@@ -42,24 +42,76 @@ enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   PassCapacity,
   AttachmentMismatch,
   ResourceSetIncomplete,
+  ResourceIdentityProof,
   ResourceHazard,
+  RenderRoute,
   PassActionEpoch,
+  QueryState,
+  UpdateTextureState,
+  CaptureState,
+  InitializerState,
+  OrderedControlState,
+  SidecarState,
   FirstDrawSnapshot,
   Count,
+};
+
+// These callbacks are borrowed only for the synchronous producer call. The
+// snapshot owns only their resolved value results; neither context may escape.
+// A resolver is the proof-producing owner: raw handles are never relabeled as
+// canonical merely because a caller supplies a boolean.
+struct ParallelPassResourceIdentityProof {
+  const void* context = nullptr;
+  bool (*resolve)(const void* context, std::uint64_t raw,
+                  std::uint64_t& canonical) noexcept = nullptr;
+
+  constexpr bool valid() const noexcept { return resolve != nullptr; }
+};
+
+struct ParallelPassRenderRouteProof {
+  const void* context = nullptr;
+  core::RenderRoute (*resolve)(const void* context,
+                               core::FlatDrawStateView state) noexcept = nullptr;
+
+  constexpr bool valid() const noexcept { return resolve != nullptr; }
+};
+
+enum ParallelPassCoordinatorProofFlag : std::uint32_t {
+  ParallelPassQueryAbsent = 1u << 0,
+  ParallelPassUpdateTextureAbsent = 1u << 1,
+  ParallelPassCaptureInactive = 1u << 2,
+  ParallelPassInitializerIndependent = 1u << 3,
+  ParallelPassOrderedControlAbsent = 1u << 4,
+  ParallelPassSidecarObservationAbsent = 1u << 5,
+};
+
+inline constexpr std::uint32_t kParallelPassCoordinatorProofComplete =
+    ParallelPassQueryAbsent | ParallelPassUpdateTextureAbsent |
+    ParallelPassCaptureInactive | ParallelPassInitializerIndependent |
+    ParallelPassOrderedControlAbsent | ParallelPassSidecarObservationAbsent;
+
+struct ParallelPassCoordinatorProof {
+  std::uint64_t firstPassActionEpoch = 0;
+  std::uint32_t flags = 0;
+
+  constexpr bool proves(ParallelPassCoordinatorProofFlag fact) const noexcept {
+    return (flags & static_cast<std::uint32_t>(fact)) != 0;
+  }
+};
+
+struct ParallelPassStaticProofInput {
+  ParallelPassResourceIdentityProof resources{};
+  ParallelPassRenderRouteProof route{};
+  ParallelPassCoordinatorProof coordinator{};
 };
 
 struct SealedParallelPassSnapshotInput {
   const EncodePartitionReplayStream* stream = nullptr;
   std::span<const EncodePartitionRangeSnapshot> ranges{};
-  std::uint64_t firstPassActionEpoch = 1u;
+  ParallelPassStaticProofInput proofs{};
   bool planValidated = false;
   bool sourceStartsPass = false;
   bool sourceEndsPass = false;
-  bool hasQuery = false;
-  bool hasUpdateTexture = false;
-  bool hasOrderedControl = false;
-  bool hasInitializerWait = false;
-  bool hasSidecarObservation = false;
 };
 
 struct ParallelPassCommandLocator {
@@ -211,8 +263,16 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
     return ParallelPassFallbackReason::ChildCapacity;
   case SealedParallelPassSnapshotFallback::AttachmentMismatch:
   case SealedParallelPassSnapshotFallback::ResourceSetIncomplete:
+  case SealedParallelPassSnapshotFallback::ResourceIdentityProof:
   case SealedParallelPassSnapshotFallback::ResourceHazard:
+  case SealedParallelPassSnapshotFallback::RenderRoute:
   case SealedParallelPassSnapshotFallback::PassActionEpoch:
+  case SealedParallelPassSnapshotFallback::QueryState:
+  case SealedParallelPassSnapshotFallback::UpdateTextureState:
+  case SealedParallelPassSnapshotFallback::CaptureState:
+  case SealedParallelPassSnapshotFallback::InitializerState:
+  case SealedParallelPassSnapshotFallback::OrderedControlState:
+  case SealedParallelPassSnapshotFallback::SidecarState:
     return ParallelPassFallbackReason::UnresolvedHazard;
   case SealedParallelPassSnapshotFallback::FirstDrawSnapshot:
   case SealedParallelPassSnapshotFallback::Count:
@@ -305,9 +365,17 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
         input.firstDrawSnapshots[i].generation == 0u ||
         !input.firstDrawSnapshots[i].entryRender.valid() ||
         !input.firstDrawSnapshots[i].entryRender.entryStateComplete() ||
+        input.firstDrawSnapshots[i].entryRender.route ==
+            core::RenderRoute::Unknown ||
+        !input.firstDrawSnapshots[i].entryRender.entryReads.complete() ||
+        !input.firstDrawSnapshots[i].entryRender.entryReads.canonicalized() ||
         input.firstDrawSnapshots[i].entryRender.passActionEpoch !=
             input.passActionEpoch) {
       return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
+    }
+    if (i != 0u && input.firstDrawSnapshots[i].entryRender.route !=
+                       input.firstDrawSnapshots[0].entryRender.route) {
+      return reject(ParallelPassFallbackReason::UnresolvedHazard);
     }
   }
   result.fallback = ParallelPassFallbackReason::None;
@@ -433,6 +501,8 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
   const auto& firstSource = children.front().range.entry.source;
   const std::uint64_t passActionEpoch =
       children.front().firstDraw.entryRender.passActionEpoch;
+  const core::RenderRoute route =
+      children.front().firstDraw.entryRender.route;
   std::uint32_t previousReplayOrdinal = 0u;
   std::uint32_t previousDrawEnd = 0u;
   std::uint32_t previousCommandIndex = 0u;
@@ -463,6 +533,10 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
         child.firstDraw.provenance != range.entry ||
         !child.firstDraw.entryRender.valid() ||
         !child.firstDraw.entryRender.entryStateComplete() ||
+        route == core::RenderRoute::Unknown ||
+        child.firstDraw.entryRender.route != route ||
+        !child.firstDraw.entryRender.entryReads.complete() ||
+        !child.firstDraw.entryRender.entryReads.canonicalized() ||
         passActionEpoch == 0u ||
         child.firstDraw.entryRender.passActionEpoch != passActionEpoch) {
       return ParallelPassFallbackReason::FirstDrawProvenanceInvalid;

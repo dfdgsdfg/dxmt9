@@ -652,7 +652,7 @@ void countParallelPassDecision(
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result) {
   using Fallback = encoders::SealedParallelPassSnapshotFallback;
-  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 16u);
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 24u);
   auto& c = counters();
   auto rejected = [&](Fallback fallback) {
     return static_cast<std::uint64_t>(
@@ -679,7 +679,13 @@ void countParallelPassShadow(
           rejected(Fallback::UnsealedEnd));
   add(c.parallelPassShadowRejectCommand,
       rejected(Fallback::CoordinatorCommand) +
-          rejected(Fallback::NonChildDrawRun));
+          rejected(Fallback::NonChildDrawRun) +
+          rejected(Fallback::QueryState) +
+          rejected(Fallback::UpdateTextureState) +
+          rejected(Fallback::CaptureState) +
+          rejected(Fallback::InitializerState) +
+          rejected(Fallback::OrderedControlState) +
+          rejected(Fallback::SidecarState));
   add(c.parallelPassShadowRejectCapacity,
       rejected(Fallback::TooFewChildren) +
           rejected(Fallback::ChildCapacity) +
@@ -688,10 +694,12 @@ void countParallelPassShadow(
       rejected(Fallback::AttachmentMismatch));
   add(c.parallelPassShadowRejectHazard,
       rejected(Fallback::ResourceSetIncomplete) +
+          rejected(Fallback::ResourceIdentityProof) +
           rejected(Fallback::ResourceHazard) +
           rejected(Fallback::PassActionEpoch));
   add(c.parallelPassShadowRejectSnapshot,
-      rejected(Fallback::FirstDrawSnapshot));
+      rejected(Fallback::RenderRoute) +
+          rejected(Fallback::FirstDrawSnapshot));
 }
 
 void countCpuReadySessionHeadAppended(bool arenaSource) {

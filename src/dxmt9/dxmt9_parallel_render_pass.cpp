@@ -42,16 +42,39 @@ void noteRejection(SealedParallelPassSnapshotBatchResult& result,
 
 bool appendResources(core::ExactResourceSet& destination,
                      const core::ExactResourceSet& source) noexcept {
-  if (!destination.complete() || !source.complete()) {
+  if (!destination.complete() || !source.complete() ||
+      !source.canonicalized()) {
     destination.flags &= ~core::ExactResourceSetComplete;
     return false;
   }
+  destination.flags |= core::ExactResourceSetCanonicalized;
   for (std::uint32_t i = 0; i < source.count; ++i) {
     if (!destination.add(source.handles[i])) {
       return false;
     }
   }
   return destination.complete();
+}
+
+bool canonicalizeResources(
+    const core::ExactResourceSet& raw,
+    const ParallelPassResourceIdentityProof& proof,
+    core::ExactResourceSet& canonical) noexcept {
+  canonical = {};
+  if (!raw.complete() || !proof.valid()) {
+    canonical.flags &= ~core::ExactResourceSetComplete;
+    return false;
+  }
+  for (std::uint32_t i = 0; i < raw.count; ++i) {
+    std::uint64_t resolved = 0;
+    if (!proof.resolve(proof.context, raw.handles[i], resolved) ||
+        resolved == 0u || !canonical.add(resolved)) {
+      canonical.flags &= ~core::ExactResourceSetComplete;
+      return false;
+    }
+  }
+  canonical.flags |= core::ExactResourceSetCanonicalized;
+  return canonical.complete();
 }
 
 core::RenderAttachmentKey attachmentKeyForClear(
@@ -115,14 +138,6 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
           std::numeric_limits<std::uint32_t>::max()) {
     return rejectBatch(Fallback::ReplayInvalid, snapshots);
   }
-  if (input.firstPassActionEpoch == 0u) {
-    return rejectBatch(Fallback::PassActionEpoch, snapshots);
-  }
-  if (input.hasQuery || input.hasUpdateTexture || input.hasOrderedControl ||
-      input.hasInitializerWait || input.hasSidecarObservation) {
-    return rejectBatch(Fallback::CoordinatorCommand, snapshots);
-  }
-
   // Query, UpdateTexture, and ordered controls are normally excluded before a
   // SourcePayloadView exists. Any other helper command that does reach this
   // stream is still a source-wide fail-closed observation input. Clear and
@@ -148,18 +163,24 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   ParallelPassCommandLocator pendingClear{};
   core::RenderAttachmentKey pendingClearAttachments{};
   std::size_t rangeIndex = 0u;
-  std::uint64_t passActionEpoch = input.firstPassActionEpoch;
+  std::uint64_t passActionEpoch =
+      input.proofs.coordinator.firstPassActionEpoch;
   bool passActionEpochValid = true;
   bool active = false;
   bool startProven = input.sourceStartsPass;
   bool attachmentKnown = false;
   bool candidateRejected = false;
-  Fallback candidateFallback = Fallback::None;
+  std::array<bool, static_cast<std::size_t>(Fallback::Count)>
+      candidateRejections{};
+  core::RenderRoute candidateRoute = core::RenderRoute::Unknown;
 
   auto rejectCandidate = [&](Fallback fallback) {
+    if (fallback == Fallback::None || fallback == Fallback::Count) {
+      return;
+    }
+    candidateRejections[fallbackIndex(fallback)] = true;
     if (!candidateRejected) {
       candidateRejected = true;
-      candidateFallback = fallback;
     }
   };
   auto advancePassActionEpoch = [&]() {
@@ -177,7 +198,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     active = false;
     attachmentKnown = false;
     candidateRejected = false;
-    candidateFallback = Fallback::None;
+    candidateRejections.fill(false);
+    candidateRoute = core::RenderRoute::Unknown;
   };
   auto startCandidate = [&](std::size_t ordinal,
                             std::uint32_t commandIndex,
@@ -207,6 +229,32 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (!passActionEpochValid || current.passActionEpoch == 0u) {
       rejectCandidate(Fallback::PassActionEpoch);
     }
+    if (!input.proofs.coordinator.proves(ParallelPassQueryAbsent)) {
+      rejectCandidate(Fallback::QueryState);
+    }
+    if (!input.proofs.coordinator.proves(ParallelPassUpdateTextureAbsent)) {
+      rejectCandidate(Fallback::UpdateTextureState);
+    }
+    if (!input.proofs.coordinator.proves(ParallelPassCaptureInactive)) {
+      rejectCandidate(Fallback::CaptureState);
+    }
+    if (!input.proofs.coordinator.proves(
+            ParallelPassInitializerIndependent)) {
+      rejectCandidate(Fallback::InitializerState);
+    }
+    if (!input.proofs.coordinator.proves(ParallelPassOrderedControlAbsent)) {
+      rejectCandidate(Fallback::OrderedControlState);
+    }
+    if (!input.proofs.coordinator.proves(
+            ParallelPassSidecarObservationAbsent)) {
+      rejectCandidate(Fallback::SidecarState);
+    }
+    if (!input.proofs.resources.valid()) {
+      rejectCandidate(Fallback::ResourceIdentityProof);
+    }
+    if (!input.proofs.route.valid()) {
+      rejectCandidate(Fallback::RenderRoute);
+    }
   };
   auto sealCandidate = [&](std::uint32_t replayOrdinalEnd,
                            ParallelPassCommandLocator sealingCommand,
@@ -221,23 +269,33 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (!startProven) {
       rejectCandidate(Fallback::UnsealedStart);
     }
+    const bool endProven = sealingCommand.valid || sealedAtSourceEnd;
+    if (!endProven) {
+      rejectCandidate(Fallback::UnsealedEnd);
+    }
     if (replayOrdinalEnd <= current.replayOrdinalBegin) {
       rejectCandidate(Fallback::UnsealedEnd);
     }
-    if (!candidateRejected) {
+    const bool boundaryComplete = startProven &&
+        endProven && replayOrdinalEnd > current.replayOrdinalBegin;
+    if (boundaryComplete) {
       ++result.sealedCount;
-      if (current.childCount < 2u) {
-        rejectCandidate(Fallback::TooFewChildren);
-      } else if (current.childCount > kParallelRenderPassChildCapacity) {
-        rejectCandidate(Fallback::ChildCapacity);
-      }
+    }
+    if (current.childCount < 2u) {
+      rejectCandidate(Fallback::TooFewChildren);
+    } else if (current.childCount > kParallelRenderPassChildCapacity) {
+      rejectCandidate(Fallback::ChildCapacity);
     }
     if (!candidateRejected &&
         snapshots.count >= snapshots.passes.size()) {
       rejectCandidate(Fallback::PassCapacity);
     }
     if (candidateRejected) {
-      noteRejection(result, candidateFallback);
+      for (std::size_t i = 1u; i < candidateRejections.size(); ++i) {
+        if (candidateRejections[i]) {
+          noteRejection(result, static_cast<Fallback>(i));
+        }
+      }
     } else {
       snapshots.passes[snapshots.count++] = current;
       ++result.eligibleCount;
@@ -306,25 +364,48 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       startCandidate(ordinal, commandIndex, attachments);
     }
 
-    const auto writes =
+    const auto rawWrites =
         core::makeRenderAttachmentWriteSet(*source.command.drawState.hot);
-    const auto reads = core::makeDrawEntryReadSet(source.command.drawState);
-    if (!writes.complete() || !reads.complete() ||
-        (current.attachmentWrites.count != 0u &&
-         writes != current.attachmentWrites)) {
-      rejectCandidate(writes != current.attachmentWrites &&
-                              current.attachmentWrites.count != 0u
-                          ? Fallback::AttachmentMismatch
+    const auto rawReads = core::makeDrawEntryReadSet(source.command.drawState);
+    core::ExactResourceSet writes{};
+    core::ExactResourceSet reads{};
+    const bool writesCanonical = canonicalizeResources(
+        rawWrites, input.proofs.resources, writes);
+    const bool readsCanonical = canonicalizeResources(
+        rawReads, input.proofs.resources, reads);
+    if (!input.proofs.resources.valid()) {
+      rejectCandidate(Fallback::ResourceIdentityProof);
+    } else if (!writesCanonical || !readsCanonical) {
+      rejectCandidate(rawWrites.complete() && rawReads.complete()
+                          ? Fallback::ResourceIdentityProof
                           : Fallback::ResourceSetIncomplete);
     }
-    if (current.attachmentWrites.count == 0u) {
-      current.attachmentWrites = writes;
+    if (writesCanonical && readsCanonical) {
+      if (current.attachmentWrites.count != 0u &&
+          writes != current.attachmentWrites) {
+        rejectCandidate(Fallback::AttachmentMismatch);
+      }
+      if (current.attachmentWrites.count == 0u) {
+        current.attachmentWrites = writes;
+      }
+      if (!appendResources(current.resourceReads, reads)) {
+        rejectCandidate(Fallback::ResourceSetIncomplete);
+      }
+      if (current.attachmentWrites.overlaps(reads)) {
+        rejectCandidate(Fallback::ResourceHazard);
+      }
     }
-    if (!appendResources(current.resourceReads, reads)) {
-      rejectCandidate(Fallback::ResourceSetIncomplete);
+    core::RenderRoute drawRoute = core::RenderRoute::Unknown;
+    if (input.proofs.route.valid()) {
+      drawRoute = input.proofs.route.resolve(
+          input.proofs.route.context, source.command.drawState);
     }
-    if (current.attachmentWrites.overlaps(reads)) {
-      rejectCandidate(Fallback::ResourceHazard);
+    if (drawRoute == core::RenderRoute::Unknown) {
+      rejectCandidate(Fallback::RenderRoute);
+    } else if (candidateRoute == core::RenderRoute::Unknown) {
+      candidateRoute = drawRoute;
+    } else if (candidateRoute != drawRoute) {
+      rejectCandidate(Fallback::RenderRoute);
     }
     if (source.command.drawParams.size() >
         std::numeric_limits<std::uint64_t>::max() - current.drawCount) {
@@ -378,13 +459,15 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
             .entryRender = core::RenderContinuationKey{
                 .attachments = attachments,
                 .entryReads = reads,
-                .route = core::RenderRoute::Unknown,
+                .route = drawRoute,
                 .passActionEpoch = current.passActionEpoch,
                 .flags = core::RenderContinuationKeyValid |
                          core::RenderContinuationEntryStateComplete,
             },
             .generation = stream.source.seqId,
-            .complete = stream.source.seqId != 0u && reads.complete(),
+            .complete = stream.source.seqId != 0u && reads.complete() &&
+                reads.canonicalized() &&
+                drawRoute != core::RenderRoute::Unknown,
         };
         ++current.childCount;
       }

@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -70,6 +71,12 @@ struct ProductionPlanFixture {
       snapshots[i] = ParallelFirstDrawSnapshot{
           .provenance = production.ranges[i].entry,
           .entryRender = dxmt9::core::RenderContinuationKey{
+              .entryReads = dxmt9::core::ExactResourceSet{
+                  .flags = dxmt9::core::ExactResourceSetComplete |
+                           dxmt9::core::ExactResourceSetCanonicalized,
+              },
+              .route = dxmt9::core::RenderRoute::Portable,
+              .passActionEpoch = 1u,
               .flags = dxmt9::core::RenderContinuationKeyValid |
                        dxmt9::core::RenderContinuationEntryStateComplete,
           },
@@ -162,6 +169,14 @@ void eligibilityAndSelectionAreTypedAndBounded() {
   check(dxmt9::encoders::classifyParallelPassEligibility(input).fallback ==
             ParallelPassFallbackReason::FirstDrawSnapshotMissing,
         "every child requires a complete first-draw snapshot");
+  auto unknownRouteSnapshots = fixture.snapshots;
+  unknownRouteSnapshots[1].entryRender.route =
+      dxmt9::core::RenderRoute::Unknown;
+  input = fixture.input();
+  input.firstDrawSnapshots = unknownRouteSnapshots;
+  check(dxmt9::encoders::classifyParallelPassEligibility(input).fallback ==
+            ParallelPassFallbackReason::FirstDrawSnapshotMissing,
+        "unknown render route is never accepted as eligible");
 
   auto commandRanges = fixture.production.ranges;
   commandRanges[1].kind =
@@ -187,15 +202,72 @@ void eligibilityAndSelectionAreTypedAndBounded() {
         "child planning fails closed above fixed storage capacity");
 }
 
+bool identityResource(const void*, std::uint64_t raw,
+                      std::uint64_t& canonical) noexcept {
+  canonical = raw;
+  return raw != 0u;
+}
+
+dxmt9::core::RenderRoute portableRoute(
+    const void*, dxmt9::core::FlatDrawStateView) noexcept {
+  return dxmt9::core::RenderRoute::Portable;
+}
+
+dxmt9::core::RenderRoute unknownRoute(
+    const void*, dxmt9::core::FlatDrawStateView) noexcept {
+  return dxmt9::core::RenderRoute::Unknown;
+}
+
+dxmt9::core::RenderRoute textureSelectedRoute(
+    const void*, dxmt9::core::FlatDrawStateView state) noexcept {
+  return state.hot && state.hot->textures[0].value == 0xbeefu
+      ? dxmt9::core::RenderRoute::Tile
+      : dxmt9::core::RenderRoute::Portable;
+}
+
+struct ResourceProofFixture {
+  std::uint64_t aliasFrom = 0;
+  std::uint64_t aliasTo = 0;
+  std::uint64_t fail = 0;
+};
+
+bool fixtureResourceProof(const void* context, std::uint64_t raw,
+                          std::uint64_t& canonical) noexcept {
+  const auto& fixture = *static_cast<const ResourceProofFixture*>(context);
+  if (raw == fixture.fail) {
+    return false;
+  }
+  canonical = raw == fixture.aliasFrom ? fixture.aliasTo : raw;
+  return canonical != 0u;
+}
+
+dxmt9::encoders::ParallelPassStaticProofInput completeProofs(
+    std::uint64_t epoch = 7u) {
+  return {
+      .resources = {.resolve = identityResource},
+      .route = {.resolve = portableRoute},
+      .coordinator = {
+          .firstPassActionEpoch = epoch,
+          .flags = dxmt9::encoders::kParallelPassCoordinatorProofComplete,
+      },
+  };
+}
+
 struct PassObservationFixture {
   dxmt9::core::ChunkSlot slot{};
   dxmt9::encoders::EncodePartitionReplayStream stream{};
   dxmt9::encoders::ProductionEncodePartitionPlanStorage plan{};
+  std::vector<std::uint32_t> commandOrder{};
+  std::vector<std::size_t> replayOrdinalByCommandIndex{};
 
-  void finalize(std::uint64_t seqId, std::size_t slotIndex = 4u) {
+  void finalize(std::uint64_t seqId, std::size_t slotIndex = 4u,
+                std::vector<std::uint32_t> order = {}) {
     slot.seqId = seqId;
+    commandOrder = std::move(order);
+    replayOrdinalByCommandIndex.resize(slot.commandCount());
     stream = dxmt9::encoders::makeEncodePartitionReplayStream(
-        slotIndex, slot, 0u, slot.commandCount(), false, {}, {},
+        slotIndex, slot, 0u, slot.commandCount(), !commandOrder.empty(),
+        commandOrder, replayOrdinalByCommandIndex,
         sourceRef(seqId));
     const auto planned = dxmt9::encoders::planProductionEncodePartitions(
         stream, plan);
@@ -208,11 +280,13 @@ struct PassObservationFixture {
   dxmt9::encoders::SealedParallelPassSnapshotBatchResult observe(
       dxmt9::encoders::SealedParallelPassSnapshotBatch& output,
       bool sourceStartsPass = true,
-      bool sourceEndsPass = true) const {
+      bool sourceEndsPass = true,
+      dxmt9::encoders::ParallelPassStaticProofInput proofs =
+          completeProofs()) const {
     return dxmt9::encoders::produceSealedParallelPassSnapshots({
           .stream = &stream,
           .ranges = plan.view(),
-          .firstPassActionEpoch = 7u,
+          .proofs = proofs,
           .planValidated = true,
           .sourceStartsPass = sourceStartsPass,
           .sourceEndsPass = sourceEndsPass,
@@ -262,6 +336,9 @@ void passLocalProducerFindsBoundedCompletePasses() {
               pass.firstDraws[i].provenance == pass.ranges[i].entry &&
               pass.firstDraws[i].entryRender.passActionEpoch ==
                   pass.passActionEpoch &&
+              pass.firstDraws[i].entryRender.route ==
+                  dxmt9::core::RenderRoute::Portable &&
+              pass.firstDraws[i].entryRender.entryReads.canonicalized() &&
               pass.firstDraws[i].complete,
           "children own source-qualified range and first-draw values only");
   }
@@ -335,6 +412,48 @@ void multiPassAndAttachmentBoundariesStayIndependent() {
         "attachment change splits candidates without over-sealing");
 }
 
+void activeReplayOrderAndPartialClearDriveExactBoundaries() {
+  const auto drawValues = draws(96u);
+  const auto drawPayloads = payloads(drawValues.size());
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+
+  PassObservationFixture reordered;
+  reordered.slot.appendDrawRun({}, {}, drawValues, drawPayloads);  // 0
+  reordered.slot.appendPresent({}, {});                            // 1
+  reordered.slot.appendClear({});                                  // 2
+  reordered.slot.appendDrawRun({}, {}, drawValues, drawPayloads);  // 3
+  reordered.slot.appendPresent({}, {});                            // 4
+  reordered.finalize(411u, 4u, {2u, 3u, 4u, 0u, 1u});
+  const auto activeOrder = reordered.observe(output);
+  check(activeOrder.candidateCount == 2u &&
+            activeOrder.eligibleCount == 2u && output.count == 2u &&
+            output.passes[0].leadingClear.commandIndex == 2u &&
+            output.passes[0].firstDraw.commandIndex == 3u &&
+            output.passes[0].sealingCommand.commandIndex == 4u &&
+            output.passes[1].firstDraw.commandIndex == 0u &&
+            output.passes[1].sealingCommand.commandIndex == 1u,
+        "candidate locators follow active replay order, not storage order");
+
+  dxmt9::core::ClearDesc partial{};
+  partial.rects.push_back({});
+  PassObservationFixture partialClear;
+  partialClear.slot.appendClear({});
+  partialClear.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  partialClear.slot.appendClear(partial);
+  partialClear.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  partialClear.slot.appendPresent({}, {});
+  partialClear.finalize(412u);
+  const auto partialResult = partialClear.observe(output);
+  check(partialResult.candidateCount == 2u &&
+            partialResult.eligibleCount == 2u && output.count == 2u &&
+            output.passes[0].passActionEpoch == 7u &&
+            output.passes[1].passActionEpoch == 9u &&
+            output.passes[0].leadingClear.valid &&
+            !output.passes[1].leadingClear.valid,
+        "partial Clear remains coordinator-owned and advances two action "
+        "epochs when it closes an active pass");
+}
+
 void producerRejectsControlsFragmentsHazardsAndBounds() {
   const auto drawValues = draws(96u);
   const auto drawPayloads = payloads(drawValues.size());
@@ -360,7 +479,7 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
         .stream = &fragment.stream,
         .ranges = std::span<const EncodePartitionRangeSnapshot>(
             malformed.ranges.data(), malformed.count),
-        .firstPassActionEpoch = 1u,
+        .proofs = completeProofs(1u),
         .planValidated = true,
         .sourceStartsPass = true,
         .sourceEndsPass = true,
@@ -382,6 +501,35 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             result.rejectionCounts[static_cast<std::size_t>(
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::ResourceHazard)] == 1u,
         "attachment sampling hazard fails closed");
+
+  dxmt9::core::CanonicalDrawState aliasedSampling{};
+  aliasedSampling.hot.colorAttachments[0].handle =
+      dxmt9::core::Handle{0x92u};
+  aliasedSampling.hot.textures[0] = dxmt9::core::Handle{0xa2u};
+  PassObservationFixture aliasHazard;
+  aliasHazard.slot.appendDrawRun(
+      aliasedSampling, {}, drawValues, drawPayloads);
+  aliasHazard.slot.appendPresent({}, {});
+  aliasHazard.finalize(413u);
+  ResourceProofFixture aliasProof{.aliasFrom = 0x92u, .aliasTo = 0xa2u};
+  auto proofs = completeProofs();
+  proofs.resources = {
+      .context = &aliasProof,
+      .resolve = fixtureResourceProof,
+  };
+  result = aliasHazard.observe(output, true, true, proofs);
+  check(result.eligibleCount == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::ResourceHazard)] == 1u,
+        "canonical alias identities reveal hazards hidden by raw handles");
+
+  ResourceProofFixture failedProof{.fail = 0x92u};
+  proofs.resources.context = &failedProof;
+  result = aliasHazard.observe(output, true, true, proofs);
+  check(result.eligibleCount == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::ResourceIdentityProof)] == 1u,
+        "a proof owner that cannot resolve an identity fails closed");
 
   dxmt9::core::CanonicalDrawState incomplete{};
   for (std::size_t i = 0; i < incomplete.hot.streamBuffers.size(); ++i) {
@@ -407,44 +555,61 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             result.fallback ==
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::CoordinatorCommand,
         "readback rejects observation before effects");
-  for (const auto input : std::array{
-           dxmt9::encoders::SealedParallelPassSnapshotInput{
-               .stream = &fragment.stream,
-               .ranges = fragment.plan.view(),
-               .planValidated = true,
-               .sourceStartsPass = true,
-               .sourceEndsPass = true,
-               .hasQuery = true,
-           },
-           dxmt9::encoders::SealedParallelPassSnapshotInput{
-               .stream = &fragment.stream,
-               .ranges = fragment.plan.view(),
-               .planValidated = true,
-               .sourceStartsPass = true,
-               .sourceEndsPass = true,
-               .hasUpdateTexture = true,
-           },
-           dxmt9::encoders::SealedParallelPassSnapshotInput{
-               .stream = &fragment.stream,
-               .ranges = fragment.plan.view(),
-               .planValidated = true,
-               .sourceStartsPass = true,
-               .sourceEndsPass = true,
-               .hasOrderedControl = true,
-           },
-           dxmt9::encoders::SealedParallelPassSnapshotInput{
-               .stream = &fragment.stream,
-               .ranges = fragment.plan.view(),
-               .planValidated = true,
-               .sourceStartsPass = true,
-               .sourceEndsPass = true,
-               .hasInitializerWait = true,
-           }}) {
-    check(dxmt9::encoders::produceSealedParallelPassSnapshots(input, output)
-                  .fallback ==
-              dxmt9::encoders::SealedParallelPassSnapshotFallback::CoordinatorCommand,
-          "query/update/control/initializer input is never child work");
-  }
+
+  auto productionLike = completeProofs(0u);
+  productionLike.coordinator.flags = 0u;
+  result = fragment.observe(output, true, true, productionLike);
+  check(result.candidateCount == 1u && result.sealedCount == 1u &&
+            result.eligibleCount == 0u && output.count == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassActionEpoch)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::QueryState)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::UpdateTextureState)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::CaptureState)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::InitializerState)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::OrderedControlState)] == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::SidecarState)] == 1u,
+        "unresolved production coordinator facts retain candidate observation "
+        "but never claim eligibility");
+
+  proofs = completeProofs();
+  proofs.resources = {};
+  result = fragment.observe(output, true, true, proofs);
+  check(result.eligibleCount == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::ResourceIdentityProof)] == 1u,
+        "raw handles without a proof-producing owner are not canonical");
+
+  proofs = completeProofs();
+  proofs.route.resolve = unknownRoute;
+  result = fragment.observe(output, true, true, proofs);
+  check(result.eligibleCount == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::RenderRoute)] == 1u,
+        "unknown route proof is rejected before publication");
+
+  dxmt9::core::CanonicalDrawState portable{};
+  dxmt9::core::CanonicalDrawState tile = portable;
+  tile.hot.textures[0] = dxmt9::core::Handle{0xbeefu};
+  PassObservationFixture mixedRoute;
+  mixedRoute.slot.appendDrawRun(
+      portable, {}, drawValues, drawPayloads);
+  mixedRoute.slot.appendDrawRun(tile, {}, drawValues, drawPayloads);
+  mixedRoute.slot.appendPresent({}, {});
+  mixedRoute.finalize(416u);
+  proofs = completeProofs();
+  proofs.route.resolve = textureSelectedRoute;
+  result = mixedRoute.observe(output, true, true, proofs);
+  check(result.eligibleCount == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::RenderRoute)] == 1u,
+        "mixed fixed-route proof rejects one logical pass");
 }
 
 void childBoundsAndPerfGateFailClosed() {
@@ -482,6 +647,34 @@ void childBoundsAndPerfGateFailClosed() {
 
   const auto largeDraws = draws(96u);
   const auto largePayloads = payloads(largeDraws.size());
+  auto appendPasses = [&](PassObservationFixture& observed,
+                          std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) {
+      observed.slot.appendDrawRun({}, {}, largeDraws, largePayloads);
+      observed.slot.appendPresent({}, {});
+    }
+  };
+
+  PassObservationFixture exactPassCapacity;
+  appendPasses(exactPassCapacity,
+               dxmt9::encoders::kParallelRenderPassCandidateCapacity);
+  exactPassCapacity.finalize(414u);
+  const auto exactCapacity = exactPassCapacity.observe(output);
+  check(exactCapacity.candidateCount == 16u &&
+            exactCapacity.eligibleCount == 16u && output.count == 16u,
+        "exactly sixteen logical passes fill bounded batch storage");
+
+  PassObservationFixture passOverflow;
+  appendPasses(passOverflow,
+               dxmt9::encoders::kParallelRenderPassCandidateCapacity + 1u);
+  passOverflow.finalize(415u);
+  const auto tooManyPasses = passOverflow.observe(output);
+  check(tooManyPasses.candidateCount == 17u &&
+            tooManyPasses.eligibleCount == 16u && output.count == 16u &&
+            tooManyPasses.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassCapacity)] == 1u,
+        "seventeenth logical pass is observed and rejected at fixed capacity");
+
   const auto smallDraws = draws(32u);
   const auto smallPayloads = payloads(smallDraws.size());
   PassObservationFixture mixed;
@@ -711,6 +904,8 @@ enum class ChildPlanMalformation : std::uint8_t {
   ProvenanceMismatch,
   IncompleteSnapshot,
   IncompleteEntryRender,
+  UnknownRoute,
+  MixedRoute,
   FullBindDisabled,
 };
 
@@ -746,6 +941,10 @@ void malformedPlansFailClosedBeforeParentPreparation() {
       Case{ChildPlanMalformation::IncompleteSnapshot,
            ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
       Case{ChildPlanMalformation::IncompleteEntryRender,
+           ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
+      Case{ChildPlanMalformation::UnknownRoute,
+           ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
+      Case{ChildPlanMalformation::MixedRoute,
            ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
       Case{ChildPlanMalformation::FullBindDisabled,
            ParallelPassFallbackReason::FullFirstDrawBindingRequired},
@@ -795,6 +994,14 @@ void malformedPlansFailClosedBeforeParentPreparation() {
       break;
     case ChildPlanMalformation::IncompleteEntryRender:
       malformed.children[1].firstDraw.entryRender.flags = 0u;
+      break;
+    case ChildPlanMalformation::UnknownRoute:
+      malformed.children[1].firstDraw.entryRender.route =
+          dxmt9::core::RenderRoute::Unknown;
+      break;
+    case ChildPlanMalformation::MixedRoute:
+      malformed.children[1].firstDraw.entryRender.route =
+          dxmt9::core::RenderRoute::Tile;
       break;
     case ChildPlanMalformation::FullBindDisabled:
       malformed.children[1].forceFullFirstDrawBinding = false;
@@ -894,6 +1101,7 @@ int main() {
     eligibilityAndSelectionAreTypedAndBounded();
     passLocalProducerFindsBoundedCompletePasses();
     multiPassAndAttachmentBoundariesStayIndependent();
+    activeReplayOrderAndPartialClearDriveExactBoundaries();
     producerRejectsControlsFragmentsHazardsAndBounds();
     childBoundsAndPerfGateFailClosed();
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();

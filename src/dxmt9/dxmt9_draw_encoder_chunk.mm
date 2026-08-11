@@ -1085,6 +1085,33 @@ bool encodeChunkAllowsRepeatedSourceFragments() noexcept {
 
 namespace {
 
+bool resolveParallelPassResourceIdentity(
+    const void* context, std::uint64_t raw,
+    std::uint64_t& canonical) noexcept {
+  const auto* pool = static_cast<const resources::Pool*>(context);
+  if (!pool || raw == 0u) {
+    return false;
+  }
+  const auto* surface = pool->findSurface(raw);
+  canonical = surface && surface->aliasTexture
+      ? surface->aliasTexture.value
+      : raw;
+  return canonical != 0u;
+}
+
+core::RenderRoute resolveParallelPassRenderRoute(
+    const void* context, core::FlatDrawStateView state) noexcept {
+  const auto* pool = static_cast<const resources::Pool*>(context);
+  if (!pool) {
+    return core::RenderRoute::Unknown;
+  }
+  const auto selection = pipeline::selectTileFfpForPass(
+      state, pool->supportsApple3());
+  return selection.decision == pipeline::TileFfpDecision::Tile
+      ? core::RenderRoute::Tile
+      : core::RenderRoute::Portable;
+}
+
 struct ActiveSeedMergeTicketAudit {
   ActiveSeedMergeTargetResolver resolver{};
   std::uint64_t mismatch = 0;
@@ -1259,7 +1286,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         SealedParallelPassSnapshotInput{
             .stream = &partitionReplayStream,
             .ranges = partitionRanges,
-            .firstPassActionEpoch = 1u,
+            .proofs = ParallelPassStaticProofInput{
+                .resources = ParallelPassResourceIdentityProof{
+                    .context = &ctx.pool,
+                    .resolve = resolveParallelPassResourceIdentity,
+                },
+                .route = ParallelPassRenderRouteProof{
+                    .context = &ctx.pool,
+                    .resolve = resolveParallelPassRenderRoute,
+                },
+                // Query/update, capture, initializer, ordered-control,
+                // sidecar, and action epoch ownership are not yet proven at
+                // this pre-effect seam.
+                // Leaving the coordinator proof empty deliberately records
+                // candidates plus precise fail-closed rejection reasons.
+                .coordinator = {},
+            },
             .planValidated = useExplicitPartitionPlan,
             .sourceStartsPass = options.session == nullptr,
             .sourceEndsPass = !(options.deferSessionFinalization &&
