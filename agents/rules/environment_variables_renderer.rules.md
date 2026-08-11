@@ -9,6 +9,8 @@ string that is not `0`, unless documented otherwise.
 
 `DXMT9_RENDER_MODE`, the compatibility profile, and the feature-token names are
 stable provider contracts under `specs/backend/render-provider/spec.md`.
+`DXMT9_RENDER_PARTITION_MODE` is the stable partition-axis contract under
+`specs/backend/encode-scheduling/spec.md`.
 Activation state is separate: `passcoalesce` is default, `dce` is implemented
 opt-in, and the remaining named feature tokens are planned/unavailable. Debug
 export and divergence flags below are diagnostic surfaces, not provider modes.
@@ -16,6 +18,7 @@ export and divergence flags below are diagnostic surfaces, not provider modes.
 | Var | Purpose | Default |
 |---|---|---|
 | `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset and `framegraph` resolve to `FrameGraphBackend`. Empty, `0`, `traditional`, and unknown values resolve to the conservative `TraditionalBackend` rollback. `scripts/run_apps/run_experiment.py` maps an omitted catalogue `render_mode` to `framegraph` unless the process environment explicitly overrides it for a diagnostic run. | framegraph |
+| `DXMT9_RENDER_PARTITION_MODE` | Queue-immutable partition execution selector. Unset or `identity` uses the allocation-free identity cursor. `serial` runs the bounded production planner after final Traditional/FrameGraph replay order and DCE selection, subdividing only large DrawRuns at indexed-merge-preserving edges before complete validation and serial consumption. `parallel` is currently unsupported and falls back to identity; empty and unknown values also fail closed to identity. Partition edges do not create render-pass, command-buffer, action, or completion boundaries. | identity |
 | `DXMT9_RENDERER_COMPAT_PROFILE` | Runtime compatibility-profile override. Unset and `progressive` enable the promoted optimizer set; `strict`, empty, `0`, and unknown values resolve to the feature-empty strict rollback. Catalogue `compat_profile` forwarding is still pending, so per-app rollback currently requires a process-environment override. | progressive |
 | `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. Under the default progressive profile, unset enables only `passcoalesce`; empty or `0` disables every optimizer feature. Explicit tokens accept `passcoalesce` and opt-in `dce`; unsupported tokens are warned and ignored. Strict rejects every token. `dce` may encode a proof-independent prefix of one dequeued chunk, then selects its FIFO successor only when that source is already ready; it never waits for proof. Without a ready successor it immediately completes the current optimized permutation without cross-chunk omission. A selected successor may omit only passes whose every output has a full-overwrite proof. The production lane replays a validated full permutation or DCE ordered subset through the existing canonical `encodeChunk` path. | passcoalesce |
 | `DXMT9_RENDERER_LOG_DIVERGENCE` | Enable renderer decision-divergence logging when the parity/divergence harness compares modern decisions against the traditional reference stream. | `0` |

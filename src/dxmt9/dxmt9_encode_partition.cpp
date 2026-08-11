@@ -1,5 +1,7 @@
 #include "dxmt9_encode_partition.hpp"
+#include "dxmt9_draw_encoder_internal.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -169,6 +171,80 @@ bool snapshotForDrawParam(
   const auto command = stream.source.payload.commandAt(commandIndex);
   return snapshotForResolvedDrawParam(stream, commandIndex, command,
                                       drawParamIndex, snapshot, resolved);
+}
+
+bool appendProductionRange(
+    ProductionEncodePartitionPlanStorage& storage,
+    const EncodePartitionRangeSnapshot& range) noexcept {
+  if (storage.count >= storage.ranges.size()) {
+    return false;
+  }
+  storage.ranges[storage.count++] = range;
+  return true;
+}
+
+bool appendProductionCommandOrdinal(
+    ProductionEncodePartitionPlanStorage& storage,
+    std::uint32_t replayOrdinal) noexcept {
+  if (storage.count != 0u) {
+    auto& tail = storage.ranges[storage.count - 1u];
+    const std::uint64_t tailEnd =
+        static_cast<std::uint64_t>(tail.replayOrdinalBegin) +
+        tail.replayOrdinalCount;
+    if (tail.kind == EncodePartitionRangeKind::CommandSegment &&
+        tailEnd == replayOrdinal &&
+        tail.replayOrdinalCount !=
+            std::numeric_limits<std::uint32_t>::max()) {
+      ++tail.replayOrdinalCount;
+      return true;
+    }
+  }
+  return appendProductionRange(
+      storage,
+      EncodePartitionRangeSnapshot{
+          .kind = EncodePartitionRangeKind::CommandSegment,
+          .replayOrdinalBegin = replayOrdinal,
+          .replayOrdinalCount = 1u,
+      });
+}
+
+std::size_t findMergePreservingPartitionEdge(
+    std::span<const core::DrawParam> draws,
+    std::span<const core::u8> payload,
+    std::size_t rangeBegin) noexcept {
+  const std::size_t minimum = kProductionPartitionMinimumDraws;
+  if (rangeBegin > draws.size() ||
+      draws.size() - rangeBegin < kProductionPartitionDrawThreshold ||
+      minimum > draws.size() - rangeBegin) {
+    return draws.size();
+  }
+  const std::size_t first = rangeBegin + minimum;
+  const std::size_t last = draws.size() - minimum;
+  if (first > last) {
+    return draws.size();
+  }
+  const std::size_t desired = std::min(
+      rangeBegin + static_cast<std::size_t>(
+          kProductionPartitionTargetDraws),
+      last);
+  const std::size_t radius = std::max(desired - first, last - desired);
+  for (std::size_t distance = 0u; distance <= radius; ++distance) {
+    if (distance <= desired - first) {
+      const std::size_t candidate = desired - distance;
+      if (classifyCompatibleIndexedDrawMergePair(
+              draws[candidate - 1u], draws[candidate], payload) != 0u) {
+        return candidate;
+      }
+    }
+    if (distance != 0u && distance <= last - desired) {
+      const std::size_t candidate = desired + distance;
+      if (classifyCompatibleIndexedDrawMergePair(
+              draws[candidate - 1u], draws[candidate], payload) != 0u) {
+        return candidate;
+      }
+    }
+  }
+  return draws.size();
 }
 
 EncodePartitionRangeValidationResult rejectRange(
@@ -604,6 +680,140 @@ EncodePartitionRangeValidationResult validateEncodePartitionRanges(
       .entryValidation = EncodePartitionEntryValidation::Valid,
       .rangeIndex = ranges.size(),
   };
+}
+
+ProductionEncodePartitionPlanResult planProductionEncodePartitions(
+    const EncodePartitionReplayStream& stream,
+    ProductionEncodePartitionPlanStorage& storage) noexcept {
+  storage.reset();
+  ProductionEncodePartitionPlanResult result{};
+  if (!stream.valid) {
+    result.fallback =
+        ProductionPartitionFallbackReason::ReplayStreamInvalid;
+    result.validation = EncodePartitionRangeValidation::ReplayStreamInvalid;
+    return result;
+  }
+  if (stream.replayOrdinalCount() >
+      std::numeric_limits<std::uint32_t>::max()) {
+    result.fallback =
+        ProductionPartitionFallbackReason::ReplayStreamTooLarge;
+    result.validation = EncodePartitionRangeValidation::ReplayStreamTooLarge;
+    return result;
+  }
+
+  bool sawEligibleDrawRun = false;
+  for (std::size_t replayOrdinal = 0u;
+       replayOrdinal < stream.replayOrdinalCount(); ++replayOrdinal) {
+    std::uint32_t commandIndex = 0u;
+    if (!stream.commandIndexAt(replayOrdinal, commandIndex)) {
+      storage.reset();
+      result.fallback =
+          ProductionPartitionFallbackReason::ReplayStreamInvalid;
+      result.validation = EncodePartitionRangeValidation::ReplayStreamInvalid;
+      return result;
+    }
+    const auto sourceCommand = stream.source.payload.commandAt(commandIndex);
+    const auto& command = sourceCommand.command;
+    const auto* record = command.drawRunRecord;
+    if (command.kind != core::MetalCommandKind::DrawRun || !record ||
+        record->paramCount == 0u ||
+        command.drawParams.size() != record->paramCount) {
+      if (!appendProductionCommandOrdinal(
+              storage, static_cast<std::uint32_t>(replayOrdinal))) {
+        storage.reset();
+        result.fallback = ProductionPartitionFallbackReason::RangeCapacity;
+        return result;
+      }
+      continue;
+    }
+
+    const auto appendDrawRange = [&](std::size_t begin,
+                                     std::size_t end) noexcept {
+      if (begin >= end || end > command.drawParams.size() ||
+          storage.count >= storage.ranges.size() ||
+          begin > std::numeric_limits<std::uint32_t>::max() -
+              record->firstParam) {
+        return false;
+      }
+      EncodePartitionRangeSnapshot range{
+          .kind = EncodePartitionRangeKind::DrawRunEntries,
+          .replayOrdinalBegin =
+              static_cast<std::uint32_t>(replayOrdinal),
+          .replayOrdinalCount = 1u,
+          .drawEntryCount = static_cast<std::uint32_t>(end - begin),
+      };
+      const std::uint32_t firstParam =
+          record->firstParam + static_cast<std::uint32_t>(begin);
+      return buildEncodePartitionEntrySnapshot(
+                 stream, replayOrdinal, firstParam, range.entry) &&
+          appendProductionRange(storage, range);
+    };
+
+    std::size_t rangeBegin = 0u;
+    bool subdivided = false;
+    if (record->paramCount >= kProductionPartitionDrawThreshold) {
+      sawEligibleDrawRun = true;
+      while (command.drawParams.size() - rangeBegin >=
+             kProductionPartitionDrawThreshold) {
+        const std::size_t edge = findMergePreservingPartitionEdge(
+            command.drawParams, command.drawPayloadBytes, rangeBegin);
+        if (edge == command.drawParams.size()) {
+          break;
+        }
+        if (!appendDrawRange(rangeBegin, edge)) {
+          const bool capacityExhausted =
+              storage.count >= storage.ranges.size();
+          storage.reset();
+          result.fallback = capacityExhausted
+              ? ProductionPartitionFallbackReason::RangeCapacity
+              : ProductionPartitionFallbackReason::SnapshotInvalid;
+          return result;
+        }
+        subdivided = true;
+        rangeBegin = edge;
+      }
+    }
+    if (!appendDrawRange(rangeBegin, command.drawParams.size())) {
+      const bool capacityExhausted =
+          storage.count >= storage.ranges.size();
+      storage.reset();
+      result.fallback = capacityExhausted
+          ? ProductionPartitionFallbackReason::RangeCapacity
+          : ProductionPartitionFallbackReason::SnapshotInvalid;
+      return result;
+    }
+    if (subdivided) {
+      ++result.subdividedDrawRunCount;
+    } else if (record->paramCount >= kProductionPartitionDrawThreshold) {
+      ++result.mergePreservedIdentityCount;
+    }
+  }
+
+  if (result.subdividedDrawRunCount == 0u) {
+    storage.reset();
+    result.fallback = sawEligibleDrawRun
+        ? ProductionPartitionFallbackReason::MergePreservation
+        : ProductionPartitionFallbackReason::NoEligibleDrawRun;
+    return result;
+  }
+
+  const auto validation = validateEncodePartitionRanges(storage.view(), stream);
+  if (!validation) {
+    storage.reset();
+    result.fallback = ProductionPartitionFallbackReason::ValidationFailed;
+    result.validation = validation.validation;
+    return result;
+  }
+  for (const auto& range : storage.view()) {
+    if (range.kind == EncodePartitionRangeKind::DrawRunEntries) {
+      ++result.drawRangeCount;
+      result.plannedDrawCount += range.drawEntryCount;
+    }
+  }
+  result.fallback = ProductionPartitionFallbackReason::None;
+  result.rangeCount = static_cast<std::uint32_t>(storage.count);
+  result.explicitPlan = true;
+  return result;
 }
 
 EncodePartitionIdentityCursor::EncodePartitionIdentityCursor(

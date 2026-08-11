@@ -2,9 +2,11 @@
 
 #include "dxmt9_encode_session.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 
 namespace dxmt9::encoders {
 
@@ -166,6 +168,64 @@ EncodePartitionResolution resolveEncodePartition(
 EncodePartitionRangeValidationResult validateEncodePartitionRanges(
     std::span<const EncodePartitionRangeSnapshot> ranges,
     const EncodePartitionReplayStream& stream) noexcept;
+
+inline constexpr std::uint32_t kProductionPartitionDrawThreshold = 64u;
+inline constexpr std::uint32_t kProductionPartitionTargetDraws = 32u;
+inline constexpr std::uint32_t kProductionPartitionMinimumDraws = 16u;
+inline constexpr std::size_t kProductionPartitionRangeCapacity = 256u;
+
+enum class ProductionPartitionFallbackReason : std::uint8_t {
+  None,
+  NoEligibleDrawRun,
+  ReplayStreamInvalid,
+  ReplayStreamTooLarge,
+  RangeCapacity,
+  SnapshotInvalid,
+  MergePreservation,
+  ValidationFailed,
+};
+
+struct ProductionEncodePartitionPlanStorage {
+  std::array<EncodePartitionRangeSnapshot,
+             kProductionPartitionRangeCapacity> ranges{};
+  std::size_t count = 0;
+
+  void reset() noexcept { count = 0; }
+  std::span<const EncodePartitionRangeSnapshot> view() const noexcept {
+    return std::span<const EncodePartitionRangeSnapshot>(ranges.data(), count);
+  }
+};
+
+struct ProductionEncodePartitionPlanResult {
+  ProductionPartitionFallbackReason fallback =
+      ProductionPartitionFallbackReason::NoEligibleDrawRun;
+  EncodePartitionRangeValidation validation =
+      EncodePartitionRangeValidation::Valid;
+  std::uint32_t rangeCount = 0;
+  std::uint32_t drawRangeCount = 0;
+  std::uint64_t plannedDrawCount = 0;
+  std::uint32_t subdividedDrawRunCount = 0;
+  std::uint32_t mergePreservedIdentityCount = 0;
+  bool explicitPlan = false;
+
+  friend constexpr bool operator==(
+      const ProductionEncodePartitionPlanResult&,
+      const ProductionEncodePartitionPlanResult&) = default;
+};
+
+static_assert(
+    std::is_trivially_copyable_v<ProductionEncodePartitionPlanStorage>);
+static_assert(std::is_standard_layout_v<ProductionEncodePartitionPlanStorage>);
+static_assert(
+    std::is_trivially_copyable_v<ProductionEncodePartitionPlanResult>);
+static_assert(std::is_standard_layout_v<ProductionEncodePartitionPlanResult>);
+
+// Deterministic production policy over the already-selected effective replay
+// stream. Storage is caller-owned, fixed-capacity, and contains locator values
+// only. A non-explicit result leaves storage empty and selects identity.
+ProductionEncodePartitionPlanResult planProductionEncodePartitions(
+    const EncodePartitionReplayStream& stream,
+    ProductionEncodePartitionPlanStorage& storage) noexcept;
 
 // Allocation-free identity traversal of the selected effective stream. A
 // valid non-empty DrawRun becomes one full DrawRunEntries range; all other

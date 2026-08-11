@@ -504,6 +504,49 @@ void countCpuReadySessionPendingStarted() {
   add(counters().cpuReadySessionPendingStarted);
 }
 
+void countEncodePartitionPlan(bool explicitPlan,
+                              std::uint64_t rangeCount,
+                              std::uint64_t drawRangeCount,
+                              std::uint64_t drawCount,
+                              std::uint64_t subdividedDrawRuns,
+                              std::uint64_t mergePreservedIdentity,
+                              std::uint32_t fallbackReason,
+                              std::uint64_t plannerNanoseconds) {
+  auto& c = counters();
+  add(explicitPlan ? c.encodePartitionExplicitSelections
+                   : c.encodePartitionIdentitySelections);
+  add(c.encodePartitionExplicitRanges, rangeCount);
+  add(c.encodePartitionExplicitDrawRanges, drawRangeCount);
+  add(c.encodePartitionExplicitDraws, drawCount);
+  add(c.encodePartitionSubdividedDrawRuns, subdividedDrawRuns);
+  add(c.encodePartitionMergePreservedIdentity, mergePreservedIdentity);
+  switch (fallbackReason) {
+  case 0u:
+    break;
+  case 1u:
+    add(c.encodePartitionFallbackNoEligible);
+    break;
+  case 2u:
+  case 3u:
+    add(c.encodePartitionFallbackInvalidReplay);
+    break;
+  case 4u:
+    add(c.encodePartitionFallbackCapacity);
+    break;
+  case 5u:
+    add(c.encodePartitionFallbackSnapshot);
+    break;
+  case 6u:
+    add(c.encodePartitionFallbackMergePreservation);
+    break;
+  default:
+    add(c.encodePartitionFallbackValidation);
+    break;
+  }
+  add(c.encodePartitionPlannerCpuNs, plannerNanoseconds);
+  updateMax(c.encodePartitionPlannerCpuMaxNs, plannerNanoseconds);
+}
+
 void countCpuReadySessionHeadAppended(bool arenaSource) {
   auto& c = counters();
   add(c.cpuReadySessionHeadAppended);

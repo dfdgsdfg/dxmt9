@@ -134,6 +134,21 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
   // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE):
+  std::atomic<std::uint64_t> encodePartitionIdentitySelections{0};
+  std::atomic<std::uint64_t> encodePartitionExplicitSelections{0};
+  std::atomic<std::uint64_t> encodePartitionExplicitRanges{0};
+  std::atomic<std::uint64_t> encodePartitionExplicitDrawRanges{0};
+  std::atomic<std::uint64_t> encodePartitionExplicitDraws{0};
+  std::atomic<std::uint64_t> encodePartitionSubdividedDrawRuns{0};
+  std::atomic<std::uint64_t> encodePartitionMergePreservedIdentity{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackNoEligible{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackInvalidReplay{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackCapacity{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackSnapshot{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackMergePreservation{0};
+  std::atomic<std::uint64_t> encodePartitionFallbackValidation{0};
+  std::atomic<std::uint64_t> encodePartitionPlannerCpuNs{0};
+  std::atomic<std::uint64_t> encodePartitionPlannerCpuMaxNs{0};
   std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};

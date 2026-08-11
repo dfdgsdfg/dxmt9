@@ -1,6 +1,7 @@
 #include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_archive_prewarm.hpp"
+#include "dxmt9_render_scheduling.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -45,6 +46,11 @@ bool cpuReadyTapeDirectReplayEnabled() noexcept {
         std::getenv("DXMT9_CPU_READY_TAPE"));
   }();
   return enabled;
+}
+
+render::RenderPartitionConfig renderPartitionConfig() noexcept {
+  const char* value = std::getenv("DXMT9_RENDER_PARTITION_MODE");
+  return render::resolveRenderPartitionConfig(value);
 }
 
 // M6 — sampled once at device init and logged so triage on a bug report
@@ -126,7 +132,20 @@ class DeviceImpl final : public Device {
         limits_(finalizeLimits(desc.limits, wmt_device_)),
         capabilities_(probeCapabilities(wmt_device_)),
         cpuReadyTapeDirectReplayEnabled_(cpuReadyTapeDirectReplayEnabled()),
-        queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_) {}
+        renderPartitionConfig_(renderPartitionConfig()),
+        queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_,
+               renderPartitionConfig_) {
+    const auto level = renderPartitionConfig_.fallback ==
+            render::PartitionModeFallback::None
+        ? util::LogLevel::Info
+        : util::LogLevel::Warn;
+    util::logf(level, "dxmt9-device",
+               "render partition requested=%s resolved=%s fallback=%u",
+               render::partitionModeRequestName(
+                   renderPartitionConfig_.requested),
+               render::partitionModeName(renderPartitionConfig_.resolved),
+               static_cast<unsigned>(renderPartitionConfig_.fallback));
+  }
 
   // queue_ destructs first (last-declared) — joins worker threads,
   // then queue-owned pool/cache/archive destruct in member-reverse
@@ -340,6 +359,7 @@ class DeviceImpl final : public Device {
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
   bool cpuReadyTapeDirectReplayEnabled_ = false;
+  render::RenderPartitionConfig renderPartitionConfig_{};
   CommandQueue queue_;
 };
 
