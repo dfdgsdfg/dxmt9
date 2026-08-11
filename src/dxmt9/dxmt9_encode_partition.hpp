@@ -183,6 +183,7 @@ enum class ProductionPartitionFallbackReason : std::uint8_t {
   SnapshotInvalid,
   MergePreservation,
   ValidationFailed,
+  Count,
 };
 
 struct ProductionEncodePartitionPlanStorage {

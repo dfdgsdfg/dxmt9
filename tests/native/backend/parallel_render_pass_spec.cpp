@@ -16,6 +16,7 @@ using dxmt9::encoders::ParallelFirstDrawSnapshot;
 using dxmt9::encoders::ParallelPassChildPlan;
 using dxmt9::encoders::ParallelPassExecutionStatus;
 using dxmt9::encoders::ParallelPassFallbackReason;
+using dxmt9::encoders::ParallelPassFailurePhase;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -66,6 +67,7 @@ struct ProductionPlanFixture {
           "parallel fixture consumes only the validated production plan");
     for (std::size_t i = 0; i < snapshots.size(); ++i) {
       snapshots[i] = ParallelFirstDrawSnapshot{
+          .provenance = production.ranges[i].entry,
           .generation = static_cast<std::uint64_t>(i + 1u),
           .complete = true,
       };
@@ -183,6 +185,7 @@ enum class EventKind : std::uint8_t {
   Prepare,
   Create,
   BeginActions,
+  LogicalCommands,
   Emit,
   EndChild,
   Join,
@@ -191,6 +194,7 @@ enum class EventKind : std::uint8_t {
   Sidecars,
   Completion,
   Abandon,
+  FailStop,
 };
 
 struct Event {
@@ -208,8 +212,12 @@ struct FakeChildBackend {
   std::uint32_t actionEndCount = 0;
   std::uint32_t sidecarCount = 0;
   std::uint32_t completionCount = 0;
+  std::uint32_t failStopCount = 0;
   std::uint32_t failCreateChild = UINT32_MAX;
-  std::uint32_t failEmitChild = UINT32_MAX;
+  ParallelPassFailurePhase injectedFailure = ParallelPassFailurePhase::None;
+  std::uint32_t injectedChild = UINT32_MAX;
+  ParallelPassFailurePhase terminalFailure = ParallelPassFailurePhase::None;
+  std::uint32_t terminalChild = UINT32_MAX;
 
   void note(EventKind kind, std::uint32_t child = 0u) noexcept {
     events[eventCount++] = Event{kind, child};
@@ -232,13 +240,19 @@ struct FakeChildBackend {
     return true;
   }
   void abandonPrepared() noexcept { note(EventKind::Abandon); }
+  bool shouldFail(ParallelPassFailurePhase phase,
+                  std::uint32_t child = UINT32_MAX) const noexcept {
+    return injectedFailure == phase &&
+        (injectedChild == UINT32_MAX || injectedChild == child);
+  }
   bool beginPassActions() noexcept {
     note(EventKind::BeginActions);
     ++actionBeginCount;
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::BeginPassActions);
   }
   bool replayLogicalCommands(
       std::span<const ParallelPassChildPlan> children) noexcept {
+    note(EventKind::LogicalCommands);
     check(!children.empty(), "logical command replay receives child ranges");
     const auto commandIndex = children.front().range.entry.commandIndex;
     for (const auto& child : children) {
@@ -246,11 +260,12 @@ struct FakeChildBackend {
               "fixture child ranges belong to one logical DrawRun command");
     }
     ++logicalCommandReplayCount;
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::LogicalCommandReplay);
   }
   bool emitChild(const ParallelPassChildPlan& child) noexcept {
     note(EventKind::Emit, child.childOrdinal);
-    if (child.childOrdinal == failEmitChild) {
+    if (shouldFail(ParallelPassFailurePhase::ChildEmission,
+                   child.childOrdinal)) {
       return false;
     }
     const auto first = child.range.entry.drawParamIndex;
@@ -261,30 +276,37 @@ struct FakeChildBackend {
   }
   bool endChild(std::uint32_t child) noexcept {
     note(EventKind::EndChild, child);
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::ChildEnd, child);
   }
   bool joinChild(std::uint32_t child) noexcept {
     note(EventKind::Join, child);
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::ChildJoin, child);
   }
   bool endPassActions() noexcept {
     note(EventKind::EndActions);
     ++actionEndCount;
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::EndPassActions);
   }
   bool endParent() noexcept {
     note(EventKind::EndParent);
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::ParentEnd);
   }
   bool publishSidecars() noexcept {
     note(EventKind::Sidecars);
     ++sidecarCount;
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::SidecarPublication);
   }
   bool publishCompletion() noexcept {
     note(EventKind::Completion);
     ++completionCount;
-    return true;
+    return !shouldFail(ParallelPassFailurePhase::CompletionPublication);
+  }
+  void failStop(ParallelPassFailurePhase phase,
+                std::uint32_t child) noexcept {
+    note(EventKind::FailStop, child);
+    ++failStopCount;
+    terminalFailure = phase;
+    terminalChild = child;
   }
 };
 
@@ -343,6 +365,116 @@ void fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay() {
   check(backend.actionBeginCount == 1u && backend.actionEndCount == 1u &&
             backend.sidecarCount == 1u && backend.completionCount == 1u,
         "coordinator alone owns pass actions, sidecars, and completion");
+  checkEq(backend.failStopCount, std::uint32_t{0},
+          "successful execution does not invoke terminal cleanup");
+}
+
+enum class ChildPlanMalformation : std::uint8_t {
+  CommandRange,
+  ReplayCount,
+  EmptyDrawRange,
+  DrawOverflow,
+  MissingLocator,
+  Overlap,
+  SourceMismatch,
+  ChildOrdinal,
+  ShadowDuplicate,
+  ProvenanceMismatch,
+  IncompleteSnapshot,
+  FullBindDisabled,
+};
+
+void malformedPlansFailClosedBeforeParentPreparation() {
+  ProductionPlanFixture fixture;
+  const auto valid = eligiblePlan(fixture);
+  const std::array<std::uint32_t, 3> completionOrder{0u, 1u, 2u};
+  struct Case {
+    ChildPlanMalformation malformation;
+    ParallelPassFallbackReason expected;
+  };
+  const std::array cases{
+      Case{ChildPlanMalformation::CommandRange,
+           ParallelPassFallbackReason::ChildRangeInvalid},
+      Case{ChildPlanMalformation::ReplayCount,
+           ParallelPassFallbackReason::ChildRangeInvalid},
+      Case{ChildPlanMalformation::EmptyDrawRange,
+           ParallelPassFallbackReason::ChildRangeInvalid},
+      Case{ChildPlanMalformation::DrawOverflow,
+           ParallelPassFallbackReason::ChildRangeInvalid},
+      Case{ChildPlanMalformation::MissingLocator,
+           ParallelPassFallbackReason::ChildRangeInvalid},
+      Case{ChildPlanMalformation::Overlap,
+           ParallelPassFallbackReason::ChildRangeOrderInvalid},
+      Case{ChildPlanMalformation::SourceMismatch,
+           ParallelPassFallbackReason::ChildRangeOrderInvalid},
+      Case{ChildPlanMalformation::ChildOrdinal,
+           ParallelPassFallbackReason::ChildOrdinalInvalid},
+      Case{ChildPlanMalformation::ShadowDuplicate,
+           ParallelPassFallbackReason::LocalShadowInvalid},
+      Case{ChildPlanMalformation::ProvenanceMismatch,
+           ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
+      Case{ChildPlanMalformation::IncompleteSnapshot,
+           ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
+      Case{ChildPlanMalformation::FullBindDisabled,
+           ParallelPassFallbackReason::FullFirstDrawBindingRequired},
+  };
+
+  for (const auto& testCase : cases) {
+    auto malformed = valid;
+    switch (testCase.malformation) {
+    case ChildPlanMalformation::CommandRange:
+      malformed.children[1].range.kind =
+          dxmt9::encoders::EncodePartitionRangeKind::CommandSegment;
+      break;
+    case ChildPlanMalformation::ReplayCount:
+      malformed.children[1].range.replayOrdinalCount = 2u;
+      break;
+    case ChildPlanMalformation::EmptyDrawRange:
+      malformed.children[1].range.drawEntryCount = 0u;
+      break;
+    case ChildPlanMalformation::DrawOverflow:
+      malformed.children[1].range.entry.drawParamIndex = UINT32_MAX;
+      break;
+    case ChildPlanMalformation::MissingLocator:
+      malformed.children[1].range.entry.source.tapeSource = {};
+      break;
+    case ChildPlanMalformation::Overlap:
+      --malformed.children[1].range.entry.drawParamIndex;
+      malformed.children[1].firstDraw.provenance =
+          malformed.children[1].range.entry;
+      break;
+    case ChildPlanMalformation::SourceMismatch:
+      ++malformed.children[1].range.entry.source.seqId;
+      malformed.children[1].firstDraw.provenance =
+          malformed.children[1].range.entry;
+      break;
+    case ChildPlanMalformation::ChildOrdinal:
+      malformed.children[1].childOrdinal = 0u;
+      break;
+    case ChildPlanMalformation::ShadowDuplicate:
+      malformed.children[1].localShadowOrdinal =
+          malformed.children[0].localShadowOrdinal;
+      break;
+    case ChildPlanMalformation::ProvenanceMismatch:
+      ++malformed.children[1].firstDraw.provenance.commandIndex;
+      break;
+    case ChildPlanMalformation::IncompleteSnapshot:
+      malformed.children[1].firstDraw.complete = false;
+      break;
+    case ChildPlanMalformation::FullBindDisabled:
+      malformed.children[1].forceFullFirstDrawBinding = false;
+      break;
+    }
+    FakeChildBackend backend{};
+    const auto result = dxmt9::encoders::executeParallelRenderPass(
+        malformed.view(), completionOrder, backend);
+    check(result.status == ParallelPassExecutionStatus::SerialFallback &&
+              !result.crossedEffectBoundary && backend.eventCount == 0u &&
+              result.failurePhase ==
+                  ParallelPassFailurePhase::ChildPlanValidation &&
+              result.fallback == testCase.expected,
+          "malformed child plan fails closed before parent preparation");
+  }
 }
 
 void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
@@ -363,6 +495,8 @@ void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
             preEffect.logicalCommandReplayCount == 0u &&
             preEffect.sidecarCount == 0u && preEffect.completionCount == 0u,
         "pre-effect fallback publishes no parallel-pass ownership effects");
+  checkEq(preEffect.failStopCount, std::uint32_t{0},
+          "pre-effect serial fallback does not invoke fail-stop cleanup");
 
   FakeChildBackend invalidJoin{};
   const std::array<std::uint32_t, 3> duplicateCompletion{0u, 0u, 2u};
@@ -374,17 +508,48 @@ void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
                 ParallelPassFallbackReason::InvalidCompletionOrder,
         "invalid arbitrary completion order falls back before preparation");
 
-  FakeChildBackend postEffect{};
-  postEffect.failEmitChild = 1u;
-  const auto failStop = dxmt9::encoders::executeParallelRenderPass(
-      plan.view(), completionOrder, postEffect);
-  check(failStop.status == ParallelPassExecutionStatus::FailStop &&
-            failStop.crossedEffectBoundary &&
-            failStop.failurePhase ==
-                dxmt9::encoders::ParallelPassFailurePhase::ChildEmission,
-        "failure after first pass effect is fail-stop");
-  check(postEffect.sidecarCount == 0u && postEffect.completionCount == 0u,
-        "fail-stop never publishes a partial logical-pass tail");
+  struct EffectFailure {
+    ParallelPassFailurePhase phase;
+    std::uint32_t child;
+  };
+  const std::array failures{
+      EffectFailure{ParallelPassFailurePhase::BeginPassActions, UINT32_MAX},
+      EffectFailure{ParallelPassFailurePhase::LogicalCommandReplay,
+                    UINT32_MAX},
+      EffectFailure{ParallelPassFailurePhase::ChildEmission, 0u},
+      EffectFailure{ParallelPassFailurePhase::ChildEmission, 1u},
+      EffectFailure{ParallelPassFailurePhase::ChildEmission, 2u},
+      EffectFailure{ParallelPassFailurePhase::ChildEnd, 0u},
+      EffectFailure{ParallelPassFailurePhase::ChildEnd, 1u},
+      EffectFailure{ParallelPassFailurePhase::ChildEnd, 2u},
+      EffectFailure{ParallelPassFailurePhase::ChildJoin, 0u},
+      EffectFailure{ParallelPassFailurePhase::ChildJoin, 1u},
+      EffectFailure{ParallelPassFailurePhase::ChildJoin, 2u},
+      EffectFailure{ParallelPassFailurePhase::EndPassActions, UINT32_MAX},
+      EffectFailure{ParallelPassFailurePhase::ParentEnd, UINT32_MAX},
+      EffectFailure{ParallelPassFailurePhase::SidecarPublication, UINT32_MAX},
+      EffectFailure{ParallelPassFailurePhase::CompletionPublication,
+                    UINT32_MAX},
+  };
+  for (const auto& failure : failures) {
+    FakeChildBackend postEffect{};
+    postEffect.injectedFailure = failure.phase;
+    postEffect.injectedChild = failure.child;
+    const auto failStop = dxmt9::encoders::executeParallelRenderPass(
+        plan.view(), completionOrder, postEffect);
+    const std::uint32_t expectedChild =
+        failure.child == UINT32_MAX ? 0u : failure.child;
+    check(failStop.status == ParallelPassExecutionStatus::FailStop &&
+              failStop.crossedEffectBoundary &&
+              failStop.failurePhase == failure.phase &&
+              failStop.affectedChild == expectedChild &&
+              postEffect.failStopCount == 1u &&
+              postEffect.terminalFailure == failure.phase &&
+              postEffect.terminalChild == expectedChild &&
+              postEffect.events[postEffect.eventCount - 1u].kind ==
+                  EventKind::FailStop,
+          "every post-effect failure invokes terminal fail-stop cleanup once");
+  }
 }
 
 }  // namespace
@@ -393,6 +558,7 @@ int main() {
   try {
     eligibilityAndSelectionAreTypedAndBounded();
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();
+    malformedPlansFailClosedBeforeParentPreparation();
     failuresSeparatePreEffectFallbackFromPostEffectFailStop();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';

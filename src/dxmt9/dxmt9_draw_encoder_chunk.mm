@@ -1232,13 +1232,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           plan.explicitPlan, plan.rangeCount, plan.drawRangeCount,
           plan.plannedDrawCount, plan.subdividedDrawRunCount,
           plan.mergePreservedIdentityCount,
-          static_cast<std::uint32_t>(plan.fallback), plannerNanoseconds);
+          plan.fallback, plannerNanoseconds);
     }
     if (plan.explicitPlan) {
       partitionRanges = productionPlanStorage.view();
     }
   } else if (partitionRanges.empty() && perf::enabled()) {
-    perf::countEncodePartitionPlan(false, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    perf::countEncodePartitionPlan(
+        false, 0u, 0u, 0u, 0u, 0u,
+        ProductionPartitionFallbackReason::None, 0u);
   }
   bool useExplicitPartitionPlan = false;
   if (!partitionRanges.empty()) {
@@ -1260,9 +1262,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         });
     const auto decision = decideParallelPassExecution(
         true, eligibility, false);
-    perf::countParallelPassDecision(
-        decision.considered, decision.eligible, decision.selected,
-        static_cast<std::uint32_t>(decision.fallback));
+    perf::countParallelPassDecision(decision);
   }
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(sourceSeqId);

@@ -1141,9 +1141,14 @@ snapshot plus forced full first-draw binding for every child. Its deterministic
 fake executor fixes child creation order, permits an arbitrary validated join
 permutation, keeps pass actions, sidecars, and completion coordinator-owned,
 joins all children before parent end, falls back only before the first effect,
-and fail-stops afterward. This seam is test evidence for the ownership and
-failure contracts; a real WMT adapter and worker pool remain unimplemented and
-default-off.
+and fail-stops afterward. Before parent preparation it revalidates every child
+plan's bounded draw-range shape, ordered non-overlapping source/command
+locators, child and local-shadow identities, exact first-draw provenance, and
+forced full first-draw binding. Every failure at or after the effect boundary
+invokes one terminal fail-stop cleanup hook; native injection covers every
+effectful phase and every child emission/end position. This seam is test
+evidence for the ownership and failure contracts; a real WMT adapter and worker
+pool remain unimplemented and default-off.
 
 ### 7.3 Metal 4 Suspend/Resume
 
@@ -1225,7 +1230,7 @@ fallback is a provider-lifecycle decision, not a storage-only refactor.
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |
-| Stable provider configuration | partition-axis pure resolver coverage pins unset, identity, serial, unsupported parallel, empty, and unknown behavior plus queue forwarding. Source/segment-axis resolvers, the unified mode matrix, process-separated selector precedence/default/fallback evidence, and complete requested/resolved perf observability remain missing. |
+| Stable provider configuration | partition-axis pure resolver coverage pins unset, identity, serial, distinct `ExplicitParallel`, empty, and unknown behavior plus queue forwarding; partition requested/resolved counters are implemented. Source/segment-axis resolvers, the unified mode matrix, process-separated selector precedence/default/fallback evidence, and requested/resolved source/segment perf observability remain missing. |
 | Parallel order and join | deterministic Metal-free fake-child coverage proves ordered creation, arbitrary completion join, distinct local shadows, forced full first-draw binding, command/draw once, coordinator-owned actions/sidecars/completion, join-before-parent-end, pre-effect fallback, and post-effect fail-stop; real WMT adapter, worker pool, and formal/refinement evidence remain missing |
 | Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
 | Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |

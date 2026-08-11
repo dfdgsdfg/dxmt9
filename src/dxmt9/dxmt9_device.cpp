@@ -148,8 +148,7 @@ class DeviceImpl final : public Device {
                static_cast<unsigned>(renderPartitionConfig_.fallback));
     if (perf::enabled()) {
       perf::countRenderPartitionProvider(
-          static_cast<std::uint32_t>(renderPartitionConfig_.requested),
-          static_cast<std::uint32_t>(renderPartitionConfig_.resolved));
+          renderPartitionConfig_.requested, renderPartitionConfig_.resolved);
     }
   }
 

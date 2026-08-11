@@ -6,6 +6,16 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace dxmt9::encoders {
+enum class ProductionPartitionFallbackReason : std::uint8_t;
+struct ParallelPassExecutionDecision;
+}  // namespace dxmt9::encoders
+
+namespace dxmt9::render {
+enum class PartitionExecutionMode : std::uint8_t;
+enum class PartitionModeRequest : std::uint8_t;
+}  // namespace dxmt9::render
+
 namespace dxmt9::perf {
 
 bool enabled();
@@ -235,14 +245,13 @@ void countEncodePartitionPlan(bool explicitPlan,
                               std::uint64_t drawCount,
                               std::uint64_t subdividedDrawRuns,
                               std::uint64_t mergePreservedIdentity,
-                              std::uint32_t fallbackReason,
+                              encoders::ProductionPartitionFallbackReason
+                                  fallbackReason,
                               std::uint64_t plannerNanoseconds);
-void countRenderPartitionProvider(std::uint32_t requestedMode,
-                                  std::uint32_t resolvedMode);
-void countParallelPassDecision(bool considered,
-                               bool eligible,
-                               bool selected,
-                               std::uint32_t fallbackReason);
+void countRenderPartitionProvider(render::PartitionModeRequest requestedMode,
+                                  render::PartitionExecutionMode resolvedMode);
+void countParallelPassDecision(
+    const encoders::ParallelPassExecutionDecision& decision);
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);

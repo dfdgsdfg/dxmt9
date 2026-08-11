@@ -9,6 +9,7 @@ enum class PartitionExecutionMode : std::uint8_t {
   IdentitySerial,
   ExplicitSerial,
   ExplicitParallel,
+  Count,
 };
 
 enum class PartitionModeRequest : std::uint8_t {
@@ -17,6 +18,7 @@ enum class PartitionModeRequest : std::uint8_t {
   Serial,
   Parallel,
   Invalid,
+  Count,
 };
 
 enum class PartitionModeFallback : std::uint8_t {
@@ -73,6 +75,8 @@ constexpr const char* partitionModeName(
       return "serial";
     case PartitionExecutionMode::ExplicitParallel:
       return "parallel";
+    case PartitionExecutionMode::Count:
+      return "invalid";
   }
   return "identity";
 }
@@ -89,6 +93,8 @@ constexpr const char* partitionModeRequestName(
     case PartitionModeRequest::Parallel:
       return "parallel";
     case PartitionModeRequest::Invalid:
+      return "invalid";
+    case PartitionModeRequest::Count:
       return "invalid";
   }
   return "invalid";

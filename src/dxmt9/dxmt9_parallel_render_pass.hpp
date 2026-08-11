@@ -16,6 +16,7 @@ inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
 // the coordinator's mutable native binding shadow. The producer owns the
 // meaning of generation; zero is never a complete snapshot.
 struct ParallelFirstDrawSnapshot {
+  EncodePartitionEntrySnapshot provenance{};
   std::uint64_t generation = 0;
   bool complete = false;
 
@@ -43,6 +44,13 @@ enum class ParallelPassFallbackReason : std::uint8_t {
   InvalidCompletionOrder,
   ParentPreparationFailed,
   ChildCreationFailed,
+  ChildRangeInvalid,
+  ChildRangeOrderInvalid,
+  ChildOrdinalInvalid,
+  LocalShadowInvalid,
+  FirstDrawProvenanceInvalid,
+  FullFirstDrawBindingRequired,
+  Count,
 };
 
 struct ParallelPassEligibilityInput {
@@ -214,6 +222,7 @@ enum class ParallelPassExecutionStatus : std::uint8_t {
 
 enum class ParallelPassFailurePhase : std::uint8_t {
   None,
+  ChildPlanValidation,
   CompletionOrderValidation,
   ParentPreparation,
   ChildCreation,
@@ -238,6 +247,68 @@ struct ParallelPassExecutionResult {
   bool crossedEffectBoundary = false;
 };
 
+inline ParallelPassFallbackReason validateParallelPassChildPlans(
+    std::span<const ParallelPassChildPlan> children) noexcept {
+  if (children.size() < 2u ||
+      children.size() > kParallelRenderPassChildCapacity) {
+    return ParallelPassFallbackReason::ChildCapacity;
+  }
+  std::array<bool, kParallelRenderPassChildCapacity + 1u> shadows{};
+  const auto& firstSource = children.front().range.entry.source;
+  std::uint32_t previousReplayOrdinal = 0u;
+  std::uint32_t previousDrawEnd = 0u;
+  std::uint32_t previousCommandIndex = 0u;
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    const auto& child = children[i];
+    const auto& range = child.range;
+    if (range.kind != EncodePartitionRangeKind::DrawRunEntries ||
+        range.replayOrdinalCount != 1u || range.drawEntryCount == 0u ||
+        !range.entry.source.tapeSource.valid() ||
+        range.entry.source.seqId == 0u ||
+        range.entry.drawParamIndex >
+            UINT32_MAX - range.drawEntryCount) {
+      return ParallelPassFallbackReason::ChildRangeInvalid;
+    }
+    if (range.entry.source != firstSource) {
+      return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+    }
+    if (child.childOrdinal != i) {
+      return ParallelPassFallbackReason::ChildOrdinalInvalid;
+    }
+    if (child.localShadowOrdinal == 0u ||
+        child.localShadowOrdinal > kParallelRenderPassChildCapacity ||
+        shadows[child.localShadowOrdinal]) {
+      return ParallelPassFallbackReason::LocalShadowInvalid;
+    }
+    shadows[child.localShadowOrdinal] = true;
+    if (!child.firstDraw.complete || child.firstDraw.generation == 0u ||
+        child.firstDraw.provenance != range.entry) {
+      return ParallelPassFallbackReason::FirstDrawProvenanceInvalid;
+    }
+    if (!child.forceFullFirstDrawBinding) {
+      return ParallelPassFallbackReason::FullFirstDrawBindingRequired;
+    }
+    if (i != 0u) {
+      if (range.replayOrdinalBegin < previousReplayOrdinal) {
+        return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+      }
+      if (range.replayOrdinalBegin == previousReplayOrdinal) {
+        if (range.entry.commandIndex != previousCommandIndex ||
+            range.entry.drawParamIndex != previousDrawEnd) {
+          return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+        }
+      } else if (range.replayOrdinalBegin != previousReplayOrdinal + 1u ||
+                 range.entry.commandIndex == previousCommandIndex) {
+        return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+      }
+    }
+    previousReplayOrdinal = range.replayOrdinalBegin;
+    previousCommandIndex = range.entry.commandIndex;
+    previousDrawEnd = range.entry.drawParamIndex + range.drawEntryCount;
+  }
+  return ParallelPassFallbackReason::None;
+}
+
 // Backend is a deliberately small seam used by deterministic native fakes now
 // and by a future WMT parent/child implementation only after it exists. Child
 // creation is ordered and pre-effect. beginPassActions() is the effect edge;
@@ -249,9 +320,13 @@ ParallelPassExecutionResult executeParallelRenderPass(
     std::span<const std::uint32_t> completionOrder,
     Backend& backend) noexcept {
   ParallelPassExecutionResult result{};
-  if (children.size() < 2u ||
-      children.size() > kParallelRenderPassChildCapacity ||
-      completionOrder.size() != children.size()) {
+  const auto planValidation = validateParallelPassChildPlans(children);
+  if (planValidation != ParallelPassFallbackReason::None) {
+    result.fallback = planValidation;
+    result.failurePhase = ParallelPassFailurePhase::ChildPlanValidation;
+    return result;
+  }
+  if (completionOrder.size() != children.size()) {
     result.fallback = ParallelPassFallbackReason::InvalidCompletionOrder;
     result.failurePhase = ParallelPassFailurePhase::CompletionOrderValidation;
     return result;
@@ -284,48 +359,45 @@ ParallelPassExecutionResult executeParallelRenderPass(
   result.crossedEffectBoundary = true;
   result.status = ParallelPassExecutionStatus::FailStop;
   result.fallback = ParallelPassFallbackReason::None;
-  if (!backend.beginPassActions()) {
-    result.failurePhase = ParallelPassFailurePhase::BeginPassActions;
+  const auto failStop = [&](ParallelPassFailurePhase phase,
+                            std::uint32_t child = 0u) {
+    result.failurePhase = phase;
+    result.affectedChild = child;
+    backend.failStop(phase, child);
     return result;
+  };
+  if (!backend.beginPassActions()) {
+    return failStop(ParallelPassFailurePhase::BeginPassActions);
   }
   if (!backend.replayLogicalCommands(children)) {
-    result.failurePhase = ParallelPassFailurePhase::LogicalCommandReplay;
-    return result;
+    return failStop(ParallelPassFailurePhase::LogicalCommandReplay);
   }
   for (const auto& child : children) {
     if (!backend.emitChild(child)) {
-      result.failurePhase = ParallelPassFailurePhase::ChildEmission;
-      result.affectedChild = child.childOrdinal;
-      return result;
+      return failStop(ParallelPassFailurePhase::ChildEmission,
+                      child.childOrdinal);
     }
     if (!backend.endChild(child.childOrdinal)) {
-      result.failurePhase = ParallelPassFailurePhase::ChildEnd;
-      result.affectedChild = child.childOrdinal;
-      return result;
+      return failStop(ParallelPassFailurePhase::ChildEnd,
+                      child.childOrdinal);
     }
   }
   for (const auto ordinal : completionOrder) {
     if (!backend.joinChild(ordinal)) {
-      result.failurePhase = ParallelPassFailurePhase::ChildJoin;
-      result.affectedChild = ordinal;
-      return result;
+      return failStop(ParallelPassFailurePhase::ChildJoin, ordinal);
     }
   }
   if (!backend.endPassActions()) {
-    result.failurePhase = ParallelPassFailurePhase::EndPassActions;
-    return result;
+    return failStop(ParallelPassFailurePhase::EndPassActions);
   }
   if (!backend.endParent()) {
-    result.failurePhase = ParallelPassFailurePhase::ParentEnd;
-    return result;
+    return failStop(ParallelPassFailurePhase::ParentEnd);
   }
   if (!backend.publishSidecars()) {
-    result.failurePhase = ParallelPassFailurePhase::SidecarPublication;
-    return result;
+    return failStop(ParallelPassFailurePhase::SidecarPublication);
   }
   if (!backend.publishCompletion()) {
-    result.failurePhase = ParallelPassFailurePhase::CompletionPublication;
-    return result;
+    return failStop(ParallelPassFailurePhase::CompletionPublication);
   }
   result.status = ParallelPassExecutionStatus::Completed;
   result.failurePhase = ParallelPassFailurePhase::None;

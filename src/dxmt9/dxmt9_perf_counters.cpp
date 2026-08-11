@@ -1,6 +1,9 @@
 #include "dxmt9_perf_counters.hpp"
 
+#include "dxmt9_encode_partition.hpp"
+#include "dxmt9_parallel_render_pass.hpp"
 #include "dxmt9_perf_counters_internal.hpp"
+#include "dxmt9_render_scheduling.hpp"
 
 #include "dxmt9/core.hpp"
 
@@ -510,8 +513,11 @@ void countEncodePartitionPlan(bool explicitPlan,
                               std::uint64_t drawCount,
                               std::uint64_t subdividedDrawRuns,
                               std::uint64_t mergePreservedIdentity,
-                              std::uint32_t fallbackReason,
+                              encoders::ProductionPartitionFallbackReason
+                                  fallbackReason,
                               std::uint64_t plannerNanoseconds) {
+  using Fallback = encoders::ProductionPartitionFallbackReason;
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 8u);
   auto& c = counters();
   add(explicitPlan ? c.encodePartitionExplicitSelections
                    : c.encodePartitionIdentitySelections);
@@ -521,25 +527,26 @@ void countEncodePartitionPlan(bool explicitPlan,
   add(c.encodePartitionSubdividedDrawRuns, subdividedDrawRuns);
   add(c.encodePartitionMergePreservedIdentity, mergePreservedIdentity);
   switch (fallbackReason) {
-  case 0u:
+  case Fallback::None:
     break;
-  case 1u:
+  case Fallback::NoEligibleDrawRun:
     add(c.encodePartitionFallbackNoEligible);
     break;
-  case 2u:
-  case 3u:
+  case Fallback::ReplayStreamInvalid:
+  case Fallback::ReplayStreamTooLarge:
     add(c.encodePartitionFallbackInvalidReplay);
     break;
-  case 4u:
+  case Fallback::RangeCapacity:
     add(c.encodePartitionFallbackCapacity);
     break;
-  case 5u:
+  case Fallback::SnapshotInvalid:
     add(c.encodePartitionFallbackSnapshot);
     break;
-  case 6u:
+  case Fallback::MergePreservation:
     add(c.encodePartitionFallbackMergePreservation);
     break;
-  default:
+  case Fallback::ValidationFailed:
+  case Fallback::Count:
     add(c.encodePartitionFallbackValidation);
     break;
   }
@@ -547,73 +554,96 @@ void countEncodePartitionPlan(bool explicitPlan,
   updateMax(c.encodePartitionPlannerCpuMaxNs, plannerNanoseconds);
 }
 
-void countRenderPartitionProvider(std::uint32_t requestedMode,
-                                  std::uint32_t resolvedMode) {
+void countRenderPartitionProvider(render::PartitionModeRequest requestedMode,
+                                  render::PartitionExecutionMode resolvedMode) {
+  using Request = render::PartitionModeRequest;
+  using Resolved = render::PartitionExecutionMode;
+  static_assert(static_cast<std::uint8_t>(Request::Count) == 5u);
+  static_assert(static_cast<std::uint8_t>(Resolved::Count) == 3u);
   auto& c = counters();
   switch (requestedMode) {
-  case 0u:
+  case Request::Default:
     add(c.renderPartitionRequestedDefault);
     break;
-  case 1u:
+  case Request::Identity:
     add(c.renderPartitionRequestedIdentity);
     break;
-  case 2u:
+  case Request::Serial:
     add(c.renderPartitionRequestedSerial);
     break;
-  case 3u:
+  case Request::Parallel:
     add(c.renderPartitionRequestedParallel);
     break;
-  default:
+  case Request::Invalid:
+  case Request::Count:
     add(c.renderPartitionRequestedInvalid);
     break;
   }
   switch (resolvedMode) {
-  case 0u:
+  case Resolved::IdentitySerial:
     add(c.renderPartitionResolvedIdentity);
     break;
-  case 1u:
+  case Resolved::ExplicitSerial:
     add(c.renderPartitionResolvedSerial);
     break;
-  default:
+  case Resolved::ExplicitParallel:
     add(c.renderPartitionResolvedParallel);
+    break;
+  case Resolved::Count:
     break;
   }
 }
 
-void countParallelPassDecision(bool considered,
-                               bool eligible,
-                               bool selected,
-                               std::uint32_t fallbackReason) {
+void countParallelPassDecision(
+    const encoders::ParallelPassExecutionDecision& decision) {
+  using Fallback = encoders::ParallelPassFallbackReason;
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 25u);
   auto& c = counters();
-  if (considered) {
+  if (decision.considered) {
     add(c.parallelPassConsidered);
   }
-  if (eligible) {
+  if (decision.eligible) {
     add(c.parallelPassEligible);
   }
-  if (selected) {
+  if (decision.selected) {
     add(c.parallelPassSelected);
   }
-  switch (fallbackReason) {
-  case 0u:
-  case 1u:
+  switch (decision.fallback) {
+  case Fallback::None:
+  case Fallback::NotRequested:
     break;
-  case 2u:
-  case 3u:
+  case Fallback::NoExplicitPlan:
+  case Fallback::PlanNotValidated:
     add(c.parallelPassFallbackNoPlan);
     break;
-  case 4u:
+  case Fallback::PassNotSealed:
     add(c.parallelPassFallbackUnsealed);
     break;
-  case 15u:
+  case Fallback::ParallelEncoderUnavailable:
     add(c.parallelPassFallbackUnavailable);
     break;
-  case 16u:
-  case 17u:
-  case 18u:
+  case Fallback::InvalidCompletionOrder:
+  case Fallback::ParentPreparationFailed:
+  case Fallback::ChildCreationFailed:
+  case Fallback::ChildRangeInvalid:
+  case Fallback::ChildRangeOrderInvalid:
+  case Fallback::ChildOrdinalInvalid:
+  case Fallback::LocalShadowInvalid:
+  case Fallback::FirstDrawProvenanceInvalid:
+  case Fallback::FullFirstDrawBindingRequired:
     add(c.parallelPassFallbackPreEffect);
     break;
-  default:
+  case Fallback::TooFewChildren:
+  case Fallback::ChildCapacity:
+  case Fallback::CoordinatorCommand:
+  case Fallback::Query:
+  case Fallback::Clear:
+  case Fallback::SidecarObservation:
+  case Fallback::InitializerWait:
+  case Fallback::Present:
+  case Fallback::UnresolvedHazard:
+  case Fallback::FirstDrawSnapshotMissing:
+  case Fallback::Count:
     add(c.parallelPassFallbackIneligible);
     break;
   }
