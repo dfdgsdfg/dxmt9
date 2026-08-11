@@ -579,9 +579,11 @@ The virtual pass and its dependency edges never linearize because they own no
 source command. Source/run edges do not close or open an encoder or submit a
 command buffer. Completion sources are transactionally registered once in
 natural FIFO order, independently of replay order, so one tail completion still
-expands to the original source sequence. The normal `encodeChunk()` attachment-
-key, exact-hazard, initializer, and tile-FFP checks remain authoritative after
-planning.
+expands to the original source sequence. The normal `encodeChunk()`
+attachment-key, exact-hazard, initializer, and tile-FFP eligibility checks
+remain authoritative after planning. Eligibility does not override the
+provider safety gate: while `R-BACK-13.7` is open, non-diagnostic `tile-auto`
+still resolves to portable.
 
 When perf counters explicitly enable collection, source-local passcoalesce also
 emits bounded diagnostic counters for every unique non-adjacent source-owned

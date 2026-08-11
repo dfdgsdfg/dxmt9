@@ -127,6 +127,43 @@ if host_machine.system() == 'darwin'
          suite: ['shader-corpus-stage1'],
          timeout: 60)
   endforeach
+
+  # R-BACK-13.2/13.7 — the current tile post-process is valid only for the
+  # narrow full-attachment diagnostic fixture. Keep that force-path proof,
+  # while separately pinning that the non-diagnostic `auto` spelling fails
+  # closed for a partial draw and therefore preserves uncovered attachment
+  # pixels.
+  shader_corpus_tile_force_env = environment()
+  if dxmt9_wine_install_path != ''
+    shader_corpus_tile_force_env.prepend(
+      'DYLD_LIBRARY_PATH',
+      dxmt9_wine_unix_runtime_path,
+      separator: ':')
+  endif
+  shader_corpus_tile_force_env.set('DXMT9_TILE_FFP', 'force')
+  test('dxmt9-tile-ffp-force-fullscreen-equality', shader_runner,
+       args: [join_paths(shader_corpus_root,
+                         'ffp/dxmt9_tile_ffp_fog_equality_readback.shader_test')],
+       env: shader_corpus_tile_force_env,
+       is_parallel: false,
+       suite: ['shader-corpus', 'tile-ffp'],
+       timeout: 60)
+
+  shader_corpus_tile_auto_env = environment()
+  if dxmt9_wine_install_path != ''
+    shader_corpus_tile_auto_env.prepend(
+      'DYLD_LIBRARY_PATH',
+      dxmt9_wine_unix_runtime_path,
+      separator: ':')
+  endif
+  shader_corpus_tile_auto_env.set('DXMT9_TILE_FFP', 'auto')
+  test('dxmt9-tile-ffp-auto-partial-coverage-safety', shader_runner,
+       args: [join_paths(shader_corpus_root,
+                         'ffp/dxmt9_tile_ffp_partial_rect_preserves_clear_readback.shader_test')],
+       env: shader_corpus_tile_auto_env,
+       is_parallel: false,
+       suite: ['shader-corpus', 'tile-ffp'],
+       timeout: 60)
 endif
 
 verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'check', 'verify_tla.sh')

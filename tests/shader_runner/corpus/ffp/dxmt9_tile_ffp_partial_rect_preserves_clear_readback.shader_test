@@ -1,0 +1,19 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: portable FFP fragment coverage semantics (R-BACK-13.2)
+; oracle-date: 2026-08-11
+
+; A tile-FFP post-process must affect only fragments covered by the draw.
+; The partial rectangle is fully fogged, while the uncovered red clear value
+; must remain unchanged. This complements the full-screen equality fixture,
+; which cannot detect an attachment-wide tile dispatch.
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-render-state fog=on fogmode=linear fogstart=0.0 fogend=1.0 fogcolor=rgba(0.25,0.5,0.75,1.0)
+dxmt9-draw-solid-rect 16 16 48 48
+probe (32, 32) rgba(0.25, 0.5, 0.75, 1.0) 1
+probe (8, 8) rgba(1.0, 0.0, 0.0, 1.0) 1

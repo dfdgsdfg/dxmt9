@@ -364,8 +364,9 @@ implementation, not the spec.
   work. A sealed EncodeSession may inspect its already-admitted immutable suffix
   under `R-BACK-15.17`, but may not infer actions from unknown future sources.
 - **Tile-shader integration with depth.** `R-BACK-13` (tile-FFP) is
-  separate; this spec leaves tile-FFP-active passes' depth handling to
-  that spec's contract.
+  separate. Non-diagnostic `tile-auto` cannot create a tile-active pass while
+  `R-BACK-13.7` is open; diagnostic `force` and any future promoted provider
+  leave depth handling to that spec's contract.
 - **Programmable blending / framebuffer fetch.** A future Apple-only
   optimization. Not addressed here.
 - **`MTLHazardTrackingMode` tuning.** Touched-set-style tracking is not

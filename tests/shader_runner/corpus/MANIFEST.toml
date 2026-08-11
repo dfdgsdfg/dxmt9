@@ -131,6 +131,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-25"
 
 [[test]]
+file = "ffp/dxmt9_tile_ffp_partial_rect_preserves_clear_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "portable FFP fragment coverage semantics"
+oracle-date = "2026-08-11"
+
+[[test]]
 file = "ffp/dxmt9_ffp_vertex_blend_triangle.shader_test"
 status = "passing"
 source = "dxmt9"

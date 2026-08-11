@@ -501,6 +501,8 @@ tile_ffp_selector_spec = executable(
 )
 
 test('dxmt9-tile-ffp-selector-spec', tile_ffp_selector_spec)
+test('dxmt9-tile-ffp-auto-fallback-spec', tile_ffp_selector_spec,
+     args: ['auto-fallback'])
 
 tile_ffp_msl_spec = executable(
   'dxmt9-tile-ffp-msl-spec',

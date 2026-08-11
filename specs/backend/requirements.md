@@ -803,13 +803,13 @@ the single-sample texture first, then read back from the resolve texture.
 
 ---
 
-## 13. Tile-Shader FFP (Apple Silicon Fast Path)
+## 13. Tile-Shader FFP (Apple Silicon Candidate)
 
-These requirements define an Apple-Silicon-specific accelerated path for D3D9
-fixed-function fragment effects. Portable and tile-auto are stable FFP provider
-modes. Tile-auto remains default off pending workload evidence and never removes
-the portable fallback; selection occurs per render pass from queue-cached GPU
-capability and render-pass shape.
+These requirements define an Apple-Silicon-specific candidate path for D3D9
+fixed-function fragment effects. Portable is the stable FFP provider. Tile-auto
+must resolve to portable until the implementation proves fragment-coverage and
+prior-attachment preservation in addition to workload benefit; selection occurs
+per render pass from queue-cached GPU capability and render-pass shape.
 
 **R-BACK-13.1** On GPU families that support programmable blending and tile
 shaders (`MTLGPUFamilyApple3` and later), the backend may emit FFP fog,
@@ -830,11 +830,13 @@ the same FFP key but different tile-mode selection must compile separate
 pipeline states. Tile-mode flips inside a pass are not permitted; they
 require a render-pass split.
 
-**R-BACK-13.4** Pass selection must be observable via counters
-(`tileFfpPassCount`, `portableFfpPassCount`, `tileFfpFallbackCount`) so the
-ratio of accelerated vs portable passes is measurable per workload. A
-fallback (R-BACK-13.2) increments `tileFfpFallbackCount` and must record the
-reason class (precision, unsupported state, GPU family).
+**R-BACK-13.4** Pass and draw routing must be observable via
+`tile_ffp_pass_count`, `portable_ffp_pass_count`,
+`tile_ffp_routed_{tile,portable}_{draws,primitives,vertices}`, and fallback
+reason counters for precision, unsupported state, GPU family, and mid-pass
+ineligibility. While `R-BACK-13.7` is open, a non-diagnostic `auto` request
+must keep `tile_ffp_pass_count` at zero; diagnostic `force` may populate tile
+counters.
 
 **R-BACK-13.5** Tile-shader FFP must remain disabled on GPU families without
 programmable blending support and on any non-Apple-Silicon configuration. The
@@ -845,6 +847,15 @@ is for the portable path only.
 post-hoc transform of the portable FFP MSL. The two paths share the
 `FFPKeyPS` value but produce distinct MSL, distinct `MTLFunction` handles,
 and distinct cache entries.
+
+**R-BACK-13.7** A tile-stage implementation must modify exactly the samples
+covered by the owning D3D9 draw and must preserve the pre-draw attachment value
+for every uncovered or alpha-test-rejected sample. An attachment-wide tile
+dispatch after a base-colour draw is not sufficient evidence: it must not fog
+clear pixels, reprocess earlier draws, or retain a rejected draw's base colour.
+Until a coverage/prior-colour mechanism passes partial-draw, overlap, and
+multi-draw GPU readback equality, non-diagnostic `tile-auto` requests must fail
+closed to the portable provider.
 
 ---
 

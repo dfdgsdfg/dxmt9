@@ -305,17 +305,37 @@ void testTileFfpDisabledWhenShaderContextMissing() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "auto-fallback") {
+    setenv("DXMT9_TILE_FFP", "auto", 1);
+    try {
+      auto fixture = makeFfpFixture(FogMode::Linear);
+      const auto sel =
+          dxmt9::pipeline::selectTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+      checkEq(static_cast<int>(sel.decision),
+              static_cast<int>(dxmt9::pipeline::TileFfpDecision::Portable),
+              "non-diagnostic auto request fails closed to portable");
+      checkEq(static_cast<int>(sel.reason),
+              static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::None),
+              "auto safety fallback is a provider-resolution decision");
+    } catch (const TestFailure& failure) {
+      std::cerr << "tile_ffp_selector_spec auto fallback failed: "
+                << failure.what() << '\n';
+      return 1;
+    }
+    std::cout << "tile_ffp_selector_spec auto fallback passed\n";
+    return 0;
+  }
+
   // R-BACK-13.* — selectTileFfpForPass consults the DXMT9_TILE_FFP escape
-  // hatch FIRST: when it resolves to `off` (the current interim-safety
-  // default, see tileFfpModeOverride in dxmt9_pipeline_cache.cpp) every draw
-  // short-circuits to {Portable, None} BEFORE the genuine GpuFamily / NotFfp /
-  // precision gates this spec exercises. Pin the override to `auto` for the
-  // duration of the spec so the real decision tree is reachable; the env is
-  // read once and cached on the first selector call, so set it before any
-  // selectTileFfpForPass() invocation. This does not change the runtime
-  // default — it only selects the code path under test.
-  setenv("DXMT9_TILE_FFP", "auto", 1);
+  // hatch FIRST: non-diagnostic `off` and `auto` both fail closed to
+  // {Portable, None}
+  // until an implementation can preserve partial-draw coverage and rejected
+  // fragments. Pin the diagnostic `force` route so the genuine GpuFamily /
+  // NotFfp / precision decision tree remains unit-testable. The env is read
+  // once and cached on the first selector call, so set it before any
+  // selectTileFfpForPass() invocation.
+  setenv("DXMT9_TILE_FFP", "force", 1);
   try {
     testGpuFamilyFallback();
     testEligibleFfpPicksTile();

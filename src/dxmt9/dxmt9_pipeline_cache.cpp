@@ -190,17 +190,17 @@ void stampX8AlphaOneTextureMask(ShaderVariantKey& key,
 // effect, like the other DXMT9 knobs).
 //   off   — never take the tile path; always route the genuine portable lane.
 //           THIS IS THE DEFAULT (value unset / empty / unrecognized) as an
-//           interim safety measure: the two-stage encode now issues the
-//           base-colour draw followed by the tile post-pass, but tile-FFP
-//           still needs eligible-draw equality and perf validation before it
-//           can become a production default.
-//   auto  — explicit opt-in to the selectTileFfpForPass heuristic (the path
-//           validated behind this flag; the default can flip back to auto once
-//           equality and useful coverage hold).
+//           invariant-preserving fallback while the candidate lacks fragment
+//           coverage and pre-draw destination-colour preservation.
+//   auto  — accepted provider spelling, but currently fails closed to the
+//           portable lane. A tile dispatch visits the whole attachment, while
+//           D3D9 fog/alpha-test apply only to covered fragments; the current
+//           two-stage path therefore cannot preserve partial-draw coverage.
 //   force — take the tile path whenever the genuine eligibility gates still
 //           pass (FFP shape, precision, A2C). NEVER forces an ineligible
 //           draw (non-FFP, textured, vertex-blended, precision-unsafe, A2C),
-//           which would mis-emit; those keep falling back to portable.
+//           which would mis-emit; those keep falling back to portable. This is
+//           diagnostic-only and is not a correctness-preserving provider.
 enum class TileFfpModeOverride : std::uint8_t { Auto, Off, Force };
 
 TileFfpModeOverride tileFfpModeOverride() noexcept {
@@ -211,7 +211,7 @@ TileFfpModeOverride tileFfpModeOverride() noexcept {
       if (std::strcmp(env, "force") == 0) return TileFfpModeOverride::Force;
       // "off" and any unrecognized value fall through to the default.
     }
-    return TileFfpModeOverride::Off;  // interim safety default — see comment above.
+    return TileFfpModeOverride::Off;
   }();
   return mode;
 }
@@ -1867,18 +1867,15 @@ TileFfpSelection classifyTileFfpForPass(core::FlatDrawStateView state, bool supp
 }
 
 TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
-  // R-BACK-13.* DXMT9_TILE_FFP escape hatch (off|force|auto). `off` is a
-  // clean opt-out that routes every draw down the portable lane regardless
-  // of eligibility — keep it ahead of the genuine gates so an A/B probe can
-  // diff the two lanes for the SAME eligible draw. `force` deliberately does
-  // NOT bypass the genuine ineligibility gates (GpuFamily / NotFfp /
-  // textured / vertex-blend / precision / A2C): forcing the tile kernel onto
-  // any of those would mis-emit. `force` therefore only guarantees the tile
-  // lane for a draw that genuinely passes every gate — which is what makes it
-  // the Tile half of the A/B against `off`'s Portable half for an eligible
-  // non-textured FFP draw.
+  // R-BACK-13.* DXMT9_TILE_FFP escape hatch (off|auto|force). Both
+  // non-diagnostic spellings fail closed to portable until the tile path can
+  // preserve draw coverage and the pre-draw attachment value. The current tile
+  // kernel is an attachment-wide post-process: it fogs uncovered pixels and cannot undo the
+  // base-colour write when alpha-test rejects a fragment. `force` remains the
+  // diagnostic route used by focused GPU fixtures and deliberately does not
+  // bypass the genuine capability/shape/precision gates below.
   const TileFfpModeOverride mode = tileFfpModeOverride();
-  if (mode == TileFfpModeOverride::Off) {
+  if (mode != TileFfpModeOverride::Force) {
     return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::None};
   }
   return classifyTileFfpForPass(state, supportsApple3);

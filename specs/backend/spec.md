@@ -1718,35 +1718,41 @@ buffer. The application cannot directly access the multisample texture data.
 
 ---
 
-## 13. Tile-Shader FFP (Apple Silicon Fast Path)
+## 13. Tile-Shader FFP (Apple Silicon Candidate)
 
-The tile-shader FFP path runs D3D9 fixed-function fragment effects (fog,
-alpha test, alpha-to-coverage) at the Metal **tile stage** instead of the
-fragment stage on `MTLGPUFamilyApple3+`. Tile-stage execution lives in
-on-chip tile memory and has no fragment-shader dispatch cost; for FFP-heavy
-D3D9 frames this collapses two passes (fragment fog + framebuffer write)
-into one tile pass.
+The tile-shader FFP candidate moves selected D3D9 fixed-function fragment
+effects (fog, alpha test, alpha-to-coverage) into a Metal tile stage on
+`MTLGPUFamilyApple3+`. The current implementation is a two-stage operation:
+it rasterizes base colour through a fragment draw, then runs an
+attachment-wide tile dispatch. This is not a stable render provider because
+the second stage lacks the owning draw's coverage and pre-draw destination
+colour. Portable fragment FFP remains authoritative.
 
 ### 13.1 Selection Flow
 
 ```mermaid
 flowchart TD
-    PASS["render-pass desc built\n(attachments, FFPKeyPS, GPU family)"] --> CAP{"GPU family\n≥ Apple3?"}
-    CAP -->|"no"| PORT["portable fragment FFP\n(unchanged path)"]
+    PASS["render-pass desc built\n(attachments, FFPKeyPS, GPU family)"] --> MODE{"resolved provider"}
+    MODE -->|"portable or auto"| PORT["portable fragment FFP\n(stable path)"]
+    MODE -->|"diagnostic force"| CAP{"GPU family\n≥ Apple3?"}
+    CAP -->|"no"| PORT
     CAP -->|"yes"| KEY{"FFPKeyPS uses\ntile-eligible state?\n(fog, alpha-test, A2C only)"}
     KEY -->|"no"| PORT
     KEY -->|"yes"| PRECISION{"reference values\nin tile-precision range?"}
-    PRECISION -->|"no"| FALLBACK["fallback:\nportable path\nincrement tileFfpFallbackCount(reason)"]
+    PRECISION -->|"no"| FALLBACK["fallback:\nportable path\nincrement reason counter"]
     PRECISION -->|"yes"| TILE["tile-shader FFP path"]
     TILE --> CMP["select MSL with\ntile_ffp_mode=1 variant"]
     PORT --> CMP_P["select MSL with\ntile_ffp_mode=0 variant"]
-    CMP --> ENC["encoder uses\nMTLTileRenderPipelineState"]
+    CMP --> ENC["encoder uses tile-descriptor\nMTLRenderPipelineState"]
     CMP_P --> ENC2["encoder uses\nMTLRenderPipelineState (fragment)"]
 ```
 
 Selection is per-render-pass (`R-BACK-13.1`). A pass that begins as tile-FFP
 cannot mid-pass switch to portable; mismatched draws within the pass force
-either a pass split or a fall-through to portable for the whole pass.
+either a pass split or a fall-through to portable for the whole pass. The
+current attachment-wide post-process does not satisfy `R-BACK-13.7`, so
+non-diagnostic `tile-auto` requests resolve to portable and only the diagnostic
+`force` route can exercise the candidate pipeline.
 
 ### 13.2 MSL Generation
 
@@ -1756,11 +1762,12 @@ Two distinct generators emit two distinct MSL sources from the same
 | Path | Generator | Output | Pipeline state |
 |---|---|---|---|
 | Portable | `makeFfpPixelSource()` | fragment function | `MTLRenderPipelineState` |
-| Tile | `makeFfpTilePixelSource()` (new) | tile function | `MTLTileRenderPipelineState` |
+| Tile | `makeFfpTilePixelSource()` | tile function | tile-descriptor `MTLRenderPipelineState` |
 
-The tile generator emits programmable-blending tile code that reads
-attachment color directly (Apple-Silicon-only feature) instead of writing
-through `out.color = ...`. This avoids round-tripping through tile memory.
+The tile generator emits programmable-blending tile code that reads attachment
+color directly. That access alone does not establish D3D9 draw semantics: a
+mid-render tile dispatch covers the attachment, not the rasterized fragment
+coverage of the immediately preceding draw.
 
 PSO key includes `tile_ffp_mode` bit (`R-BACK-13.3`); the same `FFPKeyPS`
 produces two compiled function pairs, one in each cache.
@@ -1777,31 +1784,32 @@ Tile-shader FFP must produce results bit-identical to the portable path
 | Programmable blend interaction with PS-emitted alpha-to-coverage | `unsupported_state` | mark pass portable |
 | Non-Apple-Silicon device | `gpu_family` | always portable, no counter increment |
 
-Conformance evidence (`R-BACK-13.5`) is taken from the portable path only;
-the tile path is judged equivalent by bit-identity to portable per
-`R-BACK-13.2`. Conformance regressions in the tile path manifest as
-visible-pixel differences under shader-runner readback tests, which keep
-running both paths and require equality.
+Conformance evidence (`R-BACK-13.5`) is taken from the portable path only.
+The full-attachment single-draw equality fixture proves only that narrow
+shape. The partial-rectangle readback fixture proves that the current tile
+candidate is not generally equivalent, so `auto` must remain portable.
+Promotion requires the equality matrix in §13.7; performance evidence is
+considered only after that matrix passes.
 
 ### 13.4 Counters
 
 | Counter | Meaning |
 |---|---|
-| `tileFfpPassCount` | render passes encoded via tile path |
-| `portableFfpPassCount` | render passes encoded via portable path |
-| `tileFfpFallbackCount` | passes that started tile-eligible but fell back |
-| `tileFfpFallbackByReason{precision \| unsupported_state \| gpu_family \| mid_pass_ineligible}` | fallback breakdown |
-| `tileFfpMidPassResplitCount` | passes split because a draw mid-pass became ineligible |
-| `tileFfpPassMs` / `portableFfpPassMs` | encoding time per path (sanity check) |
+| `tile_ffp_pass_count` | render passes encoded via the diagnostic tile route |
+| `portable_ffp_pass_count` | render passes encoded via the portable provider |
+| `tile_ffp_fallback_{precision,unsupported_state,gpu_family,mid_pass_ineligible}` | diagnostic eligibility fallback breakdown |
+| `tile_ffp_mid_pass_resplit_count` | diagnostic tile passes split by a later ineligible draw |
+| `tile_ffp_routed_{tile,portable}_{draws,primitives,vertices}` | draw-volume attribution by resolved route |
+| `tile_ffp_eligible_{draws,primitives,vertices}` | candidate opportunity volume before route resolution |
 
-A regression to the portable path on an Apple Silicon device is observable
-as a drop in `tileFfpPassCount` ratio without a corresponding
-`tileFfpFallbackCount` increase (i.e., the selector skipped tile path for an
-unaccounted reason).
+While `R-BACK-13.7` is open, a non-diagnostic `auto` request producing any
+`tile_ffp_pass_count` is a safety regression. Candidate coverage and route
+volume remain observable under diagnostic `force`; requested/resolved provider
+reporting remains owned by the render-provider gap.
 
 ### 13.5 Metal API Model
 
-The tile-shader FFP path uses Metal's tile-render pipeline, which is a
+The tile-shader FFP candidate uses Metal's tile-render pipeline, which is a
 distinct compile target from the standard render pipeline.
 
 ```mermaid
@@ -1832,9 +1840,17 @@ The MSL emitter (`makeFfpTilePixelSource`) writes a tile kernel that:
   (Apple Silicon programmable-blending).
 - expresses fog blend / alpha-test / A2C as an arithmetic + conditional
   pass over the imageblock value before write-back.
-- does **not** call `discard_fragment()`; alpha-test rejection becomes a
-  blend-with-prior-color of the rejected fragment (alpha-test on tile is
-  semantically equivalent to discarding pre-blend).
+- does **not** call `discard_fragment()`.
+
+The present two-stage implementation rasterizes base colour and then invokes
+`dispatchThreadsPerTile`. It is correct only for the narrow full-attachment
+single-draw fixture: the dispatch also fogs uncovered clear pixels, and an
+alpha-test return cannot restore the attachment value already overwritten by
+the base draw. A promotable design therefore needs draw coverage and the
+pre-draw destination colour in tile memory, for example a bounded memoryless
+coverage/prior-colour composition. Partial rectangles, overlapping draws, and
+multiple eligible draws in one pass are mandatory equality cases before the
+selector may resolve `tile-auto` to tile.
 
 ### 13.6 Mid-Pass Eligibility Policy
 
@@ -1857,6 +1873,9 @@ flowchart TD
 
 Rules:
 
+- These split rules describe only the diagnostic candidate and a future
+  correctness-complete provider. Non-diagnostic `auto` does not open a tile
+  pass while `R-BACK-13.7` is open.
 - A pass opened on the **portable** path stays portable even if subsequent
   draws would have been tile-eligible. Promoting mid-pass is not allowed
   because the portable encoder cannot retroactively become a tile encoder.
@@ -1868,7 +1887,29 @@ Rules:
 - `tileFfpFallbackByReason{mid_pass_ineligible}` advances on the same
   event for the by-reason breakdown.
 
-### 13.7 Floating-Point Precision Boundary
+### 13.7 Coverage and Prior-Colour Contract
+
+A promotable tile provider must carry enough per-draw information to compose
+only the samples produced by that draw. The representation may use a
+memoryless sidecar, an imageblock payload, or another bounded Metal mechanism,
+but it must establish all of the following before the tile effect runs:
+
+- exact raster coverage, including scissor, viewport, sample mask, and A2C;
+- the destination colour that existed before the owning draw;
+- ordered ownership when eligible draws overlap or when an earlier draw is
+  revisited by a later attachment-wide operation;
+- alpha-test rejection that leaves the prior destination untouched; and
+- one effect application per covered sample, with no reprocessing of earlier
+  draws in the same pass.
+
+Required GPU readback evidence is: partial rectangle over a contrasting clear,
+two overlapping eligible draws with different fog state, alpha rejection over
+existing colour, and multiple eligible draws in one render pass. Each fixture
+must compare portable with the candidate route and must also assert zero Metal
+validation errors. Only after these pass may workload coverage and performance
+be used to consider resolving `tile-auto` to tile.
+
+### 13.8 Floating-Point Precision Boundary
 
 `R-BACK-13.2` requires "bit-identical to the portable fragment path." This
 is achievable only when both paths use the same arithmetic precision.
@@ -1889,9 +1930,25 @@ Precision rules:
   before the blend and re-encoded after, identically on both paths.
 - A precision divergence that breaks bit-identity (e.g., a float
   rounding-mode quirk on a specific GPU family) must be encoded as a
-  conformance test failure → `tileFfpFallbackByReason{precision}`
+  conformance test failure → `tile_ffp_fallback_precision`
   increment + the affected pass falls back. The portable path remains
   the authoritative oracle.
+
+### 13.9 Verification Mapping
+
+| Contract | Evidence | Current verdict |
+|---|---|---|
+| Selector eligibility and reason taxonomy | `dxmt9-tile-ffp-selector-spec` | Implemented for the diagnostic candidate |
+| Non-diagnostic `auto` fail-closed policy | `dxmt9-tile-ffp-auto-fallback-spec` | Passes; eligible Linear fog resolves portable |
+| Tile MSL and variant shape | `dxmt9-tile-ffp-msl-spec` | Implemented; not pixel-correctness evidence |
+| Full-attachment single draw | `dxmt9-tile-ffp-force-fullscreen-equality` | Passes under diagnostic `force`; narrow evidence only |
+| Partial coverage safety | `dxmt9-tile-ffp-auto-partial-coverage-safety` plus the default corpus fixture | Stable route passes by resolving portable |
+| Candidate partial coverage equality | the same partial fixture under diagnostic `force` | Fails: uncovered clear pixel is modified |
+| Overlap, alpha reject, and multiple draws | new shader-runner GPU readback fixtures | Missing; required by `R-BACK-13.7` |
+
+The failed diagnostic candidate is retained as negative evidence. It must not
+be relabelled as a passing conformance provider merely because non-diagnostic `auto`
+falls back before reaching it.
 
 A future Metal version that adds full programmable-blending precision
 parity may relax these rules; until then, dxmt9's tile path opts into

@@ -132,9 +132,10 @@ gaps listed above. The findings closed in that batch were:
 
 Outstanding work for the closed findings in this historical table is deferred
 evidence: GPU-runtime pixel validation (RESZ MSAA→INTZ readback, NULL
-color-attachment omission, MIPMAPLODBIAS mip selection, tile-FFP↔portable
-equality) and conformance Wine-run validation of the new PE gates. This does not
-supersede the live implementation gaps above.
+color-attachment omission, and MIPMAPLODBIAS mip selection) plus conformance
+Wine-run validation of the new PE gates. Tile-FFP is no longer a deferred-
+evidence item: the 2026-08-11 correction below proves a current implementation
+failure. This does not supersede the live implementation gaps above.
 
 **2026-05-25 — why these are still "deferred": the blocker is `shader_runner_dxmt9`
 DSL expressiveness, NOT the dxmt9 implementation** (sub-agent investigation; each
@@ -154,10 +155,22 @@ unblocks (all are runner/`tests/shader_runner/shader_runner_dxmt9.cpp` extension
 - **NULL + RESZ ✅ CLOSED via native unit tests** (`483365e`): `dxmt9-null-rt-attachment-spec` (R-FORMAT-12) extracts the `beginRenderPass` RT0-admission + color-attachment-inclusion decisions into pure transforms (`renderPassAdmitsRt0` / `colorAttachmentIncluded`) and asserts the colorless-NULL policy (color slot omitted, depth retained). `dxmt9-resz-depth-resolve-spec` (R-FORMAT-11) asserts POINTSIZE-sentinel detection + `reszDepthResolve` `DepthResolveDesc` (MSAA source + INTZ level-0 dest) via a recording backend. Both pass. (These verify the decision LOGIC deterministically; full GPU pixel readback still needs the runner-DSL work above, but the core contracts are now unit-covered.)
 - **tile-FFP ✅ FIXED (two-stage encode landed 2026-05-25) — default stays `off` pending a perf benchmark** (`DXMT9_TILE_FFP` toggle landed `e165154`): the toggle works (force→tile, off→portable, proven by `tile_ffp_pass_count`/`portable_ffp_pass_count`), and the A/B it enabled uncovered that **the tile-FFP path never rasterizes the draw's base colour into the imageblock** — so any draw routed to tile renders the *cleared* imageblock post-processed by the tile kernel, i.e. **black**, regardless of fog/alpha-test. Evidence (M1/apple7): a plain white quad with NO fog and NO alpha-test reads `(255,255,255)` portable but `(0,0,0)` tile; the tile run shows `draw_geometry_samples=0` / `bind_pipeline=0` / no draw counters while `tile_ffp_pass_count=1`, vs portable `draw_geometry_ffp=1` / `draw_vertices=3`. **Root cause:** `src/dxmt9/dxmt9_draw_encoder.mm:~1435-1459` (wired by `523b66e`) does `setTileRenderPipelineState` + `dispatchThreadsPerTile` **instead of** the base-colour `setRenderPipelineState` + `drawPrimitives`; the tile kernel `makeFfpTilePixelSource` (`dxmt9_ffp_shaders.cpp:~1302` `float4 color = float4(slot->color);`) therefore reads the cleared imageblock, not the fragment colour. This contradicts the programmable-blend design (`specs/backend/spec.md §13.5`, R-BACK-13.1) where the fragment stage must write the base colour FIRST and the tile kernel only applies fog/alpha-test/A2C over it. **Impact:** tile-FFP is default-on for eligible draws on Apple Silicon (the `selectTileFfpForPass` eligibility: FFP + fog/alpha-test/A2C, non-textured), so a real app using non-textured FFP fog/alpha-test draws renders that geometry **black**. (Narrowly triggered — most FFP draws are textured → forced portable → correct — which is why it went unnoticed; SFIV etc. are shader-based, not FFP.) **Proper fix = two-stage tile encode:** bind a base-colour render PSO (portable FFP fragment, fog+alpha-test stripped) and issue `drawPrimitives` so the geometry lands in the imageblock, THEN bind the tile PSO + `dispatchThreadsPerTile` to apply fog/alpha-test/A2C — within one render encoder; spans variant key + a base-colour pixel-source variant + pipeline cache (two PSOs) + encoder reorder + GPU bit-identity validation. **Interim safety APPLIED (2026-05-25):** `DXMT9_TILE_FFP` default flipped `auto`→`off` (`tileFfpModeOverride` in `dxmt9_pipeline_cache.cpp`) so every FFP draw now takes the correct portable lane by default; verified an eligible FFP draw records `portable_ffp_pass_count=1` (tile=0) with no env, while `DXMT9_TILE_FFP=auto` still reaches the tile path (`tile_ffp_pass_count=1`) for the two-stage-encode fix to validate behind the flag. Portable is correct and was the original path; the only loss is the (unvalidated) tile perf optimisation. The default flips back to `auto` once the two-stage encode lands + GPU-readback equality holds. **Repro** (`.shader_test`, kept here since the corpus file was removed to keep `dxmt9-manifest-check` green): `clear rgba(0,0,0,1); dxmt9-render-state fog=on fogmode=linear fogstart=0 fogend=1 fogcolor=rgba(0.25,0.5,0.75,1); alpha-test enable greaterequal 0.5; draw quad; probe (32,32)` — run under `DXMT9_PREWARM=disabled DXMT9_TILE_FFP=force` (→ buggy `(0,0,0)`) vs `=off` (→ correct `(64,128,191)`), both with `DXMT_PERF_COUNTERS=1` to confirm the paths differ. **RESOLVED 2026-05-25 (6 commits `43ae1dd`..`7ed5fcb`, supervised mega-refactor):** implemented the two-stage encode (base-colour render PSO + `drawPrimitives` → then tile PSO + `dispatchThreadsPerTile`, one encoder). The fix exposed TWO further root causes beyond the missing base draw: (1) the tile kernel's imageblock access used `imageblock_data.data(tid)` (explicit-layout accessor) which **never compiled** → changed to `read(tid)`/`write(value,tid)` (implicit layout); (2) `setTileRenderPipelineState` is **not a valid selector on the M1 render encoder** (`AGXG13GFamilyRenderContext`, threw `NSInvalidArgumentException`) → the tile PSO is bound via `setRenderPipelineState` per §13.5, with `FfpPsConsts` on `setTileBuffer(3)`. Also runtime-gated the tile fog blend on `ffpPs.fogMode != 0`. **Verified (M1, supervisor re-ran):** the registered probe `tests/shader_runner/corpus/ffp/dxmt9_tile_ffp_fog_equality_readback.shader_test` PASSES under BOTH `=force` and `=off` (both `(64,128,191)`) with `draw_geometry_samples=1` (was 0); manifest-check ok (243 tests); `dxmt9-tile-ffp-selector-spec`/`-msl-spec` OK; FFP corpus no-regression. The `off` default is retained because the perf case is still unproven — single-draw `gpu_command_buffer_time_ms` was tile 0.039 ms vs portable 0.050 ms (noisy, not a workload benchmark); flipping the default back to `auto` should await a real benchmark proving tile beats portable.
 
-`DXMT9_PREWARM=disabled` + isolated `DXMT9_CACHE_DIR` were used per run. The dxmt9
-implementations themselves are unchanged and presumed correct — but **unverified on
-GPU**; the argbuf precedent (a "landed" lane that was a GPU page fault) is the reason
-these should not be assumed correct until a probe (via one of the vehicles above)
+- **tile-FFP 2026-08-11 correction — two-stage encode is not generally correct.**
+  `dxmt9_tile_ffp_partial_rect_preserves_clear_readback.shader_test` draws a
+  fogged rectangle over a red clear. Portable preserves the uncovered red
+  pixel, while the diagnostic tile route changes it to the fog colour
+  `(64,128,191)`. The base draw also overwrites destination colour before a
+  tile alpha-test can reject it. `R-BACK-13.7` therefore supersedes the earlier
+  full-screen closure: `auto` now fails closed to portable, `force` remains a
+  diagnostic, and promotion requires coverage/prior-colour composition plus
+  partial, overlap, alpha-reject, and multi-draw equality before performance
+  measurement.
+
+`DXMT9_PREWARM=disabled` + isolated `DXMT9_CACHE_DIR` were used per run. The
+historical presumption of correctness applies only to the still-unverified
+features in the table above; it is explicitly superseded for tile-FFP by the
+2026-08-11 partial-coverage failure. The argbuf precedent (a "landed" lane that
+was a GPU page fault) is the reason no path should be promoted until a probe
 actually reads back the pixels.
 
 ---

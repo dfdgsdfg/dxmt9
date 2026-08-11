@@ -50,7 +50,7 @@ complete.
 | CB segmentation | `off`, `metal4` | Stable; off implemented, Metal 4 planned | off default | `R-BACK-2.66` |
 | Submission grain | `off`, `per-render-pass` | Stable / implemented | per-render-pass default with cap 4; off rollback | `R-BACK-2.29`–`2.34` |
 | Binding representation | Stage 1 direct, Stage 2 constants, Stage 2b direct-cbuf, Stage 2 resource-array | Stable / implemented with capability fallback | Stage 2b automatic on Apple3+/Tier2; Stage 1 fallback; resource-array opt-in | `R-BACK-12.22`–`12.26` |
-| FFP execution | `portable`, `tile-auto` | Stable / implemented | portable default; tile-auto opt-in | `R-BACK-13.*` |
+| FFP execution | `portable`, `tile-auto` | portable stable / implemented; tile-auto candidate / correctness-blocked | tile-auto resolves to portable | `R-BACK-13.*` |
 | Present acquire | `sync`, `pre-acquire`, `sync-on-submit`, `async` | Stable / implemented | sync default | `R-BACK-6.11`, Presenter |
 | Present boundary | `default`, `after-acquire`, `completion`, `present-completion` | Stable / implemented | present-completion default | `R-BACK-6.12`, Presenter |
 | Drawable storage | general drawable, framebuffer-only drawable | Stable / implemented | general default; framebuffer-only opt-in | `R-CORE-WSI-6.1`–`6.2` |
@@ -78,10 +78,12 @@ These lanes are implemented enough to run but are not compatibility promises:
 | aggressive color/depth DontCare | conservative Store proof | cross-frame resource-liveness and device-backed equality |
 | CAMetalLayer display-sync opt-in | minimum-duration scheduling | interval correctness, compositor behavior, and latency evidence |
 | unused-varying trim | full VSOut | new evidence that justifies reopening the rejected GT1 result |
+| tile-auto FFP | portable FFP | partial/overlap/multi-draw equality, coverage/prior-colour implementation, then workload benefit |
 
-`DXMT9_ARGBUF_RESOURCE_ARRAY` and `DXMT9_TILE_FFP=auto` are stable opt-in
-provider modes, not experiments. Their defaults remain conservative until the
-owning performance gates pass. `DXMT9_TILE_FFP=force` is diagnostic only.
+`DXMT9_ARGBUF_RESOURCE_ARRAY` is a stable opt-in provider mode. The
+`DXMT9_TILE_FFP=auto` spelling is retained but currently resolves to portable;
+it is a correctness-blocked candidate, not a usable opt-in provider.
+`DXMT9_TILE_FFP=force` is diagnostic only.
 
 ### 2.2 Diagnostic and retired surfaces
 
