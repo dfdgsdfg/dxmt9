@@ -1846,11 +1846,18 @@ The present two-stage implementation rasterizes base colour and then invokes
 `dispatchThreadsPerTile`. It is correct only for the narrow full-attachment
 single-draw fixture: the dispatch also fogs uncovered clear pixels, and an
 alpha-test return cannot restore the attachment value already overwritten by
-the base draw. A promotable design therefore needs draw coverage and the
-pre-draw destination colour in tile memory, for example a bounded memoryless
-coverage/prior-colour composition. Partial rectangles, overlapping draws, and
-multiple eligible draws in one pass are mandatory equality cases before the
-selector may resolve `tile-auto` to tile.
+the base draw. A 2026-08-11 kernel-source audit found a third independent
+defect (`R-BACK-13.8`): the emitted kernel derives its fog factor from the
+destination attachment's alpha channel (`fogEnd - color.a`), but the base
+PSO carries no per-fragment fog factor into the attachment — the portable
+path fogs with the interpolated `VSOut` fog input, so the tile candidate
+misreads material alpha as fog distance; the alpha-test operand has the same
+destination-derived provenance problem. A promotable design therefore needs
+draw coverage, the pre-draw destination colour, and an explicit per-fragment
+fog/alpha carrier in tile memory, for example a bounded memoryless
+coverage/prior-colour/fog composition. Partial rectangles, overlapping draws,
+and multiple eligible draws in one pass are mandatory equality cases before
+the selector may resolve `tile-auto` to tile.
 
 ### 13.6 Mid-Pass Eligibility Policy
 
@@ -1898,7 +1905,10 @@ but it must establish all of the following before the tile effect runs:
 - the destination colour that existed before the owning draw;
 - ordered ownership when eligible draws overlap or when an earlier draw is
   revisited by a later attachment-wide operation;
-- alpha-test rejection that leaves the prior destination untouched; and
+- alpha-test rejection that leaves the prior destination untouched;
+- per-fragment fog-factor and shaded-alpha provenance from the owning draw
+  (`R-BACK-13.8`) — destination attachment channels are never a fog-distance
+  or alpha-test-operand source; and
 - one effect application per covered sample, with no reprocessing of earlier
   draws in the same pass.
 
@@ -1944,6 +1954,7 @@ Precision rules:
 | Full-attachment single draw | `dxmt9-tile-ffp-force-fullscreen-equality` | Passes under diagnostic `force`; narrow evidence only |
 | Partial coverage safety | `dxmt9-tile-ffp-auto-partial-coverage-safety` plus the default corpus fixture | Stable route passes by resolving portable |
 | Candidate partial coverage equality | the same partial fixture under diagnostic `force` | Fails: uncovered clear pixel is modified |
+| Fog/alpha per-fragment provenance (`R-BACK-13.8`) | 2026-08-11 `makeFfpTilePixelSource` source audit | Fails: kernel reads attachment alpha as fog distance and alpha-test operand; base PSO emits no carrier |
 | Overlap, alpha reject, and multiple draws | new shader-runner GPU readback fixtures | Missing; required by `R-BACK-13.7` |
 
 The failed diagnostic candidate is retained as negative evidence. It must not

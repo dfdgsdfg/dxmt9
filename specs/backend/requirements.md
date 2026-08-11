@@ -857,6 +857,16 @@ Until a coverage/prior-colour mechanism passes partial-draw, overlap, and
 multi-draw GPU readback equality, non-diagnostic `tile-auto` requests must fail
 closed to the portable provider.
 
+**R-BACK-13.8** Tile-stage fog and alpha-test inputs must have the same
+per-fragment provenance as the portable path: the fog blend factor comes from
+the owning draw's interpolated fog input, and the alpha-test operand is the
+fragment's shaded alpha before any destination blend. Neither value may be
+inferred from the destination attachment; a tile candidate that reads
+attachment channels as fog distance or as the alpha-test operand is
+correctness-invalid regardless of coverage handling, and the carrier that
+transports these per-fragment values into the tile stage is part of the
+promotable design (`R-BACK-13.7` evidence matrix).
+
 ---
 
 ## 14. Resource Heap Pooling
