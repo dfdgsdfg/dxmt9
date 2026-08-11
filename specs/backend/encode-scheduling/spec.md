@@ -1074,12 +1074,12 @@ Invalid or unsupported output selects the allocation-free identity cursor over
 the same effective stream. This fallback cannot restore commands removed by DCE
 or return to source order after FrameGraph reorder.
 
-The implemented first policy is selected by the queue-immutable
-`DXMT9_RENDER_PARTITION_MODE=serial` mode. `identity` and the unset default
-retain the identity cursor. `parallel` is a stable future spelling but currently
-falls back to identity because `R-BACK-2.63` is not implemented; unknown values
-and explicitly empty values also fail closed to identity. Device creation
-resolves the value once and every
+The implemented planner is selected by the queue-immutable `serial` and
+`parallel` modes. `identity` and the unset default retain the identity cursor.
+`parallel` resolves distinctly, runs the same production planner and validator,
+then takes the typed serial fallback described in §7.2 because no sealed-pass
+WMT child lane exists yet. Unknown values and explicitly empty values fail
+closed to identity. Device creation resolves the value once and every
 production queue source path forwards the typed result through
 `EncodeChunkOptions`; no source or draw rereads the environment.
 
@@ -1125,6 +1125,25 @@ the parent ends; then the coordinator joins sidecars and finalizes the pass.
 If eligibility or snapshot validation fails before child Metal side effects,
 the coordinator uses the serial plan. A failure after child emission is an
 invariant failure, because Metal encoding cannot be rewound safely.
+
+The first implementation increment keeps this as a non-Metal execution
+contract. `ExplicitParallel` is a distinct queue-immutable mode and invokes the
+same bounded production planner and exact range validator as `ExplicitSerial`.
+The current production call site owns only a source fragment rather than a
+sealed logical pass, so it deterministically consumes the validated ranges on
+the serial coordinator and records `PassNotSealed`; it does not ask WMT for a
+parallel parent or child encoder.
+
+The pure bounded seam classifies sealed-plan eligibility and selection with a
+typed fallback reason, copies at most 16 locator-only child plans, assigns a
+distinct child-local shadow ordinal, and requires a complete first-draw
+snapshot plus forced full first-draw binding for every child. Its deterministic
+fake executor fixes child creation order, permits an arbitrary validated join
+permutation, keeps pass actions, sidecars, and completion coordinator-owned,
+joins all children before parent end, falls back only before the first effect,
+and fail-stops afterward. This seam is test evidence for the ownership and
+failure contracts; a real WMT adapter and worker pool remain unimplemented and
+default-off.
 
 ### 7.3 Metal 4 Suspend/Resume
 
@@ -1207,7 +1226,7 @@ fallback is a provider-lifecycle decision, not a storage-only refactor.
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |
 | Stable provider configuration | partition-axis pure resolver coverage pins unset, identity, serial, unsupported parallel, empty, and unknown behavior plus queue forwarding. Source/segment-axis resolvers, the unified mode matrix, process-separated selector precedence/default/fallback evidence, and complete requested/resolved perf observability remain missing. |
-| Parallel order and join | missing fake-child executor spec and formal/refinement evidence |
+| Parallel order and join | deterministic Metal-free fake-child coverage proves ordered creation, arbitrary completion join, distinct local shadows, forced full first-draw binding, command/draw once, coordinator-owned actions/sidecars/completion, join-before-parent-end, pre-effect fallback, and post-effect fail-stop; real WMT adapter, worker pool, and formal/refinement evidence remain missing |
 | Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
 | Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |
 | Metal 4 capability lane | missing capability/fallback unit evidence, Metal integration, and visual/locality A/B |

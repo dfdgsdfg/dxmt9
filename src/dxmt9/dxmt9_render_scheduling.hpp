@@ -8,6 +8,7 @@ namespace dxmt9::render {
 enum class PartitionExecutionMode : std::uint8_t {
   IdentitySerial,
   ExplicitSerial,
+  ExplicitParallel,
 };
 
 enum class PartitionModeRequest : std::uint8_t {
@@ -20,7 +21,6 @@ enum class PartitionModeRequest : std::uint8_t {
 
 enum class PartitionModeFallback : std::uint8_t {
   None,
-  ParallelUnsupported,
   InvalidValue,
 };
 
@@ -54,8 +54,7 @@ constexpr RenderPartitionConfig resolveRenderPartitionConfig(
   if (selected == "parallel") {
     return RenderPartitionConfig{
         .requested = PartitionModeRequest::Parallel,
-        .resolved = PartitionExecutionMode::IdentitySerial,
-        .fallback = PartitionModeFallback::ParallelUnsupported,
+        .resolved = PartitionExecutionMode::ExplicitParallel,
     };
   }
   return RenderPartitionConfig{
@@ -72,6 +71,8 @@ constexpr const char* partitionModeName(
       return "identity";
     case PartitionExecutionMode::ExplicitSerial:
       return "serial";
+    case PartitionExecutionMode::ExplicitParallel:
+      return "parallel";
   }
   return "identity";
 }

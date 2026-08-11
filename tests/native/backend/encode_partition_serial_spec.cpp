@@ -460,16 +460,15 @@ void canonicalPartitionSelectorResolvesQueueImmutableModes() {
       dxmt9::render::resolveRenderPartitionConfig("surprise");
   check(defaults.resolved == PartitionExecutionMode::IdentitySerial &&
             identity.resolved == PartitionExecutionMode::IdentitySerial &&
-            serial.resolved == PartitionExecutionMode::ExplicitSerial,
-        "canonical identity/serial spelling resolves once into typed modes");
-  check(parallel.resolved == PartitionExecutionMode::IdentitySerial &&
-            parallel.fallback ==
-                PartitionModeFallback::ParallelUnsupported &&
-            empty.resolved == PartitionExecutionMode::IdentitySerial &&
+            serial.resolved == PartitionExecutionMode::ExplicitSerial &&
+            parallel.resolved == PartitionExecutionMode::ExplicitParallel &&
+            parallel.fallback == PartitionModeFallback::None,
+        "canonical spellings resolve once into three distinct typed modes");
+  check(empty.resolved == PartitionExecutionMode::IdentitySerial &&
             empty.fallback == PartitionModeFallback::InvalidValue &&
             invalid.resolved == PartitionExecutionMode::IdentitySerial &&
             invalid.fallback == PartitionModeFallback::InvalidValue,
-        "unsupported or invalid requests fail closed to identity");
+        "empty or invalid requests fail closed to identity");
 }
 
 void identityTraversesMixedSourceOrder() {

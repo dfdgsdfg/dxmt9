@@ -1,6 +1,7 @@
 #include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_archive_prewarm.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_scheduling.hpp"
 #include "util/log/log.hpp"
 
@@ -145,6 +146,11 @@ class DeviceImpl final : public Device {
                    renderPartitionConfig_.requested),
                render::partitionModeName(renderPartitionConfig_.resolved),
                static_cast<unsigned>(renderPartitionConfig_.fallback));
+    if (perf::enabled()) {
+      perf::countRenderPartitionProvider(
+          static_cast<std::uint32_t>(renderPartitionConfig_.requested),
+          static_cast<std::uint32_t>(renderPartitionConfig_.resolved));
+    }
   }
 
   // queue_ destructs first (last-declared) — joins worker threads,

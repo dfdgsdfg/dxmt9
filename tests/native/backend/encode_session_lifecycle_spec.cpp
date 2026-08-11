@@ -1034,6 +1034,8 @@ void productionPartitionModeSubdividesWithoutChangingMetalShape() {
       181u, dxmt9::render::PartitionExecutionMode::IdentitySerial);
   const auto explicitSerial = run(
       182u, dxmt9::render::PartitionExecutionMode::ExplicitSerial);
+  const auto explicitParallel = run(
+      185u, dxmt9::render::PartitionExecutionMode::ExplicitParallel);
   checkEq(identity.subranges.size(), std::size_t{1},
           "identity mode consumes one full DrawRun range");
   checkEq(explicitSerial.subranges.size(), std::size_t{2},
@@ -1054,6 +1056,12 @@ void productionPartitionModeSubdividesWithoutChangingMetalShape() {
           "partition mode preserves one complete DrawRun upload batch");
   checkEq(explicitSerial.indexCounts.size(), identity.indexCounts.size(),
           "partition mode emits every source draw exactly once");
+  check(explicitParallel.subranges == explicitSerial.subranges,
+        "parallel request uses the same validated production plan");
+  checkEq(explicitParallel.drawRunBegins, identity.drawRunBegins,
+          "unsealed parallel request falls back before command effects");
+  checkEq(explicitParallel.indexCounts.size(), identity.indexCounts.size(),
+          "parallel serial fallback emits every draw exactly once");
 }
 
 void segmentedArenaProductionPlanMatchesIdentityEndToEnd() {

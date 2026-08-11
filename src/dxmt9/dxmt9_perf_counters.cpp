@@ -547,6 +547,78 @@ void countEncodePartitionPlan(bool explicitPlan,
   updateMax(c.encodePartitionPlannerCpuMaxNs, plannerNanoseconds);
 }
 
+void countRenderPartitionProvider(std::uint32_t requestedMode,
+                                  std::uint32_t resolvedMode) {
+  auto& c = counters();
+  switch (requestedMode) {
+  case 0u:
+    add(c.renderPartitionRequestedDefault);
+    break;
+  case 1u:
+    add(c.renderPartitionRequestedIdentity);
+    break;
+  case 2u:
+    add(c.renderPartitionRequestedSerial);
+    break;
+  case 3u:
+    add(c.renderPartitionRequestedParallel);
+    break;
+  default:
+    add(c.renderPartitionRequestedInvalid);
+    break;
+  }
+  switch (resolvedMode) {
+  case 0u:
+    add(c.renderPartitionResolvedIdentity);
+    break;
+  case 1u:
+    add(c.renderPartitionResolvedSerial);
+    break;
+  default:
+    add(c.renderPartitionResolvedParallel);
+    break;
+  }
+}
+
+void countParallelPassDecision(bool considered,
+                               bool eligible,
+                               bool selected,
+                               std::uint32_t fallbackReason) {
+  auto& c = counters();
+  if (considered) {
+    add(c.parallelPassConsidered);
+  }
+  if (eligible) {
+    add(c.parallelPassEligible);
+  }
+  if (selected) {
+    add(c.parallelPassSelected);
+  }
+  switch (fallbackReason) {
+  case 0u:
+  case 1u:
+    break;
+  case 2u:
+  case 3u:
+    add(c.parallelPassFallbackNoPlan);
+    break;
+  case 4u:
+    add(c.parallelPassFallbackUnsealed);
+    break;
+  case 15u:
+    add(c.parallelPassFallbackUnavailable);
+    break;
+  case 16u:
+  case 17u:
+  case 18u:
+    add(c.parallelPassFallbackPreEffect);
+    break;
+  default:
+    add(c.parallelPassFallbackIneligible);
+    break;
+  }
+}
+
 void countCpuReadySessionHeadAppended(bool arenaSource) {
   auto& c = counters();
   add(c.cpuReadySessionHeadAppended);

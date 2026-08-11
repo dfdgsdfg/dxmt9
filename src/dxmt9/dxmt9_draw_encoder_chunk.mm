@@ -23,6 +23,7 @@
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_parallel_render_pass.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
@@ -1207,9 +1208,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   std::span<const EncodePartitionRangeSnapshot> partitionRanges =
       options.partitionRanges;
   thread_local ProductionEncodePartitionPlanStorage productionPlanStorage;
-  if (partitionRanges.empty() &&
+  const bool parallelPartitionRequested =
       options.partitionExecutionMode ==
-          render::PartitionExecutionMode::ExplicitSerial) {
+      render::PartitionExecutionMode::ExplicitParallel;
+  if (partitionRanges.empty() &&
+      (options.partitionExecutionMode ==
+           render::PartitionExecutionMode::ExplicitSerial ||
+       parallelPartitionRequested)) {
     const bool measurePlanner = perf::enabled();
     std::chrono::steady_clock::time_point plannerStarted{};
     if (measurePlanner) {
@@ -1240,6 +1245,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const auto validation = validateEncodePartitionRanges(
         partitionRanges, partitionReplayStream);
     useExplicitPartitionPlan = static_cast<bool>(validation);
+  }
+  if (parallelPartitionRequested && perf::enabled()) {
+    // encodeChunk owns only a source fragment, not a sealed logical pass. The
+    // real WMT parallel parent/child lane is intentionally absent, so a
+    // parallel request plans and validates normally, then records the exact
+    // pre-effect serial fallback at this ownership boundary.
+    const auto eligibility = classifyParallelPassEligibility(
+        ParallelPassEligibilityInput{
+            .ranges = partitionRanges,
+            .explicitPlan = !partitionRanges.empty(),
+            .planValidated = useExplicitPartitionPlan,
+            .logicalPassSealed = false,
+        });
+    const auto decision = decideParallelPassExecution(
+        true, eligibility, false);
+    perf::countParallelPassDecision(
+        decision.considered, decision.eligible, decision.selected,
+        static_cast<std::uint32_t>(decision.fallback));
   }
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(sourceSeqId);

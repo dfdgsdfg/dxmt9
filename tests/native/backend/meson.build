@@ -304,6 +304,18 @@ test('dxmt9-encode-partition-serial-spec',
      encode_partition_serial_spec,
      env: dxmt9_native_test_env)
 
+parallel_render_pass_spec = executable(
+  'dxmt9-parallel-render-pass-spec',
+  'parallel_render_pass_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-parallel-render-pass-spec',
+     parallel_render_pass_spec,
+     env: dxmt9_native_test_env)
+
 encode_session_lifecycle_spec = executable(
   'dxmt9-encode-session-lifecycle-spec',
   'encode_session_lifecycle_spec.cpp',

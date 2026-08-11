@@ -237,6 +237,12 @@ void countEncodePartitionPlan(bool explicitPlan,
                               std::uint64_t mergePreservedIdentity,
                               std::uint32_t fallbackReason,
                               std::uint64_t plannerNanoseconds);
+void countRenderPartitionProvider(std::uint32_t requestedMode,
+                                  std::uint32_t resolvedMode);
+void countParallelPassDecision(bool considered,
+                               bool eligible,
+                               bool selected,
+                               std::uint32_t fallbackReason);
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);
