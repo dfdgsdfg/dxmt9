@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_encode_partition.hpp"
+#include "dxmt9_source_semantics.hpp"
 
 #include <array>
 #include <cstddef>
@@ -17,12 +18,87 @@ inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
 // meaning of generation; zero is never a complete snapshot.
 struct ParallelFirstDrawSnapshot {
   EncodePartitionEntrySnapshot provenance{};
+  core::RenderContinuationKey entryRender{};
   std::uint64_t generation = 0;
   bool complete = false;
 
   friend constexpr bool operator==(const ParallelFirstDrawSnapshot&,
                                    const ParallelFirstDrawSnapshot&) = default;
 };
+
+enum class SealedParallelPassSnapshotFallback : std::uint8_t {
+  None,
+  PlanMissing,
+  PlanNotValidated,
+  ReplayInvalid,
+  UnsealedStart,
+  UnsealedEnd,
+  CoordinatorCommand,
+  TooFewChildren,
+  ChildCapacity,
+  AttachmentMismatch,
+  ResourceHazard,
+  FirstDrawSnapshot,
+  Count,
+};
+
+struct SealedParallelPassSnapshotInput {
+  const EncodePartitionReplayStream* stream = nullptr;
+  std::span<const EncodePartitionRangeSnapshot> ranges{};
+  bool planValidated = false;
+  bool sourceStartsPass = false;
+  bool sourceEndsPass = false;
+};
+
+// Fixed value-owned shadow of one complete single-source logical pass. It
+// deliberately contains no SourcePayloadView, resolved span, Metal object, or
+// page pointer. The source locator must be re-resolved under a residency pin by
+// any future executor before child creation.
+struct SealedParallelPassSnapshot {
+  std::array<EncodePartitionRangeSnapshot,
+             kParallelRenderPassChildCapacity> ranges{};
+  std::array<ParallelFirstDrawSnapshot,
+             kParallelRenderPassChildCapacity> firstDraws{};
+  core::RenderAttachmentKey attachments{};
+  core::ExactResourceSet attachmentWrites{};
+  core::CpuReadyTape::SourceRef source{};
+  std::uint64_t seqId = 0;
+  std::uint64_t drawCount = 0;
+  std::uint32_t childCount = 0;
+  bool hasTerminalPresent = false;
+
+  void reset() noexcept { *this = {}; }
+  std::span<const EncodePartitionRangeSnapshot> rangeView() const noexcept {
+    return std::span<const EncodePartitionRangeSnapshot>(ranges.data(),
+                                                          childCount);
+  }
+  std::span<const ParallelFirstDrawSnapshot> firstDrawView() const noexcept {
+    return std::span<const ParallelFirstDrawSnapshot>(firstDraws.data(),
+                                                       childCount);
+  }
+};
+
+struct SealedParallelPassSnapshotResult {
+  SealedParallelPassSnapshotFallback fallback =
+      SealedParallelPassSnapshotFallback::PlanMissing;
+  std::uint64_t drawCount = 0;
+  std::uint32_t childCount = 0;
+  bool considered = false;
+  bool sealed = false;
+  bool eligible = false;
+
+  friend constexpr bool operator==(
+      const SealedParallelPassSnapshotResult&,
+      const SealedParallelPassSnapshotResult&) = default;
+};
+
+// Production shadow producer for the first safely provable shape: a fresh,
+// source-local pass whose selected stream contains only DrawRuns and an
+// optional final Present. Full-plan validation must already have succeeded.
+// The function is allocation-free and performs no Metal or queue side effect.
+SealedParallelPassSnapshotResult produceSealedParallelPassSnapshot(
+    const SealedParallelPassSnapshotInput& input,
+    SealedParallelPassSnapshot& snapshot) noexcept;
 
 enum class ParallelPassFallbackReason : std::uint8_t {
   None,
@@ -52,6 +128,35 @@ enum class ParallelPassFallbackReason : std::uint8_t {
   FullFirstDrawBindingRequired,
   Count,
 };
+
+inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
+    SealedParallelPassSnapshotFallback fallback) noexcept {
+  switch (fallback) {
+  case SealedParallelPassSnapshotFallback::None:
+    return ParallelPassFallbackReason::None;
+  case SealedParallelPassSnapshotFallback::PlanMissing:
+    return ParallelPassFallbackReason::NoExplicitPlan;
+  case SealedParallelPassSnapshotFallback::PlanNotValidated:
+  case SealedParallelPassSnapshotFallback::ReplayInvalid:
+    return ParallelPassFallbackReason::PlanNotValidated;
+  case SealedParallelPassSnapshotFallback::UnsealedStart:
+  case SealedParallelPassSnapshotFallback::UnsealedEnd:
+    return ParallelPassFallbackReason::PassNotSealed;
+  case SealedParallelPassSnapshotFallback::CoordinatorCommand:
+    return ParallelPassFallbackReason::CoordinatorCommand;
+  case SealedParallelPassSnapshotFallback::TooFewChildren:
+    return ParallelPassFallbackReason::TooFewChildren;
+  case SealedParallelPassSnapshotFallback::ChildCapacity:
+    return ParallelPassFallbackReason::ChildCapacity;
+  case SealedParallelPassSnapshotFallback::AttachmentMismatch:
+  case SealedParallelPassSnapshotFallback::ResourceHazard:
+    return ParallelPassFallbackReason::UnresolvedHazard;
+  case SealedParallelPassSnapshotFallback::FirstDrawSnapshot:
+  case SealedParallelPassSnapshotFallback::Count:
+    return ParallelPassFallbackReason::FirstDrawSnapshotMissing;
+  }
+  return ParallelPassFallbackReason::FirstDrawSnapshotMissing;
+}
 
 struct ParallelPassEligibilityInput {
   std::span<const EncodePartitionRangeSnapshot> ranges{};
@@ -130,7 +235,9 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
       return reject(ParallelPassFallbackReason::CoordinatorCommand);
     }
     if (!input.firstDrawSnapshots[i].complete ||
-        input.firstDrawSnapshots[i].generation == 0u) {
+        input.firstDrawSnapshots[i].generation == 0u ||
+        !input.firstDrawSnapshots[i].entryRender.valid() ||
+        !input.firstDrawSnapshots[i].entryRender.entryStateComplete()) {
       return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
     }
   }
@@ -282,7 +389,9 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
     }
     shadows[child.localShadowOrdinal] = true;
     if (!child.firstDraw.complete || child.firstDraw.generation == 0u ||
-        child.firstDraw.provenance != range.entry) {
+        child.firstDraw.provenance != range.entry ||
+        !child.firstDraw.entryRender.valid() ||
+        !child.firstDraw.entryRender.entryStateComplete()) {
       return ParallelPassFallbackReason::FirstDrawProvenanceInvalid;
     }
     if (!child.forceFullFirstDrawBinding) {
@@ -405,6 +514,8 @@ ParallelPassExecutionResult executeParallelRenderPass(
 }
 
 static_assert(std::is_trivially_copyable_v<ParallelFirstDrawSnapshot>);
+static_assert(std::is_trivially_copyable_v<SealedParallelPassSnapshot>);
+static_assert(std::is_standard_layout_v<SealedParallelPassSnapshot>);
 static_assert(std::is_standard_layout_v<ParallelPassChildPlan>);
 static_assert(std::is_trivially_copyable_v<ParallelPassPlanStorage>);
 

@@ -649,6 +649,56 @@ void countParallelPassDecision(
   }
 }
 
+void countParallelPassShadow(
+    const encoders::SealedParallelPassSnapshotResult& result) {
+  using Fallback = encoders::SealedParallelPassSnapshotFallback;
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 12u);
+  auto& c = counters();
+  if (result.considered) {
+    add(c.parallelPassShadowAttempts);
+  }
+  if (result.sealed) {
+    add(c.parallelPassShadowSealed);
+  }
+  if (result.eligible) {
+    add(c.parallelPassShadowEligible);
+    add(c.parallelPassShadowChildren, result.childCount);
+    updateMax(c.parallelPassShadowChildrenMax, result.childCount);
+    add(c.parallelPassShadowDraws, result.drawCount);
+    updateMax(c.parallelPassShadowDrawsMax, result.drawCount);
+  }
+  switch (result.fallback) {
+  case Fallback::None:
+    break;
+  case Fallback::PlanMissing:
+  case Fallback::PlanNotValidated:
+  case Fallback::ReplayInvalid:
+    add(c.parallelPassShadowRejectPlan);
+    break;
+  case Fallback::UnsealedStart:
+  case Fallback::UnsealedEnd:
+    add(c.parallelPassShadowRejectBoundary);
+    break;
+  case Fallback::CoordinatorCommand:
+    add(c.parallelPassShadowRejectCommand);
+    break;
+  case Fallback::TooFewChildren:
+  case Fallback::ChildCapacity:
+    add(c.parallelPassShadowRejectCapacity);
+    break;
+  case Fallback::AttachmentMismatch:
+    add(c.parallelPassShadowRejectAttachment);
+    break;
+  case Fallback::ResourceHazard:
+    add(c.parallelPassShadowRejectHazard);
+    break;
+  case Fallback::FirstDrawSnapshot:
+  case Fallback::Count:
+    add(c.parallelPassShadowRejectSnapshot);
+    break;
+  }
+}
+
 void countCpuReadySessionHeadAppended(bool arenaSource) {
   auto& c = counters();
   add(c.cpuReadySessionHeadAppended);

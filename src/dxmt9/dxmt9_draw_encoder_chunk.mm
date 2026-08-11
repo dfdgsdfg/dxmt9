@@ -1249,19 +1249,41 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     useExplicitPartitionPlan = static_cast<bool>(validation);
   }
   if (parallelPartitionRequested && perf::enabled()) {
-    // encodeChunk owns only a source fragment, not a sealed logical pass. The
-    // real WMT parallel parent/child lane is intentionally absent, so a
-    // parallel request plans and validates normally, then records the exact
-    // pre-effect serial fallback at this ownership boundary.
-    const auto eligibility = classifyParallelPassEligibility(
-        ParallelPassEligibilityInput{
+    // Observation-only production sealing. The first admitted shape is a
+    // fresh source-local pass ending in this call; carried-session and
+    // cross-source passes remain explicitly unsealed. No snapshot or borrowed
+    // source view escapes this synchronous call, and the real WMT lane remains
+    // unavailable, so every successful shadow decision still consumes the
+    // validated plan through the serial cursor below.
+    thread_local SealedParallelPassSnapshot parallelPassShadow;
+    const auto shadow = produceSealedParallelPassSnapshot(
+        SealedParallelPassSnapshotInput{
+            .stream = &partitionReplayStream,
             .ranges = partitionRanges,
-            .explicitPlan = !partitionRanges.empty(),
             .planValidated = useExplicitPartitionPlan,
-            .logicalPassSealed = false,
-        });
-    const auto decision = decideParallelPassExecution(
-        true, eligibility, false);
+            .sourceStartsPass = options.session == nullptr,
+            .sourceEndsPass = !(options.deferSessionFinalization &&
+                                options.session != nullptr),
+        },
+        parallelPassShadow);
+    perf::countParallelPassShadow(shadow);
+
+    ParallelPassExecutionDecision decision{
+        .fallback = parallelPassFallbackForSnapshot(shadow.fallback),
+        .considered = shadow.considered,
+    };
+    if (shadow.eligible) {
+      const auto eligibility = classifyParallelPassEligibility(
+          ParallelPassEligibilityInput{
+              .ranges = parallelPassShadow.rangeView(),
+              .firstDrawSnapshots = parallelPassShadow.firstDrawView(),
+              .explicitPlan = true,
+              .planValidated = true,
+              .logicalPassSealed = true,
+              .hasPresent = false,
+          });
+      decision = decideParallelPassExecution(true, eligibility, false);
+    }
     perf::countParallelPassDecision(decision);
   }
 
