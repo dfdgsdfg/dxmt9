@@ -1893,6 +1893,7 @@ void CommandQueue::startThreads(std::function<void()> encodeLoop,
     return;
   }
   stop_ = false;
+  queueLifecycle_.resetPendingCompletionStop();
   encodeThread_ = std::thread(
       makeQueueWorkerLoop(QueueWorkerRole::Encode, std::move(encodeLoop)));
   finishThread_ = std::thread(
@@ -1908,10 +1909,7 @@ void CommandQueue::stopThreads() {
   }
   {
     std::lock_guard lock(mutex_);
-    stop_ = true;
-    cpuReadyTape_.stopAdmission();
-    notifySchedulingTerminalWaiters(
-        render::SchedulingTerminalDisposition::Stop);
+    requestSchedulingStopLocked();
   }
   if (encodeThread_.joinable()) encodeThread_.join();
   if (completionThread_.joinable()) completionThread_.join();
@@ -4518,7 +4516,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       const ResolvedPublishedSource resolved =
           queueLifecycle_.resolveRepresentedSource(current);
       if (!resolved.valid()) {
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       if (!resolved.slot) {
@@ -4659,7 +4657,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
             selected[0].valid(), selected[0].slot != nullptr, hasNext,
             selected[1].valid(), selected[1].slot != nullptr);
     if (sourceAction == DceChunkLookaheadSourceAction::Poison) {
-      queueLifecycle_.poisonTapeFailure();
+      queueLifecycle_.poisonTapeFailureLocked();
       return;
     }
     encoders::EncodeChunkOptions options{};
@@ -4817,6 +4815,13 @@ void CommandQueue::noteInitializerPendingUploads() noexcept {
   encodeCv_.notify_all();
 }
 
+void CommandQueue::requestSchedulingStopLocked() noexcept {
+  stop_ = true;
+  cpuReadyTape_.stopAdmission();
+  notifySchedulingTerminalWaiters(
+      render::SchedulingTerminalDisposition::Stop);
+}
+
 void CommandQueue::notifySchedulingTerminalWaiters(
     render::SchedulingTerminalDisposition disposition) noexcept {
   schedulingProgressWatchdog_.noteTerminal(
@@ -4835,7 +4840,7 @@ void CommandQueue::notifySchedulingTerminalWaiters(
     sessionReleaseCv_.notify_all();
   }
   if (wake.wakes(render::SchedulingWakePendingCompletion)) {
-    queueLifecycle_.notifyPendingCompletionStop();
+    queueLifecycle_.requestPendingCompletionStop();
   }
 }
 
@@ -4853,7 +4858,7 @@ void CommandQueue::runFinishLoop() {
 }
 
 void CommandQueue::runCompletionWatcherLoop() {
-  while (queueLifecycle_.processOnePendingCompletion(stop_)) {
+  while (queueLifecycle_.processOnePendingCompletion()) {
     // continue until processOnePendingCompletion returns false (stop)
   }
 }

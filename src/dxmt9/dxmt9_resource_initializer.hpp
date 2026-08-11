@@ -18,6 +18,7 @@
 namespace dxmt9 {
 
 class CommandQueue;
+struct SchedulingProgressTestAccess;
 
 namespace resources {
 
@@ -70,6 +71,9 @@ class Initializer {
 
  private:
   FlushResult flushToWaitUnlocked();
+  void enqueuePendingUploadUnlocked(Pool::StagingCopy staging);
+
+  friend struct dxmt9::SchedulingProgressTestAccess;
 
   CommandQueue* queue_;
   Pool* pool_;

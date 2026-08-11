@@ -379,8 +379,7 @@ struct CommandQueueArenaLeaseTestAccess {
       pending.retainedPayloads.push_back(std::move(retainedPayload));
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
-    bool completionStop = false;
-    if (!queue.queueLifecycle_.processOnePendingCompletion(completionStop)) {
+    if (!queue.queueLifecycle_.processOnePendingCompletion()) {
       return 0;
     }
 
@@ -510,9 +509,7 @@ struct CommandQueueArenaLeaseTestAccess {
       return result;
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
-    bool completionStop = false;
-    result.completed =
-        queue.queueLifecycle_.processOnePendingCompletion(completionStop);
+    result.completed = queue.queueLifecycle_.processOnePendingCompletion();
     if (!result.completed) {
       return result;
     }

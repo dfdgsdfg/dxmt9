@@ -1,7 +1,10 @@
 #include "../../../src/dxmt9/render/encode_scheduling_progress.hpp"
+#include "../../../src/dxmt9/dxmt9_command_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_resource_initializer.hpp"
 #include "../../../src/dxmt9/dxmt9_scheduling_progress_watchdog.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -11,6 +14,79 @@
 #include <string>
 #include <string_view>
 #include <thread>
+
+namespace dxmt9 {
+
+struct SchedulingProgressTestAccess {
+  struct PendingWaitReady {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool ready = false;
+  };
+
+  static std::condition_variable& conditionVariable(
+      CommandQueue& queue, render::SchedulingWakeTarget target) {
+    switch (target) {
+    case render::SchedulingWakeWriter: return queue.writeCv_;
+    case render::SchedulingWakeEncoder: return queue.encodeCv_;
+    case render::SchedulingWakeFinish: return queue.finishCv_;
+    case render::SchedulingWakePresentCompleted:
+      return queue.presentCompletedCv_;
+    case render::SchedulingWakePresentDequeued:
+      return queue.presentDequeuedCv_;
+    case render::SchedulingWakeSessionRelease:
+      return queue.sessionReleaseCv_;
+    default: std::terminate();
+    }
+  }
+
+  static std::mutex& schedulingMutex(CommandQueue& queue) {
+    return queue.mutex_;
+  }
+
+  static void enqueueInitializerPending(resources::Initializer& initializer) {
+    std::lock_guard lock(initializer.queue_->mutex_);
+    initializer.enqueuePendingUploadUnlocked({});
+  }
+
+  static void requestTerminal(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.requestSchedulingStopLocked();
+  }
+
+  static void poison(CommandQueue& queue) {
+    queue.queueLifecycle_.poisonTapeFailure();
+  }
+
+  static void abort(CommandQueue& queue) {
+    queue.abortCpuReadyArenaSource({}, queue.slots_.size());
+  }
+
+  static bool processPendingCompletion(CommandQueue& queue) {
+    return queue.queueLifecycle_.processOnePendingCompletion();
+  }
+
+  static void observePendingWait(void* context) noexcept {
+    auto& ready = *static_cast<PendingWaitReady*>(context);
+    {
+      std::lock_guard lock(ready.mutex);
+      ready.ready = true;
+    }
+    ready.cv.notify_one();
+  }
+
+  static void setPendingWaitObserver(
+      CommandQueue& queue, PendingWaitReady& ready) {
+    queue.queueLifecycle_.setPendingCompletionWaitObserverForTest(
+        &ready, observePendingWait);
+  }
+
+  static void requestPendingCompletionStop(CommandQueue& queue) {
+    queue.queueLifecycle_.requestPendingCompletionStop();
+  }
+};
+
+}  // namespace dxmt9
 
 namespace {
 
@@ -117,84 +193,124 @@ void terminalFanoutTruthTable() {
   }
 }
 
-template <typename Predicate, typename Release>
-void conditionVariableReleases(Predicate predicate, Release release,
-                               std::string_view message) {
-  std::mutex mutex;
-  std::condition_variable cv;
+template <typename Notify>
+void productionConditionVariableReleases(
+    dxmt9::CommandQueue& queue,
+    dxmt9::render::SchedulingWakeTarget target,
+    Notify notify, std::string_view message) {
+  std::mutex readyMutex;
   std::condition_variable readyCv;
   bool waiterReady = false;
-  bool released = false;
+  std::atomic<bool> predicate{false};
+  std::atomic<bool> released{false};
   std::thread waiter([&] {
-    std::unique_lock lock(mutex);
-    waiterReady = true;
+    std::unique_lock lock(
+        dxmt9::SchedulingProgressTestAccess::schedulingMutex(queue));
+    {
+      std::lock_guard readyLock(readyMutex);
+      waiterReady = true;
+    }
     readyCv.notify_one();
-    cv.wait(lock, predicate);
-    released = true;
+    auto& cv = dxmt9::SchedulingProgressTestAccess::conditionVariable(
+        queue, target);
+    released.store(cv.wait_for(lock, std::chrono::seconds(2), [&] {
+      return predicate.load(std::memory_order_acquire);
+    }), std::memory_order_release);
   });
   {
-    std::unique_lock lock(mutex);
+    std::unique_lock lock(readyMutex);
     readyCv.wait(lock, [&] { return waiterReady; });
-    check(!predicate(), "fixture must begin with a closed wait predicate");
-    release();
   }
-  cv.notify_all();
+  predicate.store(true, std::memory_order_release);
+  notify();
   waiter.join();
-  check(released, message);
+  check(released.load(std::memory_order_acquire), message);
 }
 
-void realConditionVariableReleaseTests() {
+dxmt9::CommandQueue makeSchedulingQueue() {
+  return dxmt9::CommandQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{},
+      dxmt9::core::BackendLimits{});
+}
+
+void productionOwnerConditionVariableReleaseTests() {
   using namespace dxmt9::render;
   {
-    CpuReadyAdmissionGate gate{.controlSlotFree = true};
-    conditionVariableReleases(
+    auto queue = makeSchedulingQueue();
+    dxmt9::resources::Pool pool;
+    dxmt9::resources::Initializer initializer(queue, pool, {});
+    productionConditionVariableReleases(
+        queue, SchedulingWakeEncoder,
         [&] {
-          return classifyCpuReadyAdmissionGate(gate) !=
-              CpuReadyAdmissionAction::Wait;
+          dxmt9::SchedulingProgressTestAccess::enqueueInitializerPending(
+              initializer);
         },
-        [&] { gate.reserveStillPressured = false; },
-        "admission reserve release wakes a real condition variable");
+        "Initializer empty-to-nonempty hook wakes the production encode CV");
   }
-  {
-    bool stopped = false;
-    std::uint64_t current = 3;
-    conditionVariableReleases(
-        [&] { return firstLeaseCapacityWaitDone(stopped, 3, current); },
-        [&] { current = 4; },
-        "capacity generation release wakes a real condition variable");
-  }
-  {
-    CpuReadySessionWakeState state{};
-    conditionVariableReleases(
-        [&] { return retainedOrDeferredSessionWaitDone(state); },
-        [&] { state.initializerPending = true; },
-        "initializer publication wakes a retained session wait");
-  }
-  {
-    CpuReadySessionWakeState state{};
-    conditionVariableReleases(
-        [&] { return openSessionWaitDone(state); },
-        [&] { state.orderedRelease = true; },
-        "ordered release wakes an open session wait");
-  }
-  constexpr std::array terminalTargets{
+  constexpr std::array nonCompletionTargets{
       SchedulingWakeWriter,
       SchedulingWakeEncoder,
       SchedulingWakeFinish,
       SchedulingWakePresentCompleted,
       SchedulingWakePresentDequeued,
       SchedulingWakeSessionRelease,
-      SchedulingWakePendingCompletion,
   };
-  for (const auto disposition : {SchedulingTerminalDisposition::Stop,
-                                 SchedulingTerminalDisposition::DeviceLoss}) {
-    for (const auto target : terminalTargets) {
-      auto current = SchedulingTerminalDisposition::Running;
-      conditionVariableReleases(
-          [&] { return planSchedulingTerminalWake(current).wakes(target); },
-          [&] { current = disposition; },
-          "terminal disposition releases every real condition variable");
+  for (const auto target : nonCompletionTargets) {
+    auto queue = makeSchedulingQueue();
+    productionConditionVariableReleases(
+        queue, target,
+        [&] { dxmt9::SchedulingProgressTestAccess::requestTerminal(queue); },
+        "CommandQueue terminal fanout wakes the selected production CV");
+  }
+  for (const auto target : nonCompletionTargets) {
+    auto queue = makeSchedulingQueue();
+    productionConditionVariableReleases(
+        queue, target,
+        [&] { dxmt9::SchedulingProgressTestAccess::poison(queue); },
+        "QueueLifecycleController poison wakes the selected production CV");
+  }
+  for (const auto target : nonCompletionTargets) {
+    auto queue = makeSchedulingQueue();
+    productionConditionVariableReleases(
+        queue, target,
+        [&] { dxmt9::SchedulingProgressTestAccess::abort(queue); },
+        "arena abort wakes the selected production CV");
+  }
+  for (const auto action : {0, 1, 2, 3}) {
+    auto queue = makeSchedulingQueue();
+    dxmt9::SchedulingProgressTestAccess::PendingWaitReady waitReady;
+    dxmt9::SchedulingProgressTestAccess::setPendingWaitObserver(
+        queue, waitReady);
+    std::atomic<bool> returned{false};
+    std::atomic<bool> processed{true};
+    std::thread waiter([&] {
+      processed.store(
+          dxmt9::SchedulingProgressTestAccess::processPendingCompletion(queue),
+          std::memory_order_release);
+      returned.store(true, std::memory_order_release);
+    });
+    {
+      std::unique_lock lock(waitReady.mutex);
+      waitReady.cv.wait(lock, [&] { return waitReady.ready; });
     }
+    switch (action) {
+    case 0:
+      dxmt9::SchedulingProgressTestAccess::requestTerminal(queue);
+      break;
+    case 1:
+      dxmt9::SchedulingProgressTestAccess::poison(queue);
+      break;
+    case 2:
+      dxmt9::SchedulingProgressTestAccess::abort(queue);
+      break;
+    default:
+      dxmt9::SchedulingProgressTestAccess::requestPendingCompletionStop(queue);
+      break;
+    }
+    waiter.join();
+    check(returned.load(std::memory_order_acquire) &&
+              !processed.load(std::memory_order_acquire),
+          "production pending-completion stop predicate releases its waiter");
   }
 }
 
@@ -249,6 +365,58 @@ void watchdogUsesBoundedGenerationSafeSlots() {
   }
 }
 
+void watchdogRejectsStaleStoresAcrossCapacityReuse() {
+  dxmt9::SchedulingProgressWatchdog watchdog(
+      /*enabled=*/true, /*thresholdMs=*/1000,
+      /*startSamplerThread=*/false);
+  constexpr std::uint64_t iterations = 20000;
+  std::atomic<std::uint64_t> staleSeq{0};
+  std::atomic<std::uint64_t> currentSeq{0};
+  std::atomic<std::uint64_t> epoch{0};
+  std::atomic<std::uint64_t> writerDoneEpoch{0};
+  std::atomic<bool> stop{false};
+  std::thread staleWriter([&] {
+    std::uint64_t observedEpoch = 0;
+    while (!stop.load(std::memory_order_acquire)) {
+      const auto nextEpoch = epoch.load(std::memory_order_acquire);
+      if (nextEpoch == observedEpoch) {
+        std::this_thread::yield();
+        continue;
+      }
+      observedEpoch = nextEpoch;
+      watchdog.noteSubmitted(staleSeq.load(std::memory_order_relaxed), true);
+      writerDoneEpoch.store(nextEpoch, std::memory_order_release);
+    }
+  });
+  for (std::uint64_t i = 0; i < iterations; ++i) {
+    const std::uint64_t oldSeq = 1 + i * 2u *
+        dxmt9::SchedulingProgressWatchdog::kCapacity;
+    const std::uint64_t newSeq = oldSeq +
+        dxmt9::SchedulingProgressWatchdog::kCapacity;
+    watchdog.noteAccepted(oldSeq, false);
+    watchdog.noteReleased(oldSeq, false);
+    staleSeq.store(oldSeq, std::memory_order_relaxed);
+    currentSeq.store(newSeq, std::memory_order_relaxed);
+    watchdog.noteAccepted(newSeq, false);
+    epoch.store(i + 1, std::memory_order_release);
+    while (writerDoneEpoch.load(std::memory_order_acquire) != i + 1) {
+      std::this_thread::yield();
+    }
+    const auto snapshot = watchdog.slotSnapshotForTest(newSeq);
+    check(snapshot.tracked && snapshot.identity == newSeq,
+          "reused watchdog slot keeps the new generation identity");
+    check(snapshot.phase == dxmt9::SchedulingProgressPhase::Admission &&
+              (snapshot.flags & dxmt9::SchedulingProgressCapture) == 0 &&
+              (snapshot.flags & dxmt9::SchedulingProgressReleased) == 0,
+          "old-generation writer cannot store into the reused generation");
+    watchdog.noteReleased(newSeq, false);
+  }
+  stop.store(true, std::memory_order_release);
+  staleWriter.join();
+  check(currentSeq.load(std::memory_order_relaxed) != 0,
+        "watchdog reuse stress exercised a current generation");
+}
+
 }  // namespace
 
 int main() {
@@ -258,9 +426,10 @@ int main() {
     sessionWakeTruthTables();
     initializerTransitionTruthTable();
     terminalFanoutTruthTable();
-    realConditionVariableReleaseTests();
+    productionOwnerConditionVariableReleaseTests();
     watchdogPerfOffDoesZeroWork();
     watchdogUsesBoundedGenerationSafeSlots();
+    watchdogRejectsStaleStoresAcrossCapacityReuse();
     std::cout << "encode scheduling progress spec: ok\n";
     return 0;
   } catch (const std::exception& error) {

@@ -245,12 +245,7 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
                                              height, depth, pitch, slicePitch,
                                              bytes.data(), bytes.size());
   if (staging) {
-    const bool wasEmpty = pendingUploads_.empty();
-    pendingUploads_.push_back(std::move(*staging));
-    if (render::initializerPendingTransitionNeedsWake(
-            wasEmpty, pendingUploads_.empty())) {
-      queue_->noteInitializerPendingUploads();
-    }
+    enqueuePendingUploadUnlocked(std::move(*staging));
   }
 
   // gpu-dump sidechannel: only meaningful after the destination is fully
@@ -303,12 +298,7 @@ void Initializer::initializeTextureZero(core::TextureHandle handle) {
           device_, handle, subresourceIndexForZeroInit(desc, slice, mip), width, height,
           depth, pitch, static_cast<u32>(slicePitchBytes), zeros.data(), zeros.size());
       if (staging) {
-        const bool wasEmpty = pendingUploads_.empty();
-        pendingUploads_.push_back(std::move(*staging));
-        if (render::initializerPendingTransitionNeedsWake(
-                wasEmpty, pendingUploads_.empty())) {
-          queue_->noteInitializerPendingUploads();
-        }
+        enqueuePendingUploadUnlocked(std::move(*staging));
       }
     }
   }
@@ -321,6 +311,15 @@ Initializer::FlushResult Initializer::flushToWait() {
 
 bool Initializer::hasPendingUploadsUnlocked() const noexcept {
   return !pendingUploads_.empty();
+}
+
+void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
+  const bool wasEmpty = pendingUploads_.empty();
+  pendingUploads_.push_back(std::move(staging));
+  if (render::initializerPendingTransitionNeedsWake(
+          wasEmpty, pendingUploads_.empty())) {
+    queue_->noteInitializerPendingUploads();
+  }
 }
 
 Initializer::FlushResult Initializer::flushToWaitUnlocked() {

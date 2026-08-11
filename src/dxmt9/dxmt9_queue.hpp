@@ -831,8 +831,11 @@ class QueueLifecycleController {
   PostEncodeReceiptResult retireEncodedSourcePayload(
       std::unique_lock<std::mutex>& lock,
       QueueCompletionSource& source);
-  // Fail-stop a structurally inconsistent Tape/source resolution. This is an
-  // owner-only surface used by CommandQueue's synchronous encode loops.
+  // Fail-stop a structurally inconsistent Tape/source resolution. Locked
+  // callers already own SubmissionBinding::mutex; completion-thread callers
+  // must use the unlocked entry point so Tape/admission/stop mutation remains
+  // serialized by the scheduling owner.
+  void poisonTapeFailureLocked() noexcept;
   void poisonTapeFailure() noexcept;
   // Encoded-head retention for pending session tails. Sources must already be
   // dequeued into Encoding state; this records their completion identity
@@ -1048,8 +1051,9 @@ class QueueLifecycleController {
   // Drain one pending completion — blocks on waitUntilCompleted() and then
   // runs the diagnostics / completedSeqQueue / transition work. Called from
   // the dedicated completion-watcher thread. Returns true if a record was
-  // processed, false on stop. `stop` is read under pendingCompletionMutex_.
-  bool processOnePendingCompletion(bool& stop);
+  // processed, false after the controller-owned pending-stop latch is set and
+  // the queue is empty.
+  bool processOnePendingCompletion();
   // CPU-only specs use this to exercise the completion-watcher expansion
   // path without manufacturing a fake Objective-C command-buffer handle.
   // Production submissions enter the same pending queue through submit().
@@ -1059,8 +1063,16 @@ class QueueLifecycleController {
     return postEncodeCompletionLedger_.receiptFor(seqId, state);
   }
 
-  void notifyPendingCompletionStop() {
-    pendingCompletionCv_.notify_all();
+  // Publish the completion predicate while holding its owning mutex, then
+  // notify. This may be called with the scheduling mutex held; the completion
+  // thread never takes the locks in the opposite order.
+  void requestPendingCompletionStop() noexcept;
+  void resetPendingCompletionStop() noexcept;
+  using PendingCompletionWaitObserverForTest = void (*)(void*) noexcept;
+  void setPendingCompletionWaitObserverForTest(
+      void* context, PendingCompletionWaitObserverForTest observer) noexcept {
+    pendingCompletionWaitObserverContext_ = context;
+    pendingCompletionWaitObserver_ = observer;
   }
 
  private:
@@ -1069,6 +1081,10 @@ class QueueLifecycleController {
   std::mutex pendingCompletionMutex_{};
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
+  bool pendingCompletionStop_ = false;
+  void* pendingCompletionWaitObserverContext_ = nullptr;
+  PendingCompletionWaitObserverForTest pendingCompletionWaitObserver_ =
+      nullptr;
   bool completionWaitActive_ = false;
   std::uint32_t producerSequenceWaitDepth_ = 0;
   std::uint32_t producerWriterPressureDepth_ = 0;

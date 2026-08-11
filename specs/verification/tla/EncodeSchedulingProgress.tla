@@ -10,9 +10,9 @@
  *   deferred payload retirement: PostEncodePayloadRetirement
  *   Present pacing             : PresentFrameLatency
  *
- * GPU settlement is deliberately not a queue action. GpuSettlementAssumption
- * is the explicit environment fairness assumption; all other fairness below
- * is limited to queue-owned actions while they remain enabled.
+ * Source arrival and GPU settlement are deliberately not queue actions.
+ * Their assumptions are explicit below; all other fairness is limited to
+ * queue-owned actions while they remain enabled.
  *)
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
@@ -21,7 +21,8 @@ CONSTANTS MaxSources, MaxSessionLen, MaxPresentOutstanding
 
 Sources == 1 .. MaxSources
 Phases == {"Unaccepted", "Admission", "Leased", "Ready", "Encoded",
-           "Submitted", "GpuSettled", "Completion", "Released"}
+           "Submitted", "GpuSettled", "Completion", "TerminalDrain",
+           "Released"}
 Terminals == {"Running", "Stop", "DeviceLoss"}
 
 VARIABLES
@@ -294,7 +295,6 @@ SubmitSession ==
 (* Explicit environment action; fairness appears only in
    GpuSettlementAssumption below. *)
 GpuSettleHead ==
-  /\ terminal = "Running"
   /\ gpuQueue # <<>>
   /\ Head(gpuQueue) \notin gpuSettled
   /\ LET s == Head(gpuQueue) IN
@@ -310,7 +310,6 @@ GpuSettleHead ==
                   terminal>>
 
 ExpandCompletion ==
-  /\ terminal = "Running"
   /\ gpuQueue # <<>>
   /\ Head(gpuQueue) \in gpuSettled
   /\ LET s == Head(gpuQueue) IN
@@ -326,7 +325,6 @@ ExpandCompletion ==
                   gpuSettled, nextSessionId, sourceSession, terminal>>
 
 ReleaseSource ==
-  /\ terminal = "Running"
   /\ completionQueue # <<>>
   /\ Head(completionQueue) = Cardinality(released) + 1
   /\ LET s == Head(completionQueue) IN
@@ -357,6 +355,7 @@ SettlePresent ==
 
 RequestTerminal(disposition) ==
   /\ terminal = "Running"
+  /\ nextAccept = MaxSources + 1
   /\ disposition \in {"Stop", "DeviceLoss"}
   /\ terminal' = disposition
   /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
@@ -368,38 +367,71 @@ RequestTerminal(disposition) ==
                   gpuQueue, gpuSettled, completionQueue, nextSessionId,
                   sourceSession>>
 
-TerminalRelease ==
+(* Terminal teardown is stage-specific. No transition below fabricates a
+   submission, GPU settlement, Present decision, and source release at once. *)
+TerminalDrainSource(stage) ==
   /\ terminal # "Running"
-  /\ accepted \ released # {}
-  /\ LET s == Oldest(accepted \ released) IN
-       /\ phase' = [phase EXCEPT ![s] = "Released"]
-       /\ released' = released \cup {s}
-       /\ payloadRetired' = payloadRetired \cup {s}
-       /\ presentSubmitted' =
-            IF s \in presentBearing THEN presentSubmitted \cup {s}
-            ELSE presentSubmitted
-       /\ presentSkipped' =
-            IF s \in (presentBearing \ presentPublished)
-            THEN presentSkipped \cup {s} ELSE presentSkipped
-       /\ presentSettled' =
-            IF s \in presentBearing THEN presentSettled \cup {s}
-            ELSE presentSettled
+  /\ stage \in {"Admission", "Leased", "Ready", "Encoded"}
+  /\ AtPhase(stage) # {}
+  /\ LET s == Oldest(AtPhase(stage)) IN
+       /\ phase' = [phase EXCEPT ![s] = "TerminalDrain"]
        /\ openSession' = SelectSeq(openSession, LAMBDA x : x # s)
-       /\ gpuQueue' = SelectSeq(gpuQueue, LAMBDA x : x # s)
-       /\ completionQueue' = SelectSeq(completionQueue, LAMBDA x : x # s)
        /\ capacityOwner' = IF capacityOwner = s THEN 0 ELSE capacityOwner
        /\ capacityGeneration' =
             IF capacityOwner = s THEN capacityGeneration + 1
             ELSE capacityGeneration
        /\ capacityParked' = IF capacityParked = s THEN 0 ELSE capacityParked
-  /\ UNCHANGED <<nextAccept, accepted, presentBearing, presentPublished,
+  /\ UNCHANGED <<nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired,
                   capacityObservedGeneration, readyGeneration,
-                  encoderParked, encoderObservedGeneration, gpuSettled,
-                  nextSessionId, sourceSession, terminal>>
+                  encoderParked, encoderObservedGeneration, gpuQueue,
+                  gpuSettled, completionQueue, nextSessionId, sourceSession,
+                  terminal>>
+
+TerminalDrainAdmission == TerminalDrainSource("Admission")
+TerminalDrainLeased == TerminalDrainSource("Leased")
+TerminalDrainReady == TerminalDrainSource("Ready")
+TerminalDrainEncoded == TerminalDrainSource("Encoded")
+
+TerminalSkipPresent ==
+  /\ terminal # "Running"
+  /\ (AtPhase("TerminalDrain") \cap presentBearing) \
+       (presentPublished \cup presentSkipped) # {}
+  /\ LET s == Oldest((AtPhase("TerminalDrain") \cap presentBearing) \
+                      (presentPublished \cup presentSkipped)) IN
+       presentSkipped' = presentSkipped \cup {s}
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSettled,
+                  payloadRetired, capacityOwner, capacityGeneration,
+                  capacityParked, capacityObservedGeneration,
+                  readyGeneration, encoderParked,
+                  encoderObservedGeneration, openSession, gpuQueue,
+                  gpuSettled, completionQueue, nextSessionId, sourceSession,
+                  terminal>>
+
+TerminalReleaseDrained ==
+  /\ terminal # "Running"
+  /\ AtPhase("TerminalDrain") # {}
+  /\ LET s == Oldest(AtPhase("TerminalDrain")) IN
+       /\ s = Cardinality(released) + 1
+       /\ (s \notin presentBearing \/
+            s \in presentPublished \cup presentSkipped)
+       /\ phase' = [phase EXCEPT ![s] = "Released"]
+       /\ released' = released \cup {s}
+       /\ payloadRetired' = payloadRetired \cup {s}
+  /\ UNCHANGED <<nextAccept, accepted, presentBearing, presentSubmitted,
+                  presentPublished, presentSkipped, presentSettled,
+                  capacityOwner, capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal>>
+
+AcceptNext == AcceptSource(nextAccept = MaxSources)
 
 Next ==
-  \/ AcceptSource(FALSE)
-  \/ AcceptSource(TRUE)
+  \/ AcceptNext
   \/ AcquireCapacity
   \/ ParkCapacityWaiter
   \/ WakeCapacityWaiter
@@ -417,7 +449,12 @@ Next ==
   \/ SettlePresent
   \/ RequestTerminal("Stop")
   \/ RequestTerminal("DeviceLoss")
-  \/ TerminalRelease
+  \/ TerminalDrainAdmission
+  \/ TerminalDrainLeased
+  \/ TerminalDrainReady
+  \/ TerminalDrainEncoded
+  \/ TerminalSkipPresent
+  \/ TerminalReleaseDrained
 
 QueueFairness ==
   /\ WF_vars(AcquireCapacity)
@@ -431,12 +468,19 @@ QueueFairness ==
   /\ WF_vars(ExpandCompletion)
   /\ WF_vars(ReleaseSource)
   /\ WF_vars(SettlePresent)
-  /\ WF_vars(TerminalRelease)
+  /\ WF_vars(TerminalDrainAdmission)
+  /\ WF_vars(TerminalDrainLeased)
+  /\ WF_vars(TerminalDrainReady)
+  /\ WF_vars(TerminalDrainEncoded)
+  /\ WF_vars(TerminalSkipPresent)
+  /\ WF_vars(TerminalReleaseDrained)
 
 GpuSettlementAssumption == WF_vars(GpuSettleHead)
+SourceArrivalAssumption == WF_vars(AcceptNext)
 
 Spec ==
-  Init /\ [][Next]_vars /\ QueueFairness /\ GpuSettlementAssumption
+  Init /\ [][Next]_vars /\ QueueFairness /\ GpuSettlementAssumption /\
+    SourceArrivalAssumption
 
 TypeOK ==
   /\ MaxSources \in Nat \ {0}
@@ -483,6 +527,7 @@ OwnershipConservation ==
        Cardinality(AtPhase("Submitted")) +
        Cardinality(AtPhase("GpuSettled")) +
        Cardinality(AtPhase("Completion")) +
+       Cardinality(AtPhase("TerminalDrain")) +
        Cardinality(AtPhase("Released"))
   /\ SeqSet(openSession) = AtPhase("Encoded")
   /\ SeqSet(gpuQueue) = AtPhase("Submitted") \cup AtPhase("GpuSettled")
@@ -527,6 +572,12 @@ EncoderLostWakeupFreedom ==
       (terminal # "Running" \/ AtPhase("Ready") # {} \/
        readyGeneration # encoderObservedGeneration)
     => ENABLED WakeEncoder
+
+TerminalCapacityWaiterUnblocked ==
+  terminal # "Running" ~> capacityParked = 0
+
+TerminalEncoderWaiterUnblocked ==
+  terminal # "Running" ~> ~encoderParked
 
 StickyTrackingStep ==
   /\ accepted \subseteq accepted'

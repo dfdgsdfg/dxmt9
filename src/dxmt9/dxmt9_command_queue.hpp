@@ -897,8 +897,10 @@ class CommandQueue {
  private:
   friend class resources::Initializer;
   friend struct CommandQueueArenaLeaseTestAccess;
+  friend struct SchedulingProgressTestAccess;
 
   void noteInitializerPendingUploads() noexcept;
+  void requestSchedulingStopLocked() noexcept;
   void notifySchedulingTerminalWaiters(
       render::SchedulingTerminalDisposition disposition) noexcept;
 

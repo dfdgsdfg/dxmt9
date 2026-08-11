@@ -33,7 +33,6 @@ enum SchedulingProgressFlag : std::uint32_t {
   SchedulingProgressStop = 1u << 6,
   SchedulingProgressDeviceLoss = 1u << 7,
   SchedulingProgressCapture = 1u << 8,
-  SchedulingProgressSuspended = 1u << 9,
 };
 
 // CommandQueue-owned, diagnostic-only progress ledger. The fixed slots are
@@ -59,14 +58,22 @@ class SchedulingProgressWatchdog {
   void noteLeaseWait(std::uint64_t seqId) noexcept;
   void notePublished(std::uint64_t seqId, bool hasPresent) noexcept;
   void noteEncodeOrOpenSession(std::uint64_t seqId) noexcept;
-  void noteSubmitted(std::uint64_t seqId, bool capture = false,
-                     bool suspended = false) noexcept;
+  void noteSubmitted(std::uint64_t seqId, bool capture = false) noexcept;
   void noteGpuSettled(std::uint64_t seqId) noexcept;
   void noteCompletionExpanded(std::uint64_t seqId) noexcept;
   void notePresentDisposition(std::uint64_t seqId, bool published) noexcept;
   void noteReleased(std::uint64_t seqId, bool presentSettled) noexcept;
   void noteTerminal(bool deviceLoss) noexcept;
   void stop() noexcept;
+
+  struct SlotSnapshotForTest {
+    bool tracked = false;
+    std::uint64_t identity = 0;
+    std::uint64_t progressNs = 0;
+    std::uint32_t flags = 0;
+    SchedulingProgressPhase phase = SchedulingProgressPhase::Admission;
+  };
+  SlotSnapshotForTest slotSnapshotForTest(std::uint64_t seqId) noexcept;
 
   template <typename Clock>
   void noteAcceptedWithClockForTest(std::uint64_t seqId, bool hasPresent,
@@ -82,13 +89,13 @@ class SchedulingProgressWatchdog {
 
  private:
   struct Slot {
-    std::atomic<std::uint64_t> identity{0};
-    std::atomic<std::uint64_t> acceptedNs{0};
-    std::atomic<std::uint64_t> progressNs{0};
-    std::atomic<std::uint64_t> lastReportNs{0};
-    std::atomic<std::uint32_t> flags{0};
-    std::atomic<std::uint8_t> phase{
-        static_cast<std::uint8_t>(SchedulingProgressPhase::Admission)};
+    std::atomic_flag lock = ATOMIC_FLAG_INIT;
+    std::uint64_t identity = 0;
+    std::uint64_t acceptedNs = 0;
+    std::uint64_t progressNs = 0;
+    std::uint64_t lastReportNs = 0;
+    std::uint32_t flags = 0;
+    SchedulingProgressPhase phase = SchedulingProgressPhase::Admission;
   };
 
   static std::uint64_t steadyNowNs() noexcept;
@@ -96,7 +103,10 @@ class SchedulingProgressWatchdog {
             std::uint32_t flags) noexcept;
   void noteAt(std::uint64_t seqId, SchedulingProgressPhase phase,
               std::uint32_t flags, std::uint64_t nowNs) noexcept;
-  Slot* findOrClaim(std::uint64_t seqId, std::uint64_t nowNs) noexcept;
+  static void lockSlot(Slot& slot) noexcept;
+  static void unlockSlot(Slot& slot) noexcept;
+  bool findOrClaimLocked(Slot& slot, std::uint64_t seqId,
+                         std::uint64_t nowNs) noexcept;
   void sample() noexcept;
   void runSampler() noexcept;
 

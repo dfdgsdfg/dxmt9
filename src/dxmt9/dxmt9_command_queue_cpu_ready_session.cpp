@@ -781,7 +781,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     lock, std::span<const ReadySlotSnapshot>(scratch.data(),
                                                              retainedCount))) {
               perf::countCpuReadyRetainedHeadRestoreFailure();
-              queueLifecycle_.poisonTapeFailure();
+              queueLifecycle_.poisonTapeFailureLocked();
               return;
             }
             if (fallback.has_value()) {
@@ -985,7 +985,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         // Invalid Tape identity/arithmetic is structural corruption, not a
         // capacity transition. Poison synchronously so it cannot enter the
         // generation wait and wedge without a possible releasing event.
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       if (leaseDenied && !pendingRecord.has_value()) {
@@ -1119,7 +1119,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       }
       if (!queueLifecycle_.restoreReservedReadySlotBatch(
               lock, std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       exactReplaySingleSource = true;
@@ -1349,7 +1349,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           if (!queueLifecycle_.restoreReservedReadySlotBatch(
                   lock, std::span<const ReadySlotSnapshot>(scratch.data(),
                                                            count))) {
-            queueLifecycle_.poisonTapeFailure();
+            queueLifecycle_.poisonTapeFailureLocked();
             return;
           }
           if (testOnlyPauseAfterStaleMultiSourcePlannerRestore_) {
@@ -1394,7 +1394,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       }
       if (!queueLifecycle_.restoreReservedReadySlotBatch(
               lock, std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       exactReplaySingleSource = true;
@@ -1518,7 +1518,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     if (!selectedPrefixStartsSession) {
       const auto first = queueLifecycle_.resolveRepresentedSource(scratch[0]);
       if (!first.valid()) {
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       selectedPrefixStartsSession =
@@ -1960,7 +1960,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 if (!queueLifecycle_.restoreReservedReadySlotBatch(
                         lock, std::span<const ReadySlotSnapshot>(
                                   scratch.data() + 1u, 1u))) {
-                  queueLifecycle_.poisonTapeFailure();
+                  queueLifecycle_.poisonTapeFailureLocked();
                   return false;
                 }
                 return true;
@@ -2706,7 +2706,7 @@ multi_source_window_complete:
       const auto commonSource =
           queueLifecycle_.resolveRepresentedSource(source);
       if (!commonSource.valid()) {
-        queueLifecycle_.poisonTapeFailure();
+        queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
       const auto sourceAdmission = admissionCandidateFor(commonSource);
@@ -2893,7 +2893,7 @@ multi_source_window_complete:
           resolvedLookahead[i] = queueLifecycle_.resolveRepresentedSource(
               scratch[sourceIndex + i]);
           if (!resolvedLookahead[i].valid()) {
-            queueLifecycle_.poisonTapeFailure();
+            queueLifecycle_.poisonTapeFailureLocked();
             return;
           }
         }

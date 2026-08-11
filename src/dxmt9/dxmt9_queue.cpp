@@ -1311,7 +1311,7 @@ void QueueLifecycleController::noteCpuReadyCapacityProgress() noexcept {
   }
 }
 
-void QueueLifecycleController::poisonTapeFailure() noexcept {
+void QueueLifecycleController::poisonTapeFailureLocked() noexcept {
   // Lifecycle callers hold the queue scheduling mutex while mutating the
   // tape. Stop both admission surfaces under the same contract so a release
   // build cannot admit new work after a failed lifecycle mutation.
@@ -1351,8 +1351,30 @@ void QueueLifecycleController::poisonTapeFailure() noexcept {
     submissionBinding_.sessionReleaseCv->notify_all();
   }
   if (wake.wakes(render::SchedulingWakePendingCompletion)) {
-    pendingCompletionCv_.notify_all();
+    requestPendingCompletionStop();
   }
+}
+
+void QueueLifecycleController::poisonTapeFailure() noexcept {
+  if (submissionBinding_.mutex) {
+    std::lock_guard lock(*submissionBinding_.mutex);
+    poisonTapeFailureLocked();
+    return;
+  }
+  poisonTapeFailureLocked();
+}
+
+void QueueLifecycleController::requestPendingCompletionStop() noexcept {
+  {
+    std::lock_guard lock(pendingCompletionMutex_);
+    pendingCompletionStop_ = true;
+  }
+  pendingCompletionCv_.notify_all();
+}
+
+void QueueLifecycleController::resetPendingCompletionStop() noexcept {
+  std::lock_guard lock(pendingCompletionMutex_);
+  pendingCompletionStop_ = false;
 }
 
 bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lock,
@@ -1418,13 +1440,13 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     if (probe == CpuReadyTape::ReserveProbe::InvalidRequest ||
         probe == CpuReadyTape::ReserveProbe::Corrupt) {
       endWriterPressure();
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     if (probe == CpuReadyTape::ReserveProbe::Stopped) {
       endWriterPressure();
       if (!*stop) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
       }
       return false;
     }
@@ -1457,7 +1479,7 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     const auto reservation = cpuReadyTape->reserve();
     DXMT_ASSERT(reservation.has_value());
     if (!reservation) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return;
     }
     slots[*writeIndex].state = ChunkSlot::State::Writing;
@@ -1530,7 +1552,7 @@ bool QueueLifecycleController::commitCurrentChunk(
           .storage = slot.storage,
       });
   if (!writingPayload || writingPayload != slot.payload) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   if (writingPayload->commandsEmpty()) {
@@ -1544,7 +1566,7 @@ bool QueueLifecycleController::commitCurrentChunk(
           });
       DXMT_ASSERT(aborted);
       if (!aborted) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return;
       }
       slot.state = ChunkSlot::State::Free;
@@ -1641,7 +1663,7 @@ bool QueueLifecycleController::commitCurrentChunk(
     if (!sealed) {
       slot.seqId = 0;
       writingPayload->seqId = 0;
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return;
     }
     ++(*nextSeqId);
@@ -1711,7 +1733,7 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
       std::span<const ReadySlotSnapshot>(out.data(), count);
   if (!commitReservedReadySlotBatch(lock, selected)) {
     (void)restoreReservedReadySlotBatch(lock, selected);
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return 0;
   }
   return count;
@@ -1747,7 +1769,7 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
   if (cpuReadyTape->copyReadyPrefix(
           std::span<CpuReadyTape::ReadyEntry>(ready.data(), maxCount)) !=
       maxCount) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return 0;
   }
 
@@ -1755,7 +1777,7 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
   for (size_t i = 0; i < maxCount; ++i) {
     const auto& candidate = ready[i];
     if (candidate.controlIndex >= submissionBinding_.slots.size()) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return 0;
     }
     auto& control = submissionBinding_.slots[candidate.controlIndex];
@@ -1768,12 +1790,12 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
         control.seqId != candidate.seqId || !payload.valid() ||
         (payload.isLegacy() && payload.legacyPayload() != control.payload) ||
         (payload.isArena() && control.payload != nullptr)) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return 0;
     }
     for (size_t j = 0; j < i; ++j) {
       if (ready[j].controlIndex == candidate.controlIndex) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return 0;
       }
     }
@@ -1813,7 +1835,7 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
   }
   if (!cpuReadyTape->reserveReadyPrefixForRepresentation(
           std::span<const CpuReadyTape::ReadyEntry>(ready.data(), count))) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return 0;
   }
   for (size_t i = 0; i < count; ++i) {
@@ -2083,14 +2105,14 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
     legacyPayload = tape->beginPostEncodeLegacyRetire(
         source.source.id, source.source.storage);
     if (!legacyPayload) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return PostEncodeReceiptResult::WrongState;
     }
   } else {
     auto detached = tape->beginPostEncodeArenaRetire(
         source.source.id, source.source.storage);
     if (!detached) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return PostEncodeReceiptResult::WrongState;
     }
     arenaOwner.emplace(std::move(*detached));
@@ -2114,7 +2136,7 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
   if (!finished || control.state != ChunkSlot::State::Retiring ||
       control.seqId != source.seqId || control.sourceId != sourceRef.id ||
       control.storage != sourceRef.storage) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return PostEncodeReceiptResult::WrongState;
   }
 
@@ -2215,7 +2237,7 @@ bool QueueLifecycleController::runEncodeIteration(
     // survives; no arena pointer crosses the relock/completion boundary.
     const auto resolved = resolveRepresentedSource(source);
     if (!resolved.valid()) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     if (const auto* legacy = resolved.payload.legacyPayload()) {
@@ -2239,7 +2261,7 @@ bool QueueLifecycleController::runEncodeIteration(
           completionSourceForReadySlot(source),
       };
       if (!submission->assignFixedCompletionSources(completionSources)) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
     }
@@ -2280,7 +2302,7 @@ bool QueueLifecycleController::appendPresentCommand(const SwapDesc& present,
           .storage = slot.storage,
       });
   if (!payload || payload != slot.payload) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
@@ -2305,7 +2327,7 @@ bool QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuf
     const auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
         control.sourceId, control.storage, CpuReadyTape::State::Represented);
     if (control.seqId != seqId || !payload.valid()) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     const std::array sources{QueueCompletionSource{
@@ -2320,7 +2342,7 @@ bool QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuf
         .commandCount = payload.commandCount(),
     }};
     if (!record.assignFixedCompletionSources(sources)) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
   }
@@ -2366,7 +2388,7 @@ bool QueueLifecycleController::completeInlineChunk(
       (payload.isArena() && slot.payload != nullptr) ||
       slot.seqId != seqId ||
       (payload.isLegacy() && payload.legacyPayload()->seqId != seqId)) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   auto* completedSeqId = submissionBinding_.completedSeqId;
@@ -2374,14 +2396,14 @@ bool QueueLifecycleController::completeInlineChunk(
   if (completedSeqId && completedSeqQueue) {
     if (completedSeqQueue->size() >
             std::numeric_limits<u64>::max() - *completedSeqId) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     const u64 queuedWaterline =
         *completedSeqId + completedSeqQueue->size();
     if (queuedWaterline == std::numeric_limits<u64>::max() ||
         seqId != queuedWaterline + 1u) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
   }
@@ -2398,7 +2420,7 @@ bool QueueLifecycleController::completeInlineChunk(
     if (!completedInline ||
         !submissionBinding_.cpuReadyTape->beginReclaim(
             source.id, source.storage)) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return;
     }
     if (*payloadKind == CpuReadyTape::PayloadKind::Legacy) {
@@ -2408,7 +2430,7 @@ bool QueueLifecycleController::completeInlineChunk(
       if (!reclaimingPayload ||
           reclaimingPayload != payload.legacyPayload() ||
           reclaimingPayload->seqId != seqId) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return;
       }
       deferredReleases = reclaimingPayload->detachResourceOwners();
@@ -2418,7 +2440,7 @@ bool QueueLifecycleController::completeInlineChunk(
           submissionBinding_.cpuReadyTape->detachReclaimingArenaOwner(
               source.id, source.storage);
       if (!detached) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return;
       }
       arenaOwner.emplace(std::move(*detached));
@@ -2447,7 +2469,7 @@ bool QueueLifecycleController::completeInlineChunk(
         submissionBinding_.cpuReadyTape->reclaimingPayload(
             source.id, source.storage);
     if (!reclaimingPayload || reclaimingPayload->seqId != seqId) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     reclaimingPayload->seqId = 0;
@@ -2460,7 +2482,7 @@ bool QueueLifecycleController::completeInlineChunk(
   }
   DXMT_ASSERT(reclaimed);
   if (!reclaimed) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
@@ -2513,7 +2535,7 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
       if (released != PostEncodeReceiptResult::Succeeded) {
         perf::countPostEncodeReceiptFailure(
             static_cast<std::uint32_t>(released));
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return;
       }
       perf::recordPostEncodeReceiptDepth(
@@ -2566,7 +2588,7 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   }
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
   if (head && head->seqId < seqId) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   // Inline completion already performed its two-phase reclaim before making
@@ -2592,25 +2614,25 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
   if (!head || head->seqId != seqId ||
       head->state != CpuReadyTape::State::Completed) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   if (!submissionBinding_.cpuReadyTape->beginReclaim(
           head->source.id, head->source.storage)) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   const auto payloadKind = submissionBinding_.cpuReadyTape->payloadKind(
       head->source.id, head->source.storage, CpuReadyTape::State::Reclaiming);
   if (!payloadKind) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   if (*payloadKind == CpuReadyTape::PayloadKind::Legacy) {
     auto* payload = submissionBinding_.cpuReadyTape->reclaimingPayload(
         head->source.id, head->source.storage);
     if (!payload || payload->seqId != seqId) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     deferredReleases = payload->detachResourceOwners();
@@ -2620,7 +2642,7 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
         submissionBinding_.cpuReadyTape->detachReclaimingArenaOwner(
             head->source.id, head->source.storage);
     if (!detached) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     arenaOwner.emplace(std::move(*detached));
@@ -2638,7 +2660,7 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     auto* payload = submissionBinding_.cpuReadyTape->reclaimingPayload(
         head->source.id, head->source.storage);
     if (!payload || payload->seqId != seqId) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     payload->seqId = 0;
@@ -2651,7 +2673,7 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   }
   DXMT_ASSERT(sourceReclaimed);
   if (!sourceReclaimed) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
@@ -3101,24 +3123,24 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 
 bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   if (!record.commandBuffer && !record.testOnlyAllowNullCommandBuffer) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   const auto completionSources = record.explicitCompletionSourceSpan();
   if (completionSources.empty() ||
       completionSources.size() > kMaxEncodeSessionSources) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   if (!record.completionSpanShadowMatchesSources()) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   if (record.commandBuffer &&
       completionSources.size() >
           std::numeric_limits<std::uint64_t>::max() -
               gpuOutstandingCompletionSourceCount_) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
 
@@ -3127,20 +3149,20 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   for (std::size_t i = 0; i < completionSources.size(); ++i) {
     const auto& source = completionSources[i];
     if (!source.completionIdentityValid()) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     if (source.receiptBacked()) {
       if (!postEncodeCompletionLedger_.matches(
               source.receipt, PostEncodeReceiptState::Active,
               source.hasPresent)) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
       continue;
     }
     if (source.slotIndex >= submissionBinding_.slots.size()) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     auto& sourceSlot = submissionBinding_.slots[source.slotIndex];
@@ -3164,14 +3186,14 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
         commandRangeHasPresent(sourcePayload,
                                source.commandBegin,
                                source.commandCount) != source.hasPresent) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     for (std::size_t j = 0; j < i; ++j) {
       if (completionSources[j].locatorBacked() &&
           (completionSources[j].slotIndex == source.slotIndex ||
            completionSources[j].source == source.source)) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
     }
@@ -3190,7 +3212,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
           CpuReadyTape::State::GPU);
   DXMT_ASSERT(transitioned);
   if (!transitioned) {
-    poisonTapeFailure();
+    poisonTapeFailureLocked();
     return false;
   }
   for (const auto& source : completionSources) {
@@ -3201,7 +3223,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
       if (submitted != PostEncodeReceiptResult::Succeeded) {
         perf::countPostEncodeReceiptFailure(
             static_cast<std::uint32_t>(submitted));
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
       continue;
@@ -3360,13 +3382,19 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   return true;
 }
 
-bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
+bool QueueLifecycleController::processOnePendingCompletion() {
   PendingCompletion pending;
   size_t pendingDepthAfterPop = 0;
   {
     std::unique_lock<std::mutex> lock(pendingCompletionMutex_);
-    pendingCompletionCv_.wait(lock, [&] { return stop || !pendingCompletion_.empty(); });
-    if (stop && pendingCompletion_.empty()) {
+    if (!pendingCompletionStop_ && pendingCompletion_.empty() &&
+        pendingCompletionWaitObserver_) {
+      pendingCompletionWaitObserver_(pendingCompletionWaitObserverContext_);
+    }
+    pendingCompletionCv_.wait(lock, [this] {
+      return pendingCompletionStop_ || !pendingCompletion_.empty();
+    });
+    if (pendingCompletionStop_ && pendingCompletion_.empty()) {
       return false;
     }
     pending = std::move(pendingCompletion_.front());
@@ -3531,7 +3559,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     u64 expectedSeqId = completedSeqId;
     if (binding.completedSeqQueue->size() >
         std::numeric_limits<u64>::max() - expectedSeqId) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     expectedSeqId += binding.completedSeqQueue->size();
@@ -3540,14 +3568,14 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
       if (!source.completionIdentityValid() ||
           expectedSeqId == std::numeric_limits<u64>::max() ||
           source.seqId != expectedSeqId + 1u) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
       if (source.receiptBacked()) {
         if (!postEncodeCompletionLedger_.matches(
                 source.receipt, PostEncodeReceiptState::Submitted,
                 source.hasPresent)) {
-          poisonTapeFailure();
+          poisonTapeFailureLocked();
           return false;
         }
       } else {
@@ -3556,13 +3584,13 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
             !binding.cpuReadyTape->resolveSourcePayload(
                 source.source.id, source.source.storage,
                 CpuReadyTape::State::Submitted).valid()) {
-          poisonTapeFailure();
+          poisonTapeFailureLocked();
           return false;
         }
         for (std::size_t j = 0; j < i; ++j) {
           if (completionSources[j].locatorBacked() &&
               completionSources[j].source == source.source) {
-            poisonTapeFailure();
+            poisonTapeFailureLocked();
             return false;
           }
         }
@@ -3578,7 +3606,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
                                                      tapeSourceCount));
     DXMT_ASSERT(completed);
     if (!completed) {
-      poisonTapeFailure();
+      poisonTapeFailureLocked();
       return false;
     }
     for (const auto& source : completionSources) {
@@ -3591,7 +3619,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
       if (released != PostEncodeReceiptResult::Succeeded) {
         perf::countPostEncodeReceiptFailure(
             static_cast<std::uint32_t>(released));
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
     }
@@ -3609,7 +3637,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     }
     if (pending.gpuOutstandingCounted) {
       if (completionSources.size() > gpuOutstandingCompletionSourceCount_) {
-        poisonTapeFailure();
+        poisonTapeFailureLocked();
         return false;
       }
       gpuOutstandingCompletionSourceCount_ -= completionSources.size();

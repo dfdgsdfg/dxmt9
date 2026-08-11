@@ -587,7 +587,7 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
   const auto submissionEnd = queue.find(
       "bool hasExactRedundantFixedCompletionSources", submissionBegin);
   const auto pendingBegin = queue.find("struct PendingCompletion");
-  const auto pendingEnd = queue.find("void notifyPendingCompletionStop",
+  const auto pendingEnd = queue.find("void requestPendingCompletionStop",
                                      pendingBegin);
   const auto storageBegin =
       sessionStorage.find("struct EncodeChunkSessionStorage");
@@ -792,7 +792,7 @@ void invalidLeaseSnapshotFailStopsBeforeCapacityWait(
         "invalid capacity snapshot fail-stop precedes the transient waiter");
   const std::string_view failStopBody(
       coordinator.data() + failStop, capacityWait - failStop);
-  check(failStopBody.find("queueLifecycle_.poisonTapeFailure()") !=
+  check(failStopBody.find("queueLifecycle_.poisonTapeFailureLocked()") !=
                 std::string_view::npos &&
             failStopBody.find("return;") != std::string_view::npos,
         "invalid snapshot poisons and returns without entering the capacity "

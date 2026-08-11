@@ -1917,8 +1917,7 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
       [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
-  bool stop = false;
-  const bool processed = fixture.controller.processOnePendingCompletion(stop);
+  const bool processed = fixture.controller.processOnePendingCompletion();
   check(processed, "pending completion watcher processes injected record");
   check(completionCallbackRan,
         "pending completion watcher runs completion callbacks before queueing");
@@ -2119,8 +2118,7 @@ void multiSourceCompletionRejectsStaleTailAtomically() {
   ++pending.fixedCompletionSources.entries[1].source.storage.generation;
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
-  bool completionStop = false;
-  check(!fixture.controller.processOnePendingCompletion(completionStop),
+  check(!fixture.controller.processOnePendingCompletion(),
         "stale tail completion is rejected");
   check(fixture.stop, "stale tail completion fail-stops the queue");
   check(fixture.completedSeqQueue.empty() &&
@@ -2176,8 +2174,7 @@ void recycledControlIsNeverCompletionOrReclaimIdentity() {
   completionA.fixedCompletionSources = recordA.fixedCompletionSources;
   completionA.completionSpanShadow = recordA.completionSpanShadow;
   fixture.controller.enqueuePendingCompletionForTest(std::move(completionA));
-  bool completionStop = false;
-  check(fixture.controller.processOnePendingCompletion(completionStop),
+  check(fixture.controller.processOnePendingCompletion(),
         "source A completion resolves its recorded Tape locator");
   check(fixture.slots[0].sourceId == sourceBId &&
             fixture.slots[0].storage == sourceBStorage &&
@@ -2203,7 +2200,7 @@ void recycledControlIsNeverCompletionOrReclaimIdentity() {
   duplicateA.fixedCompletionSources = recordA.fixedCompletionSources;
   duplicateA.completionSpanShadow = recordA.completionSpanShadow;
   fixture.controller.enqueuePendingCompletionForTest(std::move(duplicateA));
-  check(!fixture.controller.processOnePendingCompletion(completionStop),
+  check(!fixture.controller.processOnePendingCompletion(),
         "duplicate source A callback is stale after ordered reclaim");
   check(fixture.slots[0].sourceId == sourceBId &&
             fixture.slots[0].storage == sourceBStorage &&
@@ -2245,8 +2242,7 @@ void completionProjectionCorruptionRejectsBeforeCallbacks() {
         [&completionCallbackRan] { completionCallbackRan = true; });
     fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
-    bool completionStop = false;
-    check(!fixture.controller.processOnePendingCompletion(completionStop),
+    check(!fixture.controller.processOnePendingCompletion(),
           label);
     check(!completionCallbackRan,
           "projection mismatch rejects before completion callbacks run");
@@ -2302,8 +2298,7 @@ void invalidCompletionLocatorRetainsLegacyCallbackBeforeTapeFailure() {
       [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
-  bool completionStop = false;
-  check(!fixture.controller.processOnePendingCompletion(completionStop),
+  check(!fixture.controller.processOnePendingCompletion(),
         "old-list validation rejects the invalid locator");
   check(completionCallbackRan,
         "legacy completion callback runs before old-list locator validation");
@@ -2337,8 +2332,7 @@ void staleReceiptRejectsBeforeCallbacksAndWaterlines() {
       [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
-  bool completionStop = false;
-  check(!fixture.controller.processOnePendingCompletion(completionStop),
+  check(!fixture.controller.processOnePendingCompletion(),
         "unowned receipt generation is rejected as stale");
   check(!completionCallbackRan && fixture.stop &&
             fixture.completedSeqQueue.empty() &&

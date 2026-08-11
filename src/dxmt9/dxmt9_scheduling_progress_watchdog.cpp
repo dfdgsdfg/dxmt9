@@ -10,9 +10,6 @@
 namespace dxmt9 {
 namespace {
 
-constexpr std::uint64_t kClaimingIdentity =
-    std::numeric_limits<std::uint64_t>::max();
-
 std::uint64_t watchdogThresholdMs() noexcept {
   const char* env = std::getenv("DXMT9_SCHEDULING_PROGRESS_WATCHDOG_MS");
   if (!env || env[0] == '\0' || env[0] == '0') {
@@ -92,28 +89,32 @@ std::uint64_t SchedulingProgressWatchdog::steadyNowNs() noexcept {
           std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
-SchedulingProgressWatchdog::Slot* SchedulingProgressWatchdog::findOrClaim(
-    std::uint64_t seqId, std::uint64_t nowNs) noexcept {
-  if (seqId == 0 || seqId == kClaimingIdentity) {
-    return nullptr;
+void SchedulingProgressWatchdog::lockSlot(Slot& slot) noexcept {
+  while (slot.lock.test_and_set(std::memory_order_acquire)) {
+    std::this_thread::yield();
   }
-  auto& slot = slots_[seqId % kCapacity];
-  std::uint64_t identity = slot.identity.load(std::memory_order_acquire);
-  if (identity == seqId) {
-    return &slot;
+}
+
+void SchedulingProgressWatchdog::unlockSlot(Slot& slot) noexcept {
+  slot.lock.clear(std::memory_order_release);
+}
+
+bool SchedulingProgressWatchdog::findOrClaimLocked(
+    Slot& slot, std::uint64_t seqId, std::uint64_t nowNs) noexcept {
+  if (seqId == 0) {
+    return false;
   }
-  if (identity == kClaimingIdentity) {
-    return nullptr;
+  if (slot.identity == seqId) {
+    return true;
   }
-  const std::uint32_t occupiedFlags =
-      slot.flags.load(std::memory_order_acquire);
+  const std::uint32_t occupiedFlags = slot.flags;
   const bool occupiedPresentPending =
       (occupiedFlags & SchedulingProgressHasPresent) != 0 &&
       (occupiedFlags & SchedulingProgressPresentSettled) == 0;
   const bool occupiedComplete =
       (occupiedFlags & SchedulingProgressReleased) != 0 &&
       !occupiedPresentPending;
-  if (identity != 0 && !occupiedComplete) {
+  if (slot.identity != 0 && !occupiedComplete) {
     overflowCount_.fetch_add(1, std::memory_order_relaxed);
     std::uint64_t last =
         lastOverflowReportNs_.load(std::memory_order_relaxed);
@@ -123,23 +124,21 @@ SchedulingProgressWatchdog::Slot* SchedulingProgressWatchdog::findOrClaim(
       util::logf(util::LogLevel::Warn, "scheduling-watchdog",
                  "tracking-overflow seq=%llu occupied=%llu capacity=%zu",
                  static_cast<unsigned long long>(seqId),
-                 static_cast<unsigned long long>(identity), kCapacity);
+                 static_cast<unsigned long long>(slot.identity), kCapacity);
     }
-    return nullptr;
+    return false;
   }
-  if (!slot.identity.compare_exchange_strong(identity, kClaimingIdentity,
-                                             std::memory_order_acq_rel)) {
-    return identity == seqId ? &slot : nullptr;
-  }
-  slot.acceptedNs.store(nowNs, std::memory_order_relaxed);
-  slot.progressNs.store(nowNs, std::memory_order_relaxed);
-  slot.lastReportNs.store(0, std::memory_order_relaxed);
-  slot.flags.store(0, std::memory_order_relaxed);
-  slot.phase.store(static_cast<std::uint8_t>(
-                       SchedulingProgressPhase::Admission),
-                   std::memory_order_relaxed);
-  slot.identity.store(seqId, std::memory_order_release);
-  return &slot;
+  // All old-generation fields are finalized before identity publishes the
+  // reusable generation. Every writer and sampler holds this same lock and
+  // revalidates identity, so a delayed old-generation writer cannot retain a
+  // pointer and store into the new generation after kCapacity reuse.
+  slot.acceptedNs = nowNs;
+  slot.progressNs = nowNs;
+  slot.lastReportNs = 0;
+  slot.flags = 0;
+  slot.phase = SchedulingProgressPhase::Admission;
+  slot.identity = seqId;
+  return true;
 }
 
 void SchedulingProgressWatchdog::note(
@@ -154,14 +153,17 @@ void SchedulingProgressWatchdog::note(
 void SchedulingProgressWatchdog::noteAt(
     std::uint64_t seqId, SchedulingProgressPhase phase,
     std::uint32_t flags, std::uint64_t nowNs) noexcept {
-  Slot* slot = findOrClaim(seqId, nowNs);
-  if (!slot) {
+  if (seqId == 0) {
     return;
   }
-  slot->flags.fetch_or(flags, std::memory_order_relaxed);
-  slot->phase.store(static_cast<std::uint8_t>(phase),
-                    std::memory_order_release);
-  slot->progressNs.store(nowNs, std::memory_order_release);
+  auto& slot = slots_[seqId % kCapacity];
+  lockSlot(slot);
+  if (findOrClaimLocked(slot, seqId, nowNs)) {
+    slot.flags |= flags;
+    slot.phase = phase;
+    slot.progressNs = nowNs;
+  }
+  unlockSlot(slot);
 }
 
 void SchedulingProgressWatchdog::noteAccepted(std::uint64_t seqId,
@@ -188,10 +190,9 @@ void SchedulingProgressWatchdog::noteEncodeOrOpenSession(
 }
 
 void SchedulingProgressWatchdog::noteSubmitted(
-    std::uint64_t seqId, bool capture, bool suspended) noexcept {
+    std::uint64_t seqId, bool capture) noexcept {
   note(seqId, SchedulingProgressPhase::Submitted,
-       (capture ? SchedulingProgressCapture : 0u) |
-           (suspended ? SchedulingProgressSuspended : 0u));
+       capture ? SchedulingProgressCapture : 0u);
 }
 
 void SchedulingProgressWatchdog::noteGpuSettled(std::uint64_t seqId) noexcept {
@@ -217,24 +218,42 @@ void SchedulingProgressWatchdog::noteReleased(
     return;
   }
   const std::uint64_t nowNs = steadyNowNs();
-  Slot* slot = findOrClaim(seqId, nowNs);
-  if (!slot) {
+  if (seqId == 0) {
     return;
   }
-  const std::uint32_t existing =
-      slot->flags.load(std::memory_order_acquire);
+  auto& slot = slots_[seqId % kCapacity];
+  lockSlot(slot);
+  if (!findOrClaimLocked(slot, seqId, nowNs)) {
+    unlockSlot(slot);
+    return;
+  }
+  const std::uint32_t existing = slot.flags;
   const bool hasPresent =
       (existing & SchedulingProgressHasPresent) != 0;
-  slot->flags.fetch_or(
-      SchedulingProgressReleased |
-          (presentSettled ? SchedulingProgressPresentSettled : 0u),
-      std::memory_order_relaxed);
-  slot->phase.store(
-      static_cast<std::uint8_t>(
-          hasPresent ? SchedulingProgressPhase::PresentRelease
-                     : SchedulingProgressPhase::Released),
-      std::memory_order_release);
-  slot->progressNs.store(nowNs, std::memory_order_release);
+  slot.flags |= SchedulingProgressReleased |
+      (presentSettled ? SchedulingProgressPresentSettled : 0u);
+  slot.phase = hasPresent ? SchedulingProgressPhase::PresentRelease
+                          : SchedulingProgressPhase::Released;
+  slot.progressNs = nowNs;
+  unlockSlot(slot);
+}
+
+SchedulingProgressWatchdog::SlotSnapshotForTest
+SchedulingProgressWatchdog::slotSnapshotForTest(
+    std::uint64_t seqId) noexcept {
+  SlotSnapshotForTest result{};
+  if (!enabled_ || seqId == 0) {
+    return result;
+  }
+  auto& slot = slots_[seqId % kCapacity];
+  lockSlot(slot);
+  result.tracked = slot.identity == seqId;
+  result.identity = slot.identity;
+  result.progressNs = slot.progressNs;
+  result.flags = slot.flags;
+  result.phase = slot.phase;
+  unlockSlot(slot);
+  return result;
 }
 
 void SchedulingProgressWatchdog::noteTerminal(bool deviceLoss) noexcept {
@@ -252,45 +271,43 @@ void SchedulingProgressWatchdog::sample() noexcept {
   }
   const std::uint64_t nowNs = steadyNowNs();
   for (auto& slot : slots_) {
-    const std::uint64_t identity =
-        slot.identity.load(std::memory_order_acquire);
-    if (identity == 0 || identity == kClaimingIdentity) {
+    lockSlot(slot);
+    const std::uint64_t identity = slot.identity;
+    if (identity == 0) {
+      unlockSlot(slot);
       continue;
     }
-    const std::uint32_t flags = slot.flags.load(std::memory_order_acquire);
+    const std::uint32_t flags = slot.flags;
     const bool sourceReleased =
         (flags & SchedulingProgressReleased) != 0;
     const bool presentPending =
         (flags & SchedulingProgressHasPresent) != 0 &&
         (flags & SchedulingProgressPresentSettled) == 0;
     if (sourceReleased && !presentPending) {
+      unlockSlot(slot);
       continue;
     }
-    const std::uint64_t progressNs =
-        slot.progressNs.load(std::memory_order_acquire);
-    const std::uint64_t acceptedNs =
-        slot.acceptedNs.load(std::memory_order_acquire);
+    const std::uint64_t progressNs = slot.progressNs;
+    const std::uint64_t acceptedNs = slot.acceptedNs;
     if (nowNs - progressNs < thresholdNs_) {
+      unlockSlot(slot);
       continue;
     }
-    std::uint64_t lastReport =
-        slot.lastReportNs.load(std::memory_order_relaxed);
+    const std::uint64_t lastReport = slot.lastReportNs;
     if (lastReport != 0 && nowNs - lastReport < thresholdNs_) {
+      unlockSlot(slot);
       continue;
     }
-    if (!slot.lastReportNs.compare_exchange_strong(
-            lastReport, nowNs, std::memory_order_relaxed)) {
-      continue;
-    }
-    const auto phase = static_cast<SchedulingProgressPhase>(
-        slot.phase.load(std::memory_order_acquire));
+    slot.lastReportNs = nowNs;
+    const auto phase = slot.phase;
+    unlockSlot(slot);
     const std::uint32_t terminal =
         terminalFlags_.load(std::memory_order_relaxed);
     util::logf(
         util::LogLevel::Warn, "scheduling-watchdog",
         "pending seq=%llu phase=%s age_ms=%llu total_age_ms=%llu "
         "present=%u published=%u "
-        "skipped=%u settled=%u stop=%u loss=%u capture=%u suspend=%u",
+        "skipped=%u settled=%u stop=%u loss=%u capture=%u",
         static_cast<unsigned long long>(identity), phaseName(phase),
         static_cast<unsigned long long>((nowNs - progressNs) / 1000000ull),
         static_cast<unsigned long long>((nowNs - acceptedNs) / 1000000ull),
@@ -300,8 +317,7 @@ void SchedulingProgressWatchdog::sample() noexcept {
         (flags & SchedulingProgressPresentSettled) != 0,
         (terminal & SchedulingProgressStop) != 0,
         (terminal & SchedulingProgressDeviceLoss) != 0,
-        (flags & SchedulingProgressCapture) != 0,
-        (flags & SchedulingProgressSuspended) != 0);
+        (flags & SchedulingProgressCapture) != 0);
   }
 }
 

@@ -190,7 +190,7 @@ encode_scheduling_progress_spec = executable(
   'dxmt9-encode-scheduling-progress-spec',
   'encode_scheduling_progress_spec.cpp',
   include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep],
+  dependencies: [dxmt9_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
 

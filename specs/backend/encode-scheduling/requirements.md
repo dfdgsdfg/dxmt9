@@ -675,13 +675,20 @@ their composition is live.
   explicit environment/fairness assumption, not queue-owned weak fairness.
   Component interiors may be abstracted to their published interface
   transitions, and each abstraction must name the detailed model it
-  summarizes so refinement drift is reviewable.
+  summarizes so refinement drift is reviewable. The model's accepted-source
+  and Present antecedents must be reachable under an explicit source-arrival
+  assumption; terminal teardown must use stage-specific drain, disposition,
+  release, and settlement actions rather than one transition that fabricates
+  every downstream milestone.
 - (b) Every liveness-critical wait predicate and wake site in the
   implementation must be bound to its model transition by an isomorphism
   pin — a native truth-table spec in the `PresentOrdinalWaitIsomorphism`
   pattern — so the proof stays attached to the code it claims to cover. A
   new wait/notify pair on the scheduling path must not land without either
   a pin or a recorded gap row.
+  Tests of notifications must invoke the production owner and park on the
+  production condition variable; a local fixture that mutates a synthetic
+  predicate and calls its own `notify_all` is not evidence for a wake site.
 - (c) The runtime must expose bounded liveness watchdog observability:
   counter or log evidence sufficient to distinguish "obligations pending
   with no progress" from legitimate idleness in a wild run without

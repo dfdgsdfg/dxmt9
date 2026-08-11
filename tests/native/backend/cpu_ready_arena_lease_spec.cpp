@@ -181,9 +181,7 @@ struct CommandQueueArenaLeaseTestAccess {
       return result;
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
-    bool completionStop = false;
-    result.completed =
-        queue.queueLifecycle_.processOnePendingCompletion(completionStop);
+    result.completed = queue.queueLifecycle_.processOnePendingCompletion();
 
     {
       std::unique_lock lock(queue.mutex_);
