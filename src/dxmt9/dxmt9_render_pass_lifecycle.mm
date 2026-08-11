@@ -293,6 +293,57 @@ LifecycleRuntime::lateStoreCloseCause(perf::EncoderSplitReason reason) const noe
   return perf::RenderPassLateStoreResolutionCause::Error;
 }
 
+void LifecycleRuntime::completeParallelRenderPass(
+    perf::EncoderSplitReason reason) {
+  DXMT_ASSERT(storage_.encoder.hasActiveRender);
+  DXMT_ASSERT(!storage_.encoder.activeRenderEncoder);
+  DXMT_ASSERT(!storage_.encoder.activeBlitEncoder);
+  for (std::size_t i = 0; i < storage_.pass.lateStore.count; ++i) {
+    DXMT_ASSERT(!storage_.pass.lateStore.attachments[i].unresolved());
+  }
+  accountLateStoreActions();
+  storage_.diagnostics.activeEncoderBreakdown.recordRenderPassActions(
+      storage_.pass.lateStore.summary);
+  if (perf::enabled()) {
+    const auto& summary = storage_.pass.lateStore.summary;
+    noteRenderPassFrameClose(RenderPassCloseRecord{
+        .token = storage_.pass.activeInstance,
+        .key = RenderPassCloseKey{
+            .color0 = storage_.pass.activeKey.colorHandles[0],
+            .depth = storage_.pass.activeKey.depthHandle,
+            .sampleCount = storage_.pass.activeKey.sampleCount,
+        },
+        .splitReason = reason,
+        .finalizeCause = SessionFinalizeCause::FailOrOther,
+        .storeBytes = summary.colorStoreBytes + summary.depthStoreBytes +
+            summary.stencilStoreBytes,
+    });
+  }
+  if (auto* recorder = ctx_.drawRecorder; recorder && recorder->endRenderPass) {
+    recorder->endRenderPass(recorder->userdata);
+  }
+  DXMT_ASSERT(!storage_.diagnostics.activeColorAttachmentDump.handle);
+  DXMT_ASSERT(!storage_.diagnostics.activeDepthAttachmentDump.handle);
+  DXMT_ASSERT(storage_.diagnostics.activeDrawTextureDumps.empty());
+  DXMT_ASSERT(!storage_.diagnostics.activeVisibilityScout.has_value());
+  perf::countRenderPassEnd(reason);
+  storage_.diagnostics.activeEncoderBreakdown.emit(reason);
+  storage_.binding.activeStreamIbStaging.begin(false);
+  for (auto& handle : storage_.pass.activeColorHandles) {
+    if (handle) {
+      ctx_.queue.markColorHandleTouched(handle);
+      handle = core::Handle{};
+    }
+  }
+  storage_.pass.activeInstance = {};
+  storage_.pass.lateStore = {};
+  storage_.encoder.hasActiveRender = false;
+  storage_.binding.activeDrawStateKey.reset();
+  storage_.binding.activeDrawStateUsesPrefetchedPsoLayout = false;
+  storage_.binding.textureSamplerShadow.reset();
+  assertEncoderLifecycleInvariant();
+}
+
 void LifecycleRuntime::endRender(perf::EncoderSplitReason reason) {
   if (!storage_.encoder.activeRenderEncoder) {
     return;

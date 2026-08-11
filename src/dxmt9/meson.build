@@ -35,6 +35,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_render_pass_lifecycle.mm',
   'dxmt9_encode_partition.cpp',
   'dxmt9_parallel_render_pass.cpp',
+  'dxmt9_parallel_render_pass_metal.mm',
   'dxmt9_encode_session.mm',
   'dxmt9_encode_session_storage_internal.mm',
   'dxmt9_draw_state.cpp',

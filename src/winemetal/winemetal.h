@@ -742,6 +742,10 @@ struct WMTRenderPassInfo {
 };
 
 WINEMETAL_API obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbuf, struct WMTRenderPassInfo *info);
+WINEMETAL_API obj_handle_t MTLCommandBuffer_parallelRenderCommandEncoder(
+    obj_handle_t cmdbuf, struct WMTRenderPassInfo *info);
+WINEMETAL_API obj_handle_t MTLParallelRenderCommandEncoder_renderCommandEncoder(
+    obj_handle_t encoder);
 
 WINEMETAL_API void MTLRenderCommandEncoder_setColorStoreAction(
     obj_handle_t encoder, enum WMTStoreAction action, uint32_t color_attachment_index);

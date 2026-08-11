@@ -539,21 +539,17 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
   return summary;
 }
 
-WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead(
-    EncodeContext& ctx, WMT::CommandBuffer& commandBuffer, core::FlatDrawStateView drawState,
+bool prepareRenderPassWithStoreProofLookahead(
+    EncodeContext& ctx, core::FlatDrawStateView drawState,
     const std::optional<ClearDesc>& clear,
     std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
     RenderPassStoreProofActivePass activePass,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
-    WMT::Buffer visibilityBuffer, RenderPassActionSummary* actionSummary,
-    LateRenderPassStoreState* lateStoreState) {
+    WMT::Buffer visibilityBuffer, PreparedRenderPass& prepared) {
+  prepared = {};
+  auto* actionSummary = &prepared.actions;
+  auto* lateStoreState = &prepared.lateStore;
   const auto& hot = *drawState.hot;
-  if (actionSummary) {
-    *actionSummary = {};
-  }
-  if (lateStoreState) {
-    *lateStoreState = {};
-  }
   auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   // R-FORMAT-12: a D3DFMT_NULL render target is colorless and has no Metal
   // color texture by design. When RT0 is a NULL render target the render
@@ -568,9 +564,9 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       .isNullRt = primarySurface && primarySurface->desc.format == core::Format::NullRt,
   };
   if (!renderPassAdmitsRt0(rt0)) {
-    return {};
+    return false;
   }
-  WMTRenderPassInfo passInfo{};
+  auto& passInfo = prepared.info;
   const bool discardAfterPresent = !clear.has_value() && ctx.queue.backBufferDiscardAfterPresent_ &&
                                    hot.colorAttachments[0].handle == ctx.queue.currentBackBuffer_;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
@@ -653,9 +649,9 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
               .action = attachment.store_action,
               .aspect = LateRenderPassStoreAspect::Color,
               .colorIndex = static_cast<std::uint8_t>(i),
-          })) {
+        })) {
         DXMT_ASSERT(false && "late Store attachment ledger overflow");
-        return {};
+        return false;
       }
     }
   }
@@ -748,7 +744,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
                 .aspect = LateRenderPassStoreAspect::Depth,
             })) {
           DXMT_ASSERT(false && "late Store attachment ledger overflow");
-          return {};
+          return false;
         }
       }
     }
@@ -778,7 +774,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
                 .aspect = LateRenderPassStoreAspect::Stencil,
             })) {
           DXMT_ASSERT(false && "late Store attachment ledger overflow");
-          return {};
+          return false;
         }
       }
     }
@@ -842,15 +838,18 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     }
   }
 
-  if (lateStoreState && actionSummary) {
-    lateStoreState->summary = *actionSummary;
-  }
+  lateStoreState->summary = *actionSummary;
+  prepared.primaryWidth = primarySurface->desc.width;
+  prepared.primaryHeight = primarySurface->desc.height;
+  prepared.discardAfterPresent = discardAfterPresent;
+  prepared.valid = true;
+  return true;
+}
 
-  auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-  if (!encoder) {
-    return {};
-  }
-  perf::countRenderPassBegin();
+void configurePreparedRenderPassEncoder(
+    EncodeContext& ctx, WMT::RenderCommandEncoder& encoder,
+    core::FlatDrawStateView drawState, const PreparedRenderPass& prepared) {
+  const auto& hot = *drawState.hot;
   // R-BACK-14.3 — issue `useHeap` once per heap instance that actually
   // backs a resource bound on this encoder. Walking the active draw
   // state's stream/index buffers + sampler textures and consulting each
@@ -903,9 +902,6 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       perf::countUseHeap();
     }
   }
-  if (discardAfterPresent) {
-    ctx.queue.backBufferDiscardAfterPresent_ = false;
-  }
   const auto ffLayout = drawState.hasShaderContext()
                             ? decodeFixedFunctionVertexLayout(drawState.shaderContext().vertexDecl)
                             : std::optional<dxmt9::ffp::FixedFunctionVertexLayout>{};
@@ -916,8 +912,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
   if (ffLayout && ffLayout->preTransformed) {
     viewportOriginX = 0.0;
     viewportOriginY = 0.0;
-    viewportWidth = static_cast<double>(std::max(1u, primarySurface->desc.width));
-    viewportHeight = static_cast<double>(std::max(1u, primarySurface->desc.height));
+    viewportWidth = static_cast<double>(std::max(1u, prepared.primaryWidth));
+    viewportHeight = static_cast<double>(std::max(1u, prepared.primaryHeight));
   }
   WMTViewport vp{viewportOriginX,
                  viewportOriginY,
@@ -937,6 +933,55 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
   encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone, WMTDepthClipModeClip,
                              frontFaceWinding(), prologueDepthBias, prologueSlopeScale, 0.0f);
   countRasterizerBind();
+}
+
+void commitPreparedRenderPassOpen(EncodeContext& ctx,
+                                  const PreparedRenderPass& prepared) {
+  DXMT_ASSERT(prepared.valid);
+  perf::countRenderPassBegin();
+  if (prepared.discardAfterPresent) {
+    ctx.queue.backBufferDiscardAfterPresent_ = false;
+  }
+}
+
+WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead(
+    EncodeContext& ctx, WMT::CommandBuffer& commandBuffer, core::FlatDrawStateView drawState,
+    const std::optional<ClearDesc>& clear,
+    std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
+    RenderPassStoreProofActivePass activePass,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
+    WMT::Buffer visibilityBuffer, RenderPassActionSummary* actionSummary,
+    LateRenderPassStoreState* lateStoreState) {
+  PreparedRenderPass prepared{};
+  if (!prepareRenderPassWithStoreProofLookahead(
+          ctx, drawState, clear, lookaheadSources, activePass,
+          sampleBufferAttachments, visibilityBuffer, prepared)) {
+    if (actionSummary) {
+      *actionSummary = {};
+    }
+    if (lateStoreState) {
+      *lateStoreState = {};
+    }
+    return {};
+  }
+  auto encoder = commandBuffer.renderCommandEncoder(prepared.info);
+  if (!encoder) {
+    if (actionSummary) {
+      *actionSummary = {};
+    }
+    if (lateStoreState) {
+      *lateStoreState = {};
+    }
+    return {};
+  }
+  commitPreparedRenderPassOpen(ctx, prepared);
+  configurePreparedRenderPassEncoder(ctx, encoder, drawState, prepared);
+  if (actionSummary) {
+    *actionSummary = prepared.actions;
+  }
+  if (lateStoreState) {
+    *lateStoreState = prepared.lateStore;
+  }
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }
 

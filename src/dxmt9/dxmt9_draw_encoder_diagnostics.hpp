@@ -2565,6 +2565,11 @@ bool effectDrawTraceEnabled();
 
 bool effectDrawTraceGeometryEnabled();
 
+// True when render-pass diagnostics require draw-order observation or a
+// post-pass readback sidecar. Parallel children must fail closed while any of
+// these process-immutable diagnostic modes is enabled.
+bool parallelRenderPassSidecarObservationEnabled();
+
 void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
                      const core::FlatDrawStateRecord& hot,
                      const resources::Pool& pool,

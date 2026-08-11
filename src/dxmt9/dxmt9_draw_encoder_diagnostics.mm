@@ -904,6 +904,13 @@ std::size_t drawTextureDumpReserveCapacity() {
   return drawTextureDumpConfig().handles.size();
 }
 
+bool parallelRenderPassSidecarObservationEnabled() {
+  return depthAttachmentDumpConfig().enabled ||
+      colorAttachmentDumpConfig().enabled ||
+      drawTextureDumpConfig().enabled ||
+      visibilityScoutConfig().enabled;
+}
+
 void selectActiveDepthAttachmentDump(
     const resources::Pool& pool,
     const core::BackendLimits& limits,

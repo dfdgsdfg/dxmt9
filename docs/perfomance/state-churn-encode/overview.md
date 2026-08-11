@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-08-04
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; experiments/output/app-d3d9-3dmark05-encode-partition-serial-carrier-off-gt2/result.json; experiments/output/app-d3d9-3dmark05-encode-partition-serial-review-gt2/result.json
+updated: 2026-08-11
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md; experiments/output/app-d3d9-3dmark05-encode-partition-serial-carrier-off-gt2/result.json; experiments/output/app-d3d9-3dmark05-encode-partition-serial-review-gt2/result.json
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -36,6 +36,7 @@ bottleneck — that is owned by [hidden-backend-storage](../hidden-backend-stora
 | H209 | Fixed-payload handle carry reduces the targeted component but does not break the FPS wall | accepted local cleanup; not FPS proof | [state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md) stamps submissions with `uniformFixedPayloadGeneration` and lets `appendDrawRunBatch()` reuse the previous slot-local fixed handle when the generation is unchanged and the record hash still matches the current fixed payload. The targeted row moves: `uniform_component_fixed_find_cpu_ms_per_present` `0.229 -> 0.150`, and total component find `0.323 -> 0.257`. | Keep the carry path. Do not promote it as a wall-breaker: `uniform_append_parent_cpu_ms_per_present` is flat (`0.882 -> 0.880`), sampled FPS is noisy/regressed (`16.170 -> 14.261`), and no-enqueue completion wait remains dominant. The next FPS-facing branch remains P4/no-enqueue overlap or larger replay/encode materialization elision. |
 | H210 | Uniform append residual after fixed-handle carry is bounded local cleanup | accepted direction | [state-churn-encode-encode-phase.201](state-churn-encode-encode-phase.201.md) audits H209's current run and the `appendDrawUniformPayload()` source. The remaining parent is `0.880ms/present`; known scopes plus component scopes explain `77.75%`, leaving `0.196ms/present` residual. VS stage append is the largest named remaining component (`0.116ms/present`) because `661,640` VS stage records are appended (`0.833` per payload append), while full uniform generation reuse remains `0` and full payload hash reuse is only `3,970 / 672,993` adjacent payloads. | Do not spend `.gputrace` on uniform append residual alone. A VS-stage split or stage-handle tweak is optional local cleanup with a small ceiling. The FPS branch remains P4/no-enqueue overlap or a larger replay/encode materialization change that moves serial rows under the visual-safe no-gputrace gate. |
 | H211 | Stage 2b direct-cbuf is a general constants-only Stage 2 CPU cleanup | accepted and promoted default-on | state-churn-encode-encode-phase.202 runs same-build ABBA pairs across GT1, GT2, GT3, and SFIV. Draw CPU falls `20.7-32.6%`, chunk CPU falls `12.6-24.9%`, argbuf setup/binds become zero, FPS changes `+0.32%` to `+1.15%`, and all errors remain zero. The direct-cbuf GT3 `1:07.66` capture is free of the former quadrant glitch. [Phase 203](state-churn-encode-encode-phase.203.md) pins the phase-148 payload-source dirty rebind with the live pure transform and deterministic `A -> B -> A`/empty-payload coverage. | Default-on for constants-only Stage 2; value `0` is the rollback. Resource-array mode intentionally suppresses the lane. Repeat SFIV/GT3 GPU-phase sampling as post-promotion monitoring, without advertising an FPS/GPU win. |
+| H212 | Real parallel render-pass workers convert lower encode wall into higher throughput | rejected as a default | [Parallel render-pass worker gate](state-churn-encode-parallel-render-pass.204.md) measures the production WMT parent/child lane. GT2 worker peak reaches 8 and chunk wall falls `19.081 -> 15.321ms/present`, while summed draw CPU rises `14.711 -> 28.491ms/present` and 60-second Present throughput falls `1,573 -> 1,490` (`-5.28%`). CB/pass/tile shape and GPU errors remain neutral. | Preserve `parallel` as an explicit provider and keep `identity` default. Revisit only with child-local Stage 2 packets or a threshold that amortizes child setup/cache contention. |
 
 ## Current Status After The Engine-Default Offload And The Dead-Lane Cleanup
 
@@ -83,6 +84,7 @@ and these artifacts are not promotion or rejection evidence.
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-parallel-render-pass.204 - Parallel Render-Pass Worker Gate](state-churn-encode-parallel-render-pass.204.md)
 - [state-churn-encode-encode-phase.203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression](state-churn-encode-encode-phase.203.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)
 - [state-churn-encode-encode-phase.200 - Uniform Fixed Payload Handle Carry](state-churn-encode-encode-phase.200.md)

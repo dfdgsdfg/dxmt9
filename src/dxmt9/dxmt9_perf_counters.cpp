@@ -649,6 +649,33 @@ void countParallelPassDecision(
   }
 }
 
+void countParallelPassWorkerBatch(std::uint32_t tasks) {
+  auto& c = counters();
+  add(c.parallelPassWorkerBatches);
+  add(c.parallelPassWorkerTasks, tasks);
+}
+
+void countParallelPassWorkerTaskBegin() {
+  auto& c = counters();
+  const std::uint64_t active =
+      c.parallelPassWorkerActive.fetch_add(1u, std::memory_order_relaxed) + 1u;
+  updateMax(c.parallelPassWorkerActivePeak, active);
+}
+
+void countParallelPassWorkerTaskEnd(std::uint64_t cpuNs) {
+  auto& c = counters();
+  add(c.parallelPassWorkerCpuNs, cpuNs);
+  c.parallelPassWorkerActive.fetch_sub(1u, std::memory_order_relaxed);
+}
+
+void countParallelPassWorkerWallTime(std::uint64_t wallNs) {
+  add(counters().parallelPassWorkerWallNs, wallNs);
+}
+
+void countParallelPassForcedStage1() {
+  add(counters().parallelPassForcedStage1);
+}
+
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result) {
   using Fallback = encoders::SealedParallelPassSnapshotFallback;

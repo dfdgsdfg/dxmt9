@@ -24,6 +24,7 @@
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_parallel_render_pass.hpp"
+#include "dxmt9_parallel_render_pass_metal.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
@@ -1275,57 +1276,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         partitionRanges, partitionReplayStream);
     useExplicitPartitionPlan = static_cast<bool>(validation);
   }
-  runParallelPassObservationIfEnabled(
-      parallelPartitionRequested, perf::enabled(), [&] {
-    // Observation-only pass-local sealing over the final validated replay
-    // order. Coordinator commands never enter a child range, no borrowed view
-    // escapes this call, and every eligible pass still consumes the untouched
-    // production plan through the serial cursor below.
-    thread_local SealedParallelPassSnapshotBatch parallelPassShadows;
-    const auto observation = produceSealedParallelPassSnapshots(
-        SealedParallelPassSnapshotInput{
-            .stream = &partitionReplayStream,
-            .ranges = partitionRanges,
-            .proofs = ParallelPassStaticProofInput{
-                .resources = ParallelPassResourceIdentityProof{
-                    .context = &ctx.pool,
-                    .resolve = resolveParallelPassResourceIdentity,
-                },
-                .route = ParallelPassRenderRouteProof{
-                    .context = &ctx.pool,
-                    .resolve = resolveParallelPassRenderRoute,
-                },
-                // Query/update, capture, initializer, ordered-control,
-                // sidecar, and action epoch ownership are not yet proven at
-                // this pre-effect seam.
-                // Leaving the coordinator proof empty deliberately records
-                // candidates plus precise fail-closed rejection reasons.
-                .coordinator = {},
-            },
-            .planValidated = useExplicitPartitionPlan,
-            .sourceStartsPass = options.session == nullptr,
-            .sourceEndsPass = !(options.deferSessionFinalization &&
-                                options.session != nullptr),
-        },
-        parallelPassShadows);
-    perf::countParallelPassShadow(observation);
-
-    for (const auto& pass : parallelPassShadows.view()) {
-      const auto eligibility = classifyParallelPassEligibility(
-          ParallelPassEligibilityInput{
-              .ranges = pass.rangeView(),
-              .firstDrawSnapshots = pass.firstDrawView(),
-              .passActionEpoch = pass.passActionEpoch,
-              .explicitPlan = true,
-              .planValidated = true,
-              .logicalPassSealed = true,
-          });
-      const auto decision =
-          decideParallelPassExecution(true, eligibility, false);
-      perf::countParallelPassDecision(decision);
-    }
-  });
-
   const bool traceEncodeProgress = traceEncodeProgressForSeq(sourceSeqId);
   auto traceEncodeStage = [&](const char* stage) {
     if (!traceEncodeProgress) {
@@ -1483,6 +1433,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeSeedMergeAttributionEnabled);
 
   traceEncodeStage("before-gpu-sampling-setup");
+  bool initializerWaitEncoded = false;
   if (firstTransactionFragment) {
     encode_session::initializeGpuSamplingStorage(
         session, WMT::Device{ctx.device.handle},
@@ -1804,6 +1755,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     lifecycle.endBlit();
   };
 
+  auto buildRenderPassStoreProofLookahead =
+      [&](std::size_t lookaheadStartIndex) {
+    return makeRenderPassStoreProofLookaheadPlan({
+        .slotIndex = slotIndex,
+        .payload = payload,
+        .sourceSeqId = sourceSeqId,
+        .replayRange = replayRange,
+        .sessionSource = options.sessionSource
+            ? &*options.sessionSource
+            : nullptr,
+        .partitionSource = options.partitionSource,
+        .retainedSources = options.sessionLookaheadSources,
+        .replayCommandPlanActive = options.replayCommandPlanActive,
+        .replayCommandOrder = options.replayCommandOrder,
+        .replayOrdinalByCommandIndex = replayOrdinalByCommandIndex,
+        .lookaheadStartIndex = lookaheadStartIndex,
+    });
+  };
+
   auto startRenderPass = [&](core::FlatDrawStateView drawState,
                              const std::optional<core::ClearDesc>& clear,
                              std::size_t lookaheadStartIndex,
@@ -1834,21 +1804,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                               : NULL_OBJECT_HANDLE};
     traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
                             clear.has_value());
-    const auto storeProofLookahead = makeRenderPassStoreProofLookaheadPlan({
-        .slotIndex = slotIndex,
-        .payload = payload,
-        .sourceSeqId = sourceSeqId,
-        .replayRange = replayRange,
-        .sessionSource = options.sessionSource
-            ? &*options.sessionSource
-            : nullptr,
-        .partitionSource = options.partitionSource,
-        .retainedSources = options.sessionLookaheadSources,
-        .replayCommandPlanActive = options.replayCommandPlanActive,
-        .replayCommandOrder = options.replayCommandOrder,
-        .replayOrdinalByCommandIndex = replayOrdinalByCommandIndex,
-        .lookaheadStartIndex = lookaheadStartIndex,
-    });
+    const auto storeProofLookahead =
+        buildRenderPassStoreProofLookahead(lookaheadStartIndex);
     const auto storeProofLookaheadSources = storeProofLookahead.view();
     if (ctx.drawRecorder &&
         ctx.drawRecorder->observeRenderPassStoreProofLookahead) {
@@ -2230,8 +2187,63 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeStage("before-initializer-wait");
       commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
       traceEncodeStage("after-initializer-wait");
+      initializerWaitEncoded = true;
       commandBufferHasWork = true;
     }
+  }
+
+  thread_local SealedParallelPassSnapshotBatch parallelPassShadows;
+  parallelPassShadows.reset();
+  if (parallelPartitionRequested) {
+    // SourcePayloadView cannot represent Query, UpdateTexture, or an ordered
+    // control: those dispositions are resolved by the coordinator before this
+    // call. Capture and initializer facts become stable only after the source
+    // preamble above. This is therefore the last pre-command-effect seam at
+    // which a complete immutable coordinator proof can be published.
+    const auto coordinatorProof = makeParallelPassCoordinatorProofSnapshot(
+        ParallelPassCoordinatorProofSnapshotInput{
+            .firstPassActionEpoch = options.session == nullptr ? 1u : 0u,
+            .queryAbsent = true,
+            .updateTextureAbsent = true,
+            .captureInactive = !ctx.queue.metalCaptureEnabled() &&
+                !captureAlreadyStartedAtChunkBegin &&
+                !earlyCaptureRequest.has_value() &&
+                !diagnosticsState.metalCaptureRequest.has_value(),
+            .initializerIndependent = !initializerWaitEncoded,
+            .orderedControlAbsent = true,
+            .sidecarObservationAbsent =
+                !parallelRenderPassSidecarObservationEnabled() &&
+                !diagnosticsState.renderEncoderGpuSampleBuffer,
+        });
+    // Pass-local sealing over the final validated replay order. Coordinator
+    // commands never enter a child range and no borrowed view escapes this
+    // call. Identity/serial modes never pay this proof cost; parallel mode
+    // needs the same snapshots even when perf counters are disabled.
+    const auto observation = produceSealedParallelPassSnapshots(
+        SealedParallelPassSnapshotInput{
+            .stream = &partitionReplayStream,
+            .ranges = {},
+            .proofs = ParallelPassStaticProofInput{
+                .resources = ParallelPassResourceIdentityProof{
+                    .context = &ctx.pool,
+                    .resolve = resolveParallelPassResourceIdentity,
+                },
+                .route = ParallelPassRenderRouteProof{
+                    .context = &ctx.pool,
+                    .resolve = resolveParallelPassRenderRoute,
+                },
+                .coordinator = coordinatorProof,
+            },
+            .planValidated = partitionReplayStream.valid,
+            .sourceStartsPass = options.session == nullptr,
+            .sourceEndsPass = !(options.deferSessionFinalization &&
+                                options.session != nullptr),
+        },
+        parallelPassShadows);
+    if (perf::enabled()) {
+      perf::countParallelPassShadow(observation);
+    }
+
   }
 
   // R-BACK-2.29..2.32 — mid-chunk MTLCommandBuffer split: open the next
@@ -3041,6 +3053,148 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = true;
   };
 
+  // Fixed-pass child encoder. Unlike encodeDrawRunCommand this owns no
+  // encoder/pass/session transition state: the coordinator has already
+  // sealed and opened the logical pass, and each caller supplies a distinct
+  // child-local binding shadow. All transient allocations go through the
+  // queue's locked ResourceArena; pool/cache access is read-only or already
+  // internally synchronized. UP payloads and diagnostic sidecars are rejected
+  // before the parent Metal encoder is created.
+  auto encodeParallelDrawRunCommand =
+      [&](std::size_t commandIndex,
+          const core::MetalCommandView& command,
+          std::span<const core::DrawParam> drawItems,
+          std::size_t commandDrawBegin,
+          WMT::RenderCommandEncoder encoder,
+          encode_session::BindingState& childBinding) noexcept {
+    if (!encoder || !command.drawState.hot ||
+        !command.drawState.shaderLayout || !command.drawRunRecord ||
+        drawItems.empty()) {
+      return false;
+    }
+
+    core::DrawUniformPayload commandUniformScratch;
+    const auto* commandUniformPayload = core::drawRunUniformPayloadForHandle(
+        command, command.drawRunRecord->uniformHandle, commandUniformScratch,
+        perf::DrawUniformPayloadMaterializeSite::DrawEncoderCommand);
+    if (!commandUniformPayload) {
+      return false;
+    }
+    core::DrawUniformPayloadMaterializeCache childUniformCache;
+    auto stateView = command.drawState;
+    stateView.uniforms = commandUniformPayload;
+    const auto& hot = *stateView.hot;
+    const auto payloadArena = core::drawRunPayloadBytes(command);
+    const auto commandDrawItems =
+        command.drawItems.empty() ? command.drawParams : command.drawItems;
+    const std::size_t commandDrawCount = commandDrawItems.size();
+    const core::PsoHandle renderPsoHandle =
+        command.drawRunRecord->renderPsoHandle;
+    const core::PsoHandle tilePsoHandle =
+        command.drawRunRecord->tilePsoHandle;
+    const core::DepthStencilHandle depthStencilHandle =
+        command.drawRunRecord->depthStencilHandle;
+    const bool mergeDraws = debug::optimizeCompatibleIndexedDrawMerge();
+
+    for (std::size_t i = 0; i < drawItems.size();) {
+      const auto merged = mergeDraws
+          ? makeCompatibleIndexedDrawMerge(drawItems.subspan(i), payloadArena)
+          : CompatibleIndexedDrawMerge{
+                .param = drawItems[i],
+                .drawCount = 1u,
+            };
+      const auto& param = merged.param;
+      const std::size_t mergedDrawCount =
+          std::max<std::size_t>(1u, merged.drawCount);
+      const bool usesCommandUniform =
+          !param.uniformHandle.valid() ||
+          param.uniformHandle == command.drawRunRecord->uniformHandle;
+      const auto* drawUniformPayload = usesCommandUniform
+          ? commandUniformPayload
+          : childUniformCache.payloadForParam(
+                command, param,
+                perf::DrawUniformPayloadMaterializeSite::DrawEncoderParam);
+      if (!drawUniformPayload) {
+        return false;
+      }
+
+      core::DrawBindingOverride bindingOverride{};
+      core::DrawBindingSnapshot bindingSnapshot{};
+      core::FlatDrawStateRecord overrideHot{};
+      core::DrawShaderLayoutContext overrideShaderLayout{};
+      auto drawStateView = stateView;
+      const bool hasBindingOverride =
+          drawParamBindingOverride(param, payloadArena, bindingOverride);
+      const bool hasBindingSnapshot =
+          drawParamBindingSnapshot(param, payloadArena, bindingSnapshot);
+      if (hasBindingOverride &&
+          core::drawBindingOverrideHasBindings(bindingOverride)) {
+        overrideHot = hot;
+        overrideShaderLayout = *drawStateView.shaderLayout;
+        applyDrawBindingOverride(overrideHot, &overrideShaderLayout,
+                                 bindingOverride);
+        drawStateView.hot = &overrideHot;
+        drawStateView.shaderLayout = &overrideShaderLayout;
+      }
+      drawStateView.uniforms = drawUniformPayload;
+
+      if (childBinding.activeDrawStateKey.has_value() &&
+          (childBinding.activeDrawStateKey->clipPlaneMask !=
+               drawStateView.hot->key.clipPlaneMask ||
+           childBinding.activeDrawStateKey->clipPlanesHash !=
+               drawStateView.hot->key.clipPlanesHash)) {
+        uniform::setBit(childBinding.uniformDirty,
+                        uniform::DirtyBit::FfpVsClip);
+      }
+      const bool overrideNeedsBaseStateBind =
+          hasBindingOverride && drawBindingOverrideRequiresBaseStateBind(
+                                    bindingOverride, stateView.shaderLayout);
+      const bool baseStateCompatible =
+          childBinding.activeDrawStateKey.has_value() &&
+          childBinding.activeDrawStateUsesPrefetchedPsoLayout &&
+          core::drawStateKeysCompatibleForDrawRunBatch(
+              *childBinding.activeDrawStateKey,
+              drawStateView.hot->key);
+      const bool skipBaseStateBind =
+          baseStateCompatible && !overrideNeedsBaseStateBind;
+      const bool encoded = encodeDraw(
+          ctx, commandBuffer, encoder, drawStateView, sourceSeqId,
+          skipBaseStateBind, nullptr, &param, payloadArena,
+          hasBindingOverride ? &bindingOverride : nullptr,
+          hasBindingSnapshot ? &bindingSnapshot : nullptr,
+          /*tileFfpMode=*/false,
+          /*argbufHybridMode=*/false,
+          /*argbufResourceArray=*/false,
+          /*argbufDirectCbufMode=*/false,
+          /*reopenArgbufHybrid=*/false,
+          DrawNativeShadowView{
+              .uniformDirty = &childBinding.uniformDirty,
+              .textureSampler = &childBinding.textureSamplerShadow,
+              .argbufCbufCache = &childBinding.argbufCbufCache,
+              .streamIbStagingCache =
+                  &childBinding.activeStreamIbStaging,
+              .renderPsoHandle = renderPsoHandle,
+              .tilePsoHandle = tilePsoHandle,
+              .depthStencilHandle = depthStencilHandle,
+              .commandIndex = commandIndex <=
+                      std::numeric_limits<std::uint32_t>::max()
+                  ? static_cast<std::uint32_t>(commandIndex)
+                  : std::numeric_limits<std::uint32_t>::max(),
+              .commandDrawIndex = static_cast<u64>(commandDrawBegin + i),
+              .commandDrawCount = static_cast<u64>(commandDrawCount),
+              .bindingOverridePrefetchedPsoCompatible =
+                  hasBindingOverride && !overrideNeedsBaseStateBind,
+          });
+      if (encoded) {
+        childBinding.activeDrawStateKey = drawStateView.hot->key;
+        childBinding.activeDrawStateUsesPrefetchedPsoLayout =
+            !overrideNeedsBaseStateBind;
+      }
+      i += mergedDrawCount;
+    }
+    return true;
+  };
+
   auto applyPerRecordSplitPolicy = [&](bool presentRecord) {
     // R-BACK-2.29..2.32 — per-N-records policy. Counts every replayed
     // record (including helper-encoder commands), and fires a mid-chunk
@@ -3341,6 +3495,453 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("end", commandIndex, command.kind, command);
   };
 
+  auto parallelPassForReplayOrdinal = [&](std::uint32_t replayOrdinal)
+      -> const SealedParallelPassSnapshot* {
+    for (const auto& pass : parallelPassShadows.view()) {
+      if (pass.replayOrdinalBegin == replayOrdinal) {
+        return &pass;
+      }
+    }
+    return nullptr;
+  };
+
+  // First production execution slice: one sealed source-local logical pass
+  // backed by ordered DrawRun child spans. This exercises a real
+  // MTLParallelRenderCommandEncoder parent and child encoders while keeping
+  // Clear/Present, pass actions, and completion on the coordinator. Parallel
+  // children deliberately use the portable Stage 1 binding path even when
+  // the ordinary serial pass would select Stage 2: the queue-owned argument
+  // encoder and mutable table shadow are not child-local yet. Tile FFP,
+  // per-record CB splitting, late Store resolution, and every sidecar remain
+  // pre-effect serial fallbacks until their child-local ownership is explicit.
+  auto tryEncodeParallelPass = [&]
+      (const SealedParallelPassSnapshot& pass,
+       std::uint32_t commandIndex,
+       const core::MetalCommandView& command) -> bool {
+    const auto eligibility = classifyParallelPassEligibility(
+        ParallelPassEligibilityInput{
+            .ranges = pass.rangeView(),
+            .firstDrawSnapshots = pass.firstDrawView(),
+            .childReplayOrdinalBegins = std::span<const std::uint32_t>(
+                pass.childReplayOrdinalBegins.data(), pass.childCount),
+            .childReplayOrdinalCounts = std::span<const std::uint32_t>(
+                pass.childReplayOrdinalCounts.data(), pass.childCount),
+            .passActionEpoch = pass.passActionEpoch,
+            .childrenCoverCompleteCommands =
+                pass.childrenCoverCompleteCommands,
+            .explicitPlan = true,
+            .planValidated = true,
+            .logicalPassSealed = true,
+        });
+    auto rejectBeforeEffects = [&] {
+      if (perf::enabled()) {
+        perf::countParallelPassDecision(
+            decideParallelPassExecution(true, eligibility, false));
+      }
+      return false;
+    };
+    if (!eligibility.eligible || suppressRecordedMetalCalls(ctx) ||
+        ctx.drawRecorder || perf::encoderBreakdownEnabled() ||
+        commitPolicy == MidChunkCommitPolicy::PerNRecords ||
+        encoderState.activeRenderEncoder || encoderState.activeBlitEncoder ||
+        encoderState.hasActiveRender || !command.drawRunRecord ||
+        !command.drawState.hot || !command.drawState.shaderLayout ||
+        pass.childCount < 2u) {
+      return rejectBeforeEffects();
+    }
+    const auto tileDecision = dxmt9::pipeline::selectTileFfpForPass(
+        command.drawState, ctx.pool.supportsApple3());
+    const bool forcedStage1 =
+        dxmt9::pipeline::selectArgbufHybridForPass(
+            command.drawState, ctx.pool.argbufHybridEnabled()) ==
+        dxmt9::pipeline::ArgbufHybridDecision::Stage2;
+    if (tileDecision.decision == dxmt9::pipeline::TileFfpDecision::Tile ||
+        activeSeedMergeAttributionEnabled ||
+        parallelRenderPassSidecarObservationEnabled() ||
+        diagnosticsState.renderEncoderGpuSampleBuffer) {
+      return rejectBeforeEffects();
+    }
+
+    thread_local ParallelPassPlanStorage parallelPlanStorage;
+    const auto planned = planParallelRenderPassChildren(
+        ParallelPassEligibilityInput{
+            .ranges = pass.rangeView(),
+            .firstDrawSnapshots = pass.firstDrawView(),
+            .childReplayOrdinalBegins = std::span<const std::uint32_t>(
+                pass.childReplayOrdinalBegins.data(), pass.childCount),
+            .childReplayOrdinalCounts = std::span<const std::uint32_t>(
+                pass.childReplayOrdinalCounts.data(), pass.childCount),
+            .passActionEpoch = pass.passActionEpoch,
+            .childrenCoverCompleteCommands =
+                pass.childrenCoverCompleteCommands,
+            .explicitPlan = true,
+            .planValidated = true,
+            .logicalPassSealed = true,
+        },
+        parallelPlanStorage);
+    if (!planned.eligible) {
+      return rejectBeforeEffects();
+    }
+
+    // Re-resolve every locator while the current SourcePayloadView residency
+    // pin is still held. The first-draw generation, attachment, route, and
+    // source-qualified locator must still match the sealed snapshot.
+    std::array<EncodePartitionResolution,
+               kParallelRenderPassChildCapacity> resolvedChildren{};
+    for (std::size_t i = 0; i < parallelPlanStorage.count; ++i) {
+      const auto& child = parallelPlanStorage.children[i];
+      resolvedChildren[i] = resolveEncodePartition(
+          child.range, partitionReplayStream);
+      const auto& resolved = resolvedChildren[i];
+      if (!resolved || !resolved.partition.entry.drawState.hot ||
+          !resolved.partition.entry.drawState.shaderLayout ||
+          resolved.partition.drawParams.empty() ||
+          child.firstDraw.generation != sourceSeqId ||
+          child.firstDraw.provenance != child.range.entry ||
+          core::makeRenderAttachmentKey(
+              *resolved.partition.entry.drawState.hot) !=
+              child.firstDraw.entryRender.attachments ||
+          resolveParallelPassRenderRoute(
+              &ctx.pool, resolved.partition.entry.drawState) !=
+              child.firstDraw.entryRender.route) {
+        return rejectBeforeEffects();
+      }
+      // encodeDrawRunCommand batches every UP slice in the complete command.
+      // Invoking it once per child would upload that same command payload once
+      // per child and would make the queue-owned transient arena part of the
+      // eventual worker surface. Keep UP draws on the serial lane until the
+      // coordinator owns one immutable preupload result for all children.
+      for (const auto& draw : resolved.partition.drawParams) {
+        if (!draw.userVertexRange.empty() || !draw.userIndexRange.empty()) {
+          return rejectBeforeEffects();
+        }
+      }
+      if (pass.childrenCoverCompleteCommands) {
+        const std::uint64_t ordinalEnd =
+            static_cast<std::uint64_t>(
+                pass.childReplayOrdinalBegins[i]) +
+            pass.childReplayOrdinalCounts[i];
+        for (std::uint64_t ordinal = pass.childReplayOrdinalBegins[i];
+             ordinal < ordinalEnd; ++ordinal) {
+          std::uint32_t childCommandIndex = 0u;
+          if (!partitionReplayStream.commandIndexAt(
+                  static_cast<std::size_t>(ordinal), childCommandIndex)) {
+            return rejectBeforeEffects();
+          }
+          const auto childSource = payload.commandAt(childCommandIndex);
+          const auto& childCommand = childSource.command;
+          if (childSource.kind() != Kind::DrawRun ||
+              !childCommand.drawState.hot ||
+              !childCommand.drawState.shaderLayout ||
+              !childCommand.drawRunRecord ||
+              childCommand.drawParams.empty() ||
+              makeAttachmentKey(*childCommand.drawState.hot) !=
+                  makeAttachmentKey(*command.drawState.hot) ||
+              resolveParallelPassRenderRoute(
+                  &ctx.pool, childCommand.drawState) !=
+                  child.firstDraw.entryRender.route ||
+              dxmt9::pipeline::selectTileFfpForPass(
+                  childCommand.drawState,
+                  ctx.pool.supportsApple3()).decision ==
+                  dxmt9::pipeline::TileFfpDecision::Tile) {
+            return rejectBeforeEffects();
+          }
+          for (const auto& draw : childCommand.drawParams) {
+            if (!draw.userVertexRange.empty() ||
+                !draw.userIndexRange.empty()) {
+              return rejectBeforeEffects();
+            }
+          }
+        }
+      }
+    }
+
+    const bool leadingClearExpected = pass.leadingClear.valid;
+    if (leadingClearExpected != passState.pendingClear.has_value() ||
+        (leadingClearExpected &&
+         (!passState.pendingClearCommand.valid() ||
+          passState.pendingClearCommand.seqId != sourceSeqId ||
+          passState.pendingClearCommand.commandIndex !=
+              pass.leadingClear.commandIndex))) {
+      return rejectBeforeEffects();
+    }
+
+    const auto storeProofLookahead =
+        buildRenderPassStoreProofLookahead(commandIndex);
+    const RenderPassStoreProofActivePass storeProofActivePass{
+        .hot = command.drawState.hot,
+        .allowSameAttachmentContinuation = true,
+        .lookaheadMayHaveFutureSources = deferSessionFinalization,
+        .lookaheadInvalid = storeProofLookahead.invalid,
+        .lookaheadStorageTruncated = storeProofLookahead.storageTruncated,
+    };
+    PreparedRenderPass prepared{};
+    if (!prepareRenderPassWithStoreProofLookahead(
+            ctx, command.drawState, passState.pendingClear,
+            storeProofLookahead.view(), storeProofActivePass,
+            /*sampleBufferAttachments=*/{}, /*visibilityBuffer=*/{},
+            prepared)) {
+      return rejectBeforeEffects();
+    }
+    for (std::size_t i = 0; i < prepared.lateStore.count; ++i) {
+      if (prepared.lateStore.attachments[i].unresolved()) {
+        return rejectBeforeEffects();
+      }
+    }
+
+    thread_local std::array<encode_session::BindingState,
+                            kParallelRenderPassChildCapacity>
+        parallelChildBindings;
+    for (std::size_t i = 0; i < parallelPlanStorage.count; ++i) {
+      parallelChildBindings[i] = {};
+      parallelChildBindings[i].initialized = true;
+      uniform::markAllDirty(parallelChildBindings[i].uniformDirty);
+      parallelChildBindings[i].activeStreamIbStaging.begin(false);
+    }
+
+    struct ProductionParallelContext {
+      EncodeContext* ctx = nullptr;
+      encode_session::EncodeChunkSessionStorage* session = nullptr;
+      encode_session::LifecycleRuntime* lifecycle = nullptr;
+      PreparedRenderPass* prepared = nullptr;
+      decltype(encodeParallelDrawRunCommand)* encodeParallelDrawRun = nullptr;
+      std::array<encode_session::BindingState,
+                 kParallelRenderPassChildCapacity>* childBindings = nullptr;
+      const EncodePartitionReplayStream* stream = nullptr;
+      RenderPassFrameTracker* frameTracker = nullptr;
+      RenderPassStoreProofSummary storeProof{};
+      RenderPassAttachmentFootprint attachmentFootprint{};
+      ReplayWindowProvenance replayWindow{};
+      core::MetalCommandView command{};
+      std::uint32_t commandIndex = 0;
+      std::uint32_t sourceIndex = 0;
+      std::uint64_t sourceSeqId = 0;
+      std::uint64_t encoderIndex = 0;
+      std::uint64_t currentLoadBytes = 0;
+      bool openedWithClear = false;
+      bool forcedStage1 = false;
+      perf::EncoderSplitReason closeReason = perf::EncoderSplitReason::Final;
+      ParallelPassFailurePhase failurePhase =
+          ParallelPassFailurePhase::None;
+      std::uint32_t failureChild = 0u;
+      bool failed = false;
+    };
+    ProductionParallelContext production{
+        .ctx = &ctx,
+        .session = &session,
+        .lifecycle = &lifecycle,
+        .prepared = &prepared,
+        .encodeParallelDrawRun = &encodeParallelDrawRunCommand,
+        .childBindings = &parallelChildBindings,
+        .stream = &partitionReplayStream,
+        .frameTracker = &renderPassFrameTracker,
+        .replayWindow = options.replayWindow,
+        .command = command,
+        .commandIndex = commandIndex,
+        .sourceIndex = options.replayWindow.sourceIndex,
+        .sourceSeqId = sourceSeqId,
+        .encoderIndex = diagnosticsState.renderEncoderIndex,
+        .currentLoadBytes = prepared.actions.colorLoadBytes +
+            prepared.actions.depthLoadBytes +
+            prepared.actions.stencilLoadBytes,
+        .openedWithClear = prepared.actions.color0Clear != 0u ||
+            prepared.actions.depthClear != 0u ||
+            prepared.actions.stencilClear != 0u,
+        .forcedStage1 = forcedStage1,
+        .closeReason = pass.sealedAtSourceEnd
+            ? perf::EncoderSplitReason::Final
+            : pass.sealingCommand.kind == Kind::Present
+                ? perf::EncoderSplitReason::Present
+                : pass.sealingCommand.kind == Kind::Clear
+                    ? perf::EncoderSplitReason::ClearBarrier
+                : perf::EncoderSplitReason::RenderTargetChange,
+    };
+    if (perf::enabled()) {
+      production.storeProof = renderPassStoreProofSummaryForLookahead(
+          ctx, storeProofLookahead.view(), *command.drawState.hot,
+          storeProofActivePass);
+      production.attachmentFootprint =
+          estimateRenderPassAttachmentFootprintBytes(
+              ctx, *command.drawState.hot);
+    }
+
+    ParallelPassMetalCallbacks callbacks{
+        .context = &production,
+        .beginPassActions = +[](void* raw) noexcept {
+          auto& state = *static_cast<ProductionParallelContext*>(raw);
+          auto& storage = *state.session;
+          const auto& hot = *state.command.drawState.hot;
+          commitPreparedRenderPassOpen(*state.ctx, *state.prepared);
+          storage.encoder.hasActiveRender = true;
+          storage.pass.activeKey = makeAttachmentKey(hot);
+          storage.pass.activeWriteHazard = makeAttachmentHazard(hot);
+          storage.pass.activeInstance = RenderPassInstanceToken{
+              .seqId = state.sourceSeqId,
+              .encoderIndex = state.encoderIndex,
+          };
+          if (perf::enabled() && state.frameTracker) {
+            state.frameTracker->noteStart(
+                makeRenderPassFrameKey(hot), state.attachmentFootprint,
+                state.storeProof, state.openedWithClear,
+                state.currentLoadBytes, state.sourceSeqId,
+                state.encoderIndex, state.replayWindow, state.sourceIndex,
+                state.commandIndex, ActiveSeedMergeTicketContext{}, nullptr);
+          }
+          storage.pass.activePassUsesTileFfp = false;
+          storage.pass.lateStore = state.prepared->lateStore;
+          for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+            storage.pass.activeColorHandles[i] =
+                hot.colorAttachments[i].handle;
+          }
+          storage.pass.pendingClear.reset();
+          storage.pass.pendingClearCommand = {};
+          storage.binding = {};
+          storage.binding.initialized = true;
+          storage.diagnostics.activeColorAttachmentDump = {};
+          storage.diagnostics.activeDepthAttachmentDump = {};
+          storage.diagnostics.activeDrawTextureDumps.clear();
+          storage.diagnostics.activeVisibilityScout.reset();
+          storage.diagnostics.activeEncoderBreakdown.begin(
+              state.sourceSeqId, state.encoderIndex,
+              hot.colorAttachments[0].handle.value,
+              hot.depthStencil.handle.value);
+          storage.binding.activeStreamIbStaging.begin(
+              stageStreamIbProbeRowMatches(
+                  &storage.diagnostics.activeEncoderBreakdown));
+          storage.diagnostics.activeEncoderBreakdown
+              .recordAttachmentMetadata(state.ctx->pool, hot);
+          ++storage.diagnostics.renderEncoderIndex;
+          perf::countPortableFfpPass();
+          if (state.forcedStage1) {
+            perf::countParallelPassForcedStage1();
+          }
+          perf::countStage1Encoder();
+          perf::countStage1Bytes(sizeof(VsConsts) + sizeof(PsConsts) +
+                                 sizeof(FfpVsConsts) + sizeof(FfpPsConsts));
+          if (auto* recorder = state.ctx->drawRecorder;
+              recorder && recorder->beginRenderPass) {
+            recorder->beginRenderPass(recorder->userdata,
+                                      state.commandIndex);
+          }
+          return true;
+        },
+        .replayLogicalCommands =
+            +[](void*, std::span<const ParallelPassChildPlan>) noexcept {
+          return true;
+        },
+        .emitChild = +[](void* raw, const ParallelPassChildPlan& child,
+                         WMT::RenderCommandEncoder encoder) noexcept {
+          auto& state = *static_cast<ProductionParallelContext*>(raw);
+          const auto resolved = resolveEncodePartition(
+              child.range, *state.stream);
+          if (!resolved || resolved.partition.drawParams.empty() ||
+              (!child.coversCompleteCommands &&
+               child.range.entry.commandIndex != state.commandIndex)) {
+            return false;
+          }
+          auto& childBinding =
+              (*state.childBindings)[child.childOrdinal];
+          configurePreparedRenderPassEncoder(
+              *state.ctx, encoder,
+              resolved.partition.entry.drawState, *state.prepared);
+          encoder.setLabel(makeLabelStringFmt(
+              "ParallelRenderPass[seq=%llu,enc=%llu,child=%u]",
+              static_cast<unsigned long long>(state.sourceSeqId),
+              static_cast<unsigned long long>(state.encoderIndex),
+              child.childOrdinal));
+          if (child.coversCompleteCommands) {
+            const std::uint64_t ordinalEnd =
+                static_cast<std::uint64_t>(child.replayOrdinalBegin) +
+                child.replayOrdinalCount;
+            for (std::uint64_t ordinal = child.replayOrdinalBegin;
+                 ordinal < ordinalEnd; ++ordinal) {
+              std::uint32_t childCommandIndex = 0u;
+              if (!state.stream->commandIndexAt(
+                      static_cast<std::size_t>(ordinal),
+                      childCommandIndex)) {
+                return false;
+              }
+              const auto childSource = state.stream->source.payload.commandAt(
+                  childCommandIndex);
+              if (childSource.kind() != Kind::DrawRun) {
+                return false;
+              }
+              const auto childDrawItems =
+                  childSource.command.drawItems.empty()
+                      ? childSource.command.drawParams
+                      : childSource.command.drawItems;
+              if (!(*state.encodeParallelDrawRun)(
+                      childCommandIndex, childSource.command,
+                      childDrawItems, 0u, encoder, childBinding)) {
+                return false;
+              }
+            }
+          } else {
+            const std::size_t commandDrawBegin =
+                child.range.entry.drawParamIndex -
+                state.command.drawRunRecord->firstParam;
+            if (!(*state.encodeParallelDrawRun)(
+                    state.commandIndex, state.command,
+                    resolved.partition.drawParams, commandDrawBegin,
+                    encoder, childBinding)) {
+              return false;
+            }
+          }
+          return true;
+        },
+        .joinChild = +[](void*, std::uint32_t) noexcept { return true; },
+        .endPassActions = +[](void*) noexcept { return true; },
+        .publishSidecars = +[](void*) noexcept { return true; },
+        .publishCompletion = +[](void* raw) noexcept {
+          auto& state = *static_cast<ProductionParallelContext*>(raw);
+          state.lifecycle->completeParallelRenderPass(state.closeReason);
+          return true;
+        },
+        .failStop = +[](void* raw, ParallelPassFailurePhase phase,
+                        std::uint32_t child) noexcept {
+          auto& state = *static_cast<ProductionParallelContext*>(raw);
+          state.failurePhase = phase;
+          state.failureChild = child;
+          state.failed = true;
+        },
+    };
+    ParallelPassMetalBackend backend(commandBuffer, prepared.info, callbacks);
+    std::array<std::uint32_t, kParallelRenderPassChildCapacity>
+        completionOrder{};
+    for (std::size_t i = 0; i < parallelPlanStorage.count; ++i) {
+      completionOrder[i] = static_cast<std::uint32_t>(i);
+    }
+    const auto execution = executeParallelRenderPass(
+        parallelPlanStorage.view(),
+        std::span<const std::uint32_t>(completionOrder.data(),
+                                       parallelPlanStorage.count),
+        backend);
+    if (perf::enabled()) {
+      perf::countParallelPassDecision(decideParallelPassExecution(
+          true, eligibility,
+          execution.status == ParallelPassExecutionStatus::Completed));
+    }
+    if (production.failed ||
+        execution.status == ParallelPassExecutionStatus::FailStop) {
+      std::fprintf(
+          stderr,
+          "[dxmt9-parallel] fail-stop phase=%u child=%u seq=%llu "
+          "command=%u children=%zu\n",
+          static_cast<unsigned>(production.failurePhase),
+          production.failureChild,
+          static_cast<unsigned long long>(sourceSeqId), commandIndex,
+          parallelPlanStorage.count);
+      abortEncodePartitionInvariant(
+          "parallel render-pass execution failed after Metal effects");
+    }
+    if (execution.status != ParallelPassExecutionStatus::Completed) {
+      return false;
+    }
+    commandBufferHasWork = true;
+    return true;
+  };
+
+  std::uint32_t parallelConsumedReplayOrdinalEnd = 0u;
   EncodePartitionSerialCursor partitionCursor(
       partitionReplayStream, partitionRanges,
       useExplicitPartitionPlan);
@@ -3352,6 +3953,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             partitionBatch.replayOrdinalCount;
         for (std::uint64_t ordinal = partitionBatch.replayOrdinalBegin;
              ordinal < ordinalEnd; ++ordinal) {
+          if (ordinal < parallelConsumedReplayOrdinalEnd) {
+            continue;
+          }
           std::uint32_t commandIndex = 0;
           const bool resolvedCommand = partitionReplayStream.commandIndexAt(
               static_cast<std::size_t>(ordinal), commandIndex);
@@ -3359,7 +3963,27 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             abortEncodePartitionInvariant(
                 "CommandSegment replay ordinal resolution failed");
           }
-          encodeCompleteCommand(commandIndex, payload.commandAt(commandIndex));
+          const auto source = payload.commandAt(commandIndex);
+          if (source.kind() == Kind::DrawRun) {
+            if (const auto* pass = parallelPassForReplayOrdinal(
+                    static_cast<std::uint32_t>(ordinal))) {
+              traceEncodeCommand("begin", commandIndex, Kind::DrawRun,
+                                 source.command);
+              if (tryEncodeParallelPass(*pass, commandIndex,
+                                        source.command)) {
+                parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
+                traceEncodeCommand("after-encode", commandIndex,
+                                   Kind::DrawRun, source.command);
+                traceEncodeCommand("before-split-policy", commandIndex,
+                                   Kind::DrawRun, source.command);
+                applyPerRecordSplitPolicy(/*presentRecord=*/false);
+                traceEncodeCommand("end", commandIndex, Kind::DrawRun,
+                                   source.command);
+                continue;
+              }
+            }
+          }
+          encodeCompleteCommand(commandIndex, source);
         }
         continue;
       }
@@ -3384,14 +4008,29 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         }
         command = payload.commandAt(commandIndex).command;
       }
-      traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       // TLA+: EncoderLifecycle / opCount advances once for the complete source
       // command even when that DrawRun has multiple explicit subranges.
-      encodeDrawRunCommand(
-          commandIndex, command,
-          partitionBatch.identityResolved
-              ? std::span<const EncodePartitionRangeSnapshot>{}
-              : partitionBatch.ranges);
+      bool encodedInParallel = false;
+      if (partitionBatch.replayOrdinalBegin <
+          parallelConsumedReplayOrdinalEnd) {
+        continue;
+      }
+      traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
+      if (const auto* pass = parallelPassForReplayOrdinal(
+              partitionBatch.replayOrdinalBegin)) {
+        encodedInParallel = tryEncodeParallelPass(
+            *pass, commandIndex, command);
+        if (encodedInParallel) {
+          parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
+        }
+      }
+      if (!encodedInParallel) {
+        encodeDrawRunCommand(
+            commandIndex, command,
+            partitionBatch.identityResolved
+                ? std::span<const EncodePartitionRangeSnapshot>{}
+                : partitionBatch.ranges);
+      }
       traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
       traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
                          command);

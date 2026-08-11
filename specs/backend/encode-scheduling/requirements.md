@@ -507,6 +507,14 @@ first-draw snapshot. Queries, clears, sidecar observations, initializer waits,
 present work, and unresolved hazards make a range ineligible. Child creation
 order must preserve draw order, all children must end before the parent, and
 failure before Metal side effects must deterministically fall back to serial.
+Workers may re-resolve source-qualified locators only while the coordinator
+holds the synchronous source residency pin; no payload pointer may escape the
+joined execution. Until argument-buffer state is child-local, an eligible
+parallel pass may select the semantically equivalent Stage 1 binding variant
+only when that conversion is explicitly counted. It must not share the
+queue-owned argument encoder or mutable table shadow between children. The
+parallel provider must remain non-default when matched wild evidence reduces
+local encode wall time but regresses end-to-end throughput.
 
 **R-BACK-2.64** A Metal 4 segmented lane may encode physical segments in
 separate command buffers only for one sealed logical render pass. It must first

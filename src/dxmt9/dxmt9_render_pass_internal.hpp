@@ -70,6 +70,40 @@ struct RenderEncoderGpuAttachment {
   }
 };
 
+// Coordinator-owned render-pass descriptor and action state. Preparation is
+// deliberately separated from Metal encoder creation so the ordinary and
+// MTLParallelRenderCommandEncoder lanes consume exactly the same load/store,
+// clear, visibility, and attachment policy. No source payload or Metal object
+// is retained here.
+struct PreparedRenderPass {
+  WMTRenderPassInfo info{};
+  RenderPassActionSummary actions{};
+  LateRenderPassStoreState lateStore{};
+  std::uint32_t primaryWidth = 0;
+  std::uint32_t primaryHeight = 0;
+  bool discardAfterPresent = false;
+  bool valid = false;
+};
+
+bool prepareRenderPassWithStoreProofLookahead(
+    EncodeContext& ctx,
+    core::FlatDrawStateView drawState,
+    const std::optional<ClearDesc>& clear,
+    std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
+    RenderPassStoreProofActivePass activePass,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
+    WMT::Buffer visibilityBuffer,
+    PreparedRenderPass& prepared);
+
+void configurePreparedRenderPassEncoder(
+    EncodeContext& ctx,
+    WMT::RenderCommandEncoder& encoder,
+    core::FlatDrawStateView drawState,
+    const PreparedRenderPass& prepared);
+
+void commitPreparedRenderPassOpen(EncodeContext& ctx,
+                                  const PreparedRenderPass& prepared);
+
 struct RenderPassStoreProofSummary {
   perf::RenderPassColorStoreProof color =
       perf::RenderPassColorStoreProof::BlockNullColor;
@@ -147,6 +181,11 @@ public:
       perf::RenderPassLateStoreResolutionCause cause);
   perf::RenderPassLateStoreResolutionCause lateStoreCloseCause(
       perf::EncoderSplitReason reason) const noexcept;
+  // The parallel parent and every child have already ended. Perform the
+  // coordinator-owned logical-pass close bookkeeping without attempting to
+  // end a child encoder a second time. Sidecar eligibility must already have
+  // excluded attachment dumps and visibility work.
+  void completeParallelRenderPass(perf::EncoderSplitReason reason);
   void endRender(
       perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final);
   void endBlit();

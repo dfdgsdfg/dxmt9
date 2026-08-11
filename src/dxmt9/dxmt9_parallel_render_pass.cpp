@@ -124,7 +124,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const SealedParallelPassSnapshotInput& input,
     SealedParallelPassSnapshotBatch& snapshots) noexcept {
   snapshots.reset();
-  if (!input.stream || input.ranges.empty()) {
+  if (!input.stream) {
     return rejectBatch(Fallback::PlanMissing, snapshots);
   }
   if (!input.planValidated) {
@@ -162,7 +162,6 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   SealedParallelPassSnapshot current{};
   ParallelPassCommandLocator pendingClear{};
   core::RenderAttachmentKey pendingClearAttachments{};
-  std::size_t rangeIndex = 0u;
   std::uint64_t passActionEpoch =
       input.proofs.coordinator.firstPassActionEpoch;
   bool passActionEpochValid = true;
@@ -256,6 +255,180 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       rejectCandidate(Fallback::RenderRoute);
     }
   };
+  auto appendChild = [&](std::uint32_t replayOrdinalBegin,
+                         std::uint32_t replayOrdinalCount,
+                         std::uint32_t drawBegin,
+                         std::uint32_t drawCount,
+                         bool completeCommands) {
+    if (current.childCount >= kParallelRenderPassChildCapacity ||
+        replayOrdinalCount == 0u || drawCount == 0u) {
+      rejectCandidate(Fallback::ChildCapacity);
+      return false;
+    }
+    std::uint32_t commandIndex = 0u;
+    if (!stream.commandIndexAt(replayOrdinalBegin, commandIndex)) {
+      rejectCandidate(Fallback::FirstDrawSnapshot);
+      return false;
+    }
+    const auto source = stream.source.payload.commandAt(commandIndex);
+    if (source.kind() != Kind::DrawRun ||
+        !source.command.drawState.hot ||
+        !source.command.drawState.shaderLayout ||
+        !source.command.drawState.debug ||
+        !source.command.drawRunRecord || source.command.drawParams.empty() ||
+        drawBegin >= source.command.drawParams.size() ||
+        drawCount > source.command.drawParams.size() - drawBegin) {
+      rejectCandidate(Fallback::FirstDrawSnapshot);
+      return false;
+    }
+    EncodePartitionEntrySnapshot entry{};
+    if (drawBegin > UINT32_MAX - source.command.drawRunRecord->firstParam) {
+      rejectCandidate(Fallback::FirstDrawSnapshot);
+      return false;
+    }
+    if (!buildEncodePartitionEntrySnapshot(
+            stream, replayOrdinalBegin,
+            source.command.drawRunRecord->firstParam + drawBegin, entry)) {
+      rejectCandidate(Fallback::FirstDrawSnapshot);
+      return false;
+    }
+    const auto rawReads = core::makeDrawEntryReadSet(
+        source.command.drawState);
+    core::ExactResourceSet reads{};
+    if (!canonicalizeResources(rawReads, input.proofs.resources, reads)) {
+      rejectCandidate(rawReads.complete()
+                          ? Fallback::ResourceIdentityProof
+                          : Fallback::ResourceSetIncomplete);
+      return false;
+    }
+    const core::RenderRoute route = input.proofs.route.valid()
+        ? input.proofs.route.resolve(input.proofs.route.context,
+                                     source.command.drawState)
+        : core::RenderRoute::Unknown;
+    if (route == core::RenderRoute::Unknown ||
+        (candidateRoute != core::RenderRoute::Unknown &&
+         route != candidateRoute)) {
+      rejectCandidate(Fallback::RenderRoute);
+      return false;
+    }
+    const std::size_t child = current.childCount++;
+    current.ranges[child] = EncodePartitionRangeSnapshot{
+        .kind = EncodePartitionRangeKind::DrawRunEntries,
+        .replayOrdinalBegin = replayOrdinalBegin,
+        .replayOrdinalCount = 1u,
+        .drawEntryCount = drawCount,
+        .entry = entry,
+    };
+    current.firstDraws[child] = ParallelFirstDrawSnapshot{
+        .provenance = entry,
+        .entryRender = core::RenderContinuationKey{
+            .attachments = current.attachments,
+            .entryReads = reads,
+            .route = route,
+            .passActionEpoch = current.passActionEpoch,
+            .flags = core::RenderContinuationKeyValid |
+                     core::RenderContinuationEntryStateComplete,
+        },
+        .generation = stream.source.seqId,
+        .complete = stream.source.seqId != 0u && reads.complete() &&
+            reads.canonicalized(),
+    };
+    current.childReplayOrdinalBegins[child] = replayOrdinalBegin;
+    current.childReplayOrdinalCounts[child] = replayOrdinalCount;
+    current.childrenCoverCompleteCommands = completeCommands;
+    return true;
+  };
+  auto buildCandidateChildren = [&](std::uint32_t replayOrdinalEnd) {
+    current.childCount = 0u;
+    if (replayOrdinalEnd <= current.replayOrdinalBegin ||
+        current.drawCount < kProductionPartitionDrawThreshold) {
+      return;
+    }
+    const std::uint32_t commandCount =
+        replayOrdinalEnd - current.replayOrdinalBegin;
+    if (commandCount == 1u) {
+      std::uint32_t commandIndex = 0u;
+      if (!stream.commandIndexAt(current.replayOrdinalBegin, commandIndex)) {
+        rejectCandidate(Fallback::FirstDrawSnapshot);
+        return;
+      }
+      const auto source = stream.source.payload.commandAt(commandIndex);
+      if (source.kind() != Kind::DrawRun ||
+          source.command.drawParams.size() > UINT32_MAX) {
+        rejectCandidate(Fallback::FirstDrawSnapshot);
+        return;
+      }
+      std::uint32_t drawBegin = 0u;
+      std::uint32_t remaining =
+          static_cast<std::uint32_t>(source.command.drawParams.size());
+      while (remaining != 0u) {
+        std::uint32_t count = std::min(
+            remaining, kProductionPartitionTargetDraws);
+        if (remaining > count &&
+            remaining - count < kProductionPartitionMinimumDraws) {
+          count = remaining;
+        }
+        if (!appendChild(current.replayOrdinalBegin, 1u, drawBegin,
+                         count, false)) {
+          return;
+        }
+        drawBegin += count;
+        remaining -= count;
+      }
+      return;
+    }
+
+    const std::uint64_t targetChildren64 =
+        (current.drawCount + kProductionPartitionTargetDraws - 1u) /
+        kProductionPartitionTargetDraws;
+    const std::uint32_t targetChildren = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(
+            kParallelRenderPassChildCapacity,
+            std::max<std::uint64_t>(2u, targetChildren64)));
+    const std::uint32_t childCount = std::min(commandCount, targetChildren);
+    std::uint32_t ordinal = current.replayOrdinalBegin;
+    std::uint64_t remainingDraws = current.drawCount;
+    for (std::uint32_t child = 0u; child < childCount; ++child) {
+      const std::uint32_t childBegin = ordinal;
+      const std::uint32_t groupsRemaining = childCount - child;
+      const std::uint64_t target =
+          (remainingDraws + groupsRemaining - 1u) / groupsRemaining;
+      std::uint64_t childDraws = 0u;
+      do {
+        std::uint32_t commandIndex = 0u;
+        if (!stream.commandIndexAt(ordinal, commandIndex)) {
+          rejectCandidate(Fallback::FirstDrawSnapshot);
+          return;
+        }
+        const auto source = stream.source.payload.commandAt(commandIndex);
+        if (source.kind() != Kind::DrawRun ||
+            source.command.drawParams.empty()) {
+          rejectCandidate(Fallback::NonChildDrawRun);
+          return;
+        }
+        childDraws += source.command.drawParams.size();
+        ++ordinal;
+      } while (ordinal < replayOrdinalEnd && childDraws < target &&
+               replayOrdinalEnd - ordinal > groupsRemaining - 1u);
+      std::uint32_t firstCommandIndex = 0u;
+      if (!stream.commandIndexAt(childBegin, firstCommandIndex)) {
+        rejectCandidate(Fallback::FirstDrawSnapshot);
+        return;
+      }
+      const auto firstSource =
+          stream.source.payload.commandAt(firstCommandIndex);
+      if (firstSource.command.drawParams.size() > UINT32_MAX ||
+          !appendChild(childBegin, ordinal - childBegin, 0u,
+                       static_cast<std::uint32_t>(
+                           firstSource.command.drawParams.size()), true)) {
+        return;
+      }
+      remainingDraws -= childDraws;
+    }
+    if (ordinal != replayOrdinalEnd || remainingDraws != 0u) {
+      rejectCandidate(Fallback::FirstDrawSnapshot);
+    }
+  };
   auto sealCandidate = [&](std::uint32_t replayOrdinalEnd,
                            ParallelPassCommandLocator sealingCommand,
                            bool sealedAtSourceEnd) {
@@ -281,6 +454,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (boundaryComplete) {
       ++result.sealedCount;
     }
+    buildCandidateChildren(replayOrdinalEnd);
     if (current.childCount < 2u) {
       rejectCandidate(Fallback::TooFewChildren);
     } else if (current.childCount > kParallelRenderPassChildCapacity) {
@@ -414,67 +588,6 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       current.drawCount += source.command.drawParams.size();
     }
 
-    while (rangeIndex < input.ranges.size()) {
-      const auto& range = input.ranges[rangeIndex];
-      const std::uint64_t rangeEnd =
-          static_cast<std::uint64_t>(range.replayOrdinalBegin) +
-          range.replayOrdinalCount;
-      if (rangeEnd > ordinal) {
-        break;
-      }
-      ++rangeIndex;
-    }
-    const std::size_t drawRangeBegin = rangeIndex;
-    if (rangeIndex < input.ranges.size() &&
-        input.ranges[rangeIndex].kind ==
-            EncodePartitionRangeKind::CommandSegment &&
-        input.ranges[rangeIndex].replayOrdinalBegin <= ordinal &&
-        static_cast<std::uint64_t>(
-            input.ranges[rangeIndex].replayOrdinalBegin) +
-                input.ranges[rangeIndex].replayOrdinalCount > ordinal) {
-      rejectCandidate(Fallback::NonChildDrawRun);
-    } else {
-      while (rangeIndex < input.ranges.size() &&
-             input.ranges[rangeIndex].kind ==
-                 EncodePartitionRangeKind::DrawRunEntries &&
-             input.ranges[rangeIndex].replayOrdinalBegin == ordinal) {
-        const auto& range = input.ranges[rangeIndex++];
-        if (current.childCount >= kParallelRenderPassChildCapacity) {
-          rejectCandidate(Fallback::ChildCapacity);
-          continue;
-        }
-        const auto resolved = resolveEncodePartition(range, stream);
-        if (!resolved || !resolved.partition.entry.drawState.hot ||
-            !resolved.partition.entry.drawState.shaderLayout ||
-            !resolved.partition.entry.drawState.debug ||
-            !resolved.partition.entry.drawParam ||
-            !resolved.partition.entry.uniform ||
-            resolved.partition.drawParams.empty()) {
-          rejectCandidate(Fallback::FirstDrawSnapshot);
-          continue;
-        }
-        current.ranges[current.childCount] = range;
-        current.firstDraws[current.childCount] = ParallelFirstDrawSnapshot{
-            .provenance = range.entry,
-            .entryRender = core::RenderContinuationKey{
-                .attachments = attachments,
-                .entryReads = reads,
-                .route = drawRoute,
-                .passActionEpoch = current.passActionEpoch,
-                .flags = core::RenderContinuationKeyValid |
-                         core::RenderContinuationEntryStateComplete,
-            },
-            .generation = stream.source.seqId,
-            .complete = stream.source.seqId != 0u && reads.complete() &&
-                reads.canonicalized() &&
-                drawRoute != core::RenderRoute::Unknown,
-        };
-        ++current.childCount;
-      }
-      if (rangeIndex == drawRangeBegin) {
-        rejectCandidate(Fallback::NonChildDrawRun);
-      }
-    }
   }
 
   if (active) {

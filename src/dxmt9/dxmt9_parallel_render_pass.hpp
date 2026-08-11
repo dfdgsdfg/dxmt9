@@ -14,6 +14,7 @@ namespace dxmt9::encoders {
 
 inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
 inline constexpr std::size_t kParallelRenderPassCandidateCapacity = 16u;
+inline constexpr std::uint32_t kParallelRenderPassNoFailedChild = UINT32_MAX;
 
 // A value proof that a child can establish its first draw without borrowing
 // the coordinator's mutable native binding shadow. The producer owns the
@@ -99,6 +100,47 @@ struct ParallelPassCoordinatorProof {
   }
 };
 
+// Coordinator-owned value inputs captured after source preambles have
+// resolved capture and initializer state, but before command replay can emit
+// Metal work.  The resulting proof is call-local and contains no borrowed
+// payload or runtime object.
+struct ParallelPassCoordinatorProofSnapshotInput {
+  std::uint64_t firstPassActionEpoch = 0;
+  bool queryAbsent = false;
+  bool updateTextureAbsent = false;
+  bool captureInactive = false;
+  bool initializerIndependent = false;
+  bool orderedControlAbsent = false;
+  bool sidecarObservationAbsent = false;
+};
+
+constexpr ParallelPassCoordinatorProof
+makeParallelPassCoordinatorProofSnapshot(
+    const ParallelPassCoordinatorProofSnapshotInput& input) noexcept {
+  ParallelPassCoordinatorProof proof{
+      .firstPassActionEpoch = input.firstPassActionEpoch,
+  };
+  if (input.queryAbsent) {
+    proof.flags |= ParallelPassQueryAbsent;
+  }
+  if (input.updateTextureAbsent) {
+    proof.flags |= ParallelPassUpdateTextureAbsent;
+  }
+  if (input.captureInactive) {
+    proof.flags |= ParallelPassCaptureInactive;
+  }
+  if (input.initializerIndependent) {
+    proof.flags |= ParallelPassInitializerIndependent;
+  }
+  if (input.orderedControlAbsent) {
+    proof.flags |= ParallelPassOrderedControlAbsent;
+  }
+  if (input.sidecarObservationAbsent) {
+    proof.flags |= ParallelPassSidecarObservationAbsent;
+  }
+  return proof;
+}
+
 struct ParallelPassStaticProofInput {
   ParallelPassResourceIdentityProof resources{};
   ParallelPassRenderRouteProof route{};
@@ -134,6 +176,10 @@ struct SealedParallelPassSnapshot {
              kParallelRenderPassChildCapacity> ranges{};
   std::array<ParallelFirstDrawSnapshot,
              kParallelRenderPassChildCapacity> firstDraws{};
+  std::array<std::uint32_t,
+             kParallelRenderPassChildCapacity> childReplayOrdinalBegins{};
+  std::array<std::uint32_t,
+             kParallelRenderPassChildCapacity> childReplayOrdinalCounts{};
   core::RenderAttachmentKey attachments{};
   core::ExactResourceSet attachmentWrites{};
   core::ExactResourceSet resourceReads{};
@@ -147,6 +193,9 @@ struct SealedParallelPassSnapshot {
   std::uint32_t replayOrdinalBegin = 0;
   std::uint32_t replayOrdinalEnd = 0;
   std::uint32_t childCount = 0;
+  // Multi-command passes are divided only at DrawRun command boundaries.
+  // A single large DrawRun instead retains the existing draw-subrange split.
+  bool childrenCoverCompleteCommands = false;
   bool sealedAtSourceEnd = false;
 
   void reset() noexcept { *this = {}; }
@@ -284,7 +333,10 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
 struct ParallelPassEligibilityInput {
   std::span<const EncodePartitionRangeSnapshot> ranges{};
   std::span<const ParallelFirstDrawSnapshot> firstDrawSnapshots{};
+  std::span<const std::uint32_t> childReplayOrdinalBegins{};
+  std::span<const std::uint32_t> childReplayOrdinalCounts{};
   std::uint64_t passActionEpoch = 0;
+  bool childrenCoverCompleteCommands = false;
   bool explicitPlan = false;
   bool planValidated = false;
   bool logicalPassSealed = false;
@@ -357,6 +409,13 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
   if (input.firstDrawSnapshots.size() != input.ranges.size()) {
     return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
   }
+  const bool hasChildSpans = !input.childReplayOrdinalBegins.empty() ||
+      !input.childReplayOrdinalCounts.empty();
+  if (hasChildSpans &&
+      (input.childReplayOrdinalBegins.size() != input.ranges.size() ||
+       input.childReplayOrdinalCounts.size() != input.ranges.size())) {
+    return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
+  }
   for (std::size_t i = 0; i < input.ranges.size(); ++i) {
     if (input.ranges[i].kind != EncodePartitionRangeKind::DrawRunEntries) {
       return reject(ParallelPassFallbackReason::CoordinatorCommand);
@@ -376,6 +435,12 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
     if (i != 0u && input.firstDrawSnapshots[i].entryRender.route !=
                        input.firstDrawSnapshots[0].entryRender.route) {
       return reject(ParallelPassFallbackReason::UnresolvedHazard);
+    }
+    if (hasChildSpans &&
+        (input.childReplayOrdinalCounts[i] == 0u ||
+         input.childReplayOrdinalBegins[i] !=
+             input.ranges[i].replayOrdinalBegin)) {
+      return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
     }
   }
   result.fallback = ParallelPassFallbackReason::None;
@@ -423,8 +488,11 @@ inline ParallelPassExecutionDecision decideParallelPassExecution(
 struct ParallelPassChildPlan {
   EncodePartitionRangeSnapshot range{};
   ParallelFirstDrawSnapshot firstDraw{};
+  std::uint32_t replayOrdinalBegin = 0;
+  std::uint32_t replayOrdinalCount = 0;
   std::uint32_t childOrdinal = 0;
   std::uint32_t localShadowOrdinal = 0;
+  bool coversCompleteCommands = false;
   bool forceFullFirstDrawBinding = true;
 };
 
@@ -447,11 +515,21 @@ inline ParallelPassEligibilityDecision planParallelRenderPassChildren(
     return decision;
   }
   for (std::size_t i = 0; i < input.ranges.size(); ++i) {
+    const bool hasExplicitSpans =
+        input.childReplayOrdinalBegins.size() == input.ranges.size() &&
+        input.childReplayOrdinalCounts.size() == input.ranges.size();
     storage.children[i] = ParallelPassChildPlan{
         .range = input.ranges[i],
         .firstDraw = input.firstDrawSnapshots[i],
+        .replayOrdinalBegin = hasExplicitSpans
+            ? input.childReplayOrdinalBegins[i]
+            : input.ranges[i].replayOrdinalBegin,
+        .replayOrdinalCount = hasExplicitSpans
+            ? input.childReplayOrdinalCounts[i]
+            : input.ranges[i].replayOrdinalCount,
         .childOrdinal = static_cast<std::uint32_t>(i),
         .localShadowOrdinal = static_cast<std::uint32_t>(i + 1u),
+        .coversCompleteCommands = input.childrenCoverCompleteCommands,
     };
   }
   storage.count = input.ranges.size();
@@ -504,6 +582,7 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
   const core::RenderRoute route =
       children.front().firstDraw.entryRender.route;
   std::uint32_t previousReplayOrdinal = 0u;
+  std::uint32_t previousReplayCount = 0u;
   std::uint32_t previousDrawEnd = 0u;
   std::uint32_t previousCommandIndex = 0u;
   for (std::size_t i = 0; i < children.size(); ++i) {
@@ -511,6 +590,10 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
     const auto& range = child.range;
     if (range.kind != EncodePartitionRangeKind::DrawRunEntries ||
         range.replayOrdinalCount != 1u || range.drawEntryCount == 0u ||
+        child.replayOrdinalCount == 0u ||
+        child.replayOrdinalBegin >
+            UINT32_MAX - child.replayOrdinalCount ||
+        child.replayOrdinalBegin != range.replayOrdinalBegin ||
         !range.entry.source.tapeSource.valid() ||
         range.entry.source.seqId == 0u ||
         range.entry.drawParamIndex >
@@ -545,10 +628,18 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
       return ParallelPassFallbackReason::FullFirstDrawBindingRequired;
     }
     if (i != 0u) {
-      if (range.replayOrdinalBegin < previousReplayOrdinal) {
+      if (child.coversCompleteCommands !=
+          children.front().coversCompleteCommands) {
         return ParallelPassFallbackReason::ChildRangeOrderInvalid;
       }
-      if (range.replayOrdinalBegin == previousReplayOrdinal) {
+      if (child.coversCompleteCommands) {
+        if (child.replayOrdinalBegin !=
+            previousReplayOrdinal + previousReplayCount) {
+          return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+        }
+      } else if (range.replayOrdinalBegin < previousReplayOrdinal) {
+        return ParallelPassFallbackReason::ChildRangeOrderInvalid;
+      } else if (range.replayOrdinalBegin == previousReplayOrdinal) {
         if (range.entry.commandIndex != previousCommandIndex ||
             range.entry.drawParamIndex != previousDrawEnd) {
           return ParallelPassFallbackReason::ChildRangeOrderInvalid;
@@ -558,16 +649,17 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
         return ParallelPassFallbackReason::ChildRangeOrderInvalid;
       }
     }
-    previousReplayOrdinal = range.replayOrdinalBegin;
+    previousReplayOrdinal = child.replayOrdinalBegin;
+    previousReplayCount = child.replayOrdinalCount;
     previousCommandIndex = range.entry.commandIndex;
     previousDrawEnd = range.entry.drawParamIndex + range.drawEntryCount;
   }
   return ParallelPassFallbackReason::None;
 }
 
-// Backend is a deliberately small seam used by deterministic native fakes now
-// and by a future WMT parent/child implementation only after it exists. Child
-// creation is ordered and pre-effect. beginPassActions() is the effect edge;
+// Backend is a deliberately small seam shared by deterministic native fakes
+// and the production WMT parent/child implementation. Child creation is
+// ordered and pre-effect. beginPassActions() is the effect edge;
 // every failure at or after it is fail-stop because encoded Metal work cannot
 // be rewound into the serial lane.
 template <typename Backend>
@@ -628,11 +720,20 @@ ParallelPassExecutionResult executeParallelRenderPass(
   if (!backend.replayLogicalCommands(children)) {
     return failStop(ParallelPassFailurePhase::LogicalCommandReplay);
   }
-  for (const auto& child : children) {
-    if (!backend.emitChild(child)) {
-      return failStop(ParallelPassFailurePhase::ChildEmission,
-                      child.childOrdinal);
+  if constexpr (requires { backend.emitChildren(children); }) {
+    const std::uint32_t failedChild = backend.emitChildren(children);
+    if (failedChild != kParallelRenderPassNoFailedChild) {
+      return failStop(ParallelPassFailurePhase::ChildEmission, failedChild);
     }
+  } else {
+    for (const auto& child : children) {
+      if (!backend.emitChild(child)) {
+        return failStop(ParallelPassFailurePhase::ChildEmission,
+                        child.childOrdinal);
+      }
+    }
+  }
+  for (const auto& child : children) {
     if (!backend.endChild(child.childOrdinal)) {
       return failStop(ParallelPassFailurePhase::ChildEnd,
                       child.childOrdinal);
@@ -661,6 +762,8 @@ ParallelPassExecutionResult executeParallelRenderPass(
 }
 
 static_assert(std::is_trivially_copyable_v<ParallelFirstDrawSnapshot>);
+static_assert(
+    std::is_trivially_copyable_v<ParallelPassCoordinatorProofSnapshotInput>);
 static_assert(std::is_trivially_copyable_v<ParallelPassCommandLocator>);
 static_assert(std::is_trivially_copyable_v<SealedParallelPassSnapshot>);
 static_assert(std::is_standard_layout_v<SealedParallelPassSnapshot>);

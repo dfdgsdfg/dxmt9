@@ -253,6 +253,11 @@ void countRenderPartitionProvider(render::PartitionModeRequest requestedMode,
                                   render::PartitionExecutionMode resolvedMode);
 void countParallelPassDecision(
     const encoders::ParallelPassExecutionDecision& decision);
+void countParallelPassWorkerBatch(std::uint32_t tasks);
+void countParallelPassWorkerTaskBegin();
+void countParallelPassWorkerTaskEnd(std::uint64_t cpuNs);
+void countParallelPassWorkerWallTime(std::uint64_t wallNs);
+void countParallelPassForcedStage1();
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result);
 void countCpuReadySessionHeadAppended(bool arenaSource);

@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_parallel_render_pass.hpp"
+#include "../../../src/dxmt9/dxmt9_parallel_render_pass_metal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -115,7 +116,7 @@ void eligibilityAndSelectionAreTypedAndBounded() {
             !unavailable.selected &&
             unavailable.fallback ==
                 ParallelPassFallbackReason::ParallelEncoderUnavailable,
-        "missing real WMT implementation selects typed serial fallback");
+        "unavailable parallel encoder selects typed serial fallback");
   const auto selected = dxmt9::encoders::decideParallelPassExecution(
       true, eligible, true);
   check(selected.selected && selected.fallback ==
@@ -200,6 +201,121 @@ void eligibilityAndSelectionAreTypedAndBounded() {
   check(dxmt9::encoders::classifyParallelPassEligibility(input).fallback ==
             ParallelPassFallbackReason::ChildCapacity,
         "child planning fails closed above fixed storage capacity");
+}
+
+void coordinatorProofSnapshotRequiresEveryPreEffectFact() {
+  using namespace dxmt9::encoders;
+  const auto complete = makeParallelPassCoordinatorProofSnapshot({
+      .firstPassActionEpoch = 17u,
+      .queryAbsent = true,
+      .updateTextureAbsent = true,
+      .captureInactive = true,
+      .initializerIndependent = true,
+      .orderedControlAbsent = true,
+      .sidecarObservationAbsent = true,
+  });
+  check(complete.firstPassActionEpoch == 17u &&
+            complete.flags == kParallelPassCoordinatorProofComplete,
+        "coordinator snapshot owns the complete pre-effect proof");
+
+  constexpr std::array facts{
+      ParallelPassQueryAbsent,
+      ParallelPassUpdateTextureAbsent,
+      ParallelPassCaptureInactive,
+      ParallelPassInitializerIndependent,
+      ParallelPassOrderedControlAbsent,
+      ParallelPassSidecarObservationAbsent,
+  };
+  for (std::size_t missing = 0; missing < facts.size(); ++missing) {
+    ParallelPassCoordinatorProofSnapshotInput input{
+        .firstPassActionEpoch = 17u,
+        .queryAbsent = true,
+        .updateTextureAbsent = true,
+        .captureInactive = true,
+        .initializerIndependent = true,
+        .orderedControlAbsent = true,
+        .sidecarObservationAbsent = true,
+    };
+    switch (missing) {
+    case 0: input.queryAbsent = false; break;
+    case 1: input.updateTextureAbsent = false; break;
+    case 2: input.captureInactive = false; break;
+    case 3: input.initializerIndependent = false; break;
+    case 4: input.orderedControlAbsent = false; break;
+    case 5: input.sidecarObservationAbsent = false; break;
+    default: break;
+    }
+    const auto incomplete = makeParallelPassCoordinatorProofSnapshot(input);
+    check(!incomplete.proves(facts[missing]),
+          "an unresolved coordinator fact remains explicitly unproven");
+    check((incomplete.flags |
+           static_cast<std::uint32_t>(facts[missing])) ==
+              kParallelPassCoordinatorProofComplete,
+          "dropping one fact does not erase unrelated coordinator proofs");
+  }
+}
+
+struct MetalNoopChildEmitter {
+  static bool emit(void*, const ParallelPassChildPlan&,
+                   WMT::RenderCommandEncoder) noexcept {
+    return true;
+  }
+};
+
+void wmtParentChildAdapterCreatesAndJoinsMetalEncoders() {
+  auto devices = WMT::CopyAllDevices();
+  if (!devices || devices.count() == 0u) {
+    return;
+  }
+  WMT::Device device = devices.object(0u);
+  auto queue = device.newCommandQueue(4u);
+  check(static_cast<bool>(queue), "Metal device creates a command queue");
+  WMT::Reference<WMT::CommandBuffer> commandBuffer(queue.commandBuffer());
+  check(static_cast<bool>(commandBuffer), "Metal queue creates a command buffer");
+
+  WMTTextureInfo textureInfo{
+      .pixel_format = WMTPixelFormatBGRA8Unorm,
+      .width = 16u,
+      .height = 16u,
+      .depth = 1u,
+      .array_length = 1u,
+      .type = WMTTextureType2D,
+      .mipmap_level_count = 1u,
+      .sample_count = 1u,
+      .usage = WMTTextureUsageRenderTarget,
+      .options = WMTResourceStorageModePrivate,
+  };
+  auto texture = device.newTexture(textureInfo);
+  check(static_cast<bool>(texture), "Metal device creates a render target");
+
+  WMTRenderPassInfo passInfo{};
+  passInfo.colors[0].texture = texture.handle;
+  passInfo.colors[0].load_action = WMTLoadActionDontCare;
+  passInfo.colors[0].store_action = WMTStoreActionDontCare;
+  passInfo.default_raster_sample_count = 1u;
+  passInfo.render_target_width = textureInfo.width;
+  passInfo.render_target_height = textureInfo.height;
+  ProductionPlanFixture fixture;
+  dxmt9::encoders::ParallelPassPlanStorage plan{};
+  const auto eligibility = dxmt9::encoders::planParallelRenderPassChildren(
+      fixture.input(), plan);
+  check(eligibility.eligible,
+        "hardware adapter fixture has a validated child plan");
+  dxmt9::encoders::ParallelPassMetalBackend backend(
+      commandBuffer, passInfo,
+      dxmt9::encoders::ParallelPassMetalCallbacks{
+          .emitChild = MetalNoopChildEmitter::emit,
+      });
+  const std::array<std::uint32_t, 3> completionOrder{0u, 1u, 2u};
+  const auto result = dxmt9::encoders::executeParallelRenderPass(
+      plan.view(), completionOrder, backend);
+  check(result.status == ParallelPassExecutionStatus::Completed &&
+            result.crossedEffectBoundary,
+        "generic executor drives the real WMT parent/child adapter");
+  commandBuffer.commit();
+  commandBuffer.waitUntilCompleted();
+  check(commandBuffer.status() == WMTCommandBufferStatusCompleted,
+        "empty parent/child render pass completes on Metal");
 }
 
 bool identityResource(const void*, std::uint64_t raw,
@@ -484,10 +600,11 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
         .sourceStartsPass = true,
         .sourceEndsPass = true,
       }, output);
-  check(result.eligibleCount == 0u &&
-            result.rejectionCounts[static_cast<std::size_t>(
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::FirstDrawSnapshot)] == 1u,
-        "stale locator generation rejects first-draw provenance");
+  check(result.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].ranges[1].entry.uniformHandle !=
+                malformed.ranges[1].entry.uniformHandle,
+        "parallel producer derives fresh source-qualified locators instead of "
+        "trusting the serial planner carrier");
 
   dxmt9::core::CanonicalDrawState sampling{};
   sampling.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x91u};
@@ -683,10 +800,15 @@ void childBoundsAndPerfGateFailClosed() {
   mixed.slot.appendPresent({}, {});
   mixed.finalize(410u);
   const auto mixedResult = mixed.observe(output);
-  check(mixedResult.eligibleCount == 0u && output.count == 0u &&
-            mixedResult.rejectionCounts[static_cast<std::size_t>(
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::NonChildDrawRun)] == 1u,
-        "non-child DrawRun inside one pass rejects that pass");
+  check(mixedResult.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].childCount == 2u &&
+            output.passes[0].childrenCoverCompleteCommands &&
+            output.passes[0].childReplayOrdinalBegins[0] == 0u &&
+            output.passes[0].childReplayOrdinalCounts[0] == 1u &&
+            output.passes[0].childReplayOrdinalBegins[1] == 1u &&
+            output.passes[0].childReplayOrdinalCounts[1] == 1u,
+        "one logical pass groups ordinary DrawRuns into ordered child "
+        "command spans");
 
   std::uint32_t producerCalls = 0u;
   check(!dxmt9::encoders::runParallelPassObservationIfEnabled(
@@ -1099,6 +1221,8 @@ void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
 int main() {
   try {
     eligibilityAndSelectionAreTypedAndBounded();
+    coordinatorProofSnapshotRequiresEveryPreEffectFact();
+    wmtParentChildAdapterCreatesAndJoinsMetalEncoders();
     passLocalProducerFindsBoundedCompletePasses();
     multiPassAndAttachmentBoundariesStayIndependent();
     activeReplayOrderAndPartialClearDriveExactBoundaries();

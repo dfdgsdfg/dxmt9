@@ -1318,9 +1318,9 @@ extern "C" obj_handle_t MTLCommandBuffer_computeCommandEncoder(obj_handle_t cmdb
   return (obj_handle_t)[(id<MTLCommandBuffer>)cmdbuf computeCommandEncoderWithDispatchType:dt];
 }
 
-extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbuf,
-                                                               struct WMTRenderPassInfo *info) {
-  if (!cmdbuf || !info) return NULL_OBJECT_HANDLE;
+static MTLRenderPassDescriptor *makeRenderPassDescriptor(
+    struct WMTRenderPassInfo *info) {
+  if (!info) return nil;
   MTLRenderPassDescriptor *desc = [[MTLRenderPassDescriptor alloc] init];
   for (unsigned i = 0; i < 8; i++) {
     desc.colorAttachments[i].clearColor   = MTLClearColorMake(
@@ -1387,10 +1387,37 @@ extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbu
     desc.tileWidth  = info->tile_width;
     desc.tileHeight = info->tile_height;
   }
+  return desc;
+}
+
+extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbuf,
+                                                               struct WMTRenderPassInfo *info) {
+  if (!cmdbuf || !info) return NULL_OBJECT_HANDLE;
+  MTLRenderPassDescriptor *desc = makeRenderPassDescriptor(info);
+  if (!desc) return NULL_OBJECT_HANDLE;
   id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)cmdbuf
       renderCommandEncoderWithDescriptor:desc];
   [desc release];
   return (obj_handle_t)enc;
+}
+
+extern "C" obj_handle_t MTLCommandBuffer_parallelRenderCommandEncoder(
+    obj_handle_t cmdbuf, struct WMTRenderPassInfo *info) {
+  if (!cmdbuf || !info) return NULL_OBJECT_HANDLE;
+  MTLRenderPassDescriptor *desc = makeRenderPassDescriptor(info);
+  if (!desc) return NULL_OBJECT_HANDLE;
+  id<MTLParallelRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)cmdbuf
+      parallelRenderCommandEncoderWithDescriptor:desc];
+  [desc release];
+  return (obj_handle_t)enc;
+}
+
+extern "C" obj_handle_t
+MTLParallelRenderCommandEncoder_renderCommandEncoder(obj_handle_t encoder) {
+  return encoder
+      ? (obj_handle_t)[(id<MTLParallelRenderCommandEncoder>)encoder
+            renderCommandEncoder]
+      : NULL_OBJECT_HANDLE;
 }
 
 extern "C" void MTLRenderCommandEncoder_setColorStoreAction(

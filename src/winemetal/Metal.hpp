@@ -822,6 +822,15 @@ public:
   }
 };
 
+class ParallelRenderCommandEncoder : public CommandEncoder {
+public:
+  RenderCommandEncoder
+  renderCommandEncoder() {
+    return RenderCommandEncoder{
+        MTLParallelRenderCommandEncoder_renderCommandEncoder(handle)};
+  }
+};
+
 class BlitCommandEncoder : public CommandEncoder {
 public:
   void
@@ -1083,6 +1092,12 @@ public:
   RenderCommandEncoder
   renderCommandEncoder(WMTRenderPassInfo &info) {
     return RenderCommandEncoder{MTLCommandBuffer_renderCommandEncoder(handle, &info)};
+  }
+
+  ParallelRenderCommandEncoder
+  parallelRenderCommandEncoder(WMTRenderPassInfo &info) {
+    return ParallelRenderCommandEncoder{
+        MTLCommandBuffer_parallelRenderCommandEncoder(handle, &info)};
   }
 
   BlitCommandEncoder
