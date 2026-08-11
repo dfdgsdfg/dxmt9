@@ -1089,8 +1089,11 @@ at least 64 parameters, targets 32-draw subranges, and keeps at least 16 draws o
 both sides of a candidate edge. An edge is accepted only where the existing
 compatible indexed-draw merge classifier proves that no merge chain crosses the
 edge. If a sufficiently large run has no such edge, that complete run remains
-identity-shaped. Command ranges, malformed or empty DrawRuns, Clear, Present,
-and every other non-draw command remain coordinator-serial command segments.
+identity-shaped. Adjacent small or otherwise unsplit DrawRuns coalesce with
+malformed or empty DrawRuns, Clear, Present, and every other complete command
+into coordinator-serial command segments. Only an actually subdivided DrawRun
+consumes locator-bearing draw ranges, so ordinary source command count does not
+exhaust the fixed range array.
 
 Planning runs only after `EncodePartitionReplayStream` has captured the final
 Traditional or FrameGraph order and DCE subset. It builds full stream coverage,

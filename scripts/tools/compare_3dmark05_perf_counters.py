@@ -3499,6 +3499,14 @@ def failed_requirements(args: argparse.Namespace,
         if after_value != 0.0:
             failures.append(f"{label} is nonzero ({fmt_value(after_value)})")
 
+    def require_after_counter_positive(key: str, label: str) -> None:
+        after_value = number(counter(after, key))
+        if after_value is None:
+            failures.append(f"{label} is missing")
+            return
+        if after_value <= 0.0:
+            failures.append(f"{label} is not positive ({fmt_value(after_value)})")
+
     def require_render_pass_carry_promotion_gates() -> None:
         with_enqueue_before = before_derived[
             "completion_wait_with_enqueue_ms_per_present"
@@ -3628,6 +3636,20 @@ def failed_requirements(args: argparse.Namespace,
         require_derived_not_increase(
             "passes_per_present",
             "passes_per_present",
+        )
+
+    if args.require_explicit_serial_partition_proof:
+        for key in (
+            "encode_partition_explicit_selections",
+            "encode_partition_explicit_ranges",
+            "encode_partition_explicit_draw_ranges",
+            "encode_partition_explicit_draws",
+            "encode_partition_subdivided_draw_runs",
+        ):
+            require_after_counter_positive(key, key)
+        require_after_counter_zero(
+            "encode_partition_fallback_capacity",
+            "encode_partition_fallback_capacity",
         )
 
     if args.require_encoder_final_end_reason_not_increase:
@@ -4054,6 +4076,14 @@ def main() -> int:
         "--require-render-passes-per-present-not-increase",
         action="store_true",
         help="exit nonzero if render_pass_begin per present increases",
+    )
+    parser.add_argument(
+        "--require-explicit-serial-partition-proof",
+        action="store_true",
+        help=(
+            "exit nonzero unless the candidate executes explicit serial "
+            "partitions with subdivided DrawRuns and no capacity fallback"
+        ),
     )
     parser.add_argument(
         "--require-render-pass-carry-promotion-gates",

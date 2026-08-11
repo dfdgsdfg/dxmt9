@@ -773,6 +773,18 @@ ProductionEncodePartitionPlanResult planProductionEncodePartitions(
         rangeBegin = edge;
       }
     }
+    if (!subdivided) {
+      if (!appendProductionCommandOrdinal(
+              storage, static_cast<std::uint32_t>(replayOrdinal))) {
+        storage.reset();
+        result.fallback = ProductionPartitionFallbackReason::RangeCapacity;
+        return result;
+      }
+      if (record->paramCount >= kProductionPartitionDrawThreshold) {
+        ++result.mergePreservedIdentityCount;
+      }
+      continue;
+    }
     if (!appendDrawRange(rangeBegin, command.drawParams.size())) {
       const bool capacityExhausted =
           storage.count >= storage.ranges.size();
@@ -782,11 +794,7 @@ ProductionEncodePartitionPlanResult planProductionEncodePartitions(
           : ProductionPartitionFallbackReason::SnapshotInvalid;
       return result;
     }
-    if (subdivided) {
-      ++result.subdividedDrawRunCount;
-    } else if (record->paramCount >= kProductionPartitionDrawThreshold) {
-      ++result.mergePreservedIdentityCount;
-    }
+    ++result.subdividedDrawRunCount;
   }
 
   if (result.subdividedDrawRunCount == 0u) {

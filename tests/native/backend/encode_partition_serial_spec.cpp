@@ -280,27 +280,21 @@ void productionPlannerPreservesMergeChainsAndFailsOpenBoundedly() {
         "a compatible indexed merge chain remains one identity DrawRun");
 
   auto makeCapacityFixture = [](std::uint64_t seqId,
-                                std::size_t singletonCount) {
+                                std::size_t largeRunCount) {
     dxmt9::core::ChunkSlot slot{};
     slot.seqId = seqId;
-    std::array<DrawParam, 1> draw{};
-    std::array<dxmt9::core::DrawParamPayloadView, 1> payload{};
-    for (std::size_t i = 0u; i < singletonCount; ++i) {
-      slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
-                         dxmt9::core::DrawUniformPayload{}, draw, payload);
-    }
-    std::vector<DrawParam> largeDraws(
+    std::vector<DrawParam> draws(
         dxmt9::encoders::kProductionPartitionDrawThreshold);
-    std::vector<dxmt9::core::DrawParamPayloadView> largePayloads(
-        largeDraws.size());
-    slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
-                       dxmt9::core::DrawUniformPayload{}, largeDraws,
-                       largePayloads);
+    std::vector<dxmt9::core::DrawParamPayloadView> payloads(draws.size());
+    for (std::size_t i = 0u; i < largeRunCount; ++i) {
+      slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                         dxmt9::core::DrawUniformPayload{}, draws, payloads);
+    }
     return slot;
   };
 
   auto exact = makeCapacityFixture(
-      302u, dxmt9::encoders::kProductionPartitionRangeCapacity - 2u);
+      302u, dxmt9::encoders::kProductionPartitionRangeCapacity / 2u);
   const auto exactStream =
       dxmt9::encoders::makeEncodePartitionReplayStream(
           9u, exact, 0u, exact.commandCount(), false, {}, {},
@@ -316,7 +310,7 @@ void productionPlannerPreservesMergeChainsAndFailsOpenBoundedly() {
         "the exact fixed range capacity validates and remains explicit");
 
   auto oversized = makeCapacityFixture(
-      303u, dxmt9::encoders::kProductionPartitionRangeCapacity - 1u);
+      303u, dxmt9::encoders::kProductionPartitionRangeCapacity / 2u + 1u);
   const auto oversizedStream =
       dxmt9::encoders::makeEncodePartitionReplayStream(
           10u, oversized, 0u, oversized.commandCount(), false, {}, {},
@@ -327,10 +321,46 @@ void productionPlannerPreservesMergeChainsAndFailsOpenBoundedly() {
   check(!oversizedPlan.explicitPlan && storage.view().empty() &&
             oversizedPlan.fallback ==
                 ProductionPartitionFallbackReason::RangeCapacity,
-        "one range beyond fixed capacity atomically selects identity");
+        "one subdivided DrawRun beyond fixed capacity atomically selects "
+        "identity");
+
+  dxmt9::core::ChunkSlot compressed{};
+  compressed.seqId = 304u;
+  std::array<DrawParam, 1> singleton{};
+  std::array<dxmt9::core::DrawParamPayloadView, 1> singletonPayload{};
+  for (std::size_t i = 0u;
+       i < dxmt9::encoders::kProductionPartitionRangeCapacity * 2u;
+       ++i) {
+    compressed.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                             dxmt9::core::DrawUniformPayload{}, singleton,
+                             singletonPayload);
+  }
+  std::vector<DrawParam> largeDraws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold);
+  std::vector<dxmt9::core::DrawParamPayloadView> largePayloads(
+      largeDraws.size());
+  compressed.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                           dxmt9::core::DrawUniformPayload{}, largeDraws,
+                           largePayloads);
+  const auto compressedStream =
+      dxmt9::encoders::makeEncodePartitionReplayStream(
+          11u, compressed, 0u, compressed.commandCount(), false, {}, {},
+          testTapeSource(11u, compressed.seqId));
+  const auto compressedPlan =
+      dxmt9::encoders::planProductionEncodePartitions(compressedStream,
+                                                      storage);
+  check(compressedPlan.explicitPlan && storage.count == 3u &&
+            storage.ranges[0].kind ==
+                EncodePartitionRangeKind::CommandSegment &&
+            storage.ranges[0].replayOrdinalCount ==
+                dxmt9::encoders::kProductionPartitionRangeCapacity * 2u &&
+            dxmt9::encoders::validateEncodePartitionRanges(storage.view(),
+                                                             compressedStream),
+        "ordinary DrawRuns compress into one serial command span around an "
+        "explicit subdivision");
 
   auto malformed = makePlannerDrawSlot(
-      304u, dxmt9::encoders::kProductionPartitionDrawThreshold, false);
+      305u, dxmt9::encoders::kProductionPartitionDrawThreshold, false);
   // The replay factory bounds command arithmetic, and SourcePayloadView
   // exposes only DrawRun spans backed by the owned parameter SoA. A planner
   // draw-end overflow would therefore require materializing more than
@@ -340,8 +370,8 @@ void productionPlannerPreservesMergeChainsAndFailsOpenBoundedly() {
       std::numeric_limits<std::uint32_t>::max();
   const auto malformedStream =
       dxmt9::encoders::makeEncodePartitionReplayStream(
-          11u, malformed, 0u, malformed.commandCount(), false, {}, {},
-          testTapeSource(11u, malformed.seqId));
+          12u, malformed, 0u, malformed.commandCount(), false, {}, {},
+          testTapeSource(12u, malformed.seqId));
   check(malformedStream.valid,
         "malformed DrawRun remains a representable replay stream");
   const auto malformedPlan =

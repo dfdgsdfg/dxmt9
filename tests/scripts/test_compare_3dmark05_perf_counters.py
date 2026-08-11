@@ -1687,6 +1687,56 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_explicit_serial_partition_proof_gate_passes_on_covered_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {"present_encoded": 2})
+            write_result(root / "after", {
+                "present_encoded": 2,
+                "encode_partition_explicit_selections": 3,
+                "encode_partition_explicit_ranges": 9,
+                "encode_partition_explicit_draw_ranges": 6,
+                "encode_partition_explicit_draws": 192,
+                "encode_partition_subdivided_draw_runs": 3,
+                "encode_partition_fallback_capacity": 0,
+            })
+
+            result = self.run_compare(
+                root,
+                "--require-explicit-serial-partition-proof",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_serial_partition_proof_gate_rejects_uncovered_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {"present_encoded": 2})
+            write_result(root / "after", {
+                "present_encoded": 2,
+                "encode_partition_explicit_selections": 0,
+                "encode_partition_explicit_ranges": 0,
+                "encode_partition_explicit_draw_ranges": 0,
+                "encode_partition_explicit_draws": 0,
+                "encode_partition_subdivided_draw_runs": 0,
+                "encode_partition_fallback_capacity": 4,
+            })
+
+            result = self.run_compare(
+                root,
+                "--require-explicit-serial-partition-proof",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "encode_partition_explicit_selections is not positive (0)",
+                result.stderr,
+            )
+            self.assertIn(
+                "encode_partition_fallback_capacity is nonzero (4)",
+                result.stderr,
+            )
+
     def test_render_pass_carry_promotion_gate_passes_on_p4_and_locality(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
