@@ -3215,6 +3215,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                                           std::move(pendingDrawableToken),
                                                           present, presentSource, sourceSeqId,
                                                           sampleAttachment.span());
+        ctx.queue.noteSchedulingPresentDisposition(sourceSeqId,
+                                                    presentEncoded);
         if (presentEncoded) {
           recordRenderEncoderGpuAttachment(sampleAttachment);
         }

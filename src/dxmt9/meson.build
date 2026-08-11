@@ -52,6 +52,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_presenter_macdrv.cpp',
   'dxmt9_signposts.cpp',
   'dxmt9_session_release.cpp',
+  'dxmt9_scheduling_progress_watchdog.cpp',
   'dxmt9_source_payload.cpp',
   'dxmt9_source_semantics.cpp',
   'dxmt9_transient_resource_arena.cpp',

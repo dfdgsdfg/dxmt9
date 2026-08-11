@@ -186,6 +186,17 @@ encode_session_admission_spec = executable(
 test('dxmt9-encode-session-admission-spec',
      encode_session_admission_spec)
 
+encode_scheduling_progress_spec = executable(
+  'dxmt9-encode-scheduling-progress-spec',
+  'encode_scheduling_progress_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-encode-scheduling-progress-spec',
+     encode_scheduling_progress_spec)
+
 session_release_event_spec = executable(
   'dxmt9-session-release-event-spec',
   'session_release_event_spec.cpp',

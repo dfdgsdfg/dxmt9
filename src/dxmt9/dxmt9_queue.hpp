@@ -4,6 +4,7 @@
 #include "dxmt9_capture.hpp"
 #include "dxmt9_cpu_ready_tape.hpp"
 #include "dxmt9_post_encode_retirement.hpp"
+#include "render/encode_scheduling_progress.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <array>
@@ -24,6 +25,10 @@
 
 namespace dxmt9::core::metalhud {
 class SubmissionDiagnosticsController;
+}
+
+namespace dxmt9 {
+class SchedulingProgressWatchdog;
 }
 
 namespace dxmt9::core::metalqueue {
@@ -748,8 +753,11 @@ class QueueLifecycleController {
     std::condition_variable* encodeCv = nullptr;
     std::condition_variable* finishCv = nullptr;
     std::condition_variable* presentCompletedCv = nullptr;
+    std::condition_variable* presentDequeuedCv = nullptr;
+    std::condition_variable* sessionReleaseCv = nullptr;
     bool* stop = nullptr;
     metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
+    SchedulingProgressWatchdog* schedulingProgressWatchdog = nullptr;
     std::function<u32(Handle)> resolveSurfaceFlags;
   };
 

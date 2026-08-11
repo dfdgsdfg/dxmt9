@@ -29,8 +29,10 @@
 #include "dxmt9_render_scheduling.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_session_release.hpp"
+#include "dxmt9_scheduling_progress_watchdog.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "dxmt9_transient_resource_arena.hpp"
+#include "render/encode_scheduling_progress.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 
 #include <algorithm>
@@ -782,6 +784,8 @@ class CommandQueue {
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
+  void noteSchedulingPresentDisposition(std::uint64_t seqId,
+                                        bool published) noexcept;
   std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureForPresentChunk(
       std::uint64_t seqId);
   // Multi-chunk capture: chunk-begin opens the session, present-chunk-close
@@ -872,6 +876,7 @@ class CommandQueue {
   bool forceDrawResourceMarkingAfterSplit_ = false;
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
+  SchedulingProgressWatchdog schedulingProgressWatchdog_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
 
   // Thread-coordination primitives. Worker threads owned by *this
@@ -890,7 +895,12 @@ class CommandQueue {
   bool stop_ = true;
 
  private:
+  friend class resources::Initializer;
   friend struct CommandQueueArenaLeaseTestAccess;
+
+  void noteInitializerPendingUploads() noexcept;
+  void notifySchedulingTerminalWaiters(
+      render::SchedulingTerminalDisposition disposition) noexcept;
 
   struct ArenaBuildContext {
     ArenaBuildContext(core::CpuReadyTape::Reservation value,

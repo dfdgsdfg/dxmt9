@@ -1910,17 +1910,13 @@ void CommandQueue::stopThreads() {
     std::lock_guard lock(mutex_);
     stop_ = true;
     cpuReadyTape_.stopAdmission();
-    encodeCv_.notify_all();
-    finishCv_.notify_all();
-    presentCompletedCv_.notify_all();
-    presentDequeuedCv_.notify_all();
-    sessionReleaseCv_.notify_all();
-    writeCv_.notify_all();
+    notifySchedulingTerminalWaiters(
+        render::SchedulingTerminalDisposition::Stop);
   }
-  queueLifecycle_.notifyPendingCompletionStop();
   if (encodeThread_.joinable()) encodeThread_.join();
   if (completionThread_.joinable()) completionThread_.join();
   if (finishThread_.joinable()) finishThread_.join();
+  schedulingProgressWatchdog_.stop();
   threadsStarted_ = false;
 }
 
@@ -3410,6 +3406,7 @@ CommandQueue::beginCpuReadyArenaSource(
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
   recordCpuReadyTapeStats(cpuReadyTape_);
+  schedulingProgressWatchdog_.noteAccepted(seqId, false);
 
   const std::size_t controlIndex = writeIndex_;
   auto& control = slots_[controlIndex];
@@ -3446,21 +3443,28 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   // Wake a parked Tape-gated encode session for deterministic re-evaluation.
   // This live pressure observation carries no release fence.
   encodeCv_.notify_one();
-  bool admissionResolved = false;
-  while (!admissionResolved) {
-    if (stop_ || arenaBuildPoisoned_.load(std::memory_order_acquire)) {
-      break;
-    }
+  while (true) {
+    const bool controlSlotFree = writeIndex_ < slots_.size() &&
+        slots_[writeIndex_].state == core::ChunkSlot::State::Free;
+    bool reserveStillPressured = true;
     if (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
-        !arenaBuildContext_.has_value() && writeIndex_ < slots_.size() &&
-        slots_[writeIndex_].state == core::ChunkSlot::State::Free) {
-      admissionResolved =
-          cpuReadyTape_.probeArenaReserve(layout) !=
+        !arenaBuildContext_.has_value() && controlSlotFree) {
+      reserveStillPressured =
+          cpuReadyTape_.probeArenaReserve(layout) ==
           core::CpuReadyTape::ReserveProbe::TemporaryPressure;
       recordCpuReadyTapeStats(cpuReadyTape_);
-      if (admissionResolved) {
-        break;
-      }
+    }
+    const auto action = render::classifyCpuReadyAdmissionGate({
+        .stopped = stop_,
+        .poisoned = arenaBuildPoisoned_.load(std::memory_order_acquire),
+        .arenaBuildActive =
+            arenaAdmissionActive_.load(std::memory_order_relaxed),
+        .arenaBuildContextPresent = arenaBuildContext_.has_value(),
+        .controlSlotFree = controlSlotFree,
+        .reserveStillPressured = reserveStillPressured,
+    });
+    if (action != render::CpuReadyAdmissionAction::Wait) {
+      break;
     }
     writeCv_.wait(lock);
   }
@@ -3817,6 +3821,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
   arenaAdmissionActive_.store(false, std::memory_order_release);
   recordCpuReadyTapeStats(cpuReadyTape_);
   queueLifecycle_.noteCpuReadyCapacityProgress();
+  schedulingProgressWatchdog_.notePublished(ticket.seqId,
+                                             hasPublishedPresent);
   lock.unlock();
   writeCv_.notify_all();
   if (hasPublishedPresent) {
@@ -3876,10 +3882,8 @@ void CommandQueue::abortCpuReadyArenaSource(
     arenaAdmissionActive_.store(false, std::memory_order_release);
     recordCpuReadyTapeStats(cpuReadyTape_);
   }
-  writeCv_.notify_all();
-  encodeCv_.notify_all();
-  finishCv_.notify_all();
-  presentCompletedCv_.notify_all();
+  notifySchedulingTerminalWaiters(
+      render::SchedulingTerminalDisposition::DeviceLoss);
 }
 
 void CommandQueue::submitDrawRunBatch(
@@ -4320,6 +4324,11 @@ void CommandQueue::notePresentDequeued(std::uint64_t seqId) {
   std::lock_guard lock(mutex_);
   presentDequeuedSeqId_ = std::max(presentDequeuedSeqId_, seqId);
   presentDequeuedCv_.notify_all();
+}
+
+void CommandQueue::noteSchedulingPresentDisposition(
+    std::uint64_t seqId, bool published) noexcept {
+  schedulingProgressWatchdog_.notePresentDisposition(seqId, published);
 }
 
 std::optional<core::metalcapture::MetalCaptureRequest>
@@ -4795,10 +4804,39 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .encodeCv = &encodeCv_,
       .finishCv = &finishCv_,
       .presentCompletedCv = &presentCompletedCv_,
+      .presentDequeuedCv = &presentDequeuedCv_,
+      .sessionReleaseCv = &sessionReleaseCv_,
       .stop = &stop_,
       .submissionDiagnostics = &submissionDiagnostics_,
+      .schedulingProgressWatchdog = &schedulingProgressWatchdog_,
       .resolveSurfaceFlags = std::move(resolveSurfaceFlags),
   });
+}
+
+void CommandQueue::noteInitializerPendingUploads() noexcept {
+  encodeCv_.notify_all();
+}
+
+void CommandQueue::notifySchedulingTerminalWaiters(
+    render::SchedulingTerminalDisposition disposition) noexcept {
+  schedulingProgressWatchdog_.noteTerminal(
+      disposition == render::SchedulingTerminalDisposition::DeviceLoss);
+  const auto wake = render::planSchedulingTerminalWake(disposition);
+  if (wake.wakes(render::SchedulingWakeWriter)) writeCv_.notify_all();
+  if (wake.wakes(render::SchedulingWakeEncoder)) encodeCv_.notify_all();
+  if (wake.wakes(render::SchedulingWakeFinish)) finishCv_.notify_all();
+  if (wake.wakes(render::SchedulingWakePresentCompleted)) {
+    presentCompletedCv_.notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakePresentDequeued)) {
+    presentDequeuedCv_.notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakeSessionRelease)) {
+    sessionReleaseCv_.notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakePendingCompletion)) {
+    queueLifecycle_.notifyPendingCompletionStop();
+  }
 }
 
 void CommandQueue::runFinishLoop() {

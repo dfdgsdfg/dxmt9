@@ -621,9 +621,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       // are deliberately NOT wake-to-release conditions; only new ready work,
       // shutdown, or an ordered semantic/fixed-cap fence re-evaluates it.
       encodeCv_.wait(lock, [this] {
-        return stop_ || !cpuReadyTape_.readyEmpty() ||
-               sessionReleaseState_.hasPending() ||
-               queueLifecycle_.producerSequenceWaitActive();
+        return render::openSessionWaitDone({
+            .stopped = stop_,
+            .ready = !cpuReadyTape_.readyEmpty(),
+            .orderedRelease = sessionReleaseState_.hasPending(),
+            .producerSequenceWait =
+                queueLifecycle_.producerSequenceWaitActive(),
+        });
       });
       continue;
     }
@@ -716,16 +720,22 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
         while (true) {
           encodeCv_.wait(lock, [&] {
-            return stop_ || !cpuReadyTape_.readyEmpty() ||
-                sessionReleaseState_.hasPending() ||
-                queueLifecycle_.producerSequenceWaitActive() ||
-                arenaAdmissionWaiterCount_.load(
-                    std::memory_order_acquire) != 0u ||
-                queueLifecycle_.producerWriterPressureActive() ||
-                (initializer_ &&
-                 initializer_->hasPendingUploadsUnlocked()) ||
-                queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
-                    observedCapacityProgress;
+            return render::retainedOrDeferredSessionWaitDone({
+                .stopped = stop_,
+                .ready = !cpuReadyTape_.readyEmpty(),
+                .orderedRelease = sessionReleaseState_.hasPending(),
+                .producerSequenceWait =
+                    queueLifecycle_.producerSequenceWaitActive(),
+                .admissionPressure = arenaAdmissionWaiterCount_.load(
+                    std::memory_order_acquire) != 0u,
+                .writerPressure =
+                    queueLifecycle_.producerWriterPressureActive(),
+                .initializerPending = initializer_ &&
+                    initializer_->hasPendingUploadsUnlocked(),
+                .capacityProgress =
+                    queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
+                        observedCapacityProgress,
+            });
           });
 
           const bool releasePending = sessionReleaseState_.hasPending();
@@ -793,6 +803,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
     bool blockedByPendingCompatibility = false;
     bool leaseDenied = false;
+    std::uint64_t leaseDeniedSeqId = 0;
     bool invalidCapacitySnapshot = false;
     bool selectionAcquiredLease = false;
     std::uint64_t selectionLeaseGeneration = 0;
@@ -932,6 +943,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                           capacityPolicy, *unavailable, capacity)) {
                     perf::countCpuReadySessionLeaseDenied();
                     leaseDenied = true;
+                    leaseDeniedSeqId = candidate.seqId;
                     break;
                   }
                   selectionAcquiredLease = true;
@@ -977,6 +989,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         return;
       }
       if (leaseDenied && !pendingRecord.has_value()) {
+        schedulingProgressWatchdog_.noteLeaseWait(leaseDeniedSeqId);
         // Older submitted/represented/retiring residency or a valid Writing
         // claim beyond successor headroom may delay lease acquisition. One
         // eligible ordered-tail Writing successor is already owned by the
@@ -992,9 +1005,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             queueLifecycle_.cpuReadyCapacityProgressGeneration();
         ++cpuReadyCapacityWaiterCount_;
         encodeCv_.wait(lock, [this, observedCapacityProgress] {
-          return stop_ ||
-              queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
-                  observedCapacityProgress;
+          return render::firstLeaseCapacityWaitDone(
+              stop_, observedCapacityProgress,
+              queueLifecycle_.cpuReadyCapacityProgressGeneration());
         });
         DXMT_ASSERT(cpuReadyCapacityWaiterCount_ > 0);
         --cpuReadyCapacityWaiterCount_;
@@ -1864,16 +1877,22 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             const std::uint64_t observedCapacityProgress =
                 queueLifecycle_.cpuReadyCapacityProgressGeneration();
             encodeCv_.wait(lock, [this, observedCapacityProgress] {
-              return stop_ || !cpuReadyTape_.readyEmpty() ||
-                  sessionReleaseState_.hasPending() ||
-                  queueLifecycle_.producerSequenceWaitActive() ||
-                  arenaAdmissionWaiterCount_.load(
-                      std::memory_order_acquire) != 0u ||
-                  queueLifecycle_.producerWriterPressureActive() ||
-                  (initializer_ &&
-                   initializer_->hasPendingUploadsUnlocked()) ||
-                  queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
-                      observedCapacityProgress;
+              return render::retainedOrDeferredSessionWaitDone({
+                  .stopped = stop_,
+                  .ready = !cpuReadyTape_.readyEmpty(),
+                  .orderedRelease = sessionReleaseState_.hasPending(),
+                  .producerSequenceWait =
+                      queueLifecycle_.producerSequenceWaitActive(),
+                  .admissionPressure = arenaAdmissionWaiterCount_.load(
+                      std::memory_order_acquire) != 0u,
+                  .writerPressure =
+                      queueLifecycle_.producerWriterPressureActive(),
+                  .initializerPending = initializer_ &&
+                      initializer_->hasPendingUploadsUnlocked(),
+                  .capacityProgress =
+                      queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
+                          observedCapacityProgress,
+              });
             });
           }
 

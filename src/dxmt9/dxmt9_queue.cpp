@@ -1,4 +1,5 @@
 #include "dxmt9_queue.hpp"
+#include "dxmt9_scheduling_progress_watchdog.hpp"
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9_compat.hpp"
@@ -1320,17 +1321,37 @@ void QueueLifecycleController::poisonTapeFailure() noexcept {
   if (submissionBinding_.stop) {
     *submissionBinding_.stop = true;
   }
-  if (submissionBinding_.writeCv) {
+  if (submissionBinding_.schedulingProgressWatchdog) {
+    submissionBinding_.schedulingProgressWatchdog->noteTerminal(true);
+  }
+  const auto wake = render::planSchedulingTerminalWake(
+      render::SchedulingTerminalDisposition::DeviceLoss);
+  if (wake.wakes(render::SchedulingWakeWriter) &&
+      submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
   }
-  if (submissionBinding_.encodeCv) {
+  if (wake.wakes(render::SchedulingWakeEncoder) &&
+      submissionBinding_.encodeCv) {
     submissionBinding_.encodeCv->notify_all();
   }
-  if (submissionBinding_.finishCv) {
+  if (wake.wakes(render::SchedulingWakeFinish) &&
+      submissionBinding_.finishCv) {
     submissionBinding_.finishCv->notify_all();
   }
-  if (submissionBinding_.presentCompletedCv) {
+  if (wake.wakes(render::SchedulingWakePresentCompleted) &&
+      submissionBinding_.presentCompletedCv) {
     submissionBinding_.presentCompletedCv->notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakePresentDequeued) &&
+      submissionBinding_.presentDequeuedCv) {
+    submissionBinding_.presentDequeuedCv->notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakeSessionRelease) &&
+      submissionBinding_.sessionReleaseCv) {
+    submissionBinding_.sessionReleaseCv->notify_all();
+  }
+  if (wake.wakes(render::SchedulingWakePendingCompletion)) {
+    pendingCompletionCv_.notify_all();
   }
 }
 
@@ -2477,6 +2498,7 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   }
 
   seqId = completedSeqQueue->front();
+  bool presentSettled = false;
   const bool publicationCreditReleased =
       postEncodeCompletionLedger_.completed(seqId);
   // TLA+: QueueLifecycleRefinement / FinishDequeue.
@@ -2505,6 +2527,9 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
     if (completedPresentSeqQueue && presentCompletedSeqId) {
       while (!completedPresentSeqQueue->empty() &&
              completedPresentSeqQueue->front() <= *completedSeqId) {
+        if (completedPresentSeqQueue->front() == seqId) {
+          presentSettled = true;
+        }
         *presentCompletedSeqId = std::max(*presentCompletedSeqId, completedPresentSeqQueue->front());
         completedPresentSeqQueue->pop_front();
         if (submissionBinding_.completedPresentOrdinal) {
@@ -2516,6 +2541,10 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
       DXMT_ASSERT(*presentCompletedSeqId <= *completedSeqId);
     }
   });
+  if (submissionBinding_.schedulingProgressWatchdog) {
+    submissionBinding_.schedulingProgressWatchdog->noteReleased(
+        seqId, presentSettled);
+  }
   if (submissionBinding_.finishCv) {
     submissionBinding_.finishCv->notify_all();
   }
@@ -3266,6 +3295,13 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   // the same Metal queue.
   recordNoEnqueueWaitGapToCommandBufferCommit();
   commitCommandBuffer();
+  if (binding.schedulingProgressWatchdog) {
+    for (const auto& source : completionSources) {
+      binding.schedulingProgressWatchdog->noteSubmitted(
+          source.seqId, record.metalCapture.has_value() ||
+              record.metalCaptureAlreadyStarted);
+    }
+  }
   gpuOutstandingCompletionSourceCount_ += completionSources.size();
   perf::recordGpuOutstandingCompletionSources(
       gpuOutstandingCompletionSourceCount_);
@@ -3564,6 +3600,13 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         binding.completedPresentSeqQueue,
         completedSeqId,
         completionSources);
+    if (binding.schedulingProgressWatchdog) {
+      for (const auto& source : completionSources) {
+        binding.schedulingProgressWatchdog->noteGpuSettled(source.seqId);
+        binding.schedulingProgressWatchdog->noteCompletionExpanded(
+            source.seqId);
+      }
+    }
     if (pending.gpuOutstandingCounted) {
       if (completionSources.size() > gpuOutstandingCompletionSourceCount_) {
         poisonTapeFailure();
@@ -3699,6 +3742,15 @@ void QueueLifecycleController::noteCommitWaitEnd(const QueueControllerState& sta
 void QueueLifecycleController::noteCommitPublish(const QueueControllerState& state,
                                                  size_t slotIndex,
                                                  u64 eventSeqId) const {
+  if (submissionBinding_.schedulingProgressWatchdog &&
+      submissionBinding_.cpuReadyTape && slotIndex < state.slots.size()) {
+    const auto& control = state.slots[slotIndex];
+    const auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
+        control.sourceId, control.storage, CpuReadyTape::State::Ready);
+    submissionBinding_.schedulingProgressWatchdog->notePublished(
+        eventSeqId, payload.valid() &&
+            commandRangeHasPresent(payload, 0, payload.commandCount()));
+  }
   const auto context = makeLifecycleContext(state);
   traceLifecycleEvent(QueueLifecycleEvent::CommitPublish, slotIndex, eventSeqId, context.writingSlot,
                       context.writeIndex, context.readyCount, context.completedQueueCount,
@@ -3709,6 +3761,10 @@ void QueueLifecycleController::noteCommitPublish(const QueueControllerState& sta
 void QueueLifecycleController::noteEncodeDequeue(const QueueControllerState& state,
                                                  size_t slotIndex,
                                                  u64 eventSeqId) const {
+  if (submissionBinding_.schedulingProgressWatchdog) {
+    submissionBinding_.schedulingProgressWatchdog->noteEncodeOrOpenSession(
+        eventSeqId);
+  }
   const auto context = makeLifecycleContext(state);
   traceLifecycleEvent(QueueLifecycleEvent::EncodeDequeue, slotIndex, eventSeqId, context.writingSlot,
                       context.writeIndex, context.readyCount, context.completedQueueCount,

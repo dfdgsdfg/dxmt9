@@ -668,9 +668,11 @@ their composition is live.
   lease/wake, source publication, session continuation, completion release,
   and present pacing in one specification, and must prove under weak
   fairness of the runtime's own steps: every accepted source leads to its
-  completion release; every Present-bearing source leads to present
-  publication; and lost-wakeup freedom — no reachable state parks a waiter
-  whose wake predicate holds with no enabled step that notifies it.
+  completion release; every Present-bearing source leads to either successful
+  drawable publication or an explicit skip disposition and then settlement;
+  and lost-wakeup freedom — no reachable state parks a waiter whose wake
+  predicate holds with no enabled step that notifies it. GPU settlement is an
+  explicit environment/fairness assumption, not queue-owned weak fairness.
   Component interiors may be abstracted to their published interface
   transitions, and each abstraction must name the detailed model it
   summarizes so refinement drift is reviewable.
