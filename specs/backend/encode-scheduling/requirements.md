@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50` and `R-BACK-2.57`
-through `R-BACK-2.66` are authoritative here.
+through `R-BACK-2.67` are authoritative here.
 
 ## 1. Producer / Encode Overlap
 
@@ -655,3 +655,37 @@ experiment probes. Promotion under `R-BACK-2.50` may change a default but must
 not make the previous mode unreachable. Removing a supported mode requires an
 explicit requirement amendment, migration evidence, and replacement regression
 coverage; ordinary hot-path cleanup must preserve every supported selector.
+
+**R-BACK-2.67** Encode scheduling must carry a composed end-to-end temporal
+progress proof in addition to the per-component models. The scheduling
+pipeline is a streaming/reactive system whose observed failure class is
+liveness, not invariant violation — a waiter parked forever while its wake
+condition already holds (the 2026-08 tape lease/wake wedge) — and
+per-component models that are each individually live do not establish that
+their composition is live.
+
+- (a) A composition model must span abstracted admission, capacity
+  lease/wake, source publication, session continuation, completion release,
+  and present pacing in one specification, and must prove under weak
+  fairness of the runtime's own steps: every accepted source leads to its
+  completion release; every Present-bearing source leads to present
+  publication; and lost-wakeup freedom — no reachable state parks a waiter
+  whose wake predicate holds with no enabled step that notifies it.
+  Component interiors may be abstracted to their published interface
+  transitions, and each abstraction must name the detailed model it
+  summarizes so refinement drift is reviewable.
+- (b) Every liveness-critical wait predicate and wake site in the
+  implementation must be bound to its model transition by an isomorphism
+  pin — a native truth-table spec in the `PresentOrdinalWaitIsomorphism`
+  pattern — so the proof stays attached to the code it claims to cover. A
+  new wait/notify pair on the scheduling path must not land without either
+  a pin or a recorded gap row.
+- (c) The runtime must expose bounded liveness watchdog observability:
+  counter or log evidence sufficient to distinguish "obligations pending
+  with no progress" from legitimate idleness in a wild run without
+  gputrace, so a liveness regression is detectable on first occurrence
+  rather than by black-screen reproduction.
+
+The composition model runs under `dxmt9-verify-tla` with the existing
+models. This requirement adds verification obligations only; it must not
+change scheduling behavior.
