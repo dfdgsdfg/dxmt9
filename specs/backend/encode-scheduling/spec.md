@@ -1074,6 +1074,34 @@ Invalid or unsupported output selects the allocation-free identity cursor over
 the same effective stream. This fallback cannot restore commands removed by DCE
 or return to source order after FrameGraph reorder.
 
+The implemented first policy is selected by the queue-immutable
+`DXMT9_RENDER_PARTITION_MODE=serial` mode. `identity` and the unset default
+retain the identity cursor. `parallel` is a stable future spelling but currently
+falls back to identity because `R-BACK-2.63` is not implemented; unknown values
+and explicitly empty values also fail closed to identity. Device creation
+resolves the value once and every
+production queue source path forwards the typed result through
+`EncodeChunkOptions`; no source or draw rereads the environment.
+
+The explicit-serial planner owns one encode-thread-reused, call-local array of
+256 locator-only range snapshots. It considers a `DrawRun` only when it contains
+at least 64 parameters, targets 32-draw subranges, and keeps at least 16 draws on
+both sides of a candidate edge. An edge is accepted only where the existing
+compatible indexed-draw merge classifier proves that no merge chain crosses the
+edge. If a sufficiently large run has no such edge, that complete run remains
+identity-shaped. Command ranges, malformed or empty DrawRuns, Clear, Present,
+and every other non-draw command remain coordinator-serial command segments.
+
+Planning runs only after `EncodePartitionReplayStream` has captured the final
+Traditional or FrameGraph order and DCE subset. It builds full stream coverage,
+then calls the existing exact range validator before installing the span in the
+serial cursor. Invalid replay metadata, range-storage exhaustion, snapshot
+failure, merge-preservation inability when no other run subdivides, or final
+validation failure clears the entire scratch and uses identity over that same
+effective stream. The storage contains no payload view, page pointer, Metal
+object, retained owner, or asynchronous span; entry resolution remains inside
+the synchronous encode call.
+
 ## 7. Execution Lanes
 
 ### 7.1 Serial
@@ -1174,8 +1202,8 @@ fallback is a provider-lifecycle decision, not a storage-only refactor.
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure; the production join spec covers Ready over admission pressure. `CpuReadySessionProgress` and `SessionCapacityLease` model bounded value ownership, writer publication, Park/Join/StaleFailOpen/Drain, charge-once, and exact-successor-over-pressure safety/liveness; `dxmt9-verify-tla` is green. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
-| Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |
-| Stable provider configuration | missing pure resolver and mode-matrix native specs, process-separated selector precedence/default/fallback evidence, and requested/resolved startup plus perf-observability audits |
+| Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |
+| Stable provider configuration | partition-axis pure resolver coverage pins unset, identity, serial, unsupported parallel, empty, and unknown behavior plus queue forwarding. Source/segment-axis resolvers, the unified mode matrix, process-separated selector precedence/default/fallback evidence, and complete requested/resolved perf observability remain missing. |
 | Parallel order and join | missing fake-child executor spec and formal/refinement evidence |
 | Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
 | Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |

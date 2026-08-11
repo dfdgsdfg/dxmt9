@@ -385,6 +385,28 @@ dxmt9::core::ChunkSlot makeDrawRunSlot(std::uint64_t seqId) {
   return slot;
 }
 
+dxmt9::core::ChunkSlot makeProductionPlannerDrawRunSlot(
+    std::uint64_t seqId, std::size_t drawCount) {
+  std::vector<dxmt9::core::DrawParam> draws(drawCount);
+  std::vector<dxmt9::core::DrawParamPayloadView> payloads(drawCount);
+  std::vector<std::array<std::uint8_t, 64>> vertexPayloads(drawCount);
+  std::vector<std::array<std::uint8_t, 32>> indexPayloads(drawCount);
+  for (std::size_t i = 0u; i < drawCount; ++i) {
+    draws[i].primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+    draws[i].primitiveCount = 1u;
+    draws[i].indexed = true;
+    draws[i].indexType = dxmt9::core::IndexType::UInt16;
+    draws[i].instanceCount = 1u;
+    payloads[i].userVertexData = vertexPayloads[i];
+    payloads[i].userIndexData = indexPayloads[i];
+  }
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  slot.appendDrawRun(makeDrawRunState(),
+                     dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  return slot;
+}
+
 dxmt9::core::ChunkSlot makeTargetDrawSlot(
     std::uint64_t seqId, std::span<const std::uint64_t> colorHandles) {
   dxmt9::core::ChunkSlot slot{};
@@ -977,6 +999,61 @@ void explicitDrawRunSubrangesExecuteThroughEncodeChunk() {
 
   run(71u, twoSubranges);
   run(72u, threeSubranges);
+}
+
+void productionPartitionModeSubdividesWithoutChangingMetalShape() {
+  auto run = [](std::uint64_t seqId,
+                dxmt9::render::PartitionExecutionMode mode) {
+    Harness harness;
+    DrawRunCapture capture;
+    auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        "production-partition-render-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+
+    constexpr std::size_t slotIndex = 18u;
+    auto slot = makeProductionPlannerDrawRunSlot(
+        seqId, dxmt9::encoders::kProductionPartitionDrawThreshold);
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer = retainedToken<WMT::CommandBuffer>(
+        "production-partition-command-buffer");
+    options.partitionExecutionMode = mode;
+    options.sessionSource = fullSource(
+        slotIndex, slot.seqId, slot.commandCount());
+    options.partitionSource = options.sessionSource->source;
+    const auto submission = dxmt9::encoders::encodeChunk(
+        ctx, slotIndex, slot, std::move(options));
+    check(submission.has_value(),
+          "production partition mode returns a serial submission");
+    return capture;
+  };
+
+  const auto identity = run(
+      181u, dxmt9::render::PartitionExecutionMode::IdentitySerial);
+  const auto explicitSerial = run(
+      182u, dxmt9::render::PartitionExecutionMode::ExplicitSerial);
+  checkEq(identity.subranges.size(), std::size_t{1},
+          "identity mode consumes one full DrawRun range");
+  checkEq(explicitSerial.subranges.size(), std::size_t{2},
+          "production serial mode consumes two deterministic subranges");
+  checkEq(explicitSerial.subranges[0].second, std::size_t{32},
+          "production first subrange uses the target draw count");
+  checkEq(explicitSerial.subranges[1].second, std::size_t{32},
+          "production tail subrange covers all remaining draws");
+  checkEq(explicitSerial.drawRunBegins, identity.drawRunBegins,
+          "partition mode preserves command-once DrawRun setup");
+  checkEq(explicitSerial.renderPassBegins, identity.renderPassBegins,
+          "partition mode preserves render-pass begin shape");
+  checkEq(explicitSerial.renderPassEnds, identity.renderPassEnds,
+          "partition mode preserves render-pass end shape");
+  checkEq(explicitSerial.splitPolicyCalls, identity.splitPolicyCalls,
+          "partition mode preserves command-buffer split decisions");
+  checkEq(explicitSerial.uploadBatchCalls, identity.uploadBatchCalls,
+          "partition mode preserves one complete DrawRun upload batch");
+  checkEq(explicitSerial.indexCounts.size(), identity.indexCounts.size(),
+          "partition mode emits every source draw exactly once");
 }
 
 void invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects() {
@@ -2562,6 +2639,7 @@ int main() {
     encodeChunkRejectsPartitionAndSessionLocatorMismatchBeforeEffects();
     arenaSourcePayloadExecutesThroughIdentitySerialEncodeChunk();
     explicitDrawRunSubrangesExecuteThroughEncodeChunk();
+    productionPartitionModeSubdividesWithoutChangingMetalShape();
     invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects();
     explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer();
     closePassIsIdempotentAndSessionResumesOnSameCommandBuffer();

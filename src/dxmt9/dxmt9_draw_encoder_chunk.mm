@@ -1204,10 +1204,41 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!partitionReplayStream.valid) {
     return std::nullopt;
   }
+  std::span<const EncodePartitionRangeSnapshot> partitionRanges =
+      options.partitionRanges;
+  thread_local ProductionEncodePartitionPlanStorage productionPlanStorage;
+  if (partitionRanges.empty() &&
+      options.partitionExecutionMode ==
+          render::PartitionExecutionMode::ExplicitSerial) {
+    const bool measurePlanner = perf::enabled();
+    std::chrono::steady_clock::time_point plannerStarted{};
+    if (measurePlanner) {
+      plannerStarted = std::chrono::steady_clock::now();
+    }
+    const auto plan = planProductionEncodePartitions(
+        partitionReplayStream, productionPlanStorage);
+    std::uint64_t plannerNanoseconds = 0u;
+    if (measurePlanner) {
+      plannerNanoseconds = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - plannerStarted)
+              .count());
+      perf::countEncodePartitionPlan(
+          plan.explicitPlan, plan.rangeCount, plan.drawRangeCount,
+          plan.plannedDrawCount, plan.subdividedDrawRunCount,
+          plan.mergePreservedIdentityCount,
+          static_cast<std::uint32_t>(plan.fallback), plannerNanoseconds);
+    }
+    if (plan.explicitPlan) {
+      partitionRanges = productionPlanStorage.view();
+    }
+  } else if (partitionRanges.empty() && perf::enabled()) {
+    perf::countEncodePartitionPlan(false, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+  }
   bool useExplicitPartitionPlan = false;
-  if (!options.partitionRanges.empty()) {
+  if (!partitionRanges.empty()) {
     const auto validation = validateEncodePartitionRanges(
-        options.partitionRanges, partitionReplayStream);
+        partitionRanges, partitionReplayStream);
     useExplicitPartitionPlan = static_cast<bool>(validation);
   }
 
@@ -3225,7 +3256,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   EncodePartitionSerialCursor partitionCursor(
-      partitionReplayStream, options.partitionRanges,
+      partitionReplayStream, partitionRanges,
       useExplicitPartitionPlan);
   EncodePartitionSerialBatch partitionBatch{};
   while (partitionCursor.next(partitionBatch)) {

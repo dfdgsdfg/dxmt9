@@ -157,6 +157,8 @@ void partitionRangeSpanForwardsWithExistingOptions() {
       },
   };
   options.partitionRanges = ranges;
+  options.partitionExecutionMode =
+      dxmt9::render::PartitionExecutionMode::ExplicitSerial;
   std::array<dxmt9::core::metalqueue::ResolvedPublishedSource, 1> sources{};
   options.sessionLookaheadSources = sources;
   options.disableMidChunkCommits = true;
@@ -168,6 +170,9 @@ void partitionRangeSpanForwardsWithExistingOptions() {
           "backend option forwarding preserves the call-local range span");
   checkEq(forwarded.partitionRanges.front(), ranges.front(),
           "backend option forwarding preserves the complete range snapshot");
+  check(forwarded.partitionExecutionMode ==
+            dxmt9::render::PartitionExecutionMode::ExplicitSerial,
+        "backend option forwarding preserves queue-immutable partition mode");
   checkEq(forwarded.sessionLookaheadSources.data(), sources.data(),
           "backend option forwarding preserves the call-local source table");
   check(forwarded.disableMidChunkCommits,
@@ -451,6 +456,12 @@ void retainedSourceResolverUsesSegmentLocalArenaViews() {
   const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
       7, dxmt9::core::SourcePayloadView(chain), 41, 0, 2, false, {}, {},
       tapeSource);
+  dxmt9::encoders::ProductionEncodePartitionPlanStorage plannerStorage{};
+  const auto plannerResult =
+      dxmt9::encoders::planProductionEncodePartitions(stream, plannerStorage);
+  check(!plannerResult.explicitPlan && plannerStorage.view().empty(),
+        "production planner consumes segmented Arena source locators without "
+        "retaining pages");
   const auto target = stream.source.payload.commandAt(1).command;
   check(target.drawRunRecord && target.drawParams.size() == 1,
         "logical command one resolves directly into segment one");

@@ -6,6 +6,7 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_encode_session.hpp"
+#include "dxmt9_render_scheduling.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -99,6 +100,12 @@ struct EncodeChunkOptions {
   // itself is call-local and must not be retained. Empty selects allocation-
   // free identity traversal of the effective replay stream.
   std::span<const EncodePartitionRangeSnapshot> partitionRanges{};
+  // Queue-immutable partition execution selection. Production queues resolve
+  // the canonical selector once at creation and forward the value through
+  // every source path. ExplicitSerial invokes the bounded production planner
+  // only when a caller did not already provide an explicit test/backend plan.
+  render::PartitionExecutionMode partitionExecutionMode =
+      render::PartitionExecutionMode::IdentitySerial;
   // Stable Tape identity used by partition snapshots independently of
   // EncodeSession participation. Required for any published partition entry.
   core::CpuReadyTape::SourceRef partitionSource{};

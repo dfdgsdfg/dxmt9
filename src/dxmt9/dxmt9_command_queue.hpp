@@ -26,6 +26,7 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_render_scheduling.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_session_release.hpp"
 #include "dxmt9_shader_archive.hpp"
@@ -345,7 +346,8 @@ class CommandQueue {
   // activation decision; this constructor never reads that environment
   // gate itself. Upstream dxmt has no BackendLimits.
   CommandQueue(WMT::Device device, core::BackendLimits limits,
-               bool cpuReadySessionLaneEnabled);
+               bool cpuReadySessionLaneEnabled,
+               render::RenderPartitionConfig renderPartitionConfig = {});
 
   // Inert queue for native encoder lifecycle specs. The supplied handle is
   // used only as a validity token: this constructor does not create queue
@@ -1057,6 +1059,7 @@ class CommandQueue {
 
   WMT::Device device_{};
   bool cpuReadySessionLaneEnabled_ = false;
+  render::RenderPartitionConfig renderPartitionConfig_{};
   WMT::Reference<WMT::CommandQueue> queue_{};
   WMT::CommandQueue queueView_{};  // non-owning view of queue_
 

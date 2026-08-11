@@ -229,6 +229,14 @@ enum class CpuReadyRetainedHeadFallbackReason : std::uint8_t {
   Pressure,
 };
 void countCpuReadySessionPendingStarted();
+void countEncodePartitionPlan(bool explicitPlan,
+                              std::uint64_t rangeCount,
+                              std::uint64_t drawRangeCount,
+                              std::uint64_t drawCount,
+                              std::uint64_t subdividedDrawRuns,
+                              std::uint64_t mergePreservedIdentity,
+                              std::uint32_t fallbackReason,
+                              std::uint64_t plannerNanoseconds);
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);

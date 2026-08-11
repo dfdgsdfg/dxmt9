@@ -139,6 +139,206 @@ std::vector<EncodePartitionRangeSnapshot> identityRanges(
   return ranges;
 }
 
+dxmt9::core::ChunkSlot makePlannerDrawSlot(std::uint64_t seqId,
+                                           std::size_t drawCount,
+                                           bool mergeable) {
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  std::vector<DrawParam> draws(drawCount);
+  std::vector<dxmt9::core::DrawParamPayloadView> payloads(drawCount);
+  if (mergeable) {
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+      auto& draw = draws[i];
+      draw.indexed = true;
+      draw.primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+      draw.indexType = dxmt9::core::IndexType::UInt16;
+      draw.instanceCount = 1u;
+      draw.primitiveCount = 1u;
+      draw.startIndex = static_cast<std::uint32_t>(i * 3u);
+    }
+  }
+  slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                     dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  return slot;
+}
+
+void productionPlannerThresholdsAreDeterministic() {
+  using dxmt9::encoders::ProductionEncodePartitionPlanStorage;
+  using dxmt9::encoders::ProductionPartitionFallbackReason;
+  auto planDraws = [](std::size_t drawCount,
+                      ProductionEncodePartitionPlanStorage& storage) {
+    auto slot = makePlannerDrawSlot(101u + drawCount, drawCount, false);
+    const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
+        6u, slot, 0u, slot.commandCount(), false, {}, {},
+        testTapeSource(6u, slot.seqId));
+    const auto result = dxmt9::encoders::planProductionEncodePartitions(
+        stream, storage);
+    return std::pair{result,
+                     std::vector<EncodePartitionRangeSnapshot>(
+                         storage.view().begin(), storage.view().end())};
+  };
+
+  ProductionEncodePartitionPlanStorage storage{};
+  const auto [below, belowRanges] = planDraws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold - 1u, storage);
+  check(!below.explicitPlan && belowRanges.empty() &&
+            below.fallback ==
+                ProductionPartitionFallbackReason::NoEligibleDrawRun,
+        "threshold minus one retains identity");
+
+  const auto [edge, edgeRanges] = planDraws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold, storage);
+  check(edge.explicitPlan && edgeRanges.size() == 2u,
+        "threshold draw run receives an explicit subdivision");
+  checkEq(edgeRanges[0].drawEntryCount,
+          dxmt9::encoders::kProductionPartitionTargetDraws,
+          "threshold first range uses the deterministic target");
+  checkEq(edgeRanges[1].drawEntryCount,
+          dxmt9::encoders::kProductionPartitionDrawThreshold -
+              dxmt9::encoders::kProductionPartitionTargetDraws,
+          "threshold tail covers every remaining draw");
+
+  const auto [above, aboveRanges] = planDraws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold + 1u, storage);
+  check(above.explicitPlan && aboveRanges.size() == 2u &&
+            aboveRanges[1].drawEntryCount == 33u,
+        "threshold plus one has a deterministic complete tail");
+  const auto [repeat, repeatRanges] = planDraws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold + 1u, storage);
+  checkEq(repeat, above, "identical planner inputs produce equal results");
+  checkEq(repeatRanges, aboveRanges,
+          "identical planner inputs produce byte-equivalent locators");
+}
+
+void productionPlannerUsesFinalMixedReplaySelection() {
+  using dxmt9::encoders::ProductionEncodePartitionPlanStorage;
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 211u;
+  slot.appendClear({});
+  std::vector<DrawParam> draws(
+      dxmt9::encoders::kProductionPartitionDrawThreshold);
+  std::vector<dxmt9::core::DrawParamPayloadView> payloads(draws.size());
+  slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                     dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  slot.appendClear({});
+  checkEq(slot.commandCount(), std::size_t{3},
+          "mixed planner fixture has command/draw/command shape");
+
+  auto makeStream = [&](bool active,
+                        std::span<const std::uint32_t> order,
+                        std::span<std::size_t> scratch) {
+    return dxmt9::encoders::makeEncodePartitionReplayStream(
+        7u, slot, 0u, slot.commandCount(), active, order, scratch,
+        testTapeSource(7u, slot.seqId));
+  };
+  ProductionEncodePartitionPlanStorage storage{};
+  const auto sourceOrder = makeStream(false, {}, {});
+  const auto sourcePlan = dxmt9::encoders::planProductionEncodePartitions(
+      sourceOrder, storage);
+  check(sourcePlan.explicitPlan && storage.count == 4u,
+        "mixed stream keeps serial commands around two draw ranges");
+  check(storage.ranges[0].kind == EncodePartitionRangeKind::CommandSegment &&
+            storage.ranges[1].entry.commandIndex == 1u &&
+            storage.ranges[2].entry.commandIndex == 1u &&
+            storage.ranges[3].kind == EncodePartitionRangeKind::CommandSegment,
+        "mixed source-order plan covers command and DrawRun identities");
+
+  const std::array<std::uint32_t, 3> order{2u, 1u, 0u};
+  std::array<std::size_t, 3> scratch{};
+  const auto reordered = makeStream(true, order, scratch);
+  const auto reorderedPlan =
+      dxmt9::encoders::planProductionEncodePartitions(reordered, storage);
+  check(reorderedPlan.explicitPlan && storage.count == 4u &&
+            storage.ranges[1].entry.commandIndex == 1u,
+        "planner subdivides the final FrameGraph order, not source order");
+  check(dxmt9::encoders::validateEncodePartitionRanges(storage.view(),
+                                                       reordered),
+        "reordered production plan validates exact final coverage");
+
+  const auto empty = makeStream(true, {}, {});
+  const auto emptyPlan =
+      dxmt9::encoders::planProductionEncodePartitions(empty, storage);
+  check(!emptyPlan.explicitPlan && storage.view().empty(),
+        "DCE-empty effective replay retains the empty identity cursor");
+}
+
+void productionPlannerPreservesMergeChainsAndFailsOpenBoundedly() {
+  using dxmt9::encoders::ProductionEncodePartitionPlanStorage;
+  using dxmt9::encoders::ProductionPartitionFallbackReason;
+  auto mergeable = makePlannerDrawSlot(
+      301u, dxmt9::encoders::kProductionPartitionDrawThreshold, true);
+  const auto mergeStream = dxmt9::encoders::makeEncodePartitionReplayStream(
+      8u, mergeable, 0u, mergeable.commandCount(), false, {}, {},
+      testTapeSource(8u, mergeable.seqId));
+  ProductionEncodePartitionPlanStorage storage{};
+  const auto mergePlan =
+      dxmt9::encoders::planProductionEncodePartitions(mergeStream, storage);
+  check(!mergePlan.explicitPlan && storage.view().empty() &&
+            mergePlan.fallback ==
+                ProductionPartitionFallbackReason::MergePreservation &&
+            mergePlan.mergePreservedIdentityCount == 1u,
+        "a compatible indexed merge chain remains one identity DrawRun");
+
+  dxmt9::core::ChunkSlot oversized{};
+  oversized.seqId = 302u;
+  for (std::size_t i = 0u;
+       i <= dxmt9::encoders::kProductionPartitionRangeCapacity / 2u;
+       ++i) {
+    std::array<DrawParam, 1> draw{};
+    std::array<dxmt9::core::DrawParamPayloadView, 1> payload{};
+    oversized.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                            dxmt9::core::DrawUniformPayload{}, draw,
+                            payload);
+    oversized.appendClear({});
+  }
+  const auto oversizedStream =
+      dxmt9::encoders::makeEncodePartitionReplayStream(
+          9u, oversized, 0u, oversized.commandCount(), false, {}, {},
+          testTapeSource(9u, oversized.seqId));
+  const auto oversizedPlan =
+      dxmt9::encoders::planProductionEncodePartitions(oversizedStream,
+                                                      storage);
+  check(!oversizedPlan.explicitPlan && storage.view().empty() &&
+            oversizedPlan.fallback ==
+                ProductionPartitionFallbackReason::RangeCapacity,
+        "fixed planner storage overflow atomically selects identity");
+
+  auto invalidStream = oversizedStream;
+  invalidStream.valid = false;
+  const auto invalidPlan =
+      dxmt9::encoders::planProductionEncodePartitions(invalidStream, storage);
+  check(!invalidPlan.explicitPlan && storage.view().empty() &&
+            invalidPlan.fallback ==
+                ProductionPartitionFallbackReason::ReplayStreamInvalid,
+        "malformed replay metadata fails open without a partial plan");
+}
+
+void canonicalPartitionSelectorResolvesQueueImmutableModes() {
+  using dxmt9::render::PartitionExecutionMode;
+  using dxmt9::render::PartitionModeFallback;
+  const auto defaults = dxmt9::render::resolveRenderPartitionConfig(nullptr);
+  const auto empty = dxmt9::render::resolveRenderPartitionConfig("");
+  const auto identity =
+      dxmt9::render::resolveRenderPartitionConfig("identity");
+  const auto serial = dxmt9::render::resolveRenderPartitionConfig("serial");
+  const auto parallel =
+      dxmt9::render::resolveRenderPartitionConfig("parallel");
+  const auto invalid =
+      dxmt9::render::resolveRenderPartitionConfig("surprise");
+  check(defaults.resolved == PartitionExecutionMode::IdentitySerial &&
+            identity.resolved == PartitionExecutionMode::IdentitySerial &&
+            serial.resolved == PartitionExecutionMode::ExplicitSerial,
+        "canonical identity/serial spelling resolves once into typed modes");
+  check(parallel.resolved == PartitionExecutionMode::IdentitySerial &&
+            parallel.fallback ==
+                PartitionModeFallback::ParallelUnsupported &&
+            empty.resolved == PartitionExecutionMode::IdentitySerial &&
+            empty.fallback == PartitionModeFallback::InvalidValue &&
+            invalid.resolved == PartitionExecutionMode::IdentitySerial &&
+            invalid.fallback == PartitionModeFallback::InvalidValue,
+        "unsupported or invalid requests fail closed to identity");
+}
+
 void identityTraversesMixedSourceOrder() {
   MixedFixture fixture;
   const auto stream = fixture.sourceOrder();
@@ -1082,6 +1282,10 @@ int main() {
   setenv("DXMT_PERF_COUNTERS", "1", 1);
   try {
     identityTraversesMixedSourceOrder();
+    productionPlannerThresholdsAreDeterministic();
+    productionPlannerUsesFinalMixedReplaySelection();
+    productionPlannerPreservesMergeChainsAndFailsOpenBoundedly();
+    canonicalPartitionSelectorResolvesQueueImmutableModes();
     replayStreamValidProvesActiveOrderContract();
     identityUsesFramegraphOrderAndDceSelection();
     identityUsesPartialSessionSourceRange();

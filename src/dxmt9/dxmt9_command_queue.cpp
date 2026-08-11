@@ -312,7 +312,8 @@ class PerfScope {
 }  // namespace
 
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
-                           bool cpuReadySessionLaneEnabled)
+                           bool cpuReadySessionLaneEnabled,
+                           render::RenderPartitionConfig renderPartitionConfig)
     : cpuReadyTape_(cpuReadySessionLaneEnabled
                         ? core::CpuReadyTapeConfig::queueSessionStreaming(
                               kCommandChunkCount)
@@ -320,6 +321,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                               kCommandChunkCount)),
       device_(device),
       cpuReadySessionLaneEnabled_(cpuReadySessionLaneEnabled),
+      renderPartitionConfig_(renderPartitionConfig),
       limits_(limits),
       // R-BACK-3.9 — Mode::Full defers the archive load: shaderArchive_
       // starts default-constructed (empty, zero I/O) here and the real
@@ -469,6 +471,8 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
               if (!legacySlot) {
                 auto ctx = makeEncodeContext();
                 encoders::EncodeChunkOptions options{};
+                options.partitionExecutionMode =
+                    renderPartitionConfig_.resolved;
                 options.partitionSource = core::CpuReadyTape::SourceRef{
                     .id = source.sourceId,
                     .storage = source.storage,
@@ -492,6 +496,8 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
               traceEncodeFnStage("after-make-context", slotIndex, slot);
               traceEncodeFnStage("before-backend-onChunkReady", slotIndex, slot);
               encoders::EncodeChunkOptions options{};
+              options.partitionExecutionMode =
+                  renderPartitionConfig_.resolved;
               options.partitionSource = core::CpuReadyTape::SourceRef{
                   .id = source.sourceId,
                   .storage = source.storage,
@@ -4509,6 +4515,8 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       if (!resolved.slot) {
         auto arenaCtx = makeEncodeContext();
         encoders::EncodeChunkOptions arenaOptions{};
+        arenaOptions.partitionExecutionMode =
+            renderPartitionConfig_.resolved;
         arenaOptions.partitionSource = resolved.source;
         lock.unlock();
         auto arenaSubmission = backend_->onSourceReady(
@@ -4588,6 +4596,8 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       if (!predictedPrefix.empty()) {
         prefixSession = encoders::makeEncodeChunkSession();
         encoders::EncodeChunkOptions prefixOptions{};
+        prefixOptions.partitionExecutionMode =
+            renderPartitionConfig_.resolved;
         prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
         prefixOptions.session = prefixSession.get();
         prefixOptions.deferSessionFinalization = true;
@@ -4644,6 +4654,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       return;
     }
     encoders::EncodeChunkOptions options{};
+    options.partitionExecutionMode = renderPartitionConfig_.resolved;
     options.partitionSource = selected[0].source;
     if (sourceAction ==
         DceChunkLookaheadSourceAction::EncodeCurrentExposeLegacyLookahead) {
@@ -4739,6 +4750,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord>
 CommandQueue::encodeCpuReadySessionSource(
     const core::metalqueue::ResolvedPublishedSource& source,
     encoders::EncodeChunkOptions options) {
+  options.partitionExecutionMode = renderPartitionConfig_.resolved;
   std::optional<core::metalqueue::QueueSubmissionRecord> submission;
   if (const auto* legacy = source.payload.legacyPayload()) {
     auto& slot = *legacy;
