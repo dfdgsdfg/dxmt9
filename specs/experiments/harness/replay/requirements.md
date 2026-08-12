@@ -413,7 +413,13 @@ never inheritance from a live server shadow. Object descriptors,
 shader/declaration bytes, and initial subresource contents remain
 generation-qualified `ObjectDefine` and digest-backed `ResourceMutation`
 events; shader and declaration definitions require an immutable verified
-payload digest. Instantiates R-HARN-7.2/7.3.
+payload digest. Before any replay sink callback, validation builds a bounded,
+value-owned ObjectDefine index and closes every handle in every bootstrap
+overlay against an exact usable definition; later command chunks are closed
+against the ordered live-generation set. The bootstrap replay callback is
+journal-only and carries an explicit deferred-provider mode, so a provider
+cannot apply state before definitions have been journaled. Instantiates
+R-HARN-7.2/7.3.
 
 **R-HARN-REPLAY-7.4** The v2 event journal has exactly these semantic classes:
 `BootstrapState`, `ObjectDefine`/`ObjectDestroy`, digest-backed
@@ -443,6 +449,13 @@ journaled mutation; no resource generation is reused while an older reference
 remains reachable; and each selected Present interval is complete. Capture
 that cannot establish these predicates is invalid rather than partial full-tape
 evidence. Instantiates R-HARN-3.1, R-HARN-4.4, and R-HARN-7.3.
+
+The current v2 structural substrate can prove the presence, declared size, and
+trusted-catalogue status of each digest-backed immutable shader/declaration
+payload and resource mutation it records. It does not yet carry an
+object-level expected resource-size/initial-content manifest, so a production
+capture owner must not claim complete unrecorded initial contents from this
+validator alone; that capture-owner contract remains open for the next stage.
 
 **R-HARN-REPLAY-7.6** Reference full-tape replay reconstructs objects and imports
 wire chunks through production validation, queue, lifetime, and provider code.

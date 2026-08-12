@@ -660,9 +660,14 @@ by R-HARN-REPLAY-7.3/7.4, validates the fixed typed baseline plus canonical
 `APPLY_STATE|FULL_SNAPSHOT` bootstrap completeness, object generations,
 verified digest-backed mutations, exact D9C
 v2 chunks, ordered-control dispositions, Present/completion closure, and all
-allocation before replay callbacks. Native tests cover a complete six-event
-trace and fail-closed bootstrap, blob, generation, range, control, completion,
-and callback-conservation cases. `dxmt9-render-tape` accepts only explicitly
+allocation before replay callbacks. The validator first builds a bounded,
+value-owned ObjectDefine index, closes Bootstrap FULL_SNAPSHOT handles against
+definitions that may be journaled after event 1, and then applies the ordered
+live-generation checks for later chunks. The replay sink receives an explicit
+journal-only/deferred-provider bootstrap mode. Native tests cover a complete
+trace and fail-closed bootstrap-handle, blob, generation, range, control,
+completion, descriptor, and callback-conservation cases. `dxmt9-render-tape`
+accepts only explicitly
 verified blob references; `run_dxmt9_render_tape.py` builds the
 `dxmt9.render_tape.bundle.v2` envelope, stores digest-named blobs, verifies their
 size and SHA-256, and then supplies that catalogue to native validation.
@@ -671,6 +676,12 @@ This is still a structural replay substrate rather than a captured frame:
 production PE capture hooks, a production queue/provider sink, offscreen Metal
 oracle execution, and wild-captured identity evidence remain open. All three
 scope claims therefore remain false.
+
+The structural v2 schema represents recorded initial/resource bytes as
+digest-backed `ResourceMutation` events. It does not by itself encode an
+object-level expected byte extent for every resource, so complete initial
+contents remain a capture-owner obligation rather than an inference from a
+successful structural validation.
 
 ### 8.1 Capture boundary
 

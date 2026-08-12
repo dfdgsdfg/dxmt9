@@ -257,6 +257,7 @@ enum class RenderTapeValidationStatus : std::uint8_t {
   DuplicateGeneration,
   UnknownIdentity,
   RetainedSlotReuse,
+  DescriptorMismatch,
   InvalidObjectDefine,
   InvalidObjectDestroy,
   InvalidMutationKind,
@@ -284,6 +285,10 @@ struct RenderTapeValidationResult {
   bool valid() const noexcept {
     return status == RenderTapeValidationStatus::Valid;
   }
+};
+
+enum class RenderTapeBootstrapReplayMode : std::uint8_t {
+  JournalOnlyDeferredProvider = 1u,
 };
 
 struct ImportedRenderTapeEventView {
@@ -326,6 +331,12 @@ struct RenderTapeBlobCatalogue {
 };
 
 struct RenderTapeValidationScratch {
+  struct ObjectDefinition {
+    D9CWireObjectIdentity identity{};
+    std::uint32_t descriptorKind = 0u;
+    std::uint32_t eventIndex = 0xffffffffu;
+  };
+
   struct LiveSlot {
     D9CWireObjectIdentity identity{};
     std::uint32_t descriptorKind = 0u;
@@ -333,6 +344,10 @@ struct RenderTapeValidationScratch {
     bool retired = false;
   };
 
+  // The definition index is populated before the ordered semantic pass. It
+  // lets BootstrapState close handles against definitions journaled after the
+  // bootstrap event without borrowing any event payload storage.
+  std::vector<ObjectDefinition> objectDefinitions;
   std::vector<LiveSlot> liveObjects;
   CommandChunkValidationScratch chunk;
 };
@@ -355,8 +370,12 @@ class RenderTapeReplaySink {
 public:
   virtual ~RenderTapeReplaySink() = default;
 
+  // BootstrapState is a journal callback only. Provider application is
+  // intentionally deferred until the consumer has journaled the later
+  // ObjectDefine events and explicitly owns that application boundary.
   virtual bool bootstrap(const RenderTapeBootstrapHeader& fixed,
-                         std::span<const std::byte> overlayChunks) = 0;
+                         std::span<const std::byte> overlayChunks,
+                         RenderTapeBootstrapReplayMode mode) = 0;
   virtual bool objectDefine(const RenderTapeObjectDefineHeader& fixed,
                             std::span<const std::byte> descriptor) = 0;
   virtual bool objectDestroy(const RenderTapeObjectDestroyHeader& fixed) = 0;

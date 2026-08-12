@@ -104,6 +104,16 @@ auto findLiveSlot(std::vector<RenderTapeValidationScratch::LiveSlot>& live,
   });
 }
 
+const RenderTapeValidationScratch::ObjectDefinition* findDefinition(
+    const std::vector<RenderTapeValidationScratch::ObjectDefinition>& definitions,
+    const D9CWireObjectIdentity& identity) noexcept {
+  const auto found = std::find_if(
+      definitions.begin(), definitions.end(), [&](const auto& definition) {
+        return sameIdentity(definition.identity, identity);
+      });
+  return found == definitions.end() ? nullptr : &*found;
+}
+
 RenderTapeValidationResult
 failure(RenderTapeValidationStatus status, std::uint32_t eventIndex = kNoIndex,
         CommandChunkValidationStatus chunkStatus =
@@ -314,10 +324,71 @@ validateRenderTape(std::span<const std::byte> blob,
   };
 
   scratch.liveObjects.clear();
+  scratch.objectDefinitions.clear();
   try {
     scratch.liveObjects.reserve(header.eventCount);
+    scratch.objectDefinitions.reserve(header.eventCount);
   } catch (...) {
     return failure(RenderTapeValidationStatus::ScratchAllocationFailed);
+  }
+
+  // First build a value-owned definition index. BootstrapState is deliberately
+  // event 1, so its FULL_SNAPSHOT overlay may refer to objects whose
+  // ObjectDefine records are journaled immediately afterward. Parsing and
+  // validating every definition, including immutable blob references, before
+  // the ordered semantic pass makes that deferred shape safe for replay.
+  for (std::uint32_t i = 0u; i < header.eventCount; ++i) {
+    if (events[i].type !=
+        static_cast<std::uint32_t>(RenderTapeEventType::ObjectDefine)) {
+      continue;
+    }
+    const auto event = candidate.event(i);
+    RenderTapeObjectDefineHeader fixed{};
+    if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
+        fixed.descriptorKind == 0u || fixed.descriptorBytes == 0u ||
+        fixed.reserved0 != 0u ||
+        event.payload.size() != sizeof(fixed) + fixed.descriptorBytes) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    const auto payloadValidity =
+        static_cast<RenderTapeDigestValidity>(fixed.payloadValidity);
+    if (payloadValidity != RenderTapeDigestValidity::NotCaptured &&
+        payloadValidity != RenderTapeDigestValidity::Sha256) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    if (requiresImmutablePayload(fixed.identity) &&
+        payloadValidity != RenderTapeDigestValidity::Sha256) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    if (payloadValidity == RenderTapeDigestValidity::Sha256) {
+      if (fixed.immutablePayloadBytes == 0u) {
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+      }
+      switch (catalogue.lookup(fixed.immutablePayloadDigest,
+                               fixed.immutablePayloadBytes)) {
+      case RenderTapeBlobLookup::Exact:
+        break;
+      case RenderTapeBlobLookup::UnknownDigest:
+        return failure(RenderTapeValidationStatus::UnknownBlob, i);
+      case RenderTapeBlobLookup::SizeMismatch:
+        return failure(RenderTapeValidationStatus::BlobSizeMismatch, i);
+      case RenderTapeBlobLookup::Unverified:
+        return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
+      }
+    } else if (fixed.immutablePayloadBytes != 0u ||
+               !zeroDigest(fixed.immutablePayloadDigest)) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    try {
+      scratch.objectDefinitions.push_back(
+          RenderTapeValidationScratch::ObjectDefinition{
+              .identity = fixed.identity,
+              .descriptorKind = fixed.descriptorKind,
+              .eventIndex = i,
+          });
+    } catch (...) {
+      return failure(RenderTapeValidationStatus::ScratchAllocationFailed, i);
+    }
   }
 
   bool sawBootstrap = false;
@@ -426,6 +497,20 @@ validateRenderTape(std::span<const std::byte> blob,
                            i);
           }
         }
+        // The canonical validator proves handle-table shape and references;
+        // this tape-level pass proves that every referenced identity has an
+        // exact, usable ObjectDefine somewhere in the complete journal.
+        for (const auto& handle : chunk.handles) {
+          const D9CWireObjectIdentity identity{
+              .kind = handle.kind,
+              .generation = handle.generation,
+              .objectId = handle.objectId,
+          };
+          if (!validIdentity(identity) ||
+              findDefinition(scratch.objectDefinitions, identity) == nullptr) {
+            return failure(RenderTapeValidationStatus::UnknownIdentity, i);
+          }
+        }
       }
       if (walk != overlays.size()) {
         return failure(RenderTapeValidationStatus::InvalidBootstrapChunk, i);
@@ -481,6 +566,9 @@ validateRenderTape(std::span<const std::byte> blob,
           scratch.liveObjects.begin(), scratch.liveObjects.end(),
           [&](const auto& entry) { return sameSlot(entry.identity, fixed.identity); });
       if (priorSlot != scratch.liveObjects.end()) {
+        if (priorSlot->descriptorKind != fixed.descriptorKind) {
+          return failure(RenderTapeValidationStatus::DescriptorMismatch, i);
+        }
         return failure(priorSlot->retired
                            ? RenderTapeValidationStatus::RetainedSlotReuse
                            : RenderTapeValidationStatus::DuplicateGeneration,
@@ -811,7 +899,9 @@ replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
     case RenderTapeEventType::BootstrapState: {
       RenderTapeBootstrapHeader fixed{};
       accepted = load(event.payload, 0u, fixed) &&
-                 sink.bootstrap(fixed, tailAfter(event.payload, sizeof(fixed)));
+                 sink.bootstrap(fixed, tailAfter(event.payload, sizeof(fixed)),
+                                RenderTapeBootstrapReplayMode::
+                                    JournalOnlyDeferredProvider);
       break;
     }
     case RenderTapeEventType::ObjectDefine: {
@@ -1116,6 +1206,8 @@ renderTapeValidationStatusName(RenderTapeValidationStatus status) noexcept {
     return "unknown-identity";
   case RenderTapeValidationStatus::RetainedSlotReuse:
     return "retained-slot-reuse";
+  case RenderTapeValidationStatus::DescriptorMismatch:
+    return "descriptor-mismatch";
   case RenderTapeValidationStatus::InvalidObjectDefine:
     return "invalid-object-define";
   case RenderTapeValidationStatus::InvalidObjectDestroy:

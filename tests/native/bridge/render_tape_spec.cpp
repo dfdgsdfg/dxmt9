@@ -74,7 +74,9 @@ std::vector<std::byte> makeSingleRecordChunk(
   return bytes;
 }
 
-std::vector<std::byte> makeApplyStateChunk() {
+std::vector<std::byte> makeApplyStateChunk(
+    bool referenceHandle = false,
+    D9CWireObjectIdentity referencedIdentity = {}) {
   std::array<D9CCommandChunkWireTextureBinding,
              D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
@@ -82,7 +84,9 @@ std::vector<std::byte> makeApplyStateChunk() {
     textures[slot] = D9CCommandChunkWireTextureBinding{
         .slot = slot,
         .valid = 1u,
-        .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+        .handleIndex = referenceHandle && slot == 0u
+                           ? 0u
+                           : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
     };
   }
   std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
@@ -138,8 +142,16 @@ std::vector<std::byte> makeApplyStateChunk() {
               textureBytes);
   std::memcpy(payload.data() + streamOffset, streams.data(),
               streamBytes);
-  return makeSingleRecordChunk(D9C_COMMAND_RECORD_APPLY_STATE,
-                               payload);
+  const D9CCommandChunkWireHandleEntry handle{
+      .kind = referencedIdentity.kind,
+      .generation = referencedIdentity.generation,
+      .objectId = referencedIdentity.objectId,
+  };
+  return makeSingleRecordChunk(
+      D9C_COMMAND_RECORD_APPLY_STATE, payload,
+      referenceHandle ? std::span<const D9CCommandChunkWireHandleEntry>(&handle,
+                                                                         1u)
+                      : std::span<const D9CCommandChunkWireHandleEntry>{});
 }
 
 std::vector<std::byte> makePresentChunk() {
@@ -152,6 +164,12 @@ constexpr D9CWireObjectIdentity kSurface{
     .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
     .generation = 2u,
     .objectId = 17u,
+};
+
+constexpr D9CWireObjectIdentity kTexture{
+    .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+    .generation = 3u,
+    .objectId = 29u,
 };
 
 RenderTapeDigest digest(std::byte seed) {
@@ -250,7 +268,10 @@ D9CCommandChunkWireDrawHeader* bootstrapDrawHeader(
 class RecordingSink final : public RenderTapeReplaySink {
 public:
   bool bootstrap(const RenderTapeBootstrapHeader&,
-                 std::span<const std::byte>) override {
+                 std::span<const std::byte>,
+                 RenderTapeBootstrapReplayMode mode) override {
+    check(mode == RenderTapeBootstrapReplayMode::JournalOnlyDeferredProvider,
+          "bootstrap must defer provider application explicitly");
     calls.push_back(RenderTapeEventType::BootstrapState);
     return true;
   }
@@ -359,6 +380,100 @@ void immutableObjectsAndRetirementFailClosed() {
   check(validateRenderTape(reused.seal(), {}).status ==
             RenderTapeValidationStatus::RetainedSlotReuse,
         "a retired slot cannot be reused while the tape retains it");
+
+  RenderTapeBuilder mismatched;
+  mismatched.appendBootstrapState(bootstrap);
+  mismatched.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  mismatched.appendObjectDefine(kSurface, 2u, descriptor, 0u, {});
+  mismatched.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  mismatched.appendPresentComplete(
+      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(mismatched.seal(), {}).status ==
+            RenderTapeValidationStatus::DescriptorMismatch,
+        "a reused identity with a different descriptor must fail closed");
+}
+
+void bootstrapAndCommandHandlesCloseBeforeReplay() {
+  constexpr std::array<std::byte, 1u> descriptor{};
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = 1u,
+  };
+
+  RenderTapeBuilder deferred;
+  deferred.appendBootstrapState(makeApplyStateChunk(true, kTexture));
+  // The definition is intentionally journaled after BootstrapState. The
+  // closure index makes this safe without applying the provider state early.
+  deferred.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  deferred.appendObjectDefine(kTexture, 1u, descriptor, 0u, {});
+  deferred.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  deferred.appendPresentComplete(
+      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  ImportedRenderTapeView imported;
+  const auto deferredValidation =
+      validateRenderTape(deferred.seal(), {}, &imported);
+  check(deferredValidation.valid(),
+        std::string(renderTapeValidationStatusName(deferredValidation.status)) +
+            " chunk=" +
+            std::to_string(static_cast<std::uint32_t>(
+                deferredValidation.chunkStatus)));
+
+  auto stale = kTexture;
+  ++stale.generation;
+  RenderTapeBuilder missingBootstrapDefinition;
+  missingBootstrapDefinition.appendBootstrapState(
+      makeApplyStateChunk(true, stale));
+  missingBootstrapDefinition.appendObjectDefine(kTexture, 1u, descriptor, 0u,
+                                                {});
+  missingBootstrapDefinition.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  missingBootstrapDefinition.appendPresentComplete(
+      3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(missingBootstrapDefinition.seal(), {}).status ==
+            RenderTapeValidationStatus::UnknownIdentity,
+        "bootstrap stale handles must fail before callbacks");
+
+  RenderTapeBuilder missingCommandDefinition;
+  missingCommandDefinition.appendBootstrapState(makeApplyStateChunk());
+  missingCommandDefinition.appendObjectDefine(kSurface, 1u, descriptor, 0u,
+                                               {});
+  missingCommandDefinition.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      makeApplyStateChunk(true, stale));
+  missingCommandDefinition.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  missingCommandDefinition.appendPresentComplete(
+      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(missingCommandDefinition.seal(), {}).status ==
+            RenderTapeValidationStatus::UnknownIdentity,
+        "later command handles must resolve exact generations");
+
+  RenderTapeBuilder retiredCommandDefinition;
+  retiredCommandDefinition.appendBootstrapState(makeApplyStateChunk());
+  retiredCommandDefinition.appendObjectDefine(kTexture, 1u, descriptor, 0u,
+                                               {});
+  retiredCommandDefinition.appendObjectDestroy(kTexture);
+  retiredCommandDefinition.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      makeApplyStateChunk(true, kTexture));
+  retiredCommandDefinition.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  retiredCommandDefinition.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(retiredCommandDefinition.seal(), {}).status ==
+            RenderTapeValidationStatus::UnknownIdentity,
+        "retired command handles must fail closed");
 }
 
 void invalidInputsFailBeforeCallbacks() {
@@ -514,6 +629,7 @@ int main(int argc, char** argv) {
     check(argc == 1, "usage: render_tape_spec [--write-fixture path]");
     validTapeReplaysExactlyOnce();
     immutableObjectsAndRetirementFailClosed();
+    bootstrapAndCommandHandlesCloseBeforeReplay();
     invalidInputsFailBeforeCallbacks();
   } catch (const std::exception& error) {
     std::cerr << "render tape spec failed: " << error.what() << '\n';

@@ -36,7 +36,11 @@ std::vector<std::byte> readFile(const char* path) {
 class InspectSink final : public RenderTapeReplaySink {
 public:
   bool bootstrap(const RenderTapeBootstrapHeader&,
-                 std::span<const std::byte>) override {
+                 std::span<const std::byte>,
+                 RenderTapeBootstrapReplayMode mode) override {
+    if (mode != RenderTapeBootstrapReplayMode::JournalOnlyDeferredProvider) {
+      return false;
+    }
     ++bootstraps;
     ++events;
     return true;
