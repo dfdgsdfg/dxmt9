@@ -219,3 +219,53 @@ compile — it returns a bare `float4` from a function whose declared
 return type is `FfpFsOut` — so the one diagnostic flag meant to
 bisect a rendering failure between geometry and fragment stages is
 itself unusable exactly when it would be needed.
+
+---
+
+## 7. Reproducible Render Workloads
+
+**R-HARN-7.1** The `replay` domain owns one replay family with three named
+profiles: `draw-slice`, `frame-tape`, and `sequence-tape`. The existing
+3DMark05 mini replay is the implemented `draw-slice` profile; it must not be
+retired or described as full-frame evidence merely because the broader tape
+profiles are specified. `frame-tape` and `sequence-tape` remain unimplemented
+until their owning gap rows are closed.
+
+**R-HARN-7.2** A `frame-tape` or `sequence-tape` artifact must be a
+self-contained replay input at the dxmt9 backend-semantic boundary. It includes
+an ordered initial state checkpoint, generation-qualified object identities,
+resource descriptors and initial contents, resource create/destroy/mutation
+events, canonical command-chunk wire bytes, direct ordered-control events that
+do not enter command chunks, and every referenced shader or declaration blob.
+Raw command chunks without the checkpoint and resource journal are not a valid
+tape.
+
+**R-HARN-7.3** Tape capture must begin and end at declared ordered boundaries.
+A one-frame capture begins from a consistent Present-bounded checkpoint and
+ends after the selected Present is represented; a multi-frame capture extends
+the same rule over consecutive Present intervals. The producer must drain or
+otherwise prove consistency before snapshotting mutable resource bytes and
+state. It must fail rather than emit a checkpoint assembled from mutually
+inconsistent queue and resource generations.
+
+**R-HARN-7.4** Full-tape replay must import the recorded backend stream through
+the production validator, queue, resource-lifetime machinery, and Metal
+provider. A separate renderer that merely resembles production is a diagnostic
+fixture, not the reference full-tape replayer. Headless Present replacement and
+readback instrumentation may be replay-only adapters when their ordering and
+resource effects are explicit.
+
+**R-HARN-7.5** Capture fidelity and replay validity are separate claims. A tape
+must first pass schema, digest, object-generation, bounds, event-order, and
+resource-closure validation. A replay must then report structural conservation
+(accepted/rejected event counts, source and Present ordinals, and completion)
+and concrete output or attachment hashes. Performance timing is valid only in
+a separately declared benchmark mode with reset, warm-up, repetition, and
+measurement policy recorded in the artifact.
+
+**R-HARN-7.6** A Render Tape is a capture of dxmt9's effective backend semantics,
+not a lossless trace of application API call timing. PE-side state coalescing,
+draw-state delta construction, and producer scheduling that happened before the
+canonical stream was sealed are outside its replay claim. Any experiment that
+depends on those producer-side observables requires a distinct raw-API or
+producer trace and must not cite Render Tape identity as evidence.

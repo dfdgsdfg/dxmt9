@@ -293,6 +293,26 @@ correctness and performance evidence. Missing layers and deliberately unmodeled
 observables must be recorded in the owning `gap.md`; no later layer silently
 substitutes for an earlier one.
 
+**R-VERIF-6.5** The chosen verification mechanism must match the claim and name
+its finite domain. Exhaustive native tests enumerate every input/state tuple in
+a declared bounded domain while executing the production pure predicate. TLA+
+and TLC verify reachable state transitions, interleavings, safety, and liveness
+in a finite abstract protocol. An SMT solver may prove satisfiability,
+unsatisfiability, or equivalence of bounded value constraints and static policy
+decisions. `UNSAT` proves only that the encoded formula has no counterexample
+within its stated assumptions; it does not prove Metal behavior, final pixels,
+runtime scheduling, or performance economics. A lane must not cite one method
+as evidence for a claim owned by another without an explicit refinement link.
+
+**R-VERIF-6.6** A Render Tape reference replay may serve as deterministic
+GPU-visible evidence only after its capture consistency, object generations,
+resource closure, event ordering, production-import path, and output oracle are
+themselves verified. The first full-tape implementation must bind a bounded
+capture/replay model to production predicates with native tests, and must replay
+at least one complete Present interval twice with identical structural
+conservation and output hashes. Existing draw-slice mini replay remains valid
+for its declared window but does not satisfy this full-frame requirement.
+
 ---
 
 ## 7. Data-Oriented / DXMT Merge Acceptance

@@ -1,11 +1,11 @@
 ---
 type: "Spec"
-title: "Harness Replay Spec — Offline Metal Replay"
-description: "Script inventory, manifest schema, probe input contract, mode table, owned environment variables, declared engine-shape expectations, and known deviations for the replay domain."
+title: "Harness Replay Spec — Unified Render Replay"
+description: "Unified draw-slice, frame-tape, and sequence-tape architecture plus the implemented mini-replay contract."
 tags: [specs, experiments, harness, replay, spec]
 ---
 
-# Harness Replay Spec — Offline Metal Replay
+# Harness Replay Spec — Unified Render Replay
 
 Implements `specs/experiments/harness/replay/requirements.md`
 (`R-HARN-REPLAY-*`). Instantiates the `replay` row of the domain map in
@@ -17,15 +17,14 @@ cited from the parent spec rather than redefined here. The geometry
 authoritatively, in `specs/experiments/harness/probe/spec.md` §5; it
 is cited below, not restated.
 
-**This domain renders a valid image as of 2026-07-28** (§7, Defect
-History). It did not when this document was first written; the six
-defects that blocked it are all fixed, and §7 records each one and its
-fix. A seventh — a verification-fidelity defect, not a rendering one —
-was found on 2026-07-29 and is recorded there too. Every section below
-states this domain's intended contract. Where current source still
-violates that contract — the 32-bit index-width rejection of §6.3
-remains unimplemented — this file says so explicitly in the section
-concerned, and `specs/experiments/gap.md` tracks the shortfall.
+The implemented `draw-slice` profile renders a valid image as of
+2026-07-28 (§7, Defect History). The broader `frame-tape` and
+`sequence-tape` profiles defined in §0 and §8 are architecture only and
+remain tracked gaps. They reuse the replay domain rather than creating a
+second, competing harness family. Where current source still violates a
+contract — the 32-bit index-width rejection of §6.3 remains unimplemented —
+this file says so explicitly, and `specs/experiments/gap.md` tracks the
+shortfall.
 
 Facts in this document were verified against
 `scripts/tools/run_3dmark05_mini_replay.py` (2,093 lines) and
@@ -34,6 +33,30 @@ Facts in this document were verified against
 against the live file before further citation, per the same discipline
 `specs/experiments/harness/probe/spec.md` §3 states for its own line
 citations.
+
+---
+
+## 0. Unified Replay Profiles
+
+The replay domain has one evidence vocabulary and three scopes:
+
+| Profile | Status | Captured scope | Reference execution |
+|---|---|---|---|
+| `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
+| `frame-tape` | planned | One complete Present interval plus the ordered checkpoint and resource/event closure needed to start from no live application | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
+| `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
+
+`draw-slice` remains deliberately small and shader/geometry-centric. It is
+useful for code-path mutation, pixel isolation, and inexpensive GPU experiments,
+but it does not reproduce a complete frame or the production queue. Full tapes
+solve that larger problem; they do not retroactively strengthen evidence from an
+old mini-replay manifest.
+
+All profiles use the parent artifact envelope and the same four evidence words:
+`validity`, `coverage`, `conservation`, and optional `benchmark`. Their contents
+differ by scope, but their meanings do not. In particular, output equality is
+not coverage, containment is not execution, and successful replay is not a
+performance claim.
 
 ---
 
@@ -626,3 +649,105 @@ tell what the contract is protecting against.
    compile time. The `sites` / `files_mutated` / `files_scanned`
    counts in `execution_proof` are what make a verdict checkable, and
    the flag's help text says so.
+
+---
+
+## 8. Full Render Tape Architecture
+
+### 8.1 Capture boundary
+
+Render Tape records the canonical semantics after PE-side state coalescing and
+before unix-side import changes their scheduling. That boundary is intentional:
+the canonical D9C wire in `include/dxmt9/device_c.h` is pointer-free,
+bounds-checkable, versioned, and already carries generation-qualified object
+references. It is therefore the command representation the full-tape event
+journal preserves byte-for-byte.
+
+The wire is delta-oriented, so it cannot start a replay alone. The capture owner
+must first create an ordered checkpoint containing the complete effective state
+shadow and all resource contents that the selected interval can read before a
+captured write. Resource and control operations that bypass command chunks are
+recorded in the same ordinal journal. Capture is armed for a future Present
+boundary, obtains a consistent checkpoint only after older work can no longer
+mutate it, then records complete Present intervals. A failed drain, missing
+resource byte range, or generation mismatch aborts sealing.
+
+This is a backend-semantic capture, not an exact D3D9 API trace. Multiple setters
+already coalesced into one draw delta cannot be reconstructed, and CPU timing or
+Wine scheduling before publication is not preserved.
+
+### 8.2 Bundle layout
+
+The logical bundle is:
+
+```text
+render-tape/
+├── manifest.json       schema/profile/ABI/provenance/component digests
+├── checkpoint.bin      ordered full effective-state checkpoint
+├── objects.bin         object descriptors and generation map
+├── events.bin          monotone command/direct-control event journal
+├── blobs/              digest-named resource, shader, declaration payloads
+└── oracle/             capture-time attachment metadata and optional hashes
+```
+
+The physical container may later become one packed file, but these logical
+components and their independent digests remain part of the schema. Event
+payloads reference blob digests and `(kind, objectId, generation)` identities;
+they never embed live pointers or depend on registry slot addresses from the
+capturing process.
+
+The journal distinguishes at least:
+
+- canonical command-chunk wire bytes and their source/sequence identity;
+- object create/destroy and subresource content mutations;
+- shader/declaration creation and immutable payload identity;
+- Query, readback, Flush, Present, and other direct ordered controls;
+- capture checkpoint, interval boundary, and terminal completion records.
+
+### 8.3 Production-path replay
+
+The reference replayer is a small host around existing production owners, not a
+second renderer. It validates the manifest and component digests, reconstructs
+the generation-qualified object registry from the checkpoint, applies journaled
+mutations in ordinal order, imports recorded chunks through the production wire
+validator, and submits them through the production queue and Metal provider.
+
+For deterministic validation, Present is adapted to an offscreen attachment and
+ordered readback. The adapter replaces only drawable acquisition/presentation;
+it may not bypass pass actions, resource lifetime, completion, or command queue
+semantics. A windowed mode and `.gputrace` capture of the replayer are useful
+diagnostics but are downstream options, not the reference oracle.
+
+Replay has three modes:
+
+| Mode | Purpose | Timing claim |
+|---|---|---|
+| `validate` | schema/resource/order validation plus one deterministic execution and hashes | none |
+| `bisect` | deterministic event/pass/draw range reduction while preserving checkpoint closure | none |
+| `benchmark` | repeated execution of a validated tape with declared reset, warm-up, and sampling policy | explicit and profile-bound |
+
+### 8.4 Profile relationship and migration
+
+The current mini replay is the `draw-slice` implementation, not deprecated
+code. It owns a different execution adapter and deliberately narrow coverage.
+The first full-tape milestone does not replace its shader-mutation or draw-order
+tools. Instead, both profiles are managed under this replay domain, share the
+parent artifact envelope, and report compatible evidence blocks.
+
+A future tape-to-draw-slice projector may extract a selected encoder/draw range
+and content-addressed payloads from a validated full tape. Until projection
+identity is tested, the current manifest builder remains authoritative for
+mini-replay inputs. Once tested, its useful transforms can consume the projection
+without maintaining an independent resource-dump format.
+
+Implementation order is deliberately bounded:
+
+1. one complete `frame-tape` with capture-time closure validation;
+2. identity replay through the production importer and provider;
+3. deterministic output/conservation oracle and reducer;
+4. two consecutive Present intervals with mutations across the boundary;
+5. `sequence-tape`, where a ten-second capture is merely a longer interval set;
+6. optional tape-to-`draw-slice` projection and benchmark corpus management.
+
+Random seek, rolling eviction, mid-interval checkpoints, and a raw D3D9 API
+trace are not part of the first version.

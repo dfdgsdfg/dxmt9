@@ -57,6 +57,56 @@ For example, a scene-dependent stale-uniform artifact should become a bounded
 payload-generation trace and an alternating-uniform GPU readback fixture, rather
 than remaining a requirement to watch a long benchmark by eye.
 
+### 1.2 Method selection: exhaustive native, SMT, and TLA+
+
+These mechanisms overlap in convenience but own different claims:
+
+| Mechanism | Executes | Best claim | Does not establish |
+|---|---|---|---|
+| Exhaustive native test | Production pure predicate over every tuple in a declared small finite domain | Truth-table completeness, model/code isomorphism, boundary arithmetic | Unbounded behavior, thread interleavings outside the predicate, Metal/pixels |
+| SMT solver | Symbolic formula over bit-vectors, integers, arrays, or booleans | A bounded counterexample exists (`SAT`), cannot exist (`UNSAT`), or two static policies are equivalent under assumptions | Temporal progress, driver behavior, representative workload economics |
+| TLA+ / TLC | Abstract transition system with nondeterministic actions and fairness | Reachability safety, interleavings, ownership, join/order, eventual progress | Shader/resource bytes, floating point, real pixels, performance |
+| Concrete Render Tape replay | Captured shaders, resources, commands, production importer/provider, Metal | Same-input structural and GPU-visible equivalence; fast repeatable experiments | States absent from the tape, exact application call timing, a universal proof |
+| Supervised wild run | Full application and environment | Integration discovery and final workload evidence | Determinism or isolation by itself |
+
+An exhaustive native test is therefore not an SMT solver: it literally calls the
+real C++ predicate for every member of a small domain. An SMT test encodes the
+predicate or policy as constraints and asks a solver for a witness. SMT is useful
+when the Cartesian product is too large but the policy is still a static value
+relation—for example partition coverage, range non-overlap, bounded hazard-set
+equivalence, or whether any accepted cost-model assignment violates a threshold.
+It is a poor primary tool for queue wakeups or child-join progress; those belong
+to a temporal transition model.
+
+For every SMT-backed claim, record the formula owner, production predicate or
+translation it refines, bit widths/bounds, assumptions, solver/version, expected
+result, and a native witness replay for every `SAT` counterexample retained as a
+regression. For every exhaustive native claim, record the generated domain and
+case count. Neither result may be summarized merely as "formally verified."
+
+### 1.3 Render Tape as a concrete refinement layer
+
+The unified replay architecture is specified in
+`specs/experiments/harness/replay/spec.md` §0/§8. Verification treats its
+profiles differently:
+
+- `draw-slice` is an implemented, narrow GPU oracle for selected draws and
+  emitted shader/resource payloads. It does not exercise the production queue.
+- `frame-tape` is the first planned reference workload: one complete Present
+  interval, a consistent checkpoint, resource/direct-control journal, canonical
+  wire chunks, production import/queue/provider replay, and offscreen hashes.
+- `sequence-tape` extends the same proof over consecutive intervals; a nominal
+  ten-second capture is a corpus-selection policy, not a new semantics.
+
+Before full-tape output is trusted, a small capture/replay refinement must prove
+that checkpoint, object generation, mutation, command, Present, and completion
+order reconstruct the same abstract backend state. Production shared predicates
+must validate the same rules, and native tests must enumerate short traces such
+as create→write→draw→Present, write-between-two-Presents, destroy/recreate with a
+new generation, missing initial read bytes, and stale-object rejection. Concrete
+Metal replay then closes what the abstract model cannot see: actual resource
+bytes, shader layouts, pass actions, and output pixels.
+
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
 | `archicture/spec.md` §6 / `backend/spec.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
@@ -78,6 +128,7 @@ than remaining a requirement to watch a long benchmark by eye.
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
+| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | planned bounded capture/checkpoint/replay refinement, native isomorphism tests, and frame-tape identity oracle | planned capture owner around the canonical D9C wire/direct-control boundary and a production-import native replayer; no implementation exists yet |
 
 ---
 

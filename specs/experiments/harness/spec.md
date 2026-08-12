@@ -43,7 +43,7 @@ participates in:
 |---|---|---|
 | `runner` | `scripts/run_apps/run_experiment.py`, the catalogue launchers under `experiments/launchers/`, `scripts/run_apps/*.sh`, `scripts/run_suites/*` | `build-stage`, `run-capture` |
 | `probe` | `scripts/tools/run_3dmark05_perf_probe.sh`, `scripts/tools/run_with_wine_metal_capture_layer.sh`, `scripts/tools/run_3dmark05_system_trace_sidecar.sh` | `run-capture`, `dump-extract` |
-| `replay` | `scripts/tools/build_3dmark05_mini_replay_manifest.py`, `scripts/tools/plan_3dmark05_mini_replay.py`, `scripts/tools/run_3dmark05_mini_replay.py` | `offline-replay` |
+| `replay` | The implemented `draw-slice` scripts: `scripts/tools/build_3dmark05_mini_replay_manifest.py`, `scripts/tools/plan_3dmark05_mini_replay.py`, `scripts/tools/run_3dmark05_mini_replay.py`; plus the planned `frame-tape`/`sequence-tape` capture validator and production-path replayer specified in `replay/spec.md` §8 | `run-capture`, `dump-extract`, `offline-replay` |
 | `reduce` | the `scripts/tools/summarize_*` that read dxmt9's own logs, including `summarize_3dmark05_perf.py`, `summarize_index_cache_runtime.py`, `summarize_framegraph_dag.py` | `log-reduce` |
 | `join` | `scripts/tools/finalize_3dmark05_perf_probe.sh`, `scripts/tools/summarize_xcode_encoder_counters.py`, `scripts/tools/summarize_xctrace_metal_intervals.py`, `scripts/tools/summarize_xctrace_cpu_threads.py` | `external-join` |
 | `gate` | `scripts/tools/compare_*`, `scripts/tools/analyze_xcode_replay_variance.py` | `compare-gate` |
@@ -127,7 +127,11 @@ does not apply to this boundary's fields.
 What crosses: the running process's log stream (stderr,
 `DXMT_LOG_PATH`), the `.gputrace` bundle when
 `DXMT_METAL_CAPTURE_FRAME`/`PATH` fired, and any `DXMT9_DUMP_*`
-sidecar files (geometry payloads, depth attachment dumps). The
+sidecar files (geometry payloads, depth attachment dumps). The planned
+Render Tape path additionally crosses as an in-progress ordered checkpoint,
+canonical wire/direct-control journal, and content-addressed resource blobs;
+it is not valid at this boundary until the producer seals it after proving
+checkpoint consistency and resource closure. The
 consumer must not read GPU-side content out of a capture layer that
 was never inserted (`agents/rules/metal_debugging.rules.md` §1); a
 `probe`-domain script's file-capture preflight is the in-band signal
@@ -140,7 +144,16 @@ This is the boundary that failed silently (R-HARN-4.3, R-HARN-4.4,
 defect 2) and is stated precisely here because every other boundary
 in this document builds on the same discipline.
 
-**What crosses:** per-draw geometry payload files under
+Two artifact families cross this boundary under the same `replay` domain.
+The implemented `draw-slice` family is described immediately below. The
+planned `frame-tape`/`sequence-tape` family crosses as a sealed bundle with a
+full effective-state checkpoint, object table, ordered command/direct-control
+journal, content-addressed blobs, component digests, and capture oracle as
+specified in `replay/spec.md` §8. A directory of raw command chunks or resource
+bytes without that closure is not a full tape and must not enter reference
+replay.
+
+**What crosses for `draw-slice`:** per-draw geometry payload files under
 `analysis/geometry/*.bin` plus a sidecar `.meta` file per payload,
 written by the `probe`-domain dump path
 (`DXMT9_DUMP_INDEXED_GEOMETRY_DIR` and related knobs, documented in
@@ -224,7 +237,9 @@ match rather than silently skipping the line.
 What crosses: a `.gputrace` bundle produced by
 `run_3dmark05_mini_replay.py`'s `DXMT9_MINI_REPLAY_CAPTURE_PATH`, or
 a color-output image at `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH`, for a
-downstream `join`-domain tool (Xcode, `xctrace`) to open or diff. The
+downstream `join`-domain tool (Xcode, `xctrace`) to open or diff. Full-tape
+replay may produce the same external artifacts plus deterministic attachment
+hash/readback and structural-conservation summaries. The
 consumer must not treat the presence of the file alone as proof of
 content (R-HARN-3.1); the producer's `validity` field (§3) is what a
 downstream harness reads before trusting the bundle.

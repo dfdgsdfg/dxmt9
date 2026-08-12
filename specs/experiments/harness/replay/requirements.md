@@ -1,26 +1,27 @@
 ---
 type: "Spec Requirements"
-title: "Harness Replay Requirements — Offline Metal Replay"
-description: "Requirements for the replay domain: standalone Metal replay of dumped 3DMark05 geometry/shader payloads outside Wine."
+title: "Harness Replay Requirements — Unified Render Replay"
+description: "Requirements for draw-slice, frame-tape, and sequence-tape capture and replay profiles."
 tags: [specs, experiments, harness, replay, requirements]
 ---
 
-# Harness Replay Requirements — Offline Metal Replay
+# Harness Replay Requirements — Unified Render Replay
 
 This is a domain document under `specs/experiments/harness/`. It
 instantiates the `R-HARN-*` requirement groups in
 `specs/experiments/harness/requirements.md` for the `replay` domain
-named in `specs/experiments/harness/spec.md` §1. The replay domain
-participates in the `offline-replay` pipeline stage only (parent
-spec.md §0): it reads geometry, shader, and cbuf payloads a `probe`-
-domain run already dumped and renders them in a standalone,
-Wine-independent Metal process. Requirement IDs in this file use the
-prefix `R-HARN-REPLAY-`.
+named in `specs/experiments/harness/spec.md` §1. The domain owns three
+profiles under one contract: the implemented, standalone `draw-slice`
+mini replay and the planned `frame-tape` and `sequence-tape` profiles.
+The broader profiles add canonical backend command capture, a consistent
+state/resource checkpoint, and production-path replay; they do not weaken
+the existing mini replay's validity and execution-proof contracts.
+Requirement IDs in this file use the prefix `R-HARN-REPLAY-`.
 
-**This domain renders a valid image as of 2026-07-28.** It did not
-when these requirements were written; the six defects that blocked it
-are fixed, and this domain's own `spec.md` §7 records each one with
-its fix from the implementation side. A seventh defect, found on
+**The implemented `draw-slice` profile renders a valid image as of
+2026-07-28.** It did not when these requirements were written; the six
+defects that blocked it are fixed, and this domain's own `spec.md` §7
+records each one with its fix from the implementation side. A seventh defect, found on
 2026-07-29, was not a rendering fault at all: the domain rendered
 correctly and reported a pixel-identical result that was read as
 proof of a shader-translator change the replay had never executed
@@ -36,30 +37,29 @@ own rationale, and `specs/experiments/gap.md` tracks the shortfall.
 
 ## 1. Scope and Stage Participation
 
-**R-HARN-REPLAY-1.1** The replay domain comprises exactly the scripts
-the parent domain map (`specs/experiments/harness/spec.md` §1) assigns
-to it: `scripts/tools/build_3dmark05_mini_replay_manifest.py`,
+**R-HARN-REPLAY-1.1** The replay domain comprises the implemented scripts
+the parent domain map (`specs/experiments/harness/spec.md` §1) assigns to
+its `draw-slice` profile:
+`scripts/tools/build_3dmark05_mini_replay_manifest.py`,
 `scripts/tools/plan_3dmark05_mini_replay.py`, and
-`scripts/tools/run_3dmark05_mini_replay.py`. This domain's own
-`spec.md` names only the `offline-replay` pipeline stage (parent
-spec.md §0) as a stage it participates in — even though the manifest
-builder's own `--shader-summary` input crosses in from the `join`
-domain and its `--probe-draws` input crosses in from the `reduce`
-domain (parent spec.md §1, "reduce versus join"). A change to this
-domain must not describe consuming those two inputs as participation
-in `external-join` or `log-reduce`; consuming another domain's output
-artifact is not the same as performing that domain's stage work.
-Instantiates R-HARN-1.1.
+`scripts/tools/run_3dmark05_mini_replay.py`. The same domain owns the
+planned `frame-tape` and `sequence-tape` producers, validators, and
+production-path replayer described in this document's §7 and its `spec.md`
+§0/§8. Consuming a `join`- or `reduce`-domain artifact does not make replay
+participate in `external-join` or `log-reduce`; its consumer stage remains
+`offline-replay`. Instantiates R-HARN-1.1 and R-HARN-7.1.
 
-**R-HARN-REPLAY-1.2** This domain is a read-only consumer of the
+**R-HARN-REPLAY-1.2** The implemented `draw-slice` profile is a read-only consumer of the
 `dump-extract → offline-replay` boundary (parent spec.md §2): it must
 never write into a `probe`-domain trace directory's `analysis/geometry/`,
 `analysis/shaders/`, or `analysis/frame<N>-depth.bin` paths, only read
 from them. A change that has this domain re-derive or re-dump geometry
 or shader payloads itself, instead of consuming what `dump-extract`
 already wrote, duplicates a responsibility the parent domain map
-assigns to `probe`. Instantiates R-HARN-1.1 (parent spec.md §1, "Why
-the domain axis is harness families, not stages").
+assigns to `probe`. This does not prohibit the planned full-tape producer,
+which writes a different sealed bundle during `run-capture`/`dump-extract`
+and is governed by R-HARN-REPLAY-7.2–7.5. Instantiates R-HARN-1.1
+(parent spec.md §1, "Why the domain axis is harness families, not stages").
 
 ---
 
@@ -378,3 +378,89 @@ Instantiates R-HARN-2.2 (an out-of-classification index width must not
 be silently reinterpreted) and R-HARN-5.1 (the accepted index-width
 set must be declared, the same way the accepted cbuf-binding shapes
 are).
+
+---
+
+## 7. Unified Replay Profiles and Render Tape
+
+**R-HARN-REPLAY-7.1** Every replay artifact declares exactly one profile:
+`draw-slice`, `frame-tape`, or `sequence-tape`. `draw-slice` is the existing
+single-encoder diagnostic projection. `frame-tape` contains one complete
+Present interval. `sequence-tape` contains consecutive complete Present
+intervals and may additionally declare a wall-clock selection duration. A
+consumer must reject an unknown profile and must not infer a stronger scope
+from an artifact's size or filename. Instantiates R-HARN-7.1.
+
+**R-HARN-REPLAY-7.2** A full tape bundle is content-addressed and pointer-free.
+Its manifest records the tape schema and version, profile, producer revision,
+canonical wire ABI hash, platform/capability provenance, event and Present
+ordinal ranges, every component digest, and the artifact-envelope fields from
+the parent spec. Variable payloads are stored as immutable digest-named blobs;
+events refer to blob digests and generation-qualified object identities, never
+process addresses or live COM/Objective-C objects. Instantiates R-HARN-4.1,
+R-HARN-7.2, and R-HARN-7.5.
+
+**R-HARN-REPLAY-7.3** A full tape begins with an ordered effective-state
+checkpoint sufficient to interpret the first captured delta record. The
+checkpoint includes the complete backend-visible D3D9 state shadow, bound
+resource and declaration identities, object descriptors, shader bytecode, and
+the initial contents of every subresource that can be read before its first
+captured write. Omitting a field because a later draw packet normally inherits
+it from the live server shadow is invalid. Instantiates R-HARN-7.2/7.3.
+
+**R-HARN-REPLAY-7.4** The event journal contains both canonical command-chunk
+wire records and operations that bypass those chunks: object creation and
+destruction, lock/unlock or upload mutations, palette and mipmap mutations,
+readback/query/Flush/Present ordering, and other direct bridge controls needed
+to preserve observation order. Every event carries a monotone event ordinal;
+events that reference an object carry its kind, object ID, and generation.
+Unknown required event kinds, stale generations, missing blobs, or ordinal
+gaps are hard validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and
+R-HARN-7.5.
+
+**R-HARN-REPLAY-7.5** Capture sealing must prove resource closure and checkpoint
+consistency before reporting success. Every referenced object exists at the
+event that uses it; every read byte is supplied by the checkpoint or an earlier
+journaled mutation; no resource generation is reused while an older reference
+remains reachable; and each selected Present interval is complete. Capture
+that cannot establish these predicates is invalid rather than partial full-tape
+evidence. Instantiates R-HARN-3.1, R-HARN-4.4, and R-HARN-7.3.
+
+**R-HARN-REPLAY-7.6** Reference full-tape replay reconstructs objects and imports
+wire chunks through production validation, queue, lifetime, and provider code.
+Recorded Present events map to an explicit replay surface boundary: the
+reference mode uses an offscreen target and records attachment hashes/readback;
+an optional windowed mode may present to a drawable but is not the deterministic
+oracle. Replaying by translating events into a second hand-written renderer is
+not reference evidence. Instantiates R-HARN-7.4.
+
+**R-HARN-REPLAY-7.7** Replay reports three independent evidence blocks:
+`validity` for bundle and output non-degeneracy, `coverage` for exact event,
+source, object, shader, draw, and Present containment, and `conservation` for
+accepted/rejected counts, ordinal continuity, completion, and output hashes.
+Benchmark timing is a fourth, optional block and must declare reset, warm-up,
+repeat, and sampling policy. None of the four blocks substitutes for another.
+Instantiates R-HARN-3.2/3.4 and R-HARN-7.5.
+
+**R-HARN-REPLAY-7.8** The first implementation milestone is a complete
+`frame-tape` identity replay. `sequence-tape` may reuse the same schema only
+after two consecutive Present intervals replay with correct resource mutation,
+completion, and output conservation. A nominal ten-second workload is a
+selection policy over complete intervals, not a separate ad-hoc dump format.
+Rolling eviction, random seek, and mid-interval checkpoints are outside the
+initial contract and must not be implied by the profile name.
+
+**R-HARN-REPLAY-7.9** `draw-slice` remains a supported diagnostic projection
+with its current manifest, generated standalone Metal renderer, coverage, and
+execution-proof rules. Until a conversion path is implemented, it is not a
+view extracted from `frame-tape`; its result certifies only the selected draw
+window. When conversion is added, both paths must share object/shader/blob
+identity and must demonstrate byte- or semantic-equivalent projection before
+the legacy manifest producer can be retired.
+
+**R-HARN-REPLAY-7.10** Render Tape captures dxmt9's effective backend-semantic
+stream. It does not reproduce exact application call timing, PE-side setter
+frequency, state calls coalesced before draw-delta construction, Wine scheduling,
+or producer/replay overlap. Experiments about those observables require a
+separate producer trace. This limitation must appear in every full-tape
+artifact's scope block. Instantiates R-HARN-7.6.
