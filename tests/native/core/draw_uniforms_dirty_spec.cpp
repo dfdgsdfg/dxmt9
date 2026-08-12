@@ -23,6 +23,9 @@ using dxmt9::uniform::DirtyBit;
 using dxmt9::uniform::DirtyState;
 using dxmt9::uniform::DirectCbufPayloadCounts;
 using dxmt9::uniform::DirectCbufPayloadSourceHashes;
+using dxmt9::uniform::DrawBindingAbi;
+using dxmt9::uniform::DrawBindingPath;
+using dxmt9::uniform::DrawBindingPayloadIdentity;
 using dxmt9::uniform::ShaderConstantUsageBounds;
 
 namespace {
@@ -484,6 +487,144 @@ void testDirectCbufPayloadSourceDirtyRebind() {
         "vertex-only source change leaves PS clean");
 }
 
+// R-VERIF-2.15 — truth table shared with ParallelDrawBinding.tla. Each child
+// owns its previous identity and dirty state; A -> B -> A must rebind B and
+// then A, while an independent sibling remains untouched.
+void testDrawBindingTransitionTruthTable() {
+  const DrawBindingPayloadIdentity a{
+      .vertexConstants = 0x10u,
+      .pixelConstants = 0x20u,
+      .fixedFunction = 0x30u,
+  };
+  const DrawBindingPayloadIdentity b{
+      .vertexConstants = 0x11u,
+      .pixelConstants = 0x21u,
+      .fixedFunction = 0x31u,
+  };
+  const DirectCbufPayloadCounts counts{
+      .vertexFloat = 3,
+      .vertexInt = 2,
+      .vertexBool = 1,
+      .pixelFloat = 4,
+      .pixelInt = 2,
+      .pixelBool = 1,
+  };
+
+  DirtyState child0{};
+  DirtyState child1{};
+  auto first = dxmt9::uniform::planDrawBindingTransition(
+      false, {}, a, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  check(first.psoBindingAbiCompatible,
+        "Stage 1 PSO matches direct child binding");
+  check(!first.constantSourceChange.vertex &&
+            !first.constantSourceChange.pixel &&
+            !first.fixedFunctionChanged,
+        "first draw relies on the child-open all-dirty transition");
+
+  const auto same = dxmt9::uniform::planDrawBindingTransition(
+      true, a, a, DrawBindingAbi::Stage2DirectCbuf,
+      DrawBindingPath::Direct);
+  check(dxmt9::uniform::applyDrawBindingTransition(child0, same, counts),
+        "Stage 2b direct-cbuf PSO is direct-binding ABI compatible");
+  checkEq(child0.mask, 0u, "A to A does not create dirty work");
+
+  const auto aToB = dxmt9::uniform::planDrawBindingTransition(
+      true, a, b, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  check(dxmt9::uniform::applyDrawBindingTransition(child0, aToB, counts),
+        "A to B transition applies");
+  check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kVsAny),
+        "A to B dirties VS constants");
+  check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kPsAny),
+        "A to B dirties PS constants");
+  check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kFfpVsAny),
+        "A to B dirties FFP VS payload");
+  check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kFfpPsAny),
+        "A to B dirties FFP PS payload");
+  checkEq(child1.mask, 0u,
+          "child binding shadows stay isolated across sibling transition");
+
+  dxmt9::uniform::clearBits(child0, 0x1fffu);
+  const auto bToA = dxmt9::uniform::planDrawBindingTransition(
+      true, b, a, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  check(dxmt9::uniform::applyDrawBindingTransition(child0, bToA, counts),
+        "B to A transition applies instead of reusing stale A history");
+  check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kVsAny) &&
+            dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kPsAny),
+        "B to A re-dirties both programmable stages");
+
+  DirtyState stageOnly{};
+  auto vsOnly = b;
+  vsOnly.pixelConstants = a.pixelConstants;
+  vsOnly.fixedFunction = a.fixedFunction;
+  const auto vsPlan = dxmt9::uniform::planDrawBindingTransition(
+      true, a, vsOnly, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  dxmt9::uniform::applyDrawBindingTransition(stageOnly, vsPlan, counts);
+  check(dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kVsAny) &&
+            !dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kPsAny),
+        "VS-only identity change leaves PS clean");
+
+  stageOnly = {};
+  auto psOnly = a;
+  psOnly.pixelConstants = b.pixelConstants;
+  const auto psPlan = dxmt9::uniform::planDrawBindingTransition(
+      true, a, psOnly, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  dxmt9::uniform::applyDrawBindingTransition(stageOnly, psPlan, counts);
+  check(!dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kVsAny) &&
+            dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kPsAny),
+        "PS-only identity change leaves VS clean");
+
+  stageOnly = {};
+  auto ffpOnly = a;
+  ffpOnly.fixedFunction = b.fixedFunction;
+  const auto ffpPlan = dxmt9::uniform::planDrawBindingTransition(
+      true, a, ffpOnly, DrawBindingAbi::Stage1Direct,
+      DrawBindingPath::Direct);
+  dxmt9::uniform::applyDrawBindingTransition(stageOnly, ffpPlan, counts);
+  check(!dxmt9::uniform::anyDirty(
+            stageOnly, dxmt9::uniform::kVsAny | dxmt9::uniform::kPsAny),
+        "FFP-only identity change leaves programmable constants clean");
+  check(dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kFfpVsAny) &&
+            dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kFfpPsAny),
+        "FFP-only identity change dirties both fixed-function payloads");
+
+  DirtyState incompatible{};
+  const auto wrongAbi = dxmt9::uniform::planDrawBindingTransition(
+      true, a, b, DrawBindingAbi::Stage2ArgumentTable,
+      DrawBindingPath::Direct);
+  check(!dxmt9::uniform::applyDrawBindingTransition(
+            incompatible, wrongAbi, counts),
+        "slot-30 PSO fails closed before a direct child binding");
+  checkEq(incompatible.mask, 0u,
+          "ABI rejection has no partial dirty-state side effect");
+
+  DirtyState grow{};
+  const DirectCbufPayloadCounts grown{
+      .vertexFloat = 12,
+      .pixelFloat = 9,
+  };
+  dxmt9::uniform::applyDrawBindingTransition(grow, aToB, grown);
+  checkEq(grow.maxChangedVsF, 12u,
+          "constant-count growth uses the current payload range");
+  checkEq(grow.maxChangedPsF, 9u,
+          "pixel constant-count growth uses the current payload range");
+  dxmt9::uniform::clearBits(
+      grow, dxmt9::uniform::kVsAny | dxmt9::uniform::kPsAny);
+  const DirectCbufPayloadCounts shrunk{
+      .vertexFloat = 1,
+      .pixelFloat = 2,
+  };
+  dxmt9::uniform::applyDrawBindingTransition(grow, bToA, shrunk);
+  checkEq(grow.maxChangedVsF, 1u,
+          "constant-count shrink binds the smaller current payload range");
+  checkEq(grow.maxChangedPsF, 2u,
+          "pixel constant-count shrink binds the smaller current range");
+}
+
 }  // namespace
 
 int main() {
@@ -497,5 +638,6 @@ int main() {
   testShaderUsageAwareUploadPlanIsConservative();
   testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse();
   testDirectCbufPayloadSourceDirtyRebind();
+  testDrawBindingTransitionTruthTable();
   return 0;
 }

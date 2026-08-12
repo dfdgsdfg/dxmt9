@@ -1491,6 +1491,35 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             .pixelConstantsHash = drawStatePixelCbufSourceHash(drawState),
         };
       };
+  auto makeDrawBindingPayloadIdentity =
+      [](core::FlatDrawStateView drawState) {
+        const auto& payload = drawState.uniformPayload();
+        return uniform::DrawBindingPayloadIdentity{
+            .vertexConstants = drawStateVertexCbufSourceHash(drawState),
+            .pixelConstants = drawStatePixelCbufSourceHash(drawState),
+            .fixedFunction = payload.fixedPayloadHash,
+        };
+      };
+  auto makeDrawBindingPayloadCounts =
+      [](const core::DrawUniformPayload& payload) {
+        return uniform::DirectCbufPayloadCounts{
+            .vertexFloat = payload.vertexFloatConstantCount,
+            .vertexInt = payload.vertexIntConstantCount,
+            .vertexBool = payload.vertexBoolConstantCount,
+            .pixelFloat = payload.pixelFloatConstantCount,
+            .pixelInt = payload.pixelIntConstantCount,
+            .pixelBool = payload.pixelBoolConstantCount,
+        };
+      };
+  auto drawBindingAbiForPipelineKey =
+      [](const pipeline::ShaderVariantKey& key) {
+        if (!key.argbufHybridMode) {
+          return uniform::DrawBindingAbi::Stage1Direct;
+        }
+        return key.argbufDirectCbufMode
+            ? uniform::DrawBindingAbi::Stage2DirectCbuf
+            : uniform::DrawBindingAbi::Stage2ArgumentTable;
+      };
   auto makeArgbufPayloadDeltaComponentKey =
       [&](const core::DrawUniformPayload& payload) {
         return ArgbufPayloadDeltaComponentKey{
@@ -2125,6 +2154,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // payload hash.
     bindingState.lastArgbufPayloadHash.reset();
     bindingState.lastArgbufPayloadDeltaKey.reset();
+    bindingState.lastDrawBindingPayloadIdentity.reset();
     bindingState.lastArgbufPayloadDeltaComponentKey.reset();
     bindingState.lastArgbufPayloadDeltaPayload.reset();
     bindingState.argbufCbufCache.reset();
@@ -2725,45 +2755,35 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool reopenArgbuf =
           activePassUsesArgbufTable &&
           (bindingState.activePassUsesArgbufResourceArray || argbufPayloadChanged);
-      const auto previousArgbufPayloadSource =
-          bindingState.lastArgbufPayloadDeltaKey.has_value()
-              ? uniform::DirectCbufPayloadSourceHashes{
-                    .vertexConstants =
-                        bindingState.lastArgbufPayloadDeltaKey->vertexConstantsHash,
-                    .pixelConstants =
-                        bindingState.lastArgbufPayloadDeltaKey->pixelConstantsHash,
-                }
-              : uniform::DirectCbufPayloadSourceHashes{};
-      const auto argbufPayloadSourceChange =
-          uniform::classifyDirectCbufPayloadSourceChange(
-              bindingState.lastArgbufPayloadDeltaKey.has_value(),
-              previousArgbufPayloadSource,
-              uniform::DirectCbufPayloadSourceHashes{
-                  .vertexConstants =
-                      drawArgbufPayloadDeltaKey.vertexConstantsHash,
-                  .pixelConstants =
-                      drawArgbufPayloadDeltaKey.pixelConstantsHash,
-              });
-      const bool argbufVsPayloadSourceChanged =
-          argbufPayloadSourceChange.vertex;
-      const bool argbufPsPayloadSourceChanged =
-          argbufPayloadSourceChange.pixel;
-      if (bindingState.activePassUsesArgbufDirectCbuf &&
-          (argbufPayloadSourceChange.vertex ||
-           argbufPayloadSourceChange.pixel)) {
-        uniform::applyDirectCbufPayloadSourceChange(
-            bindingState.uniformDirty,
-            argbufPayloadSourceChange,
-            uniform::DirectCbufPayloadCounts{
-                .vertexFloat =
-                    drawUniformPayload->vertexFloatConstantCount,
-                .vertexInt = drawUniformPayload->vertexIntConstantCount,
-                .vertexBool = drawUniformPayload->vertexBoolConstantCount,
-                .pixelFloat = drawUniformPayload->pixelFloatConstantCount,
-                .pixelInt = drawUniformPayload->pixelIntConstantCount,
-                .pixelBool = drawUniformPayload->pixelBoolConstantCount,
-            });
+      const auto drawBindingPath = activePassUsesArgbufTable
+          ? uniform::DrawBindingPath::ArgumentTable
+          : uniform::DrawBindingPath::Direct;
+      const auto drawBindingAbi = !bindingState.activePassUsesArgbufHybrid
+          ? uniform::DrawBindingAbi::Stage1Direct
+          : bindingState.activePassUsesArgbufDirectCbuf
+              ? uniform::DrawBindingAbi::Stage2DirectCbuf
+              : uniform::DrawBindingAbi::Stage2ArgumentTable;
+      const auto drawBindingPayloadIdentity =
+          makeDrawBindingPayloadIdentity(drawStateView);
+      const auto drawBindingTransition =
+          uniform::planDrawBindingTransition(
+              bindingState.lastDrawBindingPayloadIdentity.has_value(),
+              bindingState.lastDrawBindingPayloadIdentity.value_or(
+                  uniform::DrawBindingPayloadIdentity{}),
+              drawBindingPayloadIdentity, drawBindingAbi, drawBindingPath);
+      // TLA+: ParallelDrawBinding / PsoBindingAbiMatchesChildBinding.
+      DXMT_ASSERT(drawBindingTransition.psoBindingAbiCompatible);
+      if (drawBindingPath == uniform::DrawBindingPath::Direct &&
+          !uniform::applyDrawBindingTransition(
+              bindingState.uniformDirty, drawBindingTransition,
+              makeDrawBindingPayloadCounts(*drawUniformPayload))) {
+        abortEncodePartitionInvariant(
+            "serial draw PSO binding ABI mismatch");
       }
+      const bool argbufVsPayloadSourceChanged =
+          drawBindingTransition.constantSourceChange.vertex;
+      const bool argbufPsPayloadSourceChanged =
+          drawBindingTransition.constantSourceChange.pixel;
       const bool argbufPayloadDeltaPerf =
           bindingState.activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();
       std::optional<ArgbufPayloadDeltaComponentKey>
@@ -2967,6 +2987,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         bindingState.activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
         bindingState.lastArgbufPayloadHash = drawArgbufPayloadHash;
         bindingState.lastArgbufPayloadDeltaKey = drawArgbufPayloadDeltaKey;
+        bindingState.lastDrawBindingPayloadIdentity =
+            drawBindingTransition.next;
         if (argbufPayloadDeltaPerf &&
             drawArgbufPayloadDeltaComponentKey.has_value()) {
           bindingState.lastArgbufPayloadDeltaComponentKey =
@@ -3094,6 +3116,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         command.drawRunRecord->tilePsoHandle;
     const core::DepthStencilHandle depthStencilHandle =
         command.drawRunRecord->depthStencilHandle;
+    const auto renderPsoKey =
+        ctx.cache.drawPipelineKeyForHandle(renderPsoHandle);
+    if (!renderPsoKey) {
+      return false;
+    }
+    const auto renderPsoBindingAbi =
+        drawBindingAbiForPipelineKey(*renderPsoKey);
+    if (!uniform::drawBindingAbiMatchesPath(
+            renderPsoBindingAbi, uniform::DrawBindingPath::Direct)) {
+      return false;
+    }
     const bool mergeDraws = debug::optimizeCompatibleIndexedDrawMerge();
 
     for (std::size_t i = 0; i < drawItems.size();) {
@@ -3137,6 +3170,23 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawStateView.shaderLayout = &overrideShaderLayout;
       }
       drawStateView.uniforms = drawUniformPayload;
+
+      const auto drawBindingTransition =
+          uniform::planDrawBindingTransition(
+              childBinding.lastDrawBindingPayloadIdentity.has_value(),
+              childBinding.lastDrawBindingPayloadIdentity.value_or(
+                  uniform::DrawBindingPayloadIdentity{}),
+              makeDrawBindingPayloadIdentity(drawStateView),
+              renderPsoBindingAbi, uniform::DrawBindingPath::Direct);
+      // TLA+: ParallelDrawBinding / DrawUsesRequiredUniformGeneration and
+      // PsoBindingAbiMatchesChildBinding. childBinding is indexed by child
+      // ordinal, which is the production ChildBindingShadowsAreIsolated owner.
+      DXMT_ASSERT(drawBindingTransition.psoBindingAbiCompatible);
+      if (!uniform::applyDrawBindingTransition(
+              childBinding.uniformDirty, drawBindingTransition,
+              makeDrawBindingPayloadCounts(*drawUniformPayload))) {
+        return false;
+      }
 
       if (childBinding.activeDrawStateKey.has_value() &&
           (childBinding.activeDrawStateKey->clipPlaneMask !=
@@ -3189,6 +3239,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         childBinding.activeDrawStateKey = drawStateView.hot->key;
         childBinding.activeDrawStateUsesPrefetchedPsoLayout =
             !overrideNeedsBaseStateBind;
+        childBinding.lastDrawBindingPayloadIdentity =
+            drawBindingTransition.next;
       }
       i += mergedDrawCount;
     }
@@ -3505,6 +3557,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return nullptr;
   };
 
+  auto parallelDrawPsoUsesDirectBinding =
+      [&](const core::MetalCommandView& drawCommand) {
+        if (!drawCommand.drawRunRecord) {
+          return false;
+        }
+        const auto key = ctx.cache.drawPipelineKeyForHandle(
+            drawCommand.drawRunRecord->renderPsoHandle);
+        return key && uniform::drawBindingAbiMatchesPath(
+            drawBindingAbiForPipelineKey(*key),
+            uniform::DrawBindingPath::Direct);
+      };
+
   // First production execution slice: one sealed source-local logical pass
   // backed by ordered DrawRun child spans. This exercises a real
   // MTLParallelRenderCommandEncoder parent and child encoders while keeping
@@ -3546,7 +3610,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         encoderState.activeRenderEncoder || encoderState.activeBlitEncoder ||
         encoderState.hasActiveRender || !command.drawRunRecord ||
         !command.drawState.hot || !command.drawState.shaderLayout ||
-        pass.childCount < 2u) {
+        pass.childCount < 2u ||
+        !parallelDrawPsoUsesDirectBinding(command)) {
       return rejectBeforeEffects();
     }
     const auto tileDecision = dxmt9::pipeline::selectTileFfpForPass(
@@ -3603,7 +3668,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               child.firstDraw.entryRender.attachments ||
           resolveParallelPassRenderRoute(
               &ctx.pool, resolved.partition.entry.drawState) !=
-              child.firstDraw.entryRender.route) {
+              child.firstDraw.entryRender.route ||
+          !parallelDrawPsoUsesDirectBinding(
+              resolved.partition.entry.command)) {
         return rejectBeforeEffects();
       }
       // encodeDrawRunCommand batches every UP slice in the complete command.
@@ -3640,6 +3707,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               resolveParallelPassRenderRoute(
                   &ctx.pool, childCommand.drawState) !=
                   child.firstDraw.entryRender.route ||
+              !parallelDrawPsoUsesDirectBinding(childCommand) ||
               dxmt9::pipeline::selectTileFfpForPass(
                   childCommand.drawState,
                   ctx.pool.supportsApple3()).decision ==

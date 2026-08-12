@@ -169,6 +169,12 @@ segment order refines the serial partition order, coordinator join precedes
 logical-pass finalization, and per-source completion expands only after every
 Metal segment containing represented work completes.
 
+`tla/ParallelDrawBinding.tla` covers the source-local R-BACK-2.63 slice: child-
+local binding generations and dirty shadows, direct-binding PSO ABI, exact
+serial draw ownership, ordered child join, parent end, and completion. Metal 4
+multi-segment completion and cross-source parallel grouping remain separate
+open refinements; this bounded model must not be cited for those claims.
+
 ---
 
 ## 3. Resource Lifetime

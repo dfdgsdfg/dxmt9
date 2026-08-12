@@ -1433,6 +1433,20 @@ Cache::drawPipelineForHandle(core::PsoHandle handle,
   return slot.entry.future;
 }
 
+std::optional<ShaderVariantKey>
+Cache::drawPipelineKeyForHandle(core::PsoHandle handle) const noexcept {
+  const auto snapshot = std::atomic_load_explicit(
+      &drawSlotSnapshot, std::memory_order_acquire);
+  if (!handle.valid() || !snapshot || handle.slot >= snapshot->size()) {
+    return std::nullopt;
+  }
+  const auto& slot = (*snapshot)[handle.slot];
+  if (!slot.occupied || slot.generation != handle.generation) {
+    return std::nullopt;
+  }
+  return slot.key;
+}
+
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,

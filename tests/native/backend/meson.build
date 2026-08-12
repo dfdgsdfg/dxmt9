@@ -327,6 +327,26 @@ test('dxmt9-parallel-render-pass-spec',
      parallel_render_pass_spec,
      env: dxmt9_native_test_env)
 
+# Concrete R-VERIF-2.15 oracle: two real Metal child encoders execute
+# A -> B -> A direct-uniform generations and must byte-match the serial pass.
+# The fixture also proves it can distinguish the omitted-dirty transition.
+parallel_draw_binding_metal_spec = executable(
+  'dxmt9-parallel-draw-binding-metal-spec',
+  'parallel_draw_binding_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-parallel-draw-binding-metal-spec',
+     parallel_draw_binding_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 encode_session_lifecycle_spec = executable(
   'dxmt9-encode-session-lifecycle-spec',
   'encode_session_lifecycle_spec.cpp',

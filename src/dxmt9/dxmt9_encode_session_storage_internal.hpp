@@ -271,6 +271,8 @@ struct BindingState {
   uniform::DirtyState uniformDirty{};
   std::optional<u64> lastArgbufPayloadHash;
   std::optional<ArgbufPayloadDeltaKey> lastArgbufPayloadDeltaKey;
+  std::optional<uniform::DrawBindingPayloadIdentity>
+      lastDrawBindingPayloadIdentity;
   std::optional<ArgbufPayloadDeltaComponentKey>
       lastArgbufPayloadDeltaComponentKey;
   std::optional<core::DrawUniformPayload> lastArgbufPayloadDeltaPayload;

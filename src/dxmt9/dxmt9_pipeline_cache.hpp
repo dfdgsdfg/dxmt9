@@ -496,6 +496,13 @@ class Cache {
   drawPipelineForHandle(core::PsoHandle handle,
                         HandleLookupContext context = {});
 
+  // Lock-free immutable handle metadata lookup for pre-effect binding-ABI
+  // validation. Unlike drawPipelineForHandle this does not resolve or count a
+  // cache hit; callers use it only to prove that a child binding path matches
+  // the already-prefetched PSO.
+  std::optional<ShaderVariantKey>
+  drawPipelineKeyForHandle(core::PsoHandle handle) const noexcept;
+
   std::mutex mutex{};
   PipelineMap draw{};
   DrawProbeMap drawProbe{};

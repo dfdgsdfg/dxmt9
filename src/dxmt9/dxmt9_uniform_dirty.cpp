@@ -236,6 +236,22 @@ void applyDirectCbufPayloadSourceChange(
   }
 }
 
+bool applyDrawBindingTransition(
+    DirtyState& state,
+    const DrawBindingTransition& transition,
+    DirectCbufPayloadCounts counts) {
+  if (!transition.psoBindingAbiCompatible) {
+    return false;
+  }
+  applyDirectCbufPayloadSourceChange(
+      state, transition.constantSourceChange, counts);
+  if (transition.fixedFunctionChanged) {
+    state.mask = static_cast<std::uint16_t>(
+        state.mask | kFfpVsAny | kFfpPsAny);
+  }
+  return true;
+}
+
 void applyTransformChange(DirtyState& state) {
   setBit(state, DirtyBit::FfpVsTransforms);
 }

@@ -72,6 +72,70 @@ struct DirectCbufPayloadSourceChange {
   bool pixel = false;
 };
 
+// Binding ABI carried by the selected PSO. Stage 1 and Stage 2b currently
+// share the direct slot-0/3 constant-buffer signature; the Stage 2 table lane
+// reads those constants through slot 30 and is not interchangeable with a
+// child encoder that emits direct bindings.
+enum class DrawBindingAbi : std::uint8_t {
+  Stage1Direct,
+  Stage2DirectCbuf,
+  Stage2ArgumentTable,
+};
+
+enum class DrawBindingPath : std::uint8_t {
+  Direct,
+  ArgumentTable,
+};
+
+struct DrawBindingPayloadIdentity {
+  std::uint64_t vertexConstants = 0;
+  std::uint64_t pixelConstants = 0;
+  std::uint64_t fixedFunction = 0;
+
+  friend bool operator==(const DrawBindingPayloadIdentity&,
+                         const DrawBindingPayloadIdentity&) = default;
+};
+
+struct DrawBindingTransition {
+  DrawBindingPayloadIdentity next{};
+  DirectCbufPayloadSourceChange constantSourceChange{};
+  bool fixedFunctionChanged = false;
+  bool psoBindingAbiCompatible = false;
+};
+
+inline constexpr bool drawBindingAbiMatchesPath(
+    DrawBindingAbi abi, DrawBindingPath path) noexcept {
+  if (path == DrawBindingPath::Direct) {
+    return abi == DrawBindingAbi::Stage1Direct ||
+        abi == DrawBindingAbi::Stage2DirectCbuf;
+  }
+  return abi == DrawBindingAbi::Stage2ArgumentTable;
+}
+
+// Pure model/code refinement seam used by both the serial encoder and each
+// parallel child. The first draw relies on markAllDirty at encoder creation;
+// later draws recreate every payload-identity edge independently per child.
+inline constexpr DrawBindingTransition planDrawBindingTransition(
+    bool hasPrevious,
+    DrawBindingPayloadIdentity previous,
+    DrawBindingPayloadIdentity current,
+    DrawBindingAbi psoAbi,
+    DrawBindingPath bindingPath) noexcept {
+  return DrawBindingTransition{
+      .next = current,
+      .constantSourceChange = hasPrevious
+          ? DirectCbufPayloadSourceChange{
+                .vertex = previous.vertexConstants != current.vertexConstants,
+                .pixel = previous.pixelConstants != current.pixelConstants,
+            }
+          : DirectCbufPayloadSourceChange{},
+      .fixedFunctionChanged = hasPrevious &&
+          previous.fixedFunction != current.fixedFunction,
+      .psoBindingAbiCompatible = drawBindingAbiMatchesPath(
+          psoAbi, bindingPath),
+  };
+}
+
 inline constexpr DirectCbufPayloadSourceChange
 classifyDirectCbufPayloadSourceChange(
     bool hasPrevious,
@@ -146,6 +210,13 @@ void applyConstantSetPsB(DirtyState& state, std::uint32_t startReg, std::uint32_
 void applyDirectCbufPayloadSourceChange(
     DirtyState& state,
     DirectCbufPayloadSourceChange change,
+    DirectCbufPayloadCounts counts);
+
+// Applies a planned direct-binding transition. Returns false without mutating
+// state when the selected PSO expects a different binding ABI.
+bool applyDrawBindingTransition(
+    DirtyState& state,
+    const DrawBindingTransition& transition,
     DirectCbufPayloadCounts counts);
 
 // Coarse FFP / fixed-uniform-block apply helpers. These OR the matching
