@@ -729,7 +729,7 @@ void countParallelPassEconomics(
     const encoders::ParallelPassEconomicsSummary& summary,
     const encoders::ParallelPassEconomicsDecision& decision) {
   using Reason = encoders::ParallelPassEconomicsRejectReason;
-  static_assert(static_cast<std::uint8_t>(Reason::Count) == 6u);
+  static_assert(static_cast<std::uint8_t>(Reason::Count) == 7u);
   auto& c = counters();
   const auto accounting = encoders::accountParallelPassEconomics(decision);
   add(c.parallelPassEconomicsConsidered, accounting.considered);
@@ -739,10 +739,18 @@ void countParallelPassEconomics(
   add(c.parallelPassEconomicsStage2bDraws, summary.stage2bDraws);
   add(c.parallelPassEconomicsForcedStage1Draws,
       summary.forcedStage1Draws);
-  add(c.parallelPassEconomicsPsoTransitions,
-      summary.renderPsoTransitions);
-  add(c.parallelPassEconomicsUniformTransitions,
-      summary.uniformTransitions);
+  add(c.parallelPassEconomicsPsoBoundaryTransitions,
+      summary.psoBoundaryTransitions);
+  add(c.parallelPassEconomicsUniformBoundaryTransitions,
+      summary.uniformBoundaryTransitions);
+  add(c.parallelPassEconomicsMinChildDraws,
+      summary.minimumChildDraws);
+  add(c.parallelPassEconomicsMaxChildDraws,
+      summary.maximumChildDraws);
+  if (summary.maximumChildDraws >= summary.minimumChildDraws) {
+    add(c.parallelPassEconomicsChildDrawImbalance,
+        summary.maximumChildDraws - summary.minimumChildDraws);
+  }
   if (accounting.accepted != 0u) {
     add(c.parallelPassEconomicsAcceptedDraws, summary.totalDraws);
     add(c.parallelPassEconomicsAcceptedChildren, summary.childCount);
@@ -757,6 +765,8 @@ void countParallelPassEconomics(
       rejected(Reason::ForcedStage1));
   add(c.parallelPassEconomicsRejectThinChild,
       rejected(Reason::ThinChild));
+  add(c.parallelPassEconomicsRejectUnbalancedChild,
+      rejected(Reason::UnbalancedChild));
   add(c.parallelPassEconomicsRejectPsoFirstBind,
       rejected(Reason::PsoFirstBindAmplification));
   add(c.parallelPassEconomicsRejectUniformFirstBind,
@@ -790,7 +800,7 @@ void countParallelPassEconomics(
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result) {
   using Fallback = encoders::SealedParallelPassSnapshotFallback;
-  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 24u);
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 25u);
   auto& c = counters();
   auto rejected = [&](Fallback fallback) {
     return static_cast<std::uint64_t>(
@@ -824,10 +834,14 @@ void countParallelPassShadow(
           rejected(Fallback::InitializerState) +
           rejected(Fallback::OrderedControlState) +
           rejected(Fallback::SidecarState));
-  add(c.parallelPassShadowRejectCapacity,
-      rejected(Fallback::TooFewChildren) +
-          rejected(Fallback::ChildCapacity) +
-          rejected(Fallback::PassCapacity));
+  add(c.parallelPassShadowRejectNoTwoChildWork,
+      rejected(Fallback::NoTwoChildWork));
+  add(c.parallelPassShadowRejectPlannerInvariant,
+      rejected(Fallback::PlannerInvariant));
+  add(c.parallelPassShadowRejectChildCapacity,
+      rejected(Fallback::ChildCapacity));
+  add(c.parallelPassShadowRejectPassCapacity,
+      rejected(Fallback::PassCapacity));
   add(c.parallelPassShadowRejectAttachment,
       rejected(Fallback::AttachmentMismatch));
   add(c.parallelPassShadowRejectHazard,

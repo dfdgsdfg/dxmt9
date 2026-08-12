@@ -105,6 +105,7 @@ enum class ParallelPassEconomicsRejectReason : std::uint8_t {
   None,
   ForcedStage1,
   ThinChild,
+  UnbalancedChild,
   PsoFirstBindAmplification,
   UniformFirstBindAmplification,
   InvalidOrOverflow,
@@ -116,10 +117,11 @@ struct ParallelPassEconomicsSummary {
   std::uint64_t stage1Draws = 0;
   std::uint64_t stage2bDraws = 0;
   std::uint64_t forcedStage1Draws = 0;
-  std::uint64_t renderPsoTransitions = 0;
-  std::uint64_t uniformTransitions = 0;
+  std::uint64_t psoBoundaryTransitions = 0;
+  std::uint64_t uniformBoundaryTransitions = 0;
   std::uint32_t childCount = 0;
   std::uint32_t minimumChildDraws = 0;
+  std::uint32_t maximumChildDraws = 0;
   bool valid = false;
   bool overflow = false;
 
@@ -164,6 +166,107 @@ struct ParallelPassChildSubdivision {
   bool valid = false;
 };
 
+enum class ParallelPassWholeCommandPlanFailure : std::uint8_t {
+  None,
+  NoTwoChildWork,
+  InvalidOrOverflow,
+};
+
+struct ParallelPassWholeCommandSubdivision {
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity>
+      replayOrdinalBegins{};
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity>
+      replayOrdinalCounts{};
+  std::array<std::uint64_t, kParallelRenderPassChildCapacity> drawCounts{};
+  ParallelPassWholeCommandPlanFailure failure =
+      ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
+  std::uint32_t childCount = 0;
+
+  constexpr bool valid() const noexcept {
+    return failure == ParallelPassWholeCommandPlanFailure::None &&
+        childCount >= 2u;
+  }
+};
+
+// Allocation-free ordered grouping for indivisible DrawRun commands. Each
+// non-final child closes at the earliest checked prefix of at least 64 draws
+// only when a complete >=64 suffix remains. This absorbs a thin final suffix
+// into its preceding child and caps emitted groups at sixteen.
+template <typename DrawCountAt>
+inline constexpr ParallelPassWholeCommandSubdivision
+subdivideParallelPassWholeCommands(std::uint32_t replayOrdinalBegin,
+                                   std::uint32_t commandCount,
+                                   std::uint64_t totalDraws,
+                                   DrawCountAt&& drawCountAt) noexcept {
+  ParallelPassWholeCommandSubdivision result{};
+  if (commandCount < 2u ||
+      totalDraws < 2u * kProductionPartitionDrawThreshold) {
+    result.failure = ParallelPassWholeCommandPlanFailure::NoTwoChildWork;
+    return result;
+  }
+  const std::uint32_t maximumChildren = static_cast<std::uint32_t>(
+      std::min<std::uint64_t>({
+          kParallelRenderPassChildCapacity, commandCount,
+          totalDraws / kProductionPartitionDrawThreshold}));
+  if (maximumChildren < 2u ||
+      replayOrdinalBegin > UINT32_MAX - commandCount) {
+    result.failure = ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
+    return result;
+  }
+
+  std::uint32_t groupBegin = replayOrdinalBegin;
+  std::uint32_t groupCommands = 0u;
+  std::uint64_t groupDraws = 0u;
+  std::uint64_t consumedDraws = 0u;
+  for (std::uint32_t command = 0u; command < commandCount; ++command) {
+    const std::uint64_t commandDraws = drawCountAt(command);
+    if (commandDraws == 0u || groupDraws > UINT64_MAX - commandDraws ||
+        commandDraws > totalDraws - consumedDraws) {
+      result.failure = ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
+      return result;
+    }
+    groupDraws += commandDraws;
+    consumedDraws += commandDraws;
+    ++groupCommands;
+    if (consumedDraws > totalDraws) {
+      result.failure = ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
+      return result;
+    }
+    const std::uint64_t remainingDraws = totalDraws - consumedDraws;
+    const std::uint32_t remainingCommands = commandCount - command - 1u;
+    if (result.childCount + 1u < maximumChildren &&
+        groupDraws >= kProductionPartitionDrawThreshold &&
+        remainingDraws >= kProductionPartitionDrawThreshold &&
+        remainingCommands != 0u) {
+      const std::size_t child = result.childCount++;
+      result.replayOrdinalBegins[child] = groupBegin;
+      result.replayOrdinalCounts[child] = groupCommands;
+      result.drawCounts[child] = groupDraws;
+      groupBegin += groupCommands;
+      groupCommands = 0u;
+      groupDraws = 0u;
+    }
+  }
+  if (consumedDraws != totalDraws || groupCommands == 0u ||
+      groupDraws < kProductionPartitionDrawThreshold ||
+      result.childCount >= kParallelRenderPassChildCapacity) {
+    result.failure = consumedDraws == totalDraws
+        ? ParallelPassWholeCommandPlanFailure::NoTwoChildWork
+        : ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
+    return result;
+  }
+  const std::size_t finalChild = result.childCount++;
+  result.replayOrdinalBegins[finalChild] = groupBegin;
+  result.replayOrdinalCounts[finalChild] = groupCommands;
+  result.drawCounts[finalChild] = groupDraws;
+  if (result.childCount < 2u) {
+    result.failure = ParallelPassWholeCommandPlanFailure::NoTwoChildWork;
+    return result;
+  }
+  result.failure = ParallelPassWholeCommandPlanFailure::None;
+  return result;
+}
+
 // ExplicitParallel-only subdivision. The serial production partitioner keeps
 // its independent 32-draw target; sealed passes instead derive no more than
 // floor(total/64) even children and place any remainder in the final children.
@@ -200,9 +303,9 @@ subdivideParallelPassDraws(std::uint64_t totalDraws) noexcept {
 }
 
 // Enforced economics policy. It reuses the production planner's
-// existing 64-draw eligibility quantum and compares child first-bind cost
-// against the serial transition count without introducing a benchmark-tuned
-// runtime threshold.
+// existing 64-draw eligibility quantum, bounds actual child imbalance by that
+// quantum, and admits an extra child first bind only when the corresponding
+// child boundary already changes both PSO and uniform identity in serial order.
 inline constexpr ParallelPassEconomicsDecision
 classifyParallelPassEconomics(
     const ParallelPassEconomicsSummary& summary) noexcept {
@@ -219,10 +322,21 @@ classifyParallelPassEconomics(
   const std::uint64_t minimumCoveredDraws =
       static_cast<std::uint64_t>(summary.childCount) *
       summary.minimumChildDraws;
+  const std::uint64_t remainingChildren = summary.childCount - 1u;
+  const std::uint64_t minimumWithMaximum =
+      summary.maximumChildDraws +
+      remainingChildren * summary.minimumChildDraws;
+  const std::uint64_t maximumWithMinimum =
+      summary.minimumChildDraws +
+      remainingChildren * summary.maximumChildDraws;
   if (!summary.valid || summary.overflow || summary.childCount < 2u ||
       summary.childCount > kParallelRenderPassChildCapacity ||
       summary.minimumChildDraws == 0u ||
-      summary.totalDraws < minimumCoveredDraws || !drawCountsConserve) {
+      summary.maximumChildDraws < summary.minimumChildDraws ||
+      summary.maximumChildDraws > summary.totalDraws ||
+      summary.totalDraws < minimumCoveredDraws ||
+      summary.totalDraws < minimumWithMaximum ||
+      summary.totalDraws > maximumWithMinimum || !drawCountsConserve) {
     return reject(ParallelPassEconomicsRejectReason::InvalidOrOverflow);
   }
   if (summary.forcedStage1Draws != 0u) {
@@ -231,12 +345,20 @@ classifyParallelPassEconomics(
   if (summary.minimumChildDraws < kProductionPartitionDrawThreshold) {
     return reject(ParallelPassEconomicsRejectReason::ThinChild);
   }
+  if (summary.maximumChildDraws - summary.minimumChildDraws >
+      kProductionPartitionDrawThreshold) {
+    return reject(ParallelPassEconomicsRejectReason::UnbalancedChild);
+  }
   const std::uint64_t extraChildFirstBinds = summary.childCount - 1u;
-  if (extraChildFirstBinds > summary.renderPsoTransitions + 1u) {
+  if (summary.psoBoundaryTransitions > extraChildFirstBinds ||
+      summary.uniformBoundaryTransitions > extraChildFirstBinds) {
+    return reject(ParallelPassEconomicsRejectReason::InvalidOrOverflow);
+  }
+  if (extraChildFirstBinds > summary.psoBoundaryTransitions) {
     return reject(
         ParallelPassEconomicsRejectReason::PsoFirstBindAmplification);
   }
-  if (extraChildFirstBinds > summary.uniformTransitions + 1u) {
+  if (extraChildFirstBinds > summary.uniformBoundaryTransitions) {
     return reject(
         ParallelPassEconomicsRejectReason::UniformFirstBindAmplification);
   }
@@ -317,7 +439,8 @@ enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   UnsealedEnd,
   CoordinatorCommand,
   NonChildDrawRun,
-  TooFewChildren,
+  NoTwoChildWork,
+  PlannerInvariant,
   ChildCapacity,
   PassCapacity,
   AttachmentMismatch,
@@ -600,8 +723,10 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
   case SealedParallelPassSnapshotFallback::CoordinatorCommand:
   case SealedParallelPassSnapshotFallback::NonChildDrawRun:
     return ParallelPassFallbackReason::CoordinatorCommand;
-  case SealedParallelPassSnapshotFallback::TooFewChildren:
+  case SealedParallelPassSnapshotFallback::NoTwoChildWork:
     return ParallelPassFallbackReason::TooFewChildren;
+  case SealedParallelPassSnapshotFallback::PlannerInvariant:
+    return ParallelPassFallbackReason::PlanNotValidated;
   case SealedParallelPassSnapshotFallback::ChildCapacity:
   case SealedParallelPassSnapshotFallback::PassCapacity:
     return ParallelPassFallbackReason::ChildCapacity;
@@ -1072,6 +1197,9 @@ static_assert(std::is_trivially_copyable_v<ParallelPassBindingSnapshot>);
 static_assert(std::is_standard_layout_v<ParallelPassBindingSnapshot>);
 static_assert(std::is_trivially_copyable_v<ParallelPassEconomicsSummary>);
 static_assert(std::is_standard_layout_v<ParallelPassEconomicsSummary>);
+static_assert(
+    std::is_trivially_copyable_v<ParallelPassWholeCommandSubdivision>);
+static_assert(std::is_standard_layout_v<ParallelPassWholeCommandSubdivision>);
 static_assert(
     std::is_trivially_copyable_v<ParallelPassCoordinatorProofSnapshotInput>);
 static_assert(std::is_trivially_copyable_v<ParallelPassCommandLocator>);

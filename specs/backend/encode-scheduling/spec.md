@@ -1136,10 +1136,15 @@ subranges; a multi-command pass is divided only at complete DrawRun command
 boundaries. The ExplicitParallel builder does not reuse the serial planner's
 32-draw target: it chooses at most `floor(totalDraws / 64)` children within the
 two-to-16 bound, divides a single DrawRun evenly with remainder assigned to the
-final children, and reduces complete-command child count until every child has
-at least 64 draws. Exact ordered coverage is mandatory; fewer than two children
-falls back before effects. The producer does not depend on the explicit-serial
-planner having subdivided the same pass.
+final children, and forms multi-command children at the earliest checked
+prefix of at least 64 draws while leaving a complete 64-draw suffix. A final
+suffix below 64 is absorbed into its predecessor, and the sixteenth child owns
+all remaining complete commands. Every result is revalidated for nonempty
+children, exact ordered command/draw coverage, overflow, and the 64-draw floor.
+No genuine two-child work, planner invariant/search failure, child capacity,
+and pass-batch capacity are distinct observations; each falls back before
+effects. The producer does not depend on the explicit-serial planner having
+subdivided the same pass.
 
 The producer derives pass boundaries from the effective replay order. A proven
 fresh call frontier, source-local finalization, Clear, Present, or attachment
@@ -1202,17 +1207,21 @@ Cross-source and carried-session pass sealing remain outside this lane.
 
 Complete preflight also builds an allocation-free economics summary with
 conserving Stage 1/Stage 2b draw volume, child count, minimum child draw count,
-and serial-order PSO and uniform-source transitions. A pure classifier
-rejects invalid or overflowing summaries, forced Stage 1 volume, children
-below the existing 64-draw planner threshold, or child first-bind amplification
-that exceeds the corresponding serial transition opportunity. The decision is
-enforced after every locator, ABI, PSO, uniform, and draw has been re-resolved,
-but before render-pass preparation and parent creation. Rejection returns to
-the ordinary serial cursor with no parallel Metal effects. Perf-enabled
-accounting records exact nonoverlapping accepted and serial-fallback volume and
-conserves considered count and typed reasons; perf-disabled execution skips
-counter clocks and atomics but still performs the proof and required policy
-summary. No environment knob, hardware-worker cap, or serial partition
+maximum child draw count, and PSO/uniform identity changes only across produced
+child boundaries from the prior child's last draw to the next child's first.
+Internal serial-order churn is excluded because it cannot pay for a child
+first-bind reset. A pure classifier rejects invalid or overflowing summaries,
+forced Stage 1 volume, children below the existing 64-draw planner threshold,
+maximum-minus-minimum child imbalance greater than that same quantum, or any
+extra child whose boundary lacks either a PSO or uniform identity change. The
+decision is enforced after every locator, ABI, PSO, uniform, and draw has been
+re-resolved, but before render-pass preparation and parent creation. Rejection
+returns to the ordinary serial cursor with no parallel Metal effects.
+Perf-enabled accounting records exact nonoverlapping accepted and
+serial-fallback volume, min/max/imbalance totals, boundary-transition totals,
+and conserving considered count and typed reasons; perf-disabled execution
+skips counter clocks and atomics but still performs the proof and required
+policy summary. No environment knob, hardware-worker cap, or serial partition
 constant is introduced.
 
 The pure bounded seam classifies sealed-plan eligibility and selection with a

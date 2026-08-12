@@ -80,16 +80,19 @@ Parallel mode adds a perf-gated production-decision counter family:
 | `parallel_pass_shadow_sealed`, `parallel_pass_shadow_eligible`, `parallel_pass_shadow_eligible_max` | Boundary-complete candidates, candidates satisfying every explicit static proof, and maximum eligible passes in one batch. |
 | `parallel_pass_shadow_children`, `parallel_pass_shadow_children_max` | Eligible DrawRun child-range volume and maximum children in one pass. |
 | `parallel_pass_shadow_draws`, `parallel_pass_shadow_draws_max` | Eligible draw volume and maximum draws in one pass. |
-| `parallel_pass_shadow_reject_{plan,boundary,command,capacity,attachment,hazard,snapshot}` | Grouped fail-closed pass-local rejection counts. |
+| `parallel_pass_shadow_reject_{plan,boundary,command,attachment,hazard,snapshot}` | Grouped fail-closed pass-local rejection counts outside child planning and fixed storage. |
+| `parallel_pass_shadow_reject_{no_two_child_work,planner_invariant,child_capacity,pass_capacity}` | Exact child-planning/storage rejections: no genuine ordered two-child grouping, malformed/overflowing or coverage-invalid planner input/output, child storage exhaustion, and pass-batch storage exhaustion. The former `reject_capacity` aggregate is derived as the sum of these four counters and is no longer emitted. |
 | `parallel_pass_worker_batches`, `parallel_pass_worker_tasks`, `parallel_pass_worker_active_peak` | Joined bounded-dispatch volume and observed peak concurrent child tasks. |
 | `parallel_pass_worker_cpu_ms`, `parallel_pass_worker_wall_ms` | Summed child task CPU duration and joined batch wall duration. |
 | `parallel_pass_binding_stage1_selected`, `parallel_pass_binding_stage2b_selected` | Mutually exclusive completed parallel-pass binding selection; their sum equals `parallel_pass_selected`. |
 | `parallel_pass_stage2b_children`, `parallel_pass_stage2b_draws` | Child and draw volume executed through direct-cbuf Stage 2b. |
 | `parallel_pass_binding_reject_{pso_missing,stage2_table,resource_array,mixed_abi,override_rebuild}` | Mutually exclusive binding-proof rejections before parent effects. |
 | `parallel_pass_economics_{considered,accepted,serial_fallback}` | Exact production decisions with `considered = accepted + serial_fallback`. |
-| `parallel_pass_economics_reject_{forced_stage1,thin_child,pso_first_bind,uniform_first_bind,invalid_overflow}` | Mutually exclusive production fallback reason; their sum equals `serial_fallback`. `forced_stage1` is retained as a conservation guard and should remain zero now that Stage 2b is preserved. |
+| `parallel_pass_economics_reject_{forced_stage1,thin_child,unbalanced_child,pso_first_bind,uniform_first_bind,invalid_overflow}` | Mutually exclusive production fallback reason; their sum equals `serial_fallback`. `unbalanced_child` means maximum minus minimum child draws exceeds the existing 64-draw quantum. `forced_stage1` is retained as a conservation guard and should remain zero now that Stage 2b is preserved. |
 | `parallel_pass_economics_{accepted,serial_fallback}_{draws,children}` | Draw and child volume grouped by the enforced result. |
-| `parallel_pass_economics_{stage1_draws,stage2b_draws,forced_stage1_draws,pso_transitions,uniform_transitions}` | Conserving ABI volume and serial-order transition observations. |
+| `parallel_pass_economics_{stage1_draws,stage2b_draws,forced_stage1_draws}` | Conserving ABI draw volume. |
+| `parallel_pass_economics_{pso_boundary_transitions,uniform_boundary_transitions}` | State changes only across produced child boundaries, from the prior child last draw to the next child first draw; internal serial-order churn is excluded. |
+| `parallel_pass_economics_{min_child_draws,max_child_draws,child_draw_imbalance}` | Sums of per-pass minimum, maximum, and `max - min` child draws for considered production decisions. |
 | `parallel_pass_economics_min_child_{under32,32_63,64_127,128plus}` | Minimum child-size distribution. |
 | `parallel_pass_economics_children_{2,3_4,5_8,9_16}` | Pass child-count distribution. |
 

@@ -3670,9 +3670,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .minimumChildDraws = UINT32_MAX,
         .valid = true,
     };
-    std::optional<core::PsoHandle> previousEconomicsPso;
+    std::optional<core::PsoHandle> previousChildLastPso;
     std::optional<uniform::DrawBindingPayloadIdentity>
-        previousEconomicsPayload;
+        previousChildLastPayload;
     std::uint64_t preflightDrawCount = 0u;
     auto addEconomics = [&](std::uint64_t& value,
                             std::uint64_t increment) {
@@ -3701,6 +3701,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         return rejectBeforeEffects();
       }
       std::uint64_t childDrawCount = 0u;
+      std::optional<core::PsoHandle> childLastPso;
+      std::optional<uniform::DrawBindingPayloadIdentity>
+          childLastPayload;
       auto preflightCommand = [&](
           std::uint32_t childCommandIndex,
           const core::MetalCommandView& childCommand,
@@ -3830,16 +3833,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           } else {
             addEconomics(economics.stage1Draws, 1u);
           }
-          if (previousEconomicsPso.has_value() &&
-              *previousEconomicsPso != renderPso) {
-            addEconomics(economics.renderPsoTransitions, 1u);
+          if (!childLastPso.has_value()) {
+            if (previousChildLastPso.has_value() &&
+                *previousChildLastPso != renderPso) {
+              addEconomics(economics.psoBoundaryTransitions, 1u);
+            }
+            if (previousChildLastPayload.has_value() &&
+                *previousChildLastPayload != payloadIdentity) {
+              addEconomics(economics.uniformBoundaryTransitions, 1u);
+            }
           }
-          if (previousEconomicsPayload.has_value() &&
-              *previousEconomicsPayload != payloadIdentity) {
-            addEconomics(economics.uniformTransitions, 1u);
-          }
-          previousEconomicsPso = renderPso;
-          previousEconomicsPayload = payloadIdentity;
+          childLastPso = renderPso;
+          childLastPayload = payloadIdentity;
           if (childDrawCount == UINT64_MAX) {
             return false;
           }
@@ -3888,6 +3893,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       economics.minimumChildDraws = std::min(
           economics.minimumChildDraws,
           static_cast<std::uint32_t>(childDrawCount));
+      economics.maximumChildDraws = std::max(
+          economics.maximumChildDraws,
+          static_cast<std::uint32_t>(childDrawCount));
+      previousChildLastPso = childLastPso;
+      previousChildLastPayload = childLastPayload;
     }
     if (!passBindingModeSet || preflightDrawCount != pass.drawCount ||
         validateParallelPassChildPlans(parallelPlanStorage.view()) !=

@@ -374,76 +374,64 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       return;
     }
 
-    const std::uint32_t maximumChildren = static_cast<std::uint32_t>(
-        std::min<std::uint64_t>({
-            kParallelRenderPassChildCapacity, commandCount,
-            current.drawCount / kProductionPartitionDrawThreshold}));
-    std::array<std::uint32_t, kParallelRenderPassChildCapacity> begins{};
-    std::array<std::uint32_t, kParallelRenderPassChildCapacity> counts{};
-    std::uint32_t childCount = 0u;
-    for (std::uint32_t desired = maximumChildren;
-         desired >= 2u && childCount == 0u; --desired) {
-      std::uint32_t ordinal = current.replayOrdinalBegin;
-      std::uint64_t remainingDraws = current.drawCount;
-      bool valid = true;
-      for (std::uint32_t child = 0u; child < desired; ++child) {
-        begins[child] = ordinal;
-        const std::uint32_t groupsRemaining = desired - child;
-        std::uint64_t childDraws = 0u;
-        const std::uint64_t target = remainingDraws / groupsRemaining;
-        while (ordinal < replayOrdinalEnd) {
+    const auto subdivision = subdivideParallelPassWholeCommands(
+        current.replayOrdinalBegin, commandCount, current.drawCount,
+        [&](std::uint32_t commandOffset) -> std::uint64_t {
+          const std::uint32_t ordinal =
+              current.replayOrdinalBegin + commandOffset;
           std::uint32_t commandIndex = 0u;
           if (!stream.commandIndexAt(ordinal, commandIndex)) {
-            valid = false;
-            break;
+            return 0u;
           }
           const auto source = stream.source.payload.commandAt(commandIndex);
-          const std::uint64_t commandDraws =
-              source.command.drawParams.size();
-          if (source.kind() != Kind::DrawRun || commandDraws == 0u ||
-              childDraws > UINT64_MAX - commandDraws) {
-            valid = false;
-            break;
+          if (source.kind() != Kind::DrawRun ||
+              source.command.drawParams.empty() ||
+              source.command.drawParams.size() > UINT32_MAX) {
+            return 0u;
           }
-          childDraws += commandDraws;
-          ++ordinal;
-          const std::uint32_t groupsAfter = groupsRemaining - 1u;
-          const std::uint64_t drawsAfter = remainingDraws - childDraws;
-          const std::uint32_t commandsAfter = replayOrdinalEnd - ordinal;
-          if (groupsAfter == 0u ||
-              (childDraws >= target &&
-               drawsAfter >= static_cast<std::uint64_t>(groupsAfter) *
-                   kProductionPartitionDrawThreshold &&
-               commandsAfter >= groupsAfter)) {
-            break;
-          }
-        }
-        if (!valid || childDraws < kProductionPartitionDrawThreshold ||
-            childDraws > remainingDraws) {
-          valid = false;
-          break;
-        }
-        counts[child] = ordinal - begins[child];
-        remainingDraws -= childDraws;
+          return source.command.drawParams.size();
+        });
+    if (!subdivision.valid()) {
+      if (subdivision.failure ==
+          ParallelPassWholeCommandPlanFailure::InvalidOrOverflow) {
+        rejectCandidate(Fallback::PlannerInvariant);
       }
-      if (valid && ordinal == replayOrdinalEnd && remainingDraws == 0u) {
-        childCount = desired;
-      }
+      return;
     }
-    for (std::uint32_t child = 0u; child < childCount; ++child) {
+    std::uint64_t coveredDraws = 0u;
+    std::uint32_t coveredCommands = 0u;
+    for (std::uint32_t child = 0u;
+         child < subdivision.childCount; ++child) {
+      if (subdivision.drawCounts[child] <
+              kProductionPartitionDrawThreshold ||
+          coveredDraws > UINT64_MAX - subdivision.drawCounts[child] ||
+          coveredCommands > UINT32_MAX -
+              subdivision.replayOrdinalCounts[child]) {
+        rejectCandidate(Fallback::PlannerInvariant);
+        return;
+      }
+      coveredDraws += subdivision.drawCounts[child];
+      coveredCommands += subdivision.replayOrdinalCounts[child];
       std::uint32_t firstCommandIndex = 0u;
-      if (!stream.commandIndexAt(begins[child], firstCommandIndex)) {
+      if (!stream.commandIndexAt(
+              subdivision.replayOrdinalBegins[child], firstCommandIndex)) {
         rejectCandidate(Fallback::FirstDrawSnapshot);
         return;
       }
       const auto firstSource =
           stream.source.payload.commandAt(firstCommandIndex);
       if (firstSource.command.drawParams.size() > UINT32_MAX ||
-          !appendChild(begins[child], counts[child], 0u,
+          !appendChild(subdivision.replayOrdinalBegins[child],
+                       subdivision.replayOrdinalCounts[child], 0u,
                        static_cast<std::uint32_t>(
                            firstSource.command.drawParams.size()), true)) {
         return;
       }
+    }
+    if (coveredDraws != current.drawCount ||
+        coveredCommands != commandCount ||
+        current.childCount != subdivision.childCount) {
+      rejectCandidate(Fallback::PlannerInvariant);
     }
   };
   auto sealCandidate = [&](std::uint32_t replayOrdinalEnd,
@@ -472,14 +460,19 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       ++result.sealedCount;
     }
     buildCandidateChildren(replayOrdinalEnd);
-    if (current.childCount < 2u) {
-      rejectCandidate(Fallback::TooFewChildren);
+    if (current.childCount < 2u && !candidateRejected) {
+      rejectCandidate(Fallback::NoTwoChildWork);
     } else if (current.childCount > kParallelRenderPassChildCapacity) {
       rejectCandidate(Fallback::ChildCapacity);
     }
     if (!candidateRejected &&
         snapshots.count >= snapshots.passes.size()) {
       rejectCandidate(Fallback::PassCapacity);
+    }
+    if (!candidateRejected &&
+        (result.drawCount > UINT64_MAX - current.drawCount ||
+         result.childCount > UINT32_MAX - current.childCount)) {
+      rejectCandidate(Fallback::PlannerInvariant);
     }
     if (candidateRejected) {
       for (std::size_t i = 1u; i < candidateRejections.size(); ++i) {
@@ -600,7 +593,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     }
     if (source.command.drawParams.size() >
         std::numeric_limits<std::uint64_t>::max() - current.drawCount) {
-      rejectCandidate(Fallback::FirstDrawSnapshot);
+      rejectCandidate(Fallback::PlannerInvariant);
     } else {
       current.drawCount += source.command.drawParams.size();
     }

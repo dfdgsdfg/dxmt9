@@ -511,7 +511,12 @@ The sealed-pass child builder, independently of the serial planner's 32-draw
 target, must choose at most `floor(totalDraws / 64)` children within the
 existing two-to-16 bound, cover draws exactly in order, and give every child at
 least 64 draws; fewer than two qualifying children selects serial before
-effects.
+effects. Multi-command passes must preserve whole-command indivisibility and
+use deterministic earliest qualifying prefixes while a complete 64-draw
+suffix remains, absorbing a thinner final suffix into its predecessor. The
+builder must validate exact command/draw coverage and distinguish no genuine
+two-child work, planner invariant/search failure, child capacity, and pass
+capacity.
 Workers may re-resolve source-qualified locators only while the coordinator
 holds the synchronous source residency pin; no payload pointer may escape the
 joined execution. Before parent creation, one immutable pass-wide binding proof
@@ -526,9 +531,12 @@ ABI, PSO, and uniform re-resolution, and before render-pass preparation or
 parent creation, the pure economics classifier must either accept the pass or
 select the exact serial pre-effect replay. Production economics counters must
 conserve `considered = accepted + serial_fallback`, and typed mutually
-exclusive rejection reasons must sum to `serial_fallback`. The parallel
-provider must remain non-default when matched wild evidence reduces local
-encode wall time but regresses end-to-end throughput.
+exclusive rejection reasons must sum to `serial_fallback`. The classifier must
+reject a child-size spread greater than the same 64-draw quantum and require
+both a PSO change and a uniform identity change at every produced child
+boundary; internal pass churn cannot pay for a child first-bind reset. The
+parallel provider must remain non-default when matched wild evidence reduces
+local encode wall time but regresses end-to-end throughput.
 
 **R-BACK-2.64** A Metal 4 segmented lane may encode physical segments in
 separate command buffers only for one sealed logical render pass. It must first

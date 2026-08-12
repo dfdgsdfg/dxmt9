@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -538,8 +539,195 @@ void explicitParallelSubdivisionIsEvenAndBounded() {
   check(result.eligibleCount == 0u && output.count == 0u &&
             result.rejectionCounts[static_cast<std::size_t>(
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::
-                    TooFewChildren)] == 1u,
+                    NoTwoChildWork)] == 1u,
         "sealed 127-draw pass takes the existing serial fallback");
+}
+
+void wholeCommandSubdivisionIsOrderedBoundedAndFailClosed() {
+  using Failure =
+      dxmt9::encoders::ParallelPassWholeCommandPlanFailure;
+  using dxmt9::encoders::subdivideParallelPassWholeCommands;
+
+  const auto verify = [&](std::span<const std::uint64_t> commands,
+                          std::span<const std::uint64_t> expectedDraws,
+                          std::span<const std::uint32_t> expectedCommands) {
+    const std::uint64_t total = std::accumulate(
+        commands.begin(), commands.end(), std::uint64_t{0});
+    const auto plan = subdivideParallelPassWholeCommands(
+        7u, static_cast<std::uint32_t>(commands.size()), total,
+        [&](std::uint32_t index) { return commands[index]; });
+    check(plan.valid() && plan.childCount == expectedDraws.size() &&
+              plan.childCount == expectedCommands.size(),
+          "whole-command subdivision emits the expected child count");
+    std::uint32_t ordinal = 7u;
+    std::uint64_t covered = 0u;
+    for (std::size_t child = 0u; child < plan.childCount; ++child) {
+      check(plan.replayOrdinalBegins[child] == ordinal &&
+                plan.replayOrdinalCounts[child] ==
+                    expectedCommands[child] &&
+                plan.drawCounts[child] == expectedDraws[child] &&
+                plan.drawCounts[child] >=
+                    dxmt9::encoders::kProductionPartitionDrawThreshold,
+            "whole-command children preserve exact order and minimum work");
+      ordinal += plan.replayOrdinalCounts[child];
+      covered += plan.drawCounts[child];
+    }
+    check(ordinal == 7u + commands.size() && covered == total,
+          "whole-command subdivision covers every command and draw once");
+  };
+
+  const std::array<std::uint64_t, 3> suffix64{64u, 32u, 32u};
+  const std::array<std::uint64_t, 2> two64{64u, 64u};
+  const std::array<std::uint32_t, 2> oneThenTwo{1u, 2u};
+  verify(suffix64, two64, oneThenTwo);
+  const std::array<std::uint64_t, 3> jagged{70u, 100u, 30u};
+  const std::array<std::uint64_t, 2> jaggedGroups{70u, 130u};
+  verify(jagged, jaggedGroups, oneThenTwo);
+  const std::array<std::uint64_t, 6> split380{
+      64u, 31u, 33u, 64u, 64u, 124u};
+  const std::array<std::uint64_t, 5> groups380{
+      64u, 64u, 64u, 64u, 124u};
+  const std::array<std::uint32_t, 5> commands380{1u, 2u, 1u, 1u, 1u};
+  verify(split380, groups380, commands380);
+  const std::array<std::uint64_t, 6> split381{
+      64u, 31u, 33u, 64u, 64u, 125u};
+  const std::array<std::uint64_t, 5> groups381{
+      64u, 64u, 64u, 64u, 125u};
+  verify(split381, groups381, commands380);
+
+  std::array<std::uint64_t,
+             dxmt9::encoders::kParallelRenderPassChildCapacity + 1u>
+      capped{};
+  capped.fill(64u);
+  std::array<std::uint64_t,
+             dxmt9::encoders::kParallelRenderPassChildCapacity>
+      cappedGroups{};
+  cappedGroups.fill(64u);
+  cappedGroups.back() = 128u;
+  std::array<std::uint32_t,
+             dxmt9::encoders::kParallelRenderPassChildCapacity>
+      cappedCommands{};
+  cappedCommands.fill(1u);
+  cappedCommands.back() = 2u;
+  verify(capped, cappedGroups, cappedCommands);
+
+  const std::array<std::uint64_t, 2> noSplit{100u, 27u};
+  check(subdivideParallelPassWholeCommands(
+            0u, 2u, 127u,
+            [&](std::uint32_t index) { return noSplit[index]; }).failure ==
+            Failure::NoTwoChildWork,
+        "genuine no-two-child work is typed separately");
+  const std::array<std::uint64_t, 2> malformed{64u, 0u};
+  const std::array<std::uint64_t, 2> overflowing{UINT64_MAX, 1u};
+  check(subdivideParallelPassWholeCommands(
+            0u, 2u, 128u,
+            [&](std::uint32_t index) { return malformed[index]; }).failure ==
+            Failure::InvalidOrOverflow &&
+            subdivideParallelPassWholeCommands(
+                UINT32_MAX, 2u, 128u,
+                [](std::uint32_t) { return std::uint64_t{64u}; }).failure ==
+                Failure::InvalidOrOverflow &&
+            subdivideParallelPassWholeCommands(
+                0u, 2u, UINT64_MAX,
+                [&](std::uint32_t index) { return overflowing[index]; })
+                    .failure == Failure::InvalidOrOverflow,
+        "malformed and overflowing command domains fail closed");
+
+  const auto verifyRejectedSerialReplay = [&](
+      std::span<const std::uint64_t> commands,
+      std::uint64_t declaredTotal,
+      Failure expected) {
+    const auto plan = subdivideParallelPassWholeCommands(
+        0u, static_cast<std::uint32_t>(commands.size()), declaredTotal,
+        [&](std::uint32_t index) { return commands[index]; });
+    std::uint32_t parallelEffects = 0u;
+    const std::size_t actualDraws = static_cast<std::size_t>(
+        std::accumulate(commands.begin(), commands.end(), std::uint64_t{0}));
+    std::vector<std::uint32_t> serialReplay(actualDraws);
+    if (plan.valid()) {
+      ++parallelEffects;
+    } else {
+      std::size_t draw = 0u;
+      for (const std::uint64_t commandDraws : commands) {
+        for (std::uint64_t i = 0u; i < commandDraws; ++i) {
+          ++serialReplay[draw++];
+        }
+      }
+    }
+    check(plan.failure == expected && parallelEffects == 0u &&
+              std::all_of(serialReplay.begin(), serialReplay.end(),
+                          [](std::uint32_t count) { return count == 1u; }),
+          "each planner rejection emits zero parallel effects then exact serial replay");
+  };
+  verifyRejectedSerialReplay(noSplit, 127u, Failure::NoTwoChildWork);
+  const std::array<std::uint64_t, 2> mismatchedTotal{64u, 63u};
+  verifyRejectedSerialReplay(
+      mismatchedTotal, 128u, Failure::InvalidOrOverflow);
+}
+
+void wholeCommandProducerPreservesCoverageAndFirstLocators() {
+  const auto verify = [](std::span<const std::size_t> commandDraws,
+                         std::span<const std::uint32_t> expectedBegins,
+                         std::span<const std::uint32_t> expectedCounts,
+                         std::uint64_t sequence) {
+    PassObservationFixture fixture;
+    for (const std::size_t count : commandDraws) {
+      const auto command = draws(count);
+      const auto commandPayloads = payloads(count);
+      fixture.slot.appendDrawRun({}, {}, command, commandPayloads);
+    }
+    fixture.slot.appendPresent({}, {});
+    fixture.finalize(sequence);
+    dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+    const auto result = fixture.observe(output);
+    check(result.eligibleCount == 1u && output.count == 1u &&
+              output.passes[0].childCount == expectedBegins.size(),
+          "whole-command producer publishes one bounded eligible pass");
+    const auto& pass = output.passes[0];
+    std::uint32_t ordinal = 0u;
+    for (std::size_t child = 0u; child < pass.childCount; ++child) {
+      check(pass.childReplayOrdinalBegins[child] == expectedBegins[child] &&
+                pass.childReplayOrdinalCounts[child] ==
+                    expectedCounts[child] &&
+                pass.childReplayOrdinalBegins[child] == ordinal &&
+                pass.ranges[child].entry.commandIndex ==
+                    expectedBegins[child] &&
+                pass.firstDraws[child].provenance ==
+                    pass.ranges[child].entry &&
+                pass.firstDraws[child].generation == sequence &&
+                pass.firstDraws[child].complete,
+            "producer retains ordered source-qualified first-command locators");
+      ordinal += pass.childReplayOrdinalCounts[child];
+    }
+    check(ordinal == commandDraws.size() &&
+              pass.replayOrdinalBegin == 0u &&
+              pass.replayOrdinalEnd == commandDraws.size(),
+          "producer child ordinals cover the complete pass exactly once");
+  };
+
+  const std::array<std::size_t, 3> suffix64{64u, 32u, 32u};
+  const std::array<std::uint32_t, 2> begins{0u, 1u};
+  const std::array<std::uint32_t, 2> counts{1u, 2u};
+  verify(suffix64, begins, counts, 418u);
+  const std::array<std::size_t, 3> jagged{70u, 100u, 30u};
+  verify(jagged, begins, counts, 419u);
+
+  PassObservationFixture noTwoChildren;
+  const auto first = draws(100u);
+  const auto firstPayloads = payloads(first.size());
+  const auto suffix = draws(27u);
+  const auto suffixPayloads = payloads(suffix.size());
+  noTwoChildren.slot.appendDrawRun({}, {}, first, firstPayloads);
+  noTwoChildren.slot.appendDrawRun({}, {}, suffix, suffixPayloads);
+  noTwoChildren.slot.appendPresent({}, {});
+  noTwoChildren.finalize(420u);
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+  const auto rejected = noTwoChildren.observe(output);
+  check(rejected.eligibleCount == 0u && output.count == 0u &&
+            rejected.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::
+                    NoTwoChildWork)] == 1u,
+        "producer distinguishes genuine no-two-child work before effects");
 }
 
 void passLocalProducerFindsBoundedCompletePasses() {
@@ -853,6 +1041,21 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
 }
 
 void childBoundsAndPerfGateFailClosed() {
+  using SnapshotFallback =
+      dxmt9::encoders::SealedParallelPassSnapshotFallback;
+  check(dxmt9::encoders::parallelPassFallbackForSnapshot(
+            SnapshotFallback::NoTwoChildWork) ==
+            ParallelPassFallbackReason::TooFewChildren &&
+            dxmt9::encoders::parallelPassFallbackForSnapshot(
+                SnapshotFallback::PlannerInvariant) ==
+                ParallelPassFallbackReason::PlanNotValidated &&
+            dxmt9::encoders::parallelPassFallbackForSnapshot(
+                SnapshotFallback::ChildCapacity) ==
+                ParallelPassFallbackReason::ChildCapacity &&
+            dxmt9::encoders::parallelPassFallbackForSnapshot(
+                SnapshotFallback::PassCapacity) ==
+                ParallelPassFallbackReason::ChildCapacity,
+        "planner and storage observations retain distinct typed snapshots");
   ProductionPlanFixture fixture;
   auto input = fixture.input();
   input.ranges = input.ranges.first(1u);
@@ -1377,63 +1580,90 @@ void economicsClassifierIsPureBoundedAndEnforcedBeforeEffects() {
 
   const auto summary = [](std::uint32_t children,
                           std::uint32_t minimum,
+                          std::uint32_t maximum,
                           std::uint64_t draws,
                           std::uint64_t stage1,
                           std::uint64_t stage2b,
                           std::uint64_t forced,
-                          std::uint64_t psoTransitions,
-                          std::uint64_t uniformTransitions) {
+                          std::uint64_t psoBoundaryTransitions,
+                          std::uint64_t uniformBoundaryTransitions) {
     return Summary{
         .totalDraws = draws,
         .stage1Draws = stage1,
         .stage2bDraws = stage2b,
         .forcedStage1Draws = forced,
-        .renderPsoTransitions = psoTransitions,
-        .uniformTransitions = uniformTransitions,
+        .psoBoundaryTransitions = psoBoundaryTransitions,
+        .uniformBoundaryTransitions = uniformBoundaryTransitions,
         .childCount = children,
         .minimumChildDraws = minimum,
+        .maximumChildDraws = maximum,
         .valid = true,
     };
   };
 
   check(classifyParallelPassEconomics(
-            summary(2u, 63u, 126u, 126u, 0u, 0u, 0u, 0u)).reject ==
+            summary(2u, 63u, 63u, 126u, 126u, 0u, 0u, 1u, 1u)).reject ==
             Reason::ThinChild,
         "2x63 is rejected at the existing eligibility quantum");
   check(classifyParallelPassEconomics(
-            summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u)).accepted,
-        "2x64 is structurally accepted");
+            summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 0u, 0u)).reject ==
+            Reason::PsoFirstBindAmplification,
+        "stable 2x64 rejects a pure child first-bind reset");
   check(classifyParallelPassEconomics(
-            summary(16u, 64u, 1024u, 0u, 1024u, 0u, 14u, 14u)).accepted,
+            summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 1u, 1u)).accepted,
+        "true PSO and uniform changes at a 2x64 boundary are accepted");
+  check(classifyParallelPassEconomics(
+            summary(16u, 64u, 64u, 1024u, 0u, 1024u, 0u, 15u, 15u)).accepted,
         "16x64 stays structurally eligible without a worker-count cap");
   check(classifyParallelPassEconomics(
-            summary(2u, 64u, 128u, 0u, 0u, 128u, 0u, 0u)).reject ==
+            summary(2u, 64u, 64u, 128u, 0u, 0u, 128u, 1u, 1u)).reject ==
             Reason::ForcedStage1,
         "forced Stage 1 draw volume rejects economics");
   check(classifyParallelPassEconomics(
-            summary(4u, 64u, 256u, 256u, 0u, 0u, 1u, 2u)).reject ==
+            summary(4u, 64u, 64u, 256u, 256u, 0u, 0u, 2u, 3u)).reject ==
             Reason::PsoFirstBindAmplification,
-        "PSO first-bind amplification rejects at its exact boundary");
+        "one missing PSO boundary rejects at its exact bound");
   check(classifyParallelPassEconomics(
-            summary(4u, 64u, 256u, 256u, 0u, 0u, 2u, 1u)).reject ==
+            summary(4u, 64u, 64u, 256u, 256u, 0u, 0u, 3u, 2u)).reject ==
             Reason::UniformFirstBindAmplification,
-        "uniform first-bind amplification rejects at its exact boundary");
+        "one missing uniform boundary rejects at its exact bound");
   check(classifyParallelPassEconomics(
-            summary(4u, 64u, 256u, 256u, 0u, 0u, 2u, 2u)).accepted,
-        "A-B-A transition counts meet both first-bind bounds");
-  auto invalid = summary(2u, 64u, 128u, 127u, 0u, 0u, 0u, 0u);
+            summary(4u, 64u, 64u, 256u, 256u, 0u, 0u, 3u, 3u)).accepted,
+        "all k-1 changed child boundaries meet both first-bind bounds");
+  check(classifyParallelPassEconomics(
+            summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 0u, 0u)).reject ==
+            Reason::PsoFirstBindAmplification,
+        "internal A-B-A churn cannot pay for a stable child boundary");
+  check(classifyParallelPassEconomics(
+            summary(2u, 64u, 192u, 256u, 256u, 0u, 0u, 1u, 1u)).reject ==
+            Reason::UnbalancedChild,
+        "64/192 children reject critical-path imbalance over one quantum");
+  check(classifyParallelPassEconomics(
+            summary(2u, 64u, 128u, 192u, 192u, 0u, 0u, 1u, 1u)).accepted,
+        "imbalance within one existing quantum remains eligible");
+  auto invalid = summary(
+      2u, 64u, 64u, 128u, 127u, 0u, 0u, 1u, 1u);
   check(classifyParallelPassEconomics(invalid).reject ==
             Reason::InvalidOrOverflow,
         "non-conserving ABI counts fail closed");
-  invalid = summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u);
+  invalid = summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 2u, 1u);
+  check(classifyParallelPassEconomics(invalid).reject ==
+            Reason::InvalidOrOverflow,
+        "more boundary transitions than boundaries fails closed");
+  invalid = summary(2u, 64u, 100u, 128u, 128u, 0u, 0u, 1u, 1u);
+  check(classifyParallelPassEconomics(invalid).reject ==
+            Reason::InvalidOrOverflow,
+        "impossible min/max/total summary fails closed");
+  invalid = summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 1u, 1u);
   invalid.overflow = true;
   check(classifyParallelPassEconomics(invalid).reject ==
             Reason::InvalidOrOverflow,
         "overflow fails closed");
 
-  const std::array<Reason, 5> rejectReasons{
+  const std::array<Reason, 6> rejectReasons{
       Reason::ForcedStage1,
       Reason::ThinChild,
+      Reason::UnbalancedChild,
       Reason::PsoFirstBindAmplification,
       Reason::UniformFirstBindAmplification,
       Reason::InvalidOrOverflow,
@@ -1469,29 +1699,43 @@ void economicsClassifierIsPureBoundedAndEnforcedBeforeEffects() {
                 Reason::InvalidOrOverflow)] == 1u,
         "malformed accounting decisions fail closed and still conserve");
 
-  std::uint32_t parallelEffects = 0u;
-  std::array<std::uint32_t, 126> serialReplayCounts{};
-  const auto rejected = dxmt9::encoders::dispatchParallelPassEconomics(
-      summary(2u, 63u, 126u, 0u, 126u, 0u, 0u, 0u),
-      [&] { ++parallelEffects; },
-      [&] {
-        for (auto& count : serialReplayCounts) {
-          ++count;
-        }
-      });
-  check(!rejected.accepted && parallelEffects == 0u &&
-            std::all_of(serialReplayCounts.begin(), serialReplayCounts.end(),
-                        [](std::uint32_t count) { return count == 1u; }),
-        "economics rejection emits no parallel effect before exact serial replay");
+  const std::array<Summary, 6> rejectedSummaries{
+      summary(2u, 64u, 64u, 128u, 0u, 0u, 128u, 1u, 1u),
+      summary(2u, 63u, 63u, 126u, 0u, 126u, 0u, 1u, 1u),
+      summary(2u, 64u, 192u, 256u, 0u, 256u, 0u, 1u, 1u),
+      summary(2u, 64u, 64u, 128u, 0u, 128u, 0u, 0u, 1u),
+      summary(2u, 64u, 64u, 128u, 0u, 128u, 0u, 1u, 0u),
+      invalid,
+  };
+  for (const auto& rejectedSummary : rejectedSummaries) {
+    std::uint32_t parallelEffects = 0u;
+    std::array<std::uint32_t, 256> serialReplayCounts{};
+    const auto rejected = dxmt9::encoders::dispatchParallelPassEconomics(
+        rejectedSummary, [&] { ++parallelEffects; },
+        [&] {
+          for (std::size_t draw = 0u;
+               draw < rejectedSummary.totalDraws; ++draw) {
+            ++serialReplayCounts[draw];
+          }
+        });
+    check(!rejected.accepted && parallelEffects == 0u &&
+              std::all_of(
+                  serialReplayCounts.begin(),
+                  serialReplayCounts.begin() + rejectedSummary.totalDraws,
+                  [](std::uint32_t count) { return count == 1u; }),
+          "every economics rejection emits zero parallel effects then exact serial replay");
+  }
 
   std::uint32_t observations = 0u;
   check(!dxmt9::encoders::observeParallelPassEconomicsCountersIfEnabled(
-            false, summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u),
+            false,
+            summary(2u, 64u, 64u, 128u, 128u, 0u, 0u, 1u, 1u),
             [&](const Summary&, const Decision&) { ++observations; }) &&
             observations == 0u,
         "perf-off economics performs zero counter-observation work");
   check(dxmt9::encoders::observeParallelPassEconomicsCountersIfEnabled(
-            true, summary(2u, 64u, 128u, 0u, 128u, 0u, 0u, 0u),
+            true,
+            summary(2u, 64u, 64u, 128u, 0u, 128u, 0u, 1u, 1u),
             [&](const Summary&, const Decision& decision) {
               ++observations;
               check(decision.accepted,
@@ -1508,6 +1752,8 @@ int main() {
     coordinatorProofSnapshotRequiresEveryPreEffectFact();
     wmtParentChildAdapterCreatesAndJoinsMetalEncoders();
     explicitParallelSubdivisionIsEvenAndBounded();
+    wholeCommandSubdivisionIsOrderedBoundedAndFailClosed();
+    wholeCommandProducerPreservesCoverageAndFirstLocators();
     passLocalProducerFindsBoundedCompletePasses();
     multiPassAndAttachmentBoundariesStayIndependent();
     activeReplayOrderAndPartialClearDriveExactBoundaries();

@@ -5,7 +5,7 @@ title: "Parallel Render-Pass Worker Gate"
 type: experiment
 status: rejected-default
 updated: 2026-08-12
-source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json
+source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-parallel-gt2-r3-20260812/result.json
 related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-scheduling/gap.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
@@ -16,7 +16,8 @@ related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-s
 The earlier pre-Stage2b GT2 pair and GT1/GT3/SFIV smoke artifacts quoted in
 this section are no longer available in the worktree; these figures are
 historical measurements that cannot currently be re-checked. The surviving
-`source:` artifacts above belong to the attributable Stage2b follow-up.
+`source:` artifacts above belong to the attributable Stage2b follow-up and the
+first post-gate pair.
 
 The production `MTLParallelRenderCommandEncoder` lane is correct enough to
 retain as an explicit provider, but it does not pass the default-promotion
@@ -82,12 +83,38 @@ as the relevant economics failure rather than a binding-correctness failure.
 The follow-up increment therefore enforces that classifier after complete
 locator/ABI/PSO/uniform re-resolution but before render-pass preparation or
 parent Metal effects. Rejected passes return to exact serial replay. The
-ExplicitParallel sealed-pass builder now uses at most `floor(draws / 64)`
-evenly sized children in the existing two-to-16 range, with every child at
-least 64 draws; serial production constants and hardware-independent capacity
-remain unchanged. Perf counters now report exact accepted versus
+ExplicitParallel sealed-pass builder uses at most `floor(draws / 64)` children
+in the existing two-to-16 range, with every child at least 64 draws; serial
+production constants and hardware-independent capacity remain unchanged. Perf
+counters report exact accepted versus
 `serial_fallback` production outcomes with considered/reason conservation.
 
 This is a measured safety/economics gate, not a speedup result. Identity remains
 the default, parallel remains opt-in, and fresh post-gate matched wild evidence
 is required before any promotion claim.
+
+## First Post-gate Pair and Planner Correction
+
+The first post-gate matched artifacts measured identity at `24.188999176 fps`
+and parallel at `24.190946579 fps`, with `1,515` Presents and zero GPU errors
+in each lane. That parity is not provider economics evidence: the parallel run
+observed `23,888` sealed candidates but selected zero passes, recorded zero
+economics considerations, and launched zero worker tasks. Inspection localized
+the zero-selection result to the multi-command child planner, which stopped the
+final group after one command and could skip earlier valid jagged cuts.
+
+The next attributable implementation increment replaces that search with a
+deterministic fixed-capacity earliest-prefix grouping that preserves whole
+commands, absorbs a final sub-64 suffix, validates exact ordered coverage, and
+separates no-two-child work from planner invariant and storage-capacity
+rejections. Its economics gate additionally rejects child draw imbalance over
+the existing 64-draw quantum and requires both PSO and uniform identity changes
+at every actual child boundary; internal A-B-A churn no longer pays for a
+child first-bind reset. New counters expose minimum, maximum, and imbalance
+draw totals plus child-boundary transitions.
+
+No wild application was run for this correction, so it makes no speed or
+promotion claim. A meaningful next GT2 pair requires nonzero economics
+considered and accepted counts, complete counter conservation, zero GPU errors,
+and conserved locality before performance can be assessed. Identity remains
+the default and `parallel` remains opt-in.

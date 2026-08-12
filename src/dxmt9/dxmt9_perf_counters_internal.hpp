@@ -185,6 +185,7 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassEconomicsSerialFallback{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectForcedStage1{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectThinChild{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsRejectUnbalancedChild{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectPsoFirstBind{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectUniformFirstBind{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectInvalidOverflow{0};
@@ -195,8 +196,11 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassEconomicsStage1Draws{0};
   std::atomic<std::uint64_t> parallelPassEconomicsStage2bDraws{0};
   std::atomic<std::uint64_t> parallelPassEconomicsForcedStage1Draws{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsPsoTransitions{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsUniformTransitions{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsPsoBoundaryTransitions{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsUniformBoundaryTransitions{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsMinChildDraws{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsMaxChildDraws{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsChildDrawImbalance{0};
   std::atomic<std::uint64_t> parallelPassEconomicsMinChildUnder32{0};
   std::atomic<std::uint64_t> parallelPassEconomicsMinChild32To63{0};
   std::atomic<std::uint64_t> parallelPassEconomicsMinChild64To127{0};
@@ -218,7 +222,10 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassShadowRejectPlan{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectBoundary{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectCommand{0};
-  std::atomic<std::uint64_t> parallelPassShadowRejectCapacity{0};
+  std::atomic<std::uint64_t> parallelPassShadowRejectNoTwoChildWork{0};
+  std::atomic<std::uint64_t> parallelPassShadowRejectPlannerInvariant{0};
+  std::atomic<std::uint64_t> parallelPassShadowRejectChildCapacity{0};
+  std::atomic<std::uint64_t> parallelPassShadowRejectPassCapacity{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectAttachment{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectHazard{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectSnapshot{0};
