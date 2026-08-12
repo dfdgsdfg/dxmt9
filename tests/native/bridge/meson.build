@@ -150,9 +150,16 @@ foreach spec : [
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
 ]
+  sources = [spec[1]]
+  if spec[0] == 'render-tape-capture'
+    sources += [
+      '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+      '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+    ]
+  endif
   target = executable(
     'dxmt9-' + spec[0] + '-spec',
-    spec[1],
+    sources,
     include_directories: dxmt9_inc,
     dependencies: [dxmt9_dep, dxmt9_frontend_dep],
     link_args: dxmt9_test_link_args,
@@ -161,6 +168,8 @@ foreach spec : [
        env: dxmt9_native_test_env)
   if spec[0] == 'render-tape'
     render_tape_fixture_spec = target
+  elif spec[0] == 'render-tape-capture'
+    render_tape_capture_fixture_spec = target
   endif
 endforeach
 
@@ -172,6 +181,19 @@ test('dxmt9-render-tape-cli-spec', python3,
        dxmt9_render_tape_tool,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
+     ],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-capture-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_capture_cli.py'),
+       render_tape_capture_fixture_spec,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape_capture_fixture.py'),
      ],
      env: dxmt9_native_test_env)
 

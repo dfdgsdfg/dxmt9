@@ -1,9 +1,12 @@
 #include "device_c_render_tape_capture.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +15,8 @@
 namespace {
 
 using namespace dxmt9::d3d9;
+
+using dxmt9::d3d9::pe::CommandChunkBuilder;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -137,6 +142,18 @@ RenderTapeDigest digest() {
   return value;
 }
 
+RenderTapeDigest productionMutationDigest() {
+  return RenderTapeDigest{
+      std::byte{0x8d}, std::byte{0x70}, std::byte{0xd6}, std::byte{0x91},
+      std::byte{0xc8}, std::byte{0x22}, std::byte{0xd5}, std::byte{0x56},
+      std::byte{0x38}, std::byte{0xb6}, std::byte{0xe7}, std::byte{0xfd},
+      std::byte{0x54}, std::byte{0xcd}, std::byte{0x94}, std::byte{0x17},
+      std::byte{0x0c}, std::byte{0x87}, std::byte{0xd1}, std::byte{0x9e},
+      std::byte{0xb1}, std::byte{0xf6}, std::byte{0x28}, std::byte{0xb7},
+      std::byte{0x57}, std::byte{0x50}, std::byte{0x6e}, std::byte{0xde},
+      std::byte{0x56}, std::byte{0x88}, std::byte{0xd2}, std::byte{0x97}};
+}
+
 RenderTapeBlob blob() {
   return RenderTapeBlob{.digest = digest(), .size = 4u, .verified = 1u};
 }
@@ -164,6 +181,110 @@ void testCaptureOffPreservesBytes() {
   check(session.state() == RenderTapeCaptureState::Disabled,
         "capture-off state remains disabled");
   check(chunk == original, "capture-off leaves canonical bytes unchanged");
+}
+
+std::vector<std::byte> recorderPresentChunk() {
+  CommandChunkBuilder recorder;
+  check(dxmt9::d3d9::pe::appendPresent(
+            recorder, D9CCommandChunkWirePresent{}),
+        "PE recorder appends Present");
+  const auto sealed = recorder.seal();
+  check(sealed.valid(), "PE recorder seals Present");
+  return std::vector<std::byte>(sealed.blob.begin(), sealed.blob.end());
+}
+
+void writeAtomically(const std::filesystem::path& path,
+                     std::span<const std::byte> bytes) {
+  const auto temporary = path.string() + ".tmp";
+  std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+  check(output.good(), "fixture opens temporary output");
+  if (!bytes.empty()) {
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+  }
+  check(output.good(), "fixture writes temporary output");
+  output.close();
+  std::error_code error;
+  std::filesystem::rename(temporary, path, error);
+  check(!error, "fixture publishes output atomically");
+}
+
+void writeProductionFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory / "blobs", error);
+  check(!error, "fixture creates output directory");
+
+  const auto bootstrap = bootstrapChunk();
+  const auto present = recorderPresentChunk();
+  const auto mutationBytes = std::array<std::byte, 4u>{
+      std::byte{0xaa}, std::byte{0xbb}, std::byte{0xcc}, std::byte{0xdd}};
+  const auto mutationDigestValue = productionMutationDigest();
+  const RenderTapeBlob verifiedBlob{
+      .digest = mutationDigestValue, .size = mutationBytes.size(), .verified = 1u};
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrap, std::span(&verifiedBlob, 1u)) ==
+            RenderTapeCaptureStatus::Accepted,
+        "production fixture arms capture owner");
+  check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "production fixture starts one Present interval");
+  constexpr std::array<std::byte, 8u> descriptor{};
+  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}) ==
+            RenderTapeCaptureStatus::Accepted,
+        "production fixture journals ObjectDefine");
+  check(session.resourceMutation(
+            kSurface, RenderTapeMutationKind::Upload, 0u, 0u,
+            mutationBytes.size(),
+            std::span<const std::byte, kRenderTapeDigestSize>(
+                mutationDigestValue)) == RenderTapeCaptureStatus::Accepted,
+        "production fixture journals resource mutation");
+  check(session.commandChunk(
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                 .recordCount = 1u, .handleCount = 0u},
+            present) == RenderTapeCaptureStatus::Accepted,
+        "production fixture copies canonical PE recorder bytes once");
+  const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
+  check(session.orderedControl(
+            RenderTapeOrderedControlHeader{
+                .kind = static_cast<std::uint32_t>(RenderTapeControlKind::FlushWait),
+                .disposition = static_cast<std::uint32_t>(
+                    RenderTapeControlDisposition::Completed),
+                .controlBytes = sizeof(wait),
+                .completionOrdinal = 10u},
+            std::as_bytes(std::span(&wait, 1u))) ==
+            RenderTapeCaptureStatus::Accepted,
+        "production fixture journals ordered control");
+  const RenderTapeOracleAttachment attachment = oracle();
+  check(session.completePresent(
+            4u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+            std::as_bytes(std::span(&attachment, 1u))) ==
+            RenderTapeCaptureStatus::Complete,
+        "production fixture seals Present transactionally");
+  check(session.validationStatus() == RenderTapeValidationStatus::Valid,
+        "production fixture validates before publish");
+
+  const auto eventsPath = directory / "events.bin";
+  const auto blobPath = directory / "blobs" /
+                        "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297.bin";
+  writeAtomically(eventsPath, session.sealedArtifact());
+  writeAtomically(blobPath, mutationBytes);
+}
+
+void testProductionFixtureUsesRecorderAndPublishesBundle(
+    const std::filesystem::path& directory) {
+  const auto recorderBytes = recorderPresentChunk();
+  const auto original = recorderBytes;
+  RenderTapeCaptureSession disabled(false);
+  check(disabled.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Disabled,
+        "production capture-off arm is inert");
+  check(recorderBytes == original,
+        "production capture-off preserves recorder bytes");
+  writeProductionFixture(directory);
+  check(std::filesystem::is_regular_file(directory / "events.bin"),
+        "production fixture publishes events.bin");
+  check(std::filesystem::is_regular_file(
+            directory / "blobs" /
+            "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297.bin"),
+        "production fixture publishes digest-named blob");
 }
 
 void testCompletePresentPublishesExactlyOneTape() {
@@ -306,8 +427,14 @@ void testObjectLifetimeAndTerminalControls() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 3 && std::string_view(argv[1]) == "--write-production-fixture") {
+      testProductionFixtureUsesRecorderAndPublishesBundle(argv[2]);
+      return 0;
+    }
+    check(argc == 1,
+          "usage: render_tape_capture_spec [--write-production-fixture dir]");
     testCaptureOffPreservesBytes();
     testCompletePresentPublishesExactlyOneTape();
     testFailureBeforePublishAndBoundedBackpressure();
