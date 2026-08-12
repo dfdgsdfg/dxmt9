@@ -5,13 +5,18 @@ title: "Parallel Render-Pass Worker Gate"
 type: experiment
 status: rejected-default
 updated: 2026-08-12
-source: experiments/output/app-d3d9-3dmark05-parallel-samebuild-identity-gt2-r10-20260811/result.json; experiments/output/app-d3d9-3dmark05-parallel-samebuild-worker-gt2-r11-20260811/result.json; experiments/output/app-d3d9-3dmark05-parallel-worker-gt1-smoke-20260811/result.json; experiments/output/app-d3d9-3dmark05-parallel-worker-gt3-smoke-20260811/result.json; experiments/output/app-d3d9-sfiv-benchmark-parallel-worker-smoke-20260811/result.json
+source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json
 related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-scheduling/gap.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
 # Parallel Render-Pass Worker Gate
 
 ## Result
+
+The earlier pre-Stage2b GT2 pair and GT1/GT3/SFIV smoke artifacts quoted in
+this section are no longer available in the worktree; these figures are
+historical measurements that cannot currently be re-checked. The surviving
+`source:` artifacts above belong to the attributable Stage2b follow-up.
 
 The production `MTLParallelRenderCommandEncoder` lane is correct enough to
 retain as an explicit provider, but it does not pass the default-promotion
@@ -39,10 +44,11 @@ saving.
 
 ## Correctness Scope
 
-Opt-in wild smokes passed with zero GPU command-buffer errors on GT1, GT2, and
-GT3. SFIV also passed, but selected zero parallel passes because its eligible
-rendering route remains outside the current portable-child policy. The native
-Metal fixture passed with `MTL_DEBUG_LAYER=1`.
+Historical opt-in wild smokes passed with zero GPU command-buffer errors on
+GT1, GT2, and GT3. SFIV also passed, but selected zero parallel passes because
+its eligible rendering route remains outside the current portable-child policy.
+Those smoke artifacts are unavailable, so these older claims cannot currently
+be re-checked. The native Metal fixture passed with `MTL_DEBUG_LAYER=1`.
 
 ## Decision
 
