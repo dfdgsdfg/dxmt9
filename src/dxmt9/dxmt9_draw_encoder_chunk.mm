@@ -1511,15 +1511,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             .pixelBool = payload.pixelBoolConstantCount,
         };
       };
-  auto drawBindingAbiForPipelineKey =
-      [](const pipeline::ShaderVariantKey& key) {
-        if (!key.argbufHybridMode) {
-          return uniform::DrawBindingAbi::Stage1Direct;
-        }
-        return key.argbufDirectCbufMode
-            ? uniform::DrawBindingAbi::Stage2DirectCbuf
-            : uniform::DrawBindingAbi::Stage2ArgumentTable;
-      };
   auto makeArgbufPayloadDeltaComponentKey =
       [&](const core::DrawUniformPayload& payload) {
         return ArgbufPayloadDeltaComponentKey{
@@ -3088,6 +3079,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           std::span<const core::DrawParam> drawItems,
           std::size_t commandDrawBegin,
           WMT::RenderCommandEncoder encoder,
+          const ParallelPassBindingSnapshot& bindingProof,
           encode_session::BindingState& childBinding) noexcept {
     if (!encoder || !command.drawState.hot ||
         !command.drawState.shaderLayout || !command.drawRunRecord ||
@@ -3118,15 +3110,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         command.drawRunRecord->depthStencilHandle;
     const auto renderPsoKey =
         ctx.cache.drawPipelineKeyForHandle(renderPsoHandle);
-    if (!renderPsoKey) {
+    const auto bindingDecision = classifyParallelPassBindingKey({
+        .psoPresent = renderPsoKey.has_value(),
+        .argbufHybrid = renderPsoKey && renderPsoKey->argbufHybridMode,
+        .argbufResourceArray =
+            renderPsoKey && renderPsoKey->argbufResourceArray,
+        .argbufDirectCbuf =
+            renderPsoKey && renderPsoKey->argbufDirectCbufMode,
+    });
+    if (!bindingDecision.accepted() ||
+        bindingDecision.mode != bindingProof.mode) {
       return false;
     }
+    const auto bindingMode = bindingProof.mode;
     const auto renderPsoBindingAbi =
-        drawBindingAbiForPipelineKey(*renderPsoKey);
-    if (!uniform::drawBindingAbiMatchesPath(
-            renderPsoBindingAbi, uniform::DrawBindingPath::Direct)) {
-      return false;
-    }
+        bindingMode == ParallelPassDirectBindingMode::Stage2DirectCbuf
+        ? uniform::DrawBindingAbi::Stage2DirectCbuf
+        : uniform::DrawBindingAbi::Stage1Direct;
+    const bool stage2DirectCbuf =
+        bindingMode == ParallelPassDirectBindingMode::Stage2DirectCbuf;
     const bool mergeDraws = debug::optimizeCompatibleIndexedDrawMerge();
 
     for (std::size_t i = 0; i < drawItems.size();) {
@@ -3171,12 +3173,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       }
       drawStateView.uniforms = drawUniformPayload;
 
+      const auto drawBindingPayloadIdentity =
+          makeDrawBindingPayloadIdentity(drawStateView);
+      const auto drawBindingPayloadCounts =
+          makeDrawBindingPayloadCounts(*drawUniformPayload);
+      if (!childBinding.lastDrawBindingPayloadIdentity.has_value() &&
+          (renderPsoHandle != bindingProof.firstRenderPso ||
+           drawBindingPayloadIdentity != bindingProof.firstPayload ||
+           drawBindingPayloadCounts != bindingProof.firstPayloadCounts)) {
+        return false;
+      }
       const auto drawBindingTransition =
           uniform::planDrawBindingTransition(
               childBinding.lastDrawBindingPayloadIdentity.has_value(),
               childBinding.lastDrawBindingPayloadIdentity.value_or(
                   uniform::DrawBindingPayloadIdentity{}),
-              makeDrawBindingPayloadIdentity(drawStateView),
+              drawBindingPayloadIdentity,
               renderPsoBindingAbi, uniform::DrawBindingPath::Direct);
       // TLA+: ParallelDrawBinding / DrawUsesRequiredUniformGeneration and
       // PsoBindingAbiMatchesChildBinding. childBinding is indexed by child
@@ -3184,7 +3196,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       DXMT_ASSERT(drawBindingTransition.psoBindingAbiCompatible);
       if (!uniform::applyDrawBindingTransition(
               childBinding.uniformDirty, drawBindingTransition,
-              makeDrawBindingPayloadCounts(*drawUniformPayload))) {
+              drawBindingPayloadCounts)) {
         return false;
       }
 
@@ -3199,6 +3211,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool overrideNeedsBaseStateBind =
           hasBindingOverride && drawBindingOverrideRequiresBaseStateBind(
                                     bindingOverride, stateView.shaderLayout);
+      if (overrideNeedsBaseStateBind) {
+        return false;
+      }
       const bool baseStateCompatible =
           childBinding.activeDrawStateKey.has_value() &&
           childBinding.activeDrawStateUsesPrefetchedPsoLayout &&
@@ -3213,14 +3228,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           hasBindingOverride ? &bindingOverride : nullptr,
           hasBindingSnapshot ? &bindingSnapshot : nullptr,
           /*tileFfpMode=*/false,
-          /*argbufHybridMode=*/false,
+          /*argbufHybridMode=*/stage2DirectCbuf,
           /*argbufResourceArray=*/false,
-          /*argbufDirectCbufMode=*/false,
+          /*argbufDirectCbufMode=*/stage2DirectCbuf,
           /*reopenArgbufHybrid=*/false,
           DrawNativeShadowView{
               .uniformDirty = &childBinding.uniformDirty,
               .textureSampler = &childBinding.textureSamplerShadow,
-              .argbufCbufCache = &childBinding.argbufCbufCache,
+              .argbufCbufCache = nullptr,
               .streamIbStagingCache =
                   &childBinding.activeStreamIbStaging,
               .renderPsoHandle = renderPsoHandle,
@@ -3557,27 +3572,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return nullptr;
   };
 
-  auto parallelDrawPsoUsesDirectBinding =
-      [&](const core::MetalCommandView& drawCommand) {
-        if (!drawCommand.drawRunRecord) {
-          return false;
-        }
-        const auto key = ctx.cache.drawPipelineKeyForHandle(
-            drawCommand.drawRunRecord->renderPsoHandle);
-        return key && uniform::drawBindingAbiMatchesPath(
-            drawBindingAbiForPipelineKey(*key),
-            uniform::DrawBindingPath::Direct);
-      };
-
-  // First production execution slice: one sealed source-local logical pass
-  // backed by ordered DrawRun child spans. This exercises a real
-  // MTLParallelRenderCommandEncoder parent and child encoders while keeping
-  // Clear/Present, pass actions, and completion on the coordinator. Parallel
-  // children deliberately use the portable Stage 1 binding path even when
-  // the ordinary serial pass would select Stage 2: the queue-owned argument
-  // encoder and mutable table shadow are not child-local yet. Tile FFP,
-  // per-record CB splitting, late Store resolution, and every sidecar remain
-  // pre-effect serial fallbacks until their child-local ownership is explicit.
+  // One sealed source-local logical pass backed by ordered DrawRun child
+  // spans. The coordinator proves one immutable pass-wide direct binding ABI
+  // before parent creation: either Stage 1 or Stage 2b direct-cbuf. Slot-30
+  // tables, resource arrays, mixed ABIs, and overrides that can rebuild the
+  // prefetched PSO stay on the serial path. Clear/Present, pass actions, and
+  // completion remain coordinator-owned.
   auto tryEncodeParallelPass = [&]
       (const SealedParallelPassSnapshot& pass,
        std::uint32_t commandIndex,
@@ -3597,10 +3597,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             .planValidated = true,
             .logicalPassSealed = true,
         });
-    auto rejectBeforeEffects = [&] {
+    auto rejectBeforeEffects = [&] (
+        ParallelPassBindingRejectReason bindingReject =
+            ParallelPassBindingRejectReason::None) {
       if (perf::enabled()) {
-        perf::countParallelPassDecision(
-            decideParallelPassExecution(true, eligibility, false));
+        if (bindingReject != ParallelPassBindingRejectReason::None) {
+          perf::countParallelPassBindingReject(bindingReject);
+        }
+        auto decision =
+            decideParallelPassExecution(true, eligibility, false);
+        if (bindingReject != ParallelPassBindingRejectReason::None) {
+          decision.fallback =
+              parallelPassFallbackForBindingReject(bindingReject);
+        }
+        perf::countParallelPassDecision(decision);
       }
       return false;
     };
@@ -3610,16 +3620,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         encoderState.activeRenderEncoder || encoderState.activeBlitEncoder ||
         encoderState.hasActiveRender || !command.drawRunRecord ||
         !command.drawState.hot || !command.drawState.shaderLayout ||
-        pass.childCount < 2u ||
-        !parallelDrawPsoUsesDirectBinding(command)) {
+        pass.childCount < 2u) {
       return rejectBeforeEffects();
     }
     const auto tileDecision = dxmt9::pipeline::selectTileFfpForPass(
         command.drawState, ctx.pool.supportsApple3());
-    const bool forcedStage1 =
-        dxmt9::pipeline::selectArgbufHybridForPass(
-            command.drawState, ctx.pool.argbufHybridEnabled()) ==
-        dxmt9::pipeline::ArgbufHybridDecision::Stage2;
     if (tileDecision.decision == dxmt9::pipeline::TileFfpDecision::Tile ||
         activeSeedMergeAttributionEnabled ||
         parallelRenderPassSidecarObservationEnabled() ||
@@ -3648,13 +3653,36 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       return rejectBeforeEffects();
     }
 
-    // Re-resolve every locator while the current SourcePayloadView residency
-    // pin is still held. The first-draw generation, attachment, route, and
-    // source-qualified locator must still match the sealed snapshot.
+    // Re-resolve every locator and draw while the current SourcePayloadView
+    // residency pin is still held. This is the complete legitimate-failure
+    // boundary: after it, the immutable source and value snapshots make any
+    // binding mismatch an invariant failure rather than a serial fallback.
     std::array<EncodePartitionResolution,
                kParallelRenderPassChildCapacity> resolvedChildren{};
+    ParallelPassDirectBindingMode passBindingMode =
+        ParallelPassDirectBindingMode::Stage1Direct;
+    bool passBindingModeSet = false;
+    ParallelPassBindingRejectReason bindingReject =
+        ParallelPassBindingRejectReason::None;
+    ParallelPassEconomicsSummary economics{
+        .childCount = static_cast<std::uint32_t>(parallelPlanStorage.count),
+        .minimumChildDraws = UINT32_MAX,
+        .valid = true,
+    };
+    std::optional<core::PsoHandle> previousEconomicsPso;
+    std::optional<uniform::DrawBindingPayloadIdentity>
+        previousEconomicsPayload;
+    std::uint64_t preflightDrawCount = 0u;
+    auto addEconomics = [&](std::uint64_t& value,
+                            std::uint64_t increment) {
+      if (value > UINT64_MAX - increment) {
+        economics.overflow = true;
+        return;
+      }
+      value += increment;
+    };
     for (std::size_t i = 0; i < parallelPlanStorage.count; ++i) {
-      const auto& child = parallelPlanStorage.children[i];
+      auto& child = parallelPlanStorage.children[i];
       resolvedChildren[i] = resolveEncodePartition(
           child.range, partitionReplayStream);
       const auto& resolved = resolvedChildren[i];
@@ -3668,27 +3696,165 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               child.firstDraw.entryRender.attachments ||
           resolveParallelPassRenderRoute(
               &ctx.pool, resolved.partition.entry.drawState) !=
-              child.firstDraw.entryRender.route ||
-          !parallelDrawPsoUsesDirectBinding(
-              resolved.partition.entry.command)) {
+              child.firstDraw.entryRender.route) {
         return rejectBeforeEffects();
       }
-      // encodeDrawRunCommand batches every UP slice in the complete command.
-      // Invoking it once per child would upload that same command payload once
-      // per child and would make the queue-owned transient arena part of the
-      // eventual worker surface. Keep UP draws on the serial lane until the
-      // coordinator owns one immutable preupload result for all children.
-      for (const auto& draw : resolved.partition.drawParams) {
-        if (!draw.userVertexRange.empty() || !draw.userIndexRange.empty()) {
-          return rejectBeforeEffects();
+      std::uint64_t childDrawCount = 0u;
+      auto preflightCommand = [&](
+          std::uint32_t childCommandIndex,
+          const core::MetalCommandView& childCommand,
+          std::span<const core::DrawParam> childDrawItems) {
+        if (!childCommand.drawState.hot ||
+            !childCommand.drawState.shaderLayout ||
+            !childCommand.drawRunRecord || childDrawItems.empty() ||
+            makeAttachmentKey(*childCommand.drawState.hot) !=
+                makeAttachmentKey(*command.drawState.hot) ||
+            resolveParallelPassRenderRoute(
+                &ctx.pool, childCommand.drawState) !=
+                child.firstDraw.entryRender.route ||
+            dxmt9::pipeline::selectTileFfpForPass(
+                childCommand.drawState,
+                ctx.pool.supportsApple3()).decision ==
+                dxmt9::pipeline::TileFfpDecision::Tile) {
+          return false;
         }
-      }
+        const auto rawReads =
+            core::makeDrawEntryReadSet(childCommand.drawState);
+        core::ExactResourceSet canonicalReads{};
+        if (!rawReads.complete()) {
+          return false;
+        }
+        for (std::uint32_t resource = 0u;
+             resource < rawReads.count; ++resource) {
+          std::uint64_t canonical = 0u;
+          if (!resolveParallelPassResourceIdentity(
+                  &ctx.pool, rawReads.handles[resource], canonical) ||
+              canonical == 0u || !canonicalReads.add(canonical)) {
+            return false;
+          }
+        }
+        canonicalReads.flags |= core::ExactResourceSetCanonicalized;
+        if (!canonicalReads.complete() ||
+            !canonicalReads.canonicalized() ||
+            (!child.binding.complete &&
+             canonicalReads != child.firstDraw.entryRender.entryReads)) {
+          return false;
+        }
+        const core::PsoHandle renderPso =
+            childCommand.drawRunRecord->renderPsoHandle;
+        const auto renderPsoKey =
+            ctx.cache.drawPipelineKeyForHandle(renderPso);
+        const auto binding = classifyParallelPassBindingKey({
+            .psoPresent = renderPsoKey.has_value(),
+            .argbufHybrid =
+                renderPsoKey && renderPsoKey->argbufHybridMode,
+            .argbufResourceArray =
+                renderPsoKey && renderPsoKey->argbufResourceArray,
+            .argbufDirectCbuf =
+                renderPsoKey && renderPsoKey->argbufDirectCbufMode,
+        });
+        if (!binding.accepted()) {
+          bindingReject = binding.reject;
+          return false;
+        }
+        if (passBindingModeSet && binding.mode != passBindingMode) {
+          bindingReject = ParallelPassBindingRejectReason::MixedAbi;
+          return false;
+        }
+        passBindingMode = binding.mode;
+        passBindingModeSet = true;
+
+        core::DrawUniformPayload commandUniformScratch;
+        const auto* commandUniformPayload =
+            core::drawRunUniformPayloadForHandle(
+                childCommand,
+                childCommand.drawRunRecord->uniformHandle,
+                commandUniformScratch,
+                perf::DrawUniformPayloadMaterializeSite::DrawEncoderCommand);
+        if (!commandUniformPayload) {
+          return false;
+        }
+        core::DrawUniformPayloadMaterializeCache uniformCache;
+        const auto payloadArena = core::drawRunPayloadBytes(childCommand);
+        for (const auto& draw : childDrawItems) {
+          if (!draw.userVertexRange.empty() ||
+              !draw.userIndexRange.empty()) {
+            return false;
+          }
+          const bool usesCommandUniform =
+              !draw.uniformHandle.valid() ||
+              draw.uniformHandle ==
+                  childCommand.drawRunRecord->uniformHandle;
+          const auto* drawUniformPayload = usesCommandUniform
+              ? commandUniformPayload
+              : uniformCache.payloadForParam(
+                    childCommand, draw,
+                    perf::DrawUniformPayloadMaterializeSite::
+                        DrawEncoderParam);
+          if (!drawUniformPayload) {
+            return false;
+          }
+          core::DrawBindingOverride bindingOverride{};
+          const bool hasBindingOverride = drawParamBindingOverride(
+              draw, payloadArena, bindingOverride);
+          if (hasBindingOverride &&
+              drawBindingOverrideRequiresBaseStateBind(
+                  bindingOverride, childCommand.drawState.shaderLayout)) {
+            bindingReject =
+                ParallelPassBindingRejectReason::OverrideRebuild;
+            return false;
+          }
+          const auto payloadIdentity =
+              makeDrawBindingPayloadIdentity(
+                  core::FlatDrawStateView{
+                      .hot = childCommand.drawState.hot,
+                      .shaderLayout = childCommand.drawState.shaderLayout,
+                      .uniforms = drawUniformPayload,
+                      .debug = childCommand.drawState.debug,
+                  });
+          if (!child.binding.complete) {
+            child.binding = ParallelPassBindingSnapshot{
+                .firstRenderPso = renderPso,
+                .firstPayload = payloadIdentity,
+                .firstPayloadCounts =
+                    makeDrawBindingPayloadCounts(*drawUniformPayload),
+                .mode = binding.mode,
+                .reject = ParallelPassBindingRejectReason::None,
+                .complete = true,
+            };
+          }
+          if (perf::enabled()) {
+            if (binding.mode ==
+                ParallelPassDirectBindingMode::Stage2DirectCbuf) {
+              addEconomics(economics.stage2bDraws, 1u);
+            } else {
+              addEconomics(economics.stage1Draws, 1u);
+            }
+            if (previousEconomicsPso.has_value() &&
+                *previousEconomicsPso != renderPso) {
+              addEconomics(economics.renderPsoTransitions, 1u);
+            }
+            if (previousEconomicsPayload.has_value() &&
+                *previousEconomicsPayload != payloadIdentity) {
+              addEconomics(economics.uniformTransitions, 1u);
+            }
+            previousEconomicsPso = renderPso;
+            previousEconomicsPayload = payloadIdentity;
+          }
+          if (childDrawCount == UINT64_MAX) {
+            return false;
+          }
+          ++childDrawCount;
+        }
+        (void)childCommandIndex;
+        return true;
+      };
+
       if (pass.childrenCoverCompleteCommands) {
         const std::uint64_t ordinalEnd =
-            static_cast<std::uint64_t>(
-                pass.childReplayOrdinalBegins[i]) +
-            pass.childReplayOrdinalCounts[i];
-        for (std::uint64_t ordinal = pass.childReplayOrdinalBegins[i];
+            static_cast<std::uint64_t>(child.replayOrdinalBegin) +
+            child.replayOrdinalCount;
+        for (std::uint64_t ordinal = child.replayOrdinalBegin;
              ordinal < ordinalEnd; ++ordinal) {
           std::uint32_t childCommandIndex = 0u;
           if (!partitionReplayStream.commandIndexAt(
@@ -3697,31 +3863,50 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
           const auto childSource = payload.commandAt(childCommandIndex);
           const auto& childCommand = childSource.command;
+          const auto childDrawItems = childCommand.drawItems.empty()
+              ? childCommand.drawParams
+              : childCommand.drawItems;
           if (childSource.kind() != Kind::DrawRun ||
-              !childCommand.drawState.hot ||
-              !childCommand.drawState.shaderLayout ||
-              !childCommand.drawRunRecord ||
-              childCommand.drawParams.empty() ||
-              makeAttachmentKey(*childCommand.drawState.hot) !=
-                  makeAttachmentKey(*command.drawState.hot) ||
-              resolveParallelPassRenderRoute(
-                  &ctx.pool, childCommand.drawState) !=
-                  child.firstDraw.entryRender.route ||
-              !parallelDrawPsoUsesDirectBinding(childCommand) ||
-              dxmt9::pipeline::selectTileFfpForPass(
-                  childCommand.drawState,
-                  ctx.pool.supportsApple3()).decision ==
-                  dxmt9::pipeline::TileFfpDecision::Tile) {
-            return rejectBeforeEffects();
-          }
-          for (const auto& draw : childCommand.drawParams) {
-            if (!draw.userVertexRange.empty() ||
-                !draw.userIndexRange.empty()) {
-              return rejectBeforeEffects();
-            }
+              !preflightCommand(
+                  childCommandIndex, childCommand, childDrawItems)) {
+            return rejectBeforeEffects(bindingReject);
           }
         }
+      } else if (!preflightCommand(
+                     child.range.entry.commandIndex,
+                     resolved.partition.entry.command,
+                     resolved.partition.drawParams)) {
+        return rejectBeforeEffects(bindingReject);
       }
+      if (!child.binding.complete || childDrawCount == 0u ||
+          childDrawCount > UINT32_MAX) {
+        return rejectBeforeEffects(bindingReject);
+      }
+      if (preflightDrawCount > UINT64_MAX - childDrawCount) {
+        return rejectBeforeEffects(bindingReject);
+      }
+      preflightDrawCount += childDrawCount;
+      if (perf::enabled()) {
+        economics.minimumChildDraws = std::min(
+            economics.minimumChildDraws,
+            static_cast<std::uint32_t>(childDrawCount));
+      }
+    }
+    if (!passBindingModeSet || preflightDrawCount != pass.drawCount ||
+        validateParallelPassChildPlans(parallelPlanStorage.view()) !=
+            ParallelPassFallbackReason::None) {
+      return rejectBeforeEffects(bindingReject);
+    }
+    if (perf::enabled()) {
+      economics.totalDraws = preflightDrawCount;
+      economics.valid = !economics.overflow &&
+          economics.totalDraws == pass.drawCount;
+      observeParallelPassEconomicsIfEnabled(
+          true, economics,
+          [](const ParallelPassEconomicsSummary& summary,
+             const ParallelPassEconomicsDecision& decision) {
+            perf::countParallelPassEconomics(summary, decision);
+          });
     }
 
     const bool leadingClearExpected = pass.leadingClear.valid;
@@ -3786,8 +3971,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       std::uint64_t sourceSeqId = 0;
       std::uint64_t encoderIndex = 0;
       std::uint64_t currentLoadBytes = 0;
+      ParallelPassDirectBindingMode bindingMode =
+          ParallelPassDirectBindingMode::Stage1Direct;
       bool openedWithClear = false;
-      bool forcedStage1 = false;
       perf::EncoderSplitReason closeReason = perf::EncoderSplitReason::Final;
       ParallelPassFailurePhase failurePhase =
           ParallelPassFailurePhase::None;
@@ -3812,10 +3998,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .currentLoadBytes = prepared.actions.colorLoadBytes +
             prepared.actions.depthLoadBytes +
             prepared.actions.stencilLoadBytes,
+        .bindingMode = passBindingMode,
         .openedWithClear = prepared.actions.color0Clear != 0u ||
             prepared.actions.depthClear != 0u ||
             prepared.actions.stencilClear != 0u,
-        .forcedStage1 = forcedStage1,
         .closeReason = pass.sealedAtSourceEnd
             ? perf::EncoderSplitReason::Final
             : pass.sealingCommand.kind == Kind::Present
@@ -3880,12 +4066,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               .recordAttachmentMetadata(state.ctx->pool, hot);
           ++storage.diagnostics.renderEncoderIndex;
           perf::countPortableFfpPass();
-          if (state.forcedStage1) {
-            perf::countParallelPassForcedStage1();
+          if (state.bindingMode ==
+              ParallelPassDirectBindingMode::Stage2DirectCbuf) {
+            perf::countArgbufHybridEncoder();
+          } else {
+            perf::countStage1Encoder();
+            perf::countStage1Bytes(sizeof(VsConsts) + sizeof(PsConsts) +
+                                   sizeof(FfpVsConsts) +
+                                   sizeof(FfpPsConsts));
           }
-          perf::countStage1Encoder();
-          perf::countStage1Bytes(sizeof(VsConsts) + sizeof(PsConsts) +
-                                 sizeof(FfpVsConsts) + sizeof(FfpPsConsts));
           if (auto* recorder = state.ctx->drawRecorder;
               recorder && recorder->beginRenderPass) {
             recorder->beginRenderPass(recorder->userdata,
@@ -3940,7 +4129,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                       : childSource.command.drawItems;
               if (!(*state.encodeParallelDrawRun)(
                       childCommandIndex, childSource.command,
-                      childDrawItems, 0u, encoder, childBinding)) {
+                      childDrawItems, 0u, encoder, child.binding,
+                      childBinding)) {
                 return false;
               }
             }
@@ -3951,7 +4141,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             if (!(*state.encodeParallelDrawRun)(
                     state.commandIndex, state.command,
                     resolved.partition.drawParams, commandDrawBegin,
-                    encoder, childBinding)) {
+                    encoder, child.binding, childBinding)) {
               return false;
             }
           }
@@ -3985,6 +4175,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                        parallelPlanStorage.count),
         backend);
     if (perf::enabled()) {
+      if (execution.status == ParallelPassExecutionStatus::Completed) {
+        perf::countParallelPassBindingSelected(
+            passBindingMode, static_cast<std::uint32_t>(
+                parallelPlanStorage.count), pass.drawCount);
+      }
       perf::countParallelPassDecision(decideParallelPassExecution(
           true, eligibility,
           execution.status == ParallelPassExecutionStatus::Completed));

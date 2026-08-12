@@ -46,6 +46,26 @@ dxmt9::core::CpuReadyTape::SourceRef sourceRef(std::uint64_t seqId) {
   };
 }
 
+dxmt9::encoders::ParallelPassBindingSnapshot bindingSnapshot(
+    dxmt9::encoders::ParallelPassDirectBindingMode mode,
+    std::uint16_t slot) {
+  return {
+      .firstRenderPso = {.slot = slot, .generation = 1u},
+      .firstPayload = {
+          .vertexConstants = static_cast<std::uint64_t>(slot) + 1u,
+          .pixelConstants = static_cast<std::uint64_t>(slot) + 2u,
+          .fixedFunction = static_cast<std::uint64_t>(slot) + 3u,
+      },
+      .firstPayloadCounts = {
+          .vertexFloat = 4u,
+          .pixelFloat = 4u,
+      },
+      .mode = mode,
+      .reject = dxmt9::encoders::ParallelPassBindingRejectReason::None,
+      .complete = true,
+  };
+}
+
 struct ProductionPlanFixture {
   dxmt9::core::ChunkSlot slot{};
   dxmt9::encoders::EncodePartitionReplayStream stream{};
@@ -100,6 +120,44 @@ struct ProductionPlanFixture {
 };
 
 void eligibilityAndSelectionAreTypedAndBounded() {
+  using BindingMode = dxmt9::encoders::ParallelPassDirectBindingMode;
+  using BindingReject = dxmt9::encoders::ParallelPassBindingRejectReason;
+  using dxmt9::encoders::classifyParallelPassBindingKey;
+  check(classifyParallelPassBindingKey({.psoPresent = true}).accepted(),
+        "Stage 1 direct PSO is child-local safe");
+  const auto stage2b = classifyParallelPassBindingKey({
+      .psoPresent = true,
+      .argbufHybrid = true,
+      .argbufDirectCbuf = true,
+  });
+  check(stage2b.accepted() &&
+            stage2b.mode == BindingMode::Stage2DirectCbuf,
+        "Stage 2b direct-cbuf PSO is child-local safe");
+  check(classifyParallelPassBindingKey({}).reject ==
+            BindingReject::MissingPso,
+        "missing PSO metadata fails closed");
+  check(classifyParallelPassBindingKey({
+            .psoPresent = true,
+            .argbufHybrid = true,
+        }).reject == BindingReject::Stage2ArgumentTable,
+        "slot-30 Stage 2 table fails closed");
+  check(classifyParallelPassBindingKey({
+            .psoPresent = true,
+            .argbufHybrid = true,
+            .argbufResourceArray = true,
+        }).reject == BindingReject::ResourceArray,
+        "resource-array PSO fails closed before table ownership");
+  check(classifyParallelPassBindingKey({
+            .psoPresent = true,
+            .argbufDirectCbuf = true,
+        }).reject == BindingReject::MixedAbi,
+        "inconsistent direct-cbuf key bits fail as mixed ABI");
+  check(classifyParallelPassBindingKey({
+            .psoPresent = true,
+            .overrideRebuild = true,
+        }).reject == BindingReject::OverrideRebuild,
+        "PSO-rebuilding draw override fails closed");
+
   ProductionPlanFixture fixture;
   dxmt9::encoders::ParallelPassPlanStorage storage{};
   const auto eligible = dxmt9::encoders::planParallelRenderPassChildren(
@@ -301,6 +359,11 @@ void wmtParentChildAdapterCreatesAndJoinsMetalEncoders() {
       fixture.input(), plan);
   check(eligibility.eligible,
         "hardware adapter fixture has a validated child plan");
+  for (std::size_t i = 0; i < plan.count; ++i) {
+    plan.children[i].binding = bindingSnapshot(
+        dxmt9::encoders::ParallelPassDirectBindingMode::Stage1Direct,
+        static_cast<std::uint16_t>(i));
+  }
   dxmt9::encoders::ParallelPassMetalBackend backend(
       commandBuffer, passInfo,
       dxmt9::encoders::ParallelPassMetalCallbacks{
@@ -880,6 +943,8 @@ struct FakeChildBackend {
           "child must force complete first-draw native binding");
     check(child.firstDraw.complete && child.firstDraw.generation != 0u,
           "child receives its immutable first-draw snapshot");
+    check(child.binding.complete && child.binding.firstRenderPso.valid(),
+          "child receives its immutable direct-binding snapshot");
     shadows[child.childOrdinal] = child.localShadowOrdinal;
     return true;
   }
@@ -961,6 +1026,11 @@ dxmt9::encoders::ParallelPassPlanStorage eligiblePlan(
                                                          storage)
             .eligible,
         "fake executor fixture is eligible");
+  for (std::size_t i = 0; i < storage.count; ++i) {
+    storage.children[i].binding = bindingSnapshot(
+        dxmt9::encoders::ParallelPassDirectBindingMode::Stage1Direct,
+        static_cast<std::uint16_t>(i));
+  }
   return storage;
 }
 
@@ -1029,6 +1099,11 @@ enum class ChildPlanMalformation : std::uint8_t {
   UnknownRoute,
   MixedRoute,
   FullBindDisabled,
+  BindingPsoMissing,
+  BindingStage2Table,
+  BindingResourceArray,
+  BindingMixedAbi,
+  BindingOverrideRebuild,
 };
 
 void malformedPlansFailClosedBeforeParentPreparation() {
@@ -1070,6 +1145,16 @@ void malformedPlansFailClosedBeforeParentPreparation() {
            ParallelPassFallbackReason::FirstDrawProvenanceInvalid},
       Case{ChildPlanMalformation::FullBindDisabled,
            ParallelPassFallbackReason::FullFirstDrawBindingRequired},
+      Case{ChildPlanMalformation::BindingPsoMissing,
+           ParallelPassFallbackReason::BindingPsoMissing},
+      Case{ChildPlanMalformation::BindingStage2Table,
+           ParallelPassFallbackReason::BindingStage2ArgumentTable},
+      Case{ChildPlanMalformation::BindingResourceArray,
+           ParallelPassFallbackReason::BindingResourceArray},
+      Case{ChildPlanMalformation::BindingMixedAbi,
+           ParallelPassFallbackReason::BindingMixedAbi},
+      Case{ChildPlanMalformation::BindingOverrideRebuild,
+           ParallelPassFallbackReason::BindingOverrideRebuild},
   };
 
   for (const auto& testCase : cases) {
@@ -1127,6 +1212,26 @@ void malformedPlansFailClosedBeforeParentPreparation() {
       break;
     case ChildPlanMalformation::FullBindDisabled:
       malformed.children[1].forceFullFirstDrawBinding = false;
+      break;
+    case ChildPlanMalformation::BindingPsoMissing:
+      malformed.children[1].binding = {};
+      break;
+    case ChildPlanMalformation::BindingStage2Table:
+      malformed.children[1].binding.reject =
+          dxmt9::encoders::ParallelPassBindingRejectReason::
+              Stage2ArgumentTable;
+      break;
+    case ChildPlanMalformation::BindingResourceArray:
+      malformed.children[1].binding.reject =
+          dxmt9::encoders::ParallelPassBindingRejectReason::ResourceArray;
+      break;
+    case ChildPlanMalformation::BindingMixedAbi:
+      malformed.children[1].binding.mode =
+          dxmt9::encoders::ParallelPassDirectBindingMode::Stage2DirectCbuf;
+      break;
+    case ChildPlanMalformation::BindingOverrideRebuild:
+      malformed.children[1].binding.reject =
+          dxmt9::encoders::ParallelPassBindingRejectReason::OverrideRebuild;
       break;
     }
     FakeChildBackend backend{};
@@ -1216,6 +1321,84 @@ void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
   }
 }
 
+void economicsClassifierIsPureBoundedAndObservationOnly() {
+  using Decision = dxmt9::encoders::ParallelPassEconomicsDecision;
+  using Reason = dxmt9::encoders::ParallelPassEconomicsRejectReason;
+  using Summary = dxmt9::encoders::ParallelPassEconomicsSummary;
+  using dxmt9::encoders::classifyParallelPassEconomics;
+
+  const auto summary = [](std::uint32_t children,
+                          std::uint32_t minimum,
+                          std::uint64_t draws,
+                          std::uint64_t stage1,
+                          std::uint64_t stage2b,
+                          std::uint64_t forced,
+                          std::uint64_t psoTransitions,
+                          std::uint64_t uniformTransitions) {
+    return Summary{
+        .totalDraws = draws,
+        .stage1Draws = stage1,
+        .stage2bDraws = stage2b,
+        .forcedStage1Draws = forced,
+        .renderPsoTransitions = psoTransitions,
+        .uniformTransitions = uniformTransitions,
+        .childCount = children,
+        .minimumChildDraws = minimum,
+        .valid = true,
+    };
+  };
+
+  check(classifyParallelPassEconomics(
+            summary(2u, 63u, 126u, 126u, 0u, 0u, 0u, 0u)).reject ==
+            Reason::ThinChild,
+        "2x63 is rejected at the existing eligibility quantum");
+  check(classifyParallelPassEconomics(
+            summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u)).accepted,
+        "2x64 is structurally accepted");
+  check(classifyParallelPassEconomics(
+            summary(16u, 64u, 1024u, 0u, 1024u, 0u, 14u, 14u)).accepted,
+        "16x64 stays structurally eligible without a worker-count cap");
+  check(classifyParallelPassEconomics(
+            summary(2u, 64u, 128u, 0u, 0u, 128u, 0u, 0u)).reject ==
+            Reason::ForcedStage1,
+        "forced Stage 1 draw volume rejects economics");
+  check(classifyParallelPassEconomics(
+            summary(4u, 64u, 256u, 256u, 0u, 0u, 1u, 2u)).reject ==
+            Reason::PsoFirstBindAmplification,
+        "PSO first-bind amplification rejects at its exact boundary");
+  check(classifyParallelPassEconomics(
+            summary(4u, 64u, 256u, 256u, 0u, 0u, 2u, 1u)).reject ==
+            Reason::UniformFirstBindAmplification,
+        "uniform first-bind amplification rejects at its exact boundary");
+  check(classifyParallelPassEconomics(
+            summary(4u, 64u, 256u, 256u, 0u, 0u, 2u, 2u)).accepted,
+        "A-B-A transition counts meet both first-bind bounds");
+  auto invalid = summary(2u, 64u, 128u, 127u, 0u, 0u, 0u, 0u);
+  check(classifyParallelPassEconomics(invalid).reject ==
+            Reason::InvalidOrOverflow,
+        "non-conserving ABI counts fail closed");
+  invalid = summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u);
+  invalid.overflow = true;
+  check(classifyParallelPassEconomics(invalid).reject ==
+            Reason::InvalidOrOverflow,
+        "overflow fails closed");
+
+  std::uint32_t observations = 0u;
+  check(!dxmt9::encoders::observeParallelPassEconomicsIfEnabled(
+            false, summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u),
+            [&](const Summary&, const Decision&) { ++observations; }) &&
+            observations == 0u,
+        "perf-off economics performs zero observation work");
+  check(dxmt9::encoders::observeParallelPassEconomicsIfEnabled(
+            true, summary(2u, 64u, 128u, 0u, 128u, 0u, 0u, 0u),
+            [&](const Summary&, const Decision& decision) {
+              ++observations;
+              check(decision.accepted,
+                    "retained Stage 2b is accepted in shadow policy");
+            }) && observations == 1u,
+        "perf-on economics observes exactly once without enforcing");
+}
+
 }  // namespace
 
 int main() {
@@ -1231,6 +1414,7 @@ int main() {
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();
     malformedPlansFailClosedBeforeParentPreparation();
     failuresSeparatePreEffectFallbackFromPostEffectFailStop();
+    economicsClassifierIsPureBoundedAndObservationOnly();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
     return 1;

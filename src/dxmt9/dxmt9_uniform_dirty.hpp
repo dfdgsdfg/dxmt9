@@ -65,6 +65,9 @@ struct DirectCbufPayloadCounts {
   std::uint16_t pixelFloat = 0;
   std::uint16_t pixelInt = 0;
   std::uint16_t pixelBool = 0;
+
+  friend constexpr bool operator==(const DirectCbufPayloadCounts&,
+                                   const DirectCbufPayloadCounts&) = default;
 };
 
 struct DirectCbufPayloadSourceChange {

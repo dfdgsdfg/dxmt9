@@ -2,6 +2,7 @@
 
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_source_semantics.hpp"
+#include "dxmt9_uniform_dirty.hpp"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +16,182 @@ namespace dxmt9::encoders {
 inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
 inline constexpr std::size_t kParallelRenderPassCandidateCapacity = 16u;
 inline constexpr std::uint32_t kParallelRenderPassNoFailedChild = UINT32_MAX;
+
+enum class ParallelPassDirectBindingMode : std::uint8_t {
+  Stage1Direct,
+  Stage2DirectCbuf,
+  Count,
+};
+
+enum class ParallelPassBindingRejectReason : std::uint8_t {
+  None,
+  MissingPso,
+  Stage2ArgumentTable,
+  ResourceArray,
+  MixedAbi,
+  OverrideRebuild,
+  Count,
+};
+
+struct ParallelPassBindingKeyInput {
+  bool psoPresent = false;
+  bool argbufHybrid = false;
+  bool argbufResourceArray = false;
+  bool argbufDirectCbuf = false;
+  bool overrideRebuild = false;
+};
+
+struct ParallelPassBindingKeyDecision {
+  ParallelPassDirectBindingMode mode =
+      ParallelPassDirectBindingMode::Stage1Direct;
+  ParallelPassBindingRejectReason reject =
+      ParallelPassBindingRejectReason::MissingPso;
+
+  constexpr bool accepted() const noexcept {
+    return reject == ParallelPassBindingRejectReason::None;
+  }
+};
+
+// Pure pre-effect classifier for the only two child-local binding ABIs. The
+// caller separately proves that every command in the pass selects the same
+// accepted mode.
+inline constexpr ParallelPassBindingKeyDecision
+classifyParallelPassBindingKey(
+    const ParallelPassBindingKeyInput& input) noexcept {
+  if (!input.psoPresent) {
+    return {};
+  }
+  if (input.argbufResourceArray) {
+    return {
+        .reject = ParallelPassBindingRejectReason::ResourceArray,
+    };
+  }
+  if (input.overrideRebuild) {
+    return {
+        .reject = ParallelPassBindingRejectReason::OverrideRebuild,
+    };
+  }
+  if (input.argbufHybrid && !input.argbufDirectCbuf) {
+    return {
+        .reject = ParallelPassBindingRejectReason::Stage2ArgumentTable,
+    };
+  }
+  if (!input.argbufHybrid && input.argbufDirectCbuf) {
+    return {
+        .reject = ParallelPassBindingRejectReason::MixedAbi,
+    };
+  }
+  return {
+      .mode = input.argbufHybrid
+          ? ParallelPassDirectBindingMode::Stage2DirectCbuf
+          : ParallelPassDirectBindingMode::Stage1Direct,
+      .reject = ParallelPassBindingRejectReason::None,
+  };
+}
+
+struct ParallelPassBindingSnapshot {
+  core::PsoHandle firstRenderPso{};
+  uniform::DrawBindingPayloadIdentity firstPayload{};
+  uniform::DirectCbufPayloadCounts firstPayloadCounts{};
+  ParallelPassDirectBindingMode mode =
+      ParallelPassDirectBindingMode::Stage1Direct;
+  ParallelPassBindingRejectReason reject =
+      ParallelPassBindingRejectReason::MissingPso;
+  bool complete = false;
+};
+
+enum class ParallelPassEconomicsRejectReason : std::uint8_t {
+  None,
+  ForcedStage1,
+  ThinChild,
+  PsoFirstBindAmplification,
+  UniformFirstBindAmplification,
+  InvalidOrOverflow,
+  Count,
+};
+
+struct ParallelPassEconomicsSummary {
+  std::uint64_t totalDraws = 0;
+  std::uint64_t stage1Draws = 0;
+  std::uint64_t stage2bDraws = 0;
+  std::uint64_t forcedStage1Draws = 0;
+  std::uint64_t renderPsoTransitions = 0;
+  std::uint64_t uniformTransitions = 0;
+  std::uint32_t childCount = 0;
+  std::uint32_t minimumChildDraws = 0;
+  bool valid = false;
+  bool overflow = false;
+
+  friend constexpr bool operator==(const ParallelPassEconomicsSummary&,
+                                   const ParallelPassEconomicsSummary&) =
+      default;
+};
+
+struct ParallelPassEconomicsDecision {
+  ParallelPassEconomicsRejectReason reject =
+      ParallelPassEconomicsRejectReason::InvalidOrOverflow;
+  bool considered = false;
+  bool accepted = false;
+
+  friend constexpr bool operator==(const ParallelPassEconomicsDecision&,
+                                   const ParallelPassEconomicsDecision&) =
+      default;
+};
+
+// Observation-only economics policy. It reuses the production planner's
+// existing 64-draw eligibility quantum and compares child first-bind cost
+// against the serial transition count without introducing a benchmark-tuned
+// runtime threshold.
+inline constexpr ParallelPassEconomicsDecision
+classifyParallelPassEconomics(
+    const ParallelPassEconomicsSummary& summary) noexcept {
+  ParallelPassEconomicsDecision result{.considered = true};
+  auto reject = [&](ParallelPassEconomicsRejectReason reason) {
+    result.reject = reason;
+    return result;
+  };
+  const bool drawCountsConserve =
+      summary.stage1Draws <= summary.totalDraws &&
+      summary.stage2bDraws <= summary.totalDraws - summary.stage1Draws &&
+      summary.forcedStage1Draws ==
+          summary.totalDraws - summary.stage1Draws - summary.stage2bDraws;
+  if (!summary.valid || summary.overflow || summary.childCount < 2u ||
+      summary.childCount > kParallelRenderPassChildCapacity ||
+      summary.minimumChildDraws == 0u || !drawCountsConserve) {
+    return reject(ParallelPassEconomicsRejectReason::InvalidOrOverflow);
+  }
+  if (summary.forcedStage1Draws != 0u) {
+    return reject(ParallelPassEconomicsRejectReason::ForcedStage1);
+  }
+  if (summary.minimumChildDraws < kProductionPartitionDrawThreshold) {
+    return reject(ParallelPassEconomicsRejectReason::ThinChild);
+  }
+  const std::uint64_t extraChildFirstBinds = summary.childCount - 1u;
+  if (extraChildFirstBinds > summary.renderPsoTransitions + 1u) {
+    return reject(
+        ParallelPassEconomicsRejectReason::PsoFirstBindAmplification);
+  }
+  if (extraChildFirstBinds > summary.uniformTransitions + 1u) {
+    return reject(
+        ParallelPassEconomicsRejectReason::UniformFirstBindAmplification);
+  }
+  result.reject = ParallelPassEconomicsRejectReason::None;
+  result.accepted = true;
+  return result;
+}
+
+template <typename Observer>
+bool observeParallelPassEconomicsIfEnabled(
+    bool perfEnabled,
+    const ParallelPassEconomicsSummary& summary,
+    Observer&& observer) {
+  if (!perfEnabled) {
+    return false;
+  }
+  std::forward<Observer>(observer)(
+      summary, classifyParallelPassEconomics(summary));
+  return true;
+}
 
 // A value proof that a child can establish its first draw without borrowing
 // the coordinator's mutable native binding shadow. The producer owns the
@@ -286,8 +463,35 @@ enum class ParallelPassFallbackReason : std::uint8_t {
   LocalShadowInvalid,
   FirstDrawProvenanceInvalid,
   FullFirstDrawBindingRequired,
+  BindingPsoMissing,
+  BindingStage2ArgumentTable,
+  BindingResourceArray,
+  BindingMixedAbi,
+  BindingOverrideRebuild,
   Count,
 };
+
+inline constexpr ParallelPassFallbackReason
+parallelPassFallbackForBindingReject(
+    ParallelPassBindingRejectReason reject) noexcept {
+  switch (reject) {
+  case ParallelPassBindingRejectReason::None:
+    return ParallelPassFallbackReason::None;
+  case ParallelPassBindingRejectReason::MissingPso:
+    return ParallelPassFallbackReason::BindingPsoMissing;
+  case ParallelPassBindingRejectReason::Stage2ArgumentTable:
+    return ParallelPassFallbackReason::BindingStage2ArgumentTable;
+  case ParallelPassBindingRejectReason::ResourceArray:
+    return ParallelPassFallbackReason::BindingResourceArray;
+  case ParallelPassBindingRejectReason::MixedAbi:
+    return ParallelPassFallbackReason::BindingMixedAbi;
+  case ParallelPassBindingRejectReason::OverrideRebuild:
+    return ParallelPassFallbackReason::BindingOverrideRebuild;
+  case ParallelPassBindingRejectReason::Count:
+    return ParallelPassFallbackReason::BindingPsoMissing;
+  }
+  return ParallelPassFallbackReason::BindingPsoMissing;
+}
 
 inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
     SealedParallelPassSnapshotFallback fallback) noexcept {
@@ -488,6 +692,7 @@ inline ParallelPassExecutionDecision decideParallelPassExecution(
 struct ParallelPassChildPlan {
   EncodePartitionRangeSnapshot range{};
   ParallelFirstDrawSnapshot firstDraw{};
+  ParallelPassBindingSnapshot binding{};
   std::uint32_t replayOrdinalBegin = 0;
   std::uint32_t replayOrdinalCount = 0;
   std::uint32_t childOrdinal = 0;
@@ -627,6 +832,16 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
     if (!child.forceFullFirstDrawBinding) {
       return ParallelPassFallbackReason::FullFirstDrawBindingRequired;
     }
+    if (child.binding.reject != ParallelPassBindingRejectReason::None) {
+      return parallelPassFallbackForBindingReject(child.binding.reject);
+    }
+    if (!child.binding.complete || !child.binding.firstRenderPso.valid() ||
+        child.binding.mode == ParallelPassDirectBindingMode::Count) {
+      return ParallelPassFallbackReason::BindingPsoMissing;
+    }
+    if (i != 0u && child.binding.mode != children.front().binding.mode) {
+      return ParallelPassFallbackReason::BindingMixedAbi;
+    }
     if (i != 0u) {
       if (child.coversCompleteCommands !=
           children.front().coversCompleteCommands) {
@@ -762,6 +977,10 @@ ParallelPassExecutionResult executeParallelRenderPass(
 }
 
 static_assert(std::is_trivially_copyable_v<ParallelFirstDrawSnapshot>);
+static_assert(std::is_trivially_copyable_v<ParallelPassBindingSnapshot>);
+static_assert(std::is_standard_layout_v<ParallelPassBindingSnapshot>);
+static_assert(std::is_trivially_copyable_v<ParallelPassEconomicsSummary>);
+static_assert(std::is_standard_layout_v<ParallelPassEconomicsSummary>);
 static_assert(
     std::is_trivially_copyable_v<ParallelPassCoordinatorProofSnapshotInput>);
 static_assert(std::is_trivially_copyable_v<ParallelPassCommandLocator>);

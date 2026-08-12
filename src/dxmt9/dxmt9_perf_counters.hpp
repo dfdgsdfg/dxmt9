@@ -8,6 +8,10 @@
 
 namespace dxmt9::encoders {
 enum class ProductionPartitionFallbackReason : std::uint8_t;
+enum class ParallelPassBindingRejectReason : std::uint8_t;
+enum class ParallelPassDirectBindingMode : std::uint8_t;
+struct ParallelPassEconomicsDecision;
+struct ParallelPassEconomicsSummary;
 struct ParallelPassExecutionDecision;
 struct SealedParallelPassSnapshotBatchResult;
 }  // namespace dxmt9::encoders
@@ -257,7 +261,15 @@ void countParallelPassWorkerBatch(std::uint32_t tasks);
 void countParallelPassWorkerTaskBegin();
 void countParallelPassWorkerTaskEnd(std::uint64_t cpuNs);
 void countParallelPassWorkerWallTime(std::uint64_t wallNs);
-void countParallelPassForcedStage1();
+void countParallelPassBindingReject(
+    encoders::ParallelPassBindingRejectReason reason);
+void countParallelPassBindingSelected(
+    encoders::ParallelPassDirectBindingMode mode,
+    std::uint32_t childCount,
+    std::uint64_t drawCount);
+void countParallelPassEconomics(
+    const encoders::ParallelPassEconomicsSummary& summary,
+    const encoders::ParallelPassEconomicsDecision& decision);
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result);
 void countCpuReadySessionHeadAppended(bool arenaSource);

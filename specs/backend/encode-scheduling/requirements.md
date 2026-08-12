@@ -509,12 +509,17 @@ order must preserve draw order, all children must end before the parent, and
 failure before Metal side effects must deterministically fall back to serial.
 Workers may re-resolve source-qualified locators only while the coordinator
 holds the synchronous source residency pin; no payload pointer may escape the
-joined execution. Until argument-buffer state is child-local, an eligible
-parallel pass may select the semantically equivalent Stage 1 binding variant
-only when that conversion is explicitly counted. It must not share the
-queue-owned argument encoder or mutable table shadow between children. The
-parallel provider must remain non-default when matched wild evidence reduces
-local encode wall time but regresses end-to-end throughput.
+joined execution. Before parent creation, one immutable pass-wide binding proof
+must select either Stage 1 direct binding or Stage 2b direct constant buffers
+at VS/PS slots 0 and FFP slots 3 for every draw. Missing PSO metadata, mixed
+ABIs, slot-30 argument tables, resource arrays, or a draw override that can
+rebuild the prefetched PSO make the complete pass ineligible before effects.
+Each child owns a zeroed binding shadow with every uniform class initially
+dirty. It must not share the queue-owned argument encoder, mutable table shadow,
+or argument-buffer constant cache between children. The parallel provider must
+remain non-default when matched wild evidence reduces local encode wall time
+but regresses end-to-end throughput; an observation-only economics classifier
+must not change selection until matched promotion evidence exists.
 
 **R-BACK-2.64** A Metal 4 segmented lane may encode physical segments in
 separate command buffers only for one sealed logical render pass. It must first

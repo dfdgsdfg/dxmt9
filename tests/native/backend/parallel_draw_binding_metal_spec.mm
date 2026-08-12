@@ -40,10 +40,16 @@ struct alignas(16) FragmentUniform {
   float color[4]{};
 };
 
+struct alignas(16) FixedUniform {
+  float vertexBias[2]{};
+  float colorScale[2]{};
+};
+
 struct DrawPayload {
   DrawBindingPayloadIdentity identity{};
   VertexUniform vertex{};
   FragmentUniform fragment{};
+  FixedUniform fixed{};
 };
 
 struct ChildPayloads {
@@ -69,27 +75,35 @@ struct FragmentUniform {
   float4 color;
 };
 
+struct FixedUniform {
+  float2 vertexBias;
+  float2 colorScale;
+};
+
 struct VertexOut {
   float4 position [[position]];
 };
 
 vertex VertexOut binding_vs(
     uint vertexId [[vertex_id]],
-    constant VertexUniform& uniform [[buffer(0)]]) {
+    constant VertexUniform& uniform [[buffer(0)]],
+    constant FixedUniform& fixed [[buffer(3)]]) {
   const float2 corners[6] = {
     float2(-1.0, -1.0), float2( 1.0, -1.0), float2(-1.0,  1.0),
     float2(-1.0,  1.0), float2( 1.0, -1.0), float2( 1.0,  1.0),
   };
   VertexOut out;
   out.position = float4(
-      uniform.center + corners[vertexId] * uniform.halfExtent,
+      uniform.center + fixed.vertexBias +
+          corners[vertexId] * uniform.halfExtent,
       0.0, 1.0);
   return out;
 }
 
 fragment float4 binding_fs(
-    constant FragmentUniform& uniform [[buffer(0)]]) {
-  return uniform.color;
+    constant FragmentUniform& uniform [[buffer(0)]],
+    constant FixedUniform& fixed [[buffer(3)]]) {
+  return uniform.color * fixed.colorScale.x;
 }
 )msl";
 
@@ -154,7 +168,9 @@ MTLRenderPassDescriptor* makePass(id<MTLTexture> target) {
 
 ChildPayloads makeChild(float centerX, std::uint64_t childSalt) {
   const auto make = [&](std::uint64_t generation,
-                        std::array<float, 4> color) {
+                        std::array<float, 4> color,
+                        float bias,
+                        float colorScale) {
     return DrawPayload{
         .identity = DrawBindingPayloadIdentity{
             .vertexConstants = childSalt ^ (generation * 0x101u),
@@ -168,10 +184,16 @@ ChildPayloads makeChild(float centerX, std::uint64_t childSalt) {
         .fragment = FragmentUniform{
             .color = {color[0], color[1], color[2], color[3]},
         },
+        .fixed = FixedUniform{
+            .vertexBias = {bias, 0.0f},
+            .colorScale = {colorScale, colorScale},
+        },
     };
   };
-  const auto a = make(1u, {0.20f, 0.00f, 0.00f, 0.20f});
-  const auto b = make(2u, {0.00f, 0.20f, 0.00f, 0.20f});
+  const auto a = make(
+      1u, {0.20f, 0.00f, 0.00f, 0.20f}, 0.0f, 1.0f);
+  const auto b = make(
+      2u, {0.00f, 0.20f, 0.00f, 0.20f}, 0.05f, 0.75f);
   return ChildPayloads{.draws = {a, b, a}};
 }
 
@@ -184,6 +206,12 @@ void encodeSerialChild(id<MTLRenderCommandEncoder> encoder,
     [encoder setFragmentBytes:&draw.fragment
                        length:sizeof(draw.fragment)
                       atIndex:0];
+    [encoder setVertexBytes:&draw.fixed
+                     length:sizeof(draw.fixed)
+                    atIndex:3];
+    [encoder setFragmentBytes:&draw.fixed
+                       length:sizeof(draw.fixed)
+                      atIndex:3];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0
                 vertexCount:6];
@@ -206,33 +234,37 @@ void encodeTransitionChild(id<MTLRenderCommandEncoder> encoder,
   for (const auto& draw : child.draws) {
     const auto transition = dxmt9::uniform::planDrawBindingTransition(
         previous.has_value(), previous.value_or(DrawBindingPayloadIdentity{}),
-        draw.identity, DrawBindingAbi::Stage1Direct,
+        draw.identity, DrawBindingAbi::Stage2DirectCbuf,
         DrawBindingPath::Direct);
     if (!omitPayloadDirtyTransition || !previous.has_value()) {
       if (!dxmt9::uniform::applyDrawBindingTransition(
               dirty, transition, counts)) {
-        fail("direct child rejected a Stage 1 binding ABI");
+        fail("direct child rejected a Stage 2b binding ABI");
       }
     }
-    if (dxmt9::uniform::anyDirty(
-            dirty, dxmt9::uniform::kVsAny |
-                dxmt9::uniform::kFfpVsAny)) {
+    if (dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kVsAny)) {
       [encoder setVertexBytes:&draw.vertex
                        length:sizeof(draw.vertex)
                       atIndex:0];
-      dxmt9::uniform::clearBits(
-          dirty, dxmt9::uniform::kVsAny |
-              dxmt9::uniform::kFfpVsAny);
+      dxmt9::uniform::clearBits(dirty, dxmt9::uniform::kVsAny);
     }
-    if (dxmt9::uniform::anyDirty(
-            dirty, dxmt9::uniform::kPsAny |
-                dxmt9::uniform::kFfpPsAny)) {
+    if (dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kFfpVsAny)) {
+      [encoder setVertexBytes:&draw.fixed
+                       length:sizeof(draw.fixed)
+                      atIndex:3];
+      dxmt9::uniform::clearBits(dirty, dxmt9::uniform::kFfpVsAny);
+    }
+    if (dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kPsAny)) {
       [encoder setFragmentBytes:&draw.fragment
                          length:sizeof(draw.fragment)
                         atIndex:0];
-      dxmt9::uniform::clearBits(
-          dirty, dxmt9::uniform::kPsAny |
-              dxmt9::uniform::kFfpPsAny);
+      dxmt9::uniform::clearBits(dirty, dxmt9::uniform::kPsAny);
+    }
+    if (dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kFfpPsAny)) {
+      [encoder setFragmentBytes:&draw.fixed
+                         length:sizeof(draw.fixed)
+                        atIndex:3];
+      dxmt9::uniform::clearBits(dirty, dxmt9::uniform::kFfpPsAny);
     }
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:0

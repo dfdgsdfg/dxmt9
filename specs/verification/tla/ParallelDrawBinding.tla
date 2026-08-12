@@ -10,9 +10,10 @@
  * EncodeCurrent remains enabled with the stale bound generation and TLC
  * reports DrawUsesRequiredUniformGeneration immediately.
  *
- * A slot-30 argument-table PSO cannot enter a direct-binding child. The
- * coordinator validates all child ABIs before any Metal side effect and
- * abstracts an incompatible plan as a complete serial fallback.
+ * A slot-30 argument-table PSO or a mixed Stage 1/Stage 2b pass cannot enter
+ * direct-binding children. The coordinator validates one pass-wide ABI before
+ * any Metal side effect and abstracts an incompatible plan as a complete
+ * serial fallback.
  ****************************************************************************)
 
 EXTENDS Naturals, FiniteSets, TLC
@@ -38,7 +39,8 @@ AbiCompatible(abi) == abi \in {"Stage1Direct", "Stage2DirectCbuf"}
 OwnedDraws(child) == {draw \in Draws : Owner(draw) = child}
 AllChildrenCreated == \A child \in Children : childState[child] # "Absent"
 AllChildAbisCompatible ==
-  \A child \in Children : AbiCompatible(psoAbi[child])
+  /\ \A child \in Children : AbiCompatible(psoAbi[child])
+  /\ \A child \in Children : psoAbi[child] = psoAbi[1]
 AllOwnedEncoded(child) ==
   \A draw \in OwnedDraws(child) : encoded[draw]
 AllDrawsEncoded == \A draw \in Draws : encoded[draw]

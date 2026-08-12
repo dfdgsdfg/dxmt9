@@ -513,10 +513,10 @@ void testDrawBindingTransitionTruthTable() {
   DirtyState child0{};
   DirtyState child1{};
   auto first = dxmt9::uniform::planDrawBindingTransition(
-      false, {}, a, DrawBindingAbi::Stage1Direct,
+      false, {}, a, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   check(first.psoBindingAbiCompatible,
-        "Stage 1 PSO matches direct child binding");
+        "Stage 2b PSO matches direct child binding");
   check(!first.constantSourceChange.vertex &&
             !first.constantSourceChange.pixel &&
             !first.fixedFunctionChanged,
@@ -530,7 +530,7 @@ void testDrawBindingTransitionTruthTable() {
   checkEq(child0.mask, 0u, "A to A does not create dirty work");
 
   const auto aToB = dxmt9::uniform::planDrawBindingTransition(
-      true, a, b, DrawBindingAbi::Stage1Direct,
+      true, a, b, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   check(dxmt9::uniform::applyDrawBindingTransition(child0, aToB, counts),
         "A to B transition applies");
@@ -547,10 +547,10 @@ void testDrawBindingTransitionTruthTable() {
 
   dxmt9::uniform::clearBits(child0, 0x1fffu);
   const auto bToA = dxmt9::uniform::planDrawBindingTransition(
-      true, b, a, DrawBindingAbi::Stage1Direct,
+      true, b, a, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   check(dxmt9::uniform::applyDrawBindingTransition(child0, bToA, counts),
-        "B to A transition applies instead of reusing stale A history");
+        "Stage 2b B to A transition applies instead of reusing stale A history");
   check(dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kVsAny) &&
             dxmt9::uniform::anyDirty(child0, dxmt9::uniform::kPsAny),
         "B to A re-dirties both programmable stages");
@@ -560,7 +560,7 @@ void testDrawBindingTransitionTruthTable() {
   vsOnly.pixelConstants = a.pixelConstants;
   vsOnly.fixedFunction = a.fixedFunction;
   const auto vsPlan = dxmt9::uniform::planDrawBindingTransition(
-      true, a, vsOnly, DrawBindingAbi::Stage1Direct,
+      true, a, vsOnly, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   dxmt9::uniform::applyDrawBindingTransition(stageOnly, vsPlan, counts);
   check(dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kVsAny) &&
@@ -571,7 +571,7 @@ void testDrawBindingTransitionTruthTable() {
   auto psOnly = a;
   psOnly.pixelConstants = b.pixelConstants;
   const auto psPlan = dxmt9::uniform::planDrawBindingTransition(
-      true, a, psOnly, DrawBindingAbi::Stage1Direct,
+      true, a, psOnly, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   dxmt9::uniform::applyDrawBindingTransition(stageOnly, psPlan, counts);
   check(!dxmt9::uniform::anyDirty(stageOnly, dxmt9::uniform::kVsAny) &&
@@ -582,7 +582,7 @@ void testDrawBindingTransitionTruthTable() {
   auto ffpOnly = a;
   ffpOnly.fixedFunction = b.fixedFunction;
   const auto ffpPlan = dxmt9::uniform::planDrawBindingTransition(
-      true, a, ffpOnly, DrawBindingAbi::Stage1Direct,
+      true, a, ffpOnly, DrawBindingAbi::Stage2DirectCbuf,
       DrawBindingPath::Direct);
   dxmt9::uniform::applyDrawBindingTransition(stageOnly, ffpPlan, counts);
   check(!dxmt9::uniform::anyDirty(

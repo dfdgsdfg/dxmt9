@@ -597,7 +597,7 @@ void countRenderPartitionProvider(render::PartitionModeRequest requestedMode,
 void countParallelPassDecision(
     const encoders::ParallelPassExecutionDecision& decision) {
   using Fallback = encoders::ParallelPassFallbackReason;
-  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 25u);
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 30u);
   auto& c = counters();
   if (decision.considered) {
     add(c.parallelPassConsidered);
@@ -631,6 +631,11 @@ void countParallelPassDecision(
   case Fallback::LocalShadowInvalid:
   case Fallback::FirstDrawProvenanceInvalid:
   case Fallback::FullFirstDrawBindingRequired:
+  case Fallback::BindingPsoMissing:
+  case Fallback::BindingStage2ArgumentTable:
+  case Fallback::BindingResourceArray:
+  case Fallback::BindingMixedAbi:
+  case Fallback::BindingOverrideRebuild:
     add(c.parallelPassFallbackPreEffect);
     break;
   case Fallback::TooFewChildren:
@@ -672,8 +677,123 @@ void countParallelPassWorkerWallTime(std::uint64_t wallNs) {
   add(counters().parallelPassWorkerWallNs, wallNs);
 }
 
-void countParallelPassForcedStage1() {
-  add(counters().parallelPassForcedStage1);
+void countParallelPassBindingReject(
+    encoders::ParallelPassBindingRejectReason reason) {
+  using Reason = encoders::ParallelPassBindingRejectReason;
+  static_assert(static_cast<std::uint8_t>(Reason::Count) == 6u);
+  auto& c = counters();
+  switch (reason) {
+  case Reason::None:
+    break;
+  case Reason::MissingPso:
+    add(c.parallelPassBindingRejectPsoMissing);
+    break;
+  case Reason::Stage2ArgumentTable:
+    add(c.parallelPassBindingRejectStage2Table);
+    break;
+  case Reason::ResourceArray:
+    add(c.parallelPassBindingRejectResourceArray);
+    break;
+  case Reason::MixedAbi:
+    add(c.parallelPassBindingRejectMixedAbi);
+    break;
+  case Reason::OverrideRebuild:
+    add(c.parallelPassBindingRejectOverrideRebuild);
+    break;
+  case Reason::Count:
+    break;
+  }
+}
+
+void countParallelPassBindingSelected(
+    encoders::ParallelPassDirectBindingMode mode,
+    std::uint32_t childCount,
+    std::uint64_t drawCount) {
+  using Mode = encoders::ParallelPassDirectBindingMode;
+  auto& c = counters();
+  switch (mode) {
+  case Mode::Stage1Direct:
+    add(c.parallelPassBindingStage1Selected);
+    break;
+  case Mode::Stage2DirectCbuf:
+    add(c.parallelPassBindingStage2bSelected);
+    add(c.parallelPassStage2bChildren, childCount);
+    add(c.parallelPassStage2bDraws, drawCount);
+    break;
+  case Mode::Count:
+    break;
+  }
+}
+
+void countParallelPassEconomics(
+    const encoders::ParallelPassEconomicsSummary& summary,
+    const encoders::ParallelPassEconomicsDecision& decision) {
+  using Reason = encoders::ParallelPassEconomicsRejectReason;
+  static_assert(static_cast<std::uint8_t>(Reason::Count) == 6u);
+  auto& c = counters();
+  if (decision.considered) {
+    add(c.parallelPassEconomicsConsidered);
+  }
+  add(c.parallelPassEconomicsStage1Draws, summary.stage1Draws);
+  add(c.parallelPassEconomicsStage2bDraws, summary.stage2bDraws);
+  add(c.parallelPassEconomicsForcedStage1Draws,
+      summary.forcedStage1Draws);
+  add(c.parallelPassEconomicsPsoTransitions,
+      summary.renderPsoTransitions);
+  add(c.parallelPassEconomicsUniformTransitions,
+      summary.uniformTransitions);
+  if (decision.accepted) {
+    add(c.parallelPassEconomicsShadowAccepted);
+    add(c.parallelPassEconomicsAcceptedDraws, summary.totalDraws);
+    add(c.parallelPassEconomicsAcceptedChildren, summary.childCount);
+  } else {
+    add(c.parallelPassEconomicsShadowRejected);
+    add(c.parallelPassEconomicsRejectedDraws, summary.totalDraws);
+    add(c.parallelPassEconomicsRejectedChildren, summary.childCount);
+  }
+  switch (decision.reject) {
+  case Reason::None:
+    break;
+  case Reason::ForcedStage1:
+    add(c.parallelPassEconomicsRejectForcedStage1);
+    break;
+  case Reason::ThinChild:
+    add(c.parallelPassEconomicsRejectThinChild);
+    break;
+  case Reason::PsoFirstBindAmplification:
+    add(c.parallelPassEconomicsRejectPsoFirstBind);
+    break;
+  case Reason::UniformFirstBindAmplification:
+    add(c.parallelPassEconomicsRejectUniformFirstBind);
+    break;
+  case Reason::InvalidOrOverflow:
+    add(c.parallelPassEconomicsRejectInvalidOverflow);
+    break;
+  case Reason::Count:
+    break;
+  }
+  if (summary.minimumChildDraws != 0u) {
+    if (summary.minimumChildDraws < 32u) {
+      add(c.parallelPassEconomicsMinChildUnder32);
+    } else if (summary.minimumChildDraws < 64u) {
+      add(c.parallelPassEconomicsMinChild32To63);
+    } else if (summary.minimumChildDraws < 128u) {
+      add(c.parallelPassEconomicsMinChild64To127);
+    } else {
+      add(c.parallelPassEconomicsMinChild128Plus);
+    }
+  }
+  if (summary.childCount == 2u) {
+    add(c.parallelPassEconomicsChildren2);
+  } else if (summary.childCount >= 3u && summary.childCount <= 4u) {
+    add(c.parallelPassEconomicsChildren3To4);
+  } else if (summary.childCount >= 5u && summary.childCount <= 8u) {
+    add(c.parallelPassEconomicsChildren5To8);
+  } else if (summary.childCount >= 9u &&
+             summary.childCount <=
+                 encoders::kParallelRenderPassChildCapacity) {
+    add(c.parallelPassEconomicsChildren9To16);
+  }
 }
 
 void countParallelPassShadow(

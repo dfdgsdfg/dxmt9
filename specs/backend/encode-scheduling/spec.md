@@ -1161,12 +1161,16 @@ and epoch ambiguity reject without altering the production plan.
 
 A statically eligible observation owns only fixed locators, attachment and
 canonical resource values, one fixed render route, pass boundaries,
-pass-action epoch, and first-draw provenance. It owns no retained
+pass-action epoch, first-draw provenance, and a bounded first-draw binding
+snapshot containing the selected direct ABI, expected render PSO handle,
+uniform source identities, and live constant counts. It owns no retained
 `SourcePayloadView`, span, Tape page, Metal object, or mutable native binding
 shadow. Immediately before parent creation the coordinator re-resolves every
 locator under the synchronous source residency pin and revalidates draw kind,
-attachment identity, render route, UP absence, tile-FFP absence, and complete
-late Store actions. Any mismatch is a pre-effect serial fallback.
+attachment identity, render route, pass epoch, canonical read set, PSO key and
+handle, uniform payload availability, UP absence, tile-FFP absence, and
+complete late Store actions for every command and draw. Any mismatch is a
+pre-effect serial fallback.
 
 The WMT adapter creates one `MTLParallelRenderCommandEncoder` and child render
 encoders in plan order. A persistent concurrent executor submits at most 16
@@ -1178,14 +1182,28 @@ shared read-only/synchronized operations; transient uploads use the
 queue-locked resource arena. The coordinator alone publishes pass actions,
 attachment-touch state, sidecars, completion, and command-buffer ownership.
 
-The first production lane deliberately uses portable Stage 1 bindings inside
-parallel children. If the serial selector would use Stage 2, the conversion is
-counted as `parallel_pass_forced_stage1`; the queue-owned argument encoder and
-mutable table shadow are never shared across children. Tile FFP, UP payloads,
-active diagnostic sidecars, unresolved late Store actions, carried/incomplete
-passes, and per-record command-buffer splitting remain fail-closed serial
-fallbacks. Cross-source and carried-session pass sealing remain outside this
-lane.
+The production lane selects one immutable direct ABI for the complete pass:
+portable Stage 1, or Stage 2b with direct VS/PS constant buffers at slot 0 and
+direct FFP payloads at slot 3. Every draw must resolve to that same ABI. Missing
+PSO metadata, a slot-30 Stage 2 table, a resource-array PSO, a mixed Stage
+1/Stage 2b pass, or an override that can rebuild the prefetched PSO is a typed,
+mutually exclusive pre-effect rejection. Stage 2b passes call the ordinary
+draw encoder with the actual hybrid/direct-cbuf flags and a null argument-table
+constant cache; the queue-owned argument encoder, mutable table shadow, and
+table cache are never shared across children. Tile FFP, UP payloads, active
+diagnostic sidecars, unresolved late Store actions, carried/incomplete passes,
+and per-record command-buffer splitting remain fail-closed serial fallbacks.
+Cross-source and carried-session pass sealing remain outside this lane.
+
+Perf-enabled preflight also builds an allocation-free economics summary with
+conserving Stage 1/Stage 2b draw volume, child count, minimum child draw count,
+and serial-order PSO and uniform-source transitions. A pure shadow classifier
+rejects invalid or overflowing summaries, forced Stage 1 volume, children
+below the existing 64-draw planner threshold, or child first-bind amplification
+that exceeds the corresponding serial transition opportunity. It records
+accept/reject reason and draw/child/ABI/transition buckets only; it does not
+alter provider selection, worker count, or partition thresholds. Perf-disabled
+execution performs no economics-only observation work.
 
 The pure bounded seam classifies sealed-plan eligibility and selection with a
 typed fallback reason, copies at most 16 locator-only child plans, assigns a
@@ -1203,7 +1221,11 @@ effectful phase and every child emission/end position. A Metal-backed native
 fixture creates, joins, commits, and completes the real parent/child pass under
 the validation layer. The provider remains explicit opt-in: same-build GT2
 evidence shows lower coordinator encode wall time but worse end-to-end
-throughput, so `identity` remains the default.
+throughput. Stage 2b removes the forced-conversion mechanism, but its economics
+classifier remains shadow only until a matched GT2 rerun establishes the exact
+selected binding volume, child-size distribution, transition amplification,
+and throughput result. `identity` therefore remains the default, with no
+speedup claim.
 
 ### 7.3 Metal 4 Suspend/Resume
 
