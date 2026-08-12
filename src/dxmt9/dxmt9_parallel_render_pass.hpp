@@ -4,6 +4,7 @@
 #include "dxmt9_source_semantics.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -138,7 +139,67 @@ struct ParallelPassEconomicsDecision {
       default;
 };
 
-// Observation-only economics policy. It reuses the production planner's
+struct ParallelPassEconomicsAccounting {
+  std::array<std::uint64_t,
+             static_cast<std::size_t>(ParallelPassEconomicsRejectReason::Count)>
+      rejectionCounts{};
+  std::uint64_t considered = 0;
+  std::uint64_t accepted = 0;
+  std::uint64_t serialFallback = 0;
+
+  constexpr bool conserves() const noexcept {
+    std::uint64_t reasons = 0;
+    for (std::size_t i = 1u; i < rejectionCounts.size(); ++i) {
+      reasons += rejectionCounts[i];
+    }
+    return considered == accepted + serialFallback &&
+        serialFallback == reasons;
+  }
+};
+
+struct ParallelPassChildSubdivision {
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity> drawBegins{};
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity> drawCounts{};
+  std::uint32_t childCount = 0;
+  bool valid = false;
+};
+
+// ExplicitParallel-only subdivision. The serial production partitioner keeps
+// its independent 32-draw target; sealed passes instead derive no more than
+// floor(total/64) even children and place any remainder in the final children.
+inline constexpr ParallelPassChildSubdivision
+subdivideParallelPassDraws(std::uint64_t totalDraws) noexcept {
+  ParallelPassChildSubdivision result{};
+  if (totalDraws > UINT32_MAX) {
+    return result;
+  }
+  const std::uint64_t boundedChildren = std::min<std::uint64_t>(
+      kParallelRenderPassChildCapacity,
+      totalDraws / kProductionPartitionDrawThreshold);
+  if (boundedChildren < 2u) {
+    return result;
+  }
+  result.childCount = static_cast<std::uint32_t>(boundedChildren);
+  const std::uint32_t draws = static_cast<std::uint32_t>(totalDraws);
+  const std::uint32_t quotient = draws / result.childCount;
+  const std::uint32_t remainder = draws % result.childCount;
+  std::uint32_t cursor = 0u;
+  for (std::uint32_t child = 0u; child < result.childCount; ++child) {
+    const std::uint32_t count = quotient +
+        (child >= result.childCount - remainder ? 1u : 0u);
+    if (count < kProductionPartitionDrawThreshold ||
+        cursor > draws - count) {
+      return {};
+    }
+    result.drawBegins[child] = cursor;
+    result.drawCounts[child] = count;
+    cursor += count;
+  }
+  result.valid = cursor == draws;
+  return result.valid ? result : ParallelPassChildSubdivision{};
+}
+
+// Enforced economics policy. It reuses the production planner's
 // existing 64-draw eligibility quantum and compares child first-bind cost
 // against the serial transition count without introducing a benchmark-tuned
 // runtime threshold.
@@ -155,9 +216,13 @@ classifyParallelPassEconomics(
       summary.stage2bDraws <= summary.totalDraws - summary.stage1Draws &&
       summary.forcedStage1Draws ==
           summary.totalDraws - summary.stage1Draws - summary.stage2bDraws;
+  const std::uint64_t minimumCoveredDraws =
+      static_cast<std::uint64_t>(summary.childCount) *
+      summary.minimumChildDraws;
   if (!summary.valid || summary.overflow || summary.childCount < 2u ||
       summary.childCount > kParallelRenderPassChildCapacity ||
-      summary.minimumChildDraws == 0u || !drawCountsConserve) {
+      summary.minimumChildDraws == 0u ||
+      summary.totalDraws < minimumCoveredDraws || !drawCountsConserve) {
     return reject(ParallelPassEconomicsRejectReason::InvalidOrOverflow);
   }
   if (summary.forcedStage1Draws != 0u) {
@@ -180,8 +245,45 @@ classifyParallelPassEconomics(
   return result;
 }
 
+inline constexpr ParallelPassEconomicsAccounting
+accountParallelPassEconomics(
+    const ParallelPassEconomicsDecision& decision) noexcept {
+  ParallelPassEconomicsAccounting result{};
+  if (!decision.considered) {
+    return result;
+  }
+  result.considered = 1u;
+  if (decision.accepted &&
+      decision.reject == ParallelPassEconomicsRejectReason::None) {
+    result.accepted = 1u;
+  } else {
+    result.serialFallback = 1u;
+    const auto reason =
+        decision.reject == ParallelPassEconomicsRejectReason::None ||
+            decision.reject == ParallelPassEconomicsRejectReason::Count
+        ? ParallelPassEconomicsRejectReason::InvalidOrOverflow
+        : decision.reject;
+    result.rejectionCounts[static_cast<std::size_t>(reason)] = 1u;
+  }
+  return result;
+}
+
+template <typename Accepted, typename SerialFallback>
+ParallelPassEconomicsDecision dispatchParallelPassEconomics(
+    const ParallelPassEconomicsSummary& summary,
+    Accepted&& accepted,
+    SerialFallback&& serialFallback) {
+  const auto decision = classifyParallelPassEconomics(summary);
+  if (decision.accepted) {
+    std::forward<Accepted>(accepted)();
+  } else {
+    std::forward<SerialFallback>(serialFallback)();
+  }
+  return decision;
+}
+
 template <typename Observer>
-bool observeParallelPassEconomicsIfEnabled(
+bool observeParallelPassEconomicsCountersIfEnabled(
     bool perfEnabled,
     const ParallelPassEconomicsSummary& summary,
     Observer&& observer) {
@@ -425,17 +527,6 @@ struct SealedParallelPassSnapshotBatchResult {
 SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const SealedParallelPassSnapshotInput& input,
     SealedParallelPassSnapshotBatch& snapshots) noexcept;
-
-template <typename Producer>
-bool runParallelPassObservationIfEnabled(bool explicitParallel,
-                                         bool perfEnabled,
-                                         Producer&& producer) {
-  if (!explicitParallel || !perfEnabled) {
-    return false;
-  }
-  std::forward<Producer>(producer)();
-  return true;
-}
 
 enum class ParallelPassFallbackReason : std::uint8_t {
   None,

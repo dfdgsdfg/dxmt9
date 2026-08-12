@@ -1133,8 +1133,13 @@ serial cursor and before Metal, queue, action, or completion effects. One fixed
 source-local batch owns at most 16 pass observations, each with two to 16
 ordered `DrawRun` children. A single large DrawRun is divided into draw
 subranges; a multi-command pass is divided only at complete DrawRun command
-boundaries. The producer does not depend on the explicit-serial planner having
-subdivided the same pass.
+boundaries. The ExplicitParallel builder does not reuse the serial planner's
+32-draw target: it chooses at most `floor(totalDraws / 64)` children within the
+two-to-16 bound, divides a single DrawRun evenly with remainder assigned to the
+final children, and reduces complete-command child count until every child has
+at least 64 draws. Exact ordered coverage is mandatory; fewer than two children
+falls back before effects. The producer does not depend on the explicit-serial
+planner having subdivided the same pass.
 
 The producer derives pass boundaries from the effective replay order. A proven
 fresh call frontier, source-local finalization, Clear, Present, or attachment
@@ -1195,15 +1200,20 @@ diagnostic sidecars, unresolved late Store actions, carried/incomplete passes,
 and per-record command-buffer splitting remain fail-closed serial fallbacks.
 Cross-source and carried-session pass sealing remain outside this lane.
 
-Perf-enabled preflight also builds an allocation-free economics summary with
+Complete preflight also builds an allocation-free economics summary with
 conserving Stage 1/Stage 2b draw volume, child count, minimum child draw count,
-and serial-order PSO and uniform-source transitions. A pure shadow classifier
+and serial-order PSO and uniform-source transitions. A pure classifier
 rejects invalid or overflowing summaries, forced Stage 1 volume, children
 below the existing 64-draw planner threshold, or child first-bind amplification
-that exceeds the corresponding serial transition opportunity. It records
-accept/reject reason and draw/child/ABI/transition buckets only; it does not
-alter provider selection, worker count, or partition thresholds. Perf-disabled
-execution performs no economics-only observation work.
+that exceeds the corresponding serial transition opportunity. The decision is
+enforced after every locator, ABI, PSO, uniform, and draw has been re-resolved,
+but before render-pass preparation and parent creation. Rejection returns to
+the ordinary serial cursor with no parallel Metal effects. Perf-enabled
+accounting records exact nonoverlapping accepted and serial-fallback volume and
+conserves considered count and typed reasons; perf-disabled execution skips
+counter clocks and atomics but still performs the proof and required policy
+summary. No environment knob, hardware-worker cap, or serial partition
+constant is introduced.
 
 The pure bounded seam classifies sealed-plan eligibility and selection with a
 typed fallback reason, copies at most 16 locator-only child plans, assigns a
@@ -1219,13 +1229,15 @@ forced full first-draw binding. Every failure at or after the effect boundary
 invokes one terminal fail-stop cleanup hook; native injection covers every
 effectful phase and every child emission/end position. A Metal-backed native
 fixture creates, joins, commits, and completes the real parent/child pass under
-the validation layer. The provider remains explicit opt-in: same-build GT2
-evidence shows lower coordinator encode wall time but worse end-to-end
-throughput. Stage 2b removes the forced-conversion mechanism, but its economics
-classifier remains shadow only until a matched GT2 rerun establishes the exact
-selected binding volume, child-size distribution, transition amplification,
-and throughput result. `identity` therefore remains the default, with no
-speedup claim.
+the validation layer. The provider remains explicit opt-in. A matched GT2
+identity/parallel pair measured 21.087975 versus 19.729740 fps (-6.44%) with
+conserved command-buffer, pass, and tile shape. Although encode stage wall
+decreased 8.9%, summed `encode_draw` rose from 14.22 to 31.92 ms/Present and
+worker CPU reached 26.91 ms/Present; all 2,670 selected passes were safe Stage
+2b, while all were rejected by the economics gate as thin-child observations
+(33,244 children / 1,017,361 draws, 30.60 draws/child). This evidence motivates
+the enforced gate and 64-draw child floor but is not a speedup or promotion
+claim. `identity` therefore remains the default.
 
 ### 7.3 Metal 4 Suspend/Resume
 

@@ -342,6 +342,9 @@ void wmtParentChildAdapterCreatesAndJoinsMetalEncoders() {
       .sample_count = 1u,
       .usage = WMTTextureUsageRenderTarget,
       .options = WMTResourceStorageModePrivate,
+      .reserved = 0u,
+      .mach_port = 0u,
+      .gpu_resource_id = 0u,
   };
   auto texture = device.newTexture(textureInfo);
   check(static_cast<bool>(texture), "Metal device creates a render target");
@@ -482,8 +485,65 @@ std::vector<dxmt9::core::DrawParamPayloadView> payloads(
   return std::vector<dxmt9::core::DrawParamPayloadView>(count);
 }
 
+void explicitParallelSubdivisionIsEvenAndBounded() {
+  using dxmt9::encoders::subdivideParallelPassDraws;
+
+  const auto verify = [](std::uint64_t total,
+                         std::span<const std::uint32_t> expected) {
+    const auto result = subdivideParallelPassDraws(total);
+    check(result.valid && result.childCount == expected.size(),
+          "eligible subdivision has the expected bounded child count");
+    std::uint64_t cursor = 0u;
+    for (std::size_t child = 0u; child < expected.size(); ++child) {
+      check(result.drawBegins[child] == cursor &&
+                result.drawCounts[child] == expected[child] &&
+                result.drawCounts[child] >=
+                    dxmt9::encoders::kProductionPartitionDrawThreshold,
+            "subdivision is ordered, exact, and never thinner than 64");
+      cursor += result.drawCounts[child];
+    }
+    check(cursor == total, "subdivision covers every draw exactly once");
+  };
+
+  check(!subdivideParallelPassDraws(127u).valid,
+        "127 draws stays on the serial pre-effect path");
+  const std::array<std::uint32_t, 2> two64{64u, 64u};
+  verify(128u, two64);
+  const std::array<std::uint32_t, 2> split129{64u, 65u};
+  verify(129u, split129);
+  const std::array<std::uint32_t, 5> split380{76u, 76u, 76u, 76u, 76u};
+  verify(380u, split380);
+  const std::array<std::uint32_t, 5> split381{76u, 76u, 76u, 76u, 77u};
+  verify(381u, split381);
+  std::array<std::uint32_t,
+             dxmt9::encoders::kParallelRenderPassChildCapacity> split1024{};
+  split1024.fill(64u);
+  verify(1024u, split1024);
+  auto split1025 = split1024;
+  split1025.back() = 65u;
+  verify(1025u, split1025);
+  check(!subdivideParallelPassDraws(UINT64_MAX).valid &&
+            !subdivideParallelPassDraws(
+                static_cast<std::uint64_t>(UINT32_MAX) + 1u).valid,
+        "overflowing draw domains fail closed without partial coverage");
+
+  const auto below = draws(127u);
+  const auto belowPayloads = payloads(below.size());
+  PassObservationFixture fixture;
+  fixture.slot.appendDrawRun({}, {}, below, belowPayloads);
+  fixture.slot.appendPresent({}, {});
+  fixture.finalize(417u);
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+  const auto result = fixture.observe(output);
+  check(result.eligibleCount == 0u && output.count == 0u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::
+                    TooFewChildren)] == 1u,
+        "sealed 127-draw pass takes the existing serial fallback");
+}
+
 void passLocalProducerFindsBoundedCompletePasses() {
-  const auto drawValues = draws(96u);
+  const auto drawValues = draws(128u);
   const auto drawPayloads = payloads(drawValues.size());
   PassObservationFixture fixture;
   fixture.slot.appendClear({});
@@ -498,7 +558,7 @@ void passLocalProducerFindsBoundedCompletePasses() {
   const auto result = fixture.observe(output);
   check(result.considered && result.candidateCount == 1u &&
             result.sealedCount == 1u && result.eligibleCount == 1u &&
-            result.childCount == 3u && result.drawCount == 96u &&
+            result.childCount == 2u && result.drawCount == 128u &&
             output.count == 1u,
         "Clear -> large DrawRun -> Present yields one eligible pass");
   const auto& pass = output.passes[0];
@@ -507,7 +567,7 @@ void passLocalProducerFindsBoundedCompletePasses() {
             pass.sealingCommand.valid &&
             pass.sealingCommand.kind ==
                 dxmt9::core::MetalCommandKind::Present &&
-            pass.childCount == 3u && pass.passActionEpoch == 7u,
+            pass.childCount == 2u && pass.passActionEpoch == 7u,
         "Clear and Present stay coordinator-owned outside child ranges");
   for (std::size_t i = 0; i < pass.childCount; ++i) {
     check(pass.ranges[i].kind ==
@@ -551,7 +611,7 @@ void passLocalProducerFindsBoundedCompletePasses() {
 }
 
 void multiPassAndAttachmentBoundariesStayIndependent() {
-  const auto drawValues = draws(96u);
+  const auto drawValues = draws(128u);
   const auto drawPayloads = payloads(drawValues.size());
   PassObservationFixture fixture;
   fixture.slot.appendClear({});
@@ -567,7 +627,7 @@ void multiPassAndAttachmentBoundariesStayIndependent() {
   dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
   const auto result = fixture.observe(output);
   check(result.candidateCount == 2u && result.eligibleCount == 2u &&
-            result.childCount == 6u && result.drawCount == 192u &&
+            result.childCount == 4u && result.drawCount == 256u &&
             output.count == 2u &&
             output.passes[0].passActionEpoch == 7u &&
             output.passes[1].passActionEpoch == 8u,
@@ -592,7 +652,7 @@ void multiPassAndAttachmentBoundariesStayIndependent() {
 }
 
 void activeReplayOrderAndPartialClearDriveExactBoundaries() {
-  const auto drawValues = draws(96u);
+  const auto drawValues = draws(128u);
   const auto drawPayloads = payloads(drawValues.size());
   dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
 
@@ -634,7 +694,7 @@ void activeReplayOrderAndPartialClearDriveExactBoundaries() {
 }
 
 void producerRejectsControlsFragmentsHazardsAndBounds() {
-  const auto drawValues = draws(96u);
+  const auto drawValues = draws(128u);
   const auto drawPayloads = payloads(drawValues.size());
   dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
 
@@ -812,20 +872,21 @@ void childBoundsAndPerfGateFailClosed() {
             ParallelPassFallbackReason::ChildCapacity,
         "more than sixteen children fails closed");
 
-  const auto manyDraws = draws(544u);
+  const auto manyDraws = draws(1025u);
   const auto manyPayloads = payloads(manyDraws.size());
   PassObservationFixture childOverflow;
   childOverflow.slot.appendDrawRun({}, {}, manyDraws, manyPayloads);
   childOverflow.slot.appendPresent({}, {});
   childOverflow.finalize(409u);
   dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
-  const auto overflowResult = childOverflow.observe(output);
-  check(overflowResult.eligibleCount == 0u && output.count == 0u &&
-            overflowResult.rejectionCounts[static_cast<std::size_t>(
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::ChildCapacity)] == 1u,
-        "production pass with more than sixteen child ranges fails closed");
+  const auto cappedResult = childOverflow.observe(output);
+  check(cappedResult.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].childCount ==
+                dxmt9::encoders::kParallelRenderPassChildCapacity &&
+            output.passes[0].ranges.back().drawEntryCount == 65u,
+        "above-cap draw volume remains exactly covered by sixteen children");
 
-  const auto largeDraws = draws(96u);
+  const auto largeDraws = draws(128u);
   const auto largePayloads = payloads(largeDraws.size());
   auto appendPasses = [&](PassObservationFixture& observed,
                           std::size_t count) {
@@ -855,7 +916,7 @@ void childBoundsAndPerfGateFailClosed() {
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::PassCapacity)] == 1u,
         "seventeenth logical pass is observed and rejected at fixed capacity");
 
-  const auto smallDraws = draws(32u);
+  const auto smallDraws = draws(64u);
   const auto smallPayloads = payloads(smallDraws.size());
   PassObservationFixture mixed;
   mixed.slot.appendDrawRun({}, {}, largeDraws, largePayloads);
@@ -873,19 +934,6 @@ void childBoundsAndPerfGateFailClosed() {
         "one logical pass groups ordinary DrawRuns into ordered child "
         "command spans");
 
-  std::uint32_t producerCalls = 0u;
-  check(!dxmt9::encoders::runParallelPassObservationIfEnabled(
-            true, false, [&] { ++producerCalls; }) &&
-            producerCalls == 0u,
-        "perf-off production gate performs zero producer/counter work");
-  check(!dxmt9::encoders::runParallelPassObservationIfEnabled(
-            false, true, [&] { ++producerCalls; }) &&
-            producerCalls == 0u,
-        "non-parallel mode performs zero pass-local observation work");
-  check(dxmt9::encoders::runParallelPassObservationIfEnabled(
-            true, true, [&] { ++producerCalls; }) &&
-            producerCalls == 1u,
-        "parallel perf observation invokes the producer exactly once");
 }
 
 enum class EventKind : std::uint8_t {
@@ -1321,7 +1369,7 @@ void failuresSeparatePreEffectFallbackFromPostEffectFailStop() {
   }
 }
 
-void economicsClassifierIsPureBoundedAndObservationOnly() {
+void economicsClassifierIsPureBoundedAndEnforcedBeforeEffects() {
   using Decision = dxmt9::encoders::ParallelPassEconomicsDecision;
   using Reason = dxmt9::encoders::ParallelPassEconomicsRejectReason;
   using Summary = dxmt9::encoders::ParallelPassEconomicsSummary;
@@ -1383,20 +1431,73 @@ void economicsClassifierIsPureBoundedAndObservationOnly() {
             Reason::InvalidOrOverflow,
         "overflow fails closed");
 
+  const std::array<Reason, 5> rejectReasons{
+      Reason::ForcedStage1,
+      Reason::ThinChild,
+      Reason::PsoFirstBindAmplification,
+      Reason::UniformFirstBindAmplification,
+      Reason::InvalidOrOverflow,
+  };
+  for (const auto reason : rejectReasons) {
+    const auto accounting = dxmt9::encoders::accountParallelPassEconomics(
+        Decision{.reject = reason, .considered = true, .accepted = false});
+    check(accounting.conserves() && accounting.considered == 1u &&
+              accounting.accepted == 0u &&
+              accounting.serialFallback == 1u &&
+              accounting.rejectionCounts[static_cast<std::size_t>(reason)] ==
+                  1u,
+          "each production rejection contributes one nonoverlapping reason");
+  }
+  const auto acceptedAccounting =
+      dxmt9::encoders::accountParallelPassEconomics(
+          Decision{.reject = Reason::None,
+                   .considered = true,
+                   .accepted = true});
+  check(acceptedAccounting.conserves() &&
+            acceptedAccounting.considered == 1u &&
+            acceptedAccounting.accepted == 1u &&
+            acceptedAccounting.serialFallback == 0u,
+        "considered equals accepted plus serial fallback");
+  const auto malformedAccounting =
+      dxmt9::encoders::accountParallelPassEconomics(
+          Decision{.reject = Reason::None,
+                   .considered = true,
+                   .accepted = false});
+  check(malformedAccounting.conserves() &&
+            malformedAccounting.serialFallback == 1u &&
+            malformedAccounting.rejectionCounts[static_cast<std::size_t>(
+                Reason::InvalidOrOverflow)] == 1u,
+        "malformed accounting decisions fail closed and still conserve");
+
+  std::uint32_t parallelEffects = 0u;
+  std::array<std::uint32_t, 126> serialReplayCounts{};
+  const auto rejected = dxmt9::encoders::dispatchParallelPassEconomics(
+      summary(2u, 63u, 126u, 0u, 126u, 0u, 0u, 0u),
+      [&] { ++parallelEffects; },
+      [&] {
+        for (auto& count : serialReplayCounts) {
+          ++count;
+        }
+      });
+  check(!rejected.accepted && parallelEffects == 0u &&
+            std::all_of(serialReplayCounts.begin(), serialReplayCounts.end(),
+                        [](std::uint32_t count) { return count == 1u; }),
+        "economics rejection emits no parallel effect before exact serial replay");
+
   std::uint32_t observations = 0u;
-  check(!dxmt9::encoders::observeParallelPassEconomicsIfEnabled(
+  check(!dxmt9::encoders::observeParallelPassEconomicsCountersIfEnabled(
             false, summary(2u, 64u, 128u, 128u, 0u, 0u, 0u, 0u),
             [&](const Summary&, const Decision&) { ++observations; }) &&
             observations == 0u,
-        "perf-off economics performs zero observation work");
-  check(dxmt9::encoders::observeParallelPassEconomicsIfEnabled(
+        "perf-off economics performs zero counter-observation work");
+  check(dxmt9::encoders::observeParallelPassEconomicsCountersIfEnabled(
             true, summary(2u, 64u, 128u, 0u, 128u, 0u, 0u, 0u),
             [&](const Summary&, const Decision& decision) {
               ++observations;
               check(decision.accepted,
-                    "retained Stage 2b is accepted in shadow policy");
+                    "retained Stage 2b is accepted by production policy");
             }) && observations == 1u,
-        "perf-on economics observes exactly once without enforcing");
+        "perf-on counter observation reports the enforced decision once");
 }
 
 }  // namespace
@@ -1406,6 +1507,7 @@ int main() {
     eligibilityAndSelectionAreTypedAndBounded();
     coordinatorProofSnapshotRequiresEveryPreEffectFact();
     wmtParentChildAdapterCreatesAndJoinsMetalEncoders();
+    explicitParallelSubdivisionIsEvenAndBounded();
     passLocalProducerFindsBoundedCompletePasses();
     multiPassAndAttachmentBoundariesStayIndependent();
     activeReplayOrderAndPartialClearDriveExactBoundaries();
@@ -1414,7 +1516,7 @@ int main() {
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();
     malformedPlansFailClosedBeforeParentPreparation();
     failuresSeparatePreEffectFallbackFromPostEffectFailStop();
-    economicsClassifierIsPureBoundedAndObservationOnly();
+    economicsClassifierIsPureBoundedAndEnforcedBeforeEffects();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
     return 1;

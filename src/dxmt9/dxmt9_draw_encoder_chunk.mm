@@ -3317,6 +3317,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               .color = clearView.color,
               .depth = clearView.depth,
               .stencil = clearView.stencil,
+              .rects = {},
           };
           passState.pendingClearCommand = lifecycle.commandRef(commandIndex);
         } else {
@@ -3823,24 +3824,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 .complete = true,
             };
           }
-          if (perf::enabled()) {
-            if (binding.mode ==
-                ParallelPassDirectBindingMode::Stage2DirectCbuf) {
-              addEconomics(economics.stage2bDraws, 1u);
-            } else {
-              addEconomics(economics.stage1Draws, 1u);
-            }
-            if (previousEconomicsPso.has_value() &&
-                *previousEconomicsPso != renderPso) {
-              addEconomics(economics.renderPsoTransitions, 1u);
-            }
-            if (previousEconomicsPayload.has_value() &&
-                *previousEconomicsPayload != payloadIdentity) {
-              addEconomics(economics.uniformTransitions, 1u);
-            }
-            previousEconomicsPso = renderPso;
-            previousEconomicsPayload = payloadIdentity;
+          if (binding.mode ==
+              ParallelPassDirectBindingMode::Stage2DirectCbuf) {
+            addEconomics(economics.stage2bDraws, 1u);
+          } else {
+            addEconomics(economics.stage1Draws, 1u);
           }
+          if (previousEconomicsPso.has_value() &&
+              *previousEconomicsPso != renderPso) {
+            addEconomics(economics.renderPsoTransitions, 1u);
+          }
+          if (previousEconomicsPayload.has_value() &&
+              *previousEconomicsPayload != payloadIdentity) {
+            addEconomics(economics.uniformTransitions, 1u);
+          }
+          previousEconomicsPso = renderPso;
+          previousEconomicsPayload = payloadIdentity;
           if (childDrawCount == UINT64_MAX) {
             return false;
           }
@@ -3886,27 +3885,26 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         return rejectBeforeEffects(bindingReject);
       }
       preflightDrawCount += childDrawCount;
-      if (perf::enabled()) {
-        economics.minimumChildDraws = std::min(
-            economics.minimumChildDraws,
-            static_cast<std::uint32_t>(childDrawCount));
-      }
+      economics.minimumChildDraws = std::min(
+          economics.minimumChildDraws,
+          static_cast<std::uint32_t>(childDrawCount));
     }
     if (!passBindingModeSet || preflightDrawCount != pass.drawCount ||
         validateParallelPassChildPlans(parallelPlanStorage.view()) !=
             ParallelPassFallbackReason::None) {
       return rejectBeforeEffects(bindingReject);
     }
+    economics.totalDraws = preflightDrawCount;
+    economics.valid = !economics.overflow &&
+        economics.totalDraws == pass.drawCount;
+    bool economicsAccepted = false;
+    const auto economicsDecision = dispatchParallelPassEconomics(
+        economics, [&] { economicsAccepted = true; }, [] {});
     if (perf::enabled()) {
-      economics.totalDraws = preflightDrawCount;
-      economics.valid = !economics.overflow &&
-          economics.totalDraws == pass.drawCount;
-      observeParallelPassEconomicsIfEnabled(
-          true, economics,
-          [](const ParallelPassEconomicsSummary& summary,
-             const ParallelPassEconomicsDecision& decision) {
-            perf::countParallelPassEconomics(summary, decision);
-          });
+      perf::countParallelPassEconomics(economics, economicsDecision);
+    }
+    if (!economicsAccepted) {
+      return rejectBeforeEffects();
     }
 
     const bool leadingClearExpected = pass.leadingClear.valid;

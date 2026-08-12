@@ -731,9 +731,10 @@ void countParallelPassEconomics(
   using Reason = encoders::ParallelPassEconomicsRejectReason;
   static_assert(static_cast<std::uint8_t>(Reason::Count) == 6u);
   auto& c = counters();
-  if (decision.considered) {
-    add(c.parallelPassEconomicsConsidered);
-  }
+  const auto accounting = encoders::accountParallelPassEconomics(decision);
+  add(c.parallelPassEconomicsConsidered, accounting.considered);
+  add(c.parallelPassEconomicsAccepted, accounting.accepted);
+  add(c.parallelPassEconomicsSerialFallback, accounting.serialFallback);
   add(c.parallelPassEconomicsStage1Draws, summary.stage1Draws);
   add(c.parallelPassEconomicsStage2bDraws, summary.stage2bDraws);
   add(c.parallelPassEconomicsForcedStage1Draws,
@@ -742,36 +743,26 @@ void countParallelPassEconomics(
       summary.renderPsoTransitions);
   add(c.parallelPassEconomicsUniformTransitions,
       summary.uniformTransitions);
-  if (decision.accepted) {
-    add(c.parallelPassEconomicsShadowAccepted);
+  if (accounting.accepted != 0u) {
     add(c.parallelPassEconomicsAcceptedDraws, summary.totalDraws);
     add(c.parallelPassEconomicsAcceptedChildren, summary.childCount);
-  } else {
-    add(c.parallelPassEconomicsShadowRejected);
-    add(c.parallelPassEconomicsRejectedDraws, summary.totalDraws);
-    add(c.parallelPassEconomicsRejectedChildren, summary.childCount);
+  } else if (accounting.serialFallback != 0u) {
+    add(c.parallelPassEconomicsSerialFallbackDraws, summary.totalDraws);
+    add(c.parallelPassEconomicsSerialFallbackChildren, summary.childCount);
   }
-  switch (decision.reject) {
-  case Reason::None:
-    break;
-  case Reason::ForcedStage1:
-    add(c.parallelPassEconomicsRejectForcedStage1);
-    break;
-  case Reason::ThinChild:
-    add(c.parallelPassEconomicsRejectThinChild);
-    break;
-  case Reason::PsoFirstBindAmplification:
-    add(c.parallelPassEconomicsRejectPsoFirstBind);
-    break;
-  case Reason::UniformFirstBindAmplification:
-    add(c.parallelPassEconomicsRejectUniformFirstBind);
-    break;
-  case Reason::InvalidOrOverflow:
-    add(c.parallelPassEconomicsRejectInvalidOverflow);
-    break;
-  case Reason::Count:
-    break;
-  }
+  auto rejected = [&](Reason reason) {
+    return accounting.rejectionCounts[static_cast<std::size_t>(reason)];
+  };
+  add(c.parallelPassEconomicsRejectForcedStage1,
+      rejected(Reason::ForcedStage1));
+  add(c.parallelPassEconomicsRejectThinChild,
+      rejected(Reason::ThinChild));
+  add(c.parallelPassEconomicsRejectPsoFirstBind,
+      rejected(Reason::PsoFirstBindAmplification));
+  add(c.parallelPassEconomicsRejectUniformFirstBind,
+      rejected(Reason::UniformFirstBindAmplification));
+  add(c.parallelPassEconomicsRejectInvalidOverflow,
+      rejected(Reason::InvalidOrOverflow));
   if (summary.minimumChildDraws != 0u) {
     if (summary.minimumChildDraws < 32u) {
       add(c.parallelPassEconomicsMinChildUnder32);

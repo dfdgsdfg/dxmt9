@@ -507,6 +507,11 @@ first-draw snapshot. Queries, clears, sidecar observations, initializer waits,
 present work, and unresolved hazards make a range ineligible. Child creation
 order must preserve draw order, all children must end before the parent, and
 failure before Metal side effects must deterministically fall back to serial.
+The sealed-pass child builder, independently of the serial planner's 32-draw
+target, must choose at most `floor(totalDraws / 64)` children within the
+existing two-to-16 bound, cover draws exactly in order, and give every child at
+least 64 draws; fewer than two qualifying children selects serial before
+effects.
 Workers may re-resolve source-qualified locators only while the coordinator
 holds the synchronous source residency pin; no payload pointer may escape the
 joined execution. Before parent creation, one immutable pass-wide binding proof
@@ -516,10 +521,14 @@ ABIs, slot-30 argument tables, resource arrays, or a draw override that can
 rebuild the prefetched PSO make the complete pass ineligible before effects.
 Each child owns a zeroed binding shadow with every uniform class initially
 dirty. It must not share the queue-owned argument encoder, mutable table shadow,
-or argument-buffer constant cache between children. The parallel provider must
-remain non-default when matched wild evidence reduces local encode wall time
-but regresses end-to-end throughput; an observation-only economics classifier
-must not change selection until matched promotion evidence exists.
+or argument-buffer constant cache between children. After complete locator,
+ABI, PSO, and uniform re-resolution, and before render-pass preparation or
+parent creation, the pure economics classifier must either accept the pass or
+select the exact serial pre-effect replay. Production economics counters must
+conserve `considered = accepted + serial_fallback`, and typed mutually
+exclusive rejection reasons must sum to `serial_fallback`. The parallel
+provider must remain non-default when matched wild evidence reduces local
+encode wall time but regresses end-to-end throughput.
 
 **R-BACK-2.64** A Metal 4 segmented lane may encode physical segments in
 separate command buffers only for one sealed logical render pass. It must first

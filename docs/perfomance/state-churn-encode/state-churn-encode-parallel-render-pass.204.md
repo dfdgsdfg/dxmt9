@@ -48,10 +48,12 @@ Metal fixture passed with `MTL_DEBUG_LAYER=1`.
 
 Keep `DXMT9_RENDER_PARTITION_MODE=parallel` as an explicit production provider
 and keep `identity` as the default. Do not promote from the local encode-wall
-reduction. Revisit only after the Stage 2b lane and shadow economics produce
-matched evidence that amortizes child setup and executor overhead.
+reduction. Revisit only after the Stage 2b lane and attributable economics produce
+matched evidence that amortizes child setup and executor overhead. The matched
+follow-up below did not do so, and therefore strengthens the no-promotion
+decision.
 
-## Next Increment: Stage 2b and Economics Shadow
+## Stage 2b Economics Follow-up
 
 The provider now retains direct-cbuf Stage 2b in child-local binding shadows at
 VS/PS slots 0 and FFP slots 3. A complete pre-effect pass proof rejects missing
@@ -59,20 +61,27 @@ PSO metadata, slot-30 tables, resource arrays, mixed Stage 1/Stage 2b ABIs, and
 PSO-rebuilding draw overrides. The queue argument encoder, mutable table shadow,
 and argument-buffer constant cache remain outside child ownership.
 
-This implementation result does not revise the rejected-default decision. Its
-allocation-free economics classifier is observation-only and introduces no new
-environment variable, worker cap, or partition threshold. The next matched GT2
-identity/parallel pair must report all of the following before any performance
-or promotion claim:
+The attributable matched GT2 pair measured identity at `21.087975 fps` and
+parallel at `19.729740 fps`, a `-6.44%` regression. Command-buffer, render-pass,
+and tile-preservation rates were conserved. The encode stage wall improved
+`8.9%`, but summed `encode_draw` CPU increased from `14.22` to `31.92
+ms/Present`, while parallel workers consumed `26.91 ms/Present`.
 
-- `parallel_pass_selected` and the conserving
-  `parallel_pass_binding_{stage1,stage2b}_selected` split;
-- Stage 2b child/draw volume and every typed binding rejection;
-- economics accepted/rejected pass, draw, and child volume plus exact reason;
-- minimum-child and child-count buckets, PSO/uniform transition counts, and
-  forced-Stage-1 volume (expected zero);
-- worker CPU/joined wall, Present throughput, and command-buffer/pass/tile
-  locality normalized per Present.
+All `2,670` selected passes were safe Stage 2b, with zero GPU or binding errors.
+They contained `33,244` children and `1,017,361` draws: `12.45` children/pass
+and only `30.60` draws/child. The existing pure classifier rejected every pass
+as `thin_child`. This isolates child granularity and first-bind amplification
+as the relevant economics failure rather than a binding-correctness failure.
 
-Until that matched evidence exists, Stage 2b is a correctness-backed opt-in
-capability with shadow economics, not a demonstrated speedup.
+The follow-up increment therefore enforces that classifier after complete
+locator/ABI/PSO/uniform re-resolution but before render-pass preparation or
+parent Metal effects. Rejected passes return to exact serial replay. The
+ExplicitParallel sealed-pass builder now uses at most `floor(draws / 64)`
+evenly sized children in the existing two-to-16 range, with every child at
+least 64 draws; serial production constants and hardware-independent capacity
+remain unchanged. Perf counters now report exact accepted versus
+`serial_fallback` production outcomes with considered/reason conservation.
+
+This is a measured safety/economics gate, not a speedup result. Identity remains
+the default, parallel remains opt-in, and fresh post-gate matched wild evidence
+is required before any promotion claim.

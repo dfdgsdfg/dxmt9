@@ -181,8 +181,8 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassBindingRejectMixedAbi{0};
   std::atomic<std::uint64_t> parallelPassBindingRejectOverrideRebuild{0};
   std::atomic<std::uint64_t> parallelPassEconomicsConsidered{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsShadowAccepted{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsShadowRejected{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsAccepted{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsSerialFallback{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectForcedStage1{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectThinChild{0};
   std::atomic<std::uint64_t> parallelPassEconomicsRejectPsoFirstBind{0};
@@ -190,8 +190,8 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassEconomicsRejectInvalidOverflow{0};
   std::atomic<std::uint64_t> parallelPassEconomicsAcceptedDraws{0};
   std::atomic<std::uint64_t> parallelPassEconomicsAcceptedChildren{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsRejectedDraws{0};
-  std::atomic<std::uint64_t> parallelPassEconomicsRejectedChildren{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsSerialFallbackDraws{0};
+  std::atomic<std::uint64_t> parallelPassEconomicsSerialFallbackChildren{0};
   std::atomic<std::uint64_t> parallelPassEconomicsStage1Draws{0};
   std::atomic<std::uint64_t> parallelPassEconomicsStage2bDraws{0};
   std::atomic<std::uint64_t> parallelPassEconomicsForcedStage1Draws{0};
