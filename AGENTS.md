@@ -19,6 +19,7 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | `agents/rules/build.rules.md` | Driving builds — build-dir naming contract, install_name fixup gotcha, ABI lockstep; full guide in `docs/build.md`. |
 | `agents/rules/environment_variables.rules.md` | Any `DXMT*` / `DXMT9*` runtime knob (master list). |
 | `agents/rules/metal_debugging.rules.md` | GPU-side debugging: frame capture, `.gputrace`, signposts, perf counters, 3DMark05 GT1 probe toolkit. |
+| `agents/rules/rendering_correctness.rules.md` | Stateful rendering optimizations: formal/refinement-first evidence, model-code binding, GPU oracle, and promotion order. |
 | `agents/rules/test_wild.rules.md` | Running against real D3D9 binaries under Wine (runtime selection — must use Sikarugir/symbol-exposing `winemac.so`). |
 | `agents/rules/documentation*.rules.md` | Writing docs/specs/rules (English-only for rules/specs; AGENTS.md vs rules vs specs decision flow). |
 | `specs/gap.md`, `specs/<domain>/gap.md`, `specs/d3d9/gap_d3d9.md`, `specs/tests/gap_d3d9_wine_test.md` | Implementation status / missing evidence before assuming a feature exists. |

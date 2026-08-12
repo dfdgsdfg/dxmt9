@@ -34,6 +34,37 @@ are covered by unit tests and property-based tests.
 - Identify all liveness properties that must hold under fair scheduling.
 - Trace each property back to a requirement ID in `d3d9/` or `backend/`.
 
+**R-VERIF-1.5** A rendering-performance lane must treat formal or exhaustive
+finite-state refinement as the default first correctness layer when it changes
+observable rendering through command reordering, state-shadow or cache reuse,
+pass/action elision, encoder partitioning, deferred completion, resource
+lifetime, or concurrent execution. The model must describe the serial reference
+behavior and prove that every optimized transition either refines it or rejects
+the candidate before externally visible side effects. A lane that does not use
+this layer must document why its correctness reduces to a pure value transform
+or to GPU behavior outside the finite-state abstraction.
+
+**R-VERIF-1.6** Formal evidence for rendering correctness must be attached to
+the implementation by deterministic code-level evidence. Transition predicates
+used by the model must be implemented as shared pure functions where practical,
+and native truth-table, property, or fake-backend tests must compare the C++
+decisions with the modeled transition relation. A green model without this
+binding is evidence about the abstraction only, not about the production path.
+
+**R-VERIF-1.7** A model must state what it does not prove. In particular,
+abstract state or temporal logic does not by itself prove shader byte layout,
+Metal API/driver behavior, resource contents, floating-point results, or final
+pixels. A lane that can change those observables must add a deterministic GPU
+readback, shader-runner, same-input replay, or equivalent oracle before wild
+application evidence is used for promotion.
+
+**R-VERIF-1.8** Wild runs are discovery and final integration evidence, not the
+first or sole proof of a stateful rendering optimization. A lane may use a wild
+run to discover an unmodeled trace, but default-on promotion requires the
+applicable formal/exhaustive, model-to-code, and deterministic GPU evidence to
+be green first. Any reproducible visual failure blocks promotion even when
+Metal validation, command-buffer status, and GPU error counters are clean.
+
 ---
 
 ## 2. Command Queue
@@ -247,6 +278,14 @@ can assess coverage.
 include debug-mode assertions (`DXMT_ASSERT`) for every safety invariant
 in the corresponding TLA+ spec. The assertions must reference the TLA+
 invariant name in a comment.
+
+**R-VERIF-6.4** Evidence for a stateful rendering optimization must be recorded
+as a layered promotion bundle: semantic/reference contract; bounded formal or
+exhaustive transition evidence; model-to-code isomorphism or shared-predicate
+tests; deterministic GPU-visible evidence when applicable; then supervised wild
+correctness and performance evidence. Missing layers and deliberately unmodeled
+observables must be recorded in the owning `gap.md`; no later layer silently
+substitutes for an earlier one.
 
 ---
 

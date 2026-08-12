@@ -155,6 +155,11 @@ Rules:
 - Queue and bridge behavior should be observable without sleeps or GPU timing.
 - Runtime shader probes complement, but do not replace, source/IR and descriptor
   assertions.
+- A spec for a stateful rendering performance lane must classify the change
+  against `specs/verification/requirements.md` R-VERIF-1.5–1.8 and record the
+  applicable semantic, bounded-refinement, model/code, GPU-oracle, wild, and
+  performance layers. Put missing layers in the owning `gap.md` rather than
+  treating a later wild run as a substitute.
 - If a requirement cannot be verified yet, add or update the owning
   `specs/<topic>/gap.md` row.
 

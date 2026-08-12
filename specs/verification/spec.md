@@ -21,6 +21,42 @@ TLA+ module is the formal counterpart of a section in `backend/spec.md`
 or `d3d9/queries/spec.md`. They describe the same system; TLA+ is more
 precise and machine-checkable.
 
+### 1.1 Rendering-optimization evidence ladder
+
+Rendering performance work commonly preserves the public D3D9 command stream
+while changing when, where, or with which cached state Metal observes it. Those
+lanes use the following evidence order. Later layers do not replace earlier
+ones.
+
+| Layer | Question | Preferred evidence |
+|---|---|---|
+| Semantic reference | What serial behavior and visible state must remain equivalent? | backend requirement plus explicit source-qualified order/state contract |
+| Bounded transition proof | Can any reordering, reuse, split/join, failure, or interleaving reach an invalid state? | small TLA+ refinement or exhaustive finite-state checker |
+| Model-to-code binding | Does production C++ make the same transition decision? | shared pure predicate plus native truth-table/property/fake-backend spec |
+| GPU-visible oracle | Do concrete bindings, shader layouts, resource bytes, and pixels agree? | offscreen readback, shader runner, or same-input mini replay |
+| Wild integration | Does the complete application expose an omitted state shape? | supervised representative scene run with visual and mechanism evidence |
+| Performance promotion | Does the proven lane improve the intended bottleneck without locality regressions? | matched counters, frame timing, and the owning benchmark gate |
+
+The bounded model should be the smallest model that contains the distinguishing
+trace. Examples include `A -> B -> A` binding generations, two partition-local
+shadows, a coordinator plus two children, one failure boundary, or one
+store/load-action epoch. Do not start by composing the entire queue, renderer,
+and GPU: keep ownership/liveness and binding/pixel safety in separate models and
+compose only their published interface invariants.
+
+Use safety invariants for stale bindings, wrong PSO ABI, duplicated or reordered
+draws, illegal pass actions, and premature completion. Use temporal properties
+for progress, join, wakeup, and eventual drain. Pixel equality remains outside
+the temporal abstraction and requires the GPU-visible layer. Runtime counters,
+assertions, and watchdogs are useful monitors at production scale, but they are
+not substitutes for refinement or a pixel/resource oracle.
+
+A counterexample discovered in a wild run must be reduced into the earliest
+applicable deterministic layer before the lane is reconsidered for promotion.
+For example, a scene-dependent stale-uniform artifact should become a bounded
+payload-generation trace and an alternating-uniform GPU readback fixture, rather
+than remaining a requirement to watch a long benchmark by eye.
+
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
 | `archicture/spec.md` §6 / `backend/spec.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
@@ -37,7 +73,7 @@ precise and machine-checkable.
 | `d3d9-renderer/requirements.md` R-BACK-32.10 (one-successor DCE window) | `tla/DceChunkLookahead.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/render/framegraph_backend.*` |
 | R-BACK-32.11 / R-VERIF-2.13 (bounded ready-prefix DCE) | missing model extension or refinement | planned queue ready-prefix and FrameGraph summary owners |
 | R-BACK-2.60 / R-BACK-2.65 / R-VERIF-2.14 (CPU-ready/session admission progress) | `tla/CpuReadySessionProgress.tla` constrains releases to semantic/terminal events; `tla/SessionCapacityLease.tla` refines the generation lease, complete ordinary-successor reserve, cap boundary, and completion-independent grouping | `CpuReadyTape`, `SessionCapacityLeaseState`, and the session coordinator in `src/dxmt9/dxmt9_cpu_ready_tape.hpp`, `src/dxmt9/render/encode_session_admission.*`, and `src/dxmt9/dxmt9_command_queue_cpu_ready_session.cpp` |
-| R-BACK-2.63–2.64 / R-VERIF-2.15 (parallel/joint completion) | missing refinement model | planned encode coordinator and partition workers |
+| R-BACK-2.63–2.64 / R-VERIF-2.15 (parallel execution correctness and joint completion) | missing binding/order refinement models; deterministic fake-child evidence is partial | encode coordinator and production partition workers |
 | `backend/spec.md` §2.7 / `include/dxmt9/device_c.h` (cross-side stable identity) | `tla/WireObjectRegistry.tla` | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*` |
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
@@ -270,7 +306,7 @@ or reviewing a TLA+ module.
 | `DceChunkLookahead.tla` | One held FrameGraph source optionally owns an encoded prefix, selects an already-ready immediate FIFO successor, or fails open without waiting | `CommandQueue::runDceChunkLookaheadEncodeLoop`, `resolveDceChunkLookaheadAction`, `FrameGraphBackend::onChunkReady` | `TypeOK`, `SubmittedPrefix`, `HeldIsNext`, `ReadyIsFollowingPrefix`, `PublishedPartition`, `BoundedHold`, `PrefixOwnedByHeld`, `CompletionPrefix` | _(safety/refinement model; no-ready is an immediate fail-open action)_ | `tests/native/backend/queue_completion_sources_spec.cpp`, `tests/native/framegraph/fg_optimizer_spec.cpp`, `tests/native/framegraph/fg_linearizer_spec.cpp` |
 | Bounded ready-prefix DCE (missing) | Already-ready FIFO prefix summaries shared without DCE source ownership (`R-VERIF-2.13`) | planned ready-prefix owner and FrameGraph summary consumer | consecutive bounded snapshot, independent DAG/completion, conservative stop | immediate no-proof release | missing summary native spec |
 | `SessionCapacityLease.tla` (`R-BACK-2.65` refinement) | Fixed encoded-work cap plus separate physical-residency vector and complete wrap-aware ordinary-successor reserve; an explicit full-residency Writing startup credits the unique successor once, eligible encoded heads may retire residency without reducing work, the deterministic work-cap candidate remains Ready, and exact predecessor submission is independent of GPU completion | `SessionCapacityLeaseState`, the typed `CpuReadyTape` first-acquisition snapshot, the queue-owned capacity-progress generation, and the command-queue session coordinator | `TypeOK`, `BoundedCapacity`, `LeaseOwnsCompleteHeadroom`, `WritingSuccessorIsUnique`, `CapCandidateStaysReady`, `NoPressureCreatedRelease`, `CapacityWakeMatchesProgress`, `SubmittedGroupsRespectCap`, `ResidencyIsSeparateFromWork` | `CapProgress`, `StartupCapacityWakeProgress`, `StartupDirectLeaseProgress`, `WritingSuccessorStartupProgress`; Writing startup reaches acquire/admit/retire/publish without completion or pressure release, while older submitted residency still waits for reclaim | `tests/native/backend/encode_session_admission_spec.cpp`, `tests/native/backend/cpu_ready_tape_spec.cpp`, `tests/native/backend/cpu_ready_session_join_spec.cpp`, `tests/native/backend/post_encode_payload_retirement_spec.cpp` |
-| Parallel/joint completion (missing) | Serial-order refinement for child encoders and Metal 4 groups (`R-VERIF-2.15`) | planned coordinator/partition executor | ordered child/segment join, completion after all represented work | bounded jobs eventually join or fail before side effects | missing fake-child executor spec |
+| Parallel execution refinement (missing) | Serial-order, partition-local binding, and joint-completion refinement for child encoders and Metal 4 groups (`R-VERIF-1.5`–`1.8`, `R-VERIF-2.15`) | encode coordinator and production partition executor | exact serial draw order/once, required uniform generation and PSO ABI at every draw, child-shadow isolation, ordered child/segment join, completion after all represented work | bounded jobs eventually join or fail before side effects | fake-child order/join specs exist; model-to-code binding and alternating-state GPU readback remain missing |
 | `WireObjectRegistry.tla` | PE → unix canonical stable identity and slot reuse | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*`, `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `KindStable`, `NoReuseWithoutGenerationAdvance`, `NoGenerationWrap` | _(safety model; no fairness property)_ | `tests/native/bridge/chunk_record_registry_spec.cpp`, `tests/native/bridge/chunk_record_validation_spec.cpp` |
 | `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_registry_spec.cpp` (generation reuse/reject path); _(gap: no dedicated `HandleArena` slot-reuse spec)_ |
 | `ResourceLifetime.tla` | Deferred GPU resource destruction; `lastUsedSeqId ≤ completedSeqId` before free | `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `NoUseAfterFree` | `DestroyPendingEventuallyFreed` | `tests/native/backend/resource_hazard_spec.cpp`, `tests/native/core/resource_format_boundary_spec.cpp` |
