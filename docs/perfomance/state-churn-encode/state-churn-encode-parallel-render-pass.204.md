@@ -5,7 +5,7 @@ title: "Parallel Render-Pass Worker Gate"
 type: experiment
 status: rejected-default
 updated: 2026-08-12
-source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-identity-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/decisive-comparison.md
+source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-identity-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/decisive-comparison.md; experiments/output/app-d3d9-sfiv-benchmark-parallel-promotion-matrix-parallel-r1-20260812/parallel-promotion-matrix-report.md
 related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-scheduling/gap.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
@@ -17,7 +17,8 @@ The earlier pre-Stage2b GT2 pair and GT1/GT3/SFIV smoke artifacts quoted in
 this section are no longer available in the worktree; these figures are
 historical measurements that cannot currently be re-checked. The surviving
 `source:` artifacts above cover the attributable Stage2b follow-up, the first
-post-gate pair, and the valid decisive `r2` identity/parallel pair. The
+post-gate pair, the valid decisive `r2` identity/parallel pair, and the
+completed GT2/GT1/GT3/SFIV promotion matrix. The
 `...decisive-identity-gt2-r1-20260812` directory is an excluded preflight: it
 stopped under transient host load without a fresh official result and is not
 part of the matched evidence.
@@ -58,10 +59,10 @@ be re-checked. The native Metal fixture passed with `MTL_DEBUG_LAYER=1`.
 
 Keep `DXMT9_RENDER_PARTITION_MODE=parallel` as an explicit production provider
 and keep `identity` as the default. Do not promote from the local encode-wall
-reduction. Revisit only after the Stage 2b lane and attributable economics produce
-matched evidence that amortizes child setup and executor overhead. The matched
-follow-up below did not do so, and therefore strengthens the no-promotion
-decision.
+reduction or the later positive one-pair GT2 result. The completed matrix below
+shows workload-selective, unstable provider economics. Reconsideration requires
+cost-model/provider-policy refinement and new non-vacuous evidence for affected
+workloads, not more repetitions of the unchanged policy.
 
 ## Stage 2b Economics Follow-up
 
@@ -142,7 +143,33 @@ coherent Firefly Forest frames. The captures are visual-health evidence at
 different animation times, not pixel-exact equivalence.
 
 The earlier `...decisive-identity-gt2-r1-20260812` run remains excluded as a
-preflight and must not be mixed into the pair. Identity remains the default.
-Promotion still requires repeated matched GT2 results, the opt-in GT1/GT3/SFIV
-correctness/locality/performance matrix, and revalidation of the prior GT1
-black-polygon observation.
+preflight and must not be mixed into the pair. The completed matrix below
+supplies the required repeat and cross-workload evidence and rejects promotion.
+
+## Completed Promotion Matrix
+
+The repeat GT2 pair reversed the decisive `r2` harmonic result: steady-body
+harmonic FPS changed by `-3.7556%` and median-wall FPS by `-2.4312%`. Its
+parallel lane remained non-vacuous, selecting `641` Stage 2b passes with
+`3,799` children and `256,011` draws. The repeat identity official result was
+overwritten before preservation, so no repeat official-FPS delta is claimed.
+
+| Workload | Matched result | Parallel work and correctness |
+|---|---|---|
+| GT1 | official `-1.2492%`, harmonic `-0.5347%`, median `-0.9295%` | `3,245` Stage 2b passes selected; all 22 bounded close-up captures showed no recurrence of the prior black polygon |
+| GT2 repeat | harmonic `-3.7556%`, median `-2.4312%`; official delta unavailable | `641` Stage 2b passes, `3,799` children, `256,011` draws |
+| GT3 | official `+2.2912%`, harmonic `+2.2642%` | `409` Stage 2b passes selected |
+| SFIV | harmonic `-0.9742%`, descriptive only | zero production parallel work selected; parallel screenshot excluded after the harness missed the window |
+
+All eight matrix lanes reported zero GPU command-buffer errors. Command-buffer,
+render-pass, and tile-preservation locality remained closely conserved for the
+non-vacuous 3DMark lanes. SFIV is neither performance nor visual evidence for
+the provider because it selected no parallel work and lacks a valid parallel
+capture.
+
+The current provider economics are workload-selective and not stable enough for
+default promotion: GT3 improved, GT1 regressed, and GT2 did not repeat the
+positive harmonic sign. Identity remains the default and ExplicitParallel
+remains opt-in. Remaining work is cost-model/provider-policy refinement plus
+SFIV eligibility and valid capture evidence, followed by a new attributable
+matrix for the revised policy.
