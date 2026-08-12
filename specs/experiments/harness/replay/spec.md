@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape and bundle validation exist; live capture, production-path replay, and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
+| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, and opt-in Present-boundary chunk hook exist; provider replay and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -672,10 +672,15 @@ verified blob references; `run_dxmt9_render_tape.py` builds the
 `dxmt9.render_tape.bundle.v2` envelope, stores digest-named blobs, verifies their
 size and SHA-256, and then supplies that catalogue to native validation.
 
-This is still a structural replay substrate rather than a captured frame:
-production PE capture hooks, a production queue/provider sink, offscreen Metal
-oracle execution, and wild-captured identity evidence remain open. All three
-scope claims therefore remain false.
+The bounded capture owner and PE hook now provide the first production capture
+seam: capture is default-off, requires an injected complete bootstrap producer,
+arms after one successful Present boundary, copies each recorder-flushed
+canonical chunk exactly once, and seals/publishes only at the following
+Present. This remains a capture seam rather than complete frame evidence:
+provider replay, offscreen Metal oracle execution, and wild-captured identity
+evidence remain open. The PE producer still owns object-destroy and later
+resource/control injection through the session API; the hook does not infer
+those events from COM pointers.
 
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events. It does not by itself encode an

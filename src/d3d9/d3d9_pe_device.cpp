@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -26,6 +27,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_producer.hpp"
+#include "d3d9_pe_render_tape_capture.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -103,6 +105,29 @@ static bool dxmt9PerfVsConstSetterRangeEnabled() {
 static bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
+}
+
+static bool dxmt9PeRenderTapeCaptureEnabled() {
+    static const bool enabled =
+        dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE");
+    return enabled;
+}
+
+static std::atomic<D3D9PeRenderTapeBootstrapProducer>
+    dxmt9PeRenderTapeBootstrapProducer{nullptr};
+static std::atomic<D3D9PeRenderTapeArtifactPublisher>
+    dxmt9PeRenderTapeArtifactPublisher{nullptr};
+
+void dxmt9PeSetRenderTapeBootstrapProducer(
+    D3D9PeRenderTapeBootstrapProducer producer) noexcept {
+    dxmt9PeRenderTapeBootstrapProducer.store(producer,
+                                             std::memory_order_release);
+}
+
+void dxmt9PeSetRenderTapeArtifactPublisher(
+    D3D9PeRenderTapeArtifactPublisher publisher) noexcept {
+    dxmt9PeRenderTapeArtifactPublisher.store(publisher,
+                                             std::memory_order_release);
 }
 
 // R-BACK-2.52 (Inline Const Delta, opt-in): read once at first use. Off
@@ -1022,6 +1047,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool dsSurfaceExplicit_ = false;
     dxmt9::d3d9::pe::CommandChunkBuilder commandChunk_{};
     bool commandChunkNegotiated_ = false;
+    std::optional<dxmt9::d3d9::RenderTapeCaptureSession>
+        renderTapeCapture_{};
+    std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
+        renderTapeCaptureOracle_{};
     std::uint64_t commandChunkCommits_ = 0;
     std::uint64_t commandChunkRecords_ = 0;
     std::uint64_t commandChunkBytes_ = 0;
@@ -6688,6 +6717,106 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderStats_.upIndexBytes += indexBytes;
     }
 
+    bool armRenderTapeCaptureAtPresentBoundary() {
+        if (!renderTapeCapture_ ||
+            (renderTapeCapture_->state() !=
+                 dxmt9::d3d9::RenderTapeCaptureState::Disabled &&
+             renderTapeCapture_->state() !=
+                 dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
+            return false;
+        }
+        const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
+            std::memory_order_acquire);
+        const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
+            std::memory_order_acquire);
+        if (!producer || !publisher) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture requested without injected bootstrap "
+                "producer/publisher; capture remains off");
+            return false;
+        }
+        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed seed{};
+        bool produced = false;
+        try {
+            produced = producer(seed);
+        } catch (...) {
+            produced = false;
+        }
+        if (!produced ||
+            renderTapeCapture_->arm(seed.bootstrapOverlay, seed.blobs) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted ||
+            renderTapeCapture_->beginPresentInterval() !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            renderTapeCapture_->abort();
+            return false;
+        }
+        for (const auto& object : seed.objects) {
+            if (renderTapeCapture_->objectDefine(
+                    object.identity, object.descriptorKind, object.descriptor,
+                    object.immutableBytes, object.immutableDigest) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                renderTapeCapture_->abort();
+                return false;
+            }
+        }
+        for (const auto& mutation : seed.mutations) {
+            if (renderTapeCapture_->resourceMutation(
+                    mutation.identity, mutation.kind, mutation.subresource,
+                    mutation.byteOffset, mutation.byteSize, mutation.digest) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                renderTapeCapture_->abort();
+                return false;
+            }
+        }
+        renderTapeCaptureOracle_ = std::move(seed.oracleAttachments);
+        return true;
+    }
+
+    void captureCommittedRenderTapeChunk(
+        const D9CCommandChunk& chunk,
+        const PeCommandChunkCommitInfo& info) noexcept {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        const auto status = renderTapeCapture_->commandChunk(
+            dxmt9::d3d9::CommandChunkEnvelope{
+                .version = chunk.version,
+                .recordCount = info.recordCount,
+                .handleCount = info.handleCount,
+            },
+            std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+                    d9cWireHandleValue(chunk.records))),
+                chunk.recordBytes));
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            renderTapeCapture_->abort();
+        }
+    }
+
+    void finishRenderTapeCaptureAtPresentBoundary() noexcept {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        const auto status = renderTapeCapture_->completePresent(
+            renderTapeCapture_->eventCount(),
+            std::max<std::uint64_t>(1u, commandChunkCommits_),
+            dxmt9::d3d9::RenderTapeDigestValidity::NotCaptured, {},
+            std::as_bytes(std::span(renderTapeCaptureOracle_)));
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
+            renderTapeCapture_->abort();
+            return;
+        }
+        const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
+            std::memory_order_acquire);
+        if (!publisher || !publisher(renderTapeCapture_->sealedArtifact())) {
+            renderTapeCapture_->abort();
+        }
+    }
+
     HRESULT commitPendingCommandChunk(PeRecorderFlushReason commitReason,
                                       const D9CCommandChunk& chunk,
                                       const PeCommandChunkCommitInfo& info) {
@@ -6730,6 +6859,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         info.payloadBytes, info.handleCount,
                                         info.wireBytes, fillGapNs,
                                         activeFillNs, bridgeNs);
+                    // Copy the exact sealed canonical bytes only after the
+                    // bridge accepted them. The source remains valid until
+                    // flushPendingCommandChunk resets its builder below.
+                    captureCommittedRenderTapeChunk(chunk, info);
+                } else if (renderTapeCapture_ &&
+                           renderTapeCapture_->state() ==
+                               dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+                    renderTapeCapture_->abort();
                 }
                 return hr;
     }
@@ -7840,6 +7977,7 @@ public:
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
         , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
+        , renderTapeCapture_(std::in_place, dxmt9PeRenderTapeCaptureEnabled())
         , creationWindow_(window)
         , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
         if (factory_) factory_->AddRef();
@@ -8240,6 +8378,10 @@ public:
         const std::uint32_t presentThreadId = dxmt9PeCurrentThreadId();
         const auto presentTimingEnter = std::chrono::steady_clock::now();
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        const bool renderTapeCaptureWasActive =
+            renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
         const auto presentTimingStart = std::chrono::steady_clock::now();
         auto presentTimingBarrierEnd = presentTimingStart;
         auto presentTimingAppendEnd = presentTimingStart;
@@ -8349,6 +8491,13 @@ public:
             logPeRecorderStats("present");
             markPePresentReturnedForCadence();
             notePeStatsDecimationPresent();
+            if (renderTapeCaptureWasActive) {
+                finishRenderTapeCaptureAtPresentBoundary();
+            } else {
+                // The first successful Present is only the arm boundary;
+                // the next Present owns the one captured interval.
+                (void)armRenderTapeCaptureAtPresentBoundary();
+            }
         }
         return flushHr;
     }

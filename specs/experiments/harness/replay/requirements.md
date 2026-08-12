@@ -495,3 +495,14 @@ frequency, state calls coalesced before draw-delta construction, Wine scheduling
 or producer/replay overlap. Experiments about those observables require a
 separate producer trace. This limitation must appear in every full-tape
 artifact's scope block. Instantiates R-HARN-7.6.
+
+**R-HARN-REPLAY-7.11** The PE capture owner is opt-in and default-off. An
+injected bootstrap producer supplies the complete value-owned shadow checkpoint
+and initial object/blob/oracle seeds at a Present boundary; the owner copies
+those values, receives each successfully committed canonical D9C v2 chunk once,
+and publishes only after the following Present seals `PresentComplete`. A
+missing producer, failed bridge commit, capacity failure, terminal Reset or
+device-lost control, failed validation, or publisher rejection aborts the
+interval without exposing a partial artifact. This hook is a production
+capture seam, not a claim that the current PE wrappers can infer object
+descriptors or initial bytes from live COM pointers.

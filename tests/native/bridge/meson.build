@@ -148,6 +148,7 @@ foreach spec : [
   ['chunk-record-registry', 'chunk_record_registry_spec.cpp'],
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
+  ['render-tape-capture', 'render_tape_capture_spec.cpp'],
 ]
   target = executable(
     'dxmt9-' + spec[0] + '-spec',

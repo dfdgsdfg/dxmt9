@@ -27,6 +27,7 @@ dxmt9_frontend_provider_srcs = files(
   'device_c_marshal.cpp',
   'device_c_record_replay.cpp',
   'device_c_render_tape.cpp',
+  'device_c_render_tape_capture.cpp',
   'device_c_replay_offload.cpp',
   'device_c_resources.cpp',
   'device_c_shader_dump.cpp',
@@ -144,6 +145,7 @@ if host_machine.system() == 'windows'
     dxguid_dep,
     dxmt9_util_dep,
     dxmt9_pe_core_dep,
+    dxmt9_frontend_provider_dep,
   ]
   dxmt9_d3d9_forwarder_cpp_args = []
 
