@@ -21,34 +21,53 @@ def main() -> int:
     bundle_tool = pathlib.Path(sys.argv[3])
     with tempfile.TemporaryDirectory(prefix="dxmt9-render-tape-") as directory:
         tape = pathlib.Path(directory) / "frame.tape"
+        blob = pathlib.Path(directory) / "mutation.bin"
+        blob.write_bytes(bytes((0xAA, 0xBB, 0xCC, 0xDD)))
         run(str(generator), "--write-fixture", str(tape))
 
-        validated = json.loads(run(str(validator), "validate", str(tape)).stdout)
+        blob_ref = (
+            "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297:4"
+        )
+
+        validated = json.loads(
+            run(
+                str(validator), "validate", str(tape),
+                "--verified-blob", blob_ref,
+            ).stdout
+        )
         assert validated == {
-            "schema": "dxmt9.render_tape.v1",
+            "schema": "dxmt9.render_tape.v2",
             "profile": "frame-tape",
             "valid": True,
-            "events": 5,
+            "events": 6,
             "presents": 1,
         }
 
-        inspected = json.loads(run(str(validator), "inspect", str(tape)).stdout)
+        inspected = json.loads(
+            run(
+                str(validator), "inspect", str(tape),
+                "--verified-blob", blob_ref,
+            ).stdout
+        )
         assert inspected["valid"] is True
-        assert inspected["events"] == 5
-        assert inspected["creates"] == 1
-        assert inspected["writes"] == 1
-        assert inspected["write_bytes"] == 4
+        assert inspected["events"] == 6
+        assert inspected["defines"] == 1
+        assert inspected["mutations"] == 1
+        assert inspected["mutation_bytes"] == 4
         assert inspected["chunks"] == 1
-        assert inspected["records"] == 2
-        assert inspected["handles"] == 1
-        assert inspected["presents"] == 1
-        assert inspected["last_present_ordinal"] == 1
+        assert inspected["records"] == 1
+        assert inspected["handles"] == 0
+        assert inspected["present_completions"] == 1
+        assert inspected["last_present_ordinal"] == 4
 
         damaged = pathlib.Path(directory) / "damaged.tape"
         payload = bytearray(tape.read_bytes())
         payload[8:12] = (99).to_bytes(4, "little")
         damaged.write_bytes(payload)
-        rejected = run(str(validator), "validate", str(damaged), check=False)
+        rejected = run(
+            str(validator), "validate", str(damaged),
+            "--verified-blob", blob_ref, check=False,
+        )
         assert rejected.returncode == 1
         assert "status=invalid-header" in rejected.stderr
 
@@ -61,6 +80,8 @@ def main() -> int:
             str(tape),
             "--output-dir",
             str(bundle),
+            "--blob",
+            str(blob),
             "--validator",
             str(validator),
         )
@@ -74,7 +95,7 @@ def main() -> int:
                 str(validator),
             ).stdout
         )
-        assert bundle_validated["bundle_schema"] == "dxmt9.render_tape.bundle.v1"
+        assert bundle_validated["bundle_schema"] == "dxmt9.render_tape.bundle.v2"
         assert bundle_validated["scope"] == {
             "production_capture": False,
             "production_provider_replay": False,
@@ -90,7 +111,27 @@ def main() -> int:
                 str(validator),
             ).stdout
         )
-        assert bundle_inspected["writes"] == 1
+        assert bundle_inspected["mutations"] == 1
+
+        manifest_path = bundle / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        canonical_blob_path = manifest["components"]["blobs"][0]["path"]
+        manifest["components"]["blobs"][0]["path"] = "../mutation.bin"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        escaped_blob = run(
+            sys.executable,
+            str(bundle_tool),
+            "validate",
+            str(bundle),
+            "--validator",
+            str(validator),
+            check=False,
+        )
+        assert escaped_blob.returncode != 0
+        assert "blob path must be canonical" in escaped_blob.stderr
+        manifest["components"]["blobs"][0]["path"] = canonical_blob_path
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
         event_component = bundle / "events.bin"
         component_bytes = bytearray(event_component.read_bytes())
         component_bytes[-1] ^= 1

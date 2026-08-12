@@ -654,21 +654,23 @@ tell what the contract is protecting against.
 
 ## 8. Full Render Tape Architecture
 
-**Implementation status (2026-08-12).** The first structural substrate now
-exists in `src/d3d9/device_c_render_tape.*`: a canonical pointer-free v1 event
-tape, builder with seal-time validation, checkpoint/object/write/chunk/destroy/
-Present event grammar, generation and frame-closure validation, embedded use of
-the production command-chunk validator, a prevalidated replay-sink dispatcher,
-and the `dxmt9-render-tape validate/inspect` CLI. Native and CLI specs cover a
-bounded checkpoint → create → write → canonical Present chunk → boundary trace
-and fail-closed corruptions. `scripts/tools/run_dxmt9_render_tape.py` additionally
-packs the event tape into a `dxmt9.render_tape.bundle.v1` envelope and verifies
-its component SHA-256 before native validation, while recording all three
-production scope claims as false. This is not yet a complete `frame-tape`: the live
-checkpoint/resource/direct-control capture hooks, digest-named external payload
-blobs, production
-queue/provider sink, offscreen output oracle, and wild-captured identity artifact
-remain open in `specs/experiments/gap.md`.
+**Implementation status (2026-08-13).** The structural substrate is Render
+Tape v2. `device_c_render_tape.*` owns the pointer-free event grammar described
+by R-HARN-REPLAY-7.3/7.4, validates the fixed typed baseline plus canonical
+`APPLY_STATE|FULL_SNAPSHOT` bootstrap completeness, object generations,
+verified digest-backed mutations, exact D9C
+v2 chunks, ordered-control dispositions, Present/completion closure, and all
+allocation before replay callbacks. Native tests cover a complete six-event
+trace and fail-closed bootstrap, blob, generation, range, control, completion,
+and callback-conservation cases. `dxmt9-render-tape` accepts only explicitly
+verified blob references; `run_dxmt9_render_tape.py` builds the
+`dxmt9.render_tape.bundle.v2` envelope, stores digest-named blobs, verifies their
+size and SHA-256, and then supplies that catalogue to native validation.
+
+This is still a structural replay substrate rather than a captured frame:
+production PE capture hooks, a production queue/provider sink, offscreen Metal
+oracle execution, and wild-captured identity evidence remain open. All three
+scope claims therefore remain false.
 
 ### 8.1 Capture boundary
 
@@ -699,9 +701,7 @@ The logical bundle is:
 ```text
 render-tape/
 ├── manifest.json       schema/profile/ABI/provenance/component digests
-├── checkpoint.bin      ordered full effective-state checkpoint
-├── objects.bin         object descriptors and generation map
-├── events.bin          monotone command/direct-control event journal
+├── events.bin          bootstrap/object/mutation/command/control/completion journal
 ├── blobs/              digest-named resource, shader, declaration payloads
 └── oracle/             capture-time attachment metadata and optional hashes
 ```
@@ -715,10 +715,12 @@ capturing process.
 The implemented structural tools are invoked as:
 
 ```sh
-build/tools/dxmt9-render-tape validate frame.tape
-build/tools/dxmt9-render-tape inspect frame.tape
+build/tools/dxmt9-render-tape validate frame.tape \
+  --verified-blob <sha256>:<bytes>
+build/tools/dxmt9-render-tape inspect frame.tape \
+  --verified-blob <sha256>:<bytes>
 python3 scripts/tools/run_dxmt9_render_tape.py pack \
-  --events frame.tape --output-dir frame-tape-bundle
+  --events frame.tape --blob mutation.bin --output-dir frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
 ```
 
@@ -730,10 +732,11 @@ the planned production provider replay.
 The journal distinguishes at least:
 
 - canonical command-chunk wire bytes and their source/sequence identity;
-- object create/destroy and subresource content mutations;
+- object define/destroy and digest-backed subresource content mutations;
 - shader/declaration creation and immutable payload identity;
-- Query, readback, Flush, Present, and other direct ordered controls;
-- capture checkpoint, interval boundary, and terminal completion records.
+- byte-exact chunk-owned QueryIssue/readback/Present commands;
+- direct QueryGetData, CPU-read, Flush/wait, Reset, and device-lost controls;
+- bootstrap and terminal `PresentComplete` records.
 
 ### 8.3 Production-path replay
 

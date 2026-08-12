@@ -400,23 +400,41 @@ events refer to blob digests and generation-qualified object identities, never
 process addresses or live COM/Objective-C objects. Instantiates R-HARN-4.1,
 R-HARN-7.2, and R-HARN-7.5.
 
-**R-HARN-REPLAY-7.3** A full tape begins with an ordered effective-state
-checkpoint sufficient to interpret the first captured delta record. The
-checkpoint includes the complete backend-visible D3D9 state shadow, bound
-resource and declaration identities, object descriptors, shader bytecode, and
-the initial contents of every subresource that can be read before its first
-captured write. Omitting a field because a later draw packet normally inherits
-it from the live server shadow is invalid. Instantiates R-HARN-7.2/7.3.
+**R-HARN-REPLAY-7.3** A full tape begins with exactly one `BootstrapState`.
+It declares a versioned typed-default baseline for every backend-visible D3D9
+state category, an exact all-known-category completeness mask, and one or more
+canonical D9C v2 `APPLY_STATE` chunks using the existing `FULL_SNAPSHOT`
+section grammar as overlays. The validator accepts only the one baseline
+profile version it implements, requires `FULL_SNAPSHOT` on every overlay
+record, rejects missing or unknown category bits, and rejects any bootstrap
+chunk containing Draw, Clear, Present, resource, query, readback, or other
+ordering records. Sparse overlay absence means the declared baseline default,
+never inheritance from a live server shadow. Object descriptors,
+shader/declaration bytes, and initial subresource contents remain
+generation-qualified `ObjectDefine` and digest-backed `ResourceMutation`
+events; shader and declaration definitions require an immutable verified
+payload digest. Instantiates R-HARN-7.2/7.3.
 
-**R-HARN-REPLAY-7.4** The event journal contains both canonical command-chunk
-wire records and operations that bypass those chunks: object creation and
-destruction, lock/unlock or upload mutations, palette and mipmap mutations,
-readback/query/Flush/Present ordering, and other direct bridge controls needed
-to preserve observation order. Every event carries a monotone event ordinal;
-events that reference an object carry its kind, object ID, and generation.
-Unknown required event kinds, stale generations, missing blobs, or ordinal
-gaps are hard validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and
-R-HARN-7.5.
+**R-HARN-REPLAY-7.4** The v2 event journal has exactly these semantic classes:
+`BootstrapState`, `ObjectDefine`/`ObjectDestroy`, digest-backed
+`ResourceMutation`, byte-exact canonical `CommandChunk`, typed
+`OrderedControl`, and terminal `PresentComplete`. Clear, Present,
+UpdateTexture, UpdateSurface, QueryIssue, and Readback already belong to D9C v2
+chunks and must not be duplicated as controls. `OrderedControl` is restricted
+to calls that actually bypass chunks: QueryGetData, CPU-read observation,
+flush/wait, Reset, and device-lost observation. It records the returned value,
+typed disposition, and completion waterline. Every event carries a monotone
+ordinal and every object reference carries kind, object ID, and generation.
+Unknown kinds/dispositions, stale generations, missing or unverified blobs,
+range overflow, completion regression, or duplicate representation are hard
+validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and R-HARN-7.5.
+
+`PresentComplete` is unique and last, names the ordinal of the one
+Present-bearing command event, records completion and typed oracle attachment
+identities, and explicitly distinguishes a captured SHA-256 oracle from
+`not-captured`. A successful Reset terminates/aborts the frame world and cannot
+be followed by successful `PresentComplete`; a failed Reset remains an ordered
+observation.
 
 **R-HARN-REPLAY-7.5** Capture sealing must prove resource closure and checkpoint
 consistency before reporting success. Every referenced object exists at the

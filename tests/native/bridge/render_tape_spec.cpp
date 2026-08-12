@@ -1,11 +1,13 @@
 #include "device_c_render_tape.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -26,416 +28,475 @@ void check(bool condition, std::string_view message) {
   }
 }
 
-template <typename T> std::span<const std::byte> bytesOf(const T& value) {
-  return std::as_bytes(std::span(&value, 1u));
-}
-
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
-std::vector<std::byte> makePresentChunk() {
-  const D9CCommandChunkWirePresent present{};
-  const std::uint32_t recordTableOffset = sizeof(D9CCommandChunkWireHeader);
-  const std::uint32_t handleTableOffset = static_cast<std::uint32_t>(
-      alignUp(recordTableOffset + sizeof(D9CCommandChunkWireRecordHeader),
-              alignof(D9CCommandChunkWireHandleEntry)));
-  const std::uint32_t payloadArenaOffset = static_cast<std::uint32_t>(
-      alignUp(handleTableOffset, alignof(std::uint32_t)));
+std::vector<std::byte> makeSingleRecordChunk(
+    std::uint32_t type, std::span<const std::byte> payload,
+    std::span<const D9CCommandChunkWireHandleEntry> handles = {}) {
+  const auto recordTableOffset = sizeof(D9CCommandChunkWireHeader);
+  const auto handleTableOffset = alignUp(
+      recordTableOffset + sizeof(D9CCommandChunkWireRecordHeader),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadArenaOffset =
+      alignUp(handleTableOffset +
+                  handles.size() * sizeof(D9CCommandChunkWireHandleEntry),
+              alignof(std::uint32_t));
   const D9CCommandChunkWireHeader header{
       .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
       .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
       .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
-      .recordTableOffset = recordTableOffset,
+      .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
       .recordCount = 1u,
-      .handleTableOffset = handleTableOffset,
-      .handleCount = 0u,
-      .payloadArenaOffset = payloadArenaOffset,
-      .payloadArenaSize = sizeof(present),
-      .reserved0 = 0u,
-      .reserved1 = 0u,
+      .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
+      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
   };
   const D9CCommandChunkWireRecordHeader record{
-      .type = D9C_COMMAND_RECORD_PRESENT,
-      .flags = 0u,
-      .payloadOffset = 0u,
-      .payloadSize = sizeof(present),
-      .firstHandle = 0u,
-      .handleCount = 0u,
-      .reserved0 = 0u,
-      .reserved1 = 0u,
+      .type = type,
+      .payloadSize = static_cast<std::uint32_t>(payload.size()),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
   };
-  std::vector<std::byte> bytes(payloadArenaOffset + sizeof(present));
+  std::vector<std::byte> bytes(payloadArenaOffset + payload.size());
   std::memcpy(bytes.data(), &header, sizeof(header));
   std::memcpy(bytes.data() + recordTableOffset, &record, sizeof(record));
-  std::memcpy(bytes.data() + payloadArenaOffset, &present, sizeof(present));
-  return bytes;
-}
-
-std::vector<std::byte>
-makeColorFillChunk(const D9CWireObjectIdentity& surfaceIdentity,
-                   bool includePresent) {
-  const D9CCommandChunkWireColorFill colorFill{
-      .surfaceHandleIndex = 0u,
-      .colorARGB = 0xff102030u,
-      .hasRect = 0u,
-      .reserved0 = 0u,
-      .rect = {},
-  };
-  const D9CCommandChunkWirePresent present{};
-  const std::uint32_t recordCount = includePresent ? 2u : 1u;
-  const std::uint32_t recordTableOffset = sizeof(D9CCommandChunkWireHeader);
-  const std::uint32_t handleTableOffset = static_cast<std::uint32_t>(alignUp(
-      recordTableOffset + recordCount * sizeof(D9CCommandChunkWireRecordHeader),
-      alignof(D9CCommandChunkWireHandleEntry)));
-  const std::uint32_t payloadArenaOffset = static_cast<std::uint32_t>(
-      alignUp(handleTableOffset + sizeof(D9CCommandChunkWireHandleEntry),
-              alignof(std::uint32_t)));
-  const std::uint32_t presentOffset = static_cast<std::uint32_t>(
-      alignUp(sizeof(colorFill), alignof(std::uint64_t)));
-  const std::uint32_t payloadSize =
-      includePresent ? presentOffset + sizeof(present) : sizeof(colorFill);
-  const D9CCommandChunkWireHeader header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
-      .recordTableOffset = recordTableOffset,
-      .recordCount = recordCount,
-      .handleTableOffset = handleTableOffset,
-      .handleCount = 1u,
-      .payloadArenaOffset = payloadArenaOffset,
-      .payloadArenaSize = payloadSize,
-      .reserved0 = 0u,
-      .reserved1 = 0u,
-  };
-  const std::array<D9CCommandChunkWireRecordHeader, 2u> records{{
-      {
-          .type = D9C_COMMAND_RECORD_COLOR_FILL,
-          .flags = 0u,
-          .payloadOffset = 0u,
-          .payloadSize = sizeof(colorFill),
-          .firstHandle = 0u,
-          .handleCount = 1u,
-          .reserved0 = 0u,
-          .reserved1 = 0u,
-      },
-      {
-          .type = D9C_COMMAND_RECORD_PRESENT,
-          .flags = 0u,
-          .payloadOffset = presentOffset,
-          .payloadSize = sizeof(present),
-          .firstHandle = 1u,
-          .handleCount = 0u,
-          .reserved0 = 0u,
-          .reserved1 = 0u,
-      },
-  }};
-  const D9CCommandChunkWireHandleEntry handle{
-      .kind = surfaceIdentity.kind,
-      .generation = surfaceIdentity.generation,
-      .objectId = surfaceIdentity.objectId,
-  };
-  std::vector<std::byte> bytes(payloadArenaOffset + payloadSize);
-  std::memcpy(bytes.data(), &header, sizeof(header));
-  std::memcpy(bytes.data() + recordTableOffset, records.data(),
-              recordCount * sizeof(records[0]));
-  std::memcpy(bytes.data() + handleTableOffset, &handle, sizeof(handle));
-  std::memcpy(bytes.data() + payloadArenaOffset, &colorFill, sizeof(colorFill));
-  if (includePresent) {
-    std::memcpy(bytes.data() + payloadArenaOffset + presentOffset, &present,
-                sizeof(present));
+  if (!handles.empty()) {
+    std::memcpy(bytes.data() + handleTableOffset, handles.data(),
+                handles.size_bytes());
+  }
+  if (!payload.empty()) {
+    std::memcpy(bytes.data() + payloadArenaOffset, payload.data(),
+                payload.size());
   }
   return bytes;
 }
 
-std::vector<std::byte> makeCompleteTape() {
-  constexpr D9CWireObjectIdentity surface{
-      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-      .generation = 2u,
-      .objectId = 17u,
+std::vector<std::byte> makeApplyStateChunk() {
+  std::array<D9CCommandChunkWireTextureBinding,
+             D9C_DRAW_PACKET_MAX_TEXTURES>
+      textures{};
+  for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
+    textures[slot] = D9CCommandChunkWireTextureBinding{
+        .slot = slot,
+        .valid = 1u,
+        .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+    };
+  }
+  std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
+      streams{};
+  for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
+    streams[slot] = D9CCommandChunkWireStreamBinding{
+        .slot = slot,
+        .valid = 1u,
+        .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+    };
+  }
+
+  constexpr std::uint32_t sectionCount = 2u;
+  constexpr std::size_t textureBytes =
+      sizeof(D9CCommandChunkWireTextureBinding) *
+      D9C_DRAW_PACKET_MAX_TEXTURES;
+  constexpr std::size_t streamBytes =
+      sizeof(D9CCommandChunkWireStreamBinding) * D9C_DRAW_PACKET_MAX_STREAMS;
+  const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
+  const auto sectionPayloadOffset =
+      alignUp(sectionTableOffset +
+                  sectionCount * sizeof(D9CCommandChunkWireSectionDesc),
+              alignof(std::uint32_t));
+  const auto streamOffset =
+      sectionPayloadOffset + textureBytes;
+  const D9CCommandChunkWireDrawHeader apply{
+      .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
+      .sectionCount = sectionCount,
+      .sectionTableOffset = static_cast<std::uint32_t>(sectionTableOffset),
+      .sectionPayloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
   };
-  constexpr std::array<std::byte, 4> state{std::byte{0x10}, std::byte{0x20},
-                                           std::byte{0x30}, std::byte{0x40}};
-  constexpr std::array<std::byte, 8> descriptor{
-      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
-      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
-  constexpr std::array<std::byte, 4> pixels{std::byte{0xaa}, std::byte{0xbb},
-                                            std::byte{0xcc}, std::byte{0xdd}};
-  const auto chunk = makeColorFillChunk(surface, true);
+  const std::array sections{
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+          .elementSize = sizeof(D9CCommandChunkWireTextureBinding),
+          .count = static_cast<std::uint32_t>(textures.size()),
+          .payloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+          .byteSize = static_cast<std::uint32_t>(textureBytes),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+          .elementSize = sizeof(D9CCommandChunkWireStreamBinding),
+          .count = static_cast<std::uint32_t>(streams.size()),
+          .payloadOffset = static_cast<std::uint32_t>(streamOffset),
+          .byteSize = static_cast<std::uint32_t>(streamBytes),
+      },
+  };
+  std::vector<std::byte> payload(streamOffset + streamBytes);
+  std::memcpy(payload.data(), &apply, sizeof(apply));
+  std::memcpy(payload.data() + sectionTableOffset, sections.data(),
+              sizeof(sections));
+  std::memcpy(payload.data() + sectionPayloadOffset, textures.data(),
+              textureBytes);
+  std::memcpy(payload.data() + streamOffset, streams.data(),
+              streamBytes);
+  return makeSingleRecordChunk(D9C_COMMAND_RECORD_APPLY_STATE,
+                               payload);
+}
+
+std::vector<std::byte> makePresentChunk() {
+  const D9CCommandChunkWirePresent present{};
+  return makeSingleRecordChunk(D9C_COMMAND_RECORD_PRESENT,
+                               std::as_bytes(std::span(&present, 1u)));
+}
+
+constexpr D9CWireObjectIdentity kSurface{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 2u,
+    .objectId = 17u,
+};
+
+RenderTapeDigest digest(std::byte seed) {
+  RenderTapeDigest value{};
+  for (std::size_t i = 0u; i < value.size(); ++i) {
+    value[i] = static_cast<std::byte>(
+        static_cast<unsigned>(seed) + static_cast<unsigned>(i));
+  }
+  return value;
+}
+
+RenderTapeDigest mutationDigest() {
+  return RenderTapeDigest{
+      std::byte{0x8d}, std::byte{0x70}, std::byte{0xd6}, std::byte{0x91},
+      std::byte{0xc8}, std::byte{0x22}, std::byte{0xd5}, std::byte{0x56},
+      std::byte{0x38}, std::byte{0xb6}, std::byte{0xe7}, std::byte{0xfd},
+      std::byte{0x54}, std::byte{0xcd}, std::byte{0x94}, std::byte{0x17},
+      std::byte{0x0c}, std::byte{0x87}, std::byte{0xd1}, std::byte{0x9e},
+      std::byte{0xb1}, std::byte{0xf6}, std::byte{0x28}, std::byte{0xb7},
+      std::byte{0x57}, std::byte{0x50}, std::byte{0x6e}, std::byte{0xde},
+      std::byte{0x56}, std::byte{0x88}, std::byte{0xd2}, std::byte{0x97},
+  };
+}
+
+std::vector<std::byte> makeCompleteTape(
+    D9CWireObjectIdentity mutationIdentity = kSurface,
+    std::uint64_t mutationOffset = 0u, std::uint64_t mutationBytes = 4u,
+    std::uint32_t controlBytes = sizeof(RenderTapeFlushWaitControl),
+    std::uint64_t controlCompletion = 10u,
+    std::uint64_t presentCompletion = 10u,
+    RenderTapeDigestValidity digestValidity =
+        RenderTapeDigestValidity::NotCaptured) {
+  const auto bootstrap = makeApplyStateChunk();
+  const auto present = makePresentChunk();
+  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto resourceDigest = mutationDigest();
+  const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
+  const RenderTapeOrderedControlHeader control{
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::FlushWait),
+      .disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Completed),
+      .controlBytes = controlBytes,
+      .completionOrdinal = controlCompletion,
+  };
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = 1u,
+  };
 
   RenderTapeBuilder builder;
-  builder.appendCheckpoint(1u, {}, state);
-  builder.appendObjectCreate(surface, 1u, descriptor);
-  builder.appendResourceWrite(surface, 0u, 0u, pixels);
+  builder.appendBootstrapState(bootstrap);
+  builder.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  builder.appendResourceMutation(mutationIdentity,
+                                 RenderTapeMutationKind::CpuUnlock, 0u,
+                                 mutationOffset, mutationBytes,
+                                 resourceDigest);
   builder.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, chunk);
-  builder.appendPresentBoundary(1u);
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  builder.appendOrderedControl(control, std::as_bytes(std::span(&wait, 1u)));
+  builder.appendPresentComplete(
+      4u, presentCompletion, digestValidity,
+      digestValidity == RenderTapeDigestValidity::Sha256
+          ? digest(std::byte{0x40})
+          : RenderTapeDigest{},
+      std::as_bytes(std::span(&oracle, 1u)));
   return builder.seal();
+}
+
+RenderTapeBlobCatalogue completeCatalogue(std::uint64_t bytes = 4u,
+                                          bool verified = true) {
+  return RenderTapeBlobCatalogue{.blobs = {{
+                                      .digest = mutationDigest(),
+                                      .size = bytes,
+                                      .verified = verified ? 1u : 0u,
+                                  }}};
+}
+
+template <typename T>
+T* eventPayload(std::vector<std::byte>& tape, std::size_t eventIndex) {
+  auto* header = reinterpret_cast<RenderTapeHeader*>(tape.data());
+  auto* events = reinterpret_cast<RenderTapeEventHeader*>(
+      tape.data() + header->eventTableOffset);
+  return reinterpret_cast<T*>(tape.data() + header->payloadArenaOffset +
+                              events[eventIndex].payloadOffset);
+}
+
+D9CCommandChunkWireDrawHeader* bootstrapDrawHeader(
+    std::vector<std::byte>& tape) {
+  auto* bootstrap = eventPayload<RenderTapeBootstrapHeader>(tape, 0u);
+  auto* overlay = reinterpret_cast<std::byte*>(bootstrap + 1u);
+  auto* chunk = reinterpret_cast<D9CCommandChunkWireHeader*>(overlay);
+  return reinterpret_cast<D9CCommandChunkWireDrawHeader*>(
+      overlay + chunk->payloadArenaOffset);
 }
 
 class RecordingSink final : public RenderTapeReplaySink {
 public:
-  bool checkpoint(std::uint32_t stateVersion,
-                  std::span<const D9CWireObjectIdentity> initialObjects,
-                  std::span<const std::byte> state) override {
-    calls.push_back(RenderTapeEventType::Checkpoint);
-    checkpointVersion = stateVersion;
-    checkpointObjects = initialObjects.size();
-    checkpointBytes = state.size();
+  bool bootstrap(const RenderTapeBootstrapHeader&,
+                 std::span<const std::byte>) override {
+    calls.push_back(RenderTapeEventType::BootstrapState);
     return true;
   }
-
-  bool objectCreate(const RenderTapeObjectCreateHeader& fixed,
-                    std::span<const std::byte> descriptor) override {
-    calls.push_back(RenderTapeEventType::ObjectCreate);
-    objectId = fixed.identity.objectId;
-    descriptorBytes = descriptor.size();
+  bool objectDefine(const RenderTapeObjectDefineHeader&,
+                    std::span<const std::byte>) override {
+    calls.push_back(RenderTapeEventType::ObjectDefine);
     return true;
   }
-
-  bool resourceWrite(const RenderTapeResourceWriteHeader& fixed,
-                     std::span<const std::byte> data) override {
-    calls.push_back(RenderTapeEventType::ResourceWrite);
-    writeSubresource = fixed.subresource;
-    writeBytes = data.size();
-    return true;
-  }
-
-  bool commandChunk(const CommandChunkEnvelope& envelope,
-                    std::span<const std::byte> chunk) override {
-    calls.push_back(RenderTapeEventType::CommandChunk);
-    ImportedChunkView imported;
-    const auto result = validateCommandChunk(chunk, envelope, &imported);
-    chunkRecords = imported.records.size();
-    return result.valid();
-  }
-
-  bool objectDestroy(const D9CWireObjectIdentity&) override {
+  bool objectDestroy(const RenderTapeObjectDestroyHeader&) override {
     calls.push_back(RenderTapeEventType::ObjectDestroy);
     return true;
   }
-
-  bool presentBoundary(const RenderTapePresentBoundary& boundary) override {
-    calls.push_back(RenderTapeEventType::PresentBoundary);
-    presentOrdinal = boundary.presentOrdinal;
+  bool resourceMutation(const RenderTapeResourceMutationHeader&) override {
+    calls.push_back(RenderTapeEventType::ResourceMutation);
+    return true;
+  }
+  bool commandChunk(const CommandChunkEnvelope& envelope,
+                    std::span<const std::byte> chunk) override {
+    calls.push_back(RenderTapeEventType::CommandChunk);
+    return validateCommandChunk(chunk, envelope).valid();
+  }
+  bool orderedControl(const RenderTapeOrderedControlHeader&,
+                      std::span<const std::byte>) override {
+    calls.push_back(RenderTapeEventType::OrderedControl);
+    return true;
+  }
+  bool presentComplete(const RenderTapePresentCompleteHeader&,
+                       std::span<const std::byte>) override {
+    calls.push_back(RenderTapeEventType::PresentComplete);
     return true;
   }
 
   std::vector<RenderTapeEventType> calls;
-  std::uint32_t checkpointVersion = 0u;
-  std::size_t checkpointObjects = 0u;
-  std::size_t checkpointBytes = 0u;
-  std::uint64_t objectId = 0u;
-  std::size_t descriptorBytes = 0u;
-  std::uint32_t writeSubresource = 0u;
-  std::size_t writeBytes = 0u;
-  std::size_t chunkRecords = 0u;
-  std::uint64_t presentOrdinal = 0u;
 };
 
-void validTapeRoundTripsAndReplaysInOrder() {
-  const auto bytes = makeCompleteTape();
-  ImportedRenderTapeView tape;
-  const auto validation = validateRenderTape(bytes, &tape);
-  check(validation.valid(), "complete frame tape validates");
-  check(tape.header.eventCount == 5u, "event count is conserved");
-  check(tape.header.presentCount == 1u, "one Present is declared");
-
-  ImportedRenderTapeView fastView;
-  check(importPrevalidatedRenderTape(bytes, fastView),
-        "prevalidated import reconstructs spans");
+void validTapeReplaysExactlyOnce() {
+  const auto tape = makeCompleteTape();
+  const auto catalogue = completeCatalogue();
+  ImportedRenderTapeView imported;
+  const auto validation = validateRenderTape(tape, catalogue, &imported);
+  check(validation.valid(), renderTapeValidationStatusName(validation.status));
   RecordingSink sink;
-  const auto replay = replayPrevalidatedRenderTape(fastView, sink);
-  check(replay.complete, "prevalidated tape replays completely");
-  check(sink.calls ==
-            std::vector<RenderTapeEventType>{
-                RenderTapeEventType::Checkpoint,
-                RenderTapeEventType::ObjectCreate,
-                RenderTapeEventType::ResourceWrite,
-                RenderTapeEventType::CommandChunk,
-                RenderTapeEventType::PresentBoundary,
-            },
-        "event order is exact");
-  check(sink.checkpointVersion == 1u && sink.checkpointObjects == 0u &&
-            sink.checkpointBytes == 4u,
-        "checkpoint reaches sink intact");
-  check(sink.objectId == 17u && sink.descriptorBytes == 8u,
-        "object creation reaches sink intact");
-  check(sink.writeSubresource == 0u && sink.writeBytes == 4u,
-        "resource mutation reaches sink intact");
-  check(sink.chunkRecords == 2u && sink.presentOrdinal == 1u,
-        "production chunk validation and Present boundary execute");
+  const auto replay = replayPrevalidatedRenderTape(imported, catalogue, sink);
+  check(replay.complete, "valid tape replay must complete");
+  const std::array expected{
+      RenderTapeEventType::BootstrapState,
+      RenderTapeEventType::ObjectDefine,
+      RenderTapeEventType::ResourceMutation,
+      RenderTapeEventType::CommandChunk,
+      RenderTapeEventType::OrderedControl,
+      RenderTapeEventType::PresentComplete,
+  };
+  check(std::equal(sink.calls.begin(), sink.calls.end(), expected.begin(),
+                   expected.end()),
+        "events must replay exactly once in serial order");
 }
 
-template <typename Mutator>
-void checkReject(Mutator mutate, RenderTapeValidationStatus status,
-                 std::string_view message) {
-  auto bytes = makeCompleteTape();
-  mutate(bytes);
-  const auto result = validateRenderTape(bytes);
-  check(result.status == status, message);
-}
-
-RenderTapeHeader& tapeHeader(std::vector<std::byte>& bytes) {
-  return *reinterpret_cast<RenderTapeHeader*>(bytes.data());
-}
-
-RenderTapeEventHeader& tapeEvent(std::vector<std::byte>& bytes,
-                                 std::size_t index) {
-  auto& header = tapeHeader(bytes);
-  return *reinterpret_cast<RenderTapeEventHeader*>(
-      bytes.data() + header.eventTableOffset +
-      index * sizeof(RenderTapeEventHeader));
-}
-
-void invalidTapesFailBeforeReplay() {
-  checkReject([](auto& bytes) { tapeHeader(bytes).version += 1u; },
-              RenderTapeValidationStatus::InvalidHeader,
-              "unknown tape version rejects");
-  checkReject([](auto& bytes) { tapeEvent(bytes, 2u).ordinal = 9u; },
-              RenderTapeValidationStatus::InvalidEventOrdinal,
-              "ordinal gap rejects");
-  checkReject([](auto& bytes) { tapeEvent(bytes, 3u).payloadSize -= 1u; },
-              RenderTapeValidationStatus::InvalidCommandChunk,
-              "truncated canonical chunk rejects");
-  checkReject([](auto& bytes) { tapeHeader(bytes).presentCount = 0u; },
-              RenderTapeValidationStatus::IncompleteFrame,
-              "frame without declared Present rejects");
-
-  {
-    auto complete = makeCompleteTape();
-    std::vector<std::byte> misaligned(complete.size() + 1u);
-    std::memcpy(misaligned.data() + 1u, complete.data(), complete.size());
-    check(validateRenderTape(std::span<const std::byte>(misaligned).subspan(1u))
-                  .status == RenderTapeValidationStatus::InvalidLayout,
-          "misaligned packed tape rejects before span construction");
-  }
-
-  auto bytes = makeCompleteTape();
-  auto& create = tapeEvent(bytes, 1u);
-  auto& write = tapeEvent(bytes, 2u);
-  std::swap(create.type, write.type);
-  const auto result = validateRenderTape(bytes);
-  check(!result.valid(), "mutation before object creation rejects");
-}
-
-void builderPreservesExplicitDestroyOrdering() {
-  constexpr D9CWireObjectIdentity texture{
-      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      .generation = 3u,
+void immutableObjectsAndRetirementFailClosed() {
+  constexpr D9CWireObjectIdentity shader{
+      .kind = D9C_CHUNK_HANDLE_KIND_SHADER,
+      .generation = 1u,
       .objectId = 23u,
   };
-  constexpr std::array<std::byte, 1> state{std::byte{1}};
-  constexpr std::array<std::byte, 1> descriptor{std::byte{2}};
-  const auto chunk = makePresentChunk();
-  RenderTapeBuilder builder;
-  builder.appendCheckpoint(1u, {}, state);
-  builder.appendObjectCreate(texture, 1u, descriptor);
-  builder.appendObjectDestroy(texture);
-  builder.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, chunk);
-  builder.appendPresentBoundary(1u);
-  const auto bytes = builder.seal();
-  check(validateRenderTape(bytes).valid(),
-        "destroyed unreferenced identity remains a valid frame");
+  constexpr std::array<std::byte, 4u> descriptor{};
+  const auto shaderDigest = digest(std::byte{0x70});
+  const auto bootstrap = makeApplyStateChunk();
+  const auto present = makePresentChunk();
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = 1u,
+  };
+
+  RenderTapeBuilder immutable;
+  immutable.appendBootstrapState(bootstrap);
+  immutable.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  immutable.appendObjectDefine(shader, 2u, descriptor, 12u, shaderDigest);
+  immutable.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  immutable.appendPresentComplete(
+      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto immutableTape = immutable.seal();
+  const RenderTapeBlobCatalogue immutableCatalogue{.blobs = {{
+      .digest = shaderDigest,
+      .size = 12u,
+      .verified = 1u,
+  }}};
+  check(validateRenderTape(immutableTape, immutableCatalogue).valid(),
+        "verified shader payload definition must validate");
+  check(validateRenderTape(immutableTape, {}).status ==
+            RenderTapeValidationStatus::UnknownBlob,
+        "shader payload definition without its blob must fail");
+
+  RenderTapeBuilder reused;
+  reused.appendBootstrapState(bootstrap);
+  reused.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  reused.appendObjectDestroy(kSurface);
+  auto newerSurface = kSurface;
+  ++newerSurface.generation;
+  reused.appendObjectDefine(newerSurface, 1u, descriptor, 0u, {});
+  reused.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  reused.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(reused.seal(), {}).status ==
+            RenderTapeValidationStatus::RetainedSlotReuse,
+        "a retired slot cannot be reused while the tape retains it");
 }
 
-void builderRefusesToSealIncompleteOrAliasedFrames() {
-  constexpr std::array<std::byte, 1> state{std::byte{1}};
-  RenderTapeBuilder incomplete;
-  incomplete.appendCheckpoint(1u, {}, state);
-  bool rejected = false;
-  try {
-    static_cast<void>(incomplete.seal());
-  } catch (const std::invalid_argument&) {
-    rejected = true;
-  }
-  check(rejected, "seal rejects a frame without canonical Present");
+void invalidInputsFailBeforeCallbacks() {
+  const auto validCatalogue = completeCatalogue();
 
-  constexpr D9CWireObjectIdentity generation1{
-      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      .generation = 1u,
-      .objectId = 99u,
-  };
-  constexpr D9CWireObjectIdentity generation2{
-      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      .generation = 2u,
-      .objectId = 99u,
-  };
-  constexpr std::array<std::byte, 1> descriptor{std::byte{2}};
-  const auto chunk = makePresentChunk();
-  RenderTapeBuilder aliased;
-  aliased.appendCheckpoint(1u, {}, state);
-  aliased.appendObjectCreate(generation1, 1u, descriptor);
-  aliased.appendObjectCreate(generation2, 1u, descriptor);
-  aliased.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, chunk);
-  aliased.appendPresentBoundary(1u);
-  rejected = false;
-  try {
-    static_cast<void>(aliased.seal());
-  } catch (const std::invalid_argument&) {
-    rejected = true;
-  }
-  check(rejected, "seal rejects two live generations of one object slot");
+  auto incomplete = makeCompleteTape();
+  eventPayload<RenderTapeBootstrapHeader>(incomplete, 0u)
+      ->requiredCategoryMask &= ~std::uint64_t{1};
+  check(validateRenderTape(incomplete, validCatalogue).status ==
+            RenderTapeValidationStatus::BootstrapCoverageIncomplete,
+        "missing bootstrap category must fail");
 
-  constexpr D9CWireObjectIdentity missingSurface{
-      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-      .generation = 1u,
-      .objectId = 100u,
-  };
-  constexpr D9CWireObjectIdentity referencedSurface{
-      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-      .generation = 1u,
-      .objectId = 101u,
-  };
-  const auto unknownChunk = makeColorFillChunk(referencedSurface, true);
-  RenderTapeBuilder unknownHandle;
-  unknownHandle.appendCheckpoint(1u, {}, state);
-  unknownHandle.appendObjectCreate(missingSurface, 1u, descriptor);
-  unknownHandle.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, unknownChunk);
-  unknownHandle.appendPresentBoundary(1u);
-  rejected = false;
-  try {
-    static_cast<void>(unknownHandle.seal());
-  } catch (const std::invalid_argument&) {
-    rejected = true;
-  }
-  check(rejected, "seal rejects a chunk that references an unknown object");
+  auto unknownBaseline = makeCompleteTape();
+  eventPayload<RenderTapeBootstrapHeader>(unknownBaseline, 0u)
+      ->baselineProfileVersion = kRenderTapeBaselineProfileVersion + 1u;
+  check(validateRenderTape(unknownBaseline, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidBootstrap,
+        "unknown bootstrap baseline must fail");
 
-  constexpr D9CWireObjectIdentity retainedGeneration1{
-      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-      .generation = 1u,
-      .objectId = 102u,
-  };
-  constexpr D9CWireObjectIdentity retainedGeneration2{
-      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-      .generation = 2u,
-      .objectId = 102u,
-  };
-  const auto retainedChunk = makeColorFillChunk(retainedGeneration1, false);
-  RenderTapeBuilder retainedReuse;
-  retainedReuse.appendCheckpoint(1u, {}, state);
-  retainedReuse.appendObjectCreate(retainedGeneration1, 1u, descriptor);
-  retainedReuse.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
-      retainedChunk);
-  retainedReuse.appendObjectDestroy(retainedGeneration1);
-  retainedReuse.appendObjectCreate(retainedGeneration2, 1u, descriptor);
-  retainedReuse.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, chunk);
-  retainedReuse.appendPresentBoundary(1u);
-  rejected = false;
-  try {
-    static_cast<void>(retainedReuse.seal());
-  } catch (const std::invalid_argument&) {
-    rejected = true;
+  auto sparseBootstrap = makeCompleteTape();
+  bootstrapDrawHeader(sparseBootstrap)->flags = 0u;
+  check(validateRenderTape(sparseBootstrap, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidBootstrapChunk,
+        "bootstrap APPLY_STATE must retain FULL_SNAPSHOT semantics");
+
+  RenderTapeBuilder forbidden;
+  const auto present = makePresentChunk();
+  forbidden.appendBootstrapState(present);
+  constexpr std::array<std::byte, 1u> descriptor{};
+  forbidden.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  forbidden.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  const RenderTapeOracleAttachment oracle{.identity = kSurface,
+                                          .descriptorKind = 1u};
+  forbidden.appendPresentComplete(
+      3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(forbidden.seal(), {}).status ==
+            RenderTapeValidationStatus::BootstrapForbiddenRecord,
+        "bootstrap must reject Present records");
+
+  const auto tape = makeCompleteTape();
+  check(validateRenderTape(tape, {}).status ==
+            RenderTapeValidationStatus::UnknownBlob,
+        "missing mutation blob must fail");
+  check(validateRenderTape(tape, completeCatalogue(5u)).status ==
+            RenderTapeValidationStatus::BlobSizeMismatch,
+        "blob size mismatch must fail");
+  check(validateRenderTape(tape, completeCatalogue(4u, false)).status ==
+            RenderTapeValidationStatus::BlobDigestMismatch,
+        "unverified blob must fail");
+
+  auto stale = kSurface;
+  ++stale.generation;
+  check(validateRenderTape(makeCompleteTape(stale), validCatalogue).status ==
+            RenderTapeValidationStatus::UnknownIdentity,
+        "stale mutation generation must fail");
+
+  auto shaderDefineWithoutPayload = makeCompleteTape();
+  eventPayload<RenderTapeObjectDefineHeader>(shaderDefineWithoutPayload, 1u)
+      ->identity.kind = D9C_CHUNK_HANDLE_KIND_SHADER;
+  check(validateRenderTape(shaderDefineWithoutPayload, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "shader definitions must carry immutable payload bytes and digest");
+
+  auto invalidMutationObject = kSurface;
+  invalidMutationObject.kind = D9C_CHUNK_HANDLE_KIND_QUERY;
+  check(validateRenderTape(makeCompleteTape(invalidMutationObject),
+                           validCatalogue)
+            .status == RenderTapeValidationStatus::InvalidMutationKind,
+        "queries cannot be resource-mutation targets");
+  check(validateRenderTape(
+            makeCompleteTape(kSurface,
+                             std::numeric_limits<std::uint64_t>::max(), 2u),
+            completeCatalogue(2u))
+            .status == RenderTapeValidationStatus::InvalidMutationRange,
+        "overflowed mutation range must fail");
+
+  check(validateRenderTape(
+            makeCompleteTape(kSurface, 0u, 4u,
+                             sizeof(RenderTapeFlushWaitControl) - 1u),
+            validCatalogue)
+            .status == RenderTapeValidationStatus::InvalidControlSize,
+        "wrong ordered-control size must fail");
+
+  auto invalidControlDisposition = makeCompleteTape();
+  eventPayload<RenderTapeOrderedControlHeader>(invalidControlDisposition, 4u)
+      ->disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Terminal);
+  check(validateRenderTape(invalidControlDisposition, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidControlKind,
+        "flush/wait cannot carry a terminal disposition");
+  check(validateRenderTape(
+            makeCompleteTape(kSurface, 0u, 4u,
+                             sizeof(RenderTapeFlushWaitControl), 10u, 9u),
+            validCatalogue)
+            .status == RenderTapeValidationStatus::InvalidPresentComplete,
+        "completion regression must fail");
+
+  auto malformedPresent = makeCompleteTape();
+  eventPayload<RenderTapePresentCompleteHeader>(malformedPresent, 5u)
+      ->digestValidity = 99u;
+  check(validateRenderTape(malformedPresent, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidPresentComplete,
+        "unknown Present digest validity must fail");
+
+  auto missingOracle = makeCompleteTape();
+  eventPayload<RenderTapePresentCompleteHeader>(missingOracle, 5u)
+      ->oracleCount = 0u;
+  check(validateRenderTape(missingOracle, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidPresentComplete,
+        "PresentComplete must identify at least one oracle attachment");
+
+  auto mismatchedOracle = makeCompleteTape();
+  auto* mismatchedAttachment = reinterpret_cast<RenderTapeOracleAttachment*>(
+      eventPayload<RenderTapePresentCompleteHeader>(mismatchedOracle, 5u) +
+      1u);
+  ++mismatchedAttachment->descriptorKind;
+  check(validateRenderTape(mismatchedOracle, validCatalogue).status ==
+            RenderTapeValidationStatus::InvalidPresentComplete,
+        "oracle attachment descriptor must match its object definition");
+
+  auto trailingPayload = makeCompleteTape();
+  trailingPayload.push_back(std::byte{});
+  ++reinterpret_cast<RenderTapeHeader*>(trailingPayload.data())
+        ->payloadArenaSize;
+  check(validateRenderTape(trailingPayload, validCatalogue).status ==
+            RenderTapeValidationStatus::NonCanonicalEventLayout,
+        "unreferenced trailing payload bytes must fail");
+
+  RecordingSink sink;
+  ImportedRenderTapeView imported;
+  const auto rejected = validateRenderTape(incomplete, validCatalogue, &imported);
+  if (rejected.valid()) {
+    static_cast<void>(replayPrevalidatedRenderTape(imported, validCatalogue,
+                                                   sink));
   }
-  check(rejected,
-        "seal rejects object-slot reuse while an earlier chunk retains it");
+  check(sink.calls.empty(), "validation failure must produce zero callbacks");
 }
 
 } // namespace
@@ -443,22 +504,21 @@ void builderRefusesToSealIncompleteOrAliasedFrames() {
 int main(int argc, char** argv) {
   try {
     if (argc == 3 && std::string_view(argv[1]) == "--write-fixture") {
-      const auto bytes = makeCompleteTape();
-      std::ofstream stream(argv[2], std::ios::binary | std::ios::trunc);
-      stream.write(reinterpret_cast<const char*>(bytes.data()),
-                   static_cast<std::streamsize>(bytes.size()));
-      check(static_cast<bool>(stream), "fixture tape write succeeds");
+      const auto tape = makeCompleteTape();
+      std::ofstream output(argv[2], std::ios::binary);
+      output.write(reinterpret_cast<const char*>(tape.data()),
+                   static_cast<std::streamsize>(tape.size()));
+      check(output.good(), "failed to write render tape fixture");
       return 0;
     }
-    check(argc == 1, "unknown render_tape_spec arguments");
-    validTapeRoundTripsAndReplaysInOrder();
-    invalidTapesFailBeforeReplay();
-    builderPreservesExplicitDestroyOrdering();
-    builderRefusesToSealIncompleteOrAliasedFrames();
+    check(argc == 1, "usage: render_tape_spec [--write-fixture path]");
+    validTapeReplaysExactlyOnce();
+    immutableObjectsAndRetirementFailClosed();
+    invalidInputsFailBeforeCallbacks();
   } catch (const std::exception& error) {
-    std::cerr << "render_tape_spec failed: " << error.what() << '\n';
+    std::cerr << "render tape spec failed: " << error.what() << '\n';
     return 1;
   }
-  std::cout << "render_tape_spec passed\n";
+  std::cout << "render tape spec passed\n";
   return 0;
 }

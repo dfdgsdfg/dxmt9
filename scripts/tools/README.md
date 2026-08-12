@@ -224,12 +224,12 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   movement into invocation-count and bytes/invocation effects, matching
   `compare_xcode_dxmt_bottlenecks.py`, so non-reorder backend-shape candidates
   can be preflighted before another Xcode replay.
-- `run_dxmt9_render_tape.py` — pack a validated pointer-free v1 event tape
-  into the `dxmt9.render_tape.bundle.v1` artifact envelope, verify component
-  size/SHA-256 before native validation, and run structural `validate` or
-  `inspect`. The manifest explicitly records that production capture/provider
-  replay/output-oracle coverage is still false; it does not promote a fixture
-  bundle into full-frame identity evidence.
+- `run_dxmt9_render_tape.py` — pack a validated pointer-free v2 event tape and
+  digest-named payload blobs into the `dxmt9.render_tape.bundle.v2` envelope,
+  verify every component size/SHA-256 before native validation, and run
+  structural `validate` or `inspect` with a verified blob catalogue. The
+  manifest explicitly records that production capture/provider replay/output-
+  oracle coverage is still false.
 - `analyze_alpha_backend_candidates.py` — preflight large alpha-blend indexed
   draw classes before Xcode spend. It joins indexed-probe rows with dumped MSL
   shaders and rejects blend-disable as a correctness fix unless the blend state

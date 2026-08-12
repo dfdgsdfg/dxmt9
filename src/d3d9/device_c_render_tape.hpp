@@ -2,25 +2,73 @@
 
 #include "device_c_chunk_validate.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
 namespace dxmt9::d3d9 {
 
-inline constexpr std::uint64_t kRenderTapeMagic = 0x31505452544d5844ull;
-inline constexpr std::uint32_t kRenderTapeVersion = 1u;
+inline constexpr std::uint64_t kRenderTapeMagic = 0x32505452544d5844ull;
+inline constexpr std::uint32_t kRenderTapeVersion = 2u;
 inline constexpr std::uint32_t kRenderTapeProfileFrame = 1u;
+inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 1u;
 inline constexpr std::uint32_t kRenderTapePayloadAlignment = 8u;
+inline constexpr std::uint32_t kRenderTapeDigestSize = 32u;
+using RenderTapeDigest = std::array<std::byte, kRenderTapeDigestSize>;
+
+enum class RenderTapeDigestValidity : std::uint32_t {
+  NotCaptured = 0u,
+  Sha256 = 1u,
+};
+
+// Persistent device-state categories carried by a BootstrapState. These map
+// 1:1 to the canonical section kinds (D9C_COMMAND_CHUNK_SECTION_* 1..23) that
+// define a backend-visible draw-delta state category. The two trailing section
+// kinds (UP_INDEX_DATA / UP_VERTEX_DATA) are per-record draw data, not
+// persistent state, and are intentionally excluded from the completeness
+// manifest (they can never be promised by a frame bootstrap).
+inline constexpr std::uint32_t kRenderTapeStateCategoryCount =
+    D9C_COMMAND_CHUNK_SECTION_PS_CONST_B;
+// Pointer-free completeness manifest: bit (kind-1) set means the bootstrap
+// guarantees a canonical overlay covers that state category. A frame bootstrap
+// must declare exactly all known categories; any unknown or missing bit is a
+// completeness violation and must fail before replay.
+inline constexpr std::uint64_t kRenderTapeRequiredCategoryMask =
+    (std::uint64_t{1} << kRenderTapeStateCategoryCount) - std::uint64_t{1};
 
 enum class RenderTapeEventType : std::uint32_t {
-  Checkpoint = 1u,
-  ObjectCreate = 2u,
-  ResourceWrite = 3u,
-  CommandChunk = 4u,
-  ObjectDestroy = 5u,
-  PresentBoundary = 6u,
+  BootstrapState = 1u,
+  ObjectDefine = 2u,
+  ObjectDestroy = 3u,
+  ResourceMutation = 4u,
+  CommandChunk = 5u,
+  OrderedControl = 6u,
+  PresentComplete = 7u,
+};
+
+enum class RenderTapeMutationKind : std::uint32_t {
+  CpuUnlock = 1u,
+  Upload = 2u,
+  Palette = 3u,
+  MipmapClass = 4u,
+};
+
+enum class RenderTapeControlKind : std::uint32_t {
+  QueryGetData = 1u,
+  CpuRead = 2u,
+  FlushWait = 3u,
+  Reset = 4u,
+  DeviceLost = 5u,
+};
+
+enum class RenderTapeControlDisposition : std::uint32_t {
+  Completed = 1u,
+  Pending = 2u,
+  Failed = 3u,
+  Terminal = 4u,
 };
 
 struct RenderTapeHeader {
@@ -51,28 +99,56 @@ struct RenderTapeEventHeader {
   std::uint32_t reserved1 = 0u;
 };
 
-struct RenderTapeCheckpointHeader {
-  std::uint32_t stateVersion = 0u;
-  std::uint32_t objectCount = 0u;
-  std::uint32_t stateBytes = 0u;
+// BootstrapState: first and unique event. Declares a fixed baseline profile
+// version (typed defaults for every persistent state category) plus one or
+// more canonical APPLY_STATE-only command chunks used as overlays, plus a
+// completeness manifest that must equal every known state category. Absent
+// sparse sections in an overlay therefore mean the baseline default rather
+// than a live-state dependency.
+struct RenderTapeBootstrapHeader {
+  std::uint32_t baselineProfileVersion = kRenderTapeBaselineProfileVersion;
+  std::uint32_t stateCategoryCount = kRenderTapeStateCategoryCount;
+  std::uint32_t overlayCount = 0u;
   std::uint32_t reserved0 = 0u;
+  std::uint64_t requiredCategoryMask = kRenderTapeRequiredCategoryMask;
 };
 
-struct RenderTapeObjectCreateHeader {
+// ObjectDefine: generation-qualified creation of an object slot. Carries the
+// exact descriptor kind/bytes plus an immutable digest for shader/declaration
+// payload identity where applicable. POD, bounded, aligned, pointer-free.
+struct RenderTapeObjectDefineHeader {
   D9CWireObjectIdentity identity{};
   std::uint32_t descriptorKind = 0u;
   std::uint32_t descriptorBytes = 0u;
-};
-
-struct RenderTapeResourceWriteHeader {
-  D9CWireObjectIdentity identity{};
-  std::uint32_t subresource = 0u;
-  std::uint32_t flags = 0u;
-  std::uint64_t byteOffset = 0u;
-  std::uint32_t dataBytes = 0u;
+  std::uint32_t payloadValidity = 0u;
   std::uint32_t reserved0 = 0u;
+  std::uint64_t immutablePayloadBytes = 0u;
+  RenderTapeDigest immutablePayloadDigest{};
 };
 
+// ObjectDestroy: generation-qualified retirement of an object slot.
+struct RenderTapeObjectDestroyHeader {
+  D9CWireObjectIdentity identity{};
+};
+
+// ResourceMutation: typed CPU-visible mutation (Unlock / upload / palette /
+// mipmap-class). Names the exact object identity, mutation kind, subresource
+// and an overflow-safe byte/region range, plus the SHA-256 digest+size of the
+// content stored in an external in-memory blob catalogue. Mutation bytes are
+// never inlined into the canonical event component.
+struct RenderTapeResourceMutationHeader {
+  D9CWireObjectIdentity identity{};
+  std::uint32_t kind = 0u;
+  std::uint32_t subresource = 0u;
+  std::uint32_t reserved0 = 0u;
+  std::uint64_t byteOffset = 0u;
+  std::uint64_t byteSize = 0u;
+  RenderTapeDigest digest{};
+};
+
+// CommandChunk: byte-exact canonical D9C chunk; validated with the production
+// validator. Already-chunked ordering records must not be duplicated as
+// OrderedControl.
 struct RenderTapeCommandChunkHeader {
   std::uint32_t wireVersion = D9C_COMMAND_CHUNK_WIRE_VERSION;
   std::uint32_t recordCount = 0u;
@@ -80,9 +156,61 @@ struct RenderTapeCommandChunkHeader {
   std::uint32_t chunkBytes = 0u;
 };
 
-struct RenderTapePresentBoundary {
+// OrderedControl: kind-specific fixed POD payload for direct synchronous
+// observations (QueryGetData / CPU-read / flush-wait / reset / device-lost).
+// Records result/disposition/completion and enforces identity and monotone
+// completion ordering.
+struct RenderTapeOrderedControlHeader {
+  D9CWireObjectIdentity identity{};
+  std::uint32_t kind = 0u;
+  std::uint32_t disposition = 0u;
+  std::int32_t resultCode = 0;
+  std::uint32_t controlBytes = 0u;    // kind-specific fixed POD bytes
+  std::uint64_t completionOrdinal = 0u;
+  std::uint32_t reserved0 = 0u;
+  std::uint32_t reserved1 = 0u;
+};
+
+struct RenderTapeQueryGetDataControl {
+  std::uint64_t dataSize = 0u;
+  std::uint64_t seqId = 0u;
+};
+
+struct RenderTapeCpuReadControl {
+  std::uint32_t copyCount = 0u;
+  std::uint32_t bytesRead = 0u;
+};
+
+struct RenderTapeFlushWaitControl {
+  std::uint64_t waitedSeqId = 0u;
+};
+
+struct RenderTapeResetControl {
+  std::uint32_t reclaimedGeneration = 0u;
+  std::uint32_t terminal = 1u; // successful reset is terminal for a frame tape
+};
+
+struct RenderTapeDeviceLostControl {
+  std::uint32_t hrCode = 0u;
+  std::uint32_t reserved0 = 0u;
+};
+
+// PresentComplete: last and unique event. Binds the Present ordinal, the
+// completion ordinal, typed oracle attachment identities/descriptors, the
+// expected post-present digest state, and closes the frame interval.
+struct RenderTapePresentCompleteHeader {
   std::uint64_t presentOrdinal = 0u;
-  std::uint32_t flags = 0u;
+  std::uint64_t completionOrdinal = 0u;
+  std::uint32_t digestValidity = 0u;
+  std::uint32_t oracleCount = 0u;
+  std::uint32_t oracleBytes = 0u;
+  std::uint32_t reserved0 = 0u;
+  RenderTapeDigest expectedDigest{};
+};
+
+struct RenderTapeOracleAttachment {
+  D9CWireObjectIdentity identity{};
+  std::uint32_t descriptorKind = 0u;
   std::uint32_t reserved0 = 0u;
 };
 
@@ -90,11 +218,22 @@ static_assert(sizeof(RenderTapeHeader) == 64u);
 static_assert(alignof(RenderTapeHeader) == 8u);
 static_assert(sizeof(RenderTapeEventHeader) == 32u);
 static_assert(alignof(RenderTapeEventHeader) == 8u);
-static_assert(sizeof(RenderTapeCheckpointHeader) == 16u);
-static_assert(sizeof(RenderTapeObjectCreateHeader) == 24u);
-static_assert(sizeof(RenderTapeResourceWriteHeader) == 40u);
+static_assert(sizeof(RenderTapeBootstrapHeader) == 24u);
+static_assert(alignof(RenderTapeBootstrapHeader) == 8u);
+static_assert(sizeof(RenderTapeObjectDefineHeader) == 72u);
+static_assert(alignof(RenderTapeObjectDefineHeader) == 8u);
+static_assert(sizeof(RenderTapeObjectDestroyHeader) == 16u);
+static_assert(alignof(RenderTapeObjectDestroyHeader) == 8u);
+static_assert(sizeof(RenderTapeResourceMutationHeader) == 80u);
+static_assert(alignof(RenderTapeResourceMutationHeader) == 8u);
 static_assert(sizeof(RenderTapeCommandChunkHeader) == 16u);
-static_assert(sizeof(RenderTapePresentBoundary) == 16u);
+static_assert(alignof(RenderTapeCommandChunkHeader) == 4u);
+static_assert(sizeof(RenderTapeOrderedControlHeader) == 48u);
+static_assert(alignof(RenderTapeOrderedControlHeader) == 8u);
+static_assert(sizeof(RenderTapePresentCompleteHeader) == 64u);
+static_assert(alignof(RenderTapePresentCompleteHeader) == 8u);
+static_assert(sizeof(RenderTapeOracleAttachment) == 24u);
+static_assert(alignof(RenderTapeOracleAttachment) == 8u);
 
 enum class RenderTapeValidationStatus : std::uint8_t {
   Valid,
@@ -108,16 +247,30 @@ enum class RenderTapeValidationStatus : std::uint8_t {
   InvalidEventRange,
   NonCanonicalEventLayout,
   NonZeroPadding,
-  MissingCheckpoint,
-  InvalidCheckpoint,
-  InvalidIdentity,
-  DuplicateIdentity,
+  MissingBootstrap,
+  BootstrapNotFirst,
+  DuplicateBootstrap,
+  InvalidBootstrap,
+  BootstrapCoverageIncomplete,
+  BootstrapForbiddenRecord,
+  InvalidBootstrapChunk,
+  DuplicateGeneration,
   UnknownIdentity,
-  InvalidObjectCreate,
-  InvalidResourceWrite,
-  InvalidCommandChunk,
+  RetainedSlotReuse,
+  InvalidObjectDefine,
   InvalidObjectDestroy,
-  InvalidPresentBoundary,
+  InvalidMutationKind,
+  InvalidMutationRange,
+  UnknownBlob,
+  BlobSizeMismatch,
+  BlobDigestMismatch,
+  InvalidCommandChunk,
+  InvalidControlKind,
+  InvalidControlSize,
+  NonMonotoneCompletion,
+  ResetNotTerminal,
+  InvalidPresentComplete,
+  PresentNotLast,
   IncompleteFrame,
   ScratchAllocationFailed,
 };
@@ -146,22 +299,53 @@ struct ImportedRenderTapeView {
   ImportedRenderTapeEventView event(std::size_t index) const noexcept;
 };
 
+// In-memory blob catalogue input to validation. ResourceMutation events name a
+// SHA-256 digest + size instead of inlining mutation bytes; validation fails
+// before replay when a referenced blob is unknown, size-mismatched, or
+// digest-mismatched.
+struct RenderTapeBlob {
+  RenderTapeDigest digest{};
+  std::uint64_t size = 0u;
+  std::uint32_t verified = 0u;
+  std::uint32_t reserved0 = 0u;
+};
+
+enum class RenderTapeBlobLookup : std::uint8_t {
+  Exact,
+  UnknownDigest,
+  SizeMismatch,
+  Unverified,
+};
+
+struct RenderTapeBlobCatalogue {
+  std::vector<RenderTapeBlob> blobs;
+
+  RenderTapeBlobLookup
+  lookup(std::span<const std::byte, kRenderTapeDigestSize> digest,
+         std::uint64_t size) const noexcept;
+};
+
 struct RenderTapeValidationScratch {
-  struct LiveIdentity {
+  struct LiveSlot {
     D9CWireObjectIdentity identity{};
+    std::uint32_t descriptorKind = 0u;
+    std::uint64_t lastUseOrdinal = 0u;
+    bool retired = false;
   };
 
-  std::vector<LiveIdentity> liveObjects;
-  std::vector<LiveIdentity> retainedObjects;
+  std::vector<LiveSlot> liveObjects;
   CommandChunkValidationScratch chunk;
 };
 
 RenderTapeValidationResult
-validateRenderTape(std::span<const std::byte> blob, ImportedRenderTapeView* out,
+validateRenderTape(std::span<const std::byte> blob,
+                   const RenderTapeBlobCatalogue& catalogue,
+                   ImportedRenderTapeView* out,
                    RenderTapeValidationScratch& scratch) noexcept;
 
 RenderTapeValidationResult
 validateRenderTape(std::span<const std::byte> blob,
+                   const RenderTapeBlobCatalogue& catalogue,
                    ImportedRenderTapeView* out = nullptr) noexcept;
 
 bool importPrevalidatedRenderTape(std::span<const std::byte> blob,
@@ -171,17 +355,19 @@ class RenderTapeReplaySink {
 public:
   virtual ~RenderTapeReplaySink() = default;
 
-  virtual bool checkpoint(std::uint32_t stateVersion,
-                          std::span<const D9CWireObjectIdentity> initialObjects,
-                          std::span<const std::byte> state) = 0;
-  virtual bool objectCreate(const RenderTapeObjectCreateHeader& fixed,
+  virtual bool bootstrap(const RenderTapeBootstrapHeader& fixed,
+                         std::span<const std::byte> overlayChunks) = 0;
+  virtual bool objectDefine(const RenderTapeObjectDefineHeader& fixed,
                             std::span<const std::byte> descriptor) = 0;
-  virtual bool resourceWrite(const RenderTapeResourceWriteHeader& fixed,
-                             std::span<const std::byte> data) = 0;
+  virtual bool objectDestroy(const RenderTapeObjectDestroyHeader& fixed) = 0;
+  virtual bool
+  resourceMutation(const RenderTapeResourceMutationHeader& fixed) = 0;
   virtual bool commandChunk(const CommandChunkEnvelope& envelope,
                             std::span<const std::byte> chunk) = 0;
-  virtual bool objectDestroy(const D9CWireObjectIdentity& identity) = 0;
-  virtual bool presentBoundary(const RenderTapePresentBoundary& boundary) = 0;
+  virtual bool orderedControl(const RenderTapeOrderedControlHeader& fixed,
+                              std::span<const std::byte> controlPayload) = 0;
+  virtual bool presentComplete(const RenderTapePresentCompleteHeader& fixed,
+                               std::span<const std::byte> oracleAttachments) = 0;
 };
 
 struct RenderTapeReplayResult {
@@ -191,30 +377,40 @@ struct RenderTapeReplayResult {
 
 RenderTapeReplayResult
 replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
+                             const RenderTapeBlobCatalogue& catalogue,
                              RenderTapeReplaySink& sink) noexcept;
 
 class RenderTapeBuilder {
 public:
-  void appendCheckpoint(std::uint32_t stateVersion,
-                        std::span<const D9CWireObjectIdentity> initialObjects,
-                        std::span<const std::byte> state);
-  void appendObjectCreate(const D9CWireObjectIdentity& identity,
+  void appendBootstrapState(std::span<const std::byte> overlayChunks);
+  void appendObjectDefine(const D9CWireObjectIdentity& identity,
                           std::uint32_t descriptorKind,
-                          std::span<const std::byte> descriptor);
-  void appendResourceWrite(const D9CWireObjectIdentity& identity,
-                           std::uint32_t subresource, std::uint64_t byteOffset,
-                           std::span<const std::byte> data);
+                          std::span<const std::byte> descriptor,
+                          std::uint64_t immutablePayloadBytes,
+                          RenderTapeDigest immutablePayloadDigest);
+  void appendObjectDestroy(const D9CWireObjectIdentity& identity);
+  void appendResourceMutation(const D9CWireObjectIdentity& identity,
+                              RenderTapeMutationKind kind,
+                              std::uint32_t subresource,
+                              std::uint64_t byteOffset, std::uint64_t byteSize,
+                              std::span<const std::byte, kRenderTapeDigestSize>
+                                  digest);
   void appendCommandChunk(const CommandChunkEnvelope& envelope,
                           std::span<const std::byte> chunk);
-  void appendObjectDestroy(const D9CWireObjectIdentity& identity);
-  void appendPresentBoundary(std::uint64_t presentOrdinal);
+  void appendOrderedControl(const RenderTapeOrderedControlHeader& fixed,
+                            std::span<const std::byte> controlPayload);
+  void appendPresentComplete(std::uint64_t presentOrdinal,
+                             std::uint64_t completionOrdinal,
+                             RenderTapeDigestValidity digestValidity,
+                             RenderTapeDigest expectedDigest,
+                             std::span<const std::byte> oracleAttachments);
 
   std::vector<std::byte> seal() const;
   std::size_t eventCount() const noexcept { return events_.size(); }
 
 private:
   struct PendingEvent {
-    RenderTapeEventType type = RenderTapeEventType::Checkpoint;
+    RenderTapeEventType type = RenderTapeEventType::BootstrapState;
     std::vector<std::byte> payload;
   };
 

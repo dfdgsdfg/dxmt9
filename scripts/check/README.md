@@ -25,7 +25,7 @@ under `tests/meson.build`.
 - `audit_perf_docs_sources.py` — checks newly added `docs/perfomance` leaf files
   so deleted/retired `specs/perfomance.plan.md` line ranges are not used as new
   provenance or maintenance state.
-- `test_render_tape_cli.py` — produces a bounded frame-tape fixture through the
-  native builder and checks validator/inspect CLI success, content-addressed
-  bundle pack/validation, corrupted-header rejection, and digest mismatch
-  rejection (`dxmt9-render-tape-cli-spec`).
+- `test_render_tape_cli.py` — produces a bounded v2 frame-tape fixture through
+  the native builder and checks validator/inspect success with a verified
+  mutation blob, digest-named bundle pack/validation, corrupted-header
+  rejection, and component digest rejection (`dxmt9-render-tape-cli-spec`).
