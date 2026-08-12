@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | planned | One complete Present interval plus the ordered checkpoint and resource/event closure needed to start from no live application | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
+| `frame-tape` | partial | Structural v1 event tape and bundle validation exist; live capture, production-path replay, and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -654,6 +654,22 @@ tell what the contract is protecting against.
 
 ## 8. Full Render Tape Architecture
 
+**Implementation status (2026-08-12).** The first structural substrate now
+exists in `src/d3d9/device_c_render_tape.*`: a canonical pointer-free v1 event
+tape, builder with seal-time validation, checkpoint/object/write/chunk/destroy/
+Present event grammar, generation and frame-closure validation, embedded use of
+the production command-chunk validator, a prevalidated replay-sink dispatcher,
+and the `dxmt9-render-tape validate/inspect` CLI. Native and CLI specs cover a
+bounded checkpoint → create → write → canonical Present chunk → boundary trace
+and fail-closed corruptions. `scripts/tools/run_dxmt9_render_tape.py` additionally
+packs the event tape into a `dxmt9.render_tape.bundle.v1` envelope and verifies
+its component SHA-256 before native validation, while recording all three
+production scope claims as false. This is not yet a complete `frame-tape`: the live
+checkpoint/resource/direct-control capture hooks, digest-named external payload
+blobs, production
+queue/provider sink, offscreen output oracle, and wild-captured identity artifact
+remain open in `specs/experiments/gap.md`.
+
 ### 8.1 Capture boundary
 
 Render Tape records the canonical semantics after PE-side state coalescing and
@@ -695,6 +711,21 @@ components and their independent digests remain part of the schema. Event
 payloads reference blob digests and `(kind, objectId, generation)` identities;
 they never embed live pointers or depend on registry slot addresses from the
 capturing process.
+
+The implemented structural tools are invoked as:
+
+```sh
+build/tools/dxmt9-render-tape validate frame.tape
+build/tools/dxmt9-render-tape inspect frame.tape
+python3 scripts/tools/run_dxmt9_render_tape.py pack \
+  --events frame.tape --output-dir frame-tape-bundle
+python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
+```
+
+The first pair operates on the canonical event component. The second pair adds
+and verifies the artifact envelope. `inspect` dispatches every prevalidated
+event to the structural replay sink and reports conservation counts; it is not
+the planned production provider replay.
 
 The journal distinguishes at least:
 

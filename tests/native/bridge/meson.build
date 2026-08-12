@@ -147,6 +147,7 @@ foreach spec : [
   ['chunk-record-layout', 'chunk_record_layout_spec.cpp'],
   ['chunk-record-registry', 'chunk_record_registry_spec.cpp'],
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
+  ['render-tape', 'render_tape_spec.cpp'],
 ]
   target = executable(
     'dxmt9-' + spec[0] + '-spec',
@@ -157,7 +158,21 @@ foreach spec : [
   )
   test('dxmt9-' + spec[0] + '-spec', target,
        env: dxmt9_native_test_env)
+  if spec[0] == 'render-tape'
+    render_tape_fixture_spec = target
+  endif
 endforeach
+
+test('dxmt9-render-tape-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_cli.py'),
+       render_tape_fixture_spec,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
+     ],
+     env: dxmt9_native_test_env)
 
 pe_chunk_record_value_spec = executable(
   'dxmt9-pe-chunk-record-value-spec',

@@ -62,6 +62,7 @@ if host_machine.system() == 'darwin'
   add_languages('objc', 'objcpp', native: false)
   subdir('include')
   subdir('src')
+  subdir('tools')
   if get_option('build_tests')
     subdir('tests')
   endif

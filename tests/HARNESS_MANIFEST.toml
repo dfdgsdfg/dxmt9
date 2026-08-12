@@ -65,16 +65,27 @@ kind = "native-unit"
 status = "implemented"
 cost_class = "compile-time-test-only"
 release_default = "not-linked"
-requirements = ["R-TEST-0.6", "R-TEST-0.10", "R-TEST-7.4"]
+requirements = [
+  "R-TEST-0.6",
+  "R-TEST-0.10",
+  "R-TEST-7.4",
+  "R-HARN-REPLAY-7.2",
+  "R-HARN-REPLAY-7.5",
+  "R-VERIF-6.6",
+]
 meson_targets = [
   "dxmt9-bridge-marshalling-value-spec",
   "dxmt9-chunk-record-validation-spec",
   "dxmt9-pe-chunk-record-value-spec",
+  "dxmt9-render-tape-spec",
+  "dxmt9-render-tape-cli-spec",
 ]
 evidence = [
   "tests/native/bridge/bridge_marshalling_value_spec.cpp",
   "tests/native/bridge/chunk_record_validation_spec.cpp",
   "tests/native/bridge/pe_chunk_record_value_spec.cpp",
+  "tests/native/bridge/render_tape_spec.cpp",
+  "scripts/check/test_render_tape_cli.py",
 ]
 next = ["Keep typed canonical assertions before and after every bridge boundary."]
 

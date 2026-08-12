@@ -128,7 +128,7 @@ bytes, shader layouts, pass actions, and output pixels.
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
-| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | planned bounded capture/checkpoint/replay refinement, native isomorphism tests, and frame-tape identity oracle | planned capture owner around the canonical D9C wire/direct-control boundary and a production-import native replayer; no implementation exists yet |
+| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | native v1 event-tape validation/replay-sink tests implemented; composed capture/checkpoint refinement and frame identity oracle planned | `device_c_render_tape.*` shares the production canonical-chunk validator and is covered by `render_tape_spec.cpp`/CLI tests; live capture owners, production queue/provider replay sink, and offscreen oracle remain missing |
 
 ---
 
