@@ -5,7 +5,7 @@ title: "Parallel Render-Pass Worker Gate"
 type: experiment
 status: rejected-default
 updated: 2026-08-12
-source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-parallel-gt2-r3-20260812/result.json
+source: experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-stage2b-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-identity-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-post-gate-matched-parallel-gt2-r3-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-identity-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/result.json; experiments/output/app-d3d9-3dmark05-parallel-economics-decisive-parallel-gt2-r2-20260812/decisive-comparison.md
 related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-scheduling/gap.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
@@ -16,8 +16,11 @@ related: specs/backend/encode-scheduling/requirements.md; specs/backend/encode-s
 The earlier pre-Stage2b GT2 pair and GT1/GT3/SFIV smoke artifacts quoted in
 this section are no longer available in the worktree; these figures are
 historical measurements that cannot currently be re-checked. The surviving
-`source:` artifacts above belong to the attributable Stage2b follow-up and the
-first post-gate pair.
+`source:` artifacts above cover the attributable Stage2b follow-up, the first
+post-gate pair, and the valid decisive `r2` identity/parallel pair. The
+`...decisive-identity-gt2-r1-20260812` directory is an excluded preflight: it
+stopped under transient host load without a fresh official result and is not
+part of the matched evidence.
 
 The production `MTLParallelRenderCommandEncoder` lane is correct enough to
 retain as an explicit provider, but it does not pass the default-promotion
@@ -89,9 +92,10 @@ production constants and hardware-independent capacity remain unchanged. Perf
 counters report exact accepted versus
 `serial_fallback` production outcomes with considered/reason conservation.
 
-This is a measured safety/economics gate, not a speedup result. Identity remains
-the default, parallel remains opt-in, and fresh post-gate matched wild evidence
-is required before any promotion claim.
+This is a measured safety/economics gate, not by itself a speedup result.
+Identity remains the default and parallel remains opt-in. The decisive pair
+below supplies the first fresh nonzero-selection post-gate result, but not the
+repetition or cross-scene matrix required for promotion.
 
 ## First Post-gate Pair and Planner Correction
 
@@ -113,8 +117,32 @@ at every actual child boundary; internal A-B-A churn no longer pays for a
 child first-bind reset. New counters expose minimum, maximum, and imbalance
 draw totals plus child-boundary transitions.
 
-No wild application was run for this correction, so it makes no speed or
-promotion claim. A meaningful next GT2 pair requires nonzero economics
-considered and accepted counts, complete counter conservation, zero GPU errors,
-and conserved locality before performance can be assessed. Identity remains
-the default and `parallel` remains opt-in.
+No wild application was run as part of the planner correction itself, so that
+increment made no speed or promotion claim. The decisive follow-up below meets
+the nonzero-selection, conservation, GPU-error, and locality prerequisites for
+one GT2 pair. Identity remains the default and `parallel` remains opt-in.
+
+## Decisive Nonzero-selection GT2 Pair
+
+At clean `b28f55d3`, the valid matched `r2` results measured official GT2 at
+`24.052877426 fps` for identity and `24.352113724 fps` for ExplicitParallel,
+or `+1.2441%`. The steady-body harmonic comparison was `+1.7771%`, while the
+steady-body median was `-1.3590%`. Encode-stage wall per Present improved
+`1.9245%`, but summed `encode_draw` CPU per Present increased `10.5927%`.
+This is a mixed one-pair result, not a production or default-promotion claim.
+
+The parallel lane was non-vacuous: economics conserved as `3,044 considered =
+632 accepted + 2,412 serial_fallback`, and all `632` accepted passes selected
+Stage 2b. They dispatched `3,746` children over `252,381` draws. The sole typed
+economics fallback was PSO first-bind (`2,412`); forced Stage 1, thin-child,
+unbalanced-child, uniform first-bind, and invalid/overflow fallbacks were zero.
+Command-buffer, render-pass, and tile-preservation locality remained conserved,
+both runs reported zero GPU command-buffer errors, and both screenshots showed
+coherent Firefly Forest frames. The captures are visual-health evidence at
+different animation times, not pixel-exact equivalence.
+
+The earlier `...decisive-identity-gt2-r1-20260812` run remains excluded as a
+preflight and must not be mixed into the pair. Identity remains the default.
+Promotion still requires repeated matched GT2 results, the opt-in GT1/GT3/SFIV
+correctness/locality/performance matrix, and revalidation of the prior GT1
+black-polygon observation.
