@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v1 event tape and bundle validation exist; live capture, production-path replay, and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
+| `frame-tape` | partial | Structural v2 event tape and bundle validation exist; live capture, production-path replay, and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
