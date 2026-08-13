@@ -197,6 +197,23 @@ test('dxmt9-render-tape-capture-cli-spec', python3,
      ],
      env: dxmt9_native_test_env)
 
+render_tape_publisher_spec = executable(
+  'dxmt9-render-tape-publisher-spec',
+  [
+    'render_tape_publisher_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_render_tape_publisher.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-publisher-spec',
+     render_tape_publisher_spec,
+     env: dxmt9_native_test_env)
+
 pe_chunk_record_value_spec = executable(
   'dxmt9-pe-chunk-record-value-spec',
   [

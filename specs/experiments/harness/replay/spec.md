@@ -701,6 +701,14 @@ with overflow-safe admission before hashing or copying. Exact duplicate blobs
 are admitted without a second charge, and failed admission or publication
 leaves the owned-byte count unchanged.
 
+Production publication is enabled only when `DXMT9_RENDER_TAPE_OUTPUT_ROOT`
+names an explicit safe absolute directory. The PE fallback resolver rejects
+relative or traversal roots, embedded NULs, symlink components, and completed
+frame-name collisions. It writes `events.bin`, digest-named `blobs/`, and a
+minimal provenance/scope manifest in same-filesystem staging, flushes and
+closes the files, and atomically renames the complete frame directory; an
+unset or unsafe root leaves the default-off capture inert.
+
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events and adds only a total expected byte
 extent plus subresource count to resource `ObjectDefine`. A separate bounded

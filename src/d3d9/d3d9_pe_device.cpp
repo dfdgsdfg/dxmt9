@@ -29,6 +29,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_producer.hpp"
+#include "d3d9_pe_render_tape_publisher.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
@@ -7082,8 +7083,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
             std::memory_order_acquire);
-        const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
+        auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
             std::memory_order_acquire);
+        if (!publisher) {
+            publisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
+        }
         if (!dxmt9PeRenderTapeCaptureCallbacksInstalled(
                 renderTapeCapture_->enabled(), producer, publisher)) {
             dxmt9DeviceInfoLog(
@@ -7172,8 +7176,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             renderTapeCapture_->abort();
             return;
         }
-        const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
+        auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
             std::memory_order_acquire);
+        if (!publisher) {
+            publisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
+        }
         if (!publisher || !publisher(renderTapeCapture_->publicationBundle())) {
             renderTapeCapture_->abort();
         }

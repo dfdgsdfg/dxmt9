@@ -519,3 +519,13 @@ failed bridge commit, capacity failure, terminal Reset or device-lost control,
 failed validation, missing/rejecting publisher, or producer failure aborts the
 interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
+
+**R-HARN-REPLAY-7.12** Production capture publication requires the explicit
+`DXMT9_RENDER_TAPE_OUTPUT_ROOT` absolute-root policy. The internal PE fallback
+publisher must reject relative/traversal/NUL roots, every symlink component,
+digest mismatch, duplicate digest conflicts, and completed-name collisions.
+It stages `events.bin`, digest-named blobs, and a v2-compatible
+provenance/scope manifest on the output filesystem, flushes and closes the
+components, and exposes them only through an atomic directory rename. A
+publisher failure leaves no claimable partial bundle and does not alter the
+D3D9 call result; capture remains inert when the root is unset or unsafe.
