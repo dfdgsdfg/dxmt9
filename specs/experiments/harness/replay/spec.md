@@ -22,8 +22,10 @@ The implemented `draw-slice` profile renders a valid image as of
 bundle production-provider identity, deterministic fresh-device repetition,
 and closure-aware whole-command reduction/bisection. The bounded
 `sequence-tape` profile replays exactly two Present intervals separated by one
-complete texture mutation; captured production sequence evidence and broader
-grammar remain tracked gaps. They reuse the replay domain rather than creating
+complete texture mutation and now has an explicit opt-in PE capture/publication
+owner plus captured production-provider identity; broader grammar remains a
+tracked gap.
+They reuse the replay domain rather than creating
 a second, competing harness family. Where
 current source still violates a contract — the 32-bit index-width rejection
 of §6.3 remains unimplemented — this file says so explicitly, and
@@ -47,7 +49,7 @@ The replay domain has one evidence vocabulary and three scopes:
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
 | `frame-tape` | bounded implementation | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, captured-bundle identity for full-surface `Clear` and non-uniform textured-UP intervals, fresh-device repetition, and whole-command reducer/bisect | Broaden the fail-closed frame grammar and add tape-to-draw-slice projection |
-| `sequence-tape` | bounded two-interval implementation | Exactly two complete textured-UP Present intervals separated by one complete digest-backed texture mutation, with per-interval completion/output conservation and repeat identity | Add production capture/publication and wild identity for sequences before widening the interval count or grammar |
+| `sequence-tape` | bounded two-interval implementation | Exactly two complete textured-UP Present intervals separated by one complete digest-backed texture mutation, with per-interval completion/output conservation and repeat identity; explicit PE capture/publication defers sealing and publication until interval 2; a captured Sikarugir bundle reproduces both ordered output digests through the production provider | Widen the interval count or grammar only with new closure and oracle evidence |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
 useful for code-path mutation, pixel isolation, and inexpensive GPU experiments,
@@ -926,8 +928,26 @@ the ordered two-digest vector on a second fresh device. The CLI repeats either
 profile with a `fresh-process-device` reset for every warm-up and measured run,
 rejects `warmup + repeat` above 64, and requires exact validity, coverage,
 conservation, output-oracle, and ordered-digest identity across all runs.
-Production PE capture/publication of a sequence and a captured wild sequence
-identity are not implemented.
+Production PE capture/publication of a sequence is opt-in through
+`DXMT9_RENDER_TAPE_CAPTURE=1`, `DXMT9_RENDER_TAPE_PROFILE=sequence-tape`, and
+the existing safe `DXMT9_RENDER_TAPE_OUTPUT_ROOT` policy. The PE owner keeps
+the first completion in the journal without sealing or publishing, preserves
+the next complete digest-backed mutation in order, and seals/validates and
+publishes exactly once after interval 2.
+
+The 2026-08-14 Sikarugir production bundle at
+`experiments/output/perf-d3d9-present-loop-sequence-r3/tapes/sequence-16792924532000-1`
+closes the captured wild sequence identity slice. It contains 12 events, four
+command chunks, six records, three object definitions, and two complete
+64-byte texture mutations. Structural inspection passes, and production
+provider replay with one warm-up plus two measured fresh-device runs conserves
+3/3 objects and 3/3 referenced blobs. Every run reproduces the ordered
+256x256 output SHA-256 vector
+`866e45bc5527c590f7cbf1deb9ca8fd5aa3ac2eddcd6746bdaf0572848a78c17`,
+`937c9038b1c145c05b319ff71130fe7f46a999155c376dceea9eae63c77f6861`;
+both capture digests match, both outputs are non-degenerate, and the mutation
+therefore has an observable result. Prior-output-load proof and broader grammar
+remain open.
 
 For `frame-tape`, `reduce` retains selected whole `CommandChunk` events plus
 their bootstrap, exact live generation definitions, complete initial seed/blob
@@ -971,11 +991,11 @@ without maintaining an independent resource-dump format.
 The completed bounded implementation order is one `frame-tape`, production-
 provider identity, deterministic output/conservation repetition, whole-command
 reducer/bisection, and an exactly two-interval `sequence-tape` with a mutation
-across the boundary. The next increments are production sequence capture and
-captured identity, then broader grammar/interval count, optional tape-to-
-`draw-slice` projection, and benchmark corpus management. A nominal ten-second
-capture remains a future corpus-selection policy over complete intervals, not a
-claim provided by the current two-interval profile.
+across the boundary, production sequence capture, and captured identity. The
+next increments are broader grammar/interval count, optional tape-to-`draw-slice`
+projection, and benchmark corpus management. A nominal ten-second capture
+remains a future corpus-selection policy over complete intervals, not a claim
+provided by the current two-interval profile.
 
 Random seek, rolling eviction, mid-interval checkpoints, and a raw D3D9 API
 trace are not part of the first version.

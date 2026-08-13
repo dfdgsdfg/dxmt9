@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -65,9 +66,13 @@ std::vector<std::byte> readBytes(const std::filesystem::path& path) {
   return bytes;
 }
 
-RenderTapePublicationBundle bundle() {
+RenderTapePublicationBundle bundle(
+    std::uint32_t profile = kRenderTapeProfileFrame) {
   RenderTapePublicationBundle value{};
-  value.events = {std::byte{1}, std::byte{2}, std::byte{3}};
+  RenderTapeHeader header{};
+  header.profile = profile;
+  value.events.resize(sizeof(header));
+  std::memcpy(value.events.data(), &header, sizeof(header));
   const std::array<std::byte, 2u> bytes{std::byte{0xaa}, std::byte{0xbb}};
   value.blobs.push_back(RenderTapePublishedBlob{
       .digest = RenderTapeCaptureSession::sha256(bytes),
@@ -179,6 +184,33 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
                                          "events.bin") &&
             !std::filesystem::exists(nestedRoot / ".nested-frame.staging"),
         "nested publication is complete with no staging residue");
+
+  const auto sequenceRoot = root / "sequence";
+  check(dxmt9PePublishRenderTapeBundle(
+            bundle(kRenderTapeProfileSequence), sequenceRoot.string(),
+            "sequence-test"),
+        "publisher accepts the explicit sequence profile");
+  check(readText(sequenceRoot / "sequence-test" / "manifest.json")
+                .find("\"profile\":\"sequence-tape\"") !=
+            std::string::npos,
+        "publisher manifest records the selected sequence profile");
+
+  const OutputRootScope restore;
+  const auto defaultRoot = root / "default-sequence";
+  setOutputRoot(defaultRoot.string().c_str());
+  const auto defaultPublisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
+  check(defaultPublisher &&
+            defaultPublisher(bundle(kRenderTapeProfileSequence)),
+        "default publisher accepts a sealed sequence bundle");
+  std::size_t defaultBundles = 0u;
+  for (const auto& entry : std::filesystem::directory_iterator(defaultRoot)) {
+    check(entry.is_directory() &&
+              entry.path().filename().string().starts_with("sequence-"),
+          "default publisher uses a sequence-qualified directory name");
+    ++defaultBundles;
+  }
+  check(defaultBundles == 1u,
+        "default publisher creates exactly one sequence bundle");
 }
 
 void testRejectsInvalidInputsAndSymlinkComponents(
@@ -191,6 +223,11 @@ void testRejectsInvalidInputsAndSymlinkComponents(
         "publisher rejects digest mismatch before staging");
   check(!std::filesystem::exists(root / "bad-digest"),
         "digest rejection leaves no final bundle");
+  auto invalidHeader = value;
+  invalidHeader.events.resize(3u);
+  check(!dxmt9PePublishRenderTapeBundle(invalidHeader, root.string(),
+                                        "bad-header"),
+        "publisher rejects metadata without a sealed tape header");
   const std::string_view embeddedNul("bad\0name", 8u);
   check(!dxmt9PePublishRenderTapeBundle(value, root.string(), embeddedNul),
         "publisher rejects embedded-NUL frame names");

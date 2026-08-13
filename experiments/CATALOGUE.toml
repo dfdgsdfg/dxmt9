@@ -616,6 +616,8 @@ capture_frame = 120
 reference_optional = true
 # Set PRESENT_LOOP_TEXTURED=1 for the bounded Clear + inline UP textured draw
 # + ordinary Present frame-tape fixture; the default remains clear-only.
+# Set PRESENT_LOOP_SEQUENCE=1 for the three-Present production sequence-tape
+# fixture with one complete texture mutation between captured intervals.
 
 [[app]]
 name = "perf-d3d9-chain-parametric"

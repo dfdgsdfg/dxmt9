@@ -117,8 +117,25 @@ static bool dxmt9PeRecorderChunkLogEnabled() {
 
 static bool dxmt9PeRenderTapeCaptureEnabled() {
     static const bool enabled =
-        dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE");
+        dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE") &&
+        [] {
+            const auto profile =
+                dxmt9::util::getenvString("DXMT9_RENDER_TAPE_PROFILE");
+            return dxmt9PeRenderTapeProfileFromText(profile) != 0u;
+        }();
     return enabled;
+}
+
+static std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
+    if (!dxmt9PeRenderTapeCaptureEnabled()) {
+        return dxmt9::d3d9::kRenderTapeProfileFrame;
+    }
+    static const std::uint32_t profile = [] {
+        const auto value =
+            dxmt9::util::getenvString("DXMT9_RENDER_TAPE_PROFILE");
+        return dxmt9PeRenderTapeProfileFromText(value);
+    }();
+    return profile;
 }
 
 static std::atomic<D3D9PeRenderTapeBootstrapProducer>
@@ -7451,11 +7468,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto status = renderTapeCapture_->completePresent(
             renderTapeCapture_->eventCount(),
-            std::max<std::uint64_t>(1u, commandChunkCommits_),
+            ++renderTapeCompletionOrdinal_,
             dxmt9::d3d9::RenderTapeDigestValidity::Sha256,
             *renderTapeExpectedDigest_,
             std::as_bytes(std::span(renderTapeCaptureOracle_)));
-        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
+            status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture completion aborted status=%u events=%u "
                 "chunks=%llu present_chunk_seen=%d oracle_bytes=%zu validation=%u",
@@ -7473,6 +7491,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 validation.failedEventIndex,
                 static_cast<unsigned>(validation.chunkStatus));
             abortRenderTapeCapture("completion");
+            return;
+        }
+        // Sequence profile keeps the first interval journaled but unsealed;
+        // publication is deliberately deferred until the second Present has
+        // passed final validation.
+        if (status == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            renderTapeExpectedDigest_.reset();
             return;
         }
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -9002,7 +9027,10 @@ public:
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
         , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
-        , renderTapeCapture_(std::in_place, dxmt9PeRenderTapeCaptureEnabled())
+        , renderTapeCapture_(
+              std::in_place, dxmt9PeRenderTapeCaptureEnabled(),
+              dxmt9::d3d9::RenderTapeCaptureLimits{},
+              dxmt9PeRenderTapeCaptureProfile())
         , renderTapeRegistry_(dxmt9PeRenderTapeCaptureEnabled()
                                   ? std::optional<RenderTapeLiveRegistry>{
                                         std::in_place}

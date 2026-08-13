@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdarg>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -161,6 +162,33 @@ std::string hexDigest(const RenderTapeDigest& digest) {
   return stream.str();
 }
 
+std::uint32_t sealedProfile(std::span<const std::byte> events) noexcept {
+  if (events.size() < sizeof(dxmt9::d3d9::RenderTapeHeader)) {
+    return 0u;
+  }
+  dxmt9::d3d9::RenderTapeHeader header{};
+  std::memcpy(&header, events.data(), sizeof(header));
+  if (header.magic != dxmt9::d3d9::kRenderTapeMagic ||
+      header.version != dxmt9::d3d9::kRenderTapeVersion ||
+      header.headerSize != sizeof(header) ||
+      (header.profile != dxmt9::d3d9::kRenderTapeProfileFrame &&
+       header.profile != dxmt9::d3d9::kRenderTapeProfileSequence)) {
+    return 0u;
+  }
+  return header.profile;
+}
+
+std::string_view profileName(std::uint32_t profile) noexcept {
+  return profile == dxmt9::d3d9::kRenderTapeProfileSequence
+             ? "sequence-tape"
+             : "frame-tape";
+}
+
+std::string_view profilePrefix(std::uint32_t profile) noexcept {
+  return profile == dxmt9::d3d9::kRenderTapeProfileSequence ? "sequence"
+                                                             : "frame";
+}
+
 bool writeBytes(const std::filesystem::path& path,
                 std::span<const std::byte> bytes) noexcept {
   std::ofstream stream(path, std::ios::binary | std::ios::out | std::ios::trunc);
@@ -187,10 +215,11 @@ bool writeText(const std::filesystem::path& path,
 std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view eventDigest,
                         std::span<const std::string> blobDigests) {
+  const auto profile = sealedProfile(bundle.events);
   std::ostringstream manifest;
   manifest << "{\n"
            << "  \"schema\":\"" << kBundleSchema << "\",\n"
-           << "  \"profile\":\"frame-tape\",\n"
+           << "  \"profile\":\"" << profileName(profile) << "\",\n"
            << "  \"producer\":{\"path\":\"dxmt9-pe-render-tape\","
               "\"git_revision\":\"runtime\"},\n"
            << "  \"stage\":\"production-capture\",\n"
@@ -218,7 +247,7 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
   return manifest.str();
 }
 
-std::atomic<std::uint64_t> nextFrameId{1u};
+std::atomic<std::uint64_t> nextTapeId{1u};
 
 bool publishDefault(const RenderTapePublicationBundle& bundle) noexcept {
   const auto root = outputRoot();
@@ -229,11 +258,17 @@ bool publishDefault(const RenderTapePublicationBundle& bundle) noexcept {
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   const auto ticks = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-  const auto id = nextFrameId.fetch_add(1u, std::memory_order_relaxed);
+  const auto profile = sealedProfile(bundle.events);
+  if (profile == 0u) {
+    publisherInfoLog(
+        "render_tape_capture publisher rejected reason=invalid_header");
+    return false;
+  }
+  const auto id = nextTapeId.fetch_add(1u, std::memory_order_relaxed);
   std::ostringstream name;
-  name << "frame-" << ticks << '-' << id;
+  name << profilePrefix(profile) << '-' << ticks << '-' << id;
   publisherInfoLog(
-      "render_tape_capture publisher attempt root=%s frame=%s events=%zu blobs=%zu",
+      "render_tape_capture publisher attempt root=%s tape=%s events=%zu blobs=%zu",
       root.c_str(), name.str().c_str(), bundle.events.size(),
       bundle.blobs.size());
   return dxmt9PePublishRenderTapeBundle(bundle, root, name.str());
@@ -254,7 +289,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     };
     std::filesystem::path root;
     if (!safeRootText(outputRootText, root) || !safeFrameName(frameName) ||
-        bundle.events.empty()) {
+        sealedProfile(bundle.events) == 0u) {
       return reject("input");
     }
 

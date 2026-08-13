@@ -512,6 +512,10 @@ producer builds a canonical `APPLY_STATE|FULL_SNAPSHOT` from the actual PE
 shadow, emits the registry as initial object/blob/mutation seeds with expected
 extent/count closure, and arms the following Present interval. An injected
 bootstrap producer may replace this owner only as an explicit test override.
+The optional `DXMT9_RENDER_TAPE_PROFILE=sequence-tape` selector extends this
+bounded owner to exactly two consecutive standard Present intervals: the first
+completion remains journaled but unsealed, one complete digest-backed mutation
+must follow it, and only the second completion may validate and publish.
 The capture owner copies each successfully committed canonical D9C v2 chunk
 once; live create/destroy, writable-lock mutation, and true chunk-bypass control
 call sites feed the same owner without duplicating chunkized operations. It

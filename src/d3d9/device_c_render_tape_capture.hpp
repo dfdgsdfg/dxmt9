@@ -87,7 +87,10 @@ struct RenderTapeCaptureBootstrapSeed {
 class RenderTapeCaptureSession {
 public:
   explicit RenderTapeCaptureSession(
-      bool enabled, RenderTapeCaptureLimits limits = {});
+      bool enabled, RenderTapeCaptureLimits limits = {},
+      std::uint32_t profile = kRenderTapeProfileFrame);
+  RenderTapeCaptureSession(bool enabled, std::uint32_t profile)
+      : RenderTapeCaptureSession(enabled, {}, profile) {}
   ~RenderTapeCaptureSession() = default;
 
   RenderTapeCaptureSession(const RenderTapeCaptureSession&) = delete;
@@ -103,8 +106,9 @@ public:
       std::span<const std::byte> bootstrapOverlay,
       std::span<const RenderTapeCaptureBlob> blobs);
 
-  // Starts exactly one future Present interval. A second interval is rejected
-  // and a successful Present is the only path to Sealed.
+  // Starts the bounded profile selected at construction. Frame captures seal
+  // after one successful Present; sequence captures retain the first boundary
+  // and seal after the second. A new begin call is always rejected.
   RenderTapeCaptureStatus beginPresentInterval();
 
   RenderTapeCaptureStatus registerVerifiedBlob(
@@ -137,8 +141,9 @@ public:
       const RenderTapeOrderedControlHeader& fixed,
       std::span<const std::byte> controlPayload);
 
-  // CompletePresent performs final structural validation before publishing
-  // the artifact. Any failure aborts the session and publishes no bytes.
+  // CompletePresent journals each selected profile boundary. Only the final
+  // boundary performs structural validation and makes bytes publishable. Any
+  // failure aborts the session and publishes no partial artifact.
   RenderTapeCaptureStatus completePresent(
       std::uint64_t presentOrdinal, std::uint64_t completionOrdinal,
       RenderTapeDigestValidity digestValidity, RenderTapeDigest expectedDigest,
@@ -159,6 +164,10 @@ public:
     return publicationBundle_;
   }
   bool enabled() const noexcept { return enabled_; }
+  std::uint32_t profile() const noexcept { return builder_.profile(); }
+  std::uint32_t presentCompletionCount() const noexcept {
+    return presentCompletionCount_;
+  }
   bool presentChunkSeen() const noexcept { return presentChunkSeen_; }
   RenderTapeValidationStatus validationStatus() const noexcept {
     return validationStatus_;
@@ -192,6 +201,7 @@ private:
   std::uint64_t eventBytes_ = 0u;
   std::uint64_t blobBytes_ = 0u;
   bool presentChunkSeen_ = false;
+  std::uint32_t presentCompletionCount_ = 0u;
   RenderTapeValidationStatus validationStatus_ =
       RenderTapeValidationStatus::Valid;
   RenderTapeValidationResult validationResult_{

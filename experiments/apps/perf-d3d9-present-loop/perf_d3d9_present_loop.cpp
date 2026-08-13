@@ -12,6 +12,8 @@
 // vertices, one fully initialized non-uniform 4x4 A8R8G8B8 texture, and the
 // same ordinary Present() call. The default mode remains clear-only for
 // existing present-pacing measurements.
+// PRESENT_LOOP_SEQUENCE=1 uses the same draw shape and performs one complete
+// texture replacement between captured Present intervals 1 and 2.
 //
 // Iteration count is read once from PRESENT_LOOP_ITERATIONS (default 1000).
 // Backbuffer is intentionally tiny (256x256) so the per-frame Clear is
@@ -69,6 +71,7 @@ struct AppState {
     int iterations = kDefaultIterations;
     int frame = 0;
     bool textured = false;
+    bool sequence = false;
     bool quit = false;
     LARGE_INTEGER qpcFrequency{};
     std::int64_t windowTicks = 0;
@@ -330,7 +333,40 @@ bool draw_textured_quad(AppState& app) {
     return true;
 }
 
+bool mutate_sequence_texture(AppState& app) {
+    D3DLOCKED_RECT locked{};
+    HRESULT hr = app.texture->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD);
+    if (FAILED(hr)) {
+        print_hresult("Sequence texture LockRect", hr);
+        return false;
+    }
+    for (UINT y = 0; y < kTextureSize; ++y) {
+        auto* row = reinterpret_cast<DWORD*>(
+            static_cast<unsigned char*>(locked.pBits) +
+            static_cast<size_t>(y) * static_cast<size_t>(locked.Pitch));
+        for (UINT x = 0; x < kTextureSize; ++x) {
+            row[x] = kTextureSeed[y][x] ^ 0x00FFFFFFu;
+        }
+    }
+    hr = app.texture->UnlockRect(0);
+    if (FAILED(hr)) {
+        print_hresult("Sequence texture UnlockRect", hr);
+        return false;
+    }
+    return true;
+}
+
 void run_iteration(AppState& app) {
+    // Present 0 is the production arm boundary and Present 1 closes the
+    // first captured interval. Mutate exactly once before any command in
+    // interval 2 so the sequence journal preserves the boundary mutation
+    // ahead of that interval's Clear -> Draw -> Present stream.
+    if (app.sequence && app.frame == 2 &&
+        !mutate_sequence_texture(app)) {
+        app.quit = true;
+        return;
+    }
+
     const DWORD clear_color = D3DCOLOR_XRGB(
         12 + ((app.frame * 3) % 36),
         20 + ((app.frame * 5) % 48),
@@ -395,9 +431,13 @@ int main(int /*argc*/, char** /*argv*/) {
     };
 
     app.iterations = env_int("PRESENT_LOOP_ITERATIONS", kDefaultIterations);
-    app.textured = env_enabled("PRESENT_LOOP_TEXTURED");
+    app.sequence = env_enabled("PRESENT_LOOP_SEQUENCE");
+    app.textured = env_enabled("PRESENT_LOOP_TEXTURED") || app.sequence;
     if (app.iterations < 1) {
         app.iterations = 1;
+    }
+    if (app.sequence && app.iterations < 3) {
+        app.iterations = 3;
     }
 
     char trace_path[MAX_PATH]{};
@@ -408,7 +448,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
     trace_log("OK: PresentLoopProbe startup iterations=%d backbuffer=%dx%d mode=%s",
               app.iterations, kBackBufferWidth, kBackBufferHeight,
-              app.textured ? "textured-drawprimitiveup" : "clear-only");
+              app.sequence ? "sequence-texture-mutation" :
+              (app.textured ? "textured-drawprimitiveup" : "clear-only"));
 
     {
         ScopedTicks timer(app.windowTicks);
@@ -468,7 +509,8 @@ int main(int /*argc*/, char** /*argv*/) {
               per_frame_ms(app, app.presentTicks),
               ticks_to_ms(app, app.messageTicks),
               ticks_to_ms(app, app.cleanupTicks),
-              app.textured ? "textured-drawprimitiveup" : "clear-only");
+              app.sequence ? "sequence-texture-mutation" :
+              (app.textured ? "textured-drawprimitiveup" : "clear-only"));
     if (g_trace) {
         std::fclose(g_trace);
         g_trace = nullptr;

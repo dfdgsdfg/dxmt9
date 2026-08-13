@@ -17,3 +17,18 @@ the checker requires two iterations. The textured mode uses inline
 initialized, non-uniform, single-level `D3DPOOL_DEFAULT` dynamic 4x4
 `D3DFMT_A8R8G8B8` texture. It calls ordinary `Present`, not `PresentEx`; the
 default clear-only mode is unchanged.
+
+For the bounded production sequence-tape fixture, use three iterations:
+
+```sh
+PRESENT_LOOP_SEQUENCE=1 PRESENT_LOOP_ITERATIONS=3 \
+DXMT9_RENDER_TAPE_CAPTURE=1 \
+DXMT9_RENDER_TAPE_PROFILE=sequence-tape \
+DXMT9_RENDER_TAPE_OUTPUT_ROOT='Z:\\absolute\\path\\to\\tapes' \
+wine perf-d3d9-present-loop.exe
+```
+
+Present 0 arms capture, Present 1 closes interval 1 without publication, and
+the fixture fully replaces the 4x4 texture before interval 2's Clear and
+Present. That replacement is the single digest-backed mutation between the two
+captured intervals.

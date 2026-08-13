@@ -5,6 +5,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
+
+inline constexpr std::uint32_t dxmt9PeRenderTapeProfileFromText(
+    std::string_view value) noexcept {
+  if (value.empty() || value == "frame-tape") {
+    return dxmt9::d3d9::kRenderTapeProfileFrame;
+  }
+  if (value == "sequence-tape") {
+    return dxmt9::d3d9::kRenderTapeProfileSequence;
+  }
+  return 0u;
+}
 
 // These are opt-in PE-local test/publication seams. Production bootstrap state
 // comes from the device-owned PE shadow; a non-null producer explicitly

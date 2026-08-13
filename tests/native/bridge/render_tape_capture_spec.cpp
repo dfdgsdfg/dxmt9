@@ -279,6 +279,16 @@ void testProductionHookGateTruthTable() {
         "production capture gate does not mutate canonical recorder bytes");
 }
 
+void testProfileSelectionTruthTable() {
+  check(dxmt9PeRenderTapeProfileFromText("") == kRenderTapeProfileFrame &&
+            dxmt9PeRenderTapeProfileFromText("frame-tape") ==
+                kRenderTapeProfileFrame &&
+            dxmt9PeRenderTapeProfileFromText("sequence-tape") ==
+                kRenderTapeProfileSequence &&
+            dxmt9PeRenderTapeProfileFromText("bogus") == 0u,
+        "capture profile selection accepts only explicit bounded names");
+}
+
 std::vector<std::byte> recorderPresentChunk() {
   CommandChunkBuilder recorder;
   check(dxmt9::d3d9::pe::appendPresent(
@@ -436,6 +446,72 @@ void testCompletePresentPublishesExactlyOneTape() {
             std::as_bytes(std::span(&attachment, 1u))) ==
             RenderTapeCaptureStatus::InvalidState,
         "second Present cannot publish another interval");
+}
+
+void testSequenceCaptureDefersSealUntilSecondPresent() {
+  constexpr std::array<std::byte, 4u> firstBytes{
+      std::byte{0x10u}, std::byte{0x11u}, std::byte{0x12u}, std::byte{0x13u}};
+  constexpr std::array<std::byte, 4u> secondBytes{
+      std::byte{0x20u}, std::byte{0x21u}, std::byte{0x22u}, std::byte{0x23u}};
+  const std::array<RenderTapeCaptureBlob, 2u> blobs{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(
+          firstBytes.begin(), firstBytes.end())},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(
+          secondBytes.begin(), secondBytes.end())}};
+  RenderTapeCaptureSession session(true, {}, kRenderTapeProfileSequence);
+  check(session.profile() == kRenderTapeProfileSequence &&
+            session.armWithBlobs(bootstrapChunk(), blobs) ==
+                RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "sequence capture arms the explicit two-interval profile");
+  constexpr std::array<std::byte, 8u> descriptor{};
+  check(session.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 4u, 1u) ==
+            RenderTapeCaptureStatus::Accepted,
+        "sequence capture journals the initial output seed definition");
+  const auto firstPresent = presentChunk();
+  check(session.resourceMutationBytes(
+            kSurface, RenderTapeMutationKind::Upload, 0u, 0u,
+            firstBytes) == RenderTapeCaptureStatus::Accepted &&
+            session.commandChunk(
+                CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+                firstPresent) == RenderTapeCaptureStatus::Accepted,
+        "sequence capture records interval one in journal order");
+  const auto attachment = oracle();
+  check(session.completePresent(
+            4u, 1u, RenderTapeDigestValidity::Sha256, digest(),
+            std::as_bytes(std::span(&attachment, 1u))) ==
+            RenderTapeCaptureStatus::Accepted &&
+            session.presentCompletionCount() == 1u &&
+            session.state() == RenderTapeCaptureState::Capturing &&
+            session.sealedArtifact().empty(),
+        "sequence capture does not seal or validate after interval one");
+  const auto secondPresent = presentChunk();
+  check(session.resourceMutationBytes(
+            kSurface, RenderTapeMutationKind::Upload, 0u, 0u,
+            secondBytes) == RenderTapeCaptureStatus::Accepted &&
+            session.commandChunk(
+                CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+                secondPresent) == RenderTapeCaptureStatus::Accepted,
+        "sequence capture preserves the between-Present mutation");
+  check(session.completePresent(
+            7u, 2u, RenderTapeDigestValidity::Sha256, digest(),
+            std::as_bytes(std::span(&attachment, 1u))) ==
+            RenderTapeCaptureStatus::Complete &&
+            session.presentCompletionCount() == 2u &&
+            session.state() == RenderTapeCaptureState::Sealed &&
+            !session.sealedArtifact().empty(),
+        "sequence capture seals only after interval two validation");
+  RenderTapeBlobCatalogue catalogue;
+  for (const auto& blob : session.publicationBundle().blobs) {
+    catalogue.blobs.push_back(RenderTapeBlob{
+        .digest = blob.digest, .size = blob.bytes.size(), .verified = 1u});
+  }
+  check(validateRenderTape(session.sealedArtifact(), catalogue).valid(),
+        "sequence capture publishes a structurally valid final tape");
 }
 
 void testValidationFailurePreservesEventAndChunkLocation() {
@@ -748,7 +824,9 @@ int main(int argc, char** argv) {
     testDescriptorKindAxisTruthTable();
     testKindZeroIntervalDefineUsesNonZeroDescriptorTag();
     testProductionHookGateTruthTable();
+    testProfileSelectionTruthTable();
     testCompletePresentPublishesExactlyOneTape();
+    testSequenceCaptureDefersSealUntilSecondPresent();
     testValidationFailurePreservesEventAndChunkLocation();
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();

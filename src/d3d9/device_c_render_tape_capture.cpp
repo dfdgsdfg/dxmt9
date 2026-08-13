@@ -57,9 +57,9 @@ bool mutationCapableIdentity(
 } // namespace
 
 RenderTapeCaptureSession::RenderTapeCaptureSession(
-    bool enabled, RenderTapeCaptureLimits limits)
+    bool enabled, RenderTapeCaptureLimits limits, std::uint32_t profile)
     : enabled_(enabled), limits_(limits),
-      state_(RenderTapeCaptureState::Disabled) {}
+      state_(RenderTapeCaptureState::Disabled), builder_(profile) {}
 
 RenderTapeDigest RenderTapeCaptureSession::sha256(
     std::span<const std::byte> bytes) {
@@ -138,6 +138,10 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
   if (bootstrapOverlay.empty() || blobs.size() > limits_.maxBlobEntries) {
     return RenderTapeCaptureStatus::InvalidInput;
   }
+  if (builder_.profile() != kRenderTapeProfileFrame &&
+      builder_.profile() != kRenderTapeProfileSequence) {
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
 
   try {
     catalogue_.blobs.assign(blobs.begin(), blobs.end());
@@ -149,10 +153,11 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     eventBytes_ = 0u;
     blobBytes_ = 0u;
     presentChunkSeen_ = false;
+    presentCompletionCount_ = 0u;
     validationStatus_ = RenderTapeValidationStatus::Valid;
     validationResult_ = RenderTapeValidationResult{
         .status = RenderTapeValidationStatus::Valid};
-    builder_ = RenderTapeBuilder{};
+    builder_ = RenderTapeBuilder(builder_.profile());
     const auto status = reserveEvent(
         sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size());
     if (status != RenderTapeCaptureStatus::Accepted) {
@@ -567,6 +572,21 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapePresentCompleteHeader) +
                    oracleAttachments.size();
+
+    ++presentCompletionCount_;
+    const auto expectedCompletions =
+        profile() == kRenderTapeProfileSequence ? 2u : 1u;
+    if (presentCompletionCount_ < expectedCompletions) {
+      // A sequence interval is a journal boundary, not a publication
+      // boundary. Keep the owner capturing so the next digest-backed
+      // mutation and Present are appended in order; only interval 2 seals.
+      presentChunkSeen_ = false;
+      return RenderTapeCaptureStatus::Accepted;
+    }
+    if (presentCompletionCount_ > expectedCompletions) {
+      abortInternal();
+      return RenderTapeCaptureStatus::InvalidState;
+    }
     const auto candidate = builder_.seal();
     RenderTapeValidationScratch scratch{};
     ImportedRenderTapeView imported{};
