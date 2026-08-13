@@ -92,9 +92,12 @@ profiles differently:
 
 - `draw-slice` is an implemented, narrow GPU oracle for selected draws and
   emitted shader/resource payloads. It does not exercise the production queue.
-- `frame-tape` is the first planned reference workload: one complete Present
+- `frame-tape` is the first bounded reference workload: one complete Present
   interval, a consistent checkpoint, resource/direct-control journal, canonical
-  wire chunks, production import/queue/provider replay, and offscreen hashes.
+  wire chunks, production import/queue/provider replay, and offscreen readback
+  evidence. One captured `perf-d3d9-present-loop` bundle has completed this
+  narrow production-provider path; broader grammar and sequence evidence remain
+  separate.
 - `sequence-tape` extends the same proof over consecutive intervals; a nominal
   ten-second capture is a corpus-selection policy, not a new semantics.
 
@@ -128,7 +131,7 @@ bytes, shader layouts, pass actions, and output pixels.
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
-| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | bounded native v2 provider identity slice, production routing, artifact host, exact Clear readback digest, and focused evidence implemented; full captured-bundle refinement remains pending | `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion and offscreen presenter seam. Native provider/host tests cover implicit and explicit RT0 identity admission, fail-closed preflight, checked texture seed extents, validity/coverage/conservation, exact 16×16 Clear digest, and bundle scope. A real captured-bundle run is still required before claiming end-to-end capture replay. |
+| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | bounded native v2 provider identity slice, production routing, artifact host, exact Clear readback digest, focused evidence, and one captured-bundle provider replay complete; broader refinement remains open | `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion and offscreen presenter seam. Native provider/host tests cover implicit and explicit RT0 identity admission, fail-closed preflight, checked texture seed extents, validity/coverage/conservation, exact 16×16 Clear digest, and bundle scope. The 2026-08-13 Sikarugir `perf-d3d9-present-loop` bundle `/tmp/dxmt9-render-tape-final.1TVZ4h/frame-90260231960200-1` replayed with `provider-replay` status `complete` and exit 0: 4 events, one object define, one bootstrap, one `Clear` + `Present` command chunk, zero blobs/mutations, 256×256 format 21, 262144-byte readback SHA-256 `49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, and 1/1 object conservation. The capture has no expected digest, so `output_oracle=false`; this is not a non-degenerate pixel-equivalence claim. |
 
 ---
 

@@ -18,13 +18,13 @@ authoritatively, in `specs/experiments/harness/probe/spec.md` §5; it
 is cited below, not restated.
 
 The implemented `draw-slice` profile renders a valid image as of
-2026-07-28 (§7, Defect History). The broader `frame-tape` and
-`sequence-tape` profiles defined in §0 and §8 are architecture only and
-remain tracked gaps. They reuse the replay domain rather than creating a
-second, competing harness family. Where current source still violates a
-contract — the 32-bit index-width rejection of §6.3 remains unimplemented —
-this file says so explicitly, and `specs/experiments/gap.md` tracks the
-shortfall.
+2026-07-28 (§7, Defect History). The bounded `frame-tape` profile now has one
+captured-bundle production-provider replay, while its intentionally narrow
+grammar and the `sequence-tape` profile remain tracked gaps. They reuse the
+replay domain rather than creating a second, competing harness family. Where
+current source still violates a contract — the 32-bit index-width rejection
+of §6.3 remains unimplemented — this file says so explicitly, and
+`specs/experiments/gap.md` tracks the shortfall.
 
 Facts in this document were verified against
 `scripts/tools/run_3dmark05_mini_replay.py` (2,093 lines) and
@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, and exact native offscreen Clear oracle for one full-surface `Clear` → `Present` interval exist | Run one real captured bundle, then expand the fail-closed grammar and add reducer workflows |
+| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen Clear oracle, and one captured-bundle provider replay for one full-surface `Clear` → `Present` interval exist | The bounded artifact replay is complete; expand the fail-closed grammar and add reducer workflows |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -692,12 +692,21 @@ surface/texture and complete-buffer seed layouts; partial rectangles,
 block-compressed layouts, cube/volume lock paths, missing initial bytes, and
 unavailable descriptor or bytecode data fail closed before publication.
 Writable buffer/surface/texture mutations are copied before provider unlock,
-and readonly buffer locks are journaled as controls. This remains a capture seam
-rather than complete captured-bundle evidence: the bounded provider replay,
-offscreen Metal readback, and exact Clear digest oracle now exist, while one
-real captured-bundle run remains a separate tester evidence step. One bounded
-production capture has established the structural wild identity described in
-the experiments gap.
+and readonly buffer locks are journaled as controls. One bounded
+`perf-d3d9-present-loop` production capture now replays through this provider:
+the bundle is `/tmp/dxmt9-render-tape-final.1TVZ4h/frame-90260231960200-1`,
+`events.bin` is 2992 bytes with SHA-256
+`e2641223b27e357f19b04d57b76522c6225f8c76c9ca2804e5bab24e6d6017bf`, and the
+four-event tape has one object definition, one bootstrap, one `Clear` +
+`Present` command chunk, and zero blobs/mutations. Structural `validate` and
+`inspect` pass; `provider-replay` returns `complete` (exit 0), with
+`production_capture=true`, `production_provider_replay=true`, 256×256 format
+21 output, 262144-byte readback SHA-256
+`49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, and
+1/1 object conservation. There is no expected digest in this capture, so
+`output_oracle=false`, `expected_digest_captured=false`, and
+`expected_digest_matched=false`; the uniform clear makes
+`output_non_degenerate=false` without making the replay fail.
 
 At the arm boundary, the implicit swap-chain backbuffer is lazily admitted as
 the stable PE wire identity with `PresentOutput` role and
@@ -844,9 +853,10 @@ separately and make no timing or benchmark claim. Queries, readback/control even
 outputs, and all other records or descriptor families fail before effects.
 
 This is a provider API plus native evidence seam, not a new structural CLI.
-The existing `validate`/`inspect` commands remain structural-only. A bounded
-captured-bundle run is still required before promoting the slice from native
-identity evidence to wild artifact evidence.
+The existing `validate`/`inspect` commands remain structural-only. The bounded
+captured-bundle run above promotes this narrow slice from native identity
+evidence to production artifact evidence; it does not claim general grammar
+support or non-degenerate pixel equivalence.
 
 Replay has three modes:
 
