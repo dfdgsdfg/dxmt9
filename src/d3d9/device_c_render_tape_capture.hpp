@@ -35,6 +35,7 @@ struct RenderTapeCaptureLimits {
   std::uint32_t maxEvents = 4096u;
   std::uint64_t maxEventBytes = 64u * 1024u * 1024u;
   std::uint32_t maxBlobEntries = 4096u;
+  std::uint64_t maxBlobBytes = 64u * 1024u * 1024u;
 };
 
 // PE-side injection point for the complete shadow checkpoint. The producer
@@ -147,6 +148,7 @@ public:
     return static_cast<std::uint32_t>(eventCount_);
   }
   std::uint64_t bufferedBytes() const noexcept { return eventBytes_; }
+  std::uint64_t ownedBlobBytes() const noexcept { return blobBytes_; }
   const std::vector<std::byte>& sealedArtifact() const noexcept {
     return sealedArtifact_;
   }
@@ -181,6 +183,7 @@ private:
   RenderTapeCaptureState state_ = RenderTapeCaptureState::Disabled;
   std::size_t eventCount_ = 0u;
   std::uint64_t eventBytes_ = 0u;
+  std::uint64_t blobBytes_ = 0u;
   bool presentChunkSeen_ = false;
   RenderTapeValidationStatus validationStatus_ =
       RenderTapeValidationStatus::Valid;

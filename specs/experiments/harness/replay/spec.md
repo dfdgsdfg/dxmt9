@@ -691,6 +691,11 @@ rather than complete frame evidence: provider replay, offscreen Metal oracle
 execution, and wild-captured identity evidence remain open. Complete initial
 resource contents remain an injected bootstrap-producer obligation.
 
+The capture owner also bounds the total owned blob bytes (64 MiB by default),
+with overflow-safe admission before hashing or copying. Exact duplicate blobs
+are admitted without a second charge, and failed admission or publication
+leaves the owned-byte count unchanged.
+
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events. It does not by itself encode an
 object-level expected byte extent for every resource, so complete initial

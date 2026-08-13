@@ -393,6 +393,60 @@ void testFailureBeforePublishAndBoundedBackpressure() {
   check(failed.sealedArtifact().empty(), "failed sealing has no partial tape");
 }
 
+void testBoundedBlobBytesAndDeduplication() {
+  const RenderTapeCaptureLimits limits{.maxBlobBytes = 4u};
+  const std::array<RenderTapeCaptureBlob, 2u> overflowing{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(3u, std::byte{1})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(2u, std::byte{2})}};
+  RenderTapeCaptureSession armOverflow(true, limits);
+  check(armOverflow.armWithBlobs(bootstrapChunk(), overflowing) ==
+            RenderTapeCaptureStatus::CapacityExceeded,
+        "arm rejects the total blob-byte limit before retaining payloads");
+  check(armOverflow.ownedBlobBytes() == 0u &&
+            armOverflow.state() == RenderTapeCaptureState::Disabled,
+        "failed arm leaves the blob-byte invariant untouched");
+
+  RenderTapeCaptureSession incremental(true, limits);
+  check(incremental.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted,
+        "incremental blob fixture arms");
+  check(incremental.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "incremental blob fixture starts");
+  const std::array<std::byte, 3u> first{
+      std::byte{0x10}, std::byte{0x11}, std::byte{0x12}};
+  const std::array<std::byte, 2u> tooMuch{std::byte{0x20}, std::byte{0x21}};
+  const std::array<std::byte, 1u> last{std::byte{0x30}};
+  check(incremental.registerBlobBytes(first) ==
+            RenderTapeCaptureStatus::Accepted &&
+            incremental.ownedBlobBytes() == 3u,
+        "incremental blob registration charges accepted bytes");
+  check(incremental.registerBlobBytes(tooMuch) ==
+            RenderTapeCaptureStatus::CapacityExceeded &&
+            incremental.ownedBlobBytes() == 3u,
+        "incremental overflow preserves the owned-byte count");
+  check(incremental.registerBlobBytes(last) ==
+            RenderTapeCaptureStatus::Accepted &&
+            incremental.ownedBlobBytes() == 4u,
+        "the exact incremental byte bound is accepted");
+  check(incremental.registerBlobBytes(first) ==
+            RenderTapeCaptureStatus::Accepted &&
+            incremental.ownedBlobBytes() == 4u,
+        "deduplicated bytes do not double-charge the bound");
+
+  const std::array<RenderTapeCaptureBlob, 2u> exact{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(2u, std::byte{3})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(2u, std::byte{4})}};
+  RenderTapeCaptureSession exactArm(true, limits);
+  check(exactArm.armWithBlobs(bootstrapChunk(), exact) ==
+            RenderTapeCaptureStatus::Accepted &&
+            exactArm.ownedBlobBytes() == 4u,
+        "arm accepts the exact total blob-byte bound");
+  const auto duplicate = exact[0].bytes;
+  check(exactArm.registerBlobBytes(duplicate) ==
+            RenderTapeCaptureStatus::Accepted &&
+            exactArm.ownedBlobBytes() == 4u,
+        "arm-owned duplicate does not double-charge bytes");
+}
+
 void testObjectLifetimeAndTerminalControls() {
   constexpr std::array<std::byte, 8u> descriptor{};
   RenderTapeCaptureSession lifetime(true);
@@ -470,6 +524,7 @@ int main(int argc, char** argv) {
     testProductionHookGateTruthTable();
     testCompletePresentPublishesExactlyOneTape();
     testFailureBeforePublishAndBoundedBackpressure();
+    testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();
     return 0;
   } catch (const TestFailure& failure) {

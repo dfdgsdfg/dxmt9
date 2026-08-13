@@ -140,6 +140,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     sealedArtifact_.clear();
     eventCount_ = 0u;
     eventBytes_ = 0u;
+    blobBytes_ = 0u;
     presentChunkSeen_ = false;
     validationStatus_ = RenderTapeValidationStatus::Valid;
     builder_ = RenderTapeBuilder{};
@@ -165,6 +166,15 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
   if (blobs.size() > limits_.maxBlobEntries) {
     return RenderTapeCaptureStatus::InvalidInput;
   }
+  std::uint64_t totalBlobBytes = 0u;
+  for (const auto& blob : blobs) {
+    const auto blobBytes = static_cast<std::uint64_t>(blob.bytes.size());
+    if (blobBytes > limits_.maxBlobBytes ||
+        totalBlobBytes > limits_.maxBlobBytes - blobBytes) {
+      return RenderTapeCaptureStatus::CapacityExceeded;
+    }
+    totalBlobBytes += blobBytes;
+  }
   std::vector<RenderTapeBlob> catalogue;
   std::vector<RenderTapePublishedBlob> owned;
   try {
@@ -184,6 +194,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
   const auto status = arm(bootstrapOverlay, catalogue);
   if (status == RenderTapeCaptureStatus::Accepted) {
     publishedBlobs_ = std::move(owned);
+    blobBytes_ = totalBlobBytes;
   }
   return status;
 }
@@ -209,16 +220,17 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerVerifiedBlob(
       state_ != RenderTapeCaptureState::Capturing) {
     return RenderTapeCaptureStatus::InvalidState;
   }
+  RenderTapeDigest digestCopy{};
+  std::memcpy(digestCopy.data(), digest.data(), kRenderTapeDigestSize);
+  if (hasVerifiedBlob(digestCopy, size)) {
+    return RenderTapeCaptureStatus::Accepted;
+  }
   if (catalogue_.blobs.size() >= limits_.maxBlobEntries) {
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
   try {
     catalogue_.blobs.push_back(RenderTapeBlob{
-        .digest = [&] {
-          RenderTapeDigest copy{};
-          std::memcpy(copy.data(), digest.data(), kRenderTapeDigestSize);
-          return copy;
-        }(),
+        .digest = digestCopy,
         .size = size,
         .verified = 1u,
     });
@@ -237,17 +249,25 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
       state_ != RenderTapeCaptureState::Capturing) {
     return RenderTapeCaptureStatus::InvalidState;
   }
-  const auto digest = sha256(bytes);
-  if (digestOut) {
-    *digestOut = digest;
-  }
   const auto alreadyPublished = std::find_if(
       publishedBlobs_.begin(), publishedBlobs_.end(), [&](const auto& blob) {
-        return blob.digest == digest && blob.bytes.size() == bytes.size() &&
+        return blob.bytes.size() == bytes.size() &&
                std::equal(blob.bytes.begin(), blob.bytes.end(), bytes.begin());
       });
   if (alreadyPublished != publishedBlobs_.end()) {
+    if (digestOut) {
+      *digestOut = alreadyPublished->digest;
+    }
     return RenderTapeCaptureStatus::Accepted;
+  }
+  const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
+  if (incomingBytes > limits_.maxBlobBytes ||
+      blobBytes_ > limits_.maxBlobBytes - incomingBytes) {
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  }
+  const auto digest = sha256(bytes);
+  if (digestOut) {
+    *digestOut = digest;
   }
   const bool alreadyCatalogued = hasVerifiedBlob(digest, bytes.size());
   if (!alreadyCatalogued) {
@@ -261,6 +281,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
   try {
     publishedBlobs_.push_back(RenderTapePublishedBlob{
         .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())});
+    blobBytes_ += incomingBytes;
   } catch (...) {
     if (!alreadyCatalogued && !catalogue_.blobs.empty()) {
       catalogue_.blobs.pop_back();
@@ -551,6 +572,7 @@ void RenderTapeCaptureSession::abortInternal() noexcept {
   state_ = RenderTapeCaptureState::Aborted;
   sealedArtifact_.clear();
   publicationBundle_ = {};
+  blobBytes_ = 0u;
 }
 
 void RenderTapeCaptureSession::abort() noexcept {
