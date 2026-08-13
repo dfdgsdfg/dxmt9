@@ -150,6 +150,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     blobBytes_ = 0u;
     presentChunkSeen_ = false;
     validationStatus_ = RenderTapeValidationStatus::Valid;
+    validationResult_ = RenderTapeValidationResult{
+        .status = RenderTapeValidationStatus::Valid};
     builder_ = RenderTapeBuilder{};
     const auto status = reserveEvent(
         sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size());
@@ -570,6 +572,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     ImportedRenderTapeView imported{};
     const auto validation = validateRenderTape(candidate, catalogue_, &imported,
                                                scratch);
+    validationResult_ = validation;
     validationStatus_ = validation.status;
     if (!validation.valid()) {
       abortInternal();

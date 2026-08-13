@@ -521,7 +521,9 @@ interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
 
 **R-HARN-REPLAY-7.12** Production capture publication requires the explicit
-`DXMT9_RENDER_TAPE_OUTPUT_ROOT` absolute-root policy. The internal PE fallback
+`DXMT9_RENDER_TAPE_OUTPUT_ROOT` PE-visible absolute-root policy. Under Wine the
+value is a Windows drive-qualified path such as `Z:\\...`; a host-only POSIX
+path is not a PE absolute root. The internal PE fallback
 publisher must reject relative/traversal/NUL roots, every symlink component,
 digest mismatch, duplicate digest conflicts, and completed-name collisions.
 It stages `events.bin`, digest-named blobs, and a v2-compatible

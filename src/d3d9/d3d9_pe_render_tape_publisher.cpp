@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdarg>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,8 @@
 #include <system_error>
 #include <unordered_set>
 #include <vector>
+
+#include "util/log/log.hpp"
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -33,6 +36,13 @@ using dxmt9::d3d9::RenderTapePublicationBundle;
 constexpr std::string_view kOutputRootVariable =
     "DXMT9_RENDER_TAPE_OUTPUT_ROOT";
 constexpr std::string_view kBundleSchema = "dxmt9.render_tape.bundle.v2";
+
+void publisherInfoLog(const char *fmt, ...) noexcept {
+  va_list args;
+  va_start(args, fmt);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-device", fmt, args);
+  va_end(args);
+}
 
 std::string outputRoot() {
   return dxmt9::util::getenvString(kOutputRootVariable.data());
@@ -105,7 +115,10 @@ bool flushAndCloseFile(const std::filesystem::path& path,
   }
 
 #if defined(_WIN32)
-  const int descriptor = _wopen(path.c_str(), _O_RDONLY | _O_BINARY);
+  // `_commit` requires a writable descriptor under the Wine/Windows CRT.
+  // Keep the close/rename ordering unchanged; only the descriptor mode
+  // changes so durable flush remains part of the pre-rename transaction.
+  const int descriptor = _wopen(path.c_str(), _O_RDWR | _O_BINARY);
   if (descriptor < 0) {
     return false;
   }
@@ -210,6 +223,7 @@ std::atomic<std::uint64_t> nextFrameId{1u};
 bool publishDefault(const RenderTapePublicationBundle& bundle) noexcept {
   const auto root = outputRoot();
   if (root.empty()) {
+    publisherInfoLog("render_tape_capture publisher rejected reason=root_empty");
     return false;
   }
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
@@ -218,6 +232,10 @@ bool publishDefault(const RenderTapePublicationBundle& bundle) noexcept {
   const auto id = nextFrameId.fetch_add(1u, std::memory_order_relaxed);
   std::ostringstream name;
   name << "frame-" << ticks << '-' << id;
+  publisherInfoLog(
+      "render_tape_capture publisher attempt root=%s frame=%s events=%zu blobs=%zu",
+      root.c_str(), name.str().c_str(), bundle.events.size(),
+      bundle.blobs.size());
   return dxmt9PePublishRenderTapeBundle(bundle, root, name.str());
 }
 
@@ -227,19 +245,26 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
                                     std::string_view outputRootText,
                                     std::string_view frameName) noexcept {
   try {
+    const auto reject = [&](const char *reason) noexcept {
+      publisherInfoLog(
+          "render_tape_capture publisher rejected reason=%s root=%.*s frame=%.*s",
+          reason, static_cast<int>(outputRootText.size()), outputRootText.data(),
+          static_cast<int>(frameName.size()), frameName.data());
+      return false;
+    };
     std::filesystem::path root;
     if (!safeRootText(outputRootText, root) || !safeFrameName(frameName) ||
         bundle.events.empty()) {
-      return false;
+      return reject("input");
     }
 
     std::error_code error;
     if (!existingPathIsSafeDirectory(root)) {
-      return false;
+      return reject("root_not_safe_directory");
     }
     std::filesystem::create_directories(root, error);
     if (error || !existingPathIsSafeDirectory(root)) {
-      return false;
+      return reject("root_create_or_safety");
     }
 
     std::unordered_set<std::string> seen;
@@ -250,7 +275,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
           hexDigest(RenderTapeCaptureSession::sha256(blob.bytes));
       const auto declaredDigest = hexDigest(blob.digest);
       if (declaredDigest != actualDigest || !seen.insert(actualDigest).second) {
-        return false;
+        return reject("blob_digest");
       }
       blobDigests.push_back(actualDigest);
     }
@@ -259,43 +284,54 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
 
     const auto finalPath = root / std::filesystem::path(std::string(frameName));
     if (!existingPathIsSafeDirectory(finalPath)) {
-      return false;
+      return reject("final_not_safe_directory");
     }
     const auto stagingPath = root / ("." + std::string(frameName) + ".staging");
     if (!existingPathIsSafeDirectory(stagingPath)) {
-      return false;
+      return reject("staging_not_safe_directory");
     }
     if (!std::filesystem::create_directory(stagingPath, error) || error) {
-      return false;
+      return reject("staging_create");
     }
 
-    const auto fail = [&]() noexcept {
+    const auto fail = [&](const char *reason) noexcept {
+      publisherInfoLog(
+          "render_tape_capture publisher rejected reason=%s root=%.*s frame=%.*s",
+          reason, static_cast<int>(outputRootText.size()), outputRootText.data(),
+          static_cast<int>(frameName.size()), frameName.data());
       std::error_code cleanupError;
       std::filesystem::remove_all(stagingPath, cleanupError);
       return false;
     };
     const auto blobsPath = stagingPath / "blobs";
-    if (!std::filesystem::create_directory(blobsPath, error) || error ||
-        !writeBytes(stagingPath / "events.bin", bundle.events)) {
-      return fail();
+    if (!std::filesystem::create_directory(blobsPath, error) || error) {
+      return fail("blobs_create");
+    }
+    if (!writeBytes(stagingPath / "events.bin", bundle.events)) {
+      return fail("events_write_or_sync");
     }
     for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
       const auto blobPath = blobsPath / (blobDigests[i] + ".bin");
       if (!writeBytes(blobPath, bundle.blobs[i].bytes)) {
-        return fail();
+        return fail("blob_write_or_sync");
       }
     }
     const auto manifest = manifestFor(bundle, eventDigest, blobDigests);
-    if (!writeText(stagingPath / "manifest.json", manifest) ||
-        !syncDirectory(blobsPath) || !syncDirectory(stagingPath)) {
-      return fail();
+    if (!writeText(stagingPath / "manifest.json", manifest)) {
+      return fail("manifest_write_or_sync");
+    }
+    if (!syncDirectory(blobsPath)) {
+      return fail("blobs_directory_sync");
+    }
+    if (!syncDirectory(stagingPath)) {
+      return fail("staging_directory_sync");
     }
     if (std::filesystem::exists(finalPath, error) || error) {
-      return fail();
+      return fail("final_exists");
     }
     std::filesystem::rename(stagingPath, finalPath, error);
     if (error) {
-      return fail();
+      return fail("final_rename");
     }
     // The final directory is complete and claimable. Parent-directory fsync is
     // best effort on filesystems/platforms that do not expose it; do not
@@ -303,6 +339,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     (void)syncDirectory(root);
     return true;
   } catch (...) {
+    publisherInfoLog("render_tape_capture publisher rejected reason=exception");
     return false;
   }
 }

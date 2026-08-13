@@ -172,6 +172,13 @@ constexpr D9CWireObjectIdentity kTexture{
     .objectId = 29u,
 };
 
+constexpr std::uint32_t kSurfaceDescriptorKind = static_cast<std::uint32_t>(
+    RenderTapeDescriptorKind::Surface);
+constexpr std::uint32_t kTextureDescriptorKind = static_cast<std::uint32_t>(
+    RenderTapeDescriptorKind::Texture);
+constexpr std::uint32_t kShaderDescriptorKind = static_cast<std::uint32_t>(
+    RenderTapeDescriptorKind::Shader);
+
 RenderTapeDigest digest(std::byte seed) {
   RenderTapeDigest value{};
   for (std::size_t i = 0u; i < value.size(); ++i) {
@@ -216,12 +223,14 @@ std::vector<std::byte> makeCompleteTape(
   };
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
-      .descriptorKind = 1u,
+      .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
   };
 
   RenderTapeBuilder builder;
   builder.appendBootstrapState(bootstrap);
-  builder.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  builder.appendObjectDefine(
+      kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      descriptor, 0u, {});
   builder.appendResourceMutation(mutationIdentity,
                                  RenderTapeMutationKind::CpuUnlock, 0u,
                                  mutationOffset, mutationBytes,
@@ -341,13 +350,16 @@ void immutableObjectsAndRetirementFailClosed() {
   const auto present = makePresentChunk();
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
-      .descriptorKind = 1u,
+      .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
   };
 
   RenderTapeBuilder immutable;
   immutable.appendBootstrapState(bootstrap);
-  immutable.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
-  immutable.appendObjectDefine(shader, 2u, descriptor, 12u, shaderDigest);
+  immutable.appendObjectDefine(
+      kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      descriptor, 0u, {});
+  immutable.appendObjectDefine(shader, kShaderDescriptorKind, descriptor, 12u,
+                               shaderDigest);
   immutable.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   immutable.appendPresentComplete(
@@ -367,11 +379,13 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder reused;
   reused.appendBootstrapState(bootstrap);
-  reused.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  reused.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                            {});
   reused.appendObjectDestroy(kSurface);
   auto newerSurface = kSurface;
   ++newerSurface.generation;
-  reused.appendObjectDefine(newerSurface, 1u, descriptor, 0u, {});
+  reused.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, descriptor,
+                            0u, {});
   reused.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   reused.appendPresentComplete(
@@ -383,31 +397,55 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder mismatched;
   mismatched.appendBootstrapState(bootstrap);
-  mismatched.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
-  mismatched.appendObjectDefine(kSurface, 2u, descriptor, 0u, {});
+  mismatched.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+                                0u, {});
+  mismatched.appendObjectDefine(kSurface, kTextureDescriptorKind, descriptor,
+                                0u, {});
   mismatched.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   mismatched.appendPresentComplete(
       4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
   check(validateRenderTape(mismatched.seal(), {}).status ==
-            RenderTapeValidationStatus::DescriptorMismatch,
-        "a reused identity with a different descriptor must fail closed");
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "a reused identity with a mismatched schema tag must fail closed");
+}
+
+void descriptorKindIdentityMismatchFailsClosed() {
+  constexpr std::array<std::byte, 8u> descriptor{};
+  RenderTapeBuilder mismatch;
+  mismatch.appendBootstrapState(makeApplyStateChunk());
+  mismatch.appendObjectDefine(kSurface, kTextureDescriptorKind, descriptor, 0u,
+                              {});
+  mismatch.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface, .descriptorKind = kSurfaceDescriptorKind};
+  mismatch.appendPresentComplete(
+      3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(mismatch.seal(), {}).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "identity and descriptor schema tags must match exactly");
 }
 
 void bootstrapAndCommandHandlesCloseBeforeReplay() {
   constexpr std::array<std::byte, 1u> descriptor{};
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
-      .descriptorKind = 1u,
+      .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
   };
 
   RenderTapeBuilder deferred;
   deferred.appendBootstrapState(makeApplyStateChunk(true, kTexture));
   // The definition is intentionally journaled after BootstrapState. The
   // closure index makes this safe without applying the provider state early.
-  deferred.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
-  deferred.appendObjectDefine(kTexture, 1u, descriptor, 0u, {});
+  deferred.appendObjectDefine(
+      kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      descriptor, 0u, {});
+  deferred.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+                              0u, {});
   deferred.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
@@ -428,8 +466,8 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
   RenderTapeBuilder missingBootstrapDefinition;
   missingBootstrapDefinition.appendBootstrapState(
       makeApplyStateChunk(true, stale));
-  missingBootstrapDefinition.appendObjectDefine(kTexture, 1u, descriptor, 0u,
-                                                {});
+  missingBootstrapDefinition.appendObjectDefine(
+      kTexture, kTextureDescriptorKind, descriptor, 0u, {});
   missingBootstrapDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
@@ -442,8 +480,8 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
 
   RenderTapeBuilder missingCommandDefinition;
   missingCommandDefinition.appendBootstrapState(makeApplyStateChunk());
-  missingCommandDefinition.appendObjectDefine(kSurface, 1u, descriptor, 0u,
-                                               {});
+  missingCommandDefinition.appendObjectDefine(
+      kSurface, kSurfaceDescriptorKind, descriptor, 0u, {});
   missingCommandDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
       makeApplyStateChunk(true, stale));
@@ -459,8 +497,8 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
 
   RenderTapeBuilder retiredCommandDefinition;
   retiredCommandDefinition.appendBootstrapState(makeApplyStateChunk());
-  retiredCommandDefinition.appendObjectDefine(kTexture, 1u, descriptor, 0u,
-                                               {});
+  retiredCommandDefinition.appendObjectDefine(
+      kTexture, kTextureDescriptorKind, descriptor, 0u, {});
   retiredCommandDefinition.appendObjectDestroy(kTexture);
   retiredCommandDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
@@ -486,13 +524,16 @@ void seedContentClosesByUniqueSubresourceAndSummedBytes() {
   }};
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
-      .descriptorKind = 1u,
+      .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
   };
 
   const auto appendPrefix = [&](RenderTapeBuilder& builder) {
     builder.appendBootstrapState(makeApplyStateChunk());
-    builder.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
-    builder.appendObjectDefine(kTexture, 1u, descriptor, 0u, {}, 7u, 2u);
+    builder.appendObjectDefine(
+        kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        descriptor, 0u, {});
+    builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+                               0u, {}, 7u, 2u);
   };
   const auto appendSuffix = [&](RenderTapeBuilder& builder,
                                 std::uint64_t presentOrdinal) {
@@ -579,11 +620,14 @@ void invalidInputsFailBeforeCallbacks() {
   const auto present = makePresentChunk();
   forbidden.appendBootstrapState(present);
   constexpr std::array<std::byte, 1u> descriptor{};
-  forbidden.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+  forbidden.appendObjectDefine(
+      kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      descriptor, 0u, {});
   forbidden.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   const RenderTapeOracleAttachment oracle{.identity = kSurface,
-                                          .descriptorKind = 1u};
+                                          .descriptorKind = static_cast<std::uint32_t>(
+                                              RenderTapeDescriptorKind::Surface)};
   forbidden.appendPresentComplete(
       3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
@@ -705,6 +749,7 @@ int main(int argc, char** argv) {
     check(argc == 1, "usage: render_tape_spec [--write-fixture path]");
     validTapeReplaysExactlyOnce();
     immutableObjectsAndRetirementFailClosed();
+    descriptorKindIdentityMismatchFailsClosed();
     bootstrapAndCommandHandlesCloseBeforeReplay();
     seedContentClosesByUniqueSubresourceAndSummedBytes();
     invalidInputsFailBeforeCallbacks();

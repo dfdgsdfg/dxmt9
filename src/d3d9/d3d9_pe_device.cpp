@@ -685,16 +685,28 @@ struct RenderTapeQueryDescriptor {
 };
 
 struct RenderTapeLiveObject {
+    enum class Role : uint8_t {
+        Ordinary,
+        PresentOutput,
+    };
+
     D9CWireObjectIdentity identity{};
     std::vector<std::byte> descriptor{};
     std::vector<std::byte> immutablePayload{};
     std::uint32_t contentCount = 0u;
     std::vector<std::vector<std::byte>> content{};
+    Role role = Role::Ordinary;
 };
 
 struct RenderTapeLiveRegistry {
     std::vector<RenderTapeLiveObject> objects{};
+    std::vector<D9CWireObjectIdentity> knownDead{};
     bool invalid = false;
+    const char *invalidReason = nullptr;
+    std::uint32_t invalidKind = 0u;
+    std::uint32_t invalidGeneration = 0u;
+    std::uint64_t invalidObjectId = 0u;
+    std::uint32_t invalidSubresource = std::numeric_limits<std::uint32_t>::max();
 };
 
 static bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
@@ -1137,6 +1149,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::optional<RenderTapeLiveRegistry> renderTapeRegistry_{};
     std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
         renderTapeCaptureOracle_{};
+    const char *renderTapeAbortReason_ = nullptr;
     std::uint64_t renderTapeCompletionOrdinal_ = 0u;
     std::uint64_t commandChunkCommits_ = 0;
     std::uint64_t commandChunkRecords_ = 0;
@@ -6818,17 +6831,66 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
     }
 
+    bool hasRenderTapeDeadObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) const noexcept {
+        return renderTapeRegistry_ &&
+               std::any_of(renderTapeRegistry_->knownDead.begin(),
+                           renderTapeRegistry_->knownDead.end(),
+                           [&](const auto &identity) {
+                               return renderTapeSameIdentity(identity,
+                                                             object.identity);
+                           });
+    }
+
+    void markRenderTapeInvalidOnce(
+        const char *reason,
+        const dxmt9::d3d9::pe::PeWireObjectRef *object = nullptr,
+        std::uint32_t subresource =
+            std::numeric_limits<std::uint32_t>::max()) noexcept {
+        if (!renderTapeRegistry_ || renderTapeRegistry_->invalid) {
+            return;
+        }
+        renderTapeRegistry_->invalid = true;
+        renderTapeRegistry_->invalidReason = reason;
+        renderTapeRegistry_->invalidSubresource = subresource;
+        if (object) {
+            renderTapeRegistry_->invalidKind = object->identity.kind;
+            renderTapeRegistry_->invalidGeneration = object->identity.generation;
+            renderTapeRegistry_->invalidObjectId = object->identity.objectId;
+        }
+    }
+
+    void abortRenderTapeCapture(const char *reason) noexcept {
+        if (!renderTapeCapture_ || !renderTapeCapture_->enabled()) {
+            return;
+        }
+        if (!renderTapeAbortReason_) {
+            renderTapeAbortReason_ = reason;
+            dxmt9DeviceInfoLog("render_tape_capture first_abort reason=%s",
+                               reason);
+        }
+        renderTapeCapture_->abort();
+    }
+
     void registerRenderTapeObject(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
-        std::span<const std::byte> immutablePayload) noexcept {
+        std::span<const std::byte> immutablePayload,
+        RenderTapeLiveObject::Role role = RenderTapeLiveObject::Role::Ordinary) noexcept {
         if (!renderTapeRegistry_) {
             return;
         }
         try {
-            if (!object.valid(object.identity.kind) || descriptor.empty() ||
-                findRenderTapeObject(object) != nullptr) {
-                renderTapeRegistry_->invalid = true;
+            if (!object.valid(object.identity.kind)) {
+                markRenderTapeInvalidOnce("invalid_identity", &object);
+                return;
+            }
+            if (descriptor.empty()) {
+                markRenderTapeInvalidOnce("empty_descriptor", &object);
+                return;
+            }
+            if (findRenderTapeObject(object) != nullptr) {
+                markRenderTapeInvalidOnce("duplicate_object", &object);
                 return;
             }
             RenderTapeLiveObject entry{};
@@ -6836,30 +6898,37 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             entry.descriptor.assign(descriptor.begin(), descriptor.end());
             entry.immutablePayload.assign(immutablePayload.begin(),
                                           immutablePayload.end());
+            entry.role = role;
             switch (object.identity.kind) {
             case D9C_CHUNK_HANDLE_KIND_BUFFER:
                 if (entry.descriptor.size() != sizeof(D9CBufferDesc)) {
-                    renderTapeRegistry_->invalid = true;
+                    markRenderTapeInvalidOnce("buffer_descriptor_size", &object);
                     return;
                 }
                 entry.contentCount = 1u;
                 break;
             case D9C_CHUNK_HANDLE_KIND_SURFACE:
                 if (entry.descriptor.size() != sizeof(D9CSurfaceDesc)) {
-                    renderTapeRegistry_->invalid = true;
+                    markRenderTapeInvalidOnce("surface_descriptor_size", &object);
                     return;
                 }
-                entry.contentCount = 1u;
+                // The implicit swap-chain backbuffer is the output produced by
+                // the captured interval. It is an oracle target, not a
+                // CPU-seeded input; a future prior-content capture must add a
+                // proof before it can use this disposition.
+                entry.contentCount =
+                    role == RenderTapeLiveObject::Role::PresentOutput ? 0u
+                                                                        : 1u;
                 break;
             case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
                 if (entry.descriptor.size() < sizeof(RenderTapeTextureDescriptor)) {
-                    renderTapeRegistry_->invalid = true;
+                    markRenderTapeInvalidOnce("texture_descriptor_short", &object);
                     return;
                 }
                 RenderTapeTextureDescriptor texture{};
                 std::memcpy(&texture, entry.descriptor.data(), sizeof(texture));
                 if (texture.levelCount == 0u) {
-                    renderTapeRegistry_->invalid = true;
+                    markRenderTapeInvalidOnce("texture_level_count_zero", &object);
                     return;
                 }
                 const auto tailLevels =
@@ -6871,7 +6940,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     entry.descriptor.size() !=
                         sizeof(RenderTapeTextureDescriptor) +
                             tailLevels * sizeof(D9CSurfaceDesc)) {
-                    renderTapeRegistry_->invalid = true;
+                    markRenderTapeInvalidOnce("texture_descriptor_size", &object);
                     return;
                 }
                 entry.contentCount = texture.levelCount;
@@ -6883,8 +6952,74 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             entry.content.resize(entry.contentCount);
             renderTapeRegistry_->objects.push_back(std::move(entry));
         } catch (...) {
-            renderTapeRegistry_->invalid = true;
+            markRenderTapeInvalidOnce("object_registration_exception", &object);
         }
+    }
+
+    bool admitRenderTapePresentOutput() noexcept {
+        if (!renderTapeRegistry_) {
+            return false;
+        }
+        auto *swapchain = dxmt9c_device_get_swap_chain(dev_, 0u);
+        if (!swapchain) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=present_output_swapchain_missing");
+            return false;
+        }
+        auto *surface = dxmt9c_swapchain_get_back_buffer(swapchain, 0u, 0u);
+        dxmt9c_swapchain_release(swapchain);
+        if (!surface) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=present_output_surface_missing");
+            return false;
+        }
+        D9CWireObjectIdentity identity{};
+        D9CSurfaceDesc descriptor{};
+        const bool identityOk =
+            dxmt9c_surface_get_wire_identity(surface, &identity) >= 0;
+        const bool descriptorOk = dxmt9c_surface_get_desc(surface, &descriptor) >= 0;
+        if (!identityOk || !descriptorOk ||
+            identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
+            identity.generation == 0u || identity.objectId == 0u) {
+            dxmt9c_surface_release(surface);
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=present_output_identity_or_descriptor_invalid");
+            return false;
+        }
+        const dxmt9::d3d9::pe::PeWireObjectRef object{
+            .identity = identity,
+            .object = surface,
+        };
+        auto *existing = findRenderTapeObject(object);
+        if (existing) {
+            existing->role = RenderTapeLiveObject::Role::PresentOutput;
+            existing->contentCount = 0u;
+            existing->content.clear();
+        } else {
+            registerRenderTapeObject(
+                object,
+                std::span<const std::byte>(
+                    reinterpret_cast<const std::byte *>(&descriptor),
+                    sizeof(descriptor)),
+                {}, RenderTapeLiveObject::Role::PresentOutput);
+        }
+        dxmt9c_surface_release(surface);
+        const auto *admitted = findRenderTapeObject(object);
+        if (!admitted || admitted->role != RenderTapeLiveObject::Role::PresentOutput) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=present_output_admission_failed "
+                "kind=%u generation=%u object_id=%llu",
+                identity.kind, identity.generation,
+                static_cast<unsigned long long>(identity.objectId));
+            return false;
+        }
+        dxmt9DeviceInfoLog(
+            "render_tape_capture present_output admitted kind=%u generation=%u "
+            "object_id=%llu descriptor=%zu initial_content=not_required",
+            identity.kind, identity.generation,
+            static_cast<unsigned long long>(identity.objectId),
+            sizeof(descriptor));
+        return true;
     }
 
     void unregisterRenderTapeObject(
@@ -6899,7 +7034,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 return renderTapeSameIdentity(entry.identity, object.identity);
             });
         if (it == renderTapeRegistry_->objects.end()) {
-            renderTapeRegistry_->invalid = true;
+            // Swap-chain-owned surfaces can be destroyed through the common
+            // child path even though they were never admitted to the
+            // value-owned capture registry. They are not part of the
+            // checkpoint closure and must not poison pre-arm capture state.
+            // Once the interval is active, however, an unknown destroy is a
+            // closure violation and remains fail-closed.
+            if (hasRenderTapeDeadObject(object)) {
+                markRenderTapeInvalidOnce("object_destroy_duplicate", &object);
+                if (IsRenderTapeCaptureActiveForChild()) {
+                    abortRenderTapeCapture("object_destroy_duplicate");
+                }
+            }
+            return;
+        }
+        try {
+            renderTapeRegistry_->knownDead.push_back(it->identity);
+        } catch (...) {
+            markRenderTapeInvalidOnce("object_destroy_tombstone_allocation",
+                                     &object);
             return;
         }
         renderTapeRegistry_->objects.erase(it);
@@ -6912,8 +7065,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         auto *entry = findRenderTapeObject(object);
         if (!entry || entry->contentCount == 0u ||
             subresource >= entry->content.size() || bytes.empty()) {
-            if (renderTapeRegistry_)
-                renderTapeRegistry_->invalid = true;
+            markRenderTapeInvalidOnce("mutation_unknown_or_empty", &object,
+                                      subresource);
             return false;
         }
         if (byteOffset == 0u) {
@@ -6964,14 +7117,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                            bytes.size() % desc.height == 0u;
             }
             if (!extentOk) {
-                renderTapeRegistry_->invalid = true;
+                markRenderTapeInvalidOnce("mutation_extent", &object,
+                                          subresource);
                 return false;
             }
             try {
                 entry->content[subresource].assign(bytes.begin(), bytes.end());
                 return true;
             } catch (...) {
-                renderTapeRegistry_->invalid = true;
+                markRenderTapeInvalidOnce("mutation_copy_exception", &object,
+                                          subresource);
                 return false;
             }
         }
@@ -6988,7 +7143,26 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     bool produceRenderTapeBootstrap(
         dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
-        if (!renderTapeRegistry_ || renderTapeRegistry_->invalid) {
+        if (!renderTapeRegistry_) {
+            dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
+            return false;
+        }
+        if (renderTapeRegistry_->invalid) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=registry_invalid "
+                "detail=%s kind=%u generation=%u object_id=%llu subresource=%u "
+                "objects=%zu",
+                renderTapeRegistry_->invalidReason
+                    ? renderTapeRegistry_->invalidReason
+                    : "unknown",
+                renderTapeRegistry_->invalidKind,
+                renderTapeRegistry_->invalidGeneration,
+                static_cast<unsigned long long>(renderTapeRegistry_->invalidObjectId),
+                renderTapeRegistry_->invalidSubresource,
+                renderTapeRegistry_->objects.size());
+            return false;
+        }
+        if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
             return false;
         }
         try {
@@ -6998,15 +7172,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 .payloadBytes = 1024u * 1024u,
                 .sealedBytes = 1024u * 1024u,
             });
-            if (!dxmt9::d3d9::pe::buildFullSnapshotState(
-                    peState_, peConsts_, peBindingView_, peSparseScratch_,
-                    peSparseHeader_, peSparseState_) ||
-                !dxmt9::d3d9::pe::appendApplyState(
-                    builder, peSparseHeader_.flags, peSparseState_)) {
+            const bool snapshotBuilt = dxmt9::d3d9::pe::buildFullSnapshotState(
+                peState_, peConsts_, peBindingView_, peSparseScratch_,
+                peSparseHeader_, peSparseState_);
+            const bool snapshotAppended =
+                snapshotBuilt && dxmt9::d3d9::pe::appendApplyState(
+                                     builder, peSparseHeader_.flags,
+                                     peSparseState_);
+            if (!snapshotBuilt || !snapshotAppended) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=bootstrap_state "
+                    "snapshot_built=%d snapshot_appended=%d",
+                    snapshotBuilt ? 1 : 0, snapshotAppended ? 1 : 0);
                 return false;
             }
             const auto overlay = builder.seal();
             if (!overlay.valid()) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=overlay_invalid");
                 return false;
             }
             seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
@@ -7025,7 +7208,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             for (const auto *object : objects) {
                 dxmt9::d3d9::RenderTapeCaptureObjectSeed objectSeed{};
                 objectSeed.identity = object->identity;
-                objectSeed.descriptorKind = object->identity.kind;
+                objectSeed.descriptorKind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::renderTapeDescriptorKindForObject(
+                        object->identity.kind));
                 objectSeed.descriptor = object->descriptor;
                 if (!object->immutablePayload.empty()) {
                     objectSeed.immutableBytes = object->immutablePayload.size();
@@ -7037,16 +7222,29 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 if (object->contentCount != 0u) {
                     if (std::any_of(object->content.begin(), object->content.end(),
                                     [](const auto &bytes) { return bytes.empty(); })) {
+                        dxmt9DeviceInfoLog(
+                            "render_tape_capture producer aborted reason=empty_content "
+                            "object_id=%llu",
+                            static_cast<unsigned long long>(object->identity.objectId));
                         return false;
                     }
                     for (std::uint32_t subresource = 0u;
                          subresource < object->content.size(); ++subresource) {
                         const auto &bytes = object->content[subresource];
                         if (bytes.empty()) {
+                            dxmt9DeviceInfoLog(
+                                "render_tape_capture producer aborted reason=empty_subresource "
+                                "object_id=%llu subresource=%u",
+                                static_cast<unsigned long long>(object->identity.objectId),
+                                subresource);
                             return false;
                         }
                         if (objectSeed.expectedContentBytes >
                             std::numeric_limits<std::uint64_t>::max() - bytes.size()) {
+                            dxmt9DeviceInfoLog(
+                                "render_tape_capture producer aborted reason=content_size_overflow "
+                                "object_id=%llu",
+                                static_cast<unsigned long long>(object->identity.objectId));
                             return false;
                         }
                         ++objectSeed.expectedContentCount;
@@ -7065,9 +7263,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     }
                 }
                 seed.objects.push_back(std::move(objectSeed));
+                if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
+                    seed.oracleAttachments.push_back({
+                        .identity = object->identity,
+                        .descriptorKind = static_cast<std::uint32_t>(
+                            dxmt9::d3d9::RenderTapeDescriptorKind::Surface),
+                    });
+                }
+            }
+            if (seed.oracleAttachments.size() != 1u) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=present_output_oracle_count "
+                    "count=%zu",
+                    seed.oracleAttachments.size());
+                return false;
             }
             return true;
         } catch (...) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture producer aborted reason=exception");
             return false;
         }
     }
@@ -7081,6 +7295,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                  dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
             return false;
         }
+        // Keep the first-abort marker sticky only for this arm/interval
+        // lifecycle; a retry must get independent attribution.
+        renderTapeAbortReason_ = nullptr;
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
             std::memory_order_acquire);
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -7088,6 +7305,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!publisher) {
             publisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
         }
+        dxmt9DeviceInfoLog(
+            "render_tape_capture arm enabled=1 producer=%d publisher=%d",
+            producer != nullptr ? 1 : 0, publisher != nullptr ? 1 : 0);
         if (!dxmt9PeRenderTapeCaptureCallbacksInstalled(
                 renderTapeCapture_->enabled(), producer, publisher)) {
             dxmt9DeviceInfoLog(
@@ -7106,31 +7326,63 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         } catch (...) {
             produced = false;
         }
+        auto armStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidInput;
+        auto intervalStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidState;
+        if (produced) {
+            armStatus = renderTapeCapture_->armWithBlobs(
+                seed.bootstrapOverlay, seed.blobs);
+            if (armStatus == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                intervalStatus = renderTapeCapture_->beginPresentInterval();
+            }
+        }
         if (!produced ||
-            renderTapeCapture_->armWithBlobs(seed.bootstrapOverlay, seed.blobs) !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted ||
-            renderTapeCapture_->beginPresentInterval() !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            renderTapeCapture_->abort();
+            armStatus != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted ||
+            intervalStatus != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture arm aborted produced=%d arm_status=%u "
+                "interval_status=%u objects=%zu mutations=%zu blobs=%zu",
+                produced ? 1 : 0, static_cast<unsigned>(armStatus),
+                static_cast<unsigned>(intervalStatus), seed.objects.size(),
+                seed.mutations.size(), seed.blobs.size());
+            abortRenderTapeCapture("arm_validation");
             return false;
         }
         for (const auto& object : seed.objects) {
-            if (renderTapeCapture_->objectDefine(
+            const auto status = renderTapeCapture_->objectDefine(
                     object.identity, object.descriptorKind, object.descriptor,
                     object.immutableBytes, object.immutableDigest,
                     object.expectedContentBytes,
-                    object.expectedContentCount) !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                renderTapeCapture_->abort();
+                    object.expectedContentCount);
+            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture seed_object_define status=%u kind=%u "
+                    "generation=%u object_id=%llu descriptor=%zu immutable=%llu "
+                    "expected_bytes=%llu expected_count=%u",
+                    static_cast<unsigned>(status), object.identity.kind,
+                    object.identity.generation,
+                    static_cast<unsigned long long>(object.identity.objectId),
+                    object.descriptor.size(),
+                    static_cast<unsigned long long>(object.immutableBytes),
+                    static_cast<unsigned long long>(object.expectedContentBytes),
+                    object.expectedContentCount);
+                abortRenderTapeCapture("seed_object_define");
                 return false;
             }
         }
         for (const auto& mutation : seed.mutations) {
-            if (renderTapeCapture_->resourceMutation(
+            const auto status = renderTapeCapture_->resourceMutation(
                     mutation.identity, mutation.kind, mutation.subresource,
-                    mutation.byteOffset, mutation.byteSize, mutation.digest) !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                renderTapeCapture_->abort();
+                    mutation.byteOffset, mutation.byteSize, mutation.digest);
+            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture seed_resource_mutation status=%u kind=%u "
+                    "generation=%u object_id=%llu subresource=%u bytes=%llu",
+                    static_cast<unsigned>(status), mutation.identity.kind,
+                    mutation.identity.generation,
+                    static_cast<unsigned long long>(mutation.identity.objectId),
+                    mutation.subresource,
+                    static_cast<unsigned long long>(mutation.byteSize));
+                abortRenderTapeCapture("seed_resource_mutation");
                 return false;
             }
         }
@@ -7157,7 +7409,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     d9cWireHandleValue(chunk.records))),
                 chunk.recordBytes));
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            renderTapeCapture_->abort();
+            dxmt9DeviceInfoLog(
+                "render_tape_capture command_chunk aborted status=%u records=%u "
+                "handles=%u",
+                static_cast<unsigned>(status), info.recordCount, info.handleCount);
+            abortRenderTapeCapture("command_chunk");
         }
     }
 
@@ -7173,7 +7429,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::RenderTapeDigestValidity::NotCaptured, {},
             std::as_bytes(std::span(renderTapeCaptureOracle_)));
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
-            renderTapeCapture_->abort();
+            dxmt9DeviceInfoLog(
+                "render_tape_capture completion aborted status=%u events=%u "
+                "chunks=%llu present_chunk_seen=%d oracle_bytes=%zu validation=%u",
+                static_cast<unsigned>(status), renderTapeCapture_->eventCount(),
+                static_cast<unsigned long long>(commandChunkCommits_),
+                renderTapeCapture_->presentChunkSeen() ? 1 : 0,
+                std::as_bytes(std::span(renderTapeCaptureOracle_)).size(),
+                static_cast<unsigned>(renderTapeCapture_->validationStatus()));
+            const auto &validation = renderTapeCapture_->validationResult();
+            dxmt9DeviceInfoLog(
+                "render_tape_capture validation_failure status=%u name=%s "
+                "failed_event_index=%u chunk_status=%u",
+                static_cast<unsigned>(validation.status),
+                dxmt9::d3d9::renderTapeValidationStatusName(validation.status),
+                validation.failedEventIndex,
+                static_cast<unsigned>(validation.chunkStatus));
+            abortRenderTapeCapture("completion");
             return;
         }
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -7181,8 +7453,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!publisher) {
             publisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
         }
-        if (!publisher || !publisher(renderTapeCapture_->publicationBundle())) {
-            renderTapeCapture_->abort();
+        const bool published =
+            publisher && publisher(renderTapeCapture_->publicationBundle());
+        dxmt9DeviceInfoLog("render_tape_capture publication published=%d",
+                           published ? 1 : 0);
+        if (!published) {
+            abortRenderTapeCapture("publication");
         }
     }
 
@@ -7235,7 +7511,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 } else if (renderTapeCapture_ &&
                            renderTapeCapture_->state() ==
                                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
-                    renderTapeCapture_->abort();
+                    abortRenderTapeCapture("bridge_commit");
                 }
                 return hr;
     }
@@ -8234,19 +8510,28 @@ public:
                 const auto status = renderTapeCapture_->registerBlobBytes(
                     immutablePayload, &digest);
                 if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                    renderTapeCapture_->abort();
+                    abortRenderTapeCapture("object_define_blob");
                     return;
                 }
                 bytes = immutablePayload.size();
             }
+            const auto descriptorKind =
+                dxmt9::d3d9::renderTapeDescriptorKindForObject(
+                    object.identity.kind);
+            if (descriptorKind ==
+                dxmt9::d3d9::RenderTapeDescriptorKind::Invalid) {
+                markRenderTapeInvalidOnce("descriptor_kind_invalid", &object);
+                abortRenderTapeCapture("object_define_descriptor_kind");
+                return;
+            }
             const auto status = renderTapeCapture_->objectDefine(
-                object.identity, object.identity.kind, descriptor, bytes,
-                digest);
+                object.identity, static_cast<std::uint32_t>(descriptorKind),
+                descriptor, bytes, digest);
             if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                renderTapeCapture_->abort();
+                abortRenderTapeCapture("object_define");
             }
         } catch (...) {
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("object_define_exception");
         }
     }
     bool IsRenderTapeCaptureActiveForChild() const noexcept override {
@@ -8258,22 +8543,31 @@ public:
         return renderTapeRegistry_.has_value();
     }
     void AbortRenderTapeCaptureForChild() noexcept override {
-        if (renderTapeRegistry_)
-            renderTapeRegistry_->invalid = true;
+        markRenderTapeInvalidOnce("child_abort");
         if (IsRenderTapeCaptureActiveForChild())
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("child_abort");
     }
     void NotifyRenderTapeObjectDestroyForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override {
+        const bool admitted = findRenderTapeObject(object) != nullptr;
         unregisterRenderTapeObject(object);
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
         }
-        if (renderTapeCapture_->objectDestroy(object.identity) !=
-            dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            renderTapeCapture_->abort();
+        if (!admitted) {
+            return;
+        }
+        const auto status = renderTapeCapture_->objectDestroy(object.identity);
+        dxmt9DeviceInfoLog(
+            "render_tape_capture object_destroy status=%u kind=%u generation=%u "
+            "object_id=%llu",
+            static_cast<unsigned>(status), object.identity.kind,
+            object.identity.generation,
+            static_cast<unsigned long long>(object.identity.objectId));
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            abortRenderTapeCapture("object_destroy");
         }
     }
     void NotifyRenderTapeResourceMutationForChild(
@@ -8291,10 +8585,10 @@ public:
             if (renderTapeCapture_->resourceMutationBytes(
                     object.identity, kind, subresource, byteOffset, bytes) !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                renderTapeCapture_->abort();
+                abortRenderTapeCapture("resource_mutation");
             }
         } catch (...) {
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("resource_mutation_exception");
         }
     }
     void NotifyRenderTapeOrderedControlForChild(
@@ -8309,7 +8603,7 @@ public:
         recorded.completionOrdinal = ++renderTapeCompletionOrdinal_;
         if (renderTapeCapture_->orderedControl(recorded, payload) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("ordered_control");
         }
     }
     void notifyRenderTapeCreatedObject(
@@ -9033,7 +9327,7 @@ public:
                     .resultCode = static_cast<std::int32_t>(hr),
                     .controlBytes = sizeof(payload)},
                 std::as_bytes(std::span(&payload, 1u)));
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("reset");
         }
         return hr;
     }
@@ -9057,7 +9351,7 @@ public:
         // D3DERR_DEVICELOST while the device awaits Reset.
         if (deviceNotReset_) {
             if (renderTapeCapture_)
-                renderTapeCapture_->abort();
+                abortRenderTapeCapture("device_lost");
             return D3DERR_DEVICELOST;
         }
         dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
@@ -12087,7 +12381,7 @@ public:
         // T2 device-lost gate.
         if (deviceNotReset_) {
             if (renderTapeCapture_)
-                renderTapeCapture_->abort();
+                abortRenderTapeCapture("device_lost");
             return D3DERR_DEVICELOST;
         }
         const bool renderTapeCaptureWasActive =
@@ -12290,7 +12584,7 @@ public:
                     .resultCode = static_cast<std::int32_t>(hr),
                     .controlBytes = sizeof(payload)},
                 std::as_bytes(std::span(&payload, 1u)));
-            renderTapeCapture_->abort();
+            abortRenderTapeCapture("reset_ex");
         }
         return hr;
     }

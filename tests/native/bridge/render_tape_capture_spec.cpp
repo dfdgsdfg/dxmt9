@@ -158,7 +158,10 @@ RenderTapeOrderedControlHeader flushControl() {
 }
 
 RenderTapeOracleAttachment oracle() {
-  return RenderTapeOracleAttachment{.identity = kSurface, .descriptorKind = 1u};
+  return RenderTapeOracleAttachment{
+      .identity = kSurface,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface)};
 }
 
 void testCaptureOffPreservesBytes() {
@@ -170,6 +173,57 @@ void testCaptureOffPreservesBytes() {
   check(session.state() == RenderTapeCaptureState::Disabled,
         "capture-off state remains disabled");
   check(chunk == original, "capture-off leaves canonical bytes unchanged");
+}
+
+void testDescriptorKindAxisTruthTable() {
+  constexpr std::array identityKinds{
+      D9C_CHUNK_HANDLE_KIND_TEXTURE, D9C_CHUNK_HANDLE_KIND_SURFACE,
+      D9C_CHUNK_HANDLE_KIND_BUFFER, D9C_CHUNK_HANDLE_KIND_SHADER,
+      D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, D9C_CHUNK_HANDLE_KIND_QUERY};
+  constexpr std::array expectedDescriptorKinds{
+      RenderTapeDescriptorKind::Texture, RenderTapeDescriptorKind::Surface,
+      RenderTapeDescriptorKind::Buffer, RenderTapeDescriptorKind::Shader,
+      RenderTapeDescriptorKind::VertexDeclaration,
+      RenderTapeDescriptorKind::Query};
+  constexpr std::array<std::byte, 8u> descriptor{};
+  for (std::size_t i = 0u; i < identityKinds.size(); ++i) {
+    const D9CWireObjectIdentity identity{
+        .kind = identityKinds[i], .generation = 1u,
+        .objectId = static_cast<std::uint64_t>(100u + i)};
+    check(renderTapeDescriptorKindForObject(identity.kind) ==
+              expectedDescriptorKinds[i],
+          "identity kind maps to its stable descriptor schema tag");
+    RenderTapeCaptureSession session(true);
+    check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() ==
+                  RenderTapeCaptureStatus::Accepted,
+          "descriptor-kind truth-table fixture starts");
+    check(session.objectDefine(
+              identity, static_cast<std::uint32_t>(expectedDescriptorKinds[i]),
+              descriptor, 0u, {}) == RenderTapeCaptureStatus::Accepted,
+          "all object categories accept their non-zero descriptor schema tag");
+  }
+  check(renderTapeDescriptorKindForObject(99u) ==
+            RenderTapeDescriptorKind::Invalid,
+        "unknown identity kinds map to the invalid descriptor schema tag");
+}
+
+void testKindZeroIntervalDefineUsesNonZeroDescriptorTag() {
+  constexpr D9CWireObjectIdentity kindZero{
+      .kind = 0u, .generation = 7u, .objectId = 700u};
+  constexpr std::array<std::byte, 8u> descriptor{};
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "kind-zero interval define fixture starts");
+  const auto descriptorKind = renderTapeDescriptorKindForObject(kindZero.kind);
+  check(descriptorKind != RenderTapeDescriptorKind::Invalid &&
+            static_cast<std::uint32_t>(descriptorKind) != 0u,
+        "kind-zero identity maps to a non-zero descriptor tag");
+  check(session.objectDefine(
+            kindZero, static_cast<std::uint32_t>(descriptorKind), descriptor,
+            0u, {}) == RenderTapeCaptureStatus::Accepted,
+        "kind-zero interval ObjectDefine accepts the mapped descriptor tag");
 }
 
 std::vector<std::byte> recorderPresentChunk();
@@ -255,7 +309,10 @@ void writeProductionFixture(const std::filesystem::path& directory) {
   check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "production fixture starts one Present interval");
   constexpr std::array<std::byte, 8u> descriptor{};
-  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}, 4u, 1u) ==
+  check(session.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 4u, 1u) ==
             RenderTapeCaptureStatus::Accepted,
         "production fixture journals ObjectDefine");
   check(session.resourceMutationBytes(
@@ -329,7 +386,10 @@ void testCompletePresentPublishesExactlyOneTape() {
   check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "complete capture starts one interval");
   constexpr std::array<std::byte, 8u> descriptor{};
-  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}, 4u, 1u) ==
+  check(session.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 4u, 1u) ==
             RenderTapeCaptureStatus::Accepted,
         "object definition is journaled");
   const auto mutationDigestValue = digest();
@@ -364,6 +424,63 @@ void testCompletePresentPublishesExactlyOneTape() {
         "second Present cannot publish another interval");
 }
 
+void testValidationFailurePreservesEventAndChunkLocation() {
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted,
+        "validation-location fixture arms");
+  check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "validation-location fixture starts");
+  const auto present = presentChunk();
+  check(session.commandChunk(
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                 .recordCount = 1u, .handleCount = 0u},
+            present) == RenderTapeCaptureStatus::Accepted,
+        "validation-location fixture records Present chunk");
+  check(session.completePresent(
+            1u, 1u, RenderTapeDigestValidity::NotCaptured, {}) ==
+            RenderTapeCaptureStatus::ValidationFailed,
+        "missing oracle attachment fails at final validation");
+  const auto &validation = session.validationResult();
+  check(validation.status == RenderTapeValidationStatus::InvalidPresentComplete &&
+            validation.failedEventIndex == 2u &&
+            validation.chunkStatus == CommandChunkValidationStatus::Valid,
+        "validation failure preserves final event index and chunk status");
+}
+
+void testPresentCompleteOracleTargetTruthTable() {
+  constexpr D9CWireObjectIdentity buffer{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 99u};
+  constexpr std::array<std::byte, 8u> descriptor{};
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "oracle-target truth-table fixture starts");
+  check(session.objectDefine(buffer,
+                             static_cast<std::uint32_t>(
+                                 RenderTapeDescriptorKind::Buffer),
+                             descriptor, 0u, {}) ==
+            RenderTapeCaptureStatus::Accepted,
+        "oracle-target truth-table admits a live buffer control case");
+  const auto present = presentChunk();
+  check(session.commandChunk(
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                 .recordCount = 1u, .handleCount = 0u},
+            present) == RenderTapeCaptureStatus::Accepted,
+        "oracle-target truth-table records Present");
+  const RenderTapeOracleAttachment wrongTarget{
+      .identity = buffer,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Buffer)};
+  check(session.completePresent(
+            1u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+            std::as_bytes(std::span(&wrongTarget, 1u))) ==
+            RenderTapeCaptureStatus::ValidationFailed,
+        "PresentComplete rejects a non-surface oracle target");
+  check(session.validationResult().status ==
+            RenderTapeValidationStatus::InvalidPresentComplete,
+        "oracle-target rejection is attributed to PresentComplete");
+}
+
 void testObjectExpectedContentContractTruthTable() {
   struct ExtentCase {
     std::uint64_t bytes;
@@ -383,7 +500,10 @@ void testObjectExpectedContentContractTruthTable() {
               session.beginPresentInterval() ==
                   RenderTapeCaptureStatus::Accepted,
           "expected-content truth-table fixture starts");
-    check(session.objectDefine(kSurface, 1u, descriptor, 0u, {},
+    check(session.objectDefine(
+              kSurface,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              descriptor, 0u, {},
                                testCase.bytes, testCase.count) ==
               testCase.expected,
           "ObjectDefine expected extent/count pair truth table is stable");
@@ -398,12 +518,19 @@ void testFailureBeforePublishAndBoundedBackpressure() {
   check(bounded.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "bounded capture starts");
   constexpr std::array<std::byte, 8u> descriptor{};
-  check(bounded.objectDefine(kSurface, 1u, descriptor, 0u, {}) ==
+  check(bounded.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}) ==
             RenderTapeCaptureStatus::CapacityExceeded,
         "bounded owner rejects before growing the journal");
   check(bounded.state() == RenderTapeCaptureState::Aborted,
         "backpressure aborts before publishing a partial artifact");
   check(bounded.sealedArtifact().empty(), "backpressure has no artifact");
+  check(bounded.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            bounded.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "an aborted capture lifecycle can be re-armed independently");
 
   RenderTapeCaptureSession failed(true);
   check(failed.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted,
@@ -495,7 +622,10 @@ void testObjectLifetimeAndTerminalControls() {
         "lifetime fixture arms");
   check(lifetime.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "lifetime fixture starts");
-  check(lifetime.objectDefine(kSurface, 1u, descriptor, 0u, {}) ==
+  check(lifetime.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}) ==
             RenderTapeCaptureStatus::Accepted,
         "lifetime definition succeeds");
   check(lifetime.objectDestroy(kSurface) == RenderTapeCaptureStatus::Accepted,
@@ -562,8 +692,12 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_capture_spec [--write-production-fixture dir]");
     testCaptureOffPreservesBytes();
+    testDescriptorKindAxisTruthTable();
+    testKindZeroIntervalDefineUsesNonZeroDescriptorTag();
     testProductionHookGateTruthTable();
     testCompletePresentPublishesExactlyOneTape();
+    testValidationFailurePreservesEventAndChunkLocation();
+    testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();

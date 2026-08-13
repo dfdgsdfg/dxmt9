@@ -693,8 +693,22 @@ block-compressed layouts, cube/volume lock paths, missing initial bytes, and
 unavailable descriptor or bytecode data fail closed before publication.
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. This remains a capture seam
-rather than complete frame evidence: provider replay, offscreen Metal oracle
-execution, and wild-captured identity evidence remain open.
+rather than complete frame evidence: provider replay and offscreen Metal oracle
+execution remain open. One bounded production capture has established the
+structural wild identity described in the experiments gap.
+
+At the arm boundary, the implicit swap-chain backbuffer is lazily admitted as
+the stable PE wire identity with `PresentOutput` role and
+`initial-content-not-required` disposition. It is the output produced by the
+captured interval, not an arbitrary live buffer or a CPU-seeded input. Proof
+that a selected interval does not load prior backbuffer contents is not yet
+implemented. Structurally valid captures may still be published with
+`reference_replay=false` and `output_oracle=false`, but provider replay and
+promotion must fail closed for intervals that require such a load until that
+proof exists. The direct `PresentEx` path
+currently calls the provider without emitting the canonical D9C `PRESENT`
+record, so `presentChunkSeen=false` and frame completion fail closed; PresentEx
+event support is a separate gap from canonical `Present` capture evidence.
 
 The capture owner also bounds the total owned blob bytes (64 MiB by default),
 with overflow-safe admission before hashing or copying. Exact duplicate blobs
@@ -702,7 +716,10 @@ are admitted without a second charge, and failed admission or publication
 leaves the owned-byte count unchanged.
 
 Production publication is enabled only when `DXMT9_RENDER_TAPE_OUTPUT_ROOT`
-names an explicit safe absolute directory. The PE fallback resolver rejects
+names an explicit safe **PE-visible absolute** directory. Under Wine callers
+must pass the Windows drive form (for example `Z:\\Users\\...`) after
+resolving the host directory; a host-only `/private/...` or `/tmp/...` string
+is not a PE absolute root. The PE fallback resolver rejects
 relative or traversal roots, embedded NULs, symlink components, and completed
 frame-name collisions. It writes `events.bin`, digest-named `blobs/`, and a
 minimal provenance/scope manifest in same-filesystem staging, flushes and

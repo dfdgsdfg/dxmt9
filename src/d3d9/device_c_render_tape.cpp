@@ -574,7 +574,9 @@ validateRenderTape(std::span<const std::byte> blob,
       }
       RenderTapeObjectDefineHeader fixed{};
       if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
-          fixed.descriptorKind == 0u || fixed.descriptorBytes == 0u ||
+          fixed.descriptorKind != static_cast<std::uint32_t>(
+              renderTapeDescriptorKindForObject(fixed.identity.kind)) ||
+          fixed.descriptorBytes == 0u ||
           fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
           ((fixed.expectedContentBytes == 0u) !=
            (fixed.expectedContentCount == 0u)) ||
@@ -919,7 +921,10 @@ validateRenderTape(std::span<const std::byte> blob,
                                      a * sizeof(RenderTapeOracleAttachment),
                   attachment) ||
             !validIdentity(attachment.identity) ||
-            attachment.descriptorKind == 0u || attachment.reserved0 != 0u) {
+            attachment.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
+            attachment.descriptorKind !=
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface) ||
+            attachment.reserved0 != 0u) {
           return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
         }
         const auto live = findLiveSlot(scratch.liveObjects, attachment.identity);

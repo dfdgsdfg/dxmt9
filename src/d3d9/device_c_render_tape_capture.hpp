@@ -159,8 +159,12 @@ public:
     return publicationBundle_;
   }
   bool enabled() const noexcept { return enabled_; }
+  bool presentChunkSeen() const noexcept { return presentChunkSeen_; }
   RenderTapeValidationStatus validationStatus() const noexcept {
     return validationStatus_;
+  }
+  const RenderTapeValidationResult& validationResult() const noexcept {
+    return validationResult_;
   }
 
   static RenderTapeDigest sha256(std::span<const std::byte> bytes);
@@ -190,6 +194,8 @@ private:
   bool presentChunkSeen_ = false;
   RenderTapeValidationStatus validationStatus_ =
       RenderTapeValidationStatus::Valid;
+  RenderTapeValidationResult validationResult_{
+      .status = RenderTapeValidationStatus::Valid};
   RenderTapeBlobCatalogue catalogue_{};
   std::vector<RenderTapePublishedBlob> publishedBlobs_{};
   std::vector<ObjectSlot> objects_{};

@@ -24,6 +24,40 @@ enum class RenderTapeDigestValidity : std::uint32_t {
   Sha256 = 1u,
 };
 
+// Object identity kinds name handle-lifetime domains and are not descriptor
+// schema tags. Keep this separate, non-zero vocabulary stable: descriptor
+// kind 0 is reserved by the event validator as invalid, while the D3D9
+// texture identity kind is legitimately 0.
+enum class RenderTapeDescriptorKind : std::uint32_t {
+  Invalid = 0u,
+  Texture = 1u,
+  Surface = 2u,
+  Buffer = 3u,
+  Shader = 4u,
+  VertexDeclaration = 5u,
+  Query = 6u,
+};
+
+constexpr RenderTapeDescriptorKind renderTapeDescriptorKindForObject(
+    std::uint32_t identityKind) noexcept {
+  switch (identityKind) {
+  case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+    return RenderTapeDescriptorKind::Texture;
+  case D9C_CHUNK_HANDLE_KIND_SURFACE:
+    return RenderTapeDescriptorKind::Surface;
+  case D9C_CHUNK_HANDLE_KIND_BUFFER:
+    return RenderTapeDescriptorKind::Buffer;
+  case D9C_CHUNK_HANDLE_KIND_SHADER:
+    return RenderTapeDescriptorKind::Shader;
+  case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+    return RenderTapeDescriptorKind::VertexDeclaration;
+  case D9C_CHUNK_HANDLE_KIND_QUERY:
+    return RenderTapeDescriptorKind::Query;
+  default:
+    return RenderTapeDescriptorKind::Invalid;
+  }
+}
+
 // Persistent device-state categories carried by a BootstrapState. These map
 // 1:1 to the canonical section kinds (D9C_COMMAND_CHUNK_SECTION_* 1..23) that
 // define a backend-visible draw-delta state category. The two trailing section
