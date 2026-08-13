@@ -1346,6 +1346,74 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
   return hr;
 }
 
+int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+    D9CDevice* d, std::span<const std::byte> bytes,
+    const dxmt9::d3d9::CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects) noexcept {
+  if (!d || bytes.empty() ||
+      envelope.version != D9C_COMMAND_CHUNK_VERSION) {
+    return commitChunkFail("provider-replay-bad-input");
+  }
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!dxmt9::d3d9::importPrevalidatedCommandChunk(
+          bytes, envelope, imported) ||
+      resolvedObjects.size() != imported.handles.size()) {
+    return commitChunkFail("provider-replay-import");
+  }
+
+  dxmt9::d3d9::RawCommandChunk raw;
+  raw.recordBlob.assign(
+      reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
+      reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
+  raw.wireVersion = envelope.version;
+  raw.recordCount = envelope.recordCount;
+  raw.recordBytes = static_cast<std::uint32_t>(bytes.size());
+  raw.handleCount = envelope.handleCount;
+  raw.preflightValidated = true;
+  raw.resolvedObjects.assign(resolvedObjects.begin(), resolvedObjects.end());
+  for (std::size_t index = 0; index < imported.handles.size(); ++index) {
+    const auto kind = imported.handles[index].kind;
+    void* object = resolvedObjects[index];
+    if (!object) {
+      dxmt9::d3d9::releaseRetainedWrappers(raw);
+      return commitChunkFail("provider-replay-null-object",
+                             static_cast<std::uint32_t>(index), kind);
+    }
+    retainWrapper(kind, object);
+    raw.retainedWrappers.push_back({.kind = kind, .ptr = object});
+  }
+  raw.hasPresent = std::any_of(
+      imported.records.begin(), imported.records.end(),
+      [](const D9CCommandChunkWireRecordHeader& record) {
+        return record.type == D9C_COMMAND_RECORD_PRESENT;
+      });
+
+  if (!persistResolvedResourcesAndCaptureBindings(d, raw, imported)) {
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    return commitChunkFail("provider-replay-resource-capture");
+  }
+  if (!dxmt9::d3d9::drainDeferredReplay(d, "provider-render-tape")) {
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    return commitChunkFail("provider-replay-drain");
+  }
+  if (!d->replayDrainLedger.publishInline(raw)) {
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    return commitChunkFail("provider-replay-ledger");
+  }
+
+  const int32_t hr = replayPlannedChunk(
+      d, raw, /*pacedByPresentOrdinal=*/false,
+      /*allowDirectArena=*/false);
+  if (!failed(hr)) {
+    d->replayDrainLedger.publishReplayed(raw);
+  } else {
+    d->replayDrainLedger.poison();
+  }
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  return hr;
+}
+
 extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
   // Boundary B2 — wall-clock latency of one commit_chunk bridge call.
   // This includes importer validation, handle/resource marking, record

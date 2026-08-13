@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+namespace dxmt9 {
+class PresentOutput;
+}
+
 namespace dxmt9::core {
 
 template <std::size_t MaxEntries>
@@ -2139,8 +2143,14 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   // Presenter* (and any pending drawable token).
   PresentId presentId() const noexcept { return presentId_; }
 
+  // Installs a typed cold-path output target for provider identity replay.
+  // Existing queue binding and Presenter encode semantics remain in use.
+  bool installPresentOutput(std::shared_ptr<dxmt9::PresentOutput> output);
+  void restoreWindowPresenter();
+
  private:
   void ensurePresenter();
+  void unregisterPresenter();
 
   std::weak_ptr<Device> owner_;
   SwapChainHandle handle_{};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_chunk_validate.hpp"
+#include "device_c_render_tape_descriptors.hpp"
 
 #include <array>
 #include <cstddef>

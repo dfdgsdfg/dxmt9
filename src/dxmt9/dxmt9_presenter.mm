@@ -207,6 +207,15 @@ WMT::MetalDrawable PresentDrawableToken::waitDrawable() {
   return WMT::MetalDrawable{drawable_.handle};
 }
 
+PresentOutputTarget OffscreenPresentOutput::acquire(std::uint64_t) noexcept {
+  return target_;
+}
+
+void OffscreenPresentOutput::schedule(WMT::CommandBuffer&,
+                                      std::uint64_t) noexcept {
+  scheduledCount_.fetch_add(1u, std::memory_order_release);
+}
+
 Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath)
@@ -215,6 +224,12 @@ Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
       layer_(acquisition_.layerHandle),
       policy_(resolveAcquirePolicyFromEnv()),
       archive_(archive), archivePath_(archivePath) {}
+
+Presenter::Presenter(WMT::Device device, std::shared_ptr<PresentOutput> output,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath)
+    : device_(device), output_(std::move(output)),
+      policy_(AcquirePolicy::Sync), archive_(archive), archivePath_(archivePath) {}
 
 Presenter::~Presenter() {
   {
@@ -513,7 +528,7 @@ void Presenter::runPreAcquireLoop() {
 Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuffer,
                                                    const EncodeParams& params) {
   EncodeResult result{};
-  if (!layer_ || !commandBuffer) {
+  if ((!layer_ && !output_) || !commandBuffer) {
     return result;
   }
 
@@ -530,17 +545,19 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   // (runAsyncAcquireLoop) or the queue-side sync-on-submit acquire.
   // The Sync and PreAcquire policies have configureLayer as the only
   // caller and don't need the lock.
-  switch (policy_) {
-    case AcquirePolicy::SyncOnSubmit:
-    case AcquirePolicy::Async: {
-      std::lock_guard lock(stateMutex_);
-      configureLayer(acquireParams);
-      break;
+  if (!output_) {
+    switch (policy_) {
+      case AcquirePolicy::SyncOnSubmit:
+      case AcquirePolicy::Async: {
+        std::lock_guard lock(stateMutex_);
+        configureLayer(acquireParams);
+        break;
+      }
+      case AcquirePolicy::Sync:
+      case AcquirePolicy::PreAcquire:
+        configureLayer(acquireParams);
+        break;
     }
-    case AcquirePolicy::Sync:
-    case AcquirePolicy::PreAcquire:
-      configureLayer(acquireParams);
-      break;
   }
 
   // G2-B Option A — non-identity ramp opts into the gamma-apply PSO and
@@ -573,7 +590,15 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
   const auto acquireStarted = std::chrono::steady_clock::now();
   WMT::MetalDrawable drawable{};
-  if (params.drawableToken) {
+  PresentOutputTarget outputTarget{};
+  if (output_) {
+    outputTarget = output_->acquire(params.seqId);
+    if (!outputTarget.texture) {
+      presentimpl::traceEvent("presentOutput.nil", params.seqId, hwnd_);
+      return result;
+    }
+    result.acquired = true;
+  } else if (params.drawableToken) {
     const auto tokenWaitStarted = std::chrono::steady_clock::now();
     drawable = params.drawableToken->waitDrawable();
     const auto tokenWaitElapsed = std::chrono::steady_clock::now() - tokenWaitStarted;
@@ -592,18 +617,20 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     return result;
   }
   auto prefetchedDrawable = WMT::Reference<WMT::MetalDrawable>{};
-  if (!drawable) {
-    prefetchedDrawable = takeOrWaitForPrefetchedDrawable();
-  }
-  if (!drawable && prefetchedDrawable) {
-    perf::countPresentPreAcquireHit();
-    drawable = WMT::MetalDrawable{prefetchedDrawable.handle};
-  } else {
-    if (!drawable && policy_ == AcquirePolicy::PreAcquire) {
-      perf::countPresentPreAcquireMiss();
-    }
+  if (!output_) {
     if (!drawable) {
-      drawable = layer_.nextDrawable();
+      prefetchedDrawable = takeOrWaitForPrefetchedDrawable();
+    }
+    if (!drawable && prefetchedDrawable) {
+      perf::countPresentPreAcquireHit();
+      drawable = WMT::MetalDrawable{prefetchedDrawable.handle};
+    } else {
+      if (!drawable && policy_ == AcquirePolicy::PreAcquire) {
+        perf::countPresentPreAcquireMiss();
+      }
+      if (!drawable) {
+        drawable = layer_.nextDrawable();
+      }
     }
   }
   const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
@@ -611,16 +638,16 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     perf::countPresentAcquireWait(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
   }
-  if (!drawable) {
+  if (!output_ && !drawable) {
     presentimpl::traceEvent("nextDrawable.nil", params.seqId, hwnd_);
     return result;
   }
   result.acquired = true;
   presentimpl::traceEvent("nextDrawable.ok", params.seqId, hwnd_);
 
-  DXMT_ASSERT(drawable &&
-              "Presenter::encodeCommands reached Metal encode with null drawable handle");
-  auto drawableTex = drawable.texture();
+  DXMT_ASSERT((outputTarget.texture || drawable) &&
+              "Presenter::encodeCommands reached Metal encode with null target");
+  auto drawableTex = output_ ? outputTarget.texture : drawable.texture();
   WMTRenderPassInfo passInfo{};
   passInfo.colors[0].texture = drawableTex.handle;
   passInfo.colors[0].load_action = WMTLoadActionDontCare;
@@ -648,8 +675,8 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     encoder.setFragmentBytes(params.gammaRamp, sizeof(core::GammaRamp), 0);
   }
 
-  const auto drawableWidth = drawableTex.width();
-  const auto drawableHeight = drawableTex.height();
+  const auto drawableWidth = output_ ? outputTarget.width : drawableTex.width();
+  const auto drawableHeight = output_ ? outputTarget.height : drawableTex.height();
   const auto fallbackWidth =
       static_cast<std::uint64_t>(std::max<uint32_t>(1u, params.width));
   const auto fallbackHeight =
@@ -664,7 +691,9 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.endEncoding();
   perf::countPresentPass(params.width, params.height, targetWidth, targetHeight);
   perf::countPresentSchedule(params.displaySyncEnabled, params.minimumPresentDuration);
-  if (params.minimumPresentDuration > 0.0) {
+  if (output_) {
+    output_->schedule(commandBuffer, params.seqId);
+  } else if (params.minimumPresentDuration > 0.0) {
     commandBuffer.presentDrawableAfterMinimumDuration(drawable, params.minimumPresentDuration);
   } else {
     commandBuffer.presentDrawable(drawable);

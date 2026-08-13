@@ -14,6 +14,7 @@
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <future>
@@ -27,6 +28,41 @@
 namespace dxmt9 {
 
 class Device;
+
+struct PresentOutputTarget {
+  WMT::Texture texture{};
+  std::uint64_t width = 0u;
+  std::uint64_t height = 0u;
+};
+
+// Cold replay/testing seam. Implementations replace only drawable acquisition
+// and presentation scheduling; Presenter keeps the production PSO, render
+// pass, source texture, queue command buffer and completion semantics.
+class PresentOutput {
+ public:
+  virtual ~PresentOutput() = default;
+  virtual PresentOutputTarget acquire(std::uint64_t seqId) noexcept = 0;
+  virtual void schedule(WMT::CommandBuffer& commandBuffer,
+                        std::uint64_t seqId) noexcept = 0;
+};
+
+class OffscreenPresentOutput final : public PresentOutput {
+ public:
+  OffscreenPresentOutput(WMT::Texture texture, std::uint64_t width,
+                         std::uint64_t height) noexcept
+      : target_{.texture = texture, .width = width, .height = height} {}
+
+  PresentOutputTarget acquire(std::uint64_t seqId) noexcept override;
+  void schedule(WMT::CommandBuffer& commandBuffer,
+                std::uint64_t seqId) noexcept override;
+  std::uint64_t scheduledCount() const noexcept {
+    return scheduledCount_.load(std::memory_order_acquire);
+  }
+
+ private:
+  PresentOutputTarget target_{};
+  std::atomic<std::uint64_t> scheduledCount_{0u};
+};
 
 inline constexpr uint32_t kDefaultMetalDrawableCount = 3;
 
@@ -201,12 +237,15 @@ class Presenter {
   Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
             WMT::Reference<WMT::BinaryArchive>* archive,
             const std::string* archivePath);
+  Presenter(WMT::Device device, std::shared_ptr<PresentOutput> output,
+            WMT::Reference<WMT::BinaryArchive>* archive,
+            const std::string* archivePath);
   ~Presenter();
 
   Presenter(const Presenter&) = delete;
   Presenter& operator=(const Presenter&) = delete;
 
-  bool valid() const noexcept { return acquisition_.valid(); }
+  bool valid() const noexcept { return output_ || acquisition_.valid(); }
   uint64_t hwnd() const noexcept { return hwnd_; }
   WMT::MetalLayer layer() const noexcept { return layer_; }
   AcquirePolicy acquirePolicy() const noexcept { return policy_; }
@@ -235,6 +274,7 @@ class Presenter {
   uint64_t hwnd_ = 0;
   presentimpl::LayerAcquisition acquisition_{};
   WMT::MetalLayer layer_{};
+  std::shared_ptr<PresentOutput> output_{};
   // Acquire policy is resolved once at construction from env (process-
   // wide cache). Branch sites read this directly instead of going
   // through scattered env-parsing lambdas.

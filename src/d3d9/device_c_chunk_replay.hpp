@@ -7,6 +7,8 @@
 #include <limits>
 #include <span>
 
+struct D9CDevice;
+
 namespace dxmt9::d3d9 {
 
 inline constexpr std::int32_t kCommandChunkDecodeFailure =
@@ -121,5 +123,14 @@ bool isNonDrawRecord(std::uint32_t type) noexcept;
 std::int32_t replayNonDrawRecord(
     const ResolvedRecordView& record,
     NonDrawReplaySink& sink) noexcept;
+
+// Provider-replay entry for a canonical chunk whose recorded handle table has
+// already been resolved to replay-owned wrappers. The canonical bytes are
+// imported unchanged and dispatched by DeviceReplaySink; this does not add a
+// second record switch or consult the live capture registry.
+std::int32_t replayPrevalidatedResolvedCommandChunk(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects) noexcept;
 
 }  // namespace dxmt9::d3d9

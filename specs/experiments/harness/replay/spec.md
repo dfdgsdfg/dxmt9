@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, and opt-in Present-boundary chunk hook exist; provider replay and the output oracle remain open | Production dxmt9 importer, queue, lifetime, and provider with an offscreen Present adapter |
+| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, and a production-provider identity slice for one full-surface `Clear` → `Present` interval exist | Expand the fail-closed grammar beyond the first identity slice and add artifact-host/reducer workflows |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -814,6 +814,29 @@ ordered readback. The adapter replaces only drawable acquisition/presentation;
 it may not bypass pass actions, resource lifetime, completion, or command queue
 semantics. A windowed mode and `.gputrace` capture of the replayer are useful
 diagnostics but are downstream options, not the reference oracle.
+
+The first production slice is implemented by
+`device_c_render_tape_provider.*`. It admits exactly one uncompressed,
+single-sample 2D colour output, a complete bootstrap, generation-qualified
+surface/buffer/2D-texture definitions and complete initial seeds, followed by
+exactly one full-surface `Clear` and one identity `Present`. Admission validates
+the whole tape and the actual blob digests before creating provider objects.
+Recorded identities resolve to replay-owned wrappers in a side registry; the
+canonical chunk bytes are passed unchanged to
+`replayPrevalidatedResolvedCommandChunk`, which retains the wrappers and uses
+the existing `DeviceReplaySink`, replay planner, drain ledger, resource marks,
+queue, and completion paths. `OffscreenPresentOutput` replaces only drawable
+acquisition/scheduling in `Presenter`; the existing present PSO/pass and
+production readback remain shared. Result values report validity, grammar
+coverage, and blob/object/ordinal conservation separately and make no timing or
+benchmark claim. Queries, readback/control events, reset/device-lost,
+`PresentEx` flags, partial rectangles/seeds, multiple/depth/MSAA/compressed
+outputs, and all other records or descriptor families fail before effects.
+
+This is a provider API plus native evidence seam, not a new structural CLI.
+The existing `validate`/`inspect` commands remain structural-only. A bounded
+captured-bundle run is still required before promoting the slice from native
+identity evidence to wild artifact evidence.
 
 Replay has three modes:
 

@@ -266,6 +266,10 @@ SwapChain::~SwapChain() {
   // invalidates any in-flight PresentId so a late submitPresent / encode
   // sees a nullptr and skips the present instead of dereferencing
   // freed memory.
+  unregisterPresenter();
+}
+
+void SwapChain::unregisterPresenter() {
   if (presentId_.value != 0) {
     if (auto owner = owner_.lock()) {
       if (const auto& upper = owner->upperDevice()) {
@@ -274,6 +278,7 @@ SwapChain::~SwapChain() {
     }
     presentId_ = {};
   }
+  presenter_.reset();
 }
 
 void SwapChain::ensurePresenter() {
@@ -301,6 +306,33 @@ void SwapChain::ensurePresenter() {
     return;
   }
   presentId_ = upper->queue().registerPresenter(presenter_.get());
+}
+
+bool SwapChain::installPresentOutput(
+    std::shared_ptr<dxmt9::PresentOutput> output) {
+  auto owner = owner_.lock();
+  if (!owner || !output) {
+    return false;
+  }
+  const auto& upper = owner->upperDevice();
+  if (!upper || !upper->wmtDevice()) {
+    return false;
+  }
+  unregisterPresenter();
+  presenter_ = std::make_unique<dxmt9::Presenter>(
+      upper->wmtDevice(), std::move(output), upper->shaderArchive(),
+      upper->shaderArchivePath());
+  if (!presenter_->valid()) {
+    presenter_.reset();
+    return false;
+  }
+  presentId_ = upper->queue().registerPresenter(presenter_.get());
+  return presentId_.value != 0u;
+}
+
+void SwapChain::restoreWindowPresenter() {
+  unregisterPresenter();
+  ensurePresenter();
 }
 
 bool SwapChain::displaySyncEnabled() const noexcept {

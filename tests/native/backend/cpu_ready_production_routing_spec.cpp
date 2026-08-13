@@ -1,5 +1,6 @@
 #include "device_c_common.hpp"
 #include "device_c_cpu_ready_plan.hpp"
+#include "device_c_chunk_replay.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
@@ -473,6 +474,20 @@ void directRawPublishesAndCompletesArenaSource() {
         "completed Direct source must release Tape residency");
 }
 
+void providerResolvedEntryRoutesExistingClearPresent() {
+  RuntimeFixture fixture;
+  const std::array records{clearRecord(), presentRecord()};
+  const auto wire = makeWireFixture(records);
+  const auto before = wire.bytes;
+  const auto hr = dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+      fixture.cDevice.get(), wire.bytes, wire.envelope, {});
+  check(hr == D3D_OK && fixture.routing->clearCalls == 1 &&
+            fixture.routing->presentCalls == 1,
+        "provider entry must route Clear and Present through DeviceReplaySink");
+  check(wire.bytes == before,
+        "provider entry must not rewrite canonical command bytes");
+}
+
 void oversizeSegmentedPresentTakesOneLegacyRollbackSource() {
   RuntimeFixture fixture;
   // 17K D3D rects exceed the fixed 64-page ordinary Direct footprint. The
@@ -680,6 +695,7 @@ int main() {
   try {
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
+    providerResolvedEntryRoutesExistingClearPresent();
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     stateOnlyRawMutatesWithoutTicket();

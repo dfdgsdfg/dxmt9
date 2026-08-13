@@ -149,6 +149,7 @@ foreach spec : [
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
+  ['render-tape-provider', 'render_tape_provider_spec.cpp'],
 ]
   sources = [spec[1]]
   if spec[0] == 'render-tape-capture'

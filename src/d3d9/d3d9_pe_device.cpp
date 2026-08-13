@@ -31,6 +31,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_render_tape_publisher.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
+#include "device_c_render_tape_descriptors.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -50,6 +51,10 @@ using dxmt9::d3d9::pe::process_vertices::processFvfXyzbPosition;
 using dxmt9::d3d9::pe::process_vertices::processVertices;
 using dxmt9::d3d9::pe::process_vertices::ProcessShaderIo;
 using dxmt9::d3d9::pe::process_vertices::vertexElementTypeSize;
+using dxmt9::d3d9::RenderTapeQueryDescriptor;
+using dxmt9::d3d9::RenderTapeShaderDescriptor;
+using dxmt9::d3d9::RenderTapeTextureDescriptor;
+using dxmt9::d3d9::RenderTapeVertexDeclDescriptor;
 
 static D3DFORMAT exposeAdapterDisplayFormat(D3DFORMAT fmt) {
     if (fmt == D3DFMT_A8R8G8B8) return D3DFMT_X8R8G8B8;
@@ -663,26 +668,6 @@ constexpr uint32_t kShaderHeaderPS = 0xFFFFu;
 constexpr uint32_t kShaderMaxMajor = 3u; /* vs_3_0 / ps_3_0 are the cap */
 constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
 constexpr size_t kShaderBoundedScan = 1u << 16;
-
-struct RenderTapeTextureDescriptor {
-    D9CSurfaceDesc level0{};
-    uint32_t levelCount = 0u;
-};
-
-struct RenderTapeVertexDeclDescriptor {
-    uint32_t elementCount = 0u;
-    uint32_t elementBytes = 0u;
-};
-
-struct RenderTapeShaderDescriptor {
-    uint32_t stage = 0u;
-    uint32_t bytecodeBytes = 0u;
-};
-
-struct RenderTapeQueryDescriptor {
-    uint32_t type = 0u;
-    uint32_t dataBytes = 0u;
-};
 
 struct RenderTapeLiveObject {
     enum class Role : uint8_t {
