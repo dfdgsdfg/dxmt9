@@ -14,13 +14,14 @@ class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
+  D3D9PeRecorderFlush *recorder_;
   std::uint64_t hash_ = 0;
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9VertexShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
-                       std::uint64_t hash)
-      : s_(s), device_(device), hash_(hash) {
+                       std::uint64_t hash, D3D9PeRecorderFlush *recorder)
+      : s_(s), device_(device), recorder_(recorder), hash_(hash) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -28,6 +29,8 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9VertexShaderImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
@@ -86,13 +89,14 @@ class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
+  D3D9PeRecorderFlush *recorder_;
   std::uint64_t hash_ = 0;
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9PixelShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
-                      std::uint64_t hash)
-      : s_(s), device_(device), hash_(hash) {
+                      std::uint64_t hash, D3D9PeRecorderFlush *recorder)
+      : s_(s), device_(device), recorder_(recorder), hash_(hash) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -100,6 +104,8 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9PixelShaderImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
@@ -157,14 +163,16 @@ public:
 
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
                                              IDirect3DDevice9 *device,
-                                             std::uint64_t hash) {
-  return new D3D9VertexShaderImpl(shader, device, hash);
+                                             std::uint64_t hash,
+                                             D3D9PeRecorderFlush *recorder) {
+  return new D3D9VertexShaderImpl(shader, device, hash, recorder);
 }
 
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
                                            IDirect3DDevice9 *device,
-                                           std::uint64_t hash) {
-  return new D3D9PixelShaderImpl(shader, device, hash);
+                                           std::uint64_t hash,
+                                           D3D9PeRecorderFlush *recorder) {
+  return new D3D9PixelShaderImpl(shader, device, hash, recorder);
 }
 
 D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader) {

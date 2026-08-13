@@ -11,7 +11,13 @@
 using D3D9PeRenderTapeBootstrapProducer = bool (*)(
     dxmt9::d3d9::RenderTapeCaptureBootstrapSeed& seed);
 using D3D9PeRenderTapeArtifactPublisher = bool (*)(
-    std::span<const std::byte> sealedArtifact);
+    const dxmt9::d3d9::RenderTapePublicationBundle& bundle);
+
+inline bool dxmt9PeRenderTapeCaptureCallbacksInstalled(
+    bool captureEnabled, D3D9PeRenderTapeBootstrapProducer producer,
+    D3D9PeRenderTapeArtifactPublisher publisher) noexcept {
+  return captureEnabled && producer != nullptr && publisher != nullptr;
+}
 
 void dxmt9PeSetRenderTapeBootstrapProducer(
     D3D9PeRenderTapeBootstrapProducer producer) noexcept;

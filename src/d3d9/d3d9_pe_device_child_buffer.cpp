@@ -138,6 +138,9 @@ struct D3D9PeBufferLockState {
   bool locked = false;
   bool servedFromReadonlyCache = false;
   DWORD flags = 0;
+  void *data = nullptr;
+  UINT offset = 0;
+  UINT size = 0;
   D3D9PeBufferReadonlyCache readonlyCache{};
 };
 
@@ -185,6 +188,9 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     state.locked = true;
     state.servedFromReadonlyCache = true;
     state.flags = flags;
+    state.data = *pp;
+    state.offset = off;
+    state.size = size;
     return S_OK;
   }
 
@@ -197,6 +203,9 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     state.locked = true;
     state.servedFromReadonlyCache = false;
     state.flags = flags;
+    state.data = *pp;
+    state.offset = off;
+    state.size = size != 0u ? size : desc.size - off;
     if ((flags & D3DLOCK_READONLY) == 0)
       state.readonlyCache.invalidate();
     if (cacheEligible && *pp &&
@@ -215,6 +224,7 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
 
 [[nodiscard]] static HRESULT
 unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
+               const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
                D3D9PeBufferLockState &state) noexcept {
   if (!state.locked)
     return D3DERR_INVALIDCALL;
@@ -222,6 +232,9 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     state.locked = false;
     state.servedFromReadonlyCache = false;
     state.flags = 0;
+    state.data = nullptr;
+    state.offset = 0;
+    state.size = 0;
     return S_OK;
   }
   const HRESULT flushHr =
@@ -230,9 +243,20 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     return flushHr;
   const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
   if (SUCCEEDED(unlockHr)) {
+    if (recorder && state.data && state.size != 0u &&
+        (state.flags & D3DLOCK_READONLY) == 0u) {
+      recorder->NotifyRenderTapeResourceMutationForChild(
+          wireObject, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u,
+          state.offset,
+          std::span<const std::byte>(static_cast<const std::byte *>(state.data),
+                                     state.size));
+    }
     state.locked = false;
     state.servedFromReadonlyCache = false;
     state.flags = 0;
+    state.data = nullptr;
+    state.offset = 0;
+    state.size = 0;
   }
   return unlockHr;
 }
@@ -267,6 +291,8 @@ public:
                              bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9VertexBufferImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_buffer_release(b_);
@@ -350,7 +376,7 @@ public:
                         pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    return unlockPeBuffer(b_, recorder_, lockState_);
+    return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {
@@ -411,6 +437,8 @@ public:
                              bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9IndexBufferImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_buffer_release(b_);
@@ -494,7 +522,7 @@ public:
                         pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    return unlockPeBuffer(b_, recorder_, lockState_);
+    return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DINDEXBUFFER_DESC *pDesc) noexcept override {

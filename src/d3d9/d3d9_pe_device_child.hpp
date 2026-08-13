@@ -4,6 +4,7 @@
 
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
+#include "device_c_render_tape_capture.hpp"
 
 #include <array>
 #include <cstddef>
@@ -75,6 +76,19 @@ struct D3D9PeRecorderFlush {
   virtual void NotifyPeCallReturnAfterPresentForChild(
       const D3D9PePresentCallToken &token,
       const char *callName, HRESULT hr) noexcept = 0;
+  virtual void NotifyRenderTapeObjectDefineForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      std::span<const std::byte> descriptor,
+      std::span<const std::byte> immutablePayload = {}) noexcept = 0;
+  virtual void NotifyRenderTapeObjectDestroyForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept = 0;
+  virtual void NotifyRenderTapeResourceMutationForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
+      std::uint64_t byteOffset, std::span<const std::byte> bytes) noexcept = 0;
+  virtual void NotifyRenderTapeOrderedControlForChild(
+      const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
+      std::span<const std::byte> payload) noexcept = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM
@@ -118,12 +132,15 @@ CreatePeIndexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
                     D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
                                              IDirect3DDevice9 *device,
-                                             std::uint64_t hash);
+                                             std::uint64_t hash,
+                                             D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
                                            IDirect3DDevice9 *device,
-                                           std::uint64_t hash);
+                                           std::uint64_t hash,
+                                           D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
-                                                IDirect3DDevice9 *device);
+                                                IDirect3DDevice9 *device,
+                                                D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
                                D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DStateBlock9 *

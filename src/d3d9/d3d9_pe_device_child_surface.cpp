@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdint>
+#include <limits>
 
 // Wine's d3dkmthk.h is not in the llvm-mingw SDK; inline the minimum
 // surface needed for the D3DKMTCreateDCFromMemory call path used by
@@ -167,6 +168,18 @@ static bool boxWithinExtents(const D3DBOX *b, UINT width, UINT height,
   if (b->Right > width || b->Bottom > height || b->Back > depth)
     return false;
   return true;
+}
+
+static std::size_t renderTapeLockBytes(const D9CSurfaceDesc &desc, LONG pitch,
+                                       const RECT *rect) {
+  if (pitch <= 0)
+    return 0u;
+  const auto height = rect ? static_cast<std::size_t>(rect->bottom - rect->top)
+                           : static_cast<std::size_t>(desc.height);
+  const auto row = static_cast<std::size_t>(pitch);
+  if (height != 0u && row > std::numeric_limits<std::size_t>::max() / height)
+    return 0u;
+  return row * height;
 }
 
 // D3DLOCK_DISCARD is only valid on textures created with D3DUSAGE_DYNAMIC.
@@ -421,6 +434,9 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   // recorder flush. Distinct from the C-side authority but kept in
   // sync via the C-side return values.
   bool locked_ = false;
+  DWORD lockFlags_ = 0u;
+  void *lockBits_ = nullptr;
+  std::size_t lockBytes_ = 0u;
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   // Wine d3d9 conformance: surfaces obtained through
   // IDirect3DTexture9::GetSurfaceLevel share their lock state with the
@@ -468,6 +484,8 @@ public:
   bool peLocked() const { return locked_; }
 
   ~D3D9SurfaceImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     if (dc_)
       DeleteDC(dc_);
@@ -653,6 +671,24 @@ public:
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
       locked_ = true;
+      lockFlags_ = flags;
+      lockBits_ = userMemory_;
+      lockBytes_ = renderTapeLockBytes(desc_, userMemoryPitch_, pRect);
+      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+        const dxmt9::d3d9::RenderTapeCpuReadControl payload{
+            .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
+                std::min<std::size_t>(lockBytes_, 0xffffffffu))};
+        recorder_->NotifyRenderTapeOrderedControlForChild(
+            dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                .identity = wireObject_.identity,
+                .kind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlKind::CpuRead),
+                .disposition = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+                .resultCode = static_cast<std::int32_t>(S_OK),
+                .controlBytes = sizeof(payload)},
+            std::as_bytes(std::span(&payload, 1u)));
+      }
       dxmt9DeviceDebugLog(
           "surface_lock_rect (user-memory) surface=%p pitch=%d bits=%p", this,
           userMemoryPitch_, userMemory_);
@@ -673,6 +709,24 @@ public:
       pLR->Pitch = lr.pitch;
       pLR->pBits = lr.bits;
       locked_ = true;
+      lockFlags_ = flags;
+      lockBits_ = lr.bits;
+      lockBytes_ = renderTapeLockBytes(desc_, lr.pitch, pRect);
+      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+        const dxmt9::d3d9::RenderTapeCpuReadControl payload{
+            .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
+                std::min<std::size_t>(lockBytes_, 0xffffffffu))};
+        recorder_->NotifyRenderTapeOrderedControlForChild(
+            dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                .identity = wireObject_.identity,
+                .kind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlKind::CpuRead),
+                .disposition = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+                .resultCode = static_cast<std::int32_t>(S_OK),
+                .controlBytes = sizeof(payload)},
+            std::as_bytes(std::span(&payload, 1u)));
+      }
       dxmt9DeviceDebugLog("surface_lock_rect -> pitch=%ld bits=%p",
                           (long)pLR->Pitch, pLR->pBits);
     } else {
@@ -687,7 +741,18 @@ public:
     if (userMemory_) {
       if (!locked_)
         return ownerIsTexture2D_ ? S_OK : D3DERR_INVALIDCALL;
+      if (recorder_ && lockBits_ && lockBytes_ != 0u &&
+          (lockFlags_ & D3DLOCK_READONLY) == 0u) {
+        recorder_->NotifyRenderTapeResourceMutationForChild(
+            wireObject_, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
+            0u, 0u,
+            std::span<const std::byte>(static_cast<const std::byte *>(lockBits_),
+                                       lockBytes_));
+      }
       locked_ = false;
+      lockBits_ = nullptr;
+      lockBytes_ = 0u;
+      lockFlags_ = 0u;
       return S_OK;
     }
     // Wine d3d9 conformance: Unlock-without-Lock returns INVALIDCALL
@@ -713,8 +778,22 @@ public:
     if (hr == D3DERR_INVALIDCALL && ownerIsTexture2D_) {
       hr = S_OK;
     }
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr)) {
+      if (recorder_ && lockBits_ && lockBytes_ != 0u &&
+          (lockFlags_ & D3DLOCK_READONLY) == 0u) {
+        recorder_->NotifyRenderTapeResourceMutationForChild(
+            wireObject_, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
+            0u, 0u,
+            std::span<const std::byte>(
+                static_cast<const std::byte *>(lockBits_), lockBytes_));
+      }
       locked_ = false;
+    }
+    if (SUCCEEDED(hr)) {
+      lockBits_ = nullptr;
+      lockBytes_ = 0u;
+      lockFlags_ = 0u;
+    }
     return hr;
   }
   HRESULT STDMETHODCALLTYPE GetDC(HDC *phdc) noexcept override {
@@ -836,6 +915,9 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
+  void *lockBits_ = nullptr;
+  std::size_t lockBytes_ = 0u;
+  DWORD lockFlags_ = 0u;
   // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
   // texture aliases caller-owned memory; LockRect (level 0) returns the
   // user pointer directly. Only level 0 is supported here because the
@@ -861,6 +943,8 @@ public:
                              textureIsDefaultPool(t_));
   }
   ~D3D9TextureImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
@@ -1073,6 +1157,26 @@ public:
     if (userMemory_ && level == 0) {
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
+      lockBits_ = userMemory_;
+      lockFlags_ = flags;
+      D9CSurfaceDesc userDesc{};
+      (void)textureLevelDesc(t_, level, &userDesc);
+      lockBytes_ = renderTapeLockBytes(userDesc, userMemoryPitch_, pRect);
+      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+        const dxmt9::d3d9::RenderTapeCpuReadControl payload{
+            .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
+                std::min<std::size_t>(lockBytes_, 0xffffffffu))};
+        recorder_->NotifyRenderTapeOrderedControlForChild(
+            dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                .identity = wireObject_.identity,
+                .kind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlKind::CpuRead),
+                .disposition = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+                .resultCode = static_cast<std::int32_t>(S_OK),
+                .controlBytes = sizeof(payload)},
+            std::as_bytes(std::span(&payload, 1u)));
+      }
       dxmt9DeviceDebugLog(
           "texture_lock_rect (user-memory) texture=%p pitch=%d bits=%p", this,
           userMemoryPitch_, userMemory_);
@@ -1093,6 +1197,26 @@ public:
     if (SUCCEEDED(hr)) {
       pLR->Pitch = lr.pitch;
       pLR->pBits = lr.bits;
+      lockBits_ = lr.bits;
+      lockFlags_ = flags;
+      D9CSurfaceDesc lockDesc{};
+      (void)textureLevelDesc(t_, level, &lockDesc);
+      lockBytes_ = renderTapeLockBytes(lockDesc, lr.pitch, pRect);
+      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+        const dxmt9::d3d9::RenderTapeCpuReadControl payload{
+            .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
+                std::min<std::size_t>(lockBytes_, 0xffffffffu))};
+        recorder_->NotifyRenderTapeOrderedControlForChild(
+            dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                .identity = wireObject_.identity,
+                .kind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlKind::CpuRead),
+                .disposition = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+                .resultCode = static_cast<std::int32_t>(S_OK),
+                .controlBytes = sizeof(payload)},
+            std::as_bytes(std::span(&payload, 1u)));
+      }
       dxmt9DeviceDebugLog("texture_lock_rect -> pitch=%ld bits=%p",
                           (long)pLR->Pitch, pLR->pBits);
     } else {
@@ -1107,6 +1231,17 @@ public:
       return D3DERR_INVALIDCALL;
     // T4: user-memory aliasing has no staging copy to flush.
     if (userMemory_ && level == 0) {
+      if (recorder_ && lockBits_ && lockBytes_ != 0u &&
+          (lockFlags_ & D3DLOCK_READONLY) == 0u) {
+        recorder_->NotifyRenderTapeResourceMutationForChild(
+            wireObject_, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
+            level, 0u,
+            std::span<const std::byte>(static_cast<const std::byte *>(lockBits_),
+                                       lockBytes_));
+      }
+      lockBits_ = nullptr;
+      lockBytes_ = 0u;
+      lockFlags_ = 0u;
       return S_OK;
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
@@ -1117,6 +1252,19 @@ public:
     const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, level));
     if (FAILED(hr)) {
       dxmt9DeviceDebugLog("texture_unlock_rect -> hr=0x%08x", (unsigned)hr);
+    }
+    if (SUCCEEDED(hr)) {
+      if (recorder_ && lockBits_ && lockBytes_ != 0u &&
+          (lockFlags_ & D3DLOCK_READONLY) == 0u) {
+        recorder_->NotifyRenderTapeResourceMutationForChild(
+            wireObject_, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
+            level, 0u,
+            std::span<const std::byte>(
+                static_cast<const std::byte *>(lockBits_), lockBytes_));
+      }
+      lockBits_ = nullptr;
+      lockBytes_ = 0u;
+      lockFlags_ = 0u;
     }
     return hr;
   }
@@ -1171,6 +1319,8 @@ public:
                              textureIsDefaultPool(t_));
   }
   ~D3D9CubeTextureImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
@@ -1557,6 +1707,8 @@ public:
                              textureIsDefaultPool(t_));
   }
   ~D3D9VolumeTextureImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);

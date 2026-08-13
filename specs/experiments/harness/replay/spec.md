@@ -673,14 +673,16 @@ verified blob references; `run_dxmt9_render_tape.py` builds the
 size and SHA-256, and then supplies that catalogue to native validation.
 
 The bounded capture owner and PE hook now provide the first production capture
-seam: capture is default-off, requires an injected complete bootstrap producer,
-arms after one successful Present boundary, copies each recorder-flushed
-canonical chunk exactly once, and seals/publishes only at the following
-Present. This remains a capture seam rather than complete frame evidence:
-provider replay, offscreen Metal oracle execution, and wild-captured identity
-evidence remain open. The PE producer still owns object-destroy and later
-resource/control injection through the session API; the hook does not infer
-those events from COM pointers.
+seam: capture is default-off, checks that gate before invoking installed
+callbacks, requires an injected complete bootstrap producer, arms after one
+successful Present boundary, copies each recorder-flushed canonical chunk
+exactly once, and seals/publishes one value-owned bundle containing events and
+digest-verified blob bytes at the following Present. Live PE object,
+writable-lock mutation, and true chunk-bypass control call sites feed that
+owner; chunkized operations are not duplicated. This remains a capture seam
+rather than complete frame evidence: provider replay, offscreen Metal oracle
+execution, and wild-captured identity evidence remain open. Complete initial
+resource contents remain an injected bootstrap-producer obligation.
 
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events. It does not by itself encode an

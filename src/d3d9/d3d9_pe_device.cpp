@@ -1051,6 +1051,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeCapture_{};
     std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
         renderTapeCaptureOracle_{};
+    std::uint64_t renderTapeCompletionOrdinal_ = 0u;
     std::uint64_t commandChunkCommits_ = 0;
     std::uint64_t commandChunkRecords_ = 0;
     std::uint64_t commandChunkBytes_ = 0;
@@ -6719,6 +6720,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     bool armRenderTapeCaptureAtPresentBoundary() {
         if (!renderTapeCapture_ ||
+            !renderTapeCapture_->enabled() ||
             (renderTapeCapture_->state() !=
                  dxmt9::d3d9::RenderTapeCaptureState::Disabled &&
              renderTapeCapture_->state() !=
@@ -6729,7 +6731,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::memory_order_acquire);
         const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
             std::memory_order_acquire);
-        if (!producer || !publisher) {
+        if (!dxmt9PeRenderTapeCaptureCallbacksInstalled(
+                renderTapeCapture_->enabled(), producer, publisher)) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture requested without injected bootstrap "
                 "producer/publisher; capture remains off");
@@ -6743,7 +6746,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             produced = false;
         }
         if (!produced ||
-            renderTapeCapture_->arm(seed.bootstrapOverlay, seed.blobs) !=
+            renderTapeCapture_->armWithBlobs(seed.bootstrapOverlay, seed.blobs) !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted ||
             renderTapeCapture_->beginPresentInterval() !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
@@ -6812,7 +6815,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
             std::memory_order_acquire);
-        if (!publisher || !publisher(renderTapeCapture_->sealedArtifact())) {
+        if (!publisher || !publisher(renderTapeCapture_->publicationBundle())) {
             renderTapeCapture_->abort();
         }
     }
@@ -7849,6 +7852,111 @@ public:
         const char* callName, HRESULT hr) noexcept override {
         logPeCallReturnAfterPresent(token, callName, hr);
     }
+    void NotifyRenderTapeObjectDefineForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::span<const std::byte> descriptor,
+        std::span<const std::byte> immutablePayload = {}) noexcept override {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        try {
+            dxmt9::d3d9::RenderTapeDigest digest{};
+            std::uint64_t bytes = 0u;
+            if (!immutablePayload.empty()) {
+                const auto status = renderTapeCapture_->registerBlobBytes(
+                    immutablePayload, &digest);
+                if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                    renderTapeCapture_->abort();
+                    return;
+                }
+                bytes = immutablePayload.size();
+            }
+            const auto status = renderTapeCapture_->objectDefine(
+                object.identity, object.identity.kind, descriptor, bytes,
+                digest);
+            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                renderTapeCapture_->abort();
+            }
+        } catch (...) {
+            renderTapeCapture_->abort();
+        }
+    }
+    void NotifyRenderTapeObjectDestroyForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        if (renderTapeCapture_->objectDestroy(object.identity) !=
+            dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            renderTapeCapture_->abort();
+        }
+    }
+    void NotifyRenderTapeResourceMutationForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
+        std::uint64_t byteOffset,
+        std::span<const std::byte> bytes) noexcept override {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        try {
+            if (renderTapeCapture_->resourceMutationBytes(
+                    object.identity, kind, subresource, byteOffset, bytes) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                renderTapeCapture_->abort();
+            }
+        } catch (...) {
+            renderTapeCapture_->abort();
+        }
+    }
+    void NotifyRenderTapeOrderedControlForChild(
+        const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
+        std::span<const std::byte> payload) noexcept override {
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        auto recorded = fixed;
+        recorded.completionOrdinal = ++renderTapeCompletionOrdinal_;
+        if (renderTapeCapture_->orderedControl(recorded, payload) !=
+            dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            renderTapeCapture_->abort();
+        }
+    }
+    void notifyRenderTapeCreatedObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+        if (!object.valid(object.identity.kind))
+            return;
+        constexpr std::array<std::byte, 8u> descriptor{};
+        NotifyRenderTapeObjectDefineForChild(object, descriptor);
+    }
+    void notifyRenderTapeCreatedShader(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        const DWORD *bytecode) noexcept {
+        if (!object.valid(object.identity.kind) || !bytecode)
+            return;
+        std::size_t words = 0u;
+        for (; words < kShaderBoundedScan; ++words) {
+            if (static_cast<std::uint32_t>(bytecode[words]) == kShaderEndToken) {
+                ++words;
+                break;
+            }
+        }
+        if (words == 0u || words > kShaderBoundedScan)
+            return;
+        constexpr std::array<std::byte, 8u> descriptor{};
+        NotifyRenderTapeObjectDefineForChild(
+            object, descriptor,
+            std::span<const std::byte>(reinterpret_cast<const std::byte *>(bytecode),
+                                       words * sizeof(DWORD)));
+    }
     bool IsStateBlockRecordingForChild() const noexcept override {
         return stateBlockRecording_;
     }
@@ -8368,6 +8476,24 @@ public:
             peState_.pendingViewport = false;
             peState_.pendingScissor  = false;
         }
+        if (renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            const dxmt9::d3d9::RenderTapeResetControl payload{
+                .reclaimedGeneration = 0u, .terminal = 1u};
+            NotifyRenderTapeOrderedControlForChild(
+                dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                    .kind = static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeControlKind::Reset),
+                    .disposition = static_cast<std::uint32_t>(
+                        SUCCEEDED(hr)
+                            ? dxmt9::d3d9::RenderTapeControlDisposition::Terminal
+                            : dxmt9::d3d9::RenderTapeControlDisposition::Failed),
+                    .resultCode = static_cast<std::int32_t>(hr),
+                    .controlBytes = sizeof(payload)},
+                std::as_bytes(std::span(&payload, 1u)));
+            renderTapeCapture_->abort();
+        }
         return hr;
     }
 
@@ -8388,7 +8514,11 @@ public:
         auto presentTimingFlushEnd = presentTimingStart;
         // T2 device-lost gate: render-path methods must early-return
         // D3DERR_DEVICELOST while the device awaits Reset.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) {
+            if (renderTapeCapture_)
+                renderTapeCapture_->abort();
+            return D3DERR_DEVICELOST;
+        }
         dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
                             this, wnd,
                             src ? "<custom>" : "<full>",
@@ -8666,6 +8796,7 @@ public:
         if (!t) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
+        notifyRenderTapeCreatedObject(D3D9PeWireTexture(*ppTex));
         // Wine base_vidmem_accounting_policy expects a strictly-decreasing
         // budget on non-Ex devices; ex_vidmem_accounting_policy expects
         // the value to stay roughly constant for D3D9Ex devices (the spec
@@ -8703,6 +8834,7 @@ public:
         if (!t) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeVolumeTexture(t, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireTexture(*ppTex));
         dxmt9DeviceDebugLog("device_create_volume_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -8732,6 +8864,7 @@ public:
         if (!t) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeCubeTexture(t, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireTexture(*ppTex));
         dxmt9DeviceDebugLog("device_create_cube_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -8759,6 +8892,7 @@ public:
         if (!b) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppBuf = CreatePeVertexBuffer(b, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireVertexBuffer(*ppBuf));
         dxmt9DeviceDebugLog("device_create_vertex_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
@@ -8787,6 +8921,7 @@ public:
         if (!b) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppBuf = CreatePeIndexBuffer(b, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireIndexBuffer(*ppBuf));
         dxmt9DeviceDebugLog("device_create_index_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
@@ -8844,6 +8979,7 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
         return S_OK;
     }
@@ -8881,6 +9017,7 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -9289,6 +9426,7 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this, true, userPtr, userPitch);
+        notifyRenderTapeCreatedObject(D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -10508,7 +10646,7 @@ public:
         }
         D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
         if (!d) return nullptr;
-        IDirect3DVertexDeclaration9* decl = CreatePeVertexDecl(d, this);
+        IDirect3DVertexDeclaration9* decl = CreatePeVertexDecl(d, this, this);
         if (!decl) return nullptr;
         /* Cache holds one ref. */
         fvfDeclCache_.emplace(fvf, decl);
@@ -10573,7 +10711,8 @@ public:
             *ppVD = nullptr;
             return D3DERR_INVALIDCALL;
         }
-        *ppVD = CreatePeVertexDecl(d, this);
+        *ppVD = CreatePeVertexDecl(d, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireVertexDecl(*ppVD));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
@@ -10643,7 +10782,8 @@ public:
             *ppVS = nullptr;
             return D3DERR_INVALIDCALL;
         }
-        *ppVS = CreatePeVertexShader(s, this, hashValidatedShaderBytecode(pFn));
+        *ppVS = CreatePeVertexShader(s, this, hashValidatedShaderBytecode(pFn), this);
+        notifyRenderTapeCreatedShader(D3D9PeWireVertexShader(*ppVS), pFn);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) noexcept override {
@@ -10929,7 +11069,8 @@ public:
             *ppPS = nullptr;
             return D3DERR_INVALIDCALL;
         }
-        *ppPS = CreatePePixelShader(s, this, hashValidatedShaderBytecode(pFn));
+        *ppPS = CreatePePixelShader(s, this, hashValidatedShaderBytecode(pFn), this);
+        notifyRenderTapeCreatedShader(D3D9PeWirePixelShader(*ppPS), pFn);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
@@ -11377,6 +11518,7 @@ public:
             return S_OK;
         }
         *ppQ = CreatePeQuery(q, this, this);
+        notifyRenderTapeCreatedObject(D3D9PeWireQuery(*ppQ));
         return S_OK;
     }
 
@@ -11393,7 +11535,15 @@ public:
                                          DWORD flags) noexcept override {
         dxmt9PeSetCurrentCallName("PresentEx");
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) {
+            if (renderTapeCapture_)
+                renderTapeCapture_->abort();
+            return D3DERR_DEVICELOST;
+        }
+        const bool renderTapeCaptureWasActive =
+            renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
         const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Present);
@@ -11404,6 +11554,10 @@ public:
         if (SUCCEEDED(hr)) {
             logPeRecorderStats("present_ex");
             markPePresentReturnedForCadence();
+            if (renderTapeCaptureWasActive)
+                finishRenderTapeCaptureAtPresentBoundary();
+            else
+                (void)armRenderTapeCaptureAtPresentBoundary();
         }
         return hr;
     }
@@ -11420,7 +11574,20 @@ public:
 
     HRESULT STDMETHODCALLTYPE WaitForVBlank(UINT sc) noexcept override {
         notePeDeviceCallAfterPresent("WaitForVBlank");
-        return hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
+        const HRESULT hr = hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
+        const dxmt9::d3d9::RenderTapeFlushWaitControl payload{.waitedSeqId = 0u};
+        NotifyRenderTapeOrderedControlForChild(
+            dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                .kind = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeControlKind::FlushWait),
+                .disposition = static_cast<std::uint32_t>(
+                    SUCCEEDED(hr)
+                        ? dxmt9::d3d9::RenderTapeControlDisposition::Completed
+                        : dxmt9::d3d9::RenderTapeControlDisposition::Failed),
+                .resultCode = static_cast<std::int32_t>(hr),
+                .controlBytes = sizeof(payload)},
+            std::as_bytes(std::span(&payload, 1u)));
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE CheckResourceResidency(IDirect3DResource9**,
@@ -11556,6 +11723,24 @@ public:
             peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
             peState_.pendingViewport = false;
             peState_.pendingScissor  = false;
+        }
+        if (renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            const dxmt9::d3d9::RenderTapeResetControl payload{
+                .reclaimedGeneration = 0u, .terminal = 1u};
+            NotifyRenderTapeOrderedControlForChild(
+                dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                    .kind = static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeControlKind::Reset),
+                    .disposition = static_cast<std::uint32_t>(
+                        SUCCEEDED(hr)
+                            ? dxmt9::d3d9::RenderTapeControlDisposition::Terminal
+                            : dxmt9::d3d9::RenderTapeControlDisposition::Failed),
+                    .resultCode = static_cast<std::int32_t>(hr),
+                    .controlBytes = sizeof(payload)},
+                std::as_bytes(std::span(&payload, 1u)));
+            renderTapeCapture_->abort();
         }
         return hr;
     }

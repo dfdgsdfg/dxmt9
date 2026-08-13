@@ -500,9 +500,12 @@ artifact's scope block. Instantiates R-HARN-7.6.
 injected bootstrap producer supplies the complete value-owned shadow checkpoint
 and initial object/blob/oracle seeds at a Present boundary; the owner copies
 those values, receives each successfully committed canonical D9C v2 chunk once,
-and publishes only after the following Present seals `PresentComplete`. A
-missing producer, failed bridge commit, capacity failure, terminal Reset or
-device-lost control, failed validation, or publisher rejection aborts the
-interval without exposing a partial artifact. This hook is a production
-capture seam, not a claim that the current PE wrappers can infer object
-descriptors or initial bytes from live COM pointers.
+and publishes only after the following Present seals `PresentComplete`. While
+armed, live PE object create/destroy, writable-lock mutation, and true
+chunk-bypass control call sites feed the same owner; chunkized operations are
+not duplicated. The owner derives blob digests from copied bytes and publishes
+events and verified blob bytes as one value-owned bundle. A missing producer,
+failed bridge commit, capacity failure, terminal Reset or device-lost control,
+failed validation, or publisher rejection aborts the interval without exposing
+a partial artifact. Complete initial resource contents remain a bootstrap
+producer obligation; this hook does not infer them from arbitrary COM pointers.

@@ -58,11 +58,13 @@ class D3D9VertexDeclImpl final : public IDirect3DVertexDeclaration9 {
   ULONG refs_ = 1;
   D9CVertexDecl *d_;
   IDirect3DDevice9 *device_;
+  D3D9PeRecorderFlush *recorder_;
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
-  D3D9VertexDeclImpl(D9CVertexDecl *d, IDirect3DDevice9 *device)
-      : d_(d), device_(device) {
+  D3D9VertexDeclImpl(D9CVertexDecl *d, IDirect3DDevice9 *device,
+                     D3D9PeRecorderFlush *recorder)
+      : d_(d), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -70,6 +72,8 @@ public:
         dxmt9c_vdecl_get_wire_identity, wireObject_);
   }
   ~D3D9VertexDeclImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_vdecl_release(d_);
     if (device_)
@@ -153,6 +157,8 @@ public:
         dxmt9c_query_get_wire_identity, wireObject_);
   }
   ~D3D9QueryImpl() {
+    if (recorder_)
+      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_query_release(q_);
     if (device_)
@@ -233,7 +239,27 @@ public:
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
-    return hr32(dxmt9c_query_get_data(q_, pData, size, flags));
+    const HRESULT hr = hr32(dxmt9c_query_get_data(q_, pData, size, flags));
+    if (recorder_) {
+      const auto disposition =
+          hr == S_FALSE
+              ? dxmt9::d3d9::RenderTapeControlDisposition::Pending
+              : SUCCEEDED(hr)
+                    ? dxmt9::d3d9::RenderTapeControlDisposition::Completed
+                    : dxmt9::d3d9::RenderTapeControlDisposition::Failed;
+      const dxmt9::d3d9::RenderTapeQueryGetDataControl payload{
+          .dataSize = size, .seqId = 0u};
+      recorder_->NotifyRenderTapeOrderedControlForChild(
+          dxmt9::d3d9::RenderTapeOrderedControlHeader{
+              .identity = wireObject_.identity,
+              .kind = static_cast<std::uint32_t>(
+                  dxmt9::d3d9::RenderTapeControlKind::QueryGetData),
+              .disposition = static_cast<std::uint32_t>(disposition),
+              .resultCode = static_cast<std::int32_t>(hr),
+              .controlBytes = sizeof(payload)},
+          std::as_bytes(std::span(&payload, 1u)));
+    }
+    return hr;
   }
 };
 
@@ -778,8 +804,9 @@ public:
  * ========================================================================= */
 
 IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
-                                                IDirect3DDevice9 *device) {
-  return new D3D9VertexDeclImpl(decl, device);
+                                                IDirect3DDevice9 *device,
+                                                D3D9PeRecorderFlush *recorder) {
+  return new D3D9VertexDeclImpl(decl, device, recorder);
 }
 
 IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,

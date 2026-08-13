@@ -57,9 +57,25 @@ struct RenderTapeCaptureMutationSeed {
   RenderTapeDigest digest{};
 };
 
+// A capture-owned blob. The digest is never trusted: armWithBlobs hashes the
+// copied bytes and derives the catalogue entry from that result.
+struct RenderTapeCaptureBlob {
+  std::vector<std::byte> bytes{};
+};
+
+struct RenderTapePublishedBlob {
+  RenderTapeDigest digest{};
+  std::vector<std::byte> bytes{};
+};
+
+struct RenderTapePublicationBundle {
+  std::vector<std::byte> events{};
+  std::vector<RenderTapePublishedBlob> blobs{};
+};
+
 struct RenderTapeCaptureBootstrapSeed {
   std::vector<std::byte> bootstrapOverlay{};
-  std::vector<RenderTapeBlob> blobs{};
+  std::vector<RenderTapeCaptureBlob> blobs{};
   std::vector<RenderTapeCaptureObjectSeed> objects{};
   std::vector<RenderTapeCaptureMutationSeed> mutations{};
   std::vector<RenderTapeOracleAttachment> oracleAttachments{};
@@ -80,6 +96,10 @@ public:
   RenderTapeCaptureStatus arm(std::span<const std::byte> bootstrapOverlay,
                               std::span<const RenderTapeBlob> blobs = {});
 
+  RenderTapeCaptureStatus armWithBlobs(
+      std::span<const std::byte> bootstrapOverlay,
+      std::span<const RenderTapeCaptureBlob> blobs);
+
   // Starts exactly one future Present interval. A second interval is rejected
   // and a successful Present is the only path to Sealed.
   RenderTapeCaptureStatus beginPresentInterval();
@@ -87,6 +107,14 @@ public:
   RenderTapeCaptureStatus registerVerifiedBlob(
       std::span<const std::byte, kRenderTapeDigestSize> digest,
       std::uint64_t size);
+
+  RenderTapeCaptureStatus registerBlobBytes(std::span<const std::byte> bytes,
+                                            RenderTapeDigest* digest = nullptr);
+
+  RenderTapeCaptureStatus resourceMutationBytes(
+      const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
+      std::uint32_t subresource, std::uint64_t byteOffset,
+      std::span<const std::byte> bytes);
 
   RenderTapeCaptureStatus objectDefine(
       const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
@@ -122,6 +150,10 @@ public:
   const std::vector<std::byte>& sealedArtifact() const noexcept {
     return sealedArtifact_;
   }
+  const RenderTapePublicationBundle& publicationBundle() const noexcept {
+    return publicationBundle_;
+  }
+  bool enabled() const noexcept { return enabled_; }
   RenderTapeValidationStatus validationStatus() const noexcept {
     return validationStatus_;
   }
@@ -142,6 +174,8 @@ private:
                        const CommandChunkEnvelope& envelope) const noexcept;
   void abortInternal() noexcept;
 
+  static RenderTapeDigest sha256(std::span<const std::byte> bytes);
+
   bool enabled_ = false;
   RenderTapeCaptureLimits limits_{};
   RenderTapeCaptureState state_ = RenderTapeCaptureState::Disabled;
@@ -151,9 +185,11 @@ private:
   RenderTapeValidationStatus validationStatus_ =
       RenderTapeValidationStatus::Valid;
   RenderTapeBlobCatalogue catalogue_{};
+  std::vector<RenderTapePublishedBlob> publishedBlobs_{};
   std::vector<ObjectSlot> objects_{};
   RenderTapeBuilder builder_{};
   std::vector<std::byte> sealedArtifact_{};
+  RenderTapePublicationBundle publicationBundle_{};
 };
 
 } // namespace dxmt9::d3d9
