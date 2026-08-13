@@ -97,7 +97,8 @@ std::vector<std::byte> makeChunk(std::span<const Record> specs) {
   return bytes;
 }
 
-std::vector<std::byte> bootstrapChunk() {
+std::vector<std::byte> bootstrapChunkWithRenderTargets(
+    std::span<const D9CCommandChunkWireRenderTargetBinding> renderTargets) {
   std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
@@ -110,11 +111,6 @@ std::vector<std::byte> bootstrapChunk() {
     streams[slot] = {.slot = slot, .valid = 1u,
                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
   }
-  const D9CCommandChunkWireRenderTargetBinding renderTarget{
-      .slot = 0u,
-      .valid = 1u,
-      .handleIndex = 0u,
-  };
   constexpr std::uint32_t sectionCount = 3u;
   const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
   const auto sectionPayloadOffset = alignUp(
@@ -122,6 +118,8 @@ std::vector<std::byte> bootstrapChunk() {
       alignof(std::uint32_t));
   const auto streamOffset = sectionPayloadOffset + sizeof(textures);
   const auto renderTargetOffset = streamOffset + sizeof(streams);
+  const auto renderTargetBytes = renderTargets.size() *
+                                 sizeof(D9CCommandChunkWireRenderTargetBinding);
   const D9CCommandChunkWireDrawHeader draw{
       .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
       .sectionCount = sectionCount,
@@ -145,29 +143,42 @@ std::vector<std::byte> bootstrapChunk() {
       },
       D9CCommandChunkWireSectionDesc{
           .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
-          .elementSize = sizeof(renderTarget),
-          .count = 1u,
+          .elementSize = sizeof(D9CCommandChunkWireRenderTargetBinding),
+          .count = static_cast<std::uint32_t>(renderTargets.size()),
           .payloadOffset = static_cast<std::uint32_t>(renderTargetOffset),
-          .byteSize = sizeof(renderTarget),
+          .byteSize = static_cast<std::uint32_t>(renderTargetBytes),
       },
   };
-  std::vector<std::byte> payload(renderTargetOffset + sizeof(renderTarget));
+  std::vector<std::byte> payload(renderTargetOffset + renderTargetBytes);
   std::memcpy(payload.data(), &draw, sizeof(draw));
   std::memcpy(payload.data() + sectionTableOffset, sections.data(), sizeof(sections));
   std::memcpy(payload.data() + sectionPayloadOffset, textures.data(), sizeof(textures));
   std::memcpy(payload.data() + streamOffset, streams.data(), sizeof(streams));
-  std::memcpy(payload.data() + renderTargetOffset, &renderTarget,
-              sizeof(renderTarget));
-  const std::array records{Record{
-      .type = D9C_COMMAND_RECORD_APPLY_STATE,
-      .payload = std::move(payload),
-      .handles = {{
+  if (!renderTargets.empty()) {
+    std::memcpy(payload.data() + renderTargetOffset, renderTargets.data(),
+                renderTargetBytes);
+  }
+  std::vector<D9CCommandChunkWireHandleEntry> handles(renderTargets.size(),
+      D9CCommandChunkWireHandleEntry{
           .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
           .generation = 7u,
           .objectId = 41u,
-      }},
+      });
+  const std::array records{Record{
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = std::move(payload),
+      .handles = std::move(handles),
   }};
   return makeChunk(records);
+}
+
+std::vector<std::byte> bootstrapChunk() {
+  const std::array renderTargets{D9CCommandChunkWireRenderTargetBinding{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = 0u,
+  }};
+  return bootstrapChunkWithRenderTargets(renderTargets);
 }
 
 std::vector<std::byte> implicitBootstrapChunk() {
@@ -238,7 +249,7 @@ constexpr D9CWireObjectIdentity kSeedBuffer{
 struct ProductionFixture {
   std::vector<std::byte> tape{};
 
-  ProductionFixture() {
+  explicit ProductionFixture(bool wrongExpectedDigest = false) {
     const D9CCommandChunkWireClear clear{
         .flags = 1u,
         .colorARGB = 0xff204060u,
@@ -278,6 +289,8 @@ struct ProductionFixture {
         std::byte{0x60}, std::byte{0x6c}, std::byte{0x44}, std::byte{0x40},
         std::byte{0x10}, std::byte{0x9d}, std::byte{0xca}, std::byte{0x61},
     };
+    auto expected = expectedDigest;
+    if (wrongExpectedDigest) expected[0] ^= std::byte{1u};
     RenderTapeBuilder builder;
     builder.appendBootstrapState(implicitBootstrapChunk());
     builder.appendObjectDefine(
@@ -286,7 +299,7 @@ struct ProductionFixture {
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
     builder.appendPresentComplete(
-        3u, 1u, RenderTapeDigestValidity::Sha256, expectedDigest,
+        3u, 1u, RenderTapeDigestValidity::Sha256, expected,
         std::as_bytes(std::span(&oracle, 1u)));
     tape = builder.seal();
   }
@@ -504,6 +517,42 @@ void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
                                                 .handleCount = 1u},
             kOutput) == FrameTapeBootstrapOutputDisposition::ExplicitNull,
         "explicit null RT0 must fail closed");
+  const std::array ambiguousTargets{
+      D9CCommandChunkWireRenderTargetBinding{
+          .slot = 0u,
+          .valid = 1u,
+          .handleIndex = 0u,
+      },
+      D9CCommandChunkWireRenderTargetBinding{
+          .slot = 0u,
+          .valid = 1u,
+          .handleIndex = 1u,
+      },
+  };
+  check(classifyFrameTapeBootstrapOutput(
+            bootstrapChunkWithRenderTargets(ambiguousTargets),
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 2u},
+            kOutput) == FrameTapeBootstrapOutputDisposition::Ambiguous,
+        "duplicate RT0 bindings must fail closed as ambiguous");
+  auto outOfRange = explicitBootstrap;
+  ImportedChunkView outOfRangeView;
+  check(importPrevalidatedCommandChunk(
+            outOfRange, CommandChunkEnvelope{.recordCount = 1u,
+                                               .handleCount = 1u},
+            outOfRangeView),
+        "explicit bootstrap must import for slot-range classification");
+  const auto outOfRangeRenderTarget = outOfRangeView.record(0u).section(2u);
+  D9CCommandChunkWireRenderTargetBinding outOfRangeBinding{};
+  std::memcpy(&outOfRangeBinding, outOfRangeRenderTarget.payload.data(),
+              sizeof(outOfRangeBinding));
+  outOfRangeBinding.slot = 1u;
+  std::memcpy(const_cast<std::byte*>(outOfRangeRenderTarget.payload.data()),
+              &outOfRangeBinding, sizeof(outOfRangeBinding));
+  check(classifyFrameTapeBootstrapOutput(
+            outOfRange, CommandChunkEnvelope{.recordCount = 1u,
+                                               .handleCount = 1u},
+            kOutput) == FrameTapeBootstrapOutputDisposition::SlotOutOfRange,
+        "non-zero RT slot must fail closed");
   check(renderTapeTextureSeedExtentMatches(64u, 16, 4u) &&
             !renderTapeTextureSeedExtentMatches(63u, 16, 4u) &&
             !renderTapeTextureSeedExtentMatches(64u, 0, 4u),
@@ -529,6 +578,36 @@ void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
             result.validity.expectedDigestMatched,
         "production fixture must read back and compare its digest");
   check(result.complete(), frameTapeReplayStatusName(result.status));
+}
+
+void productionShapeReportsWrongExpectedDigest() {
+  ProductionFixture fixture(true);
+  const auto validation = preflightFrameTapeIdentity(fixture.tape, {});
+  check(validation.complete(), frameTapeReplayStatusName(validation.status));
+  const D9CPresentParams params{
+      .backBufferWidth = validation.requirements.outputWidth,
+      .backBufferHeight = validation.requirements.outputHeight,
+      .backBufferFormat = validation.requirements.outputFormat,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "wrong-digest fixture factory must be available");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "wrong-digest fixture device must construct");
+  const auto result = replayFrameTapeIdentity(device, fixture.tape, {});
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.status == FrameTapeReplayStatus::OutputMismatch,
+        "wrong expected digest must report output mismatch");
+  check(result.validity.outputReadback && result.validity.expectedDigestCaptured &&
+            !result.validity.expectedDigestMatched,
+        "output mismatch must retain readback and digest comparison evidence");
+  check(result.conservation.objectsCreated == 1u &&
+            result.conservation.objectsReleased == 1u,
+        "output mismatch must still clean up replay-owned objects");
 }
 
 void writeProductionFixture(const std::filesystem::path& directory) {
@@ -557,6 +636,7 @@ int main(int argc, char** argv) {
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
     nativeMetalOffscreenIdentityReplay();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
+    productionShapeReportsWrongExpectedDigest();
   } catch (const TestFailure& error) {
     std::cerr << "render_tape_provider_spec failed: " << error.what() << '\n';
     return 1;
