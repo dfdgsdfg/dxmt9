@@ -89,6 +89,8 @@ struct D3D9PeRecorderFlush {
   virtual void NotifyRenderTapeOrderedControlForChild(
       const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
       std::span<const std::byte> payload) noexcept = 0;
+  virtual bool IsRenderTapeCaptureActiveForChild() const noexcept = 0;
+  virtual void AbortRenderTapeCaptureForChild() noexcept = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

@@ -10,6 +10,8 @@
 
 #include <cstdarg>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
@@ -71,6 +73,25 @@ flushChildRecorderForBufferLock(D3D9PeRecorderFlush *recorder, D9CBuffer *buffer
 
 static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {
   return buffer && SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc)));
+}
+
+static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
+                                         const void *data, std::size_t bytes,
+                                         std::vector<std::byte> &copy) noexcept {
+  if (!recorder || !recorder->IsRenderTapeCaptureActiveForChild())
+    return true;
+  if (!data || bytes == 0u) {
+    recorder->AbortRenderTapeCaptureForChild();
+    return false;
+  }
+  try {
+    copy.assign(static_cast<const std::byte *>(data),
+                static_cast<const std::byte *>(data) + bytes);
+    return true;
+  } catch (...) {
+    recorder->AbortRenderTapeCaptureForChild();
+    return false;
+  }
 }
 
 static bool bufferIsDefaultPool(const D9CBufferDesc &desc, bool valid) {
@@ -171,8 +192,30 @@ validateBufferLockArgs(D9CBuffer *buffer, const D9CBufferDesc &cachedDesc,
 [[nodiscard]] static HRESULT
 lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
              const D9CBufferDesc &cachedDesc, bool cachedDescValid,
+             const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
              D3D9PeBufferLockState &state, UINT off, UINT size, void **pp,
              DWORD flags) noexcept {
+  const auto notifyCpuRead = [&]() noexcept {
+    if (!recorder || !recorder->IsRenderTapeCaptureActiveForChild() ||
+        (flags & D3DLOCK_READONLY) == 0u) {
+      return;
+    }
+    const dxmt9::d3d9::RenderTapeCpuReadControl payload{
+        .copyCount = 1u,
+        .bytesRead = static_cast<std::uint32_t>(
+            std::min<UINT>(state.size, 0xffffffffu)),
+    };
+    recorder->NotifyRenderTapeOrderedControlForChild(
+        dxmt9::d3d9::RenderTapeOrderedControlHeader{
+            .identity = wireObject.identity,
+            .kind = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeControlKind::CpuRead),
+            .disposition = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+            .resultCode = static_cast<std::int32_t>(S_OK),
+            .controlBytes = sizeof(payload)},
+        std::as_bytes(std::span(&payload, 1u)));
+  };
   D9CBufferDesc desc{};
   bool descValid = false;
   const HRESULT validationHr = validateBufferLockArgs(
@@ -190,7 +233,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     state.flags = flags;
     state.data = *pp;
     state.offset = off;
-    state.size = size;
+    state.size = size != 0u ? size : desc.size - off;
+    notifyCpuRead();
     return S_OK;
   }
 
@@ -218,6 +262,7 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
         state.readonlyCache.invalidate();
       }
     }
+    notifyCpuRead();
   }
   return lockHr;
 }
@@ -241,15 +286,18 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
       flushChildRecorderForBufferLock(recorder, buffer, state.flags);
   if (FAILED(flushHr))
     return flushHr;
+  std::vector<std::byte> mutationCopy;
+  const bool mutationReady =
+      (state.flags & D3DLOCK_READONLY) != 0u ||
+      copyRenderTapeBufferMutation(recorder, state.data, state.size,
+                                    mutationCopy);
   const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
   if (SUCCEEDED(unlockHr)) {
-    if (recorder && state.data && state.size != 0u &&
-        (state.flags & D3DLOCK_READONLY) == 0u) {
+    if (mutationReady && !mutationCopy.empty()) {
       recorder->NotifyRenderTapeResourceMutationForChild(
           wireObject, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u,
           state.offset,
-          std::span<const std::byte>(static_cast<const std::byte *>(state.data),
-                                     state.size));
+          mutationCopy);
     }
     state.locked = false;
     state.servedFromReadonlyCache = false;
@@ -372,8 +420,8 @@ public:
     if (recorder_)
       recorder_->NotifyPeFirstCallAfterPresentForChild(
           "VertexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    return lockPeBuffer(b_, recorder_, desc_, descValid_, lockState_, off, size,
-                        pp, flags);
+    return lockPeBuffer(b_, recorder_, desc_, descValid_, wireObject_,
+                        lockState_, off, size, pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
     return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);
@@ -518,8 +566,8 @@ public:
     if (recorder_)
       recorder_->NotifyPeFirstCallAfterPresentForChild(
           "IndexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    return lockPeBuffer(b_, recorder_, desc_, descValid_, lockState_, off, size,
-                        pp, flags);
+    return lockPeBuffer(b_, recorder_, desc_, descValid_, wireObject_,
+                        lockState_, off, size, pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
     return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);

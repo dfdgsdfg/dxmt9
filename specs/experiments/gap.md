@@ -20,6 +20,7 @@ retired with that revision.
 
 | Area | Status | Spec |
 |---|---|---|
+| PE Render Tape capture boundary | ⚠️ bounded default-off seam with value-owned descriptors and fail-closed unsupported locks | Full uncompressed 2D locks and readonly buffer controls are journaled; partial/BC layouts, cube/volume locks, and unavailable metadata abort the interval. Provider replay, output oracle, and wild identity evidence remain open. |
 | `experiments/CATALOGUE.toml` + launcher tree scaffolded | ✅ | R-WILD-5.1 |
 | Wine-lane launcher harness (`run_experiment.py`, launcher scripts, manifest-selected runtime staging) | ✅ | R-WILD-1.2 (Wine lane), R-RT-* |
 | Internal backbuffer frame dump + SSIM comparison + `result.json` output | ✅ | R-WILD-2.3, R-WILD-4.1 |

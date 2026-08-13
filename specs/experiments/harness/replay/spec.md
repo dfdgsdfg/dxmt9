@@ -679,7 +679,14 @@ successful Present boundary, copies each recorder-flushed canonical chunk
 exactly once, and seals/publishes one value-owned bundle containing events and
 digest-verified blob bytes at the following Present. Live PE object,
 writable-lock mutation, and true chunk-bypass control call sites feed that
-owner; chunkized operations are not duplicated. This remains a capture seam
+owner; chunkized operations are not duplicated. PE object definitions carry
+value-owned C-side buffer/surface/texture/query descriptors, vertex
+declaration elements, and the exact validated shader bytecode extent. The
+capture seam accepts only full, uncompressed 2D surface/texture lock layouts;
+partial rectangles, block-compressed layouts, cube/volume lock paths, and
+unavailable descriptor or bytecode data fail closed by aborting the interval.
+Writable buffer/surface/texture mutations are copied before provider unlock,
+and readonly buffer locks are journaled as controls. This remains a capture seam
 rather than complete frame evidence: provider replay, offscreen Metal oracle
 execution, and wild-captured identity evidence remain open. Complete initial
 resource contents remain an injected bootstrap-producer obligation.
