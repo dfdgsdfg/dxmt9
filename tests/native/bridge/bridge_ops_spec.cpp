@@ -45,10 +45,10 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  // 156 since Task 10 stage D removed dxmt9c_device_draw_primitive_packet and
-  // ..._chunk, the two direct fat-packet ops. They had no PE caller and the wire
-  // has rejected non-canonical chunks for far longer.
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 156u,
+  // 159 after Task 10 stage D removed the two unused direct fat-packet ops and
+  // Render Tape added reserve / finish / cancel for its capture-only Present
+  // output oracle.
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 159u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
@@ -66,6 +66,9 @@ void testCommandChunkBridgeOpsAreGenerated() {
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_negotiate_command_chunk),
         "canonical negotiation opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_device_finish_render_tape_present_capture),
+        "capture-only PresentComplete finish opcode is generated");
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_texture_get_wire_identity),
         "texture identity opcode is generated");

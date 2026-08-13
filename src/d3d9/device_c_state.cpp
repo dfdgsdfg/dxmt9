@@ -20,6 +20,9 @@ D9CDevice::~D9CDevice() {
     replayOffload->queue().waitDrained();
     replayOffload->stop();
   }
+  // Replay must finish before the mirror lease is cancelled: encode may have
+  // taken its raw target handle while the command buffer is still in flight.
+  dxmt9c_device_cancel_render_tape_present_capture(this);
   if (iface) {
     iface->Release();
   }
@@ -139,6 +142,9 @@ extern "C" int32_t dxmt9c_device_reset(D9CDevice* d, const D9CPresentParams* pp)
   if (!pp) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  // The PE bridge wrapper drains deferred replay before entering this provider
+  // reset path; cancel only after that ordering point is established.
+  dxmt9c_device_cancel_render_tape_present_capture(d);
   const int32_t hr = d->iface->Reset(ppFromC(*pp));
   if (hr == dxmt9::core::D3D_OK) {
     clearBoundRenderTargetCache(d);
@@ -151,6 +157,9 @@ extern "C" int32_t dxmt9c_device_reset_ex(D9CDevice* d, const D9CPresentParams* 
   if (!pp) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  // The PE bridge wrapper drains deferred replay before entering this provider
+  // reset path; cancel only after that ordering point is established.
+  dxmt9c_device_cancel_render_tape_present_capture(d);
   auto params = ppFromC(*pp);
   if (dm) {
     auto dmex = dmExFromC(*dm);

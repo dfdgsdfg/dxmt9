@@ -1,7 +1,10 @@
 #include "device_c_render_tape_capture.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
+#include "dxmt9/device_c.h"
+#include "dxmt9/dxmt9_presenter.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,9 +14,20 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+static_assert(sizeof(D9CRenderTapePresentCaptureResult) == 56u);
+static_assert(alignof(D9CRenderTapePresentCaptureResult) == alignof(uint64_t));
+static_assert(std::is_standard_layout_v<D9CRenderTapePresentCaptureResult>);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, status) == 0u);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, width) == 4u);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, height) == 8u);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, format) == 12u);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, byteCount) == 16u);
+static_assert(offsetof(D9CRenderTapePresentCaptureResult, sha256) == 24u);
 
 using namespace dxmt9::d3d9;
 
@@ -681,6 +695,45 @@ void testObjectLifetimeAndTerminalControls() {
         "device lost has no partial artifact");
 }
 
+void testPresentCaptureResultAbiAndOneShotCancellation() {
+  D9CRenderTapePresentCaptureResult result{};
+  check(result.status == D9C_RENDER_TAPE_PRESENT_CAPTURE_NONE &&
+            result.width == 0u && result.height == 0u && result.format == 0u &&
+            result.byteCount == 0u,
+        "capture-only result is fixed POD with a zero failure baseline");
+  check(std::all_of(std::begin(result.sha256), std::end(result.sha256),
+                    [](std::uint8_t value) { return value == 0u; }),
+        "zeroed capture-only result exposes no partial digest");
+
+  constexpr std::array<std::byte, 3> abc{
+      std::byte{0x61u}, std::byte{0x62u}, std::byte{0x63u}};
+  constexpr std::array<std::byte, 32> abcSha256{
+      std::byte{0xbau}, std::byte{0x78u}, std::byte{0x16u}, std::byte{0xbfu},
+      std::byte{0x8fu}, std::byte{0x01u}, std::byte{0xcfu}, std::byte{0xeau},
+      std::byte{0x41u}, std::byte{0x41u}, std::byte{0x40u}, std::byte{0xdeu},
+      std::byte{0x5du}, std::byte{0xaeu}, std::byte{0x22u}, std::byte{0x23u},
+      std::byte{0xb0u}, std::byte{0x03u}, std::byte{0x61u}, std::byte{0xa3u},
+      std::byte{0x96u}, std::byte{0x17u}, std::byte{0x7au}, std::byte{0x9cu},
+      std::byte{0xb4u}, std::byte{0x10u}, std::byte{0xffu}, std::byte{0x61u},
+      std::byte{0xf2u}, std::byte{0x00u}, std::byte{0x15u}, std::byte{0xadu},
+  };
+  const auto digest = RenderTapeCaptureSession::sha256(abc);
+  check(digest == abcSha256,
+        "capture-only digest is SHA-256 over tightly packed presentation bytes");
+  auto mismatchedBytes = abc;
+  mismatchedBytes[2] = std::byte{0x64u};
+  check(RenderTapeCaptureSession::sha256(mismatchedBytes) != digest,
+        "one changed presentation byte must reject the expected digest");
+
+  dxmt9::PresentMirrorTicket cancelled;
+  check(cancelled.cancel() && !cancelled.markEncoded() && !cancelled.encoded(),
+        "cancelled mirror ticket cannot be consumed by a later Present");
+
+  dxmt9::PresentMirrorTicket consumed;
+  check(consumed.markEncoded() && consumed.encoded() && !consumed.cancel(),
+        "encoded mirror ticket is consumed exactly once and is not cancelled");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -701,6 +754,7 @@ int main(int argc, char** argv) {
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();
+    testPresentCaptureResultAbiAndOneShotCancellation();
     testObjectExpectedContentContractTruthTable();
     return 0;
   } catch (const TestFailure& failure) {

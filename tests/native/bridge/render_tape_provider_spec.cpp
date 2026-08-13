@@ -1,5 +1,8 @@
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_provider.hpp"
+#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_presenter.hpp"
+#include "dxmt9/dxmt9_resource_pool.hpp"
 
 // R-HARN-REPLAY-7.6/7.7/7.8: bounded provider identity grammar,
 // pre-effect failure, independent evidence, and native Metal output readback.
@@ -435,6 +438,143 @@ void failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs() {
         "stale generation must fail structural validation before effects");
 }
 
+std::vector<std::byte> readbackTight(dxmt9::Device& device,
+                                     dxmt9::core::SurfaceHandle surface,
+                                     std::uint32_t width,
+                                     std::uint32_t height) {
+  dxmt9::core::ReadbackPixels pixels;
+  check(device.readbackSurface(
+            dxmt9::core::ReadbackDesc{.source = surface}, pixels),
+        "production Presenter oracle readback succeeds");
+  constexpr std::uint32_t bytesPerPixel = 4u;
+  const auto tightPitch = width * bytesPerPixel;
+  check(pixels.pitch >= tightPitch &&
+            pixels.bytes.size() >= static_cast<std::size_t>(pixels.pitch) * height,
+        "production Presenter oracle readback has a bounded source span");
+  std::vector<std::byte> tight(static_cast<std::size_t>(tightPitch) * height);
+  for (std::uint32_t row = 0u; row < height; ++row) {
+    std::memcpy(tight.data() + static_cast<std::size_t>(row) * tightPitch,
+                pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
+                tightPitch);
+  }
+  return tight;
+}
+
+void productionPresenterMirrorGpuOracle() {
+  constexpr std::uint32_t width = 16u;
+  constexpr std::uint32_t height = 16u;
+  auto devices = WMT::CopyAllDevices();
+  if (!devices || devices.count() == 0u) {
+    return;
+  }
+  WMT::Device metalDevice = devices.object(0u);
+  auto upper = dxmt9::CreateDXMT9Device(
+      dxmt9::DEVICE_DESC{.device = metalDevice});
+  check(upper != nullptr, "production Presenter oracle device constructs");
+  const dxmt9::core::SurfaceDesc surfaceDesc{
+      .width = width,
+      .height = height,
+      .format = dxmt9::core::Format::A8R8G8B8,
+      .pool = dxmt9::core::Pool::Scratch,
+      .usage = dxmt9::core::UsageRenderTarget,
+      .renderTarget = true,
+      .depthStencil = false,
+      .multiSampleType = dxmt9::core::MultiSampleType::None,
+  };
+  const auto source = upper->createSurface(surfaceDesc);
+  const auto primary = upper->createSurface(surfaceDesc);
+  const auto mirror = upper->createSurface(surfaceDesc);
+  check(source && primary && mirror,
+        "production Presenter oracle creates source and output targets");
+  auto* sourceRecord = upper->pool()->findSurface(source.value);
+  auto* primaryRecord = upper->pool()->findSurface(primary.value);
+  auto* mirrorRecord = upper->pool()->findSurface(mirror.value);
+  check(sourceRecord && primaryRecord && mirrorRecord && sourceRecord->texture &&
+            primaryRecord->texture && mirrorRecord->texture,
+        "production Presenter oracle resolves Metal textures from the pool");
+
+  std::vector<std::uint8_t> sourceBytes(width * height * 4u);
+  for (std::uint32_t row = 0u; row < height; ++row) {
+    for (std::uint32_t column = 0u; column < width; ++column) {
+      const auto offset = (row * width + column) * 4u;
+      sourceBytes[offset + 0u] = static_cast<std::uint8_t>(column * 13u + row);
+      sourceBytes[offset + 1u] = static_cast<std::uint8_t>(row * 17u + column);
+      sourceBytes[offset + 2u] = static_cast<std::uint8_t>(column ^ (row * 3u));
+      sourceBytes[offset + 3u] = static_cast<std::uint8_t>(0x40u + row + column);
+    }
+  }
+  sourceRecord->texture.replaceRegion(
+      WMTOrigin{.x = 0u, .y = 0u, .z = 0u},
+      WMTSize{.width = width, .height = height, .depth = 1u}, 0u, 0u,
+      sourceBytes.data(), width * 4u, sourceBytes.size());
+
+  auto output = std::make_shared<dxmt9::OffscreenPresentOutput>(
+      WMT::Texture{primaryRecord->texture.handle}, width, height);
+  dxmt9::Presenter presenter(metalDevice, std::move(output), nullptr, nullptr);
+  check(presenter.valid(), "production Presenter oracle is valid");
+  auto ticket = std::make_shared<dxmt9::PresentMirrorTicket>();
+  const dxmt9::PresentOutputTarget mirrorTarget{
+      .texture = WMT::Texture{mirrorRecord->texture.handle},
+      .width = width,
+      .height = height,
+  };
+  check(presenter.reservePresentMirror(mirrorTarget, ticket),
+        "production Presenter reserves one mirror");
+  auto competingTicket = std::make_shared<dxmt9::PresentMirrorTicket>();
+  check(!presenter.reservePresentMirror(mirrorTarget, competingTicket),
+        "production Presenter rejects a second outstanding mirror");
+
+  auto commandBuffer = upper->queue().newCommandBuffer();
+  check(commandBuffer, "production Presenter oracle creates a command buffer");
+  const dxmt9::Presenter::EncodeParams params{
+      .source = WMT::Texture{sourceRecord->texture.handle},
+      .width = width,
+      .height = height,
+      .displaySyncEnabled = false,
+      .contentsScale = 1.0,
+      .minimumPresentDuration = 0.0,
+      .maxDrawableCount = dxmt9::kDefaultMetalDrawableCount,
+      .opaqueAlpha = false,
+      .seqId = 1u,
+  };
+  const auto first = presenter.encodeCommands(commandBuffer, params);
+  check(first.acquired && first.encoded && ticket->encoded(),
+        "production Presenter encodes the primary and one-shot mirror passes");
+  commandBuffer.commit();
+  commandBuffer.waitUntilCompleted();
+  const auto primaryBytes = readbackTight(*upper, primary, width, height);
+  const auto mirrorBytes = readbackTight(*upper, mirror, width, height);
+  check(primaryBytes == mirrorBytes,
+        "production Presenter primary and mirror readback bytes match");
+  check(RenderTapeCaptureSession::sha256(primaryBytes) ==
+            RenderTapeCaptureSession::sha256(mirrorBytes),
+        "production Presenter primary and mirror digests match");
+
+  auto secondTicket = std::make_shared<dxmt9::PresentMirrorTicket>();
+  check(presenter.reservePresentMirror(mirrorTarget, secondTicket),
+        "production Presenter permits a new mirror after one-shot consume");
+  presenter.cancelPresentMirror(secondTicket);
+  for (std::size_t i = 0u; i < sourceBytes.size(); ++i) {
+    sourceBytes[i] ^= static_cast<std::uint8_t>((i % 29u) + 1u);
+  }
+  sourceRecord->texture.replaceRegion(
+      WMTOrigin{.x = 0u, .y = 0u, .z = 0u},
+      WMTSize{.width = width, .height = height, .depth = 1u}, 0u, 0u,
+      sourceBytes.data(), width * 4u, sourceBytes.size());
+  auto secondCommandBuffer = upper->queue().newCommandBuffer();
+  check(secondCommandBuffer, "production Presenter oracle creates its second command buffer");
+  const auto second = presenter.encodeCommands(secondCommandBuffer, params);
+  check(second.acquired && second.encoded && !secondTicket->encoded(),
+        "cancelled mirror does not leak into a later Present");
+  secondCommandBuffer.commit();
+  secondCommandBuffer.waitUntilCompleted();
+  const auto primaryBytesAfterCancel = readbackTight(*upper, primary, width, height);
+  const auto mirrorBytesAfterCancel = readbackTight(*upper, mirror, width, height);
+  check(primaryBytesAfterCancel != primaryBytes &&
+            mirrorBytesAfterCancel == mirrorBytes,
+        "cancelled mirror remains untouched while the later primary changes");
+}
+
 void nativeMetalOffscreenIdentityReplay() {
   Fixture fixture;
   auto* factory = dxmt9c_factory_create();
@@ -634,6 +774,7 @@ int main(int argc, char** argv) {
           "usage: render_tape_provider_spec [--write-production-fixture dir]");
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
+    productionPresenterMirrorGpuOracle();
     nativeMetalOffscreenIdentityReplay();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
     productionShapeReportsWrongExpectedDigest();

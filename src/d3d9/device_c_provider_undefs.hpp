@@ -70,6 +70,9 @@
 #undef dxmt9c_device_get_depth_stencil
 #undef dxmt9c_device_draw_primitive
 #undef dxmt9c_device_commit_chunk
+#undef dxmt9c_device_reserve_render_tape_present_capture
+#undef dxmt9c_device_finish_render_tape_present_capture
+#undef dxmt9c_device_cancel_render_tape_present_capture
 #undef dxmt9c_device_draw_indexed_primitive
 #undef dxmt9c_device_draw_primitive_up
 #undef dxmt9c_device_draw_indexed_primitive_up

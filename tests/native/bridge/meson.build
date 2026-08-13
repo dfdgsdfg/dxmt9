@@ -158,11 +158,15 @@ foreach spec : [
       '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
     ]
   endif
+  dependencies = [dxmt9_dep, dxmt9_frontend_dep]
+  if spec[0] == 'render-tape-provider'
+    dependencies += [dxmt9_winemetal_dep]
+  endif
   target = executable(
     'dxmt9-' + spec[0] + '-spec',
     sources,
     include_directories: dxmt9_inc,
-    dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+    dependencies: dependencies,
     link_args: dxmt9_test_link_args,
   )
   test('dxmt9-' + spec[0] + '-spec', target,

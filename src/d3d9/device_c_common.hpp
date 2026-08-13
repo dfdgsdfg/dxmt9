@@ -142,6 +142,19 @@ struct D9CFactory {
   }
 };
 
+namespace dxmt9 {
+class PresentMirrorTicket;
+}
+
+struct D9CRenderTapePresentCaptureLease {
+  std::shared_ptr<dxmt9::core::Surface> mirror;
+  std::shared_ptr<dxmt9::PresentMirrorTicket> ticket;
+  uint32_t width = 0u;
+  uint32_t height = 0u;
+  uint32_t coreFormat = 0u;
+  uint32_t d3dFormat = 0u;
+};
+
 struct D9CDevice {
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t> refs{1};
@@ -154,6 +167,7 @@ struct D9CDevice {
   dxmt9::d3d9::ReplayDrainLedger replayDrainLedger;
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   dxmt9::d3d9::WireObjectRegistry wireObjects;
+  std::optional<D9CRenderTapePresentCaptureLease> renderTapePresentCapture;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}

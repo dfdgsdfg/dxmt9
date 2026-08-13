@@ -20,6 +20,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -33,6 +34,28 @@ struct PresentOutputTarget {
   WMT::Texture texture{};
   std::uint64_t width = 0u;
   std::uint64_t height = 0u;
+};
+
+class PresentMirrorTicket {
+ public:
+  enum class State : std::uint8_t { Reserved, Encoded, Cancelled };
+
+  bool markEncoded() noexcept {
+    State expected = State::Reserved;
+    return state_.compare_exchange_strong(expected, State::Encoded,
+                                          std::memory_order_acq_rel);
+  }
+  bool cancel() noexcept {
+    State expected = State::Reserved;
+    return state_.compare_exchange_strong(expected, State::Cancelled,
+                                          std::memory_order_acq_rel);
+  }
+  bool encoded() const noexcept {
+    return state_.load(std::memory_order_acquire) == State::Encoded;
+  }
+
+ private:
+  std::atomic<State> state_{State::Reserved};
 };
 
 // Cold replay/testing seam. Implementations replace only drawable acquisition
@@ -254,6 +277,9 @@ class Presenter {
   std::shared_ptr<PresentDrawableToken> beginAcquireDrawable(const AcquireParams& params);
   EncodeResult encodeCommands(WMT::CommandBuffer& commandBuffer, const EncodeParams& params);
   void preAcquireNextDrawable(uint64_t seqId);
+  bool reservePresentMirror(PresentOutputTarget target,
+                            std::shared_ptr<PresentMirrorTicket> ticket) noexcept;
+  void cancelPresentMirror(const std::shared_ptr<PresentMirrorTicket>& ticket) noexcept;
 
  private:
   // Return the pipeline future for the requested variant, kicking off the
@@ -269,6 +295,8 @@ class Presenter {
   void finishAsyncAcquireToken();
   void runAsyncAcquireLoop();
   void runPreAcquireLoop();
+  bool takePresentMirror(PresentOutputTarget& target,
+                         std::shared_ptr<PresentMirrorTicket>& ticket) noexcept;
 
   WMT::Device device_{};
   uint64_t hwnd_ = 0;
@@ -291,6 +319,12 @@ class Presenter {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineGammaAlpha_{};
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineGammaOpaque_{};
   WMT::Reference<WMT::SamplerState> sampler_{};
+  struct ReservedPresentMirror {
+    PresentOutputTarget target{};
+    std::shared_ptr<PresentMirrorTicket> ticket{};
+  };
+  std::mutex mirrorMutex_{};
+  std::optional<ReservedPresentMirror> mirror_{};
   std::mutex stateMutex_{};
   WMTLayerProps cachedLayerProps_{};
   uint32_t cachedMaxDrawableCount_ = 0;

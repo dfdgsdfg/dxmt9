@@ -836,6 +836,26 @@ typedef struct D9CCommandChunk {
     D9CWireHandle handles;
 } D9CCommandChunk;
 
+/* Capture-only PresentComplete output result. This fixed, pointer-free POD
+ * crosses the PE/unix boundary only after the captured PRESENT chunk has
+ * drained. `sha256` hashes tightly packed canonical logical Present output
+ * rows at the captured descriptor extent; only fixed POD is returned, and no
+ * variable payload or caller memory is retained or referenced after return. */
+typedef enum D9CRenderTapePresentCaptureStatus {
+    D9C_RENDER_TAPE_PRESENT_CAPTURE_NONE = 0,
+    D9C_RENDER_TAPE_PRESENT_CAPTURE_COMPLETE = 1,
+    D9C_RENDER_TAPE_PRESENT_CAPTURE_FAILED = 2,
+} D9CRenderTapePresentCaptureStatus;
+
+typedef struct D9CRenderTapePresentCaptureResult {
+    uint32_t status;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint64_t byteCount;
+    uint8_t sha256[32];
+} D9CRenderTapePresentCaptureResult;
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 DXMT9_NODISCARD D9CFactory* dxmt9c_factory_create(void);
@@ -972,6 +992,10 @@ DXMT9_NODISCARD D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDevice*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
+    D9CDevice*, D9CRenderTapePresentCaptureResult* out);
+void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,

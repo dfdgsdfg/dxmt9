@@ -216,6 +216,44 @@ void OffscreenPresentOutput::schedule(WMT::CommandBuffer&,
   scheduledCount_.fetch_add(1u, std::memory_order_release);
 }
 
+bool Presenter::reservePresentMirror(
+    PresentOutputTarget target,
+    std::shared_ptr<PresentMirrorTicket> ticket) noexcept {
+  if (!target.texture || target.width == 0u || target.height == 0u || !ticket) {
+    return false;
+  }
+  std::lock_guard lock(mirrorMutex_);
+  if (mirror_) {
+    return false;
+  }
+  mirror_ = ReservedPresentMirror{.target = target, .ticket = std::move(ticket)};
+  return true;
+}
+
+void Presenter::cancelPresentMirror(
+    const std::shared_ptr<PresentMirrorTicket>& ticket) noexcept {
+  std::lock_guard lock(mirrorMutex_);
+  if (mirror_ && mirror_->ticket == ticket) {
+    mirror_->ticket->cancel();
+    mirror_.reset();
+  } else if (ticket) {
+    ticket->cancel();
+  }
+}
+
+bool Presenter::takePresentMirror(
+    PresentOutputTarget& target,
+    std::shared_ptr<PresentMirrorTicket>& ticket) noexcept {
+  std::lock_guard lock(mirrorMutex_);
+  if (!mirror_) {
+    return false;
+  }
+  target = mirror_->target;
+  ticket = std::move(mirror_->ticket);
+  mirror_.reset();
+  return true;
+}
+
 Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath)
@@ -232,6 +270,13 @@ Presenter::Presenter(WMT::Device device, std::shared_ptr<PresentOutput> output,
       policy_(AcquirePolicy::Sync), archive_(archive), archivePath_(archivePath) {}
 
 Presenter::~Presenter() {
+  {
+    std::lock_guard lock(mirrorMutex_);
+    if (mirror_ && mirror_->ticket) {
+      mirror_->ticket->cancel();
+    }
+    mirror_.reset();
+  }
   {
     std::lock_guard lock(asyncAcquireMutex_);
     asyncAcquireStop_ = true;
@@ -689,6 +734,43 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.setScissorRect(WMTScissorRect{0, 0, targetWidth, targetHeight});
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
+
+  PresentOutputTarget mirrorTarget{};
+  std::shared_ptr<PresentMirrorTicket> mirrorTicket;
+  if (takePresentMirror(mirrorTarget, mirrorTicket)) {
+    WMTRenderPassInfo mirrorPass{};
+    mirrorPass.colors[0].texture = mirrorTarget.texture.handle;
+    mirrorPass.colors[0].load_action = WMTLoadActionDontCare;
+    mirrorPass.colors[0].store_action = WMTStoreActionStore;
+    auto mirrorEncoder = commandBuffer.renderCommandEncoder(mirrorPass);
+    if (!mirrorEncoder) {
+      mirrorTicket->cancel();
+      presentimpl::traceEvent("mirror.encoder.nil", params.seqId, hwnd_);
+    } else {
+      mirrorEncoder.setLabel(labels::makeLabelStringFmt(
+          "PresentMirror[seq=%llu]", static_cast<unsigned long long>(params.seqId)));
+      mirrorEncoder.setRenderPipelineState(pipeline);
+      mirrorEncoder.setFragmentTexture(params.source, 0);
+      if (sampler_) {
+        mirrorEncoder.setFragmentSamplerState(sampler_, 0);
+      }
+      if (applyGamma) {
+        mirrorEncoder.setFragmentBytes(params.gammaRamp, sizeof(core::GammaRamp), 0);
+      }
+      mirrorEncoder.setViewport(WMTViewport{
+          0.0, 0.0, static_cast<double>(mirrorTarget.width),
+          static_cast<double>(mirrorTarget.height), 0.0, 1.0});
+      mirrorEncoder.setScissorRect(
+          WMTScissorRect{0, 0, mirrorTarget.width, mirrorTarget.height});
+      mirrorEncoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+      mirrorEncoder.endEncoding();
+      if (mirrorTicket->markEncoded()) {
+        presentimpl::traceEvent("mirror.encoded", params.seqId, hwnd_);
+      } else {
+        presentimpl::traceEvent("mirror.cancelled", params.seqId, hwnd_);
+      }
+    }
+  }
   perf::countPresentPass(params.width, params.height, targetWidth, targetHeight);
   perf::countPresentSchedule(params.displaySyncEnabled, params.minimumPresentDuration);
   if (output_) {

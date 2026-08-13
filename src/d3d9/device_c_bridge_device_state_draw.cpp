@@ -292,6 +292,23 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* arg0, const D9CCommandC
   return dxmt9p_device_commit_chunk(arg0, chunk);
 }
 
+extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
+    D9CDevice* arg0) {
+  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_reserve_render_tape_present_capture");
+  return dxmt9p_device_reserve_render_tape_present_capture(arg0);
+}
+
+extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
+    D9CDevice* arg0, D9CRenderTapePresentCaptureResult* out) {
+  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_finish_render_tape_present_capture");
+  return dxmt9p_device_finish_render_tape_present_capture(arg0, out);
+}
+
+extern "C" void dxmt9c_device_cancel_render_tape_present_capture(
+    D9CDevice* arg0) {
+  if (arg0) dxmt9p_device_cancel_render_tape_present_capture(arg0);
+}
+
 extern "C" int32_t dxmt9c_device_draw_indexed_primitive(D9CDevice* arg0, uint32_t type, int32_t baseVertex, uint32_t minVertex, uint32_t numVertices, uint32_t startIndex, uint32_t count) {
   DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_draw_indexed_primitive");
   return dxmt9p_device_draw_indexed_primitive(arg0, type, baseVertex, minVertex, numVertices, startIndex, count);

@@ -109,6 +109,7 @@ enum class BridgeDetail : std::size_t {
   ResourceUnlock,
   QueryGetData,
   FrameWait,
+  RenderTapePresentCapture,
   ShaderCompile,
   Count,
 };
@@ -210,6 +211,7 @@ const char* bridgeDetailName(BridgeDetail detail) {
   case BridgeDetail::ResourceUnlock: return "resource_unlock";
   case BridgeDetail::QueryGetData: return "query_get_data";
   case BridgeDetail::FrameWait: return "frame_wait_call";
+  case BridgeDetail::RenderTapePresentCapture: return "render_tape_present_capture";
   case BridgeDetail::ShaderCompile: return "shader_compile";
   case BridgeDetail::Count: break;
   }
@@ -326,6 +328,9 @@ BridgeClass classifyBridgeClass(unsigned int code) {
     return BridgeClass::Surface;
 
   case BridgeOpcode::dxmt9c_device_present:
+  case BridgeOpcode::dxmt9c_device_reserve_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_swapchain_present:
   case BridgeOpcode::dxmt9c_device_get_swap_chain:
   case BridgeOpcode::dxmt9c_device_get_swap_chain_count:
@@ -460,6 +465,11 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     return true;
   case BridgeOpcode::dxmt9c_device_present:
     detail = BridgeDetail::Present;
+    return true;
+  case BridgeOpcode::dxmt9c_device_reserve_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
+    detail = BridgeDetail::RenderTapePresentCapture;
     return true;
   case BridgeOpcode::dxmt9c_swapchain_present:
     detail = BridgeDetail::SwapchainPresent;

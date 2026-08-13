@@ -693,20 +693,35 @@ block-compressed layouts, cube/volume lock paths, missing initial bytes, and
 unavailable descriptor or bytecode data fail closed before publication.
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. One bounded
-`perf-d3d9-present-loop` production capture now replays through this provider:
-the bundle is `/tmp/dxmt9-render-tape-final.1TVZ4h/frame-90260231960200-1`,
-`events.bin` is 2992 bytes with SHA-256
-`e2641223b27e357f19b04d57b76522c6225f8c76c9ca2804e5bab24e6d6017bf`, and the
-four-event tape has one object definition, one bootstrap, one `Clear` +
-`Present` command chunk, and zero blobs/mutations. Structural `validate` and
-`inspect` pass; `provider-replay` returns `complete` (exit 0), with
-`production_capture=true`, `production_provider_replay=true`, 256×256 format
-21 output, 262144-byte readback SHA-256
-`49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, and
-1/1 object conservation. There is no expected digest in this capture, so
-`output_oracle=false`, `expected_digest_captured=false`, and
-`expected_digest_matched=false`; the uniform clear makes
-`output_non_degenerate=false` without making the replay fail.
+`perf-d3d9-present-loop` production capture now closes the capture-time output
+oracle through this provider. The 2026-08-13 bundle
+`experiments/output/render-tape-oracle-final.0ZFP3y/frame-95919862787500-1`
+has a 2992-byte `events.bin` with SHA-256
+`ed6bb63659a72c60066c0653d4934669dd7f7081e7389f6a110f13a94eb5c7be`.
+Its four events are one object definition, one bootstrap, one `Clear` +
+`Present` command chunk, and one `PresentComplete`, with zero blobs or
+mutations. Structural `validate` and `inspect` pass; `provider-replay` returns
+`complete` (exit 0), with `production_capture=true`,
+`production_provider_replay=true`, and `output_oracle=true`. The capture-time
+and replay 256×256 format-21, 262144-byte outputs have the same SHA-256
+`49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, so
+`expected_digest_captured=true` and `expected_digest_matched=true`; object
+conservation is 1/1. The uniform clear makes `output_non_degenerate=false`,
+which limits scene coverage but does not weaken the exact byte-equivalence
+claim for this accepted interval.
+
+The first digest-bearing wild run usefully failed this oracle: capture recorded
+SHA-256 `7f2d0d283f559405932df39c2322375c60a577e9e6d462136661dea1a21b7b6a`
+while replay produced `49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`.
+Those hashes exactly identify the sample's first and second clear colours,
+respectively. Deferred replay had allowed the prior Present to consume the
+one-shot ticket. Draining deferred replay alone was insufficient because the
+prior Present could already be pending in the renderer queue; conversely, the
+captured Present reached that queue before its ticket was marked encoded. The
+implemented ordering therefore flushes the renderer before publishing the
+reservation and again after draining the captured replay but before accepting
+the encoded ticket. The successful evidence above is from that corrected
+ordering.
 
 At the arm boundary, the implicit swap-chain backbuffer is lazily admitted as
 the stable PE wire identity with `PresentOutput` role and
@@ -736,6 +751,27 @@ frame-name collisions. It writes `events.bin`, digest-named `blobs/`, and a
 minimal provenance/scope manifest in same-filesystem staging, flushes and
 closes the files, and atomically renames the complete frame directory; an
 unset or unsafe root leaves the default-off capture inert.
+
+For a standard canonical `PRESENT`, production capture also reserves one
+one-shot offscreen mirror on the existing window `Presenter` immediately before
+the captured chunk commit. The mirror is the canonical logical output at the
+captured backbuffer descriptor extent; it is not a claim about a drawable that
+may be resized by the window system. The ordinary drawable present remains
+intact. The reserve bridge first drains deferred replay and flushes the renderer
+queue before publishing the one-shot ticket, so a prior queued Present cannot
+consume it. In the captured Present command buffer the presenter renders the
+mirror with the identical present PSO, source, sampler, and gamma parameters.
+After the commit, a typed capture-only bridge finish drains replay and flushes
+the renderer queue before validating that the ticket was encoded; it then
+production-reads back the mirror, tightly packs row bytes, and returns fixed
+POD metadata plus SHA-256. PE
+validates the dimensions, D3D format, and exact byte count before recording the
+digest in `PresentComplete`. Mirror failure, cancellation, absent/mismatched
+metadata, or cleanup failure aborts the tape alone and never changes the
+application's Present result or publishes a bundle. The inactive capture gate
+does not reserve, bridge, allocate, or add a render pass. This does not extend
+the accepted grammar, support `PresentEx` or prior-output loads, or introduce
+sequence/reducer behavior.
 
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events and adds only a total expected byte

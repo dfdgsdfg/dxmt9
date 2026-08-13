@@ -1134,6 +1134,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::optional<RenderTapeLiveRegistry> renderTapeRegistry_{};
     std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
         renderTapeCaptureOracle_{};
+    std::optional<dxmt9::d3d9::RenderTapeDigest> renderTapeExpectedDigest_{};
+    std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
     const char *renderTapeAbortReason_ = nullptr;
     std::uint64_t renderTapeCompletionOrdinal_ = 0u;
     std::uint64_t commandChunkCommits_ = 0;
@@ -6855,6 +6857,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                reason);
         }
         renderTapeCapture_->abort();
+        renderTapeExpectedDigest_.reset();
+        renderTapeOutputDesc_.reset();
     }
 
     void registerRenderTapeObject(
@@ -6971,6 +6975,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 "render_tape_capture producer aborted reason=present_output_identity_or_descriptor_invalid");
             return false;
         }
+        renderTapeOutputDesc_ = descriptor;
         const dxmt9::d3d9::pe::PeWireObjectRef object{
             .identity = identity,
             .object = surface,
@@ -7283,6 +7288,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // Keep the first-abort marker sticky only for this arm/interval
         // lifecycle; a retry must get independent attribution.
         renderTapeAbortReason_ = nullptr;
+        renderTapeExpectedDigest_.reset();
+        renderTapeOutputDesc_.reset();
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
             std::memory_order_acquire);
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -7402,16 +7409,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    static bool chunkHasPresentRecord(const D9CCommandChunk& chunk) noexcept {
+        if (chunk.recordBytes < sizeof(D9CCommandChunkWireHeader) ||
+            d9cWireHandleValue(chunk.records) == 0u) {
+            return false;
+        }
+        const auto* bytes = reinterpret_cast<const std::byte*>(
+            static_cast<std::uintptr_t>(d9cWireHandleValue(chunk.records)));
+        D9CCommandChunkWireHeader header{};
+        std::memcpy(&header, bytes, sizeof(header));
+        if (header.recordCount != chunk.recordCount ||
+            header.recordHeaderSize != sizeof(D9CCommandChunkWireRecordHeader) ||
+            header.recordTableOffset > chunk.recordBytes ||
+            header.recordCount >
+                (chunk.recordBytes - header.recordTableOffset) /
+                    sizeof(D9CCommandChunkWireRecordHeader)) {
+            return false;
+        }
+        for (std::uint32_t index = 0u; index < header.recordCount; ++index) {
+            D9CCommandChunkWireRecordHeader record{};
+            std::memcpy(&record,
+                        bytes + header.recordTableOffset +
+                            static_cast<std::size_t>(index) * sizeof(record),
+                        sizeof(record));
+            if (record.type == D9C_COMMAND_RECORD_PRESENT) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void finishRenderTapeCaptureAtPresentBoundary() noexcept {
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
         }
+        if (!renderTapeExpectedDigest_) {
+            abortRenderTapeCapture("present_output_capture_missing");
+            return;
+        }
         const auto status = renderTapeCapture_->completePresent(
             renderTapeCapture_->eventCount(),
             std::max<std::uint64_t>(1u, commandChunkCommits_),
-            dxmt9::d3d9::RenderTapeDigestValidity::NotCaptured, {},
+            dxmt9::d3d9::RenderTapeDigestValidity::Sha256,
+            *renderTapeExpectedDigest_,
             std::as_bytes(std::span(renderTapeCaptureOracle_)));
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
             dxmt9DeviceInfoLog(
@@ -7445,11 +7487,26 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!published) {
             abortRenderTapeCapture("publication");
         }
+        renderTapeExpectedDigest_.reset();
     }
 
     HRESULT commitPendingCommandChunk(PeRecorderFlushReason commitReason,
                                       const D9CCommandChunk& chunk,
                                       const PeCommandChunkCommitInfo& info) {
+                const bool capturePresent = renderTapeCapture_ &&
+                    renderTapeCapture_->state() ==
+                        dxmt9::d3d9::RenderTapeCaptureState::Capturing &&
+                    chunkHasPresentRecord(chunk);
+                bool presentMirrorReserved = false;
+                if (capturePresent) {
+                    const HRESULT reserveHr = hr32(
+                        dxmt9c_device_reserve_render_tape_present_capture(dev_));
+                    if (SUCCEEDED(reserveHr)) {
+                        presentMirrorReserved = true;
+                    } else {
+                        abortRenderTapeCapture("present_output_reserve");
+                    }
+                }
                 auto chunkCadence = claimPeFirstChunkAfterPresent();
                 const std::int64_t entryNs =
                     dxmt9SteadyClockNs(std::chrono::steady_clock::now());
@@ -7497,6 +7554,50 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                            renderTapeCapture_->state() ==
                                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
                     abortRenderTapeCapture("bridge_commit");
+                }
+                if (presentMirrorReserved) {
+                    if (FAILED(hr)) {
+                        dxmt9c_device_cancel_render_tape_present_capture(dev_);
+                    } else if (renderTapeCapture_ &&
+                               renderTapeCapture_->state() ==
+                                   dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+                        D9CRenderTapePresentCaptureResult output{};
+                        const HRESULT finishHr = hr32(
+                            dxmt9c_device_finish_render_tape_present_capture(
+                                dev_, &output));
+                        const auto outputBpp = renderTapeOutputDesc_
+                            ? renderTapeFormatBytesPerPixel(
+                                  renderTapeOutputDesc_->format)
+                            : 0u;
+                        const bool outputExtentFits = renderTapeOutputDesc_ &&
+                            outputBpp != 0u &&
+                            renderTapeOutputDesc_->height != 0u &&
+                            renderTapeOutputDesc_->width <=
+                                std::numeric_limits<std::uint64_t>::max() /
+                                    renderTapeOutputDesc_->height / outputBpp;
+                        const auto outputBytes = outputExtentFits
+                            ? static_cast<std::uint64_t>(
+                                  renderTapeOutputDesc_->width) *
+                                  renderTapeOutputDesc_->height * outputBpp
+                            : 0u;
+                        if (SUCCEEDED(finishHr) &&
+                            output.status ==
+                                D9C_RENDER_TAPE_PRESENT_CAPTURE_COMPLETE &&
+                            outputExtentFits &&
+                            output.width == renderTapeOutputDesc_->width &&
+                            output.height == renderTapeOutputDesc_->height &&
+                            output.format == renderTapeOutputDesc_->format &&
+                            output.byteCount == outputBytes) {
+                            dxmt9::d3d9::RenderTapeDigest digest{};
+                            std::memcpy(digest.data(), output.sha256,
+                                        digest.size());
+                            renderTapeExpectedDigest_ = digest;
+                        } else {
+                            abortRenderTapeCapture("present_output_finish");
+                        }
+                    } else {
+                        dxmt9c_device_cancel_render_tape_present_capture(dev_);
+                    }
                 }
                 return hr;
     }

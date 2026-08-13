@@ -28,6 +28,7 @@ dxmt9_frontend_provider_srcs = files(
   'device_c_record_replay.cpp',
   'device_c_render_tape.cpp',
   'device_c_render_tape_capture.cpp',
+  'device_c_render_tape_present_capture.cpp',
   'device_c_render_tape_provider.cpp',
   'device_c_replay_offload.cpp',
   'device_c_resources.cpp',

@@ -531,3 +531,23 @@ provenance/scope manifest on the output filesystem, flushes and closes the
 components, and exposes them only through an atomic directory rename. A
 publisher failure leaves no claimable partial bundle and does not alter the
 D3D9 call result; capture remains inert when the root is unset or unsafe.
+
+**R-HARN-REPLAY-7.13** A production Render Tape `PresentComplete` carries the
+SHA-256 digest of the exact standard-`Present` presentation-output domain: the
+row-major, tightly packed bytes of a one-shot offscreen mirror representing the
+canonical logical output at the captured backbuffer descriptor extent, rendered
+by the existing window `Presenter` with the same present PSO, source, sampler,
+and gamma parameters in the same command buffer as the normal drawable present.
+The PE owner reserves that mirror only immediately before committing the
+captured canonical `PRESENT` chunk, then uses a typed capture-only bridge
+finish to drain, read back, validate `(width,height,format,byteCount)`, and
+copy its fixed-POD result. Before publishing the one-shot reservation, the
+bridge drains deferred replay and flushes the renderer queue; after the
+captured chunk is accepted, finish drains that replay and flushes the renderer
+queue before accepting the ticket as encoded. Therefore neither an older nor a
+later Present may consume the ticket for the captured interval. Reservation,
+cancellation, failure, a missing or mismatched result, and cleanup abort only
+the tape: they preserve the D3D9 `Present` HRESULT and publish no artifact. The
+feature is default-off and must add neither allocation nor bridge work while
+capture is inactive. This requirement does not widen the accepted grammar,
+support `PresentEx`, or support prior-output loads.
