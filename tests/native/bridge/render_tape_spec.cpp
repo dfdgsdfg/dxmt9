@@ -476,6 +476,82 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
         "retired command handles must fail closed");
 }
 
+void seedContentClosesByUniqueSubresourceAndSummedBytes() {
+  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto firstDigest = digest(std::byte{0x10});
+  const auto secondDigest = digest(std::byte{0x30});
+  const RenderTapeBlobCatalogue catalogue{.blobs = {
+      RenderTapeBlob{.digest = firstDigest, .size = 3u, .verified = 1u},
+      RenderTapeBlob{.digest = secondDigest, .size = 4u, .verified = 1u},
+  }};
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = 1u,
+  };
+
+  const auto appendPrefix = [&](RenderTapeBuilder& builder) {
+    builder.appendBootstrapState(makeApplyStateChunk());
+    builder.appendObjectDefine(kSurface, 1u, descriptor, 0u, {});
+    builder.appendObjectDefine(kTexture, 1u, descriptor, 0u, {}, 7u, 2u);
+  };
+  const auto appendSuffix = [&](RenderTapeBuilder& builder,
+                                std::uint64_t presentOrdinal) {
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        makePresentChunk());
+    builder.appendPresentComplete(
+        presentOrdinal, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+  };
+
+  RenderTapeBuilder complete;
+  appendPrefix(complete);
+  complete.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                  0u, 0u, 3u, firstDigest);
+  complete.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                  1u, 0u, 4u, secondDigest);
+  appendSuffix(complete, 6u);
+  check(validateRenderTape(complete.seal(), catalogue).valid(),
+        "unique multi-subresource seeds close by summed bytes and count");
+
+  RenderTapeBuilder postArmMutation;
+  appendPrefix(postArmMutation);
+  postArmMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::Upload, 0u, 0u, 3u, firstDigest);
+  postArmMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::Upload, 1u, 0u, 4u, secondDigest);
+  // Once the declared checkpoint closes, a mutation in the live interval is
+  // ordinary even when no CommandChunk has appeared yet. It may target a
+  // seeded subresource again and need not match the aggregate seed extent.
+  postArmMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::CpuUnlock, 0u, 1u, 4u, secondDigest);
+  appendSuffix(postArmMutation, 7u);
+  check(validateRenderTape(postArmMutation.seal(), catalogue).valid(),
+        "post-arm pre-command mutation is not reclassified as a seed");
+
+  RenderTapeBuilder duplicate;
+  appendPrefix(duplicate);
+  duplicate.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                   0u, 0u, 3u, firstDigest);
+  duplicate.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                   0u, 0u, 4u, secondDigest);
+  appendSuffix(duplicate, 6u);
+  check(validateRenderTape(duplicate.seal(), catalogue).status ==
+            RenderTapeValidationStatus::InvalidMutationRange,
+        "duplicate seed subresources fail closed even when totals match");
+
+  RenderTapeBuilder incomplete;
+  appendPrefix(incomplete);
+  incomplete.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                    0u, 0u, 3u, firstDigest);
+  appendSuffix(incomplete, 5u);
+  const auto incompleteResult =
+      validateRenderTape(incomplete.seal(), catalogue);
+  check(incompleteResult.status == RenderTapeValidationStatus::IncompleteFrame &&
+            incompleteResult.failedEventIndex == 4u,
+        "seed extents close before the first non-seed command event");
+}
+
 void invalidInputsFailBeforeCallbacks() {
   const auto validCatalogue = completeCatalogue();
 
@@ -630,6 +706,7 @@ int main(int argc, char** argv) {
     validTapeReplaysExactlyOnce();
     immutableObjectsAndRetirementFailClosed();
     bootstrapAndCommandHandlesCloseBeforeReplay();
+    seedContentClosesByUniqueSubresourceAndSummedBytes();
     invalidInputsFailBeforeCallbacks();
   } catch (const std::exception& error) {
     std::cerr << "render tape spec failed: " << error.what() << '\n';

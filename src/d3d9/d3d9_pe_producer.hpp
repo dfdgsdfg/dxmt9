@@ -70,6 +70,15 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                         D9CCommandChunkWireDrawHeader& header,
                         SparseStateInput& out) noexcept;
 
+// Builds the value-owned checkpoint form used by Render Tape. Unlike the
+// normal draw path this preserves the complete constant shadow rather than
+// consuming only dirty ranges; the caller may then append the result to a
+// temporary APPLY_STATE builder without touching the live command chunk.
+bool buildFullSnapshotState(
+    const PeHotStateShadow& shadow, PeConstShadowBlock& constants,
+    const PeBindingView& bindings, PeSparseScratch& scratch,
+    D9CCommandChunkWireDrawHeader& header, SparseStateInput& out) noexcept;
+
 // Applies destination-chunk re-emission on top of a buildSparseState result.
 // Draw sites only: the barrier path never calls this, matching production.
 //

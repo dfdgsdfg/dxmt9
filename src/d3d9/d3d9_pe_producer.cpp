@@ -442,6 +442,48 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   return true;
 }
 
+bool buildFullSnapshotState(
+    const PeHotStateShadow& shadow, PeConstShadowBlock& constants,
+    const PeBindingView& bindings, PeSparseScratch& scratch,
+    D9CCommandChunkWireDrawHeader& header, SparseStateInput& out) noexcept {
+  if (!buildSparseState(shadow, constants, bindings, PeDrawPayloads{},
+                        PeDrawParams{.recordType = D9C_COMMAND_RECORD_APPLY_STATE},
+                        true, false, scratch, header, out)) {
+    return false;
+  }
+
+  const auto setRange = [](const ConstShadow& source,
+                           SparseConstantRangeInput& destination,
+                           std::size_t elementSize,
+                           std::uint32_t maxRegisters) noexcept {
+    if (source.values.empty() || source.values.size() % elementSize != 0u) {
+      destination = {};
+      return source.values.empty();
+    }
+    destination = SparseConstantRangeInput{
+        .startRegister = 0u,
+        .registerCount = static_cast<std::uint32_t>(source.values.size() /
+                                                     elementSize),
+        .registerBytes = std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(source.values.data()),
+            source.values.size()),
+    };
+    return destination.registerCount <= maxRegisters;
+  };
+  return setRange(constants.vsConstF, out.vsFloatConstants, 16u,
+                  D9C_DRAW_PACKET_MAX_CONST_VS_F) &&
+         setRange(constants.vsConstI, out.vsIntConstants, 16u,
+                  D9C_DRAW_PACKET_MAX_CONST_VS_I) &&
+         setRange(constants.vsConstB, out.vsBoolConstants, 4u,
+                  D9C_DRAW_PACKET_MAX_CONST_VS_B) &&
+         setRange(constants.psConstF, out.psFloatConstants, 16u,
+                  D9C_DRAW_PACKET_MAX_CONST_PS_F) &&
+         setRange(constants.psConstI, out.psIntConstants, 16u,
+                  D9C_DRAW_PACKET_MAX_CONST_PS_I) &&
+         setRange(constants.psConstB, out.psBoolConstants, 4u,
+                  D9C_DRAW_PACKET_MAX_CONST_PS_B);
+}
+
 namespace {
 
 // Fail loudly on an unstamped recordType instead of silently deciding "not

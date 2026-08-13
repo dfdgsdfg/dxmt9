@@ -202,7 +202,9 @@ static std::size_t renderTapeLockBytes(const D9CSurfaceDesc &desc, LONG pitch,
 static bool copyRenderTapeMutation(
     D3D9PeRecorderFlush *recorder, const void *bits, std::size_t bytes,
     std::vector<std::byte> &copy) noexcept {
-  if (!recorder || !recorder->IsRenderTapeCaptureActiveForChild())
+  if (!recorder ||
+      (!recorder->IsRenderTapeCaptureActiveForChild() &&
+       !recorder->IsRenderTapeCaptureTrackingEnabledForChild()))
     return true;
   if (!bits || bytes == 0u) {
     recorder->AbortRenderTapeCaptureForChild();
@@ -710,7 +712,7 @@ public:
       lockFlags_ = flags;
       lockBits_ = userMemory_;
       lockBytes_ = renderTapeLockBytes(desc_, userMemoryPitch_, pRect);
-      if (recorder_ && recorder_->IsRenderTapeCaptureActiveForChild() &&
+      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           lockBytes_ == 0u)
         recorder_->AbortRenderTapeCaptureForChild();
       if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
@@ -751,7 +753,7 @@ public:
       lockFlags_ = flags;
       lockBits_ = lr.bits;
       lockBytes_ = renderTapeLockBytes(desc_, lr.pitch, pRect);
-      if (recorder_ && recorder_->IsRenderTapeCaptureActiveForChild() &&
+      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           lockBytes_ == 0u)
         recorder_->AbortRenderTapeCaptureForChild();
       if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
@@ -1206,7 +1208,7 @@ public:
       D9CSurfaceDesc userDesc{};
       (void)textureLevelDesc(t_, level, &userDesc);
       lockBytes_ = renderTapeLockBytes(userDesc, userMemoryPitch_, pRect);
-      if (recorder_ && recorder_->IsRenderTapeCaptureActiveForChild() &&
+      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           lockBytes_ == 0u)
         recorder_->AbortRenderTapeCaptureForChild();
       if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
@@ -1249,7 +1251,7 @@ public:
       D9CSurfaceDesc lockDesc{};
       (void)textureLevelDesc(t_, level, &lockDesc);
       lockBytes_ = renderTapeLockBytes(lockDesc, lr.pitch, pRect);
-      if (recorder_ && recorder_->IsRenderTapeCaptureActiveForChild() &&
+      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           lockBytes_ == 0u)
         recorder_->AbortRenderTapeCaptureForChild();
       if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
@@ -1583,7 +1585,7 @@ public:
     if (SUCCEEDED(hr)) {
       pLR->Pitch = lr.pitch;
       pLR->pBits = lr.bits;
-      if (recorder_ && recorder_->IsRenderTapeCaptureActiveForChild())
+      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild())
         recorder_->AbortRenderTapeCaptureForChild();
     }
     return hr;
@@ -1728,7 +1730,7 @@ public:
           "Volume::LockBox", DXMT9_PE_CALLSITE_PC());
     const HRESULT hr = lockTextureBox(t_, level_, locked, box, flags, recorder_);
     if (SUCCEEDED(hr) && recorder_ &&
-        recorder_->IsRenderTapeCaptureActiveForChild())
+        recorder_->IsRenderTapeCaptureTrackingEnabledForChild())
       recorder_->AbortRenderTapeCaptureForChild();
     return hr;
   }
@@ -1954,7 +1956,7 @@ public:
     }
     const HRESULT hr = lockTextureBox(t_, level, locked, box, flags, recorder_);
     if (SUCCEEDED(hr) && recorder_ &&
-        recorder_->IsRenderTapeCaptureActiveForChild())
+        recorder_->IsRenderTapeCaptureTrackingEnabledForChild())
       recorder_->AbortRenderTapeCaptureForChild();
     return hr;
   }

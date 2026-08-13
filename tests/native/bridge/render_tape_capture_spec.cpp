@@ -197,7 +197,7 @@ void testProductionHookGateTruthTable() {
       GateCase{false, nullptr, publisher, false},
       GateCase{true, producer, publisher, true},
       GateCase{true, producer, nullptr, false},
-      GateCase{true, nullptr, publisher, false},
+      GateCase{true, nullptr, publisher, true},
   };
   for (const auto& testCase : cases) {
     check(dxmt9PeRenderTapeCaptureCallbacksInstalled(
@@ -255,7 +255,7 @@ void writeProductionFixture(const std::filesystem::path& directory) {
   check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "production fixture starts one Present interval");
   constexpr std::array<std::byte, 8u> descriptor{};
-  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}) ==
+  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}, 4u, 1u) ==
             RenderTapeCaptureStatus::Accepted,
         "production fixture journals ObjectDefine");
   check(session.resourceMutationBytes(
@@ -329,7 +329,7 @@ void testCompletePresentPublishesExactlyOneTape() {
   check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "complete capture starts one interval");
   constexpr std::array<std::byte, 8u> descriptor{};
-  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}) ==
+  check(session.objectDefine(kSurface, 1u, descriptor, 0u, {}, 4u, 1u) ==
             RenderTapeCaptureStatus::Accepted,
         "object definition is journaled");
   const auto mutationDigestValue = digest();
@@ -362,6 +362,32 @@ void testCompletePresentPublishesExactlyOneTape() {
             std::as_bytes(std::span(&attachment, 1u))) ==
             RenderTapeCaptureStatus::InvalidState,
         "second Present cannot publish another interval");
+}
+
+void testObjectExpectedContentContractTruthTable() {
+  struct ExtentCase {
+    std::uint64_t bytes;
+    std::uint32_t count;
+    RenderTapeCaptureStatus expected;
+  };
+  constexpr std::array cases{
+      ExtentCase{0u, 0u, RenderTapeCaptureStatus::Accepted},
+      ExtentCase{4u, 0u, RenderTapeCaptureStatus::InvalidInput},
+      ExtentCase{0u, 1u, RenderTapeCaptureStatus::InvalidInput},
+      ExtentCase{4u, 1u, RenderTapeCaptureStatus::Accepted},
+  };
+  constexpr std::array<std::byte, 8u> descriptor{};
+  for (const auto& testCase : cases) {
+    RenderTapeCaptureSession session(true);
+    check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() ==
+                  RenderTapeCaptureStatus::Accepted,
+          "expected-content truth-table fixture starts");
+    check(session.objectDefine(kSurface, 1u, descriptor, 0u, {},
+                               testCase.bytes, testCase.count) ==
+              testCase.expected,
+          "ObjectDefine expected extent/count pair truth table is stable");
+  }
 }
 
 void testFailureBeforePublishAndBoundedBackpressure() {
@@ -445,6 +471,21 @@ void testBoundedBlobBytesAndDeduplication() {
             RenderTapeCaptureStatus::Accepted &&
             exactArm.ownedBlobBytes() == 4u,
         "arm-owned duplicate does not double-charge bytes");
+
+  const std::array<RenderTapeCaptureBlob, 2u> duplicateSeeds{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(
+                                3u, std::byte{0x55})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(
+                                3u, std::byte{0x55})},
+  };
+  RenderTapeCaptureSession duplicateArm(true,
+                                        RenderTapeCaptureLimits{
+                                            .maxBlobEntries = 1u,
+                                            .maxBlobBytes = 3u});
+  check(duplicateArm.armWithBlobs(bootstrapChunk(), duplicateSeeds) ==
+            RenderTapeCaptureStatus::Accepted &&
+            duplicateArm.ownedBlobBytes() == 3u,
+        "duplicate bootstrap blobs consume one entry and one byte charge");
 }
 
 void testObjectLifetimeAndTerminalControls() {
@@ -526,6 +567,7 @@ int main(int argc, char** argv) {
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();
+    testObjectExpectedContentContractTruthTable();
     return 0;
   } catch (const TestFailure& failure) {
     return 1;

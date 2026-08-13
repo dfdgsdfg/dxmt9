@@ -47,6 +47,13 @@ bool sameSlot(const D9CWireObjectIdentity& a,
   return a.kind == b.kind && a.objectId == b.objectId;
 }
 
+bool mutationCapableIdentity(
+    const D9CWireObjectIdentity& identity) noexcept {
+  return identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+         identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE ||
+         identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER;
+}
+
 } // namespace
 
 RenderTapeCaptureSession::RenderTapeCaptureSession(
@@ -163,30 +170,37 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
 RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     std::span<const std::byte> bootstrapOverlay,
     std::span<const RenderTapeCaptureBlob> blobs) {
-  if (blobs.size() > limits_.maxBlobEntries) {
-    return RenderTapeCaptureStatus::InvalidInput;
-  }
   std::uint64_t totalBlobBytes = 0u;
-  for (const auto& blob : blobs) {
-    const auto blobBytes = static_cast<std::uint64_t>(blob.bytes.size());
-    if (blobBytes > limits_.maxBlobBytes ||
-        totalBlobBytes > limits_.maxBlobBytes - blobBytes) {
-      return RenderTapeCaptureStatus::CapacityExceeded;
-    }
-    totalBlobBytes += blobBytes;
-  }
   std::vector<RenderTapeBlob> catalogue;
   std::vector<RenderTapePublishedBlob> owned;
   try {
-    catalogue.reserve(blobs.size());
-    owned.reserve(blobs.size());
+    const auto reserveCount = std::min<std::size_t>(
+        blobs.size(), limits_.maxBlobEntries);
+    catalogue.reserve(reserveCount);
+    owned.reserve(reserveCount);
     for (const auto& blob : blobs) {
+      const bool duplicate = std::any_of(
+          owned.begin(), owned.end(), [&](const auto& published) {
+            return published.bytes == blob.bytes;
+          });
+      if (duplicate) {
+        continue;
+      }
+      if (owned.size() >= limits_.maxBlobEntries) {
+        return RenderTapeCaptureStatus::CapacityExceeded;
+      }
+      const auto blobBytes = static_cast<std::uint64_t>(blob.bytes.size());
+      if (blobBytes > limits_.maxBlobBytes ||
+          totalBlobBytes > limits_.maxBlobBytes - blobBytes) {
+        return RenderTapeCaptureStatus::CapacityExceeded;
+      }
       const auto digest = sha256(blob.bytes);
       catalogue.push_back(RenderTapeBlob{.digest = digest,
                                          .size = blob.bytes.size(),
                                          .verified = 1u});
       owned.push_back(RenderTapePublishedBlob{.digest = digest,
                                               .bytes = blob.bytes});
+      totalBlobBytes += blobBytes;
     }
   } catch (...) {
     return RenderTapeCaptureStatus::CapacityExceeded;
@@ -359,12 +373,15 @@ bool RenderTapeCaptureSession::chunkHasPresent(
 RenderTapeCaptureStatus RenderTapeCaptureSession::objectDefine(
     const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
     std::span<const std::byte> descriptor, std::uint64_t immutableBytes,
-    RenderTapeDigest immutableDigest) {
+    RenderTapeDigest immutableDigest, std::uint64_t expectedContentBytes,
+    std::uint32_t expectedContentCount) {
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
     return status;
   }
   if (!validIdentity(identity) || descriptorKind == 0u || descriptor.empty() ||
+      ((expectedContentBytes == 0u) != (expectedContentCount == 0u)) ||
+      (expectedContentBytes != 0u && !mutationCapableIdentity(identity)) ||
       hasObject(identity, false) ||
       std::any_of(objects_.begin(), objects_.end(), [&](const auto& slot) {
         return sameSlot(slot.identity, identity);
@@ -380,7 +397,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::objectDefine(
   }
   try {
     builder_.appendObjectDefine(identity, descriptorKind, descriptor,
-                                immutableBytes, immutableDigest);
+                                immutableBytes, immutableDigest,
+                                expectedContentBytes, expectedContentCount);
     objects_.push_back(ObjectSlot{.identity = identity, .live = true});
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapeObjectDefineHeader) + descriptor.size();

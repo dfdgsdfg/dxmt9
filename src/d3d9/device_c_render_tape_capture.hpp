@@ -38,15 +38,17 @@ struct RenderTapeCaptureLimits {
   std::uint64_t maxBlobBytes = 64u * 1024u * 1024u;
 };
 
-// PE-side injection point for the complete shadow checkpoint. The producer
-// owns no live COM/Metal objects through this value-only handoff; the session
-// copies every field before the producer's call returns.
+// Value-only handoff for the device-owned production checkpoint and the
+// explicit injected test override. The session copies every field before the
+// producer's call returns and never retains COM/Metal objects.
 struct RenderTapeCaptureObjectSeed {
   D9CWireObjectIdentity identity{};
   std::uint32_t descriptorKind = 0u;
   std::vector<std::byte> descriptor{};
   std::uint64_t immutableBytes = 0u;
   RenderTapeDigest immutableDigest{};
+  std::uint64_t expectedContentBytes = 0u;
+  std::uint32_t expectedContentCount = 0u;
 };
 
 struct RenderTapeCaptureMutationSeed {
@@ -120,7 +122,8 @@ public:
   RenderTapeCaptureStatus objectDefine(
       const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
       std::span<const std::byte> descriptor, std::uint64_t immutableBytes,
-      RenderTapeDigest immutableDigest);
+      RenderTapeDigest immutableDigest, std::uint64_t expectedContentBytes = 0u,
+      std::uint32_t expectedContentCount = 0u);
   RenderTapeCaptureStatus objectDestroy(
       const D9CWireObjectIdentity& identity);
   RenderTapeCaptureStatus resourceMutation(
@@ -160,6 +163,8 @@ public:
     return validationStatus_;
   }
 
+  static RenderTapeDigest sha256(std::span<const std::byte> bytes);
+
 private:
   struct ObjectSlot {
     D9CWireObjectIdentity identity{};
@@ -175,8 +180,6 @@ private:
   bool chunkHasPresent(std::span<const std::byte> chunk,
                        const CommandChunkEnvelope& envelope) const noexcept;
   void abortInternal() noexcept;
-
-  static RenderTapeDigest sha256(std::span<const std::byte> bytes);
 
   bool enabled_ = false;
   RenderTapeCaptureLimits limits_{};

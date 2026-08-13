@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -682,6 +683,66 @@ struct RenderTapeQueryDescriptor {
     uint32_t dataBytes = 0u;
 };
 
+struct RenderTapeLiveObject {
+    D9CWireObjectIdentity identity{};
+    std::vector<std::byte> descriptor{};
+    std::vector<std::byte> immutablePayload{};
+    std::uint32_t contentCount = 0u;
+    std::vector<std::vector<std::byte>> content{};
+};
+
+struct RenderTapeLiveRegistry {
+    std::vector<RenderTapeLiveObject> objects{};
+    bool invalid = false;
+};
+
+static bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
+    switch (format) {
+    case D3DFMT_DXT1:
+    case D3DFMT_DXT2:
+    case D3DFMT_DXT3:
+    case D3DFMT_DXT4:
+    case D3DFMT_DXT5:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static std::uint32_t renderTapeFormatBytesPerPixel(std::uint32_t format) {
+    switch (format) {
+    case D3DFMT_A8R8G8B8:
+    case D3DFMT_X8R8G8B8:
+    case D3DFMT_A8B8G8R8:
+    case D3DFMT_X8B8G8R8:
+        return 4u;
+    case D3DFMT_R8G8B8:
+        return 3u;
+    case D3DFMT_A1R5G5B5:
+    case D3DFMT_X1R5G5B5:
+    case D3DFMT_R5G6B5:
+    case D3DFMT_A4R4G4B4:
+    case D3DFMT_X4R4G4B4:
+    case D3DFMT_A8L8:
+    case D3DFMT_V8U8:
+    case D3DFMT_A8P8:
+        return 2u;
+    case D3DFMT_A8:
+    case D3DFMT_L8:
+    case D3DFMT_P8:
+        return 1u;
+    default:
+        return 0u;
+    }
+}
+
+static bool renderTapeSameIdentity(
+    const D9CWireObjectIdentity &a,
+    const D9CWireObjectIdentity &b) noexcept {
+    return a.kind == b.kind && a.generation == b.generation &&
+           a.objectId == b.objectId;
+}
+
 [[nodiscard]] HRESULT validateShaderBytecodeForStage(const DWORD* code,
                                                      bool vertexStage) {
     if (!code) return D3DERR_INVALIDCALL;
@@ -1070,6 +1131,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool commandChunkNegotiated_ = false;
     std::optional<dxmt9::d3d9::RenderTapeCaptureSession>
         renderTapeCapture_{};
+    // Cold capture-only registry. It is disengaged for the normal renderer,
+    // so capture-off draw/state paths retain their existing hot-path shape.
+    std::optional<RenderTapeLiveRegistry> renderTapeRegistry_{};
     std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
         renderTapeCaptureOracle_{};
     std::uint64_t renderTapeCompletionOrdinal_ = 0u;
@@ -6739,6 +6803,274 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderStats_.upIndexBytes += indexBytes;
     }
 
+    RenderTapeLiveObject *findRenderTapeObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+        if (!renderTapeRegistry_) {
+            return nullptr;
+        }
+        const auto it = std::find_if(
+            renderTapeRegistry_->objects.begin(),
+            renderTapeRegistry_->objects.end(),
+            [&](const auto &entry) {
+                return renderTapeSameIdentity(entry.identity, object.identity);
+            });
+        return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
+    }
+
+    void registerRenderTapeObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::span<const std::byte> descriptor,
+        std::span<const std::byte> immutablePayload) noexcept {
+        if (!renderTapeRegistry_) {
+            return;
+        }
+        try {
+            if (!object.valid(object.identity.kind) || descriptor.empty() ||
+                findRenderTapeObject(object) != nullptr) {
+                renderTapeRegistry_->invalid = true;
+                return;
+            }
+            RenderTapeLiveObject entry{};
+            entry.identity = object.identity;
+            entry.descriptor.assign(descriptor.begin(), descriptor.end());
+            entry.immutablePayload.assign(immutablePayload.begin(),
+                                          immutablePayload.end());
+            switch (object.identity.kind) {
+            case D9C_CHUNK_HANDLE_KIND_BUFFER:
+                if (entry.descriptor.size() != sizeof(D9CBufferDesc)) {
+                    renderTapeRegistry_->invalid = true;
+                    return;
+                }
+                entry.contentCount = 1u;
+                break;
+            case D9C_CHUNK_HANDLE_KIND_SURFACE:
+                if (entry.descriptor.size() != sizeof(D9CSurfaceDesc)) {
+                    renderTapeRegistry_->invalid = true;
+                    return;
+                }
+                entry.contentCount = 1u;
+                break;
+            case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
+                if (entry.descriptor.size() < sizeof(RenderTapeTextureDescriptor)) {
+                    renderTapeRegistry_->invalid = true;
+                    return;
+                }
+                RenderTapeTextureDescriptor texture{};
+                std::memcpy(&texture, entry.descriptor.data(), sizeof(texture));
+                if (texture.levelCount == 0u) {
+                    renderTapeRegistry_->invalid = true;
+                    return;
+                }
+                const auto tailLevels =
+                    static_cast<std::size_t>(texture.levelCount - 1u);
+                if (tailLevels >
+                        (std::numeric_limits<std::size_t>::max() -
+                         sizeof(RenderTapeTextureDescriptor)) /
+                            sizeof(D9CSurfaceDesc) ||
+                    entry.descriptor.size() !=
+                        sizeof(RenderTapeTextureDescriptor) +
+                            tailLevels * sizeof(D9CSurfaceDesc)) {
+                    renderTapeRegistry_->invalid = true;
+                    return;
+                }
+                entry.contentCount = texture.levelCount;
+                break;
+            }
+            default:
+                break;
+            }
+            entry.content.resize(entry.contentCount);
+            renderTapeRegistry_->objects.push_back(std::move(entry));
+        } catch (...) {
+            renderTapeRegistry_->invalid = true;
+        }
+    }
+
+    void unregisterRenderTapeObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+        if (!renderTapeRegistry_) {
+            return;
+        }
+        const auto it = std::find_if(
+            renderTapeRegistry_->objects.begin(),
+            renderTapeRegistry_->objects.end(),
+            [&](const auto &entry) {
+                return renderTapeSameIdentity(entry.identity, object.identity);
+            });
+        if (it == renderTapeRegistry_->objects.end()) {
+            renderTapeRegistry_->invalid = true;
+            return;
+        }
+        renderTapeRegistry_->objects.erase(it);
+    }
+
+    bool recordRenderTapeCpuBytes(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, std::uint64_t byteOffset,
+        std::span<const std::byte> bytes) noexcept {
+        auto *entry = findRenderTapeObject(object);
+        if (!entry || entry->contentCount == 0u ||
+            subresource >= entry->content.size() || bytes.empty()) {
+            if (renderTapeRegistry_)
+                renderTapeRegistry_->invalid = true;
+            return false;
+        }
+        if (byteOffset == 0u) {
+            bool extentOk = true;
+            if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+                D9CBufferDesc desc{};
+                std::memcpy(&desc, entry->descriptor.data(), sizeof(desc));
+                extentOk = bytes.size() == desc.size;
+            } else {
+                D9CSurfaceDesc desc{};
+                if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+                    std::memcpy(&desc, entry->descriptor.data(), sizeof(desc));
+                } else {
+                    RenderTapeTextureDescriptor texture{};
+                    std::memcpy(&texture, entry->descriptor.data(),
+                                sizeof(texture));
+                    if (subresource == 0u) {
+                        desc = texture.level0;
+                    } else {
+                        const auto textureOffset =
+                            sizeof(RenderTapeTextureDescriptor) +
+                            (static_cast<std::size_t>(subresource) - 1u) *
+                                sizeof(D9CSurfaceDesc);
+                        if (entry->descriptor.size() <
+                            textureOffset + sizeof(desc)) {
+                            extentOk = false;
+                        } else {
+                            std::memcpy(&desc,
+                                        entry->descriptor.data() + textureOffset,
+                                        sizeof(desc));
+                        }
+                    }
+                }
+                const auto bpp = renderTapeFormatBytesPerPixel(desc.format);
+                std::uint64_t minimum = 0u;
+                const bool extentFits =
+                    desc.width != 0u && desc.height != 0u && bpp != 0u &&
+                    static_cast<std::uint64_t>(desc.width) <=
+                        std::numeric_limits<std::uint64_t>::max() /
+                            desc.height / bpp;
+                if (extentFits) {
+                    minimum = static_cast<std::uint64_t>(desc.width) *
+                              desc.height * bpp;
+                }
+                extentOk = extentOk && extentFits &&
+                           !renderTapeFormatIsBlockCompressed(desc.format) &&
+                           bytes.size() >= minimum &&
+                           bytes.size() % desc.height == 0u;
+            }
+            if (!extentOk) {
+                renderTapeRegistry_->invalid = true;
+                return false;
+            }
+            try {
+                entry->content[subresource].assign(bytes.begin(), bytes.end());
+                return true;
+            } catch (...) {
+                renderTapeRegistry_->invalid = true;
+                return false;
+            }
+        }
+        auto &existing = entry->content[subresource];
+        if (existing.empty() || byteOffset > existing.size() ||
+            bytes.size() > existing.size() - byteOffset) {
+            // A partial write before a complete CPU-owned seed is not enough
+            // to establish initial contents. Leave it unknown and fail at arm.
+            return true;
+        }
+        std::memcpy(existing.data() + byteOffset, bytes.data(), bytes.size());
+        return true;
+    }
+
+    bool produceRenderTapeBootstrap(
+        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
+        if (!renderTapeRegistry_ || renderTapeRegistry_->invalid) {
+            return false;
+        }
+        try {
+            dxmt9::d3d9::pe::CommandChunkBuilder builder({
+                .records = 1u,
+                .handles = 256u,
+                .payloadBytes = 1024u * 1024u,
+                .sealedBytes = 1024u * 1024u,
+            });
+            if (!dxmt9::d3d9::pe::buildFullSnapshotState(
+                    peState_, peConsts_, peBindingView_, peSparseScratch_,
+                    peSparseHeader_, peSparseState_) ||
+                !dxmt9::d3d9::pe::appendApplyState(
+                    builder, peSparseHeader_.flags, peSparseState_)) {
+                return false;
+            }
+            const auto overlay = builder.seal();
+            if (!overlay.valid()) {
+                return false;
+            }
+            seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
+
+            std::vector<const RenderTapeLiveObject *> objects;
+            objects.reserve(renderTapeRegistry_->objects.size());
+            for (const auto &object : renderTapeRegistry_->objects) {
+                objects.push_back(&object);
+            }
+            std::sort(objects.begin(), objects.end(), [](const auto *a, const auto *b) {
+                return std::tie(a->identity.kind, a->identity.generation,
+                                a->identity.objectId) <
+                       std::tie(b->identity.kind, b->identity.generation,
+                                b->identity.objectId);
+            });
+            for (const auto *object : objects) {
+                dxmt9::d3d9::RenderTapeCaptureObjectSeed objectSeed{};
+                objectSeed.identity = object->identity;
+                objectSeed.descriptorKind = object->identity.kind;
+                objectSeed.descriptor = object->descriptor;
+                if (!object->immutablePayload.empty()) {
+                    objectSeed.immutableBytes = object->immutablePayload.size();
+                    objectSeed.immutableDigest =
+                        dxmt9::d3d9::RenderTapeCaptureSession::sha256(
+                            object->immutablePayload);
+                    seed.blobs.push_back({.bytes = object->immutablePayload});
+                }
+                if (object->contentCount != 0u) {
+                    if (std::any_of(object->content.begin(), object->content.end(),
+                                    [](const auto &bytes) { return bytes.empty(); })) {
+                        return false;
+                    }
+                    for (std::uint32_t subresource = 0u;
+                         subresource < object->content.size(); ++subresource) {
+                        const auto &bytes = object->content[subresource];
+                        if (bytes.empty()) {
+                            return false;
+                        }
+                        if (objectSeed.expectedContentBytes >
+                            std::numeric_limits<std::uint64_t>::max() - bytes.size()) {
+                            return false;
+                        }
+                        ++objectSeed.expectedContentCount;
+                        objectSeed.expectedContentBytes += bytes.size();
+                        const auto digest =
+                            dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes);
+                        seed.blobs.push_back({.bytes = bytes});
+                        seed.mutations.push_back({
+                            .identity = object->identity,
+                            .kind = dxmt9::d3d9::RenderTapeMutationKind::Upload,
+                            .subresource = subresource,
+                            .byteOffset = 0u,
+                            .byteSize = bytes.size(),
+                            .digest = digest,
+                        });
+                    }
+                }
+                seed.objects.push_back(std::move(objectSeed));
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     bool armRenderTapeCaptureAtPresentBoundary() {
         if (!renderTapeCapture_ ||
             !renderTapeCapture_->enabled() ||
@@ -6755,14 +7087,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!dxmt9PeRenderTapeCaptureCallbacksInstalled(
                 renderTapeCapture_->enabled(), producer, publisher)) {
             dxmt9DeviceInfoLog(
-                "render_tape_capture requested without injected bootstrap "
-                "producer/publisher; capture remains off");
+                "render_tape_capture requested without artifact publisher; "
+                "capture remains off");
             return false;
         }
         dxmt9::d3d9::RenderTapeCaptureBootstrapSeed seed{};
         bool produced = false;
         try {
-            produced = producer(seed);
+            // A non-null injected producer is an explicit test override. The
+            // production path always snapshots this device's value-owned PE
+            // shadow and live-object store at the arm Present boundary.
+            produced = producer ? producer(seed)
+                                : produceRenderTapeBootstrap(seed);
         } catch (...) {
             produced = false;
         }
@@ -6777,7 +7113,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         for (const auto& object : seed.objects) {
             if (renderTapeCapture_->objectDefine(
                     object.identity, object.descriptorKind, object.descriptor,
-                    object.immutableBytes, object.immutableDigest) !=
+                    object.immutableBytes, object.immutableDigest,
+                    object.expectedContentBytes,
+                    object.expectedContentCount) !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 renderTapeCapture_->abort();
                 return false;
@@ -7909,12 +8247,18 @@ public:
                renderTapeCapture_->state() ==
                    dxmt9::d3d9::RenderTapeCaptureState::Capturing;
     }
+    bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept override {
+        return renderTapeRegistry_.has_value();
+    }
     void AbortRenderTapeCaptureForChild() noexcept override {
+        if (renderTapeRegistry_)
+            renderTapeRegistry_->invalid = true;
         if (IsRenderTapeCaptureActiveForChild())
             renderTapeCapture_->abort();
     }
     void NotifyRenderTapeObjectDestroyForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override {
+        unregisterRenderTapeObject(object);
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
@@ -7930,6 +8274,7 @@ public:
         dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
         std::uint64_t byteOffset,
         std::span<const std::byte> bytes) noexcept override {
+        (void)recordRenderTapeCpuBytes(object, subresource, byteOffset, bytes);
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
@@ -7964,19 +8309,22 @@ public:
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
         std::span<const std::byte> immutablePayload = {}) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         if (!object.valid(object.identity.kind) || descriptor.empty()) {
             AbortRenderTapeCaptureForChild();
             return;
         }
+        registerRenderTapeObject(object, descriptor, immutablePayload);
+        if (!IsRenderTapeCaptureActiveForChild())
+            return;
         NotifyRenderTapeObjectDefineForChild(object, descriptor,
                                              immutablePayload);
     }
     void notifyRenderTapeCreatedBuffer(
         D9CBuffer *buffer,
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         D9CBufferDesc descriptor{};
         if (!buffer || FAILED(hr32(dxmt9c_buffer_get_desc(buffer, &descriptor)))) {
@@ -7992,7 +8340,7 @@ public:
     void notifyRenderTapeCreatedSurface(
         D9CSurface *surface,
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         D9CSurfaceDesc descriptor{};
         if (!surface ||
@@ -8009,7 +8357,7 @@ public:
     void notifyRenderTapeCreatedTexture(
         D9CTexture *texture,
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         RenderTapeTextureDescriptor descriptor{};
         if (!texture ||
@@ -8023,17 +8371,45 @@ public:
             AbortRenderTapeCaptureForChild();
             return;
         }
+        const auto tailLevels =
+            static_cast<std::size_t>(descriptor.levelCount - 1u);
+        if (tailLevels >
+            (std::numeric_limits<std::size_t>::max() -
+             sizeof(RenderTapeTextureDescriptor)) /
+                sizeof(D9CSurfaceDesc)) {
+            AbortRenderTapeCaptureForChild();
+            return;
+        }
+        std::vector<std::byte> descriptorBytes;
+        try {
+            descriptorBytes.resize(
+                sizeof(RenderTapeTextureDescriptor) +
+                tailLevels * sizeof(D9CSurfaceDesc));
+        } catch (...) {
+            AbortRenderTapeCaptureForChild();
+            return;
+        }
+        std::memcpy(descriptorBytes.data(), &descriptor, sizeof(descriptor));
+        for (std::uint32_t level = 1u; level < descriptor.levelCount; ++level) {
+            D9CSurfaceDesc levelDesc{};
+            if (FAILED(hr32(dxmt9c_texture_get_level_desc(texture, level,
+                                                          &levelDesc)))) {
+                AbortRenderTapeCaptureForChild();
+                return;
+            }
+            std::memcpy(descriptorBytes.data() + sizeof(descriptor) +
+                            (level - 1u) * sizeof(D9CSurfaceDesc),
+                        &levelDesc, sizeof(levelDesc));
+        }
         notifyRenderTapeCreatedObject(
             object,
-            std::span<const std::byte>(
-                reinterpret_cast<const std::byte *>(&descriptor),
-                sizeof(descriptor)));
+            descriptorBytes);
     }
     void notifyRenderTapeCreatedVertexDecl(
         D9CVertexDecl *decl,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> elements, std::size_t elementCount) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         if (!decl || elements.empty() ||
             elementCount > std::numeric_limits<uint32_t>::max() ||
@@ -8054,7 +8430,7 @@ public:
     void notifyRenderTapeCreatedQuery(
         D9CQuery *query,
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         if (!query) {
             AbortRenderTapeCaptureForChild();
@@ -8076,7 +8452,7 @@ public:
         D9CShader *shader,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         uint32_t stage) noexcept {
-        if (!IsRenderTapeCaptureActiveForChild())
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
         if (!shader || !object.valid(object.identity.kind)) {
             AbortRenderTapeCaptureForChild();
@@ -8240,6 +8616,10 @@ public:
         , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
         , renderTapeCapture_(std::in_place, dxmt9PeRenderTapeCaptureEnabled())
+        , renderTapeRegistry_(dxmt9PeRenderTapeCaptureEnabled()
+                                  ? std::optional<RenderTapeLiveRegistry>{
+                                        std::in_place}
+                                  : std::nullopt)
         , creationWindow_(window)
         , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
         if (factory_) factory_->AddRef();

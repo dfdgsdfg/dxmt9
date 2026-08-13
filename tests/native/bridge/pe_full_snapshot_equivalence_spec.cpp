@@ -325,6 +325,51 @@ pe::PeChunkContext everythingRetained() {
   return c;
 }
 
+void renderTapeSnapshotCarriesCompleteConstantsWithoutDrainingDirtyState() {
+  PeConstShadowBlock constants{};
+  const auto initialize = [](ConstShadow& shadow, std::size_t elementBytes,
+                             std::uint32_t registers) {
+    shadow.values.resize(elementBytes * registers);
+    for (std::size_t i = 0u; i < shadow.values.size(); ++i) {
+      shadow.values[i] = static_cast<std::uint8_t>(i + registers);
+    }
+    shadow.dirtyStart = 1u;
+    shadow.dirtyEnd = registers;
+  };
+  initialize(constants.vsConstF, 16u, 4u);
+  initialize(constants.vsConstI, 16u, 3u);
+  initialize(constants.vsConstB, 4u, 5u);
+  initialize(constants.psConstF, 16u, 6u);
+  initialize(constants.psConstI, 16u, 2u);
+  initialize(constants.psConstB, 4u, 7u);
+
+  static pe::PeSparseScratch scratch{};
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  check(pe::buildFullSnapshotState(PeHotStateShadow{}, constants,
+                                   fullyBoundView(), scratch, header, state),
+        "Render Tape full snapshot build must succeed");
+  const std::array ranges{
+      std::pair{state.vsFloatConstants.registerCount, 4u},
+      std::pair{state.vsIntConstants.registerCount, 3u},
+      std::pair{state.vsBoolConstants.registerCount, 5u},
+      std::pair{state.psFloatConstants.registerCount, 6u},
+      std::pair{state.psIntConstants.registerCount, 2u},
+      std::pair{state.psBoolConstants.registerCount, 7u},
+  };
+  check(std::all_of(ranges.begin(), ranges.end(), [](const auto& range) {
+          return range.first == range.second;
+        }),
+        "Render Tape full snapshot must carry every constant register");
+  check(constants.vsConstF.dirtyStart == 1u &&
+            constants.vsConstF.dirtyEnd == 4u &&
+            constants.psConstB.dirtyStart == 1u &&
+            constants.psConstB.dirtyEnd == 7u,
+        "Render Tape full snapshot must not drain live dirty constant ranges");
+  check((header.flags & D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) != 0u,
+        "Render Tape APPLY_STATE snapshot must set FULL_SNAPSHOT");
+}
+
 }  // namespace
 
 int main() {
@@ -352,6 +397,7 @@ int main() {
         }
       }
     }
+    renderTapeSnapshotCarriesCompleteConstantsWithoutDrainingDirtyState();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_full_snapshot_equivalence_spec FAILED: " << failure.what()
               << "\n";

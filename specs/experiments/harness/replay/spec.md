@@ -672,24 +672,29 @@ verified blob references; `run_dxmt9_render_tape.py` builds the
 `dxmt9.render_tape.bundle.v2` envelope, stores digest-named blobs, verifies their
 size and SHA-256, and then supplies that catalogue to native validation.
 
-The bounded capture owner and PE hook now provide the first production capture
-seam: capture is default-off, checks that gate before invoking installed
-callbacks, requires an injected complete bootstrap producer, arms after one
-successful Present boundary, copies each recorder-flushed canonical chunk
-exactly once, and seals/publishes one value-owned bundle containing events and
-digest-verified blob bytes at the following Present. Live PE object,
-writable-lock mutation, and true chunk-bypass control call sites feed that
-owner; chunkized operations are not duplicated. PE object definitions carry
-value-owned C-side buffer/surface/texture/query descriptors, vertex
-declaration elements, and the exact validated shader bytecode extent. The
-capture seam accepts only full, uncompressed 2D surface/texture lock layouts;
-partial rectangles, block-compressed layouts, cube/volume lock paths, and
-unavailable descriptor or bytecode data fail closed by aborting the interval.
+The bounded capture owner and PE hook now provide the production bootstrap
+producer: capture is default-off and allocates no registry while disabled. When
+enabled, the device tracks generation-qualified live object identities plus
+value-owned descriptors, immutable shader/declaration payloads, and supported
+CPU-written resource contents from creation onward. At the first successful
+Present boundary the member producer serializes the actual PE shadow as one
+canonical `APPLY_STATE|FULL_SNAPSHOT`, sorts and seeds the live objects, emits
+complete initial subresource mutations, and arms the next interval; an injected
+producer remains only an explicit test override. Each recorder-flushed canonical
+chunk is copied exactly once, and the following Present seals/publishes one
+value-owned bundle containing events and digest-verified blob bytes. Live PE
+object, writable-lock mutation, and true chunk-bypass control call sites feed
+that owner; chunkized operations are not duplicated. PE object definitions
+carry value-owned C-side buffer/surface/texture/query descriptors, vertex
+declaration elements, exact validated shader bytecode, and resource expected
+extent/count closure. The capture seam accepts only full, uncompressed 2D
+surface/texture and complete-buffer seed layouts; partial rectangles,
+block-compressed layouts, cube/volume lock paths, missing initial bytes, and
+unavailable descriptor or bytecode data fail closed before publication.
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. This remains a capture seam
 rather than complete frame evidence: provider replay, offscreen Metal oracle
-execution, and wild-captured identity evidence remain open. Complete initial
-resource contents remain an injected bootstrap-producer obligation.
+execution, and wild-captured identity evidence remain open.
 
 The capture owner also bounds the total owned blob bytes (64 MiB by default),
 with overflow-safe admission before hashing or copying. Exact duplicate blobs
@@ -697,10 +702,13 @@ are admitted without a second charge, and failed admission or publication
 leaves the owned-byte count unchanged.
 
 The structural v2 schema represents recorded initial/resource bytes as
-digest-backed `ResourceMutation` events. It does not by itself encode an
-object-level expected byte extent for every resource, so complete initial
-contents remain a capture-owner obligation rather than an inference from a
-successful structural validation.
+digest-backed `ResourceMutation` events and adds only a total expected byte
+extent plus subresource count to resource `ObjectDefine`. A separate bounded
+seed-closure table rejects duplicate subresources and requires their zero-offset
+mutation sizes to sum to the exact extent. The seed prefix closes immediately
+when all expectations are satisfied; subsequent live mutations remain ordinary
+interval traffic even before the first command, and cannot repair an incomplete
+checkpoint. The ordered live-generation registry remains identity/lifetime-only.
 
 ### 8.1 Capture boundary
 

@@ -114,6 +114,28 @@ const RenderTapeValidationScratch::ObjectDefinition* findDefinition(
   return found == definitions.end() ? nullptr : &*found;
 }
 
+auto findSeedContentExpectation(
+    std::vector<RenderTapeValidationScratch::SeedContentExpectation>&
+        expectations,
+    const D9CWireObjectIdentity& identity) noexcept {
+  return std::find_if(expectations.begin(), expectations.end(),
+                      [&](const auto& expectation) {
+                        return sameIdentity(expectation.identity, identity);
+                      });
+}
+
+bool seedContentComplete(
+    const std::vector<RenderTapeValidationScratch::SeedContentExpectation>&
+        expectations) noexcept {
+  return std::all_of(expectations.begin(), expectations.end(),
+                     [](const auto& expectation) {
+                       return expectation.recordedBytes ==
+                                  expectation.expectedBytes &&
+                              expectation.recordedCount ==
+                                  expectation.expectedCount;
+                     });
+}
+
 RenderTapeValidationResult
 failure(RenderTapeValidationStatus status, std::uint32_t eventIndex = kNoIndex,
         CommandChunkValidationStatus chunkStatus =
@@ -325,9 +347,13 @@ validateRenderTape(std::span<const std::byte> blob,
 
   scratch.liveObjects.clear();
   scratch.objectDefinitions.clear();
+  scratch.seedContentExpectations.clear();
+  scratch.seedSubresources.clear();
   try {
     scratch.liveObjects.reserve(header.eventCount);
     scratch.objectDefinitions.reserve(header.eventCount);
+    scratch.seedContentExpectations.reserve(header.eventCount);
+    scratch.seedSubresources.reserve(header.eventCount);
   } catch (...) {
     return failure(RenderTapeValidationStatus::ScratchAllocationFailed);
   }
@@ -346,7 +372,11 @@ validateRenderTape(std::span<const std::byte> blob,
     RenderTapeObjectDefineHeader fixed{};
     if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
         fixed.descriptorKind == 0u || fixed.descriptorBytes == 0u ||
-        fixed.reserved0 != 0u ||
+        fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
+        ((fixed.expectedContentBytes == 0u) !=
+         (fixed.expectedContentCount == 0u)) ||
+        (fixed.expectedContentBytes != 0u &&
+         !mutationCapableIdentity(fixed.identity)) ||
         event.payload.size() != sizeof(fixed) + fixed.descriptorBytes) {
       return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
     }
@@ -386,6 +416,14 @@ validateRenderTape(std::span<const std::byte> blob,
               .descriptorKind = fixed.descriptorKind,
               .eventIndex = i,
           });
+      if (fixed.expectedContentBytes != 0u) {
+        scratch.seedContentExpectations.push_back(
+            RenderTapeValidationScratch::SeedContentExpectation{
+                .identity = fixed.identity,
+                .expectedBytes = fixed.expectedContentBytes,
+                .expectedCount = fixed.expectedContentCount,
+            });
+      }
     } catch (...) {
       return failure(RenderTapeValidationStatus::ScratchAllocationFailed, i);
     }
@@ -398,6 +436,7 @@ validateRenderTape(std::span<const std::byte> blob,
   std::uint64_t presentCommandOrdinal = 0u;
   std::uint64_t previousCompletion = 0u;
   std::uint64_t expectedPayloadEnd = 0u;
+  bool seedPhaseOpen = true;
 
   for (std::uint32_t i = 0u; i < header.eventCount; ++i) {
     const auto& eventHeader = events[i];
@@ -434,7 +473,19 @@ validateRenderTape(std::span<const std::byte> blob,
       return failure(RenderTapeValidationStatus::InvalidEventRange, i);
     }
 
-    switch (static_cast<RenderTapeEventType>(eventHeader.type)) {
+    const auto eventType = static_cast<RenderTapeEventType>(eventHeader.type);
+    const bool seedPrefixEvent =
+        eventType == RenderTapeEventType::BootstrapState ||
+        eventType == RenderTapeEventType::ObjectDefine ||
+        eventType == RenderTapeEventType::ResourceMutation;
+    if (seedPhaseOpen && !seedPrefixEvent) {
+      seedPhaseOpen = false;
+      if (!seedContentComplete(scratch.seedContentExpectations)) {
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+      }
+    }
+
+    switch (eventType) {
     case RenderTapeEventType::BootstrapState: {
       if (i != 0u) {
         return failure(RenderTapeValidationStatus::BootstrapNotFirst, i);
@@ -524,7 +575,11 @@ validateRenderTape(std::span<const std::byte> blob,
       RenderTapeObjectDefineHeader fixed{};
       if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
           fixed.descriptorKind == 0u || fixed.descriptorBytes == 0u ||
-          fixed.reserved0 != 0u) {
+          fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
+          ((fixed.expectedContentBytes == 0u) !=
+           (fixed.expectedContentCount == 0u)) ||
+          (fixed.expectedContentBytes != 0u &&
+           !mutationCapableIdentity(fixed.identity))) {
         return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
       }
       const auto payloadValidity =
@@ -629,6 +684,62 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::BlobSizeMismatch, i);
       case RenderTapeBlobLookup::Unverified:
         return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
+      }
+      if (seedPhaseOpen) {
+        const auto expectation = findSeedContentExpectation(
+            scratch.seedContentExpectations, fixed.identity);
+        const bool advancesIncompleteSeed =
+            expectation != scratch.seedContentExpectations.end() &&
+            (expectation->recordedBytes != expectation->expectedBytes ||
+             expectation->recordedCount != expectation->expectedCount);
+        if (advancesIncompleteSeed) {
+          if (fixed.kind !=
+                  static_cast<std::uint32_t>(RenderTapeMutationKind::Upload) &&
+              fixed.kind != static_cast<std::uint32_t>(
+                                 RenderTapeMutationKind::CpuUnlock)) {
+            return failure(RenderTapeValidationStatus::InvalidMutationKind, i);
+          }
+          const bool duplicate = std::any_of(
+              scratch.seedSubresources.begin(),
+              scratch.seedSubresources.end(), [&](const auto& seed) {
+                return sameIdentity(seed.identity, fixed.identity) &&
+                       seed.subresource == fixed.subresource;
+              });
+          std::uint64_t recordedBytes = 0u;
+          if (fixed.byteOffset != 0u || duplicate ||
+              expectation->recordedCount ==
+                  std::numeric_limits<std::uint32_t>::max() ||
+              !checkedAdd(expectation->recordedBytes, fixed.byteSize,
+                          recordedBytes) ||
+              recordedBytes > expectation->expectedBytes ||
+              expectation->recordedCount + 1u > expectation->expectedCount) {
+            return failure(RenderTapeValidationStatus::InvalidMutationRange, i);
+          }
+          try {
+            scratch.seedSubresources.push_back(
+                RenderTapeValidationScratch::SeedSubresource{
+                    .identity = fixed.identity,
+                    .subresource = fixed.subresource,
+                });
+          } catch (...) {
+            return failure(RenderTapeValidationStatus::ScratchAllocationFailed,
+                           i);
+          }
+          expectation->recordedBytes = recordedBytes;
+          ++expectation->recordedCount;
+          if (seedContentComplete(scratch.seedContentExpectations)) {
+            seedPhaseOpen = false;
+          }
+        } else {
+          // The first mutation that does not advance an incomplete declared
+          // expectation is ordinary interval traffic. Close the seed prefix
+          // before accepting it; a still-incomplete different identity fails
+          // here and cannot be repaired by a later mutation.
+          seedPhaseOpen = false;
+          if (!seedContentComplete(scratch.seedContentExpectations)) {
+            return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+          }
+        }
       }
       break;
     }
@@ -828,6 +939,9 @@ validateRenderTape(std::span<const std::byte> blob,
   if (!sawPresent) {
     return failure(RenderTapeValidationStatus::IncompleteFrame);
   }
+  if (!seedContentComplete(scratch.seedContentExpectations)) {
+    return failure(RenderTapeValidationStatus::IncompleteFrame);
+  }
   if (sawPresent && header.presentCount != 1u) {
     return failure(RenderTapeValidationStatus::InvalidPresentComplete);
   }
@@ -1000,7 +1114,9 @@ void RenderTapeBuilder::appendObjectDefine(const D9CWireObjectIdentity& identity
                                            std::uint32_t descriptorKind,
                                            std::span<const std::byte> descriptor,
                                            std::uint64_t immutablePayloadBytes,
-                                           RenderTapeDigest immutablePayloadDigest) {
+                                           RenderTapeDigest immutablePayloadDigest,
+                                           std::uint64_t expectedContentBytes,
+                                           std::uint32_t expectedContentCount) {
   append(RenderTapeEventType::ObjectDefine,
          payloadWithTail(
              RenderTapeObjectDefineHeader{
@@ -1013,6 +1129,8 @@ void RenderTapeBuilder::appendObjectDefine(const D9CWireObjectIdentity& identity
                          ? RenderTapeDigestValidity::NotCaptured
                          : RenderTapeDigestValidity::Sha256),
                  .immutablePayloadBytes = immutablePayloadBytes,
+                 .expectedContentBytes = expectedContentBytes,
+                 .expectedContentCount = expectedContentCount,
                  .immutablePayloadDigest = immutablePayloadDigest,
              },
              descriptor));

@@ -123,6 +123,12 @@ struct RenderTapeObjectDefineHeader {
   std::uint32_t payloadValidity = 0u;
   std::uint32_t reserved0 = 0u;
   std::uint64_t immutablePayloadBytes = 0u;
+  // Resource closure contract. A non-zero extent is a promise that the
+  // bootstrap contains exactly that many bytes for every listed subresource.
+  // Non-resource objects keep both fields zero.
+  std::uint64_t expectedContentBytes = 0u;
+  std::uint32_t expectedContentCount = 0u;
+  std::uint32_t reserved1 = 0u;
   RenderTapeDigest immutablePayloadDigest{};
 };
 
@@ -220,7 +226,7 @@ static_assert(sizeof(RenderTapeEventHeader) == 32u);
 static_assert(alignof(RenderTapeEventHeader) == 8u);
 static_assert(sizeof(RenderTapeBootstrapHeader) == 24u);
 static_assert(alignof(RenderTapeBootstrapHeader) == 8u);
-static_assert(sizeof(RenderTapeObjectDefineHeader) == 72u);
+static_assert(sizeof(RenderTapeObjectDefineHeader) == 88u);
 static_assert(alignof(RenderTapeObjectDefineHeader) == 8u);
 static_assert(sizeof(RenderTapeObjectDestroyHeader) == 16u);
 static_assert(alignof(RenderTapeObjectDestroyHeader) == 8u);
@@ -344,11 +350,30 @@ struct RenderTapeValidationScratch {
     bool retired = false;
   };
 
+  struct SeedContentExpectation {
+    D9CWireObjectIdentity identity{};
+    std::uint64_t expectedBytes = 0u;
+    std::uint32_t expectedCount = 0u;
+    std::uint64_t recordedBytes = 0u;
+    std::uint32_t recordedCount = 0u;
+  };
+
+  struct SeedSubresource {
+    D9CWireObjectIdentity identity{};
+    std::uint32_t subresource = 0u;
+  };
+
   // The definition index is populated before the ordered semantic pass. It
   // lets BootstrapState close handles against definitions journaled after the
   // bootstrap event without borrowing any event payload storage.
   std::vector<ObjectDefinition> objectDefinitions;
   std::vector<LiveSlot> liveObjects;
+  // Initial-content accounting is deliberately separate from the ordered
+  // generation registry. The latter remains identity/lifetime-only while
+  // this bounded side table proves unique subresource seeds close their
+  // ObjectDefine extent before the first non-seed event.
+  std::vector<SeedContentExpectation> seedContentExpectations;
+  std::vector<SeedSubresource> seedSubresources;
   CommandChunkValidationScratch chunk;
 };
 
@@ -406,7 +431,9 @@ public:
                           std::uint32_t descriptorKind,
                           std::span<const std::byte> descriptor,
                           std::uint64_t immutablePayloadBytes,
-                          RenderTapeDigest immutablePayloadDigest);
+                          RenderTapeDigest immutablePayloadDigest,
+                          std::uint64_t expectedContentBytes = 0u,
+                          std::uint32_t expectedContentCount = 0u);
   void appendObjectDestroy(const D9CWireObjectIdentity& identity);
   void appendResourceMutation(const D9CWireObjectIdentity& identity,
                               RenderTapeMutationKind kind,

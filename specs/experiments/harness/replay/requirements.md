@@ -450,12 +450,16 @@ remains reachable; and each selected Present interval is complete. Capture
 that cannot establish these predicates is invalid rather than partial full-tape
 evidence. Instantiates R-HARN-3.1, R-HARN-4.4, and R-HARN-7.3.
 
-The current v2 structural substrate can prove the presence, declared size, and
-trusted-catalogue status of each digest-backed immutable shader/declaration
-payload and resource mutation it records. It does not yet carry an
-object-level expected resource-size/initial-content manifest, so a production
-capture owner must not claim complete unrecorded initial contents from this
-validator alone; that capture-owner contract remains open for the next stage.
+Each resource `ObjectDefine` may declare a non-zero expected total byte extent
+and subresource count; the two fields must be both zero or both non-zero. Before
+the first non-seed event, validation must close every non-zero expectation
+against unique, zero-offset initial `ResourceMutation` subresources whose byte
+sizes sum exactly to the declared extent and whose count matches exactly. The
+seed prefix closes immediately when all expectations are satisfied; subsequent
+in-frame mutations are ordinary interval traffic even if they precede the first
+`CommandChunk`, and cannot be reclassified as seeds. The ordered live-generation
+registry remains identity/lifetime-only; seed-closure accounting is a separate
+bounded value table and cannot be satisfied by a later in-frame mutation.
 
 **R-HARN-REPLAY-7.6** Reference full-tape replay reconstructs objects and imports
 wire chunks through production validation, queue, lifetime, and provider code.
@@ -496,16 +500,22 @@ or producer/replay overlap. Experiments about those observables require a
 separate producer trace. This limitation must appear in every full-tape
 artifact's scope block. Instantiates R-HARN-7.6.
 
-**R-HARN-REPLAY-7.11** The PE capture owner is opt-in and default-off. An
-injected bootstrap producer supplies the complete value-owned shadow checkpoint
-and initial object/blob/oracle seeds at a Present boundary; the owner copies
-those values, receives each successfully committed canonical D9C v2 chunk once,
-and publishes only after the following Present seals `PresentComplete`. While
-armed, live PE object create/destroy, writable-lock mutation, and true
-chunk-bypass control call sites feed the same owner; chunkized operations are
-not duplicated. The owner derives blob digests from copied bytes and publishes
-events and verified blob bytes as one value-owned bundle. A missing producer,
+**R-HARN-REPLAY-7.11** The PE capture owner is opt-in and default-off. While the
+gate is enabled, a device-owned registry tracks generation-qualified live
+texture/surface/buffer/shader/declaration/query identities, exact value-owned
+descriptors and immutable payloads, and supported CPU-owned resource contents
+from creation onward. At the first successful Present boundary the device-owned
+producer builds a canonical `APPLY_STATE|FULL_SNAPSHOT` from the actual PE
+shadow, emits the registry as initial object/blob/mutation seeds with expected
+extent/count closure, and arms the following Present interval. An injected
+bootstrap producer may replace this owner only as an explicit test override.
+The capture owner copies each successfully committed canonical D9C v2 chunk
+once; live create/destroy, writable-lock mutation, and true chunk-bypass control
+call sites feed the same owner without duplicating chunkized operations. It
+derives blob digests from copied bytes and publishes events and verified blob
+bytes as one value-owned bundle. Missing state or initial content, stale
+generation, descriptor/payload mismatch, unsupported lock/content layout,
 failed bridge commit, capacity failure, terminal Reset or device-lost control,
-failed validation, or publisher rejection aborts the interval without exposing
-a partial artifact. Complete initial resource contents remain a bootstrap
-producer obligation; this hook does not infer them from arbitrary COM pointers.
+failed validation, missing/rejecting publisher, or producer failure aborts the
+interval without exposing a partial artifact. The producer must not recover
+bytes by retaining or dereferencing stale COM pointers.

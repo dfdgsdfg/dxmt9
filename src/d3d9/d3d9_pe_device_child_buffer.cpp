@@ -78,7 +78,9 @@ static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {
 static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
                                          const void *data, std::size_t bytes,
                                          std::vector<std::byte> &copy) noexcept {
-  if (!recorder || !recorder->IsRenderTapeCaptureActiveForChild())
+  if (!recorder ||
+      (!recorder->IsRenderTapeCaptureActiveForChild() &&
+       !recorder->IsRenderTapeCaptureTrackingEnabledForChild()))
     return true;
   if (!data || bytes == 0u) {
     recorder->AbortRenderTapeCaptureForChild();
