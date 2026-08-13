@@ -7,6 +7,7 @@
 #include "dxmt9/dxmt9_presenter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -30,6 +31,15 @@ bool sameIdentity(const D9CWireObjectIdentity& a,
 
 bool sameDigest(const RenderTapeDigest& a, const RenderTapeDigest& b) {
   return std::equal(a.begin(), a.end(), b.begin());
+}
+
+bool checkedMul(std::uint64_t a, std::uint64_t b,
+                std::uint64_t& out) noexcept {
+  if (a != 0u && b > std::numeric_limits<std::uint64_t>::max() / a) {
+    return false;
+  }
+  out = a * b;
+  return true;
 }
 
 const RenderTapeProviderBlob* findBlob(
@@ -89,13 +99,184 @@ struct PreflightPlan {
   std::vector<Definition> definitions{};
   std::vector<RenderTapeResourceMutationHeader> mutations{};
   std::vector<Chunk> bootstrap{};
-  Chunk frame{};
+  std::vector<Chunk> frame{};
   D9CWireObjectIdentity outputIdentity{};
   D9CSurfaceDesc outputDesc{};
+  D9CWireObjectIdentity textureIdentity{};
+  RenderTapeTextureDescriptor textureDesc{};
+  D9CWireObjectIdentity vertexDeclarationIdentity{};
   RenderTapeDigestValidity expectedDigestValidity =
       RenderTapeDigestValidity::NotCaptured;
   RenderTapeDigest expectedDigest{};
 };
+
+enum class FrameRecordState : std::uint8_t {
+  ExpectClear,
+  ExpectDrawOrPresent,
+  ExpectPresent,
+  Complete,
+};
+
+struct BoundedDrawState {
+  D9CWireObjectIdentity texture{};
+  D9CWireObjectIdentity vertexDeclaration{};
+  std::uint32_t fvf = 0u;
+  bool unsupportedBinding = false;
+};
+
+bool nullHandle(std::uint32_t handleIndex) {
+  return handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+}
+
+bool handleIdentity(const ImportedChunkView& chunk, std::uint32_t handleIndex,
+                    std::uint32_t kind, D9CWireObjectIdentity& identity) {
+  if (nullHandle(handleIndex)) {
+    identity = {};
+    return true;
+  }
+  if (handleIndex >= chunk.handles.size() ||
+      chunk.handles[handleIndex].kind != kind) return false;
+  const auto& handle = chunk.handles[handleIndex];
+  identity = D9CWireObjectIdentity{
+      .kind = handle.kind,
+      .generation = handle.generation,
+      .objectId = handle.objectId,
+  };
+  return true;
+}
+
+bool applyBoundedBindings(const ImportedChunkView& chunk,
+                          const ImportedRecordView& record,
+                          BoundedDrawState& state,
+                          std::span<const std::byte>* upVertices = nullptr) {
+  for (std::size_t index = 0u; index < record.sections.size(); ++index) {
+    const auto section = record.section(index);
+    switch (section.descriptor.kind) {
+    case D9C_COMMAND_CHUNK_SECTION_TEXTURE:
+      for (std::uint32_t bindingIndex = 0u;
+           bindingIndex < section.descriptor.count; ++bindingIndex) {
+        D9CCommandChunkWireTextureBinding binding{};
+        if (!load(section.payload, bindingIndex * sizeof(binding), binding))
+          return false;
+        if (!binding.valid) continue;
+        D9CWireObjectIdentity identity{};
+        if (!handleIdentity(chunk, binding.handleIndex,
+                            D9C_CHUNK_HANDLE_KIND_TEXTURE, identity)) return false;
+        if (binding.slot == 0u) {
+          state.texture = identity;
+        } else if (identity.objectId != 0u) {
+          state.unsupportedBinding = true;
+        }
+      }
+      break;
+    case D9C_COMMAND_CHUNK_SECTION_STREAM:
+      for (std::uint32_t bindingIndex = 0u;
+           bindingIndex < section.descriptor.count; ++bindingIndex) {
+        D9CCommandChunkWireStreamBinding binding{};
+        if (!load(section.payload, bindingIndex * sizeof(binding), binding))
+          return false;
+        if (binding.valid && !nullHandle(binding.handleIndex))
+          state.unsupportedBinding = true;
+      }
+      break;
+    case D9C_COMMAND_CHUNK_SECTION_SHADER:
+      for (std::uint32_t bindingIndex = 0u;
+           bindingIndex < section.descriptor.count; ++bindingIndex) {
+        D9CCommandChunkWireShaderBinding binding{};
+        if (!load(section.payload, bindingIndex * sizeof(binding), binding))
+          return false;
+        if (binding.valid && !nullHandle(binding.handleIndex))
+          state.unsupportedBinding = true;
+      }
+      break;
+    case D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT: {
+      D9CCommandChunkWireVertexInput input{};
+      if (section.descriptor.count != 1u ||
+          !load(section.payload, 0u, input)) return false;
+      if (!input.valid ||
+          (input.kind != D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF &&
+           input.kind != D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION)) {
+        state.unsupportedBinding = true;
+      } else if (input.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
+        if (!nullHandle(input.handleIndex)) state.unsupportedBinding = true;
+        state.fvf = input.value;
+        state.vertexDeclaration = {};
+      } else {
+        D9CWireObjectIdentity identity{};
+        if (!handleIdentity(chunk, input.handleIndex,
+                            D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, identity) ||
+            identity.objectId == 0u) {
+          return false;
+        }
+        state.vertexDeclaration = identity;
+        state.fvf = 0u;
+      }
+      break;
+    }
+    case D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER:
+      for (std::uint32_t bindingIndex = 0u;
+           bindingIndex < section.descriptor.count; ++bindingIndex) {
+        D9CCommandChunkWireIndexBinding binding{};
+        if (!load(section.payload, bindingIndex * sizeof(binding), binding))
+          return false;
+        if (binding.valid && !nullHandle(binding.handleIndex))
+          state.unsupportedBinding = true;
+      }
+      break;
+    case D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL: {
+      D9CCommandChunkWireDepthStencilBinding binding{};
+      if (section.descriptor.count != 1u ||
+          !load(section.payload, 0u, binding)) return false;
+      if (binding.valid && !nullHandle(binding.handleIndex))
+        state.unsupportedBinding = true;
+      break;
+    }
+    case D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA:
+      state.unsupportedBinding = true;
+      break;
+    case D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA:
+      if (!upVertices || !upVertices->empty()) return false;
+      *upVertices = section.payload;
+      break;
+    default:
+      break;
+    }
+  }
+  return true;
+}
+
+bool acceptedTexturedDraw(const ImportedChunkView& chunk,
+                          const ImportedRecordView& record,
+                          BoundedDrawState& state,
+                          const D9CWireObjectIdentity& expectedVertexDeclaration) {
+  constexpr std::uint32_t kTriangleList = 4u;
+  constexpr std::uint32_t kXyzRhwDiffuseTex1Fvf = 0x144u;
+  constexpr std::uint32_t kVertexStride = 28u;
+  if (record.drawHeader.flags != 0u) return false;
+  for (const auto& section : record.sections) {
+    if (section.kind != D9C_COMMAND_CHUNK_SECTION_TEXTURE &&
+        section.kind != D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT &&
+        section.kind != D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA) {
+      return false;
+    }
+  }
+  std::span<const std::byte> vertices;
+  if (!applyBoundedBindings(chunk, record, state, &vertices)) return false;
+  const bool usesExactDeclaration =
+      expectedVertexDeclaration.objectId != 0u &&
+      sameIdentity(state.vertexDeclaration, expectedVertexDeclaration) &&
+      state.fvf == 0u;
+  const bool usesExactFvf = expectedVertexDeclaration.objectId == 0u &&
+      state.vertexDeclaration.objectId == 0u &&
+      state.fvf == kXyzRhwDiffuseTex1Fvf;
+  if (state.unsupportedBinding || state.texture.objectId == 0u ||
+      (!usesExactDeclaration && !usesExactFvf) ||
+      record.drawHeader.primitiveType != kTriangleList ||
+      record.drawHeader.primitiveCount != 1u ||
+      record.drawHeader.stride != kVertexStride ||
+      vertices.size() != 3u * kVertexStride) return false;
+  return true;
+}
 
 bool mutationCatalogueMatches(
     const PreflightPlan& plan,
@@ -113,6 +294,42 @@ bool mutationCatalogueMatches(
     }
   }
   return true;
+}
+
+constexpr std::array<std::byte, 32u> kProductionTexturedVertexDeclaration{
+    std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+    std::byte{0x03}, std::byte{0x00}, std::byte{0x09}, std::byte{0x00},
+    std::byte{0x00}, std::byte{0x00}, std::byte{0x10}, std::byte{0x00},
+    std::byte{0x04}, std::byte{0x00}, std::byte{0x0a}, std::byte{0x00},
+    std::byte{0x00}, std::byte{0x00}, std::byte{0x14}, std::byte{0x00},
+    std::byte{0x01}, std::byte{0x00}, std::byte{0x05}, std::byte{0x00},
+    std::byte{0xff}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+    std::byte{0x11}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+};
+
+bool acceptedProductionTexturedVertexDeclaration(
+    const Definition& definition, std::span<const RenderTapeProviderBlob> blobs) {
+  const auto& fixed = definition.fixed;
+  if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_VERTEX_DECL ||
+      fixed.descriptorKind != static_cast<std::uint32_t>(
+                                  RenderTapeDescriptorKind::VertexDeclaration) ||
+      definition.descriptor.size() != sizeof(RenderTapeVertexDeclDescriptor) ||
+      fixed.payloadValidity != static_cast<std::uint32_t>(
+                                  RenderTapeDigestValidity::Sha256) ||
+      fixed.immutablePayloadBytes != kProductionTexturedVertexDeclaration.size() ||
+      fixed.expectedContentBytes != 0u || fixed.expectedContentCount != 0u) {
+    return false;
+  }
+  RenderTapeVertexDeclDescriptor descriptor{};
+  if (!load(definition.descriptor, 0u, descriptor) ||
+      descriptor.elementCount != 4u || descriptor.elementBytes !=
+                                             kProductionTexturedVertexDeclaration.size()) {
+    return false;
+  }
+  const auto* blob = findBlob(blobs, fixed.immutablePayloadDigest);
+  return blob && blob->bytes.size() == kProductionTexturedVertexDeclaration.size() &&
+         std::equal(kProductionTexturedVertexDeclaration.begin(),
+                    kProductionTexturedVertexDeclaration.end(), blob->bytes.begin());
 }
 
 bool parseChunks(std::span<const std::byte> bytes, std::uint32_t count,
@@ -207,6 +424,9 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
   bool bootstrapAccepted = false;
   bool sawFrame = false;
   bool sawComplete = false;
+  bool sawTexturedDraw = false;
+  FrameRecordState recordState = FrameRecordState::ExpectClear;
+  BoundedDrawState drawState{};
   std::vector<RenderTapeDigest> referencedBlobs;
   std::uint32_t currentEventIndex = 0xffffffffu;
   for (std::uint32_t index = 0u; index < tape.events.size(); ++index) {
@@ -225,12 +445,13 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       RenderTapeObjectDefineHeader fixed{};
       if (!load(event.payload, 0u, fixed)) goto unsupported;
       const auto descriptor = event.payload.subspan(sizeof(fixed));
-      if (fixed.payloadValidity != static_cast<std::uint32_t>(
-                                       RenderTapeDigestValidity::NotCaptured) ||
-          fixed.immutablePayloadBytes != 0u) goto unsupported;
+      const bool noImmutablePayload =
+          fixed.payloadValidity == static_cast<std::uint32_t>(
+              RenderTapeDigestValidity::NotCaptured) &&
+          fixed.immutablePayloadBytes == 0u;
       if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
         D9CSurfaceDesc surface{};
-        if (descriptor.size() != sizeof(surface) ||
+        if (!noImmutablePayload || descriptor.size() != sizeof(surface) ||
             !load(descriptor, 0u, surface) || !acceptedSurface(surface) ||
             fixed.expectedContentBytes != 0u ||
             fixed.expectedContentCount != 0u ||
@@ -239,15 +460,28 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         candidate.outputDesc = surface;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
         D9CBufferDesc buffer{};
-        if (descriptor.size() != sizeof(buffer) || !load(descriptor, 0u, buffer) ||
+        if (!noImmutablePayload || descriptor.size() != sizeof(buffer) ||
+            !load(descriptor, 0u, buffer) ||
             buffer.size == 0u || fixed.expectedContentCount != 1u ||
             fixed.expectedContentBytes != buffer.size) goto unsupported;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
         RenderTapeTextureDescriptor texture{};
-        if (descriptor.size() < sizeof(texture) || !load(descriptor, 0u, texture) ||
+        if (!noImmutablePayload || descriptor.size() < sizeof(texture) ||
+            !load(descriptor, 0u, texture) ||
             !acceptedTextureDescriptor(descriptor, texture) ||
             fixed.expectedContentCount != texture.levelCount ||
-            fixed.expectedContentBytes == 0u) goto unsupported;
+            fixed.expectedContentBytes == 0u ||
+            candidate.textureIdentity.objectId != 0u) goto unsupported;
+        candidate.textureIdentity = fixed.identity;
+        candidate.textureDesc = texture;
+      } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+        const Definition definition{.fixed = fixed, .descriptor = descriptor};
+        if (candidate.vertexDeclarationIdentity.objectId != 0u ||
+            !acceptedProductionTexturedVertexDeclaration(definition, blobs)) {
+          goto unsupported;
+        }
+        candidate.vertexDeclarationIdentity = fixed.identity;
+        referencedBlobs.push_back(fixed.immutablePayloadDigest);
       } else {
         goto unsupported;
       }
@@ -273,37 +507,52 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
     }
     case RenderTapeEventType::CommandChunk: {
       RenderTapeCommandChunkHeader fixed{};
-      if (sawFrame || !load(event.payload, 0u, fixed)) goto unsupported;
-      candidate.frame = Chunk{
+      if (sawComplete || !load(event.payload, 0u, fixed)) goto unsupported;
+      candidate.frame.push_back(Chunk{
           .envelope = CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
                                             fixed.handleCount},
           .bytes = event.payload.subspan(sizeof(fixed)),
-      };
+      });
+      const auto& frame = candidate.frame.back();
       ImportedChunkView chunk;
-      if (!importPrevalidatedCommandChunk(candidate.frame.bytes,
-                                           candidate.frame.envelope, chunk) ||
-          chunk.records.size() != 2u) goto unsupported;
-      const auto clearRecord = chunk.record(0u);
-      const auto presentRecord = chunk.record(1u);
-      D9CCommandChunkWireClear clear{};
-      D9CCommandChunkWirePresent present{};
-      if (clearRecord.header.type != D9C_COMMAND_RECORD_CLEAR ||
-          presentRecord.header.type != D9C_COMMAND_RECORD_PRESENT ||
-          !load(clearRecord.payload, 0u, clear) ||
-          !load(presentRecord.payload, 0u, present) ||
-          clear.flags != 1u || clear.rectCount != 0u ||
-          present.flags != 0u || present.reserved0 != 0u ||
-          present.hasSrc != present.hasDst ||
-          (present.hasSrc != 0u &&
-           (!fullRect(present.src, candidate.outputDesc.width,
-                      candidate.outputDesc.height) ||
-            !fullRect(present.dst, candidate.outputDesc.width,
-                      candidate.outputDesc.height)))) goto unsupported;
-      sawFrame = true;
-      result.coverage.commandChunks = 1u;
-      result.coverage.commandRecords = 2u;
-      result.coverage.clearRecords = 1u;
-      result.coverage.presentRecords = 1u;
+      if (!importPrevalidatedCommandChunk(frame.bytes, frame.envelope, chunk) ||
+          chunk.records.empty()) goto unsupported;
+      for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+           ++recordIndex) {
+        const auto record = chunk.record(recordIndex);
+        ++result.coverage.commandRecords;
+        if (recordState == FrameRecordState::ExpectClear &&
+            record.header.type == D9C_COMMAND_RECORD_CLEAR) {
+          D9CCommandChunkWireClear clear{};
+          if (!load(record.payload, 0u, clear) || clear.flags != 1u ||
+              clear.rectCount != 0u) goto unsupported;
+          ++result.coverage.clearRecords;
+          recordState = FrameRecordState::ExpectDrawOrPresent;
+        } else if (recordState == FrameRecordState::ExpectDrawOrPresent &&
+                   record.header.type ==
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
+          sawTexturedDraw = true;
+          ++result.coverage.drawPrimitiveUpRecords;
+          recordState = FrameRecordState::ExpectPresent;
+        } else if ((recordState == FrameRecordState::ExpectDrawOrPresent ||
+                    recordState == FrameRecordState::ExpectPresent) &&
+                   record.header.type == D9C_COMMAND_RECORD_PRESENT) {
+          D9CCommandChunkWirePresent present{};
+          if (!load(record.payload, 0u, present) || present.flags != 0u ||
+              present.reserved0 != 0u || present.hasSrc != present.hasDst ||
+              (present.hasSrc != 0u &&
+               (!fullRect(present.src, candidate.outputDesc.width,
+                          candidate.outputDesc.height) ||
+                !fullRect(present.dst, candidate.outputDesc.width,
+                          candidate.outputDesc.height)))) goto unsupported;
+          ++result.coverage.presentRecords;
+          recordState = FrameRecordState::Complete;
+          sawFrame = true;
+        } else {
+          goto unsupported;
+        }
+      }
+      ++result.coverage.commandChunks;
       break;
     }
     case RenderTapeEventType::PresentComplete: {
@@ -335,10 +584,92 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
   bootstrapAccepted =
       bootstrapDisposition == FrameTapeBootstrapOutputDisposition::ImplicitDefault ||
       bootstrapDisposition == FrameTapeBootstrapOutputDisposition::ExplicitExact;
-  if (!sawFrame || !sawComplete || candidate.outputIdentity.objectId == 0u ||
+  for (const auto& chunkBytes : candidate.bootstrap) {
+    ImportedChunkView chunk;
+    if (!importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope,
+                                        chunk)) goto unsupported;
+    for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+         ++recordIndex) {
+      if (!applyBoundedBindings(chunk, chunk.record(recordIndex), drawState))
+        goto unsupported;
+    }
+  }
+  // The bootstrap is semantically earlier than frame records. Re-scan the
+  // frame deltas to evaluate the effective state exactly at the draw.
+  if (sawTexturedDraw) {
+    drawState = {};
+    for (const auto& chunkBytes : candidate.bootstrap) {
+      ImportedChunkView chunk;
+      importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope, chunk);
+      for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+           ++recordIndex) {
+        if (!applyBoundedBindings(chunk, chunk.record(recordIndex), drawState))
+          goto unsupported;
+      }
+    }
+    for (const auto& chunkBytes : candidate.frame) {
+      ImportedChunkView chunk;
+      importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope, chunk);
+      for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+           ++recordIndex) {
+        const auto record = chunk.record(recordIndex);
+        if (record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
+          if (!acceptedTexturedDraw(chunk, record, drawState,
+                                    candidate.vertexDeclarationIdentity)) {
+            goto unsupported;
+          }
+        } else if (record.sparseState() &&
+                   !applyBoundedBindings(chunk, record, drawState)) {
+          goto unsupported;
+        }
+      }
+    }
+  }
+  if (!sawFrame || recordState != FrameRecordState::Complete || !sawComplete ||
+      candidate.outputIdentity.objectId == 0u ||
       !bootstrapAccepted ||
       referencedBlobs.size() != blobs.size() ||
       !mutationCatalogueMatches(candidate, blobs)) goto unsupported;
+  if (!sawTexturedDraw &&
+      (candidate.textureIdentity.objectId != 0u ||
+       candidate.vertexDeclarationIdentity.objectId != 0u))
+    goto unsupported;
+  if (sawTexturedDraw) {
+    std::uint64_t texturePixels = 0u;
+    std::uint64_t tightTextureBytes = 0u;
+    if (!checkedMul(candidate.textureDesc.level0.width,
+                    candidate.textureDesc.level0.height, texturePixels) ||
+        !checkedMul(texturePixels, 4u, tightTextureBytes)) goto unsupported;
+    const auto textureDefinition = std::find_if(
+        candidate.definitions.begin(), candidate.definitions.end(),
+        [&](const auto& definition) {
+          return sameIdentity(definition.fixed.identity,
+                              candidate.textureIdentity);
+        });
+    const bool productionDeclaration =
+        candidate.vertexDeclarationIdentity.objectId != 0u;
+    const std::size_t expectedDefinitions = productionDeclaration ? 3u : 2u;
+    const std::size_t expectedBlobs = productionDeclaration ? 2u : 1u;
+    if (candidate.definitions.size() != expectedDefinitions ||
+        candidate.textureIdentity.objectId == 0u ||
+        textureDefinition == candidate.definitions.end() ||
+        !sameIdentity(drawState.texture, candidate.textureIdentity) ||
+        candidate.textureDesc.levelCount != 1u ||
+        candidate.textureDesc.level0.format != 21u ||
+        textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
+        textureDefinition->fixed.expectedContentBytes %
+                candidate.textureDesc.level0.height != 0u ||
+        candidate.mutations.size() != 1u || blobs.size() != expectedBlobs ||
+        !sameIdentity(candidate.mutations[0].identity,
+                      candidate.textureIdentity) ||
+        candidate.mutations[0].subresource != 0u ||
+        candidate.mutations[0].byteOffset != 0u ||
+        candidate.mutations[0].byteSize !=
+            textureDefinition->fixed.expectedContentBytes ||
+        textureDefinition->fixed.expectedContentCount != 1u) {
+      goto unsupported;
+    }
+  }
   result.conservation.referencedBlobs =
       static_cast<std::uint32_t>(referencedBlobs.size());
   result.requirements = FrameTapeReplayRequirements{
@@ -371,6 +702,8 @@ void releaseObject(OwnedObject& object) {
     dxmt9c_surface_release(static_cast<D9CSurface*>(object.value)); break;
   case D9C_CHUNK_HANDLE_KIND_BUFFER:
     dxmt9c_buffer_release(static_cast<D9CBuffer*>(object.value)); break;
+  case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+    dxmt9c_vdecl_release(static_cast<D9CVertexDecl*>(object.value)); break;
   default: break;
   }
   object.value = nullptr;
@@ -462,6 +795,15 @@ FrameTapeReplayResult replayFrameTapeIdentity(
       value = dxmt9c_device_create_texture(
           device, desc.level0.width, desc.level0.height, desc.levelCount,
           desc.level0.usage, desc.level0.format, desc.level0.pool);
+    } else if (definition.fixed.identity.kind ==
+               D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+      const auto* blob = findBlob(blobs, definition.fixed.immutablePayloadDigest);
+      std::array<D9CVertexElement, 4u> elements{};
+      if (blob && blob->bytes.size() == sizeof(elements)) {
+        std::memcpy(elements.data(), blob->bytes.data(), sizeof(elements));
+        value = dxmt9c_device_create_vertex_declaration(device,
+                                                         elements.data());
+      }
     }
     if (!value) {
       result.status = FrameTapeReplayStatus::ObjectCreationFailed;
@@ -553,12 +895,14 @@ FrameTapeReplayResult replayFrameTapeIdentity(
     outputInstalled = true;
   }
 
-  if (!resolveChunk(plan.frame, objects, resolved) ||
-      replayPrevalidatedResolvedCommandChunk(
-          device, plan.frame.bytes, plan.frame.envelope, resolved) != core::D3D_OK) {
-    result.status = FrameTapeReplayStatus::CommandReplayFailed;
-    cleanup();
-    return result;
+  for (const auto& chunk : plan.frame) {
+    if (!resolveChunk(chunk, objects, resolved) ||
+        replayPrevalidatedResolvedCommandChunk(
+            device, chunk.bytes, chunk.envelope, resolved) != core::D3D_OK) {
+      result.status = FrameTapeReplayStatus::CommandReplayFailed;
+      cleanup();
+      return result;
+    }
   }
 
   if (auto upper = device->dev().upperDevice(); upper && readbackTarget) {
@@ -571,9 +915,28 @@ FrameTapeReplayResult replayFrameTapeIdentity(
       return result;
     }
     result.validity.outputReadback = true;
-    result.validity.outputBytes = pixels.bytes.size();
-    result.validity.outputDigest = RenderTapeCaptureSession::sha256(
-        std::as_bytes(std::span(pixels.bytes)));
+    constexpr std::uint32_t bytesPerPixel = 4u;
+    std::uint64_t tightPitch = 0u;
+    std::uint64_t tightBytes = 0u;
+    std::uint64_t pitchedBytes = 0u;
+    if (!checkedMul(plan.outputDesc.width, bytesPerPixel, tightPitch) ||
+        !checkedMul(tightPitch, plan.outputDesc.height, tightBytes) ||
+        !checkedMul(pixels.pitch, plan.outputDesc.height, pitchedBytes) ||
+        pixels.pitch < tightPitch ||
+        tightBytes > std::numeric_limits<std::size_t>::max() ||
+        pixels.bytes.size() < pitchedBytes) {
+      result.status = FrameTapeReplayStatus::ReadbackFailed;
+      cleanup();
+      return result;
+    }
+    std::vector<std::byte> tight(static_cast<std::size_t>(tightBytes));
+    for (std::uint32_t row = 0u; row < plan.outputDesc.height; ++row) {
+      std::memcpy(tight.data() + static_cast<std::size_t>(row * tightPitch),
+                  pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
+                  static_cast<std::size_t>(tightPitch));
+    }
+    result.validity.outputBytes = tight.size();
+    result.validity.outputDigest = RenderTapeCaptureSession::sha256(tight);
     if (plan.expectedDigestValidity == RenderTapeDigestValidity::Sha256) {
       result.validity.expectedDigestMatched =
           sameDigest(result.validity.outputDigest, plan.expectedDigest);
@@ -581,10 +944,10 @@ FrameTapeReplayResult replayFrameTapeIdentity(
         result.status = FrameTapeReplayStatus::OutputMismatch;
       }
     }
-    const auto pixelSize = std::min<std::size_t>(4u, pixels.bytes.size());
+    const auto pixelSize = std::min<std::size_t>(4u, tight.size());
     result.validity.outputNonDegenerate = false;
-    for (std::size_t index = pixelSize; index < pixels.bytes.size(); ++index) {
-      if (pixels.bytes[index] != pixels.bytes[index % pixelSize]) {
+    for (std::size_t index = pixelSize; index < tight.size(); ++index) {
+      if (tight[index] != tight[index % pixelSize]) {
         result.validity.outputNonDegenerate = true;
         break;
       }
@@ -653,9 +1016,7 @@ FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
     }
   }
   if (!sawRenderTargetSection || !sawSlotZero) {
-    return imported.handles.empty()
-               ? FrameTapeBootstrapOutputDisposition::ImplicitDefault
-               : FrameTapeBootstrapOutputDisposition::Ambiguous;
+    return FrameTapeBootstrapOutputDisposition::ImplicitDefault;
   }
   return FrameTapeBootstrapOutputDisposition::ExplicitExact;
 }

@@ -65,6 +65,7 @@ struct FrameTapeCoverageEvidence {
   std::uint32_t commandChunks = 0u;
   std::uint32_t commandRecords = 0u;
   std::uint32_t clearRecords = 0u;
+  std::uint32_t drawPrimitiveUpRecords = 0u;
   std::uint32_t presentRecords = 0u;
   std::uint32_t presentOutputs = 0u;
 };
@@ -109,10 +110,11 @@ FrameTapeReplayResult preflightFrameTapeIdentity(
     std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept;
 
-// Replays one preflighted Clear -> Present frame through production factories,
-// mutation APIs, DeviceReplaySink and the production queue. On Metal devices a
-// typed offscreen PresentOutput is installed and read back after the completion
-// waterline. Stub devices still exercise the exact replay routing deterministically.
+// Replays one preflighted Clear -> [textured DrawPrimitiveUP ->] Present frame
+// through production factories, mutation APIs, DeviceReplaySink and the
+// production queue. On Metal devices a typed offscreen PresentOutput is
+// installed and read back after the completion waterline. Stub devices still
+// exercise the exact replay routing deterministically.
 FrameTapeReplayResult replayFrameTapeIdentity(
     D9CDevice* device, std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept;

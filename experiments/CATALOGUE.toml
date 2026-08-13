@@ -606,7 +606,7 @@ license_scope = "project-mit"
 binary = "experiments/apps/perf-d3d9-present-loop/perf-d3d9-present-loop.exe"
 launcher = "experiments/launchers/perf-d3d9-present-loop.sh"
 reference = "experiments/references/perf-d3d9-present-loop.png"
-features = ["performance", "synthetic", "present", "drawable-acquire", "boundary-b6", "perf-probe"]
+features = ["performance", "synthetic", "present", "drawable-acquire", "boundary-b6", "textured-drawprimitiveup", "perf-probe"]
 status = "exploratory"
 requires_wine = true
 window_title = "DXMT9 PresentLoop"
@@ -614,6 +614,8 @@ capture_delay_sec = 2.0
 run_timeout_sec = 60
 capture_frame = 120
 reference_optional = true
+# Set PRESENT_LOOP_TEXTURED=1 for the bounded Clear + inline UP textured draw
+# + ordinary Present frame-tape fixture; the default remains clear-only.
 
 [[app]]
 name = "perf-d3d9-chain-parametric"

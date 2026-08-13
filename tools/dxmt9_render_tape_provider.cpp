@@ -84,6 +84,8 @@ void printResult(const FrameTapeReplayResult& result) {
   std::cout << "\"command_chunks\":" << coverage.commandChunks << ',';
   std::cout << "\"command_records\":" << coverage.commandRecords << ',';
   std::cout << "\"clear_records\":" << coverage.clearRecords << ',';
+  std::cout << "\"draw_primitive_up_records\":"
+            << coverage.drawPrimitiveUpRecords << ',';
   std::cout << "\"present_records\":" << coverage.presentRecords << ',';
   std::cout << "\"present_outputs\":" << coverage.presentOutputs << "},";
   std::cout << "\"conservation\":{";

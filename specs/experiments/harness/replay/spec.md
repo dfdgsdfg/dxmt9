@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen Clear oracle, and one captured-bundle provider replay for one full-surface `Clear` → `Present` interval exist | The bounded artifact replay is complete; expand the fail-closed grammar and add reducer workflows |
+| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, and captured-bundle provider identity for both full-surface `Clear` → `Present` and bounded non-uniform textured-UP intervals exist | Add reducer workflows and broaden the fail-closed frame grammar |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -870,9 +870,14 @@ diagnostics but are downstream options, not the reference oracle.
 The first production slice is implemented by
 `device_c_render_tape_provider.*` and hosted by
 `tools/dxmt9_render_tape_provider.cpp`. It admits exactly one uncompressed,
-single-sample 2D colour output, a complete bootstrap, generation-qualified
-surface/buffer/2D-texture definitions and complete initial seeds, followed by
-exactly one full-surface `Clear` and one identity `Present`. Admission validates
+single-sample 2D colour output and a complete bootstrap. The legacy bounded
+form is one full-surface `Clear` followed by one identity `Present`. The second
+bounded form adds exactly one fixed-function `DrawPrimitiveUP` between them:
+one triangle-list primitive, inline `XYZRHW|DIFFUSE|TEX1` vertices, one bound
+uncompressed single-level A8R8G8B8 texture, and one complete level-0 seed.
+Canonical records may occupy separate command-chunk events; admission flattens
+them in journal order and requires exactly `Clear` → `DrawPrimitiveUP` →
+standard `Present`. Admission validates
 the whole tape and the actual blob digests before creating provider objects.
 Recorded identities resolve to replay-owned wrappers in a side registry; the
 canonical chunk bytes are passed unchanged to
@@ -886,7 +891,27 @@ native D9C device, and returns non-zero for any non-Complete result. Result
 values report validity, grammar coverage, and blob/object/ordinal conservation
 separately and make no timing or benchmark claim. Queries, readback/control events, reset/device-lost,
 `PresentEx` flags, partial rectangles/seeds, multiple/depth/MSAA/compressed
-outputs, and all other records or descriptor families fail before effects.
+outputs, shaders, arbitrary declarations, vertex/index buffers, prior-output
+loads, and all other records or descriptor families fail before effects. The
+one declaration exception is production's byte-exact four-element
+`XYZRHW|DIFFUSE|TEX1` FVF expansion; its descriptor, immutable payload digest,
+bootstrap identity, factory creation, and release are all checked explicitly.
+
+The native provider fixture covers combined and three-event command-chunk
+boundaries, negative near-misses, and production Metal replay. On the Apple M1
+test host its 16×16 non-uniform output has tight SHA-256
+`3dc6ca2708ccbb285106dea4b1cba42e6d67dd69ffe72ab003d87d7d8250b72e`;
+the direct-FVF and production-declaration forms produce the same digest and
+conserve 2/2 and 3/3 replay-owned objects respectively.
+
+The 2026-08-13 Sikarugir `PRESENT_LOOP_TEXTURED=1` capture at
+`experiments/output/render-tape-wild-textured-r2/tapes/frame-99975454225700-1`
+contains 8 events, 3 records in 2 command chunks, 3 definitions, one 64-byte
+texture mutation, and one 32-byte immutable generated declaration. Structural
+validation and inspection pass. Provider replay returns `complete`, 2/2 blob
+references, 3/3 object conservation, `output_non_degenerate=true`, and exact
+capture/replay identity for the 262144-byte output SHA-256
+`866e45bc5527c590f7cbf1deb9ca8fd5aa3ac2eddcd6746bdaf0572848a78c17`.
 
 This is a provider API plus native evidence seam, not a new structural CLI.
 The existing `validate`/`inspect` commands remain structural-only. The bounded

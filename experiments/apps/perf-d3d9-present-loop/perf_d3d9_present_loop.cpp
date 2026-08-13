@@ -1,11 +1,17 @@
 // PresentLoopProbe — V1 audit (f) drawable-acquire isolation probe (B6).
 //
-// Runs N empty Present() cycles with no draw work — just Clear() and
+// Runs N standard Present() cycles. By default there is no draw work — just
 // Present(). The dominant cost per iteration is the GPU-presenter
 // boundary, so the existing `present_*` counter family (acquire/token/
 // boundary waits, preacquire stats, present_encoded) reflects only B6
 // instead of being entangled with encode CPU + GPU draw work the way
 // the existing perf probes are.
+//
+// PRESENT_LOOP_TEXTURED=1 opts into the small frame-tape fixture: each frame
+// is Clear + one fixed-function DrawPrimitiveUP with inline XYZRHW/TEX1
+// vertices, one fully initialized non-uniform 4x4 A8R8G8B8 texture, and the
+// same ordinary Present() call. The default mode remains clear-only for
+// existing present-pacing measurements.
 //
 // Iteration count is read once from PRESENT_LOOP_ITERATIONS (default 1000).
 // Backbuffer is intentionally tiny (256x256) so the per-frame Clear is
@@ -27,8 +33,30 @@ namespace {
 constexpr int kBackBufferWidth = 256;
 constexpr int kBackBufferHeight = 256;
 constexpr int kDefaultIterations = 1000;
+constexpr UINT kTextureSize = 4;
+constexpr DWORD kTexturedFvf =
+    D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 constexpr char kWindowClass[] = "dxmt9_perf_probe_present_loop_window";
 constexpr char kWindowTitle[] = "DXMT9 PresentLoop";
+
+// Every texel is explicit so capture/replay probes have a stable, non-uniform
+// seed rather than a procedural or partially initialized upload.
+constexpr DWORD kTextureSeed[kTextureSize][kTextureSize] = {
+    {0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu, 0xFFFFFFFFu},
+    {0xFFFF8000u, 0xFF8000FFu, 0xFF00FFFFu, 0xFFFFFF00u},
+    {0xFF400040u, 0xFF408040u, 0xFF404080u, 0xFF804000u},
+    {0xFF101010u, 0xFF707070u, 0xFFB0B0B0u, 0xFFE0E0E0u},
+};
+
+struct TexturedVertex {
+    float x;
+    float y;
+    float z;
+    float rhw;
+    DWORD diffuse;
+    float u;
+    float v;
+};
 
 FILE* g_trace = nullptr;
 
@@ -36,14 +64,17 @@ struct AppState {
     HWND hwnd = nullptr;
     IDirect3D9* d3d = nullptr;
     IDirect3DDevice9* device = nullptr;
+    IDirect3DTexture9* texture = nullptr;
     D3DPRESENT_PARAMETERS pp{};
     int iterations = kDefaultIterations;
     int frame = 0;
+    bool textured = false;
     bool quit = false;
     LARGE_INTEGER qpcFrequency{};
     std::int64_t windowTicks = 0;
     std::int64_t deviceTicks = 0;
     std::int64_t clearTicks = 0;
+    std::int64_t drawTicks = 0;
     std::int64_t presentTicks = 0;
     std::int64_t messageTicks = 0;
     std::int64_t cleanupTicks = 0;
@@ -152,6 +183,13 @@ int env_int(const char* name, int fallback) {
     return static_cast<int>(parsed);
 }
 
+bool env_enabled(const char* name) {
+    const char* value = std::getenv(name);
+    return value && (std::strcmp(value, "1") == 0 ||
+                     std::strcmp(value, "true") == 0 ||
+                     std::strcmp(value, "yes") == 0);
+}
+
 bool create_window(AppState& app) {
     WNDCLASSEXA wc{};
     wc.cbSize = sizeof(wc);
@@ -219,6 +257,76 @@ bool create_device(AppState& app) {
         print_hresult("CreateDevice", hr);
         return false;
     }
+
+    if (!app.textured) {
+        return true;
+    }
+
+    hr = app.device->CreateTexture(
+        kTextureSize, kTextureSize, 1, D3DUSAGE_DYNAMIC,
+        D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &app.texture, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateTexture", hr);
+        return false;
+    }
+
+    D3DLOCKED_RECT locked{};
+    hr = app.texture->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD);
+    if (FAILED(hr)) {
+        print_hresult("Texture LockRect", hr);
+        return false;
+    }
+    for (UINT y = 0; y < kTextureSize; ++y) {
+        auto* row = reinterpret_cast<DWORD*>(
+            static_cast<unsigned char*>(locked.pBits) +
+            static_cast<size_t>(y) * static_cast<size_t>(locked.Pitch));
+        std::memcpy(row, kTextureSeed[y], sizeof(kTextureSeed[y]));
+    }
+    hr = app.texture->UnlockRect(0);
+    if (FAILED(hr)) {
+        print_hresult("Texture UnlockRect", hr);
+        return false;
+    }
+
+    app.device->SetRenderState(D3DRS_LIGHTING, FALSE);
+    app.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    app.device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    app.device->SetFVF(kTexturedFvf);
+    app.device->SetTexture(0, app.texture);
+    app.device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    app.device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    app.device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    app.device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    app.device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    app.device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    return true;
+}
+
+bool draw_textured_quad(AppState& app) {
+    const TexturedVertex vertices[3] = {
+        {-0.5f, -0.5f, 0.5f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
+        {static_cast<float>(kBackBufferWidth * 2) - 0.5f, -0.5f, 0.5f,
+         1.0f, 0xffffffffu, 2.0f, 0.0f},
+        {-0.5f, static_cast<float>(kBackBufferHeight * 2) - 0.5f, 0.5f,
+         1.0f, 0xffffffffu, 0.0f, 2.0f},
+    };
+
+    HRESULT hr = app.device->BeginScene();
+    if (FAILED(hr)) {
+        print_hresult("BeginScene", hr);
+        return false;
+    }
+    hr = app.device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, vertices,
+                                      sizeof(vertices[0]));
+    const HRESULT end_hr = app.device->EndScene();
+    if (FAILED(hr)) {
+        print_hresult("DrawPrimitiveUP", hr);
+        return false;
+    }
+    if (FAILED(end_hr)) {
+        print_hresult("EndScene", end_hr);
+        return false;
+    }
     return true;
 }
 
@@ -233,6 +341,14 @@ void run_iteration(AppState& app) {
                                        clear_color, 1.0f, 0);
         if (FAILED(hr)) {
             print_hresult("Clear", hr);
+            app.quit = true;
+            return;
+        }
+    }
+
+    if (app.textured) {
+        ScopedTicks draw_timer(app.drawTicks);
+        if (!draw_textured_quad(app)) {
             app.quit = true;
             return;
         }
@@ -258,6 +374,7 @@ void run_iteration(AppState& app) {
 }
 
 void cleanup(AppState& app) {
+    safe_release(app.texture);
     safe_release(app.device);
     safe_release(app.d3d);
     if (app.hwnd) {
@@ -278,6 +395,7 @@ int main(int /*argc*/, char** /*argv*/) {
     };
 
     app.iterations = env_int("PRESENT_LOOP_ITERATIONS", kDefaultIterations);
+    app.textured = env_enabled("PRESENT_LOOP_TEXTURED");
     if (app.iterations < 1) {
         app.iterations = 1;
     }
@@ -288,8 +406,9 @@ int main(int /*argc*/, char** /*argv*/) {
         g_trace = std::fopen(trace_path, "wb");
     }
 
-    trace_log("OK: PresentLoopProbe startup iterations=%d backbuffer=%dx%d",
-              app.iterations, kBackBufferWidth, kBackBufferHeight);
+    trace_log("OK: PresentLoopProbe startup iterations=%d backbuffer=%dx%d mode=%s",
+              app.iterations, kBackBufferWidth, kBackBufferHeight,
+              app.textured ? "textured-drawprimitiveup" : "clear-only");
 
     {
         ScopedTicks timer(app.windowTicks);
@@ -334,18 +453,22 @@ int main(int /*argc*/, char** /*argv*/) {
     cleanup_with_timing();
     app.totalTicks = qpc_now() - total_started;
     trace_log("[present-loop-probe] iterations=%d total_ms=%.3f window_ms=%.3f "
-              "device_ms=%.3f clear_ms=%.3f clear_avg_ms=%.3f present_ms=%.3f "
-              "present_avg_ms=%.3f message_ms=%.3f cleanup_ms=%.3f",
+              "device_ms=%.3f clear_ms=%.3f clear_avg_ms=%.3f draw_ms=%.3f "
+              "draw_avg_ms=%.3f present_ms=%.3f present_avg_ms=%.3f "
+              "message_ms=%.3f cleanup_ms=%.3f mode=%s",
               app.frame,
               ticks_to_ms(app, app.totalTicks),
               ticks_to_ms(app, app.windowTicks),
               ticks_to_ms(app, app.deviceTicks),
               ticks_to_ms(app, app.clearTicks),
               per_frame_ms(app, app.clearTicks),
+              ticks_to_ms(app, app.drawTicks),
+              per_frame_ms(app, app.drawTicks),
               ticks_to_ms(app, app.presentTicks),
               per_frame_ms(app, app.presentTicks),
               ticks_to_ms(app, app.messageTicks),
-              ticks_to_ms(app, app.cleanupTicks));
+              ticks_to_ms(app, app.cleanupTicks),
+              app.textured ? "textured-drawprimitiveup" : "clear-only");
     if (g_trace) {
         std::fclose(g_trace);
         g_trace = nullptr;
