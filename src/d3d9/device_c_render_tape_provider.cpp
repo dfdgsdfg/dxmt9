@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -96,6 +97,24 @@ struct PreflightPlan {
   RenderTapeDigest expectedDigest{};
 };
 
+bool mutationCatalogueMatches(
+    const PreflightPlan& plan,
+    std::span<const RenderTapeProviderBlob> blobs) {
+  for (const auto& mutation : plan.mutations) {
+    const auto definition = std::find_if(
+        plan.definitions.begin(), plan.definitions.end(),
+        [&](const auto& value) {
+          return sameIdentity(value.fixed.identity, mutation.identity);
+        });
+    const auto* blob = findBlob(blobs, mutation.digest);
+    if (definition == plan.definitions.end() || !blob ||
+        blob->bytes.size() != mutation.byteSize) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool parseChunks(std::span<const std::byte> bytes, std::uint32_t count,
                  std::vector<Chunk>& out) {
   std::size_t offset = 0u;
@@ -158,35 +177,6 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
   return true;
 }
 
-bool bootstrapBindsOutput(const Chunk& chunk,
-                          const D9CWireObjectIdentity& output) {
-  ImportedChunkView imported;
-  if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported) ||
-      imported.records.size() != 1u) return false;
-  const auto record = imported.record(0u);
-  for (std::size_t index = 0u; index < record.sections.size(); ++index) {
-    const auto section = record.section(index);
-    if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET)
-      continue;
-    for (std::uint32_t bindingIndex = 0u;
-         bindingIndex < section.descriptor.count; ++bindingIndex) {
-      D9CCommandChunkWireRenderTargetBinding binding{};
-      if (!load(section.payload,
-                bindingIndex * sizeof(binding), binding)) return false;
-      if (binding.slot != 0u) continue;
-      if (binding.valid != 1u ||
-          binding.handleIndex >= imported.handles.size()) return false;
-      const auto& handle = imported.handles[binding.handleIndex];
-      return sameIdentity(output, D9CWireObjectIdentity{
-          .kind = handle.kind,
-          .generation = handle.generation,
-          .objectId = handle.objectId,
-      });
-    }
-  }
-  return false;
-}
-
 FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                                 std::span<const RenderTapeProviderBlob> blobs,
                                 PreflightPlan* plan) {
@@ -212,6 +202,9 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
   result.coverage.eventCount = tape.header.eventCount;
 
   PreflightPlan candidate{.tape = tape, .catalogue = std::move(catalogue)};
+  FrameTapeBootstrapOutputDisposition bootstrapDisposition =
+      FrameTapeBootstrapOutputDisposition::Malformed;
+  bool bootstrapAccepted = false;
   bool sawFrame = false;
   bool sawComplete = false;
   std::vector<RenderTapeDigest> referencedBlobs;
@@ -333,13 +326,28 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       goto unsupported;
     }
   }
+  bootstrapDisposition = candidate.bootstrap.size() == 1u
+      ? classifyFrameTapeBootstrapOutput(
+            candidate.bootstrap.front().bytes,
+            candidate.bootstrap.front().envelope,
+            candidate.outputIdentity)
+      : FrameTapeBootstrapOutputDisposition::Malformed;
+  bootstrapAccepted =
+      bootstrapDisposition == FrameTapeBootstrapOutputDisposition::ImplicitDefault ||
+      bootstrapDisposition == FrameTapeBootstrapOutputDisposition::ExplicitExact;
   if (!sawFrame || !sawComplete || candidate.outputIdentity.objectId == 0u ||
-      candidate.bootstrap.size() != 1u ||
-      !bootstrapBindsOutput(candidate.bootstrap.front(),
-                            candidate.outputIdentity) ||
-      referencedBlobs.size() != blobs.size()) goto unsupported;
+      !bootstrapAccepted ||
+      referencedBlobs.size() != blobs.size() ||
+      !mutationCatalogueMatches(candidate, blobs)) goto unsupported;
   result.conservation.referencedBlobs =
       static_cast<std::uint32_t>(referencedBlobs.size());
+  result.requirements = FrameTapeReplayRequirements{
+      .outputWidth = candidate.outputDesc.width,
+      .outputHeight = candidate.outputDesc.height,
+      .outputFormat = candidate.outputDesc.format,
+  };
+  result.validity.expectedDigestCaptured =
+      candidate.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
   result.status = FrameTapeReplayStatus::Complete;
   if (plan) *plan = std::move(candidate);
   return result;
@@ -491,14 +499,22 @@ FrameTapeReplayResult replayFrameTapeIdentity(
         ok = dxmt9c_buffer_unlock(buffer) == core::D3D_OK;
       }
     } else if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+      D9CSurfaceDesc levelDesc{};
       D9CLockedRect locked{};
       auto* texture = static_cast<D9CTexture*>(object);
-      ok = dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
-                                    nullptr, 0u) == core::D3D_OK && locked.bits &&
-           locked.pitch > 0 && blob->bytes.size() % locked.pitch == 0u;
-      if (ok) {
+      ok = dxmt9c_texture_get_level_desc(texture, mutation.subresource,
+                                         &levelDesc) == core::D3D_OK &&
+           dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
+                                    nullptr, 0u) == core::D3D_OK &&
+           locked.bits;
+      if (ok && !renderTapeTextureSeedExtentMatches(
+                    blob->bytes.size(), locked.pitch, levelDesc.height)) {
+        (void)dxmt9c_texture_unlock_rect(texture, mutation.subresource);
+        ok = false;
+      } else if (ok) {
         std::memcpy(locked.bits, blob->bytes.data(), blob->bytes.size());
-        ok = dxmt9c_texture_unlock_rect(texture, mutation.subresource) == core::D3D_OK;
+        ok = dxmt9c_texture_unlock_rect(texture, mutation.subresource) ==
+             core::D3D_OK;
       }
     } else {
       ok = false;
@@ -579,6 +595,80 @@ FrameTapeReplayResult replayFrameTapeIdentity(
   }
   cleanup();
   return result;
+}
+
+FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
+    std::span<const std::byte> bytes, const CommandChunkEnvelope& envelope,
+    const D9CWireObjectIdentity& output) noexcept {
+  ImportedChunkView imported;
+  if (!importPrevalidatedCommandChunk(bytes, envelope, imported) ||
+      imported.records.size() != 1u ||
+      imported.record(0u).header.type != D9C_COMMAND_RECORD_APPLY_STATE) {
+    return FrameTapeBootstrapOutputDisposition::Malformed;
+  }
+
+  bool sawRenderTargetSection = false;
+  bool sawSlotZero = false;
+  for (std::size_t index = 0u; index < imported.record(0u).sections.size();
+       ++index) {
+    const auto section = imported.record(0u).section(index);
+    if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) {
+      continue;
+    }
+    sawRenderTargetSection = true;
+    if (section.descriptor.count == 0u) {
+      if (section.descriptor.byteSize != 0u) {
+        return FrameTapeBootstrapOutputDisposition::Malformed;
+      }
+      continue;
+    }
+    for (std::uint32_t bindingIndex = 0u;
+         bindingIndex < section.descriptor.count; ++bindingIndex) {
+      D9CCommandChunkWireRenderTargetBinding binding{};
+      if (!load(section.payload, bindingIndex * sizeof(binding), binding)) {
+        return FrameTapeBootstrapOutputDisposition::Malformed;
+      }
+      if (binding.slot != 0u) {
+        return FrameTapeBootstrapOutputDisposition::SlotOutOfRange;
+      }
+      if (sawSlotZero) {
+        return FrameTapeBootstrapOutputDisposition::Ambiguous;
+      }
+      sawSlotZero = true;
+      if (binding.valid != 1u ||
+          binding.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) {
+        return FrameTapeBootstrapOutputDisposition::ExplicitNull;
+      }
+      if (binding.handleIndex >= imported.handles.size()) {
+        return FrameTapeBootstrapOutputDisposition::Malformed;
+      }
+      const auto& handle = imported.handles[binding.handleIndex];
+      if (!sameIdentity(output, D9CWireObjectIdentity{
+                                 .kind = handle.kind,
+                                 .generation = handle.generation,
+                                 .objectId = handle.objectId,
+                             })) {
+        return FrameTapeBootstrapOutputDisposition::WrongIdentity;
+      }
+    }
+  }
+  if (!sawRenderTargetSection || !sawSlotZero) {
+    return imported.handles.empty()
+               ? FrameTapeBootstrapOutputDisposition::ImplicitDefault
+               : FrameTapeBootstrapOutputDisposition::Ambiguous;
+  }
+  return FrameTapeBootstrapOutputDisposition::ExplicitExact;
+}
+
+bool renderTapeTextureSeedExtentMatches(std::uint64_t blobBytes,
+                                        std::int32_t pitch,
+                                        std::uint32_t mipHeight) noexcept {
+  if (pitch <= 0 || mipHeight == 0u) return false;
+  const auto rowPitch = static_cast<std::uint64_t>(pitch);
+  if (rowPitch > std::numeric_limits<std::uint64_t>::max() / mipHeight) {
+    return false;
+  }
+  return blobBytes == rowPitch * mipHeight;
 }
 
 const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept {

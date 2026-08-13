@@ -128,7 +128,7 @@ bytes, shader layouts, pass actions, and output pixels.
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
-| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | native v2 event-tape validation/replay-sink tests implemented; composed production-capture refinement and frame identity oracle planned | `device_c_render_tape.*` shares the production canonical-chunk validator and is covered by `render_tape_spec.cpp`/CLI tests for bootstrap, object, blob, control, Present/completion, and conservation; live capture owners, production queue/provider replay sink, and offscreen oracle remain missing |
+| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.8 / R-VERIF-6.6 | bounded native v2 provider identity slice, production routing, artifact host, exact Clear readback digest, and focused evidence implemented; full captured-bundle refinement remains pending | `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion and offscreen presenter seam. Native provider/host tests cover implicit and explicit RT0 identity admission, fail-closed preflight, checked texture seed extents, validity/coverage/conservation, exact 16×16 Clear digest, and bundle scope. A real captured-bundle run is still required before claiming end-to-end capture replay. |
 
 ---
 

@@ -34,10 +34,27 @@ struct FrameTapeValidityEvidence {
   bool structurallyValid = false;
   bool digestsValid = false;
   bool outputReadback = false;
+  bool expectedDigestCaptured = false;
   bool expectedDigestMatched = false;
   bool outputNonDegenerate = false;
   std::uint64_t outputBytes = 0u;
   RenderTapeDigest outputDigest{};
+};
+
+struct FrameTapeReplayRequirements {
+  std::uint32_t outputWidth = 0u;
+  std::uint32_t outputHeight = 0u;
+  std::uint32_t outputFormat = 0u;
+};
+
+enum class FrameTapeBootstrapOutputDisposition : std::uint8_t {
+  Malformed,
+  ImplicitDefault,
+  ExplicitExact,
+  ExplicitNull,
+  WrongIdentity,
+  SlotOutOfRange,
+  Ambiguous,
 };
 
 struct FrameTapeCoverageEvidence {
@@ -64,6 +81,7 @@ struct FrameTapeConservationEvidence {
 struct FrameTapeReplayResult {
   FrameTapeReplayStatus status = FrameTapeReplayStatus::InvalidTape;
   std::uint32_t failedEventIndex = 0xffffffffu;
+  FrameTapeReplayRequirements requirements{};
   FrameTapeValidityEvidence validity{};
   FrameTapeCoverageEvidence coverage{};
   FrameTapeConservationEvidence conservation{};
@@ -72,6 +90,18 @@ struct FrameTapeReplayResult {
     return status == FrameTapeReplayStatus::Complete;
   }
 };
+
+// Classifies the only accepted bootstrap attachment forms without changing
+// the canonical wire bytes. The implicit form is the production default RT0
+// created and bound by the replay device itself.
+FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
+    std::span<const std::byte> bytes, const CommandChunkEnvelope& envelope,
+    const D9CWireObjectIdentity& output) noexcept;
+
+// Pure checked extent predicate used immediately before a texture lock copy.
+bool renderTapeTextureSeedExtentMatches(std::uint64_t blobBytes,
+                                        std::int32_t pitch,
+                                        std::uint32_t mipHeight) noexcept;
 
 // Transactional admission for the one-frame identity grammar. No provider or
 // device operation is performed until this returns Complete.

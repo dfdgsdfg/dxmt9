@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -168,6 +170,60 @@ std::vector<std::byte> bootstrapChunk() {
   return makeChunk(records);
 }
 
+std::vector<std::byte> implicitBootstrapChunk() {
+  std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
+      textures{};
+  for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
+    textures[slot] = {.slot = slot, .valid = 1u,
+                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  }
+  std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
+      streams{};
+  for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
+    streams[slot] = {.slot = slot, .valid = 1u,
+                     .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  }
+  constexpr std::uint32_t sectionCount = 2u;
+  const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
+  const auto sectionPayloadOffset = alignUp(
+      sectionTableOffset + sectionCount * sizeof(D9CCommandChunkWireSectionDesc),
+      alignof(std::uint32_t));
+  const auto streamOffset = sectionPayloadOffset + sizeof(textures);
+  const D9CCommandChunkWireDrawHeader draw{
+      .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
+      .sectionCount = sectionCount,
+      .sectionTableOffset = static_cast<std::uint32_t>(sectionTableOffset),
+      .sectionPayloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+  };
+  const std::array sections{
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+          .elementSize = sizeof(textures[0]),
+          .count = static_cast<std::uint32_t>(textures.size()),
+          .payloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+          .byteSize = sizeof(textures),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+          .elementSize = sizeof(streams[0]),
+          .count = static_cast<std::uint32_t>(streams.size()),
+          .payloadOffset = static_cast<std::uint32_t>(streamOffset),
+          .byteSize = sizeof(streams),
+      },
+  };
+  std::vector<std::byte> payload(streamOffset + sizeof(streams));
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  std::memcpy(payload.data() + sectionTableOffset, sections.data(),
+              sizeof(sections));
+  std::memcpy(payload.data() + sectionPayloadOffset, textures.data(),
+              sizeof(textures));
+  std::memcpy(payload.data() + streamOffset, streams.data(), sizeof(streams));
+  return makeChunk(std::array{Record{
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = std::move(payload),
+  }});
+}
+
 constexpr D9CWireObjectIdentity kOutput{
     .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
     .generation = 7u,
@@ -177,6 +233,63 @@ constexpr D9CWireObjectIdentity kSeedBuffer{
     .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
     .generation = 3u,
     .objectId = 42u,
+};
+
+struct ProductionFixture {
+  std::vector<std::byte> tape{};
+
+  ProductionFixture() {
+    const D9CCommandChunkWireClear clear{
+        .flags = 1u,
+        .colorARGB = 0xff204060u,
+        .z = 1.0f,
+        .rectCount = 0u,
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    };
+    const std::array frameRecords{
+        Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
+        Record{.type = D9C_COMMAND_RECORD_PRESENT,
+               .payload = bytesOf(D9CCommandChunkWirePresent{})},
+    };
+    const auto frame = makeChunk(frameRecords);
+    const D9CSurfaceDesc outputDesc{
+        .format = 21u,
+        .resourceType = 1u,
+        .usage = 1u,
+        .pool = 0u,
+        .multiSampleType = 0u,
+        .multiSampleQuality = 0u,
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+    };
+    const RenderTapeOracleAttachment oracle{
+        .identity = kOutput,
+        .descriptorKind = static_cast<std::uint32_t>(
+            RenderTapeDescriptorKind::Surface),
+    };
+    const RenderTapeDigest expectedDigest{
+        std::byte{0x5f}, std::byte{0x73}, std::byte{0x22}, std::byte{0xd0},
+        std::byte{0x5f}, std::byte{0x8b}, std::byte{0xa9}, std::byte{0x74},
+        std::byte{0x08}, std::byte{0x93}, std::byte{0xa4}, std::byte{0x70},
+        std::byte{0x42}, std::byte{0x3e}, std::byte{0x69}, std::byte{0x2f},
+        std::byte{0x05}, std::byte{0x7c}, std::byte{0x05}, std::byte{0x4f},
+        std::byte{0xd0}, std::byte{0xbd}, std::byte{0x92}, std::byte{0xaa},
+        std::byte{0x60}, std::byte{0x6c}, std::byte{0x44}, std::byte{0x40},
+        std::byte{0x10}, std::byte{0x9d}, std::byte{0xca}, std::byte{0x61},
+    };
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(implicitBootstrapChunk());
+    builder.appendObjectDefine(
+        kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
+    builder.appendPresentComplete(
+        3u, 1u, RenderTapeDigestValidity::Sha256, expectedDigest,
+        std::as_bytes(std::span(&oracle, 1u)));
+    tape = builder.seal();
+  }
 };
 
 struct Fixture {
@@ -337,13 +450,113 @@ void nativeMetalOffscreenIdentityReplay() {
         "replay-owned wrappers must be conserved through completion cleanup");
 }
 
+void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
+  ProductionFixture fixture;
+  check(fixture.tape.size() != 0u, "production fixture must seal");
+  const auto validation = preflightFrameTapeIdentity(fixture.tape, {});
+  check(validation.complete(), frameTapeReplayStatusName(validation.status));
+  check(validation.coverage.eventCount == 4u &&
+            validation.coverage.objectDefinitions == 1u &&
+            validation.coverage.seedMutations == 0u &&
+            validation.coverage.commandChunks == 1u &&
+            validation.coverage.commandRecords == 2u,
+        "production fixture must match the four-event implicit-output capture");
+  check(validation.requirements.outputWidth == 16u &&
+            validation.requirements.outputHeight == 16u &&
+            validation.requirements.outputFormat == 21u,
+        "preflight must expose the admitted output requirements");
+  check(validation.validity.expectedDigestCaptured,
+        "production fixture must carry an output digest oracle");
+  check(classifyFrameTapeBootstrapOutput(
+            implicitBootstrapChunk(), CommandChunkEnvelope{.recordCount = 1u},
+            kOutput) == FrameTapeBootstrapOutputDisposition::ImplicitDefault,
+        "production bootstrap must classify as implicit default RT0");
+  const auto explicitBootstrap = bootstrapChunk();
+  check(classifyFrameTapeBootstrapOutput(
+            explicitBootstrap, CommandChunkEnvelope{.recordCount = 1u,
+                                                     .handleCount = 1u},
+            kOutput) == FrameTapeBootstrapOutputDisposition::ExplicitExact,
+        "explicit exact RT0 must remain accepted");
+  check(classifyFrameTapeBootstrapOutput(
+            explicitBootstrap, CommandChunkEnvelope{.recordCount = 1u,
+                                                     .handleCount = 1u},
+            D9CWireObjectIdentity{.kind = kOutput.kind,
+                                  .generation = kOutput.generation + 1u,
+                                  .objectId = kOutput.objectId}) ==
+            FrameTapeBootstrapOutputDisposition::WrongIdentity,
+        "wrong-generation RT0 must fail closed");
+  auto explicitNull = explicitBootstrap;
+  ImportedChunkView explicitView;
+  check(importPrevalidatedCommandChunk(
+            explicitNull, CommandChunkEnvelope{.recordCount = 1u,
+                                                .handleCount = 1u},
+            explicitView),
+        "explicit bootstrap must import for negative classification");
+  const auto renderTarget = explicitView.record(0u).section(2u);
+  D9CCommandChunkWireRenderTargetBinding nullBinding{};
+  std::memcpy(&nullBinding, renderTarget.payload.data(), sizeof(nullBinding));
+  nullBinding.valid = 0u;
+  nullBinding.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+  std::memcpy(const_cast<std::byte*>(renderTarget.payload.data()), &nullBinding,
+              sizeof(nullBinding));
+  check(classifyFrameTapeBootstrapOutput(
+            explicitNull, CommandChunkEnvelope{.recordCount = 1u,
+                                                .handleCount = 1u},
+            kOutput) == FrameTapeBootstrapOutputDisposition::ExplicitNull,
+        "explicit null RT0 must fail closed");
+  check(renderTapeTextureSeedExtentMatches(64u, 16, 4u) &&
+            !renderTapeTextureSeedExtentMatches(63u, 16, 4u) &&
+            !renderTapeTextureSeedExtentMatches(64u, 0, 4u),
+        "texture seed extent predicate must be exact and checked");
+
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "production fixture factory must be available");
+  const D9CPresentParams params{
+      .backBufferWidth = validation.requirements.outputWidth,
+      .backBufferHeight = validation.requirements.outputHeight,
+      .backBufferFormat = validation.requirements.outputFormat,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "production fixture device must construct");
+  const auto result = replayFrameTapeIdentity(device, fixture.tape, {});
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.validity.outputReadback && result.validity.expectedDigestCaptured &&
+            result.validity.expectedDigestMatched,
+        "production fixture must read back and compare its digest");
+  check(result.complete(), frameTapeReplayStatusName(result.status));
+}
+
+void writeProductionFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "provider fixture directory must be created");
+  const ProductionFixture fixture;
+  std::ofstream output(directory / "events.bin", std::ios::binary);
+  check(output.good(), "provider fixture must open events.bin");
+  output.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  check(output.good(), "provider fixture must write events.bin");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 3 && std::string_view(argv[1]) == "--write-production-fixture") {
+      writeProductionFixture(argv[2]);
+      return 0;
+    }
+    check(argc == 1,
+          "usage: render_tape_provider_spec [--write-production-fixture dir]");
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
     nativeMetalOffscreenIdentityReplay();
+    productionShapeUsesImplicitDefaultOutputAndExactDigest();
   } catch (const TestFailure& error) {
     std::cerr << "render_tape_provider_spec failed: " << error.what() << '\n';
     return 1;

@@ -43,7 +43,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, and a production-provider identity slice for one full-surface `Clear` → `Present` interval exist | Expand the fail-closed grammar beyond the first identity slice and add artifact-host/reducer workflows |
+| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, and exact native offscreen Clear oracle for one full-surface `Clear` → `Present` interval exist | Run one real captured bundle, then expand the fail-closed grammar and add reducer workflows |
 | `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -693,9 +693,11 @@ block-compressed layouts, cube/volume lock paths, missing initial bytes, and
 unavailable descriptor or bytecode data fail closed before publication.
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. This remains a capture seam
-rather than complete frame evidence: provider replay and offscreen Metal oracle
-execution remain open. One bounded production capture has established the
-structural wild identity described in the experiments gap.
+rather than complete captured-bundle evidence: the bounded provider replay,
+offscreen Metal readback, and exact Clear digest oracle now exist, while one
+real captured-bundle run remains a separate tester evidence step. One bounded
+production capture has established the structural wild identity described in
+the experiments gap.
 
 At the arm boundary, the implicit swap-chain backbuffer is lazily admitted as
 the stable PE wire identity with `PresentOutput` role and
@@ -785,12 +787,17 @@ build/tools/dxmt9-render-tape inspect frame.tape \
 python3 scripts/tools/run_dxmt9_render_tape.py pack \
   --events frame.tape --blob mutation.bin --output-dir frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
+python3 scripts/tools/run_dxmt9_render_tape.py provider-replay frame-tape-bundle
 ```
 
 The first pair operates on the canonical event component. The second pair adds
 and verifies the artifact envelope. `inspect` dispatches every prevalidated
-event to the structural replay sink and reports conservation counts; it is not
-the planned production provider replay.
+event to the structural replay sink and reports conservation counts; it remains
+semantically distinct from the production provider replay. `provider-replay`
+validates the bundle, passes the actual digest-named blob files to
+`build/tools/dxmt9-render-tape-provider`, and reports machine-readable validity,
+coverage, conservation, and output-oracle scope without rewriting the source
+manifest.
 
 The journal distinguishes at least:
 
@@ -816,7 +823,8 @@ semantics. A windowed mode and `.gputrace` capture of the replayer are useful
 diagnostics but are downstream options, not the reference oracle.
 
 The first production slice is implemented by
-`device_c_render_tape_provider.*`. It admits exactly one uncompressed,
+`device_c_render_tape_provider.*` and hosted by
+`tools/dxmt9_render_tape_provider.cpp`. It admits exactly one uncompressed,
 single-sample 2D colour output, a complete bootstrap, generation-qualified
 surface/buffer/2D-texture definitions and complete initial seeds, followed by
 exactly one full-surface `Clear` and one identity `Present`. Admission validates
@@ -827,9 +835,11 @@ canonical chunk bytes are passed unchanged to
 the existing `DeviceReplaySink`, replay planner, drain ledger, resource marks,
 queue, and completion paths. `OffscreenPresentOutput` replaces only drawable
 acquisition/scheduling in `Presenter`; the existing present PSO/pass and
-production readback remain shared. Result values report validity, grammar
-coverage, and blob/object/ordinal conservation separately and make no timing or
-benchmark claim. Queries, readback/control events, reset/device-lost,
+production readback remain shared. The host hashes each supplied blob itself,
+obtains output requirements from provider preflight, constructs the matching
+native D9C device, and returns non-zero for any non-Complete result. Result
+values report validity, grammar coverage, and blob/object/ordinal conservation
+separately and make no timing or benchmark claim. Queries, readback/control events, reset/device-lost,
 `PresentEx` flags, partial rectangles/seeds, multiple/depth/MSAA/compressed
 outputs, and all other records or descriptor families fail before effects.
 

@@ -48,6 +48,36 @@ def run_validator(
         ) from error
 
 
+def run_provider_replay(
+    provider: pathlib.Path,
+    events: pathlib.Path,
+    blob_paths: list[pathlib.Path],
+) -> dict[str, Any]:
+    arguments = [str(provider), "replay", str(events)]
+    for path in blob_paths:
+        arguments.extend(("--blob", str(path)))
+    completed = subprocess.run(
+        arguments,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    output = completed.stdout.strip()
+    if not output:
+        detail = completed.stderr.strip() or "provider emitted no result"
+        raise SystemExit(f"render tape provider replay failed: {detail}")
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as error:
+        detail = completed.stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise SystemExit(
+            f"render tape provider emitted invalid JSON: {error}{suffix}"
+        ) from error
+    result["provider_exit_code"] = completed.returncode
+    return result
+
+
 def producer_revision() -> str:
     root = pathlib.Path(__file__).resolve().parents[2]
     completed = subprocess.run(
@@ -139,7 +169,7 @@ def pack(args: argparse.Namespace) -> int:
 
 def load_bundle(
     bundle: pathlib.Path,
-) -> tuple[dict[str, Any], pathlib.Path, list[str]]:
+) -> tuple[dict[str, Any], pathlib.Path, list[str], list[pathlib.Path]]:
     manifest_path = bundle.resolve() / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -170,6 +200,7 @@ def load_bundle(
     if not isinstance(blob_components, list):
         raise SystemExit("render tape components.blobs must be an array")
     blob_refs = []
+    blob_paths = []
     seen_digests: set[str] = set()
     for blob in blob_components:
         if not isinstance(blob, dict):
@@ -205,17 +236,37 @@ def load_bundle(
                 f"manifest={claimed_digest} actual={actual_digest}"
             )
         blob_refs.append(f"{actual_digest}:{actual_bytes}")
-    return manifest, events, blob_refs
+        blob_paths.append(path)
+    return manifest, events, blob_refs, blob_paths
 
 
 def validate_or_inspect(args: argparse.Namespace) -> int:
-    manifest, events, blob_refs = load_bundle(args.bundle)
+    manifest, events, blob_refs, _ = load_bundle(args.bundle)
     result = run_validator(args.validator, args.command, events, blob_refs)
     result["bundle_schema"] = manifest["schema"]
     result["events_sha256"] = manifest["components"]["events"]["sha256"]
     result["scope"] = manifest.get("scope", {})
     print(json.dumps(result, sort_keys=True))
     return 0
+
+
+def provider_replay(args: argparse.Namespace) -> int:
+    manifest, events, _, blob_paths = load_bundle(args.bundle)
+    result = run_provider_replay(args.provider, events, blob_paths)
+    validity = result.get("validity", {})
+    output_oracle = bool(
+        validity.get("output_readback")
+        and validity.get("expected_digest_captured")
+        and validity.get("expected_digest_matched")
+    )
+    scope = dict(manifest.get("scope", {}))
+    scope["production_provider_replay"] = result.get("status") == "complete"
+    scope["output_oracle"] = output_oracle
+    result["bundle_schema"] = manifest["schema"]
+    result["events_sha256"] = manifest["components"]["events"]["sha256"]
+    result["scope"] = scope
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result.get("status") == "complete" else 1
 
 
 def parser() -> argparse.ArgumentParser:
@@ -238,6 +289,15 @@ def parser() -> argparse.ArgumentParser:
             default=pathlib.Path("build/tools/dxmt9-render-tape"),
         )
         command_parser.set_defaults(function=validate_or_inspect)
+    provider_parser = subparsers.add_parser(
+        "provider-replay", help="replay a validated bundle through the production provider"
+    )
+    provider_parser.add_argument("bundle", type=pathlib.Path)
+    provider_parser.add_argument(
+        "--provider", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape-provider"),
+    )
+    provider_parser.set_defaults(function=provider_replay)
     return value
 
 

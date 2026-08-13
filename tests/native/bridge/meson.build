@@ -171,6 +171,8 @@ foreach spec : [
     render_tape_fixture_spec = target
   elif spec[0] == 'render-tape-capture'
     render_tape_capture_fixture_spec = target
+  elif spec[0] == 'render-tape-provider'
+    render_tape_provider_fixture_spec = target
   endif
 endforeach
 
@@ -195,6 +197,18 @@ test('dxmt9-render-tape-capture-cli-spec', python3,
                   'scripts/tools/run_dxmt9_render_tape.py'),
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape_capture_fixture.py'),
+     ],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-provider-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_provider_cli.py'),
+       render_tape_provider_fixture_spec,
+       dxmt9_render_tape_provider_tool,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
      ],
      env: dxmt9_native_test_env)
 
