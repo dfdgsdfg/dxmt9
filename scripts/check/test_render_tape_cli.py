@@ -132,6 +132,21 @@ def main() -> int:
         manifest["components"]["blobs"][0]["path"] = canonical_blob_path
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
+        extra_blob = bundle / "blobs" / ("0" * 64 + ".bin")
+        extra_blob.write_bytes(b"unreachable")
+        extra_rejected = run(
+            sys.executable,
+            str(bundle_tool),
+            "validate",
+            str(bundle),
+            "--validator",
+            str(validator),
+            check=False,
+        )
+        assert extra_rejected.returncode != 0
+        assert "blob directory does not match" in extra_rejected.stderr
+        extra_blob.unlink()
+
         event_component = bundle / "events.bin"
         component_bytes = bytearray(event_component.read_bytes())
         component_bytes[-1] ^= 1

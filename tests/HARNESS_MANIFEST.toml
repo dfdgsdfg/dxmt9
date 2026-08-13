@@ -71,6 +71,8 @@ requirements = [
   "R-TEST-7.4",
   "R-HARN-REPLAY-7.2",
   "R-HARN-REPLAY-7.5",
+  "R-HARN-REPLAY-7.14",
+  "R-HARN-REPLAY-7.15",
   "R-VERIF-6.6",
 ]
 meson_targets = [
@@ -79,6 +81,8 @@ meson_targets = [
   "dxmt9-pe-chunk-record-value-spec",
   "dxmt9-render-tape-spec",
   "dxmt9-render-tape-cli-spec",
+  "dxmt9-render-tape-provider-spec",
+  "dxmt9-render-tape-provider-cli-spec",
 ]
 evidence = [
   "tests/native/bridge/bridge_marshalling_value_spec.cpp",
@@ -86,6 +90,8 @@ evidence = [
   "tests/native/bridge/pe_chunk_record_value_spec.cpp",
   "tests/native/bridge/render_tape_spec.cpp",
   "scripts/check/test_render_tape_cli.py",
+  "tests/native/bridge/render_tape_provider_spec.cpp",
+  "scripts/check/test_render_tape_provider_cli.py",
 ]
 next = ["Keep typed canonical assertions before and after every bridge boundary."]
 

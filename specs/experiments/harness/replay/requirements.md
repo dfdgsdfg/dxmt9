@@ -11,9 +11,9 @@ This is a domain document under `specs/experiments/harness/`. It
 instantiates the `R-HARN-*` requirement groups in
 `specs/experiments/harness/requirements.md` for the `replay` domain
 named in `specs/experiments/harness/spec.md` §1. The domain owns three
-profiles under one contract: the implemented, standalone `draw-slice`
-mini replay and the planned `frame-tape` and `sequence-tape` profiles.
-The broader profiles add canonical backend command capture, a consistent
+profiles under one contract: the implemented standalone `draw-slice`, the
+bounded production-backed `frame-tape`, and the bounded two-interval
+`sequence-tape` profile. The broader profiles add canonical backend command capture, a consistent
 state/resource checkpoint, and production-path replay; they do not weaken
 the existing mini replay's validity and execution-proof contracts.
 Requirement IDs in this file use the prefix `R-HARN-REPLAY-`.
@@ -43,8 +43,9 @@ its `draw-slice` profile:
 `scripts/tools/build_3dmark05_mini_replay_manifest.py`,
 `scripts/tools/plan_3dmark05_mini_replay.py`, and
 `scripts/tools/run_3dmark05_mini_replay.py`. The same domain owns the
-planned `frame-tape` and `sequence-tape` producers, validators, and
-production-path replayer described in this document's §7 and its `spec.md`
+implemented bounded `frame-tape`/`sequence-tape` validators, tools, and
+production-path replayer, plus the frame-only production capture owner,
+described in this document's §7 and its `spec.md`
 §0/§8. Consuming a `join`- or `reduce`-domain artifact does not make replay
 participate in `external-join` or `log-reduce`; its consumer stage remains
 `offline-replay`. Instantiates R-HARN-1.1 and R-HARN-7.1.
@@ -56,7 +57,7 @@ never write into a `probe`-domain trace directory's `analysis/geometry/`,
 from them. A change that has this domain re-derive or re-dump geometry
 or shader payloads itself, instead of consuming what `dump-extract`
 already wrote, duplicates a responsibility the parent domain map
-assigns to `probe`. This does not prohibit the planned full-tape producer,
+assigns to `probe`. This does not prohibit the frame-tape producer,
 which writes a different sealed bundle during `run-capture`/`dump-extract`
 and is governed by R-HARN-REPLAY-7.2–7.5. Instantiates R-HARN-1.1
 (parent spec.md §1, "Why the domain axis is harness families, not stages").
@@ -435,8 +436,10 @@ Unknown kinds/dispositions, stale generations, missing or unverified blobs,
 range overflow, completion regression, or duplicate representation are hard
 validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and R-HARN-7.5.
 
-`PresentComplete` is unique and last, names the ordinal of the one
-Present-bearing command event, records completion and typed oracle attachment
+For `frame-tape`, `PresentComplete` is unique and last. For `sequence-tape`,
+one `PresentComplete` closes each interval and only the final completion is
+last. Every completion names the ordinal of its interval's one Present-bearing
+command event, records a monotone completion value and typed oracle attachment
 identities, and explicitly distinguishes a captured SHA-256 oracle from
 `not-captured`. A successful Reset terminates/aborts the frame world and cannot
 be followed by successful `PresentComplete`; a failed Reset remains an ordered
@@ -551,3 +554,21 @@ the tape: they preserve the D3D9 `Present` HRESULT and publish no artifact. The
 feature is default-off and must add neither allocation nor bridge work while
 capture is inactive. This requirement does not widen the accepted grammar,
 support `PresentEx`, or support prior-output loads.
+
+**R-HARN-REPLAY-7.14** Deterministic provider repetition must construct a fresh
+device for every warm-up and measured run, validate before effects, cap both
+counts, and report the declared reset, warm-up, and repeat policy. Every
+measured run must conserve the same objects, blobs, Present intervals, and
+completion state and must produce the same ordered output-digest vector; one
+successful run does not establish repeat identity.
+
+**R-HARN-REPLAY-7.15** A Render Tape reducer must preserve closure rather than
+delete arbitrary bytes. The bounded first reducer operates on whole
+`CommandChunk` events in `frame-tape`, retains the unique bootstrap, the exact
+generation-qualified definitions and complete initial mutations reachable from
+selected command handles, the selected Present command, and terminal
+`PresentComplete`, then rewrites ordinals and component manifests canonically.
+It must validate the candidate before effects and accept it only when an
+explicit production-provider oracle succeeds. Deterministic bisection may
+search this same finite selection space; it must not silently omit live
+mutations, controls, destruction, or other semantics it cannot close.

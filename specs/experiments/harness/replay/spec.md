@@ -18,10 +18,13 @@ authoritatively, in `specs/experiments/harness/probe/spec.md` §5; it
 is cited below, not restated.
 
 The implemented `draw-slice` profile renders a valid image as of
-2026-07-28 (§7, Defect History). The bounded `frame-tape` profile now has one
-captured-bundle production-provider replay, while its intentionally narrow
-grammar and the `sequence-tape` profile remain tracked gaps. They reuse the
-replay domain rather than creating a second, competing harness family. Where
+2026-07-28 (§7, Defect History). The bounded `frame-tape` profile has captured-
+bundle production-provider identity, deterministic fresh-device repetition,
+and closure-aware whole-command reduction/bisection. The bounded
+`sequence-tape` profile replays exactly two Present intervals separated by one
+complete texture mutation; captured production sequence evidence and broader
+grammar remain tracked gaps. They reuse the replay domain rather than creating
+a second, competing harness family. Where
 current source still violates a contract — the 32-bit index-width rejection
 of §6.3 remains unimplemented — this file says so explicitly, and
 `specs/experiments/gap.md` tracks the shortfall.
@@ -43,8 +46,8 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | partial | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, and captured-bundle provider identity for both full-surface `Clear` → `Present` and bounded non-uniform textured-UP intervals exist | Add reducer workflows and broaden the fail-closed frame grammar |
-| `sequence-tape` | planned after frame identity | Consecutive complete Present intervals; a ten-second selection is represented as many intervals in the same schema | The same production-path replayer, with explicit reset/warm-up/timing modes |
+| `frame-tape` | bounded implementation | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, captured-bundle identity for full-surface `Clear` and non-uniform textured-UP intervals, fresh-device repetition, and whole-command reducer/bisect | Broaden the fail-closed frame grammar and add tape-to-draw-slice projection |
+| `sequence-tape` | bounded two-interval implementation | Exactly two complete textured-UP Present intervals separated by one complete digest-backed texture mutation, with per-interval completion/output conservation and repeat identity | Add production capture/publication and wild identity for sequences before widening the interval count or grammar |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
 useful for code-path mutation, pixel isolation, and inexpensive GPU experiments,
@@ -769,9 +772,10 @@ validates the dimensions, D3D format, and exact byte count before recording the
 digest in `PresentComplete`. Mirror failure, cancellation, absent/mismatched
 metadata, or cleanup failure aborts the tape alone and never changes the
 application's Present result or publishes a bundle. The inactive capture gate
-does not reserve, bridge, allocate, or add a render pass. This does not extend
-the accepted grammar, support `PresentEx` or prior-output loads, or introduce
-sequence/reducer behavior.
+does not reserve, bridge, allocate, or add a render pass. The production PE
+capture owner still emits only `frame-tape`; the replay tool's bounded sequence
+and reducer operations do not extend capture grammar, support `PresentEx`, or
+prove prior-output loads.
 
 The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events and adds only a total expected byte
@@ -913,6 +917,28 @@ references, 3/3 object conservation, `output_non_degenerate=true`, and exact
 capture/replay identity for the 262144-byte output SHA-256
 `866e45bc5527c590f7cbf1deb9ca8fd5aa3ac2eddcd6746bdaf0572848a78c17`.
 
+The same provider now admits one additional bounded `sequence-tape` shape:
+exactly two copies of the textured-UP interval with one complete, digest-backed
+level-0 texture mutation between their `PresentComplete` boundaries. Each
+interval has its own expected digest and completion conservation. Native Metal
+tests produce two distinct interval outputs after the mutation and reproduce
+the ordered two-digest vector on a second fresh device. The CLI repeats either
+profile with a `fresh-process-device` reset for every warm-up and measured run,
+rejects `warmup + repeat` above 64, and requires exact validity, coverage,
+conservation, output-oracle, and ordered-digest identity across all runs.
+Production PE capture/publication of a sequence and a captured wild sequence
+identity are not implemented.
+
+For `frame-tape`, `reduce` retains selected whole `CommandChunk` events plus
+their bootstrap, exact live generation definitions, complete initial seed/blob
+closure, the selected Present, and terminal `PresentComplete`. It rewrites
+ordinals and the content-addressed manifest, validates before provider effects,
+and accepts only a candidate whose explicit provider oracle succeeds. `bisect`
+performs deterministic delta minimization over that same whole-command domain.
+Both operations reject controls, destruction, live post-seed mutations,
+sequence input, and any other shape whose semantics the bounded closure cannot
+preserve.
+
 This is a provider API plus native evidence seam, not a new structural CLI.
 The existing `validate`/`inspect` commands remain structural-only. The bounded
 captured-bundle run above promotes this narrow slice from native identity
@@ -923,9 +949,10 @@ Replay has three modes:
 
 | Mode | Purpose | Timing claim |
 |---|---|---|
-| `validate` | schema/resource/order validation plus one deterministic execution and hashes | none |
-| `bisect` | deterministic event/pass/draw range reduction while preserving checkpoint closure | none |
-| `benchmark` | repeated execution of a validated tape with declared reset, warm-up, and sampling policy | explicit and profile-bound |
+| `validate` / `inspect` | schema/resource/order validation and structural conservation; no provider execution | none |
+| `provider-replay` | production-provider execution with declared fresh-process reset, warm-up, repetition, and exact run identity | identity only; no performance sampling |
+| `reduce` / `bisect` | deterministic whole-command frame reduction with closure validation and explicit provider oracle | none |
+| future `benchmark` | repeated execution with a declared sampling policy beyond identity checks | explicit and profile-bound |
 
 ### 8.4 Profile relationship and migration
 
@@ -941,14 +968,14 @@ identity is tested, the current manifest builder remains authoritative for
 mini-replay inputs. Once tested, its useful transforms can consume the projection
 without maintaining an independent resource-dump format.
 
-Implementation order is deliberately bounded:
-
-1. one complete `frame-tape` with capture-time closure validation;
-2. identity replay through the production importer and provider;
-3. deterministic output/conservation oracle and reducer;
-4. two consecutive Present intervals with mutations across the boundary;
-5. `sequence-tape`, where a ten-second capture is merely a longer interval set;
-6. optional tape-to-`draw-slice` projection and benchmark corpus management.
+The completed bounded implementation order is one `frame-tape`, production-
+provider identity, deterministic output/conservation repetition, whole-command
+reducer/bisection, and an exactly two-interval `sequence-tape` with a mutation
+across the boundary. The next increments are production sequence capture and
+captured identity, then broader grammar/interval count, optional tape-to-
+`draw-slice` projection, and benchmark corpus management. A nominal ten-second
+capture remains a future corpus-selection policy over complete intervals, not a
+claim provided by the current two-interval profile.
 
 Random seek, rolling eviction, mid-interval checkpoints, and a raw D3D9 API
 trace are not part of the first version.

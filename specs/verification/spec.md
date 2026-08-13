@@ -98,17 +98,33 @@ profiles differently:
   evidence. One captured `perf-d3d9-present-loop` bundle has completed this
   narrow production-provider path; broader grammar and sequence evidence remain
   separate.
-- `sequence-tape` extends the same proof over consecutive intervals; a nominal
-  ten-second capture is a corpus-selection policy, not a new semantics.
+- `sequence-tape` currently extends the same proof over exactly two textured-UP
+  intervals separated by one complete texture mutation. A nominal ten-second
+  capture remains a future corpus-selection policy, not a new semantics.
 
-Before full-tape output is trusted, a small capture/replay refinement must prove
-that checkpoint, object generation, mutation, command, Present, and completion
-order reconstruct the same abstract backend state. Production shared predicates
-must validate the same rules, and native tests must enumerate short traces such
-as create→write→draw→Present, write-between-two-Presents, destroy/recreate with a
-new generation, missing initial read bytes, and stale-object rejection. Concrete
-Metal replay then closes what the abstract model cannot see: actual resource
-bytes, shader layouts, pass actions, and output pixels.
+`dxmt9-render-tape-spec` contains the bounded capture/replay refinement required
+by `R-VERIF-6.6`. It exhaustively executes 45 cases against production
+`validateRenderTape`, `replayPrevalidatedRenderTape`, and
+`WireObjectRegistry::resolveAndRetain`:
+
+| Finite domain | Cases | Checked production decision |
+|---|---:|---|
+| Five initial-content states (Upload, CpuUnlock, missing, short, stale) × live/stale draw × live/stale oracle | 20 | create→write→draw→Present admission, exact initial-byte closure, stale command/oracle rejection |
+| Five between-Present mutation states (Upload, CpuUnlock, missing, stale, duplicate) × live/stale second draw | 10 | exactly two complete intervals, one boundary mutation, ordered per-interval Present/completion |
+| Six wire identity kinds × old/new generation lookup after destroy/recreate | 12 | stale generation rejects before retain; replacement generation admits |
+| Three mutable resource kinds reused inside one retained tape | 3 | conservative `RetainedSlotReuse` rejection |
+
+Every accepted tape is replayed through a serial value sink that checks live
+handle resolution, mutation-before-draw, draw-before-Present, one completion per
+Present, and the final mutation digest. This is an exhaustive native checker of
+the declared 45-case domain, not a universal or temporal proof. In particular,
+the live wire registry permits destroy/recreate only after generation advance,
+while one retained Render Tape deliberately rejects reuse because the old
+generation remains reachable in its journal. Concrete Metal replay closes what
+this abstract checker cannot see: actual resource bytes, shader layouts, pass
+actions, and output pixels. Prior-output loads, arbitrary controls, broader
+provider grammar, unbounded sequences, concurrency, and driver behavior remain
+outside this checker.
 
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
@@ -131,7 +147,7 @@ bytes, shader layouts, pass actions, and output pixels.
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
-| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.13 / R-VERIF-6.6 | bounded native v2 provider identity slice, production routing, capture-time output oracle, artifact host, exact Clear readback digest, focused evidence, and one digest-matched captured-bundle provider replay complete; broader refinement remains open | `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion and offscreen presenter seam. Production capture fences prior replay and renderer work before publishing a one-shot normal-Presenter mirror for canonical Present, reuses the same-command-buffer pass, and drains plus flushes the captured work before typed readback/tight-hash validation and cancellation cleanup. Native provider/host tests cover implicit and explicit RT0 identity admission, fail-closed preflight, capture-only ABI/consume/cancel behavior, checked texture seed extents, validity/coverage/conservation, exact 16×16 provider Clear digest, and bundle scope. A production-bound Metal fixture executes `Presenter::reservePresentMirror`, `cancelPresentMirror`, and `encodeCommands`, compares non-uniform primary/mirror bytes and SHA-256, and pins one-shot consume, second reservation, cancellation, and no-later-Present leakage. The 2026-08-13 Sikarugir `perf-d3d9-present-loop` bundle `experiments/output/render-tape-oracle-final.0ZFP3y/frame-95919862787500-1` replayed with `provider-replay` status `complete` and exit 0: 4 events, one object define, one bootstrap, one `Clear` + `Present` command chunk, zero blobs/mutations, 256×256 format 21, and 1/1 object conservation. Capture and replay produced the same 262144-byte SHA-256 `49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, giving `expected_digest_matched=true` and `output_oracle=true`. The uniform output is exact byte-equivalence evidence for the bounded interval, not a non-degenerate scene claim. |
+| `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.15 / R-VERIF-6.6 | bounded 45-case capture/replay refinement, deterministic repetition, closure-aware reducer/bisect, two-interval sequence identity, production routing, capture-time output oracle, and captured frame identity complete; broader grammar/captured sequence evidence open | `device_c_render_tape.*` provides the production validator/replay predicates used by the exhaustive checker and whole-command reducer. `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion, and offscreen presenter seam. The CLI constructs a fresh process/device per warm-up and measured run and requires exact ordered output/conservation identity. Production capture fences prior replay and renderer work before publishing a one-shot normal-Presenter mirror for canonical Present, reuses the same-command-buffer pass, and drains plus flushes captured work before typed readback/tight-hash validation. Native provider tests prove two distinct outputs across one sequence mutation and repeat the two-digest vector on a fresh device. Captured production evidence remains the two bounded frame bundles below; no captured sequence bundle exists yet. |
 | Bounded textured-UP increment for R-HARN-REPLAY-7.6–7.8 / R-VERIF-6.6 | native fail-closed grammar, production Metal repeat identity, and captured wild identity complete | `device_c_render_tape_provider.*` preserves flattened record order across command-chunk events and admits one exact `Clear` → fixed-function textured `DrawPrimitiveUP` → standard `Present` form. `dxmt9-render-tape-provider-spec` covers split/combined chunks, full A8R8G8B8 seed closure, exact production FVF-generated declaration admission and near-miss rejection, tight non-uniform readback, representation-equivalent Metal SHA-256 `3dc6ca2708ccbb285106dea4b1cba42e6d67dd69ffe72ab003d87d7d8250b72e`, and 2/2 or 3/3 object conservation. The 2026-08-13 Sikarugir `PRESENT_LOOP_TEXTURED=1` bundle `experiments/output/render-tape-wild-textured-r2/tapes/frame-99975454225700-1` has 8 events, 3 records in 2 chunks, 3 definitions, 2 blobs, and one mutation; provider replay returns `complete`, `output_non_degenerate=true`, 2/2 blob references, 3/3 object conservation, and exact capture/replay 262144-byte SHA-256 `866e45bc5527c590f7cbf1deb9ca8fd5aa3ac2eddcd6746bdaf0572848a78c17`. |
 
 ---

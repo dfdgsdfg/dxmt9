@@ -29,3 +29,9 @@ under `tests/meson.build`.
   the native builder and checks validator/inspect success with a verified
   mutation blob, digest-named bundle pack/validation, corrupted-header
   rejection, and component digest rejection (`dxmt9-render-tape-cli-spec`).
+- `test_render_tape_provider_cli.py` — proves fresh-device warmup/repeat
+  identity, the strict production output-oracle predicate, deterministic
+  closure-aware whole-command reduction/bisection, content-addressed reduced
+  bundles, bounded two-interval mutation visibility with distinct per-Present
+  digests, and fail-before-output rejection
+  (`dxmt9-render-tape-provider-cli-spec`).

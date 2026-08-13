@@ -15,6 +15,7 @@ namespace dxmt9::d3d9 {
 inline constexpr std::uint64_t kRenderTapeMagic = 0x32505452544d5844ull;
 inline constexpr std::uint32_t kRenderTapeVersion = 2u;
 inline constexpr std::uint32_t kRenderTapeProfileFrame = 1u;
+inline constexpr std::uint32_t kRenderTapeProfileSequence = 2u;
 inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 1u;
 inline constexpr std::uint32_t kRenderTapePayloadAlignment = 8u;
 inline constexpr std::uint32_t kRenderTapeDigestSize = 32u;
@@ -236,9 +237,9 @@ struct RenderTapeDeviceLostControl {
   std::uint32_t reserved0 = 0u;
 };
 
-// PresentComplete: last and unique event. Binds the Present ordinal, the
-// completion ordinal, typed oracle attachment identities/descriptors, the
-// expected post-present digest state, and closes the frame interval.
+// PresentComplete closes one Present interval. It is last and unique for the
+// frame profile; the bounded sequence profile carries exactly two, with the
+// second and final completion terminating the tape.
 struct RenderTapePresentCompleteHeader {
   std::uint64_t presentOrdinal = 0u;
   std::uint64_t completionOrdinal = 0u;
@@ -454,6 +455,32 @@ struct RenderTapeReplayResult {
   std::uint32_t failedEventIndex = 0xffffffffu;
 };
 
+enum class RenderTapeReductionStatus : std::uint8_t {
+  Valid,
+  InvalidSource,
+  InvalidSelection,
+  UnsupportedEvent,
+  MissingPresentSelection,
+  ClosureFailure,
+  OutputValidationFailed,
+  AllocationFailed,
+};
+
+struct RenderTapeReductionResult {
+  RenderTapeReductionStatus status = RenderTapeReductionStatus::InvalidSource;
+  // On failure this is the source or reduced-tape validation evidence. The
+  // output vectors remain empty and bytes is never partially populated.
+  RenderTapeValidationResult validation{};
+  RenderTapeValidationResult sourceValidation{};
+  std::vector<std::byte> bytes;
+  std::vector<std::uint32_t> retainedSourceEventIndices;
+  std::vector<RenderTapeDigest> referencedBlobDigests;
+
+  bool valid() const noexcept {
+    return status == RenderTapeReductionStatus::Valid;
+  }
+};
+
 RenderTapeReplayResult
 replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
                              const RenderTapeBlobCatalogue& catalogue,
@@ -461,6 +488,13 @@ replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
 
 class RenderTapeBuilder {
 public:
+  explicit RenderTapeBuilder(
+      std::uint32_t profile = kRenderTapeProfileFrame) : profile_(profile) {}
+
+  // Copies an already validated event payload verbatim. seal() still rebuilds
+  // event ordinals, offsets, padding, and presentCount canonically.
+  void appendRawEvent(RenderTapeEventType type,
+                      std::span<const std::byte> payload);
   void appendBootstrapState(std::span<const std::byte> overlayChunks);
   void appendObjectDefine(const D9CWireObjectIdentity& identity,
                           std::uint32_t descriptorKind,
@@ -488,6 +522,7 @@ public:
 
   std::vector<std::byte> seal() const;
   std::size_t eventCount() const noexcept { return events_.size(); }
+  std::uint32_t profile() const noexcept { return profile_; }
 
 private:
   struct PendingEvent {
@@ -497,10 +532,24 @@ private:
 
   void append(RenderTapeEventType type, std::vector<std::byte> payload);
 
+  std::uint32_t profile_ = kRenderTapeProfileFrame;
   std::vector<PendingEvent> events_;
 };
 
+const char* renderTapeProfileName(std::uint32_t profile) noexcept;
+
 const char*
 renderTapeValidationStatusName(RenderTapeValidationStatus status) noexcept;
+
+const char* renderTapeReductionStatusName(
+    RenderTapeReductionStatus status) noexcept;
+
+// Reduces a validated whole-frame tape to the selected CommandChunk events.
+// Input bytes and catalogue entries are borrowed only for the duration of the
+// call; successful output owns all returned storage.
+RenderTapeReductionResult reduceRenderTape(
+    std::span<const std::byte> source,
+    const RenderTapeBlobCatalogue& verifiedCatalogue,
+    std::span<const std::uint32_t> selectedCommandEventIndices) noexcept;
 
 } // namespace dxmt9::d3d9

@@ -93,21 +93,30 @@ struct Chunk {
   std::span<const std::byte> bytes{};
 };
 
+struct IntervalPlan {
+  std::vector<RenderTapeResourceMutationHeader> mutationsBefore{};
+  std::vector<Chunk> frame{};
+  RenderTapeDigestValidity expectedDigestValidity =
+      RenderTapeDigestValidity::NotCaptured;
+  RenderTapeDigest expectedDigest{};
+  std::uint64_t presentOrdinal = 0u;
+  std::uint64_t completionOrdinal = 0u;
+  bool sawTexturedDraw = false;
+};
+
 struct PreflightPlan {
   ImportedRenderTapeView tape{};
   RenderTapeBlobCatalogue catalogue{};
   std::vector<Definition> definitions{};
-  std::vector<RenderTapeResourceMutationHeader> mutations{};
+  std::vector<RenderTapeResourceMutationHeader> initialMutations{};
   std::vector<Chunk> bootstrap{};
-  std::vector<Chunk> frame{};
+  std::array<IntervalPlan, kRenderTapeMaxReplayIntervals> intervals{};
+  std::uint32_t intervalCount = 0u;
   D9CWireObjectIdentity outputIdentity{};
   D9CSurfaceDesc outputDesc{};
   D9CWireObjectIdentity textureIdentity{};
   RenderTapeTextureDescriptor textureDesc{};
   D9CWireObjectIdentity vertexDeclarationIdentity{};
-  RenderTapeDigestValidity expectedDigestValidity =
-      RenderTapeDigestValidity::NotCaptured;
-  RenderTapeDigest expectedDigest{};
 };
 
 enum class FrameRecordState : std::uint8_t {
@@ -281,15 +290,23 @@ bool acceptedTexturedDraw(const ImportedChunkView& chunk,
 bool mutationCatalogueMatches(
     const PreflightPlan& plan,
     std::span<const RenderTapeProviderBlob> blobs) {
-  for (const auto& mutation : plan.mutations) {
+  const auto matches = [&](const RenderTapeResourceMutationHeader& mutation) {
     const auto definition = std::find_if(
         plan.definitions.begin(), plan.definitions.end(),
         [&](const auto& value) {
           return sameIdentity(value.fixed.identity, mutation.identity);
         });
     const auto* blob = findBlob(blobs, mutation.digest);
-    if (definition == plan.definitions.end() || !blob ||
-        blob->bytes.size() != mutation.byteSize) {
+    return definition != plan.definitions.end() && blob &&
+           blob->bytes.size() == mutation.byteSize;
+  };
+  if (!std::all_of(plan.initialMutations.begin(),
+                   plan.initialMutations.end(), matches)) {
+    return false;
+  }
+  for (std::uint32_t i = 0u; i < plan.intervalCount; ++i) {
+    if (!std::all_of(plan.intervals[i].mutationsBefore.begin(),
+                     plan.intervals[i].mutationsBefore.end(), matches)) {
       return false;
     }
   }
@@ -416,18 +433,30 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
   }
   result.validity.structurallyValid = true;
   result.validity.digestsValid = true;
+  result.profile = tape.header.profile;
+  result.intervalCount = tape.header.presentCount;
   result.coverage.eventCount = tape.header.eventCount;
 
   PreflightPlan candidate{.tape = tape, .catalogue = std::move(catalogue)};
+  candidate.intervalCount = tape.header.presentCount;
   FrameTapeBootstrapOutputDisposition bootstrapDisposition =
       FrameTapeBootstrapOutputDisposition::Malformed;
   bool bootstrapAccepted = false;
-  bool sawFrame = false;
-  bool sawComplete = false;
-  bool sawTexturedDraw = false;
-  FrameRecordState recordState = FrameRecordState::ExpectClear;
+  std::array<FrameRecordState, kRenderTapeMaxReplayIntervals> recordStates{
+      FrameRecordState::ExpectClear, FrameRecordState::ExpectClear};
+  std::array<bool, kRenderTapeMaxReplayIntervals> intervalStarted{};
+  std::uint32_t completedIntervals = 0u;
+  bool anyTexturedDraw = false;
   BoundedDrawState drawState{};
   std::vector<RenderTapeDigest> referencedBlobs;
+  const auto referenceBlob = [&](const RenderTapeDigest& digest) {
+    if (std::none_of(referencedBlobs.begin(), referencedBlobs.end(),
+                     [&](const auto& prior) {
+                       return sameDigest(prior, digest);
+                     })) {
+      referencedBlobs.push_back(digest);
+    }
+  };
   std::uint32_t currentEventIndex = 0xffffffffu;
   for (std::uint32_t index = 0u; index < tape.events.size(); ++index) {
     currentEventIndex = index;
@@ -443,7 +472,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
     }
     case RenderTapeEventType::ObjectDefine: {
       RenderTapeObjectDefineHeader fixed{};
-      if (!load(event.payload, 0u, fixed)) goto unsupported;
+      if (completedIntervals != 0u || intervalStarted[0] ||
+          !load(event.payload, 0u, fixed)) goto unsupported;
       const auto descriptor = event.payload.subspan(sizeof(fixed));
       const bool noImmutablePayload =
           fixed.payloadValidity == static_cast<std::uint32_t>(
@@ -481,7 +511,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
           goto unsupported;
         }
         candidate.vertexDeclarationIdentity = fixed.identity;
-        referencedBlobs.push_back(fixed.immutablePayloadDigest);
+        referenceBlob(fixed.immutablePayloadDigest);
       } else {
         goto unsupported;
       }
@@ -495,25 +525,33 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
           (fixed.kind != static_cast<std::uint32_t>(RenderTapeMutationKind::Upload) &&
            fixed.kind != static_cast<std::uint32_t>(RenderTapeMutationKind::CpuUnlock)) ||
           !findBlob(blobs, fixed.digest)) goto unsupported;
-      candidate.mutations.push_back(fixed);
-      ++result.coverage.seedMutations;
-      if (std::none_of(referencedBlobs.begin(), referencedBlobs.end(),
-                       [&](const auto& digest) {
-                         return sameDigest(digest, fixed.digest);
-                       })) {
-        referencedBlobs.push_back(fixed.digest);
+      if (completedIntervals == 0u && !intervalStarted[0]) {
+        candidate.initialMutations.push_back(fixed);
+      } else if (tape.header.profile == kRenderTapeProfileSequence &&
+                 completedIntervals == 1u && !intervalStarted[1]) {
+        candidate.intervals[1].mutationsBefore.push_back(fixed);
+      } else {
+        goto unsupported;
       }
+      ++result.coverage.seedMutations;
+      referenceBlob(fixed.digest);
       break;
     }
     case RenderTapeEventType::CommandChunk: {
       RenderTapeCommandChunkHeader fixed{};
-      if (sawComplete || !load(event.payload, 0u, fixed)) goto unsupported;
-      candidate.frame.push_back(Chunk{
+      if (completedIntervals >= candidate.intervalCount ||
+          completedIntervals >= kRenderTapeMaxReplayIntervals ||
+          (completedIntervals == 1u &&
+           candidate.intervals[1].mutationsBefore.size() != 1u) ||
+          !load(event.payload, 0u, fixed)) goto unsupported;
+      const auto intervalIndex = completedIntervals;
+      intervalStarted[intervalIndex] = true;
+      candidate.intervals[intervalIndex].frame.push_back(Chunk{
           .envelope = CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
                                             fixed.handleCount},
           .bytes = event.payload.subspan(sizeof(fixed)),
       });
-      const auto& frame = candidate.frame.back();
+      const auto& frame = candidate.intervals[intervalIndex].frame.back();
       ImportedChunkView chunk;
       if (!importPrevalidatedCommandChunk(frame.bytes, frame.envelope, chunk) ||
           chunk.records.empty()) goto unsupported;
@@ -521,6 +559,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
            ++recordIndex) {
         const auto record = chunk.record(recordIndex);
         ++result.coverage.commandRecords;
+        auto& recordState = recordStates[intervalIndex];
         if (recordState == FrameRecordState::ExpectClear &&
             record.header.type == D9C_COMMAND_RECORD_CLEAR) {
           D9CCommandChunkWireClear clear{};
@@ -531,7 +570,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         } else if (recordState == FrameRecordState::ExpectDrawOrPresent &&
                    record.header.type ==
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
-          sawTexturedDraw = true;
+          candidate.intervals[intervalIndex].sawTexturedDraw = true;
           ++result.coverage.drawPrimitiveUpRecords;
           recordState = FrameRecordState::ExpectPresent;
         } else if ((recordState == FrameRecordState::ExpectDrawOrPresent ||
@@ -547,7 +586,6 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                           candidate.outputDesc.height)))) goto unsupported;
           ++result.coverage.presentRecords;
           recordState = FrameRecordState::Complete;
-          sawFrame = true;
         } else {
           goto unsupported;
         }
@@ -558,16 +596,25 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
     case RenderTapeEventType::PresentComplete: {
       RenderTapePresentCompleteHeader fixed{};
       RenderTapeOracleAttachment oracle{};
-      if (!load(event.payload, 0u, fixed) || fixed.oracleCount != 1u ||
+      if (completedIntervals >= candidate.intervalCount ||
+          !intervalStarted[completedIntervals] ||
+          recordStates[completedIntervals] != FrameRecordState::Complete ||
+          !load(event.payload, 0u, fixed) || fixed.oracleCount != 1u ||
           !load(event.payload, sizeof(fixed), oracle) ||
           !sameIdentity(oracle.identity, candidate.outputIdentity)) goto unsupported;
-      result.conservation.presentOrdinal = fixed.presentOrdinal;
-      result.conservation.completionOrdinal = fixed.completionOrdinal;
-      candidate.expectedDigestValidity =
+      auto& interval = candidate.intervals[completedIntervals];
+      interval.presentOrdinal = fixed.presentOrdinal;
+      interval.completionOrdinal = fixed.completionOrdinal;
+      interval.expectedDigestValidity =
           static_cast<RenderTapeDigestValidity>(fixed.digestValidity);
-      candidate.expectedDigest = fixed.expectedDigest;
-      result.coverage.presentOutputs = 1u;
-      sawComplete = true;
+      interval.expectedDigest = fixed.expectedDigest;
+      result.intervals[completedIntervals].presentOrdinal = fixed.presentOrdinal;
+      result.intervals[completedIntervals].completionOrdinal =
+          fixed.completionOrdinal;
+      result.intervals[completedIntervals].validity.expectedDigestCaptured =
+          interval.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
+      ++completedIntervals;
+      ++result.coverage.presentOutputs;
       break;
     }
     case RenderTapeEventType::ObjectDestroy:
@@ -594,20 +641,21 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         goto unsupported;
     }
   }
-  // The bootstrap is semantically earlier than frame records. Re-scan the
-  // frame deltas to evaluate the effective state exactly at the draw.
-  if (sawTexturedDraw) {
-    drawState = {};
-    for (const auto& chunkBytes : candidate.bootstrap) {
-      ImportedChunkView chunk;
-      importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope, chunk);
-      for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
-           ++recordIndex) {
-        if (!applyBoundedBindings(chunk, chunk.record(recordIndex), drawState))
-          goto unsupported;
-      }
+  // Apply the effective draw state in exact interval order. Mutation events do
+  // not alter bindings, so the state shadow intentionally survives Present 1.
+  drawState = {};
+  for (const auto& chunkBytes : candidate.bootstrap) {
+    ImportedChunkView chunk;
+    importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope, chunk);
+    for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+         ++recordIndex) {
+      if (!applyBoundedBindings(chunk, chunk.record(recordIndex), drawState))
+        goto unsupported;
     }
-    for (const auto& chunkBytes : candidate.frame) {
+  }
+  for (std::uint32_t intervalIndex = 0u;
+       intervalIndex < candidate.intervalCount; ++intervalIndex) {
+    for (const auto& chunkBytes : candidate.intervals[intervalIndex].frame) {
       ImportedChunkView chunk;
       importPrevalidatedCommandChunk(chunkBytes.bytes, chunkBytes.envelope, chunk);
       for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
@@ -625,16 +673,22 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       }
     }
   }
-  if (!sawFrame || recordState != FrameRecordState::Complete || !sawComplete ||
+  if (completedIntervals != candidate.intervalCount ||
       candidate.outputIdentity.objectId == 0u ||
       !bootstrapAccepted ||
       referencedBlobs.size() != blobs.size() ||
       !mutationCatalogueMatches(candidate, blobs)) goto unsupported;
-  if (!sawTexturedDraw &&
+  anyTexturedDraw = std::any_of(
+      candidate.intervals.begin(),
+      candidate.intervals.begin() + candidate.intervalCount,
+      [](const auto& interval) { return interval.sawTexturedDraw; });
+  if (!anyTexturedDraw &&
       (candidate.textureIdentity.objectId != 0u ||
        candidate.vertexDeclarationIdentity.objectId != 0u))
     goto unsupported;
-  if (sawTexturedDraw) {
+  if (tape.header.profile == kRenderTapeProfileSequence && !anyTexturedDraw)
+    goto unsupported;
+  if (anyTexturedDraw) {
     std::uint64_t texturePixels = 0u;
     std::uint64_t tightTextureBytes = 0u;
     if (!checkedMul(candidate.textureDesc.level0.width,
@@ -649,7 +703,14 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
     const bool productionDeclaration =
         candidate.vertexDeclarationIdentity.objectId != 0u;
     const std::size_t expectedDefinitions = productionDeclaration ? 3u : 2u;
-    const std::size_t expectedBlobs = productionDeclaration ? 2u : 1u;
+    const bool sequence = tape.header.profile == kRenderTapeProfileSequence;
+    const std::size_t expectedBlobs =
+        (productionDeclaration ? 2u : 1u) + (sequence ? 1u : 0u);
+    const auto mutationShapeMatches = [&](const auto& mutation) {
+      return sameIdentity(mutation.identity, candidate.textureIdentity) &&
+             mutation.subresource == 0u && mutation.byteOffset == 0u &&
+             mutation.byteSize == textureDefinition->fixed.expectedContentBytes;
+    };
     if (candidate.definitions.size() != expectedDefinitions ||
         candidate.textureIdentity.objectId == 0u ||
         textureDefinition == candidate.definitions.end() ||
@@ -659,15 +720,30 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
         textureDefinition->fixed.expectedContentBytes %
                 candidate.textureDesc.level0.height != 0u ||
-        candidate.mutations.size() != 1u || blobs.size() != expectedBlobs ||
-        !sameIdentity(candidate.mutations[0].identity,
-                      candidate.textureIdentity) ||
-        candidate.mutations[0].subresource != 0u ||
-        candidate.mutations[0].byteOffset != 0u ||
-        candidate.mutations[0].byteSize !=
-            textureDefinition->fixed.expectedContentBytes ||
+        candidate.initialMutations.size() != 1u ||
+        !mutationShapeMatches(candidate.initialMutations[0]) ||
+        blobs.size() != expectedBlobs ||
         textureDefinition->fixed.expectedContentCount != 1u) {
       goto unsupported;
+    }
+    if (sequence) {
+      if (!candidate.intervals[0].sawTexturedDraw ||
+          !candidate.intervals[1].sawTexturedDraw ||
+          !candidate.intervals[0].mutationsBefore.empty() ||
+          candidate.intervals[1].mutationsBefore.size() != 1u ||
+          !mutationShapeMatches(candidate.intervals[1].mutationsBefore[0]) ||
+          sameDigest(candidate.initialMutations[0].digest,
+                     candidate.intervals[1].mutationsBefore[0].digest) ||
+          candidate.intervals[0].expectedDigestValidity !=
+              RenderTapeDigestValidity::Sha256 ||
+          candidate.intervals[1].expectedDigestValidity !=
+              RenderTapeDigestValidity::Sha256 ||
+          sameDigest(candidate.intervals[0].expectedDigest,
+                     candidate.intervals[1].expectedDigest) ||
+          candidate.intervals[0].completionOrdinal >=
+              candidate.intervals[1].completionOrdinal) {
+        goto unsupported;
+      }
     }
   }
   result.conservation.referencedBlobs =
@@ -677,8 +753,16 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       .outputHeight = candidate.outputDesc.height,
       .outputFormat = candidate.outputDesc.format,
   };
-  result.validity.expectedDigestCaptured =
-      candidate.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
+  result.conservation.presentOrdinal =
+      candidate.intervals[candidate.intervalCount - 1u].presentOrdinal;
+  result.conservation.completionOrdinal =
+      candidate.intervals[candidate.intervalCount - 1u].completionOrdinal;
+  result.validity.expectedDigestCaptured = std::all_of(
+      candidate.intervals.begin(),
+      candidate.intervals.begin() + candidate.intervalCount,
+      [](const auto& interval) {
+        return interval.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
+      });
   result.status = FrameTapeReplayStatus::Complete;
   if (plan) *plan = std::move(candidate);
   return result;
@@ -734,13 +818,23 @@ bool resolveChunk(const Chunk& chunk, std::vector<OwnedObject>& objects,
 
 } // namespace
 
-FrameTapeReplayResult preflightFrameTapeIdentity(
+FrameTapeReplayResult preflightRenderTapeIdentity(
     std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept {
   return buildPlan(tape, blobs, nullptr);
 }
 
-FrameTapeReplayResult replayFrameTapeIdentity(
+FrameTapeReplayResult preflightFrameTapeIdentity(
+    std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept {
+  auto result = preflightRenderTapeIdentity(tape, blobs);
+  if (result.complete() && result.profile != kRenderTapeProfileFrame) {
+    result.status = FrameTapeReplayStatus::UnsupportedGrammar;
+  }
+  return result;
+}
+
+FrameTapeReplayResult replayRenderTapeIdentity(
     D9CDevice* device, std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept {
   PreflightPlan plan;
@@ -826,46 +920,57 @@ FrameTapeReplayResult replayFrameTapeIdentity(
     }
   }
 
-  for (const auto& mutation : plan.mutations) {
-    const auto* blob = findBlob(blobs, mutation.digest);
-    void* object = findObject(objects, mutation.identity);
-    bool ok = blob && object;
-    if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
-      void* mapped = nullptr;
-      auto* buffer = static_cast<D9CBuffer*>(object);
-      ok = mutation.subresource == 0u &&
-           dxmt9c_buffer_lock(buffer, 0u, static_cast<std::uint32_t>(blob->bytes.size()),
-                              &mapped, 0u) == core::D3D_OK && mapped;
-      if (ok) {
-        std::memcpy(mapped, blob->bytes.data(), blob->bytes.size());
-        ok = dxmt9c_buffer_unlock(buffer) == core::D3D_OK;
-      }
-    } else if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
-      D9CSurfaceDesc levelDesc{};
-      D9CLockedRect locked{};
-      auto* texture = static_cast<D9CTexture*>(object);
-      ok = dxmt9c_texture_get_level_desc(texture, mutation.subresource,
-                                         &levelDesc) == core::D3D_OK &&
-           dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
-                                    nullptr, 0u) == core::D3D_OK &&
-           locked.bits;
-      if (ok && !renderTapeTextureSeedExtentMatches(
-                    blob->bytes.size(), locked.pitch, levelDesc.height)) {
-        (void)dxmt9c_texture_unlock_rect(texture, mutation.subresource);
+  const auto applyMutations = [&](std::span<const RenderTapeResourceMutationHeader>
+                                      mutations) {
+    for (const auto& mutation : mutations) {
+      const auto* blob = findBlob(blobs, mutation.digest);
+      void* object = findObject(objects, mutation.identity);
+      bool ok = blob && object;
+      if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+        void* mapped = nullptr;
+        auto* buffer = static_cast<D9CBuffer*>(object);
+        ok = mutation.subresource == 0u &&
+             dxmt9c_buffer_lock(
+                 buffer, 0u, static_cast<std::uint32_t>(blob->bytes.size()),
+                 &mapped, 0u) == core::D3D_OK &&
+             mapped;
+        if (ok) {
+          std::memcpy(mapped, blob->bytes.data(), blob->bytes.size());
+          ok = dxmt9c_buffer_unlock(buffer) == core::D3D_OK;
+        }
+      } else if (ok &&
+                 mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+        D9CSurfaceDesc levelDesc{};
+        D9CLockedRect locked{};
+        auto* texture = static_cast<D9CTexture*>(object);
+        ok = dxmt9c_texture_get_level_desc(texture, mutation.subresource,
+                                           &levelDesc) == core::D3D_OK &&
+             dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
+                                      nullptr, 0u) == core::D3D_OK &&
+             locked.bits;
+        if (ok && !renderTapeTextureSeedExtentMatches(
+                      blob->bytes.size(), locked.pitch, levelDesc.height)) {
+          (void)dxmt9c_texture_unlock_rect(texture, mutation.subresource);
+          ok = false;
+        } else if (ok) {
+          std::memcpy(locked.bits, blob->bytes.data(), blob->bytes.size());
+          ok = dxmt9c_texture_unlock_rect(texture, mutation.subresource) ==
+               core::D3D_OK;
+        }
+      } else {
         ok = false;
-      } else if (ok) {
-        std::memcpy(locked.bits, blob->bytes.data(), blob->bytes.size());
-        ok = dxmt9c_texture_unlock_rect(texture, mutation.subresource) ==
-             core::D3D_OK;
       }
-    } else {
-      ok = false;
+      if (!ok) {
+        return false;
+      }
     }
-    if (!ok) {
-      result.status = FrameTapeReplayStatus::MutationFailed;
-      cleanup();
-      return result;
-    }
+    return true;
+  };
+
+  if (!applyMutations(plan.initialMutations)) {
+    result.status = FrameTapeReplayStatus::MutationFailed;
+    cleanup();
+    return result;
   }
 
   if (auto upper = device->dev().upperDevice(); upper && upper->pool()) {
@@ -895,26 +1000,20 @@ FrameTapeReplayResult replayFrameTapeIdentity(
     outputInstalled = true;
   }
 
-  for (const auto& chunk : plan.frame) {
-    if (!resolveChunk(chunk, objects, resolved) ||
-        replayPrevalidatedResolvedCommandChunk(
-            device, chunk.bytes, chunk.envelope, resolved) != core::D3D_OK) {
-      result.status = FrameTapeReplayStatus::CommandReplayFailed;
-      cleanup();
-      return result;
+  const auto readbackInterval = [&](std::uint32_t intervalIndex) {
+    auto& evidence = result.intervals[intervalIndex].validity;
+    const auto& interval = plan.intervals[intervalIndex];
+    auto upper = device->dev().upperDevice();
+    if (!upper || !readbackTarget) {
+      return true;
     }
-  }
-
-  if (auto upper = device->dev().upperDevice(); upper && readbackTarget) {
     upper->flush();
     core::ReadbackPixels pixels;
     if (!upper->readbackSurface(
             core::ReadbackDesc{.source = readbackTarget->obj->handle()}, pixels)) {
-      result.status = FrameTapeReplayStatus::ReadbackFailed;
-      cleanup();
-      return result;
+      return false;
     }
-    result.validity.outputReadback = true;
+    evidence.outputReadback = true;
     constexpr std::uint32_t bytesPerPixel = 4u;
     std::uint64_t tightPitch = 0u;
     std::uint64_t tightBytes = 0u;
@@ -925,9 +1024,7 @@ FrameTapeReplayResult replayFrameTapeIdentity(
         pixels.pitch < tightPitch ||
         tightBytes > std::numeric_limits<std::size_t>::max() ||
         pixels.bytes.size() < pitchedBytes) {
-      result.status = FrameTapeReplayStatus::ReadbackFailed;
-      cleanup();
-      return result;
+      return false;
     }
     std::vector<std::byte> tight(static_cast<std::size_t>(tightBytes));
     for (std::uint32_t row = 0u; row < plan.outputDesc.height; ++row) {
@@ -935,29 +1032,92 @@ FrameTapeReplayResult replayFrameTapeIdentity(
                   pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
                   static_cast<std::size_t>(tightPitch));
     }
-    result.validity.outputBytes = tight.size();
-    result.validity.outputDigest = RenderTapeCaptureSession::sha256(tight);
-    if (plan.expectedDigestValidity == RenderTapeDigestValidity::Sha256) {
-      result.validity.expectedDigestMatched =
-          sameDigest(result.validity.outputDigest, plan.expectedDigest);
-      if (!result.validity.expectedDigestMatched) {
-        result.status = FrameTapeReplayStatus::OutputMismatch;
-      }
+    evidence.outputBytes = tight.size();
+    evidence.outputDigest = RenderTapeCaptureSession::sha256(tight);
+    evidence.expectedDigestCaptured =
+        interval.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
+    if (evidence.expectedDigestCaptured) {
+      evidence.expectedDigestMatched =
+          sameDigest(evidence.outputDigest, interval.expectedDigest);
     }
     const auto pixelSize = std::min<std::size_t>(4u, tight.size());
-    result.validity.outputNonDegenerate = false;
+    evidence.outputNonDegenerate = false;
     for (std::size_t index = pixelSize; index < tight.size(); ++index) {
       if (tight[index] != tight[index % pixelSize]) {
-        result.validity.outputNonDegenerate = true;
+        evidence.outputNonDegenerate = true;
         break;
       }
     }
-    if (output && output->scheduledCount() != 1u) {
-      result.status = FrameTapeReplayStatus::PresentOutputFailed;
+    return true;
+  };
+
+  for (std::uint32_t intervalIndex = 0u;
+       intervalIndex < plan.intervalCount; ++intervalIndex) {
+    if (!applyMutations(plan.intervals[intervalIndex].mutationsBefore)) {
+      result.status = FrameTapeReplayStatus::MutationFailed;
+      cleanup();
+      return result;
     }
+    for (const auto& chunk : plan.intervals[intervalIndex].frame) {
+      if (!resolveChunk(chunk, objects, resolved) ||
+          replayPrevalidatedResolvedCommandChunk(
+              device, chunk.bytes, chunk.envelope, resolved) != core::D3D_OK) {
+        result.status = FrameTapeReplayStatus::CommandReplayFailed;
+        cleanup();
+        return result;
+      }
+    }
+    if (!readbackInterval(intervalIndex)) {
+      result.status = FrameTapeReplayStatus::ReadbackFailed;
+      cleanup();
+      return result;
+    }
+    if (result.intervals[intervalIndex].validity.expectedDigestCaptured &&
+        !result.intervals[intervalIndex].validity.expectedDigestMatched) {
+      result.validity = result.intervals[intervalIndex].validity;
+      result.validity.structurallyValid = true;
+      result.validity.digestsValid = true;
+      result.status = FrameTapeReplayStatus::OutputMismatch;
+      cleanup();
+      return result;
+    }
+  }
+  if (output && output->scheduledCount() != plan.intervalCount) {
+    result.status = FrameTapeReplayStatus::PresentOutputFailed;
+  }
+  if (plan.intervalCount != 0u) {
+    result.validity = result.intervals[plan.intervalCount - 1u].validity;
+    result.validity.structurallyValid = true;
+    result.validity.digestsValid = true;
+    result.validity.outputReadback = std::all_of(
+        result.intervals.begin(), result.intervals.begin() + plan.intervalCount,
+        [](const auto& interval) { return interval.validity.outputReadback; });
+    result.validity.expectedDigestCaptured = std::all_of(
+        result.intervals.begin(), result.intervals.begin() + plan.intervalCount,
+        [](const auto& interval) {
+          return interval.validity.expectedDigestCaptured;
+        });
+    result.validity.expectedDigestMatched = std::all_of(
+        result.intervals.begin(), result.intervals.begin() + plan.intervalCount,
+        [](const auto& interval) {
+          return interval.validity.expectedDigestMatched;
+        });
+    result.validity.outputNonDegenerate = std::all_of(
+        result.intervals.begin(), result.intervals.begin() + plan.intervalCount,
+        [](const auto& interval) {
+          return interval.validity.outputNonDegenerate;
+        });
   }
   cleanup();
   return result;
+}
+
+FrameTapeReplayResult replayFrameTapeIdentity(
+    D9CDevice* device, std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept {
+  const auto preflight = preflightFrameTapeIdentity(tape, blobs);
+  if (!preflight.complete()) return preflight;
+  return replayRenderTapeIdentity(device, tape, blobs);
 }
 
 FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(

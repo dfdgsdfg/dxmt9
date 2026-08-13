@@ -1,4 +1,5 @@
 #include "device_c_render_tape.hpp"
+#include "device_c_chunk_registry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -160,6 +161,21 @@ std::vector<std::byte> makePresentChunk() {
                                std::as_bytes(std::span(&present, 1u)));
 }
 
+std::vector<std::byte> makeDrawChunk(
+    D9CWireObjectIdentity textureIdentity) {
+  auto chunk = makeApplyStateChunk(true, textureIdentity);
+  auto* wire = reinterpret_cast<D9CCommandChunkWireHeader*>(chunk.data());
+  auto* record = reinterpret_cast<D9CCommandChunkWireRecordHeader*>(
+      chunk.data() + wire->recordTableOffset);
+  auto* draw = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(
+      chunk.data() + wire->payloadArenaOffset);
+  record->type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  draw->flags = 0u;
+  draw->primitiveType = 4u; // D3DPT_TRIANGLELIST
+  draw->primitiveCount = 1u;
+  return chunk;
+}
+
 constexpr D9CWireObjectIdentity kSurface{
     .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
     .generation = 2u,
@@ -315,6 +331,102 @@ public:
 
   std::vector<RenderTapeEventType> calls;
 };
+
+class BoundedRefinementSink final : public RenderTapeReplaySink {
+public:
+  bool bootstrap(const RenderTapeBootstrapHeader&,
+                 std::span<const std::byte>,
+                 RenderTapeBootstrapReplayMode) override {
+    return live.empty() && mutations == 0u && draws == 0u && presents == 0u;
+  }
+
+  bool objectDefine(const RenderTapeObjectDefineHeader& fixed,
+                    std::span<const std::byte>) override {
+    live.push_back(fixed.identity);
+    return true;
+  }
+
+  bool objectDestroy(const RenderTapeObjectDestroyHeader& fixed) override {
+    const auto found = std::find_if(live.begin(), live.end(), [&](const auto& id) {
+      return id.kind == fixed.identity.kind &&
+             id.generation == fixed.identity.generation &&
+             id.objectId == fixed.identity.objectId;
+    });
+    if (found == live.end()) return false;
+    live.erase(found);
+    return true;
+  }
+
+  bool resourceMutation(const RenderTapeResourceMutationHeader& fixed) override {
+    const auto found = std::find_if(live.begin(), live.end(), [&](const auto& id) {
+      return id.kind == fixed.identity.kind &&
+             id.generation == fixed.identity.generation &&
+             id.objectId == fixed.identity.objectId;
+    });
+    if (found == live.end()) return false;
+    lastMutationDigest = fixed.digest;
+    ++mutations;
+    return true;
+  }
+
+  bool commandChunk(const CommandChunkEnvelope& envelope,
+                    std::span<const std::byte> bytes) override {
+    ImportedChunkView chunk;
+    if (!validateCommandChunk(bytes, envelope, &chunk).valid()) return false;
+    for (const auto& handle : chunk.handles) {
+      const auto found = std::find_if(live.begin(), live.end(), [&](const auto& id) {
+        return id.kind == handle.kind && id.generation == handle.generation &&
+               id.objectId == handle.objectId;
+      });
+      if (found == live.end()) return false;
+    }
+    for (const auto& record : chunk.records) {
+      switch (record.type) {
+      case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+      case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+      case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+      case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+        if (mutations != draws + 1u) return false;
+        ++draws;
+        break;
+      case D9C_COMMAND_RECORD_PRESENT:
+        if (presents >= draws) return false;
+        ++presents;
+        break;
+      default:
+        break;
+      }
+    }
+    return true;
+  }
+
+  bool orderedControl(const RenderTapeOrderedControlHeader&,
+                      std::span<const std::byte>) override {
+    return false;
+  }
+
+  bool presentComplete(const RenderTapePresentCompleteHeader&,
+                       std::span<const std::byte>) override {
+    if (completions >= presents) return false;
+    ++completions;
+    return true;
+  }
+
+  std::vector<D9CWireObjectIdentity> live;
+  RenderTapeDigest lastMutationDigest{};
+  std::uint32_t mutations = 0u;
+  std::uint32_t draws = 0u;
+  std::uint32_t presents = 0u;
+  std::uint32_t completions = 0u;
+};
+
+struct RefinementRegistryObject {
+  std::uint32_t retains = 0u;
+};
+
+void retainRefinementObject(std::uint32_t, void* object) noexcept {
+  ++static_cast<RefinementRegistryObject*>(object)->retains;
+}
 
 void validTapeReplaysExactlyOnce() {
   const auto tape = makeCompleteTape();
@@ -734,6 +846,419 @@ void invalidInputsFailBeforeCallbacks() {
   check(sink.calls.empty(), "validation failure must produce zero callbacks");
 }
 
+void boundedCaptureReplayRefinementIsExhaustive() {
+  enum class SeedCase : std::uint8_t {
+    Upload,
+    CpuUnlock,
+    Missing,
+    Short,
+    Stale,
+  };
+  enum class BoundaryCase : std::uint8_t {
+    Upload,
+    CpuUnlock,
+    Missing,
+    Stale,
+    Duplicate,
+  };
+
+  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto initialDigest = mutationDigest();
+  const auto boundaryDigest = digest(std::byte{0x50});
+  const auto shortDigest = digest(std::byte{0x70});
+  const RenderTapeBlobCatalogue catalogue{.blobs = {
+      RenderTapeBlob{.digest = initialDigest, .size = 4u, .verified = 1u},
+      RenderTapeBlob{.digest = boundaryDigest, .size = 4u, .verified = 1u},
+      RenderTapeBlob{.digest = shortDigest, .size = 3u, .verified = 1u},
+  }};
+  auto staleTexture = kTexture;
+  ++staleTexture.generation;
+  auto staleSurface = kSurface;
+  ++staleSurface.generation;
+  std::uint32_t checkedCases = 0u;
+
+  const auto expectStatus = [&](const std::vector<std::byte>& tape,
+                                RenderTapeValidationStatus expected,
+                                std::string_view label,
+                                std::uint32_t expectedMutations,
+                                std::uint32_t expectedDraws,
+                                std::uint32_t expectedPresents,
+                                RenderTapeDigest expectedLastDigest) {
+    ++checkedCases;
+    ImportedRenderTapeView imported;
+    const auto result = validateRenderTape(tape, catalogue, &imported);
+    check(result.status == expected,
+          std::string(label) + ": expected " +
+              renderTapeValidationStatusName(expected) + ", got " +
+              renderTapeValidationStatusName(result.status));
+    if (!result.valid()) return;
+
+    BoundedRefinementSink sink;
+    const auto replay = replayPrevalidatedRenderTape(imported, catalogue, sink);
+    check(replay.complete && sink.mutations == expectedMutations &&
+              sink.draws == expectedDraws &&
+              sink.presents == expectedPresents &&
+              sink.completions == expectedPresents &&
+              sink.lastMutationDigest == expectedLastDigest,
+          std::string(label) +
+              ": accepted production replay must refine the serial state");
+  };
+
+  // Domain A (20 cases): five initial-content states x live/stale draw x
+  // live/stale output. This includes create-write-draw-Present, both admitted
+  // seed mutation kinds, missing/short initial bytes, and stale references.
+  for (const auto seedCase : {SeedCase::Upload, SeedCase::CpuUnlock,
+                              SeedCase::Missing, SeedCase::Short,
+                              SeedCase::Stale}) {
+    for (const bool staleDraw : {false, true}) {
+      for (const bool staleOracle : {false, true}) {
+        RenderTapeBuilder builder;
+        builder.appendBootstrapState(makeApplyStateChunk());
+        builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+                                   descriptor, 0u, {});
+        builder.appendObjectDefine(kTexture, kTextureDescriptorKind,
+                                   descriptor, 0u, {}, 4u, 1u);
+        switch (seedCase) {
+        case SeedCase::Upload:
+        case SeedCase::CpuUnlock:
+          builder.appendResourceMutation(
+              kTexture,
+              seedCase == SeedCase::Upload
+                  ? RenderTapeMutationKind::Upload
+                  : RenderTapeMutationKind::CpuUnlock,
+              0u, 0u, 4u, initialDigest);
+          break;
+        case SeedCase::Missing:
+          break;
+        case SeedCase::Short:
+          builder.appendResourceMutation(kTexture,
+                                         RenderTapeMutationKind::Upload, 0u,
+                                         0u, 3u, shortDigest);
+          break;
+        case SeedCase::Stale:
+          builder.appendResourceMutation(staleTexture,
+                                         RenderTapeMutationKind::Upload, 0u,
+                                         0u, 4u, initialDigest);
+          break;
+        }
+        builder.appendCommandChunk(
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+            makeDrawChunk(staleDraw ? staleTexture : kTexture));
+        builder.appendCommandChunk(
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+            makePresentChunk());
+        const auto presentOrdinal = builder.eventCount();
+        const RenderTapeOracleAttachment oracle{
+            .identity = staleOracle ? staleSurface : kSurface,
+            .descriptorKind = kSurfaceDescriptorKind,
+        };
+        builder.appendPresentComplete(
+            presentOrdinal, presentOrdinal + 1u,
+            RenderTapeDigestValidity::NotCaptured, {},
+            std::as_bytes(std::span(&oracle, 1u)));
+
+        auto expected = RenderTapeValidationStatus::Valid;
+        if (seedCase == SeedCase::Missing || seedCase == SeedCase::Short) {
+          expected = RenderTapeValidationStatus::IncompleteFrame;
+        } else if (seedCase == SeedCase::Stale || staleDraw) {
+          expected = RenderTapeValidationStatus::UnknownIdentity;
+        } else if (staleOracle) {
+          expected = RenderTapeValidationStatus::InvalidPresentComplete;
+        }
+        expectStatus(builder.seal(), expected, "bounded frame trace", 1u, 1u,
+                     1u, initialDigest);
+      }
+    }
+  }
+
+  // Domain B (10 cases): five between-Present mutation states x live/stale
+  // second draw. Exactly one valid digest-backed mutation must separate the
+  // two complete intervals.
+  for (const auto boundaryCase : {
+           BoundaryCase::Upload, BoundaryCase::CpuUnlock,
+           BoundaryCase::Missing, BoundaryCase::Stale,
+           BoundaryCase::Duplicate}) {
+    for (const bool staleSecondDraw : {false, true}) {
+      RenderTapeBuilder builder(kRenderTapeProfileSequence);
+      builder.appendBootstrapState(makeApplyStateChunk());
+      builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+                                 0u, {});
+      builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+                                 0u, {}, 4u, 1u);
+      builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                     0u, 0u, 4u, initialDigest);
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+          makeDrawChunk(kTexture));
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+          makePresentChunk());
+      auto presentOrdinal = builder.eventCount();
+      const RenderTapeOracleAttachment oracle{
+          .identity = kSurface,
+          .descriptorKind = kSurfaceDescriptorKind,
+      };
+      builder.appendPresentComplete(
+          presentOrdinal, presentOrdinal + 1u,
+          RenderTapeDigestValidity::NotCaptured, {},
+          std::as_bytes(std::span(&oracle, 1u)));
+
+      if (boundaryCase != BoundaryCase::Missing) {
+        builder.appendResourceMutation(
+            boundaryCase == BoundaryCase::Stale ? staleTexture : kTexture,
+            boundaryCase == BoundaryCase::CpuUnlock
+                ? RenderTapeMutationKind::CpuUnlock
+                : RenderTapeMutationKind::Upload,
+            0u, 0u, 4u, boundaryDigest);
+      }
+      if (boundaryCase == BoundaryCase::Duplicate) {
+        builder.appendResourceMutation(kTexture,
+                                       RenderTapeMutationKind::CpuUnlock, 0u,
+                                       0u, 4u, boundaryDigest);
+      }
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+          makeDrawChunk(staleSecondDraw ? staleTexture : kTexture));
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+          makePresentChunk());
+      presentOrdinal = builder.eventCount();
+      builder.appendPresentComplete(
+          presentOrdinal, presentOrdinal + 1u,
+          RenderTapeDigestValidity::NotCaptured, {},
+          std::as_bytes(std::span(&oracle, 1u)));
+
+      auto expected = RenderTapeValidationStatus::Valid;
+      if (boundaryCase == BoundaryCase::Missing ||
+          boundaryCase == BoundaryCase::Duplicate) {
+        expected = RenderTapeValidationStatus::IncompleteFrame;
+      } else if (boundaryCase == BoundaryCase::Stale || staleSecondDraw) {
+        expected = RenderTapeValidationStatus::UnknownIdentity;
+      }
+      expectStatus(builder.seal(), expected, "bounded sequence trace", 2u,
+                   2u, 2u, boundaryDigest);
+    }
+  }
+
+  // Domain C (12 registry decisions): every production identity kind across
+  // stale-old/new-generation resolution after destroy/recreate.
+  for (std::uint32_t kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+       kind <= D9C_CHUNK_HANDLE_KIND_QUERY; ++kind) {
+    WireObjectRegistry registry;
+    RefinementRegistryObject oldObject;
+    RefinementRegistryObject replacement;
+    const auto oldIdentity = registry.insert(kind, &oldObject);
+    check(registry.erase(oldIdentity, &oldObject),
+          "bounded registry trace must destroy the old generation");
+    const auto newIdentity = registry.insert(kind, &replacement);
+    check(newIdentity.objectId == oldIdentity.objectId &&
+              newIdentity.generation == oldIdentity.generation + 1u,
+          "bounded registry trace must reuse only with generation advance");
+    for (const auto identity : {oldIdentity, newIdentity}) {
+      const std::array entry{wireHandleEntry(identity)};
+      std::array<void*, 1u> resolved{};
+      const bool accepted = registry.resolveAndRetain(
+          entry, resolved, retainRefinementObject);
+      ++checkedCases;
+      check(accepted == (identity.generation == newIdentity.generation),
+            "bounded registry trace must reject stale and admit current generation");
+    }
+    check(oldObject.retains == 0u && replacement.retains == 1u,
+          "stale registry rejection must happen before retain effects");
+  }
+
+  // Domain D (3 tape decisions): the retained whole-tape journal is
+  // intentionally stricter than the live registry and rejects slot reuse for
+  // each mutable resource kind, even when the generation advances.
+  for (const std::uint32_t kind : {
+           std::uint32_t{D9C_CHUNK_HANDLE_KIND_TEXTURE},
+           std::uint32_t{D9C_CHUNK_HANDLE_KIND_SURFACE},
+           std::uint32_t{D9C_CHUNK_HANDLE_KIND_BUFFER}}) {
+    const D9CWireObjectIdentity oldIdentity{
+        .kind = kind,
+        .generation = 1u,
+        .objectId = 101u + kind,
+    };
+    auto newIdentity = oldIdentity;
+    ++newIdentity.generation;
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(makeApplyStateChunk());
+    builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+                               0u, {});
+    builder.appendObjectDefine(
+        oldIdentity,
+        static_cast<std::uint32_t>(renderTapeDescriptorKindForObject(kind)),
+        descriptor, 0u, {});
+    builder.appendObjectDestroy(oldIdentity);
+    builder.appendObjectDefine(
+        newIdentity,
+        static_cast<std::uint32_t>(renderTapeDescriptorKindForObject(kind)),
+        descriptor, 0u, {});
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        makePresentChunk());
+    const auto presentOrdinal = builder.eventCount();
+    const RenderTapeOracleAttachment oracle{
+        .identity = kSurface,
+        .descriptorKind = kSurfaceDescriptorKind,
+    };
+    builder.appendPresentComplete(
+        presentOrdinal, presentOrdinal + 1u,
+        RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    expectStatus(builder.seal(), RenderTapeValidationStatus::RetainedSlotReuse,
+                 "bounded retained-tape generation trace", 0u, 0u, 0u, {});
+  }
+
+  check(checkedCases == 45u,
+        "bounded refinement domain must remain explicit and exhaustive");
+}
+
+void wholeEventReductionIsCanonicalAndFailClosed() {
+  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto seedDigest = mutationDigest();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = seedDigest,
+      .size = 4u,
+      .verified = 1u,
+  }}};
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = kSurfaceDescriptorKind,
+  };
+
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(makeApplyStateChunk());
+  builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                             {});
+  builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+                             {}, 4u, 1u);
+  builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                                 0u, 4u, seedDigest);
+  const auto textureState = makeApplyStateChunk(true, kTexture);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      textureState);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  builder.appendPresentComplete(
+      6u, 7u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto source = builder.seal();
+  check(validateRenderTape(source, catalogue).valid(),
+        "reducer source fixture must validate");
+
+  const std::array bothCommands{4u, 5u};
+  const auto complete = reduceRenderTape(source, catalogue, bothCommands);
+  check(complete.valid(), renderTapeReductionStatusName(complete.status));
+  check(complete.retainedSourceEventIndices ==
+            std::vector<std::uint32_t>({0u, 1u, 2u, 3u, 4u, 5u, 6u}),
+        "selected command closure must retain exact definitions and seed mutation");
+  check(complete.referencedBlobDigests ==
+            std::vector<RenderTapeDigest>({seedDigest}),
+        "selected resource closure must retain its exact seed blob");
+  check(validateRenderTape(complete.bytes, catalogue).valid(),
+        "complete reduced tape must remain canonical");
+
+  const std::array presentOnly{5u};
+  const auto pruned = reduceRenderTape(source, catalogue, presentOnly);
+  const auto repeated = reduceRenderTape(source, catalogue, presentOnly);
+  check(pruned.valid() && repeated.valid() && pruned.bytes == repeated.bytes,
+        "identical whole-event selection must produce byte-identical output");
+  check(pruned.retainedSourceEventIndices ==
+            std::vector<std::uint32_t>({0u, 1u, 5u, 6u}) &&
+            pruned.referencedBlobDigests.empty(),
+        "unreachable resource definition, seed mutation, and blob must be pruned");
+  ImportedRenderTapeView imported;
+  check(validateRenderTape(pruned.bytes, {}, &imported).valid(),
+        "pruned tape must validate against only its referenced catalogue");
+  RenderTapePresentCompleteHeader fixed{};
+  std::memcpy(&fixed, imported.event(3u).payload.data(), sizeof(fixed));
+  check(fixed.presentOrdinal == 3u && fixed.completionOrdinal == 7u,
+        "reduction must patch the Present event ordinal and preserve completion");
+
+  const std::array duplicate{5u, 5u};
+  check(reduceRenderTape(source, catalogue, duplicate).status ==
+            RenderTapeReductionStatus::InvalidSelection,
+        "duplicate selections must fail closed");
+  const std::array nonCommand{0u};
+  check(reduceRenderTape(source, catalogue, nonCommand).status ==
+            RenderTapeReductionStatus::InvalidSelection,
+        "non-command selections must fail closed");
+  const std::array noPresent{4u};
+  check(reduceRenderTape(source, catalogue, noPresent).status ==
+            RenderTapeReductionStatus::MissingPresentSelection,
+        "selection without the Present command must fail closed");
+  const std::array outOfRange{999u};
+  check(reduceRenderTape(source, catalogue, outOfRange).status ==
+            RenderTapeReductionStatus::InvalidSelection,
+        "out-of-range selections must fail closed");
+
+  RenderTapeBuilder liveMutation;
+  liveMutation.appendBootstrapState(makeApplyStateChunk());
+  liveMutation.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+                                  0u, {});
+  liveMutation.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+                                  0u, {}, 4u, 1u);
+  liveMutation.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                      0u, 0u, 4u, seedDigest);
+  liveMutation.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      textureState);
+  liveMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::CpuUnlock, 0u, 0u, 4u, seedDigest);
+  liveMutation.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  liveMutation.appendPresentComplete(
+      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto liveMutationSource = liveMutation.seal();
+  check(validateRenderTape(liveMutationSource, catalogue).valid(),
+        "ordinary post-seed mutation fixture must validate");
+  const std::array liveCommands{4u, 6u};
+  check(reduceRenderTape(liveMutationSource, catalogue, liveCommands).status ==
+            RenderTapeReductionStatus::UnsupportedEvent,
+        "post-seed mutation must reject instead of being silently omitted");
+
+  RenderTapeBuilder preCommandMutation;
+  preCommandMutation.appendBootstrapState(makeApplyStateChunk());
+  preCommandMutation.appendObjectDefine(
+      kSurface, kSurfaceDescriptorKind, descriptor, 0u, {});
+  preCommandMutation.appendObjectDefine(
+      kTexture, kTextureDescriptorKind, descriptor, 0u, {}, 4u, 1u);
+  preCommandMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::Upload, 0u, 0u, 4u, seedDigest);
+  preCommandMutation.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::CpuUnlock, 0u, 0u, 4u, seedDigest);
+  preCommandMutation.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      textureState);
+  preCommandMutation.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  preCommandMutation.appendPresentComplete(
+      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto preCommandSource = preCommandMutation.seal();
+  check(validateRenderTape(preCommandSource, catalogue).valid(),
+        "ordinary pre-command mutation fixture must validate");
+  const std::array preCommandCommands{5u, 6u};
+  check(reduceRenderTape(preCommandSource, catalogue, preCommandCommands)
+                .status == RenderTapeReductionStatus::UnsupportedEvent,
+        "ordinary pre-command mutation must not be reclassified as seed data");
+
+  auto invalidSource = source;
+  reinterpret_cast<RenderTapeHeader*>(invalidSource.data())->version += 1u;
+  const auto rejected = reduceRenderTape(invalidSource, catalogue, presentOnly);
+  check(rejected.status == RenderTapeReductionStatus::InvalidSource &&
+            rejected.bytes.empty() &&
+            rejected.retainedSourceEventIndices.empty() &&
+            rejected.referencedBlobDigests.empty(),
+        "invalid source must fail before producing any reduced output");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -753,6 +1278,8 @@ int main(int argc, char** argv) {
     bootstrapAndCommandHandlesCloseBeforeReplay();
     seedContentClosesByUniqueSubresourceAndSummedBytes();
     invalidInputsFailBeforeCallbacks();
+    boundedCaptureReplayRefinementIsExhaustive();
+    wholeEventReductionIsCanonicalAndFailClosed();
   } catch (const std::exception& error) {
     std::cerr << "render tape spec failed: " << error.what() << '\n';
     return 1;

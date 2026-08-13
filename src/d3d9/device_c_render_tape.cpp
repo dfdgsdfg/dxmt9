@@ -196,6 +196,42 @@ bool zeroDigest(const RenderTapeDigest& digest) noexcept {
                      [](std::byte value) { return value == std::byte{}; });
 }
 
+bool sameDigest(const RenderTapeDigest& a, const RenderTapeDigest& b) noexcept {
+  return std::memcmp(a.data(), b.data(), kRenderTapeDigestSize) == 0;
+}
+
+bool containsIdentity(const std::vector<D9CWireObjectIdentity>& identities,
+                      const D9CWireObjectIdentity& identity) noexcept {
+  return std::any_of(identities.begin(), identities.end(),
+                     [&](const auto& value) {
+                       return sameIdentity(value, identity);
+                     });
+}
+
+void addIdentity(std::vector<D9CWireObjectIdentity>& identities,
+                 const D9CWireObjectIdentity& identity) {
+  if (containsIdentity(identities, identity)) {
+    return;
+  }
+  identities.push_back(identity);
+}
+
+bool addDigest(std::vector<RenderTapeDigest>& digests,
+               const RenderTapeDigest& digest) {
+  if (std::any_of(digests.begin(), digests.end(),
+                  [&](const auto& value) { return sameDigest(value, digest); })) {
+    return true;
+  }
+  digests.push_back(digest);
+  return true;
+}
+
+struct ReductionCommandInfo {
+  std::uint32_t eventIndex = kNoIndex;
+  std::uint32_t presentCount = 0u;
+  std::vector<D9CWireObjectIdentity> handles;
+};
+
 bool knownMutationKind(std::uint32_t value) noexcept {
   return value >=
              static_cast<std::uint32_t>(RenderTapeMutationKind::CpuUnlock) &&
@@ -297,7 +333,8 @@ validateRenderTape(std::span<const std::byte> blob,
   if (header.magic != kRenderTapeMagic ||
       header.version != kRenderTapeVersion ||
       header.headerSize != sizeof(RenderTapeHeader) ||
-      header.profile != kRenderTapeProfileFrame ||
+      (header.profile != kRenderTapeProfileFrame &&
+       header.profile != kRenderTapeProfileSequence) ||
       header.eventHeaderSize != sizeof(RenderTapeEventHeader) ||
       header.wireVersion != D9C_COMMAND_CHUNK_WIRE_VERSION) {
     return failure(RenderTapeValidationStatus::InvalidHeader);
@@ -430,8 +467,11 @@ validateRenderTape(std::span<const std::byte> blob,
   }
 
   bool sawBootstrap = false;
-  bool sawPresent = false;
+  const bool sequenceProfile = header.profile == kRenderTapeProfileSequence;
+  std::uint32_t presentCompleteCount = 0u;
   bool sawChunkPresent = false;
+  bool sawBetweenPresentMutation = false;
+  bool secondIntervalStarted = false;
   bool sawReset = false;
   std::uint64_t presentCommandOrdinal = 0u;
   std::uint64_t previousCompletion = 0u;
@@ -569,7 +609,7 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::ObjectDefine: {
-      if (!sawBootstrap || sawPresent) {
+      if (!sawBootstrap || presentCompleteCount != 0u) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       RenderTapeObjectDefineHeader fixed{};
@@ -640,7 +680,7 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::ObjectDestroy: {
-      if (!sawBootstrap || sawPresent) {
+      if (!sawBootstrap || presentCompleteCount != 0u) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       RenderTapeObjectDestroyHeader fixed{};
@@ -656,7 +696,11 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::ResourceMutation: {
-      if (!sawBootstrap || sawPresent) {
+      if (!sawBootstrap ||
+          (!sequenceProfile && presentCompleteCount != 0u) ||
+          presentCompleteCount >= 2u ||
+          (presentCompleteCount == 1u &&
+           (sawBetweenPresentMutation || secondIntervalStarted))) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       RenderTapeResourceMutationHeader fixed{};
@@ -686,6 +730,9 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::BlobSizeMismatch, i);
       case RenderTapeBlobLookup::Unverified:
         return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
+      }
+      if (sequenceProfile && presentCompleteCount == 1u) {
+        sawBetweenPresentMutation = true;
       }
       if (seedPhaseOpen) {
         const auto expectation = findSeedContentExpectation(
@@ -746,8 +793,14 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::CommandChunk: {
-      if (!sawBootstrap || sawPresent) {
+      if (!sawBootstrap ||
+          (!sequenceProfile && presentCompleteCount != 0u) ||
+          presentCompleteCount >= 2u ||
+          (presentCompleteCount == 1u && !sawBetweenPresentMutation)) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+      }
+      if (sequenceProfile && presentCompleteCount == 1u) {
+        secondIntervalStarted = true;
       }
       RenderTapeCommandChunkHeader fixed{};
       if (!load(event.payload, 0u, fixed) ||
@@ -794,7 +847,7 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::OrderedControl: {
-      if (!sawBootstrap || sawPresent) {
+      if (!sawBootstrap || presentCompleteCount != 0u) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       if (sawReset) {
@@ -882,10 +935,14 @@ validateRenderTape(std::span<const std::byte> blob,
       break;
     }
     case RenderTapeEventType::PresentComplete: {
-      if (sawPresent) {
+      if ((!sequenceProfile && presentCompleteCount != 0u) ||
+          presentCompleteCount >= 2u) {
         return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
       }
-      if (i != header.eventCount - 1u) {
+      const bool finalCompletion = sequenceProfile
+          ? presentCompleteCount == 1u
+          : true;
+      if (finalCompletion != (i == header.eventCount - 1u)) {
         return failure(RenderTapeValidationStatus::PresentNotLast, i);
       }
       RenderTapePresentCompleteHeader fixed{};
@@ -907,7 +964,10 @@ validateRenderTape(std::span<const std::byte> blob,
           !zeroDigest(fixed.expectedDigest)) {
         return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
       }
-      sawPresent = true;
+      if (sequenceProfile && presentCompleteCount == 1u &&
+          (!sawBetweenPresentMutation || !secondIntervalStarted)) {
+        return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
+      }
       std::uint64_t oracleBytes = 0u;
       if (!checkedMul(fixed.oracleCount, sizeof(RenderTapeOracleAttachment),
                       oracleBytes) ||
@@ -933,6 +993,10 @@ validateRenderTape(std::span<const std::byte> blob,
           return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
         }
       }
+      ++presentCompleteCount;
+      previousCompletion = fixed.completionOrdinal;
+      sawChunkPresent = false;
+      presentCommandOrdinal = 0u;
       break;
     }
     }
@@ -941,13 +1005,14 @@ validateRenderTape(std::span<const std::byte> blob,
   if (!sawBootstrap) {
     return failure(RenderTapeValidationStatus::MissingBootstrap);
   }
-  if (!sawPresent) {
+  const auto expectedPresentCount = sequenceProfile ? 2u : 1u;
+  if (presentCompleteCount != expectedPresentCount) {
     return failure(RenderTapeValidationStatus::IncompleteFrame);
   }
   if (!seedContentComplete(scratch.seedContentExpectations)) {
     return failure(RenderTapeValidationStatus::IncompleteFrame);
   }
-  if (sawPresent && header.presentCount != 1u) {
+  if (header.presentCount != expectedPresentCount) {
     return failure(RenderTapeValidationStatus::InvalidPresentComplete);
   }
   if (expectedPayloadEnd != arena.size()) {
@@ -1081,12 +1146,417 @@ replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
   return result;
 }
 
+void RenderTapeBuilder::appendRawEvent(RenderTapeEventType type,
+                                       std::span<const std::byte> payload) {
+  append(type, std::vector<std::byte>(payload.begin(), payload.end()));
+}
+
 void RenderTapeBuilder::append(RenderTapeEventType type,
                                std::vector<std::byte> payload) {
   events_.push_back(PendingEvent{
       .type = type,
       .payload = std::move(payload),
   });
+}
+
+RenderTapeReductionResult reduceRenderTape(
+    std::span<const std::byte> source,
+    const RenderTapeBlobCatalogue& verifiedCatalogue,
+    std::span<const std::uint32_t> selectedCommandEventIndices) noexcept {
+  RenderTapeReductionResult result{};
+  ImportedRenderTapeView tape;
+  result.sourceValidation = validateRenderTape(source, verifiedCatalogue, &tape);
+  result.validation = result.sourceValidation;
+  if (!result.sourceValidation.valid()) {
+    result.status = RenderTapeReductionStatus::InvalidSource;
+    return result;
+  }
+  if (tape.header.profile != kRenderTapeProfileFrame) {
+    result.status = RenderTapeReductionStatus::UnsupportedEvent;
+    return result;
+  }
+
+  try {
+    std::vector<ReductionCommandInfo> commands;
+    std::vector<D9CWireObjectIdentity> closure;
+    std::vector<D9CWireObjectIdentity> definitions;
+    struct SeedNeed {
+      D9CWireObjectIdentity identity{};
+      std::uint64_t expectedBytes = 0u;
+      std::uint32_t expectedCount = 0u;
+      std::uint64_t recordedBytes = 0u;
+      std::uint32_t recordedCount = 0u;
+    };
+    std::vector<SeedNeed> seedNeeds;
+    std::vector<std::uint8_t> selected(tape.events.size(), 0u);
+    std::uint32_t presentCommandEvent = kNoIndex;
+    std::uint32_t presentCommandCount = 0u;
+    std::uint32_t firstCommandEvent = kNoIndex;
+
+    // Ordered controls and destruction cannot be reduced safely: their
+    // effects are not represented by the selected command closure.
+    for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
+      const auto type = static_cast<RenderTapeEventType>(tape.events[i].type);
+      if (type == RenderTapeEventType::OrderedControl ||
+          type == RenderTapeEventType::ObjectDestroy) {
+        result.status = RenderTapeReductionStatus::UnsupportedEvent;
+        result.validation = result.sourceValidation;
+        result.validation.failedEventIndex = i;
+        return result;
+      }
+    }
+
+    // Build the command index and identity references from the immutable,
+    // already validated source view.
+    for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
+      if (static_cast<RenderTapeEventType>(tape.events[i].type) !=
+          RenderTapeEventType::CommandChunk) {
+        continue;
+      }
+      const auto event = tape.event(i);
+      RenderTapeCommandChunkHeader fixed{};
+      if (!load(event.payload, 0u, fixed)) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = i;
+        return result;
+      }
+      ImportedChunkView chunk;
+      const auto chunkResult = validateCommandChunk(
+          tailAfter(event.payload, sizeof(fixed)),
+          CommandChunkEnvelope{
+              .version = fixed.wireVersion,
+              .recordCount = fixed.recordCount,
+              .handleCount = fixed.handleCount,
+          },
+          &chunk);
+      if (!chunkResult.valid()) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = i;
+        result.validation.chunkStatus = chunkResult.status;
+        return result;
+      }
+      ReductionCommandInfo info{.eventIndex = i};
+      for (const auto& handle : chunk.handles) {
+        info.handles.push_back(D9CWireObjectIdentity{
+            .kind = handle.kind,
+            .generation = handle.generation,
+            .objectId = handle.objectId,
+        });
+      }
+      for (const auto& record : chunk.records) {
+        if (record.type == D9C_COMMAND_RECORD_PRESENT) {
+          ++info.presentCount;
+        }
+      }
+      if (info.presentCount != 0u) {
+        ++presentCommandCount;
+        presentCommandEvent = i;
+      }
+      if (firstCommandEvent == kNoIndex) {
+        firstCommandEvent = i;
+      }
+      commands.push_back(std::move(info));
+    }
+
+    if (commands.empty() || presentCommandCount != 1u) {
+      result.status = RenderTapeReductionStatus::ClosureFailure;
+      return result;
+    }
+
+    // Validate and normalize selection without sorting it: source order is
+    // the canonical output order, while duplicate detection is independent
+    // of caller ordering.
+    for (const auto index : selectedCommandEventIndices) {
+      if (index >= tape.events.size() || selected[index] != 0u ||
+          static_cast<RenderTapeEventType>(tape.events[index].type) !=
+              RenderTapeEventType::CommandChunk) {
+        result.status = RenderTapeReductionStatus::InvalidSelection;
+        result.validation.failedEventIndex = index;
+        return result;
+      }
+      selected[index] = 1u;
+    }
+    std::uint32_t selectedPresentCount = 0u;
+    for (const auto& command : commands) {
+      if (selected[command.eventIndex] != 0u) {
+        selectedPresentCount += command.presentCount;
+      }
+    }
+    if (selectedPresentCount != 1u || selected[presentCommandEvent] == 0u) {
+      result.status = RenderTapeReductionStatus::MissingPresentSelection;
+      result.validation.failedEventIndex = presentCommandEvent;
+      return result;
+    }
+
+    // Bootstrap overlays are always part of the closure.
+    const auto bootstrap = tape.event(0u);
+    RenderTapeBootstrapHeader bootstrapFixed{};
+    if (!load(bootstrap.payload, 0u, bootstrapFixed)) {
+      result.status = RenderTapeReductionStatus::ClosureFailure;
+      result.validation.failedEventIndex = 0u;
+      return result;
+    }
+    const auto overlays = tailAfter(bootstrap.payload, sizeof(bootstrapFixed));
+    std::uint64_t overlayOffset = 0u;
+    for (std::uint32_t o = 0u; o < bootstrapFixed.overlayCount; ++o) {
+      std::uint64_t total = 0u;
+      if (!chunkTotalBytes(overlays.subspan(overlayOffset), total)) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = 0u;
+        return result;
+      }
+      D9CCommandChunkWireHeader overlayHeader{};
+      if (!load(overlays.subspan(overlayOffset), 0u, overlayHeader)) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = 0u;
+        return result;
+      }
+      ImportedChunkView chunk;
+      const auto chunkResult = validateCommandChunk(
+          overlays.subspan(overlayOffset, total),
+          CommandChunkEnvelope{
+              .version = overlayHeader.version,
+              .recordCount = overlayHeader.recordCount,
+              .handleCount = overlayHeader.handleCount,
+          },
+          &chunk);
+      if (!chunkResult.valid()) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = 0u;
+        result.validation.chunkStatus = chunkResult.status;
+        return result;
+      }
+      for (const auto& handle : chunk.handles) {
+        addIdentity(closure, D9CWireObjectIdentity{
+                                .kind = handle.kind,
+                                .generation = handle.generation,
+                                .objectId = handle.objectId,
+                            });
+      }
+      overlayOffset += total;
+    }
+
+    for (const auto& command : commands) {
+      if (selected[command.eventIndex] == 0u) {
+        continue;
+      }
+      for (const auto& identity : command.handles) {
+        addIdentity(closure, identity);
+      }
+    }
+
+    // PresentComplete oracle attachments are part of the output's identity
+    // closure even though they are not referenced by a command handle.
+    const auto complete = tape.event(tape.events.size() - 1u);
+    RenderTapePresentCompleteHeader completeFixed{};
+    if (!load(complete.payload, 0u, completeFixed)) {
+      result.status = RenderTapeReductionStatus::ClosureFailure;
+      result.validation.failedEventIndex =
+          static_cast<std::uint32_t>(tape.events.size() - 1u);
+      return result;
+    }
+    for (std::uint32_t a = 0u; a < completeFixed.oracleCount; ++a) {
+      RenderTapeOracleAttachment attachment{};
+      if (!load(complete.payload,
+                sizeof(completeFixed) +
+                    a * sizeof(RenderTapeOracleAttachment),
+                attachment)) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex =
+            static_cast<std::uint32_t>(tape.events.size() - 1u);
+        return result;
+      }
+      addIdentity(closure, attachment.identity);
+    }
+
+    // Definitions are retained exactly by generation-qualified identity.
+    for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
+      if (static_cast<RenderTapeEventType>(tape.events[i].type) !=
+          RenderTapeEventType::ObjectDefine) {
+        continue;
+      }
+      RenderTapeObjectDefineHeader fixed{};
+      if (!load(tape.event(i).payload, 0u, fixed)) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        result.validation.failedEventIndex = i;
+        return result;
+      }
+      if (containsIdentity(closure, fixed.identity)) {
+        definitions.push_back(fixed.identity);
+        seedNeeds.push_back(SeedNeed{
+            .identity = fixed.identity,
+            .expectedBytes = fixed.expectedContentBytes,
+            .expectedCount = fixed.expectedContentCount,
+        });
+      }
+    }
+
+    // Construct the source-index retention set in source order. Resource
+    // mutations after the first command are ordinary interval traffic; only
+    // the declared seed prefix is safe to carry into a reduced frame.
+    std::vector<std::uint8_t> retain(tape.events.size(), 0u);
+    retain[0u] = 1u;
+    for (std::uint32_t i = 1u; i < tape.events.size() - 1u; ++i) {
+      const auto type = static_cast<RenderTapeEventType>(tape.events[i].type);
+      if (type == RenderTapeEventType::ObjectDefine) {
+        RenderTapeObjectDefineHeader fixed{};
+        load(tape.event(i).payload, 0u, fixed);
+        retain[i] = containsIdentity(closure, fixed.identity) ? 1u : 0u;
+      } else if (type == RenderTapeEventType::ResourceMutation &&
+                 (firstCommandEvent != kNoIndex && i >= firstCommandEvent)) {
+        result.status = RenderTapeReductionStatus::UnsupportedEvent;
+        result.validation.failedEventIndex = i;
+        return result;
+      } else if (type == RenderTapeEventType::ResourceMutation) {
+        RenderTapeResourceMutationHeader fixed{};
+        load(tape.event(i).payload, 0u, fixed);
+        const auto need = std::find_if(
+            seedNeeds.begin(), seedNeeds.end(), [&](const auto& value) {
+              return sameIdentity(value.identity, fixed.identity);
+            });
+        if (need == seedNeeds.end()) {
+          retain[i] = 0u;
+          continue;
+        }
+        // Only the definition-declared initial-content prefix is reducible.
+        // Any later live mutation, including one before the first command,
+        // has interval semantics that this bounded reducer cannot project.
+        if (need->expectedCount == 0u ||
+            need->recordedCount >= need->expectedCount ||
+            need->recordedBytes >= need->expectedBytes) {
+          result.status = RenderTapeReductionStatus::UnsupportedEvent;
+          result.validation.failedEventIndex = i;
+          return result;
+        }
+        need->recordedBytes += fixed.byteSize;
+        ++need->recordedCount;
+        retain[i] = 1u;
+      } else if (type == RenderTapeEventType::CommandChunk) {
+        retain[i] = selected[i];
+      }
+    }
+    retain[tape.events.size() - 1u] = 1u;
+    if (std::any_of(seedNeeds.begin(), seedNeeds.end(), [](const auto& need) {
+          return need.recordedBytes != need.expectedBytes ||
+                 need.recordedCount != need.expectedCount;
+        })) {
+      result.status = RenderTapeReductionStatus::ClosureFailure;
+      return result;
+    }
+
+    std::vector<std::uint32_t> retained;
+    retained.reserve(tape.events.size());
+    for (std::uint32_t i = 0u; i < retain.size(); ++i) {
+      if (retain[i] != 0u) {
+        retained.push_back(i);
+      }
+    }
+    if (retained.size() < 3u) {
+      result.status = RenderTapeReductionStatus::ClosureFailure;
+      return result;
+    }
+
+    // Collect blob references in first-use/source order, and retain only the
+    // exact catalogue entries needed to validate the reduced tape.
+    std::vector<RenderTapeDigest> digests;
+    struct BlobNeed {
+      RenderTapeDigest digest{};
+      std::uint64_t size = 0u;
+    };
+    std::vector<BlobNeed> needs;
+    for (const auto i : retained) {
+      const auto event = tape.event(i);
+      if (static_cast<RenderTapeEventType>(event.header.type) ==
+          RenderTapeEventType::ObjectDefine) {
+        RenderTapeObjectDefineHeader fixed{};
+        load(event.payload, 0u, fixed);
+        if (fixed.payloadValidity ==
+            static_cast<std::uint32_t>(RenderTapeDigestValidity::Sha256)) {
+          digests.push_back(fixed.immutablePayloadDigest);
+          needs.push_back(BlobNeed{fixed.immutablePayloadDigest,
+                                   fixed.immutablePayloadBytes});
+        }
+      } else if (static_cast<RenderTapeEventType>(event.header.type) ==
+                 RenderTapeEventType::ResourceMutation) {
+        RenderTapeResourceMutationHeader fixed{};
+        load(event.payload, 0u, fixed);
+        addDigest(digests, fixed.digest);
+        needs.push_back(BlobNeed{fixed.digest, fixed.byteSize});
+      }
+    }
+    // Immutable definitions can legitimately share a digest; normalize that
+    // list after preserving first-use order above.
+    std::vector<RenderTapeDigest> uniqueDigests;
+    for (const auto& digest : digests) addDigest(uniqueDigests, digest);
+
+    RenderTapeBuilder builder;
+    std::uint64_t outputOrdinal = 0u;
+    std::uint64_t reducedPresentOrdinal = 0u;
+    std::vector<std::byte> patchedComplete;
+    for (const auto i : retained) {
+      const auto event = tape.event(i);
+      ++outputOrdinal;
+      if (i == presentCommandEvent) {
+        reducedPresentOrdinal = outputOrdinal;
+      }
+      if (i == tape.events.size() - 1u) {
+        patchedComplete.assign(event.payload.begin(), event.payload.end());
+        RenderTapePresentCompleteHeader fixed{};
+        if (!load(patchedComplete, 0u, fixed)) {
+          result.status = RenderTapeReductionStatus::ClosureFailure;
+          return result;
+        }
+        fixed.presentOrdinal = reducedPresentOrdinal;
+        std::memcpy(patchedComplete.data(), &fixed, sizeof(fixed));
+        builder.appendRawEvent(RenderTapeEventType::PresentComplete,
+                               patchedComplete);
+      } else {
+        builder.appendRawEvent(
+            static_cast<RenderTapeEventType>(event.header.type), event.payload);
+      }
+    }
+    auto reduced = builder.seal();
+
+    RenderTapeBlobCatalogue reducedCatalogue;
+    for (const auto& need : needs) {
+      const auto found = std::find_if(
+          verifiedCatalogue.blobs.begin(), verifiedCatalogue.blobs.end(),
+          [&](const auto& blob) {
+            return sameDigest(blob.digest, need.digest) &&
+                   blob.size == need.size && blob.verified == 1u;
+          });
+      if (found == verifiedCatalogue.blobs.end()) {
+        result.status = RenderTapeReductionStatus::ClosureFailure;
+        return result;
+      }
+      const bool already = std::any_of(
+          reducedCatalogue.blobs.begin(), reducedCatalogue.blobs.end(),
+          [&](const auto& blob) {
+            return sameDigest(blob.digest, found->digest) &&
+                   blob.size == found->size;
+          });
+      if (!already) reducedCatalogue.blobs.push_back(*found);
+    }
+    ImportedRenderTapeView reducedView;
+    const auto reducedValidation =
+        validateRenderTape(reduced, reducedCatalogue, &reducedView);
+    result.validation = reducedValidation;
+    if (!reducedValidation.valid()) {
+      result.status = RenderTapeReductionStatus::OutputValidationFailed;
+      return result;
+    }
+    result.bytes = std::move(reduced);
+    result.retainedSourceEventIndices = std::move(retained);
+    result.referencedBlobDigests = std::move(uniqueDigests);
+    result.status = RenderTapeReductionStatus::Valid;
+    return result;
+  } catch (...) {
+    result.status = RenderTapeReductionStatus::AllocationFailed;
+    result.bytes.clear();
+    result.retainedSourceEventIndices.clear();
+    result.referencedBlobDigests.clear();
+    return result;
+  }
 }
 
 void RenderTapeBuilder::appendBootstrapState(
@@ -1215,12 +1685,23 @@ std::vector<std::byte> RenderTapeBuilder::seal() const {
   if (events_.back().type != RenderTapeEventType::PresentComplete) {
     throw std::invalid_argument("render tape must end with PresentComplete");
   }
-  for (std::size_t i = 1u; i < events_.size() - 1u; ++i) {
-    if (events_[i].type == RenderTapeEventType::BootstrapState ||
-        events_[i].type == RenderTapeEventType::PresentComplete) {
-      throw std::invalid_argument("BootstrapState / PresentComplete must be "
-                                  "first / last and unique");
+  if (profile_ != kRenderTapeProfileFrame &&
+      profile_ != kRenderTapeProfileSequence) {
+    throw std::invalid_argument("unsupported render tape profile");
+  }
+  std::uint32_t completionCount = 0u;
+  for (std::size_t i = 1u; i < events_.size(); ++i) {
+    if (events_[i].type == RenderTapeEventType::BootstrapState) {
+      throw std::invalid_argument("BootstrapState must be first and unique");
     }
+    if (events_[i].type == RenderTapeEventType::PresentComplete) {
+      ++completionCount;
+    }
+  }
+  const auto expectedCompletionCount =
+      profile_ == kRenderTapeProfileSequence ? 2u : 1u;
+  if (completionCount != expectedCompletionCount) {
+    throw std::invalid_argument("render tape profile has wrong completion count");
   }
   if (events_.size() >
       static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
@@ -1263,6 +1744,7 @@ std::vector<std::byte> RenderTapeBuilder::seal() const {
     throw std::length_error("render tape blob exceeds uint32_t");
   }
   const RenderTapeHeader header{
+      .profile = profile_,
       .eventHeaderSize = sizeof(RenderTapeEventHeader),
       .eventTableOffset = static_cast<std::uint32_t>(eventTableOffset),
       .eventCount = static_cast<std::uint32_t>(headers.size()),
@@ -1282,6 +1764,17 @@ std::vector<std::byte> RenderTapeBuilder::seal() const {
     std::memcpy(blob.data() + payloadArenaOffset, arena.data(), arena.size());
   }
   return blob;
+}
+
+const char* renderTapeProfileName(std::uint32_t profile) noexcept {
+  switch (profile) {
+  case kRenderTapeProfileFrame:
+    return "frame-tape";
+  case kRenderTapeProfileSequence:
+    return "sequence-tape";
+  default:
+    return "unknown";
+  }
 }
 
 const char*
@@ -1363,6 +1856,29 @@ renderTapeValidationStatusName(RenderTapeValidationStatus status) noexcept {
     return "incomplete-frame";
   case RenderTapeValidationStatus::ScratchAllocationFailed:
     return "scratch-allocation-failed";
+  }
+  return "unknown";
+}
+
+const char* renderTapeReductionStatusName(
+    RenderTapeReductionStatus status) noexcept {
+  switch (status) {
+  case RenderTapeReductionStatus::Valid:
+    return "valid";
+  case RenderTapeReductionStatus::InvalidSource:
+    return "invalid-source";
+  case RenderTapeReductionStatus::InvalidSelection:
+    return "invalid-selection";
+  case RenderTapeReductionStatus::UnsupportedEvent:
+    return "unsupported-event";
+  case RenderTapeReductionStatus::MissingPresentSelection:
+    return "missing-present-selection";
+  case RenderTapeReductionStatus::ClosureFailure:
+    return "closure-failure";
+  case RenderTapeReductionStatus::OutputValidationFailed:
+    return "output-validation-failed";
+  case RenderTapeReductionStatus::AllocationFailed:
+    return "allocation-failed";
   }
   return "unknown";
 }

@@ -701,6 +701,133 @@ struct TexturedFixture {
   }
 };
 
+struct SequenceFixture {
+  std::array<std::byte, 16u> firstSeed{
+      std::byte{0x10}, std::byte{0x20}, std::byte{0xf0}, std::byte{0xff},
+      std::byte{0xe0}, std::byte{0x30}, std::byte{0x20}, std::byte{0xff},
+      std::byte{0x30}, std::byte{0xd0}, std::byte{0x40}, std::byte{0xff},
+      std::byte{0xc0}, std::byte{0x50}, std::byte{0xb0}, std::byte{0xff},
+  };
+  std::array<std::byte, 16u> secondSeed{
+      std::byte{0xf0}, std::byte{0x20}, std::byte{0x10}, std::byte{0xff},
+      std::byte{0x20}, std::byte{0xd0}, std::byte{0xe0}, std::byte{0xff},
+      std::byte{0x40}, std::byte{0x30}, std::byte{0xd0}, std::byte{0xff},
+      std::byte{0xb0}, std::byte{0x50}, std::byte{0xc0}, std::byte{0xff},
+  };
+  RenderTapeDigest firstDigest{};
+  RenderTapeDigest secondDigest{};
+  std::vector<std::byte> tape{};
+
+  explicit SequenceFixture(RenderTapeDigest secondExpected = {},
+                           bool omitBoundaryMutation = false) {
+    firstDigest = RenderTapeCaptureSession::sha256(firstSeed);
+    secondDigest = RenderTapeCaptureSession::sha256(secondSeed);
+    const D9CSurfaceDesc outputDesc{
+        .format = 21u,
+        .resourceType = 1u,
+        .usage = 1u,
+        .pool = 0u,
+        .multiSampleType = 0u,
+        .multiSampleQuality = 0u,
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+    };
+    const RenderTapeTextureDescriptor textureDesc{
+        .level0 = D9CSurfaceDesc{
+            .format = 21u,
+            .resourceType = 3u,
+            .usage = 0u,
+            .pool = 0u,
+            .multiSampleType = 0u,
+            .multiSampleQuality = 0u,
+            .width = 2u,
+            .height = 2u,
+            .depth = 1u,
+        },
+        .levelCount = 1u,
+    };
+    const RenderTapeOracleAttachment oracle{
+        .identity = kOutput,
+        .descriptorKind = static_cast<std::uint32_t>(
+            RenderTapeDescriptorKind::Surface),
+    };
+    const D9CCommandChunkWireClear clear{
+        .flags = 1u,
+        .colorARGB = 0xff081018u,
+        .z = 1.0f,
+        .rectCount = 0u,
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    };
+    const auto draw = texturedDrawChunk();
+    ImportedChunkView importedDraw;
+    check(importPrevalidatedCommandChunk(
+              draw, CommandChunkEnvelope{.recordCount = 1u}, importedDraw),
+          "sequence draw imports");
+    const auto drawRecord = importedDraw.record(0u);
+    const std::array frameRecords{
+        Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
+        Record{.type = drawRecord.header.type,
+               .payload = std::vector<std::byte>(drawRecord.payload.begin(),
+                                                 drawRecord.payload.end())},
+        Record{.type = D9C_COMMAND_RECORD_PRESENT,
+               .payload = bytesOf(D9CCommandChunkWirePresent{})},
+    };
+    const auto frame = makeChunk(frameRecords);
+    const RenderTapeDigest firstExpected{
+        std::byte{0x3d}, std::byte{0xc6}, std::byte{0xca}, std::byte{0x27},
+        std::byte{0x08}, std::byte{0xcc}, std::byte{0xbb}, std::byte{0x28},
+        std::byte{0x51}, std::byte{0x06}, std::byte{0xde}, std::byte{0xa4},
+        std::byte{0xb1}, std::byte{0xcb}, std::byte{0xa4}, std::byte{0x2e},
+        std::byte{0x6d}, std::byte{0x67}, std::byte{0xdd}, std::byte{0x69},
+        std::byte{0xff}, std::byte{0xe7}, std::byte{0x2a}, std::byte{0xb0},
+        std::byte{0x03}, std::byte{0xd8}, std::byte{0x7d}, std::byte{0x7d},
+        std::byte{0x82}, std::byte{0x50}, std::byte{0xb7}, std::byte{0x2e},
+    };
+    if (std::all_of(secondExpected.begin(), secondExpected.end(),
+                    [](std::byte value) { return value == std::byte{}; })) {
+      secondExpected = RenderTapeDigest{
+          std::byte{0x50}, std::byte{0xd9}, std::byte{0xf7}, std::byte{0x82},
+          std::byte{0xe3}, std::byte{0xbd}, std::byte{0x33}, std::byte{0x5e},
+          std::byte{0x89}, std::byte{0xc3}, std::byte{0x0a}, std::byte{0x80},
+          std::byte{0x2b}, std::byte{0xb0}, std::byte{0x8d}, std::byte{0x50},
+          std::byte{0x02}, std::byte{0x0d}, std::byte{0x46}, std::byte{0xa4},
+          std::byte{0xc4}, std::byte{0x5a}, std::byte{0xc9}, std::byte{0x1c},
+          std::byte{0xd0}, std::byte{0x98}, std::byte{0x9c}, std::byte{0x2b},
+          std::byte{0xb1}, std::byte{0xca}, std::byte{0x3c}, std::byte{0xbc},
+      };
+    }
+    RenderTapeBuilder builder(kRenderTapeProfileSequence);
+    builder.appendBootstrapState(texturedBootstrapChunk(false));
+    builder.appendObjectDefine(
+        kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+    builder.appendObjectDefine(
+        kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        std::as_bytes(std::span(&textureDesc, 1u)), 0u, {}, firstSeed.size(), 1u);
+    builder.appendResourceMutation(kTexture, RenderTapeMutationKind::CpuUnlock,
+                                   0u, 0u, firstSeed.size(), firstDigest);
+    builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 3u}, frame);
+    builder.appendPresentComplete(
+        5u, 1u, RenderTapeDigestValidity::Sha256, firstExpected,
+        std::as_bytes(std::span(&oracle, 1u)));
+    if (!omitBoundaryMutation) {
+      builder.appendResourceMutation(kTexture, RenderTapeMutationKind::CpuUnlock,
+                                     0u, 0u, secondSeed.size(), secondDigest);
+    }
+    builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 3u}, frame);
+    builder.appendPresentComplete(
+        8u, 2u, RenderTapeDigestValidity::Sha256, secondExpected,
+        std::as_bytes(std::span(&oracle, 1u)));
+    tape = builder.seal();
+  }
+
+  std::array<RenderTapeProviderBlob, 2u> blobs() const {
+    return {{{.digest = firstDigest, .bytes = firstSeed},
+             {.digest = secondDigest, .bytes = secondSeed}}};
+  }
+};
+
 void acceptsSplitTexturedUpGrammarAndRejectsNearMisses() {
   TexturedFixture split;
   const auto blob = split.blob();
@@ -1072,6 +1199,75 @@ void nativeMetalTexturedUpDigestRepeats() {
         "repeat replay conserves output, texture, and declaration wrappers independently");
 }
 
+void boundedSequenceMutationIsVisibleAtSecondPresent() {
+  SequenceFixture fixture;
+  const auto blobs = fixture.blobs();
+  const auto preflight = preflightRenderTapeIdentity(fixture.tape, blobs);
+  check(preflight.complete(), frameTapeReplayStatusName(preflight.status));
+  check(preflight.profile == kRenderTapeProfileSequence &&
+            preflight.intervalCount == 2u &&
+            preflight.coverage.presentRecords == 2u &&
+            preflight.coverage.presentOutputs == 2u &&
+            preflight.coverage.seedMutations == 2u &&
+            preflight.intervals[0].presentOrdinal == 5u &&
+            preflight.intervals[1].presentOrdinal == 8u &&
+            preflight.intervals[0].completionOrdinal == 1u &&
+            preflight.intervals[1].completionOrdinal == 2u,
+        "sequence preflight conserves two ordered Present intervals");
+  check(preflightFrameTapeIdentity(fixture.tape, blobs).status ==
+            FrameTapeReplayStatus::UnsupportedGrammar,
+        "the legacy frame entry point remains sequence-strict");
+  SequenceFixture missingBoundary({}, true);
+  const auto missingBlobs = missingBoundary.blobs();
+  const auto missing = preflightRenderTapeIdentity(
+      missingBoundary.tape, missingBlobs);
+  check(missing.status == FrameTapeReplayStatus::InvalidTape &&
+            missing.conservation.objectsCreated == 0u &&
+            missing.conservation.objectsReleased == 0u,
+        "a second interval without its boundary mutation fails before effects");
+
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  const auto replayFresh = [&] {
+    auto* factory = dxmt9c_factory_create();
+    check(factory != nullptr, "sequence native Metal factory must be available");
+    auto* device =
+        dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+    check(device != nullptr, "sequence replay device must construct");
+    const auto result = replayRenderTapeIdentity(device, fixture.tape, blobs);
+    dxmt9c_device_release(device);
+    dxmt9c_factory_release(factory);
+    return result;
+  };
+  const auto first = replayFresh();
+  const auto second = replayFresh();
+  check(first.complete() && second.complete(),
+        frameTapeReplayStatusName(first.complete() ? second.status
+                                                   : first.status));
+  check(first.validity.outputReadback && first.validity.expectedDigestCaptured &&
+            first.validity.expectedDigestMatched &&
+            first.intervals[0].validity.outputDigest !=
+                first.intervals[1].validity.outputDigest,
+        "the boundary mutation produces two distinct accepted outputs");
+  check(first.intervals[0].validity.outputDigest ==
+                second.intervals[0].validity.outputDigest &&
+            first.intervals[1].validity.outputDigest ==
+                second.intervals[1].validity.outputDigest,
+        "fresh-device sequence replay repeats both interval digests exactly");
+  check(first.conservation.objectsCreated == 2u &&
+            first.conservation.objectsReleased == 2u &&
+            second.conservation.objectsCreated == 2u &&
+            second.conservation.objectsReleased == 2u,
+        "each sequence replay conserves its output and texture wrappers");
+}
+
 void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
   ProductionFixture fixture;
   check(fixture.tape.size() != 0u, "production fixture must seal");
@@ -1231,6 +1427,25 @@ void writeProductionFixture(const std::filesystem::path& directory) {
   check(output.good(), "provider fixture must write events.bin");
 }
 
+void writeSequenceFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "sequence fixture directory must be created");
+  const SequenceFixture fixture;
+  std::ofstream events(directory / "events.bin", std::ios::binary);
+  check(events.good(), "sequence fixture must open events.bin");
+  events.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  check(events.good(), "sequence fixture must write events.bin");
+  std::ofstream first(directory / "first.bin", std::ios::binary);
+  std::ofstream second(directory / "second.bin", std::ios::binary);
+  first.write(reinterpret_cast<const char*>(fixture.firstSeed.data()),
+              static_cast<std::streamsize>(fixture.firstSeed.size()));
+  second.write(reinterpret_cast<const char*>(fixture.secondSeed.data()),
+               static_cast<std::streamsize>(fixture.secondSeed.size()));
+  check(first.good() && second.good(), "sequence fixture must write both blobs");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1239,14 +1454,20 @@ int main(int argc, char** argv) {
       writeProductionFixture(argv[2]);
       return 0;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-sequence-fixture") {
+      writeSequenceFixture(argv[2]);
+      return 0;
+    }
     check(argc == 1,
-          "usage: render_tape_provider_spec [--write-production-fixture dir]");
+          "usage: render_tape_provider_spec "
+          "[--write-production-fixture dir|--write-sequence-fixture dir]");
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
     acceptsSplitTexturedUpGrammarAndRejectsNearMisses();
     productionPresenterMirrorGpuOracle();
     nativeMetalOffscreenIdentityReplay();
     nativeMetalTexturedUpDigestRepeats();
+    boundedSequenceMutationIsVisibleAtSecondPresent();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
     productionShapeReportsWrongExpectedDigest();
   } catch (const TestFailure& error) {

@@ -2,6 +2,7 @@
 
 #include "device_c_render_tape.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -79,13 +80,25 @@ struct FrameTapeConservationEvidence {
   std::uint64_t completionOrdinal = 0u;
 };
 
+inline constexpr std::uint32_t kRenderTapeMaxReplayIntervals = 2u;
+
+struct RenderTapeIntervalEvidence {
+  std::uint64_t presentOrdinal = 0u;
+  std::uint64_t completionOrdinal = 0u;
+  FrameTapeValidityEvidence validity{};
+};
+
 struct FrameTapeReplayResult {
   FrameTapeReplayStatus status = FrameTapeReplayStatus::InvalidTape;
   std::uint32_t failedEventIndex = 0xffffffffu;
+  std::uint32_t profile = 0u;
+  std::uint32_t intervalCount = 0u;
   FrameTapeReplayRequirements requirements{};
   FrameTapeValidityEvidence validity{};
   FrameTapeCoverageEvidence coverage{};
   FrameTapeConservationEvidence conservation{};
+  std::array<RenderTapeIntervalEvidence, kRenderTapeMaxReplayIntervals>
+      intervals{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;
@@ -116,6 +129,19 @@ FrameTapeReplayResult preflightFrameTapeIdentity(
 // installed and read back after the completion waterline. Stub devices still
 // exercise the exact replay routing deterministically.
 FrameTapeReplayResult replayFrameTapeIdentity(
+    D9CDevice* device, std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept;
+
+// Profile-aware entry points additionally admit exactly two textured Present
+// intervals separated by one full digest-backed texture mutation. Both
+// completions and output digests are conserved independently. The frame
+// wrappers above retain their historical strictness and reject a sequence tape
+// before provider effects.
+FrameTapeReplayResult preflightRenderTapeIdentity(
+    std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept;
+
+FrameTapeReplayResult replayRenderTapeIdentity(
     D9CDevice* device, std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept;
 

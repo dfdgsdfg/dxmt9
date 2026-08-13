@@ -10,6 +10,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   distribution from PE and unix builds.
 - `cleanup_dxmt9_temp_prefixes.py` — list/prune temporary Wine prefixes
   created by experiment runs.
+- `run_dxmt9_render_tape.py` — pack and validate frame-tape and bounded
+  two-interval sequence-tape bundles, replay them through fresh production-
+  provider devices with declared warmup/repeat identity checks, and
+  reduce/bisect frame-tape whole command events through an explicit
+  digest/readback/conservation oracle.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank
   3DMark05 `traces/` and `experiments/output/` run-id cleanup candidates,
   marking run ids referenced by `docs/perfomance/**/*.md`.

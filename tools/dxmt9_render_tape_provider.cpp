@@ -53,7 +53,8 @@ void printResult(const FrameTapeReplayResult& result) {
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
   std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v1\",";
-  std::cout << "\"profile\":\"frame-tape\",\"status\":\""
+  std::cout << "\"profile\":\"" << renderTapeProfileName(result.profile)
+            << "\",\"status\":\""
             << frameTapeReplayStatusName(result.status) << "\",";
   std::cout << "\"failed_event\":" << result.failedEventIndex << ',';
   std::cout << "\"requirements\":{";
@@ -94,7 +95,31 @@ void printResult(const FrameTapeReplayResult& result) {
   std::cout << "\"objects_created\":" << conservation.objectsCreated << ',';
   std::cout << "\"objects_released\":" << conservation.objectsReleased << ',';
   std::cout << "\"present_ordinal\":" << conservation.presentOrdinal << ',';
-  std::cout << "\"completion_ordinal\":" << conservation.completionOrdinal << "}}\n";
+  std::cout << "\"completion_ordinal\":" << conservation.completionOrdinal
+            << "},\"intervals\":[";
+  for (std::uint32_t i = 0u; i < result.intervalCount; ++i) {
+    if (i != 0u) std::cout << ',';
+    const auto& interval = result.intervals[i];
+    std::cout << "{\"present_ordinal\":" << interval.presentOrdinal << ',';
+    std::cout << "\"completion_ordinal\":" << interval.completionOrdinal << ',';
+    std::cout << "\"validity\":{";
+    std::cout << "\"output_readback\":"
+              << (interval.validity.outputReadback ? "true" : "false") << ',';
+    std::cout << "\"expected_digest_captured\":"
+              << (interval.validity.expectedDigestCaptured ? "true" : "false")
+              << ',';
+    std::cout << "\"expected_digest_matched\":"
+              << (interval.validity.expectedDigestMatched ? "true" : "false")
+              << ',';
+    std::cout << "\"output_non_degenerate\":"
+              << (interval.validity.outputNonDegenerate ? "true" : "false")
+              << ',';
+    std::cout << "\"output_bytes\":" << interval.validity.outputBytes << ',';
+    std::cout << "\"output_sha256\":\""
+              << digestHex(interval.validity.outputDigest) << "\"}}";
+  }
+  std::cout << "]}\n";
+  std::cout.flush();
 }
 
 void usage() {
@@ -134,7 +159,7 @@ int main(int argc, char** argv) {
       });
     }
 
-    const auto preflight = preflightFrameTapeIdentity(tape, blobs);
+    const auto preflight = preflightRenderTapeIdentity(tape, blobs);
     if (!preflight.complete()) {
       printResult(preflight);
       return 1;
@@ -165,7 +190,7 @@ int main(int argc, char** argv) {
       printResult(failure);
       return 1;
     }
-    const auto result = replayFrameTapeIdentity(device, tape, blobs);
+    const auto result = replayRenderTapeIdentity(device, tape, blobs);
     dxmt9c_device_release(device);
     dxmt9c_factory_release(factory);
     printResult(result);

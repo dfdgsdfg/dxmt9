@@ -169,8 +169,14 @@ foreach spec : [
     dependencies: dependencies,
     link_args: dxmt9_test_link_args,
   )
-  test('dxmt9-' + spec[0] + '-spec', target,
-       env: dxmt9_native_test_env)
+  if spec[0] == 'render-tape-provider'
+    test('dxmt9-' + spec[0] + '-spec', target,
+         env: dxmt9_native_test_env,
+         timeout: 60)
+  else
+    test('dxmt9-' + spec[0] + '-spec', target,
+         env: dxmt9_native_test_env)
+  endif
   if spec[0] == 'render-tape'
     render_tape_fixture_spec = target
   elif spec[0] == 'render-tape-capture'
@@ -214,7 +220,8 @@ test('dxmt9-render-tape-provider-cli-spec', python3,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
      ],
-     env: dxmt9_native_test_env)
+     env: dxmt9_native_test_env,
+     timeout: 120)
 
 render_tape_publisher_spec = executable(
   'dxmt9-render-tape-publisher-spec',
