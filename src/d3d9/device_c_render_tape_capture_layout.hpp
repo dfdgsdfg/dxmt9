@@ -95,6 +95,57 @@ struct RenderTapeExpectedContentContract {
 const char* renderTapeExpectedContentStatusName(
     RenderTapeExpectedContentStatus status) noexcept;
 
+// Capture-only, value-owned context for a missing initial subresource. The
+// provenance fields identify the original command record and handle slot; an
+// alias-parent materialization must carry these values unchanged.
+struct RenderTapeReferenceProvenance {
+  std::uint32_t handleIndex = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t recordIndex = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t recordType = 0u;
+};
+
+enum class RenderTapeMissingSeedDescriptorStatus : std::uint32_t {
+  UnsupportedKind = 0u,
+  Accepted,
+  InvalidDescriptor,
+  MissingSubresource,
+};
+
+const char* renderTapeMissingSeedDescriptorStatusName(
+    RenderTapeMissingSeedDescriptorStatus status) noexcept;
+
+struct RenderTapeMissingSeedDescriptor {
+  D9CWireObjectIdentity identity{};
+  RenderTapeReferenceProvenance provenance{};
+  RenderTapeMissingSeedDescriptorStatus descriptorStatus =
+      RenderTapeMissingSeedDescriptorStatus::UnsupportedKind;
+  RenderTapeExpectedContentStatus expectedContentStatus =
+      RenderTapeExpectedContentStatus::NotRequired;
+  RenderTapeTextureDimension textureDimension =
+      static_cast<RenderTapeTextureDimension>(0u);
+  std::uint32_t mipLevelCount = 0u;
+  std::uint32_t subresourceCount = 0u;
+  std::uint32_t missingSubresource =
+      std::numeric_limits<std::uint32_t>::max();
+  D9CSurfaceDesc missingSurface{};
+  std::uint64_t expectedTightBytes = 0u;
+  bool expectedTightBytesValid = false;
+};
+
+// Extracts only bounded V2 metadata and the missing subresource descriptor.
+// This is diagnostic-only: malformed input and unsupported formats remain
+// typed results and never become an accepted content contract.
+RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
+    const D9CWireObjectIdentity& identity,
+    std::span<const std::byte> descriptor, std::uint32_t missingSubresource,
+    RenderTapeReferenceProvenance provenance = {}) noexcept;
+
+// Per-subresource form of the existing exact content transform. Keeping this
+// value-only helper public lets native tests pin the diagnostic's byte claim
+// without constructing a PE device or capture session.
+RenderTapeExpectedContentContract renderTapeDeriveExpectedSurfaceContent(
+    const D9CSurfaceDesc& desc) noexcept;
+
 // Derives the exact initial-content extent for every content-bearing resource
 // descriptor. Texture and standalone-surface inputs must use their canonical
 // V2 descriptors; volume seed closure is explicitly unsupported. Identities

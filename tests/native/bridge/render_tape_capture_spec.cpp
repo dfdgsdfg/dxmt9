@@ -1015,6 +1015,77 @@ std::vector<std::byte> versionedTextureDescriptor(
   return descriptor;
 }
 
+void testMissingSeedDescriptorAndProvenanceTruthTable() {
+  const D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 9u, .objectId = 77u};
+  const RenderTapeReferenceProvenance provenance{
+      .handleIndex = 12u, .recordIndex = 34u,
+      .recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE};
+  auto descriptor = texture2DDescriptor();
+  RenderTapeTextureDescriptorV2 header{};
+  std::memcpy(&header, descriptor.data(), sizeof(header));
+  D9CSurfaceDesc surface{};
+  std::memcpy(&surface, descriptor.data() + sizeof(header), sizeof(surface));
+  surface.usage = 0x1234u;
+  surface.pool = 2u;
+  surface.multiSampleType = 3u;
+  surface.multiSampleQuality = 4u;
+  std::memcpy(descriptor.data() + sizeof(header), &surface, sizeof(surface));
+
+  const auto detail = renderTapeDescribeMissingSeed(
+      texture, descriptor, 0u, provenance);
+  check(detail.descriptorStatus ==
+                RenderTapeMissingSeedDescriptorStatus::Accepted &&
+            detail.expectedContentStatus ==
+                RenderTapeExpectedContentStatus::Accepted &&
+            detail.textureDimension == RenderTapeTextureDimension::Texture2D &&
+            detail.mipLevelCount == 1u && detail.subresourceCount == 1u &&
+            detail.missingSurface.usage == 0x1234u &&
+            detail.missingSurface.resourceType == 3u &&
+            detail.missingSurface.pool == 2u &&
+            detail.missingSurface.format == 21u &&
+            detail.missingSurface.width == 4u &&
+            detail.missingSurface.height == 4u &&
+            detail.missingSurface.multiSampleType == 3u &&
+            detail.missingSurface.multiSampleQuality == 4u &&
+            detail.expectedTightBytesValid && detail.expectedTightBytes == 64u,
+        "missing-seed descriptor extracts V2 metadata and exact tight bytes");
+  check(detail.identity.kind == texture.kind &&
+            detail.identity.generation == texture.generation &&
+            detail.identity.objectId == texture.objectId &&
+            detail.provenance.handleIndex == provenance.handleIndex &&
+            detail.provenance.recordIndex == provenance.recordIndex &&
+            detail.provenance.recordType == provenance.recordType,
+        "missing-seed diagnostic preserves original identity and command provenance");
+
+  auto malformed = descriptor;
+  malformed.resize(sizeof(RenderTapeTextureDescriptorV2));
+  const auto malformedDetail = renderTapeDescribeMissingSeed(
+      texture, malformed, 0u, provenance);
+  check(malformedDetail.descriptorStatus ==
+                RenderTapeMissingSeedDescriptorStatus::InvalidDescriptor &&
+            malformedDetail.expectedContentStatus ==
+                RenderTapeExpectedContentStatus::InvalidDescriptor &&
+            !malformedDetail.expectedTightBytesValid &&
+            malformedDetail.provenance.recordIndex == provenance.recordIndex,
+        "malformed V2 descriptor fails closed without losing provenance");
+
+  const auto missingDetail = renderTapeDescribeMissingSeed(
+      texture, descriptor, 1u, provenance);
+  check(missingDetail.descriptorStatus ==
+                RenderTapeMissingSeedDescriptorStatus::MissingSubresource &&
+            missingDetail.expectedContentStatus ==
+                RenderTapeExpectedContentStatus::InvalidExtent &&
+            missingDetail.subresourceCount == 1u &&
+            missingDetail.provenance.handleIndex == provenance.handleIndex,
+        "out-of-range missing subresource remains typed and provenance-qualified");
+
+  check(std::string_view(renderTapeMissingSeedDescriptorStatusName(
+            RenderTapeMissingSeedDescriptorStatus::InvalidDescriptor)) ==
+            "invalid_descriptor",
+        "missing-seed descriptor status names are stable");
+}
+
 void testExpectedContentContractDerivation() {
   constexpr auto texture = D9C_CHUNK_HANDLE_KIND_TEXTURE;
   constexpr auto surface = D9C_CHUNK_HANDLE_KIND_SURFACE;
@@ -2927,6 +2998,7 @@ int main(int argc, char** argv) {
     testFullSnapshotClosureTruthTable();
     testBootstrapClosureTruthTable();
     testObjectExpectedContentContractTruthTable();
+    testMissingSeedDescriptorAndProvenanceTruthTable();
     testExpectedContentContractDerivation();
     testUpdateTextureClosureTruthTable();
     testExpectedContentValidatorOrdering();

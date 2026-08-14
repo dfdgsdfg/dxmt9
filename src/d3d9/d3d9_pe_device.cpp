@@ -8297,7 +8297,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                               UnmaterializedPreArmObject);
         }
         if (object->lifetime.textureAlias &&
-            !materializeRenderTapeObjectForReference(object->aliasParentTexture)) {
+            !materializeRenderTapeObjectForReference(
+                object->aliasParentTexture, handleIndex, recordIndex,
+                recordType)) {
             return false;
         }
         if (object->contentCount != object->content.size() ||
@@ -8306,6 +8308,45 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const auto missing = std::find_if(
                 object->content.begin(), object->content.end(),
                 [](const auto &bytes) { return bytes.empty(); });
+            // Keep the diagnostic index identical to the existing rejection
+            // below: a count mismatch with no empty slot reports content.size().
+            const auto missingSubresource = static_cast<std::uint32_t>(
+                missing - object->content.begin());
+            const auto missingSeed = dxmt9::d3d9::renderTapeDescribeMissingSeed(
+                object->identity, object->descriptor, missingSubresource,
+                dxmt9::d3d9::RenderTapeReferenceProvenance{
+                    .handleIndex = handleIndex,
+                    .recordIndex = recordIndex,
+                    .recordType = recordType,
+                });
+            dxmt9DeviceInfoLog(
+                "render_tape_capture missing_seed identity_kind=%u "
+                "generation=%u object_id=%llu descriptor_status=%s "
+                "expected_status=%s texture_dimension=%u mip_levels=%u "
+                "subresources=%u missing_subresource=%u usage=%u "
+                "resource_type=%u pool=%u format=%u width=%u height=%u "
+                "multisample_type=%u multisample_quality=%u "
+                "expected_tight_bytes=%llu expected_tight_bytes_valid=%d "
+                "handle_index=%u record_index=%u record_type=%u",
+                missingSeed.identity.kind, missingSeed.identity.generation,
+                static_cast<unsigned long long>(missingSeed.identity.objectId),
+                dxmt9::d3d9::renderTapeMissingSeedDescriptorStatusName(
+                    missingSeed.descriptorStatus),
+                dxmt9::d3d9::renderTapeExpectedContentStatusName(
+                    missingSeed.expectedContentStatus),
+                static_cast<unsigned>(missingSeed.textureDimension),
+                missingSeed.mipLevelCount, missingSeed.subresourceCount,
+                missingSeed.missingSubresource, missingSeed.missingSurface.usage,
+                missingSeed.missingSurface.resourceType,
+                missingSeed.missingSurface.pool, missingSeed.missingSurface.format,
+                missingSeed.missingSurface.width, missingSeed.missingSurface.height,
+                missingSeed.missingSurface.multiSampleType,
+                missingSeed.missingSurface.multiSampleQuality,
+                static_cast<unsigned long long>(missingSeed.expectedTightBytes),
+                missingSeed.expectedTightBytesValid ? 1 : 0,
+                missingSeed.provenance.handleIndex,
+                missingSeed.provenance.recordIndex,
+                missingSeed.provenance.recordType);
             if (recordType == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
                 !renderTapeObjectAdmitted(identity)) {
                 // UpdateTexture's destination initial bytes must precede the

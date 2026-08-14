@@ -258,6 +258,20 @@ capture-off path are unchanged. Native truth-table coverage proves empty and
 pre-observed destinations, incomplete sources, extent mismatch, autogen, and
 volume rejection. No GT2 bundle or provider-replay promotion is claimed yet.
 
+### GT2 r24 missing-seed provenance (capture-only)
+
+The GT2 r24 retry confirms that Render Tape capture is active and reaches the
+generation-qualified missing-seed materialization path. Its typed diagnostic
+now retains the original command record and handle-slot provenance through
+texture-derived surface alias-parent recursion, while reporting the canonical
+V2 texture dimension, mip/subresource counts, missing `D9CSurfaceDesc` fields,
+and an exact tight-byte expectation when the descriptor makes one derivable.
+The r24 evidence disproves `UpdateTexture` as the producer of this identity's
+missing seed; the exact producer class remains open until this provenance is
+measured on the next capture. Rejection semantics, descriptor/generation
+validation, event/chunk/bridge ABI, and capture-off cost are unchanged. No
+complete GT2 bundle or provider-replay promotion is claimed.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with

@@ -122,6 +122,11 @@ RenderTapeExpectedContentContract expectedContentForTexture(
 
 } // namespace
 
+RenderTapeExpectedContentContract renderTapeDeriveExpectedSurfaceContent(
+    const D9CSurfaceDesc& desc) noexcept {
+  return expectedContentForSurface(desc);
+}
+
 const char* renderTapeExpectedContentStatusName(
     RenderTapeExpectedContentStatus status) noexcept {
   switch (status) {
@@ -141,6 +146,94 @@ const char* renderTapeExpectedContentStatusName(
     return "overflow";
   }
   return "unknown";
+}
+
+const char* renderTapeMissingSeedDescriptorStatusName(
+    RenderTapeMissingSeedDescriptorStatus status) noexcept {
+  switch (status) {
+  case RenderTapeMissingSeedDescriptorStatus::UnsupportedKind:
+    return "unsupported_kind";
+  case RenderTapeMissingSeedDescriptorStatus::Accepted:
+    return "accepted";
+  case RenderTapeMissingSeedDescriptorStatus::InvalidDescriptor:
+    return "invalid_descriptor";
+  case RenderTapeMissingSeedDescriptorStatus::MissingSubresource:
+    return "missing_subresource";
+  }
+  return "unknown";
+}
+
+RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
+    const D9CWireObjectIdentity& identity,
+    std::span<const std::byte> descriptor, std::uint32_t missingSubresource,
+    RenderTapeReferenceProvenance provenance) noexcept {
+  RenderTapeMissingSeedDescriptor result{
+      .identity = identity,
+      .provenance = provenance,
+      .missingSubresource = missingSubresource,
+  };
+
+  if (identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+    RenderTapeTextureDescriptorV2 texture{};
+    if (!renderTapeLoadTextureDescriptorV2(descriptor, texture)) {
+      result.descriptorStatus =
+          RenderTapeMissingSeedDescriptorStatus::InvalidDescriptor;
+      result.expectedContentStatus =
+          RenderTapeExpectedContentStatus::InvalidDescriptor;
+      return result;
+    }
+    result.textureDimension =
+        static_cast<RenderTapeTextureDimension>(texture.dimension);
+    result.mipLevelCount = texture.mipLevelCount;
+    result.subresourceCount = texture.subresourceCount;
+    if (missingSubresource >= texture.subresourceCount ||
+        !renderTapeTextureSubresourceDescriptor(
+            descriptor, missingSubresource, result.missingSurface)) {
+      result.descriptorStatus =
+          RenderTapeMissingSeedDescriptorStatus::MissingSubresource;
+      result.expectedContentStatus =
+          RenderTapeExpectedContentStatus::InvalidExtent;
+      return result;
+    }
+    result.descriptorStatus = RenderTapeMissingSeedDescriptorStatus::Accepted;
+    const auto expected =
+        renderTapeDeriveExpectedSurfaceContent(result.missingSurface);
+    result.expectedContentStatus = expected.status;
+    result.expectedTightBytes = expected.bytes;
+    result.expectedTightBytesValid =
+        expected.status == RenderTapeExpectedContentStatus::Accepted;
+    return result;
+  }
+
+  if (identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+    RenderTapeSurfaceDescriptorV2 surface{};
+    if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface)) {
+      result.descriptorStatus =
+          RenderTapeMissingSeedDescriptorStatus::InvalidDescriptor;
+      result.expectedContentStatus =
+          RenderTapeExpectedContentStatus::InvalidDescriptor;
+      return result;
+    }
+    result.subresourceCount = 1u;
+    if (missingSubresource != 0u) {
+      result.descriptorStatus =
+          RenderTapeMissingSeedDescriptorStatus::MissingSubresource;
+      result.expectedContentStatus =
+          RenderTapeExpectedContentStatus::InvalidExtent;
+      return result;
+    }
+    result.descriptorStatus = RenderTapeMissingSeedDescriptorStatus::Accepted;
+    result.missingSurface = surface.surface;
+    const auto expected =
+        renderTapeDeriveExpectedSurfaceContent(result.missingSurface);
+    result.expectedContentStatus = expected.status;
+    result.expectedTightBytes = expected.bytes;
+    result.expectedTightBytesValid =
+        expected.status == RenderTapeExpectedContentStatus::Accepted;
+    return result;
+  }
+
+  return result;
 }
 
 RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
