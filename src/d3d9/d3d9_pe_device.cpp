@@ -56,6 +56,8 @@ using dxmt9::d3d9::pe::process_vertices::ProcessShaderIo;
 using dxmt9::d3d9::pe::process_vertices::vertexElementTypeSize;
 using dxmt9::d3d9::RenderTapeQueryDescriptor;
 using dxmt9::d3d9::RenderTapeShaderDescriptor;
+using dxmt9::d3d9::RenderTapeInitialContentDisposition;
+using dxmt9::d3d9::RenderTapeTextureDimension;
 using dxmt9::d3d9::RenderTapeTextureDescriptorV2;
 using dxmt9::d3d9::RenderTapeVertexDeclDescriptor;
 

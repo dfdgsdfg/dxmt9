@@ -112,6 +112,11 @@ constexpr D9CWireObjectIdentity kTexture{
     .generation = 3u,
     .objectId = 29u,
 };
+constexpr D9CWireObjectIdentity kAlias{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 5u,
+    .objectId = 31u,
+};
 constexpr D9CWireObjectIdentity kShader{
     .kind = D9C_CHUNK_HANDLE_KIND_SHADER,
     .generation = 7u,
@@ -130,7 +135,8 @@ const RenderTapeDigest kTextureDigest = digest(std::byte{0x10});
 const RenderTapeDigest kShaderDigest = digest(std::byte{0x40});
 
 std::vector<std::byte> drawPayload(bool fullSnapshot,
-                                   std::uint32_t firstHandle = 0u) {
+                                   std::uint32_t firstHandle = 0u,
+                                   bool includeAlias = false) {
   std::array<D9CCommandChunkWireTextureBinding,
              D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
@@ -156,14 +162,22 @@ std::vector<std::byte> drawPayload(bool fullSnapshot,
       .valid = 1u,
       .handleIndex = firstHandle + 1u,
   };
+  const D9CCommandChunkWireRenderTargetBinding renderTarget{
+      .slot = 0u,
+      .valid = includeAlias ? 1u : 0u,
+      .handleIndex = includeAlias
+          ? firstHandle + 2u
+          : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+  };
 
-  constexpr std::uint32_t sectionCount = 3u;
+  constexpr std::uint32_t sectionCount = 4u;
   const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
   const auto sectionPayloadOffset = alignUp(
       sectionTableOffset + sectionCount * sizeof(D9CCommandChunkWireSectionDesc),
       alignof(std::uint32_t));
   const auto streamOffset = sectionPayloadOffset + sizeof(textures);
   const auto shaderOffset = streamOffset + sizeof(streams);
+  const auto renderTargetOffset = shaderOffset + sizeof(shader);
   const D9CCommandChunkWireDrawHeader draw{
       .flags = fullSnapshot ? D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT : 0u,
       .primitiveType = 4u,
@@ -194,8 +208,15 @@ std::vector<std::byte> drawPayload(bool fullSnapshot,
           .payloadOffset = static_cast<std::uint32_t>(shaderOffset),
           .byteSize = sizeof(shader),
       },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+          .elementSize = sizeof(renderTarget),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(renderTargetOffset),
+          .byteSize = sizeof(renderTarget),
+      },
   };
-  std::vector<std::byte> payload(shaderOffset + sizeof(shader));
+  std::vector<std::byte> payload(renderTargetOffset + sizeof(renderTarget));
   std::memcpy(payload.data(), &draw, sizeof(draw));
   std::memcpy(payload.data() + sectionTableOffset, sections.data(),
               sizeof(sections));
@@ -203,6 +224,8 @@ std::vector<std::byte> drawPayload(bool fullSnapshot,
               sizeof(textures));
   std::memcpy(payload.data() + streamOffset, streams.data(), sizeof(streams));
   std::memcpy(payload.data() + shaderOffset, &shader, sizeof(shader));
+  std::memcpy(payload.data() + renderTargetOffset, &renderTarget,
+              sizeof(renderTarget));
   return payload;
 }
 
@@ -230,7 +253,8 @@ std::vector<std::byte> bootstrapChunk() {
   }});
 }
 
-std::vector<std::byte> frameChunk(bool firstFullSnapshot = true) {
+std::vector<std::byte> frameChunk(bool firstFullSnapshot = true,
+                                  bool includeAlias = false) {
   const D9CCommandChunkWireClear clear{
       .flags = 1u,
       .colorARGB = 0xff204060u,
@@ -238,7 +262,7 @@ std::vector<std::byte> frameChunk(bool firstFullSnapshot = true) {
       .rectCount = 0u,
       .rectOffset = sizeof(D9CCommandChunkWireClear),
   };
-  const std::vector handles{
+  std::vector<D9CCommandChunkWireHandleEntry> handles{
       D9CCommandChunkWireHandleEntry{
           .kind = kTexture.kind,
           .generation = kTexture.generation,
@@ -250,13 +274,23 @@ std::vector<std::byte> frameChunk(bool firstFullSnapshot = true) {
           .objectId = kShader.objectId,
       },
   };
+  if (includeAlias) {
+    handles.push_back(D9CCommandChunkWireHandleEntry{
+        .kind = kAlias.kind,
+        .generation = kAlias.generation,
+        .objectId = kAlias.objectId,
+    });
+  }
+  const auto firstDrawPayload = drawPayload(firstFullSnapshot, 0u, includeAlias);
+  const auto secondDrawPayload =
+      drawPayload(false, includeAlias ? 3u : 2u, includeAlias);
   const std::array records{
       Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
       Record{.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-             .payload = drawPayload(firstFullSnapshot),
+             .payload = firstDrawPayload,
              .handles = handles},
       Record{.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-             .payload = drawPayload(false, 2u),
+             .payload = secondDrawPayload,
              .handles = handles},
       Record{.type = D9C_COMMAND_RECORD_PRESENT,
              .payload = bytesOf(D9CCommandChunkWirePresent{})},
@@ -317,11 +351,12 @@ std::vector<std::byte> textureDescriptor() {
 std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
                                      bool includeTextureDefinition = true,
                                      std::uint64_t expectedTextureBytes = 4u,
-                                     bool lateTextureSeed = false) {
+                                     bool lateTextureSeed = false,
+                                     bool includeAlias = false) {
   constexpr std::array<std::byte, 4u> shaderDescriptor{};
   const auto output = outputDescriptor();
   const auto texture = textureDescriptor();
-  const auto frame = frameChunk(firstFullSnapshot);
+  const auto frame = frameChunk(firstFullSnapshot, includeAlias);
   const RenderTapeOracleAttachment oracle{
       .identity = kOutput,
       .descriptorKind =
@@ -347,6 +382,29 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
         texture, 0u, {}, expectedTextureBytes, 1u);
   }
+  if (includeAlias) {
+    const RenderTapeSurfaceDescriptorV2 alias{
+        .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+        .storage = static_cast<std::uint32_t>(
+            RenderTapeSurfaceStorage::TextureSubresource),
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::Unavailable),
+        .subresource = 0u,
+        .parentTexture = kTexture,
+        .surface = D9CSurfaceDesc{
+            .format = 21u,
+            .resourceType = 1u,
+            .usage = 0u,
+            .pool = 0u,
+            .width = 1u,
+            .height = 1u,
+            .depth = 1u,
+        },
+    };
+    builder.appendObjectDefine(
+        kAlias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&alias, 1u)), 0u, {}, 0u, 0u);
+  }
   builder.appendObjectDefine(
       kShader, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
       shaderDescriptor, 4u, kShaderDigest);
@@ -365,7 +423,9 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
   builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
                                  0u, 4u, kTextureDigest);
   builder.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 4u, .handleCount = 4u}, frame);
+      CommandChunkEnvelope{.recordCount = 4u,
+                           .handleCount = includeAlias ? 6u : 4u},
+      frame);
   builder.appendObjectDestroy(kTexture);
   builder.appendOrderedControl(control, std::as_bytes(std::span(&wait, 1u)));
   builder.appendPresentComplete(
@@ -488,6 +548,37 @@ void projectionAccountsLatePerIdentitySeed() {
         "projection must classify a late matching mutation as initial content");
 }
 
+void projectionPreservesDispositionAndAliasMetadata() {
+  const auto tape = makeFrameTape(true, true, 4u, false, true);
+  const auto blobs = catalogue();
+  const auto validation = validateRenderTape(tape, blobs);
+  check(validation.valid(),
+        "alias projection fixture source must validate");
+  auto aliasSelector = selector();
+  aliasSelector.commandEventOrdinal = 7u;
+  const auto projected =
+      projectRenderTapeDrawSlice(tape, blobs, aliasSelector);
+  check(projected.valid(), renderTapeProjectionStatusName(projected.status));
+  const auto texture = std::find_if(
+      projected.objects.begin(), projected.objects.end(), [](const auto& object) {
+        return object.identity.objectId == kTexture.objectId;
+      });
+  const auto alias = std::find_if(
+      projected.objects.begin(), projected.objects.end(), [](const auto& object) {
+        return object.identity.objectId == kAlias.objectId;
+      });
+  check(texture != projected.objects.end() &&
+            texture->initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::CompleteSeed) &&
+            alias != projected.objects.end() &&
+            alias->initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::Unavailable) &&
+            alias->aliasParentTexture.objectId == kTexture.objectId &&
+            alias->aliasParentTexture.generation == kTexture.generation &&
+            alias->aliasSubresource == 0u,
+        "projection preserves texture disposition and exact alias metadata");
+}
+
 void failClosedSelectionAndClosureCases() {
   const auto blobs = catalogue();
   check(projectRenderTapeDrawSlice(makeSequenceTape(), blobs, selector()).status ==
@@ -556,6 +647,7 @@ int main(int argc, char** argv) {
           "usage: render_tape_projection_spec [--write-fixture path]");
     acceptedRangeConservesCanonicalIdentity();
     projectionAccountsLatePerIdentitySeed();
+    projectionPreservesDispositionAndAliasMetadata();
     failClosedSelectionAndClosureCases();
   } catch (const std::exception& error) {
     std::cerr << "render_tape_projection_spec failed: " << error.what() << '\n';

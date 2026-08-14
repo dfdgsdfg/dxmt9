@@ -586,7 +586,7 @@ void testProducedByCapturedPassTape() {
       .objectId = 43u,
   };
   auto level = D9CSurfaceDesc{
-      .format = 21u,
+      .format = 22u,
       .resourceType = 3u,
       .usage = 1u,
       .pool = 0u,
@@ -595,7 +595,7 @@ void testProducedByCapturedPassTape() {
       .depth = 1u,
   };
   auto producedTexture = texture2DDescriptor(
-      D9CSurfaceDesc{.format = 21u, .resourceType = 3u, .pool = 0u,
+      D9CSurfaceDesc{.format = 22u, .resourceType = 3u, .pool = 0u,
                      .width = 4u, .height = 4u, .depth = 1u});
   RenderTapeTextureDescriptorV2 producedHeader{};
   std::memcpy(&producedHeader, producedTexture.data(), sizeof(producedHeader));
@@ -612,7 +612,7 @@ void testProducedByCapturedPassTape() {
           RenderTapeInitialContentDisposition::Unavailable),
       .subresource = 0u,
       .parentTexture = texture,
-      .surface = D9CSurfaceDesc{.format = 21u,
+      .surface = D9CSurfaceDesc{.format = 22u,
                                 .resourceType = 1u,
                                 .usage = 1u,
                                 .pool = 0u,
@@ -680,7 +680,11 @@ void testProducedByCapturedPassTape() {
   check(validation.valid(),
         "produced full-clear tape retains and validates its command chunk");
   const auto preflight = preflightFrameTapeIdentity(tape, {});
-  check(preflight.complete(),
+  check(preflight.complete() && preflight.coverage.seedMutations == 0u &&
+            preflight.coverage.commandChunks == 1u &&
+            preflight.coverage.commandRecords == 3u &&
+            preflight.coverage.clearRecords == 1u &&
+            preflight.coverage.presentRecords == 1u,
         "provider admits the bounded produced full-clear tape without a seed");
 
   auto multiMipTexture = producedTexture;

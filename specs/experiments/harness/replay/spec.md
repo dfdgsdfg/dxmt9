@@ -767,8 +767,18 @@ payload is one `RenderTapeTextureDescriptorV2` header plus an exact tail of
 six complete mip chains for cube textures. The validator checks the declared
 dimension, mip/subresource relation, resource type, repeated format/storage
 attributes, mip extents, and volume mip depth before any replay effect. Texture
-initial content is always `CompleteSeed`; texture `Unavailable` is rejected. A
-surface payload is exactly one `RenderTapeSurfaceDescriptorV2`: independently
+initial content is `CompleteSeed` by default; texture `Unavailable` is
+rejected except for the bounded `ProducedByCapturedPass` exception. That
+exception is limited to one Texture2D mip and subresource, render-target
+usage, one exact generation-qualified Surface alias at subresource 0, and a
+single unresolved obligation. Both definitions must precede the resolving
+command chunk, which must be retained and bind the exact alias before an
+unrestricted full clear as the first terminal access. The obligation resolves
+once; `PresentComplete` rejects it if unresolved. Partial or draw/read-first
+access, identity mismatch, multiple Produced textures, multiple matching
+aliases, multi-mip/cube/volume textures, ambiguous aliases, and out-of-order
+definitions fail closed, and the Produced texture receives no seed mutation.
+A surface payload is exactly one `RenderTapeSurfaceDescriptorV2`: independently
 owned surfaces use `Standalone`/`CompleteSeed`, aliases use
 `TextureSubresource`/`Unavailable` with an exact live parent and subresource,
 and the oracle uses `SwapchainBackbuffer`/`ProducedPresentOutput`. The old

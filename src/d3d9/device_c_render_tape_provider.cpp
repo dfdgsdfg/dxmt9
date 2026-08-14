@@ -546,25 +546,26 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
         RenderTapeTextureDescriptorV2 texture{};
         D9CSurfaceDesc level0{};
+        bool producedByCapturedPass = false;
+        bool expectedContentShape = false;
         if (!noImmutablePayload || descriptor.size() < sizeof(texture) ||
             !load(descriptor, 0u, texture) ||
-            !acceptedTextureDescriptor(descriptor, texture, level0) ||
-            fixed.expectedContentCount !=
-                (texture.initialContentDisposition == static_cast<std::uint32_t>(
-                     RenderTapeInitialContentDisposition::ProducedByCapturedPass)
-                     ? 0u
-                     : texture.subresourceCount) ||
-            (texture.initialContentDisposition == static_cast<std::uint32_t>(
-                 RenderTapeInitialContentDisposition::ProducedByCapturedPass)
-                 ? fixed.expectedContentBytes != 0u
-                 : fixed.expectedContentBytes == 0u) ||
+            !acceptedTextureDescriptor(descriptor, texture, level0))
+          goto unsupported;
+        producedByCapturedPass =
+            texture.initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+        expectedContentShape = producedByCapturedPass
+            ? fixed.expectedContentBytes == 0u &&
+                  fixed.expectedContentCount == 0u
+            : fixed.expectedContentBytes != 0u &&
+                  fixed.expectedContentCount == texture.subresourceCount;
+        if (!expectedContentShape ||
             candidate.textureIdentity.objectId != 0u) goto unsupported;
         candidate.textureIdentity = fixed.identity;
         candidate.textureDesc = texture;
         candidate.textureLevel0 = level0;
-        candidate.textureProducedByCapturedPass =
-            texture.initialContentDisposition == static_cast<std::uint32_t>(
-                RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+        candidate.textureProducedByCapturedPass = producedByCapturedPass;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
         const Definition definition{.fixed = fixed, .descriptor = descriptor};
         if (candidate.vertexDeclarationIdentity.objectId != 0u ||
@@ -809,7 +810,10 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         (!candidate.textureProducedByCapturedPass &&
          !sameIdentity(drawState.texture, candidate.textureIdentity)) ||
         candidate.textureDesc.mipLevelCount != 1u ||
-        candidate.textureLevel0.format != 21u ||
+        ((!candidate.textureProducedByCapturedPass &&
+          candidate.textureLevel0.format != 21u) ||
+         (candidate.textureProducedByCapturedPass &&
+          candidate.textureLevel0.format != 22u)) ||
         (!candidate.textureProducedByCapturedPass &&
          (textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
           textureDefinition->fixed.expectedContentBytes %

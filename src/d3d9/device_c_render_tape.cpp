@@ -891,9 +891,16 @@ validateRenderTape(std::span<const std::byte> blob,
             expectation->recordedCount != expectation->expectedCount);
   };
 
-  const auto validateProducedPassChunk = [&](const ImportedChunkView& chunk) {
+  const auto validateProducedPassChunk = [&](std::uint32_t currentEventIndex,
+                                             const ImportedChunkView& chunk) {
     for (auto& obligation : scratch.producedPassObligations) {
       if (obligation.resolved)
+        continue;
+      // Definitions are pre-indexed so forward references can be validated,
+      // but a ProducedByCapturedPass proof is temporal: neither the texture
+      // nor its exact alias may be used to resolve a command chunk that
+      // precedes their ObjectDefine events.
+      if (obligation.definitionEventIndex >= currentEventIndex)
         continue;
       const auto event = candidate.event(obligation.definitionEventIndex);
       RenderTapeObjectDefineHeader fixed{};
@@ -904,11 +911,34 @@ validateRenderTape(std::span<const std::byte> blob,
               RenderTapeInitialContentDisposition::ProducedByCapturedPass))
         return false;
 
+      std::uint32_t matchingAliasDefinitions = 0u;
+      for (const auto& candidateDefinition : scratch.objectDefinitions) {
+        if (candidateDefinition.identity.kind !=
+            D9C_CHUNK_HANDLE_KIND_SURFACE)
+          continue;
+        const auto surfaceEvent = candidate.event(candidateDefinition.eventIndex);
+        RenderTapeObjectDefineHeader surfaceFixed{};
+        RenderTapeSurfaceDescriptorV2 surface{};
+        if (load(surfaceEvent.payload, 0u, surfaceFixed) &&
+            load(surfaceEvent.payload, sizeof(surfaceFixed), surface) &&
+            surface.storage == static_cast<std::uint32_t>(
+                RenderTapeSurfaceStorage::TextureSubresource) &&
+            surface.subresource == 0u &&
+            renderTapePresentOutputIdentityMatchesCommand(
+                surface.parentTexture, obligation.identity)) {
+          ++matchingAliasDefinitions;
+        }
+      }
+      if (matchingAliasDefinitions != 1u)
+        return false;
+
       D9CWireObjectIdentity origin{};
       std::uint32_t originCount = 0u;
       for (const auto& candidateDefinition : scratch.objectDefinitions) {
         if (candidateDefinition.identity.kind !=
             D9C_CHUNK_HANDLE_KIND_SURFACE)
+          continue;
+        if (candidateDefinition.eventIndex >= currentEventIndex)
           continue;
         const auto surfaceEvent = candidate.event(candidateDefinition.eventIndex);
         RenderTapeObjectDefineHeader surfaceFixed{};
@@ -1361,7 +1391,7 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::InvalidCommandChunk, i,
                        chunkResult.status);
       }
-      if (!validateProducedPassChunk(chunk)) {
+      if (!validateProducedPassChunk(i, chunk)) {
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       // Every handle referenced by the chunk must name a live object.

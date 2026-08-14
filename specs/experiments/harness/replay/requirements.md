@@ -624,12 +624,24 @@ each declared subresource, or exactly one `RenderTapeSurfaceDescriptorV2`.
 Texture dimensions are self-describing: 2D and volume counts equal the mip
 count, cube counts equal six times the mip count, every descriptor repeats the
 exact dimension-appropriate resource type and mip extent, and volume entries
-preserve the depth of each mip. Every texture uses `CompleteSeed`; texture
-`Unavailable` is invalid rather than a compatibility mode. Independently owned render-target, depth, and
-offscreen surfaces are `Standalone` plus `CompleteSeed`; texture views are
-`TextureSubresource` plus `Unavailable` and name the exact generation-qualified
-parent/subresource; the oracle target is `SwapchainBackbuffer` plus
-`ProducedPresentOutput`. The unversioned texture level-0/count payload and raw
+preserve the depth of each mip. Textures use `CompleteSeed` by default; texture
+`Unavailable` remains invalid except for the bounded
+`ProducedByCapturedPass` lane. That exception admits exactly one Texture2D
+with one mip and one subresource, render-target usage, and exactly one
+generation-qualified `TextureSubresource` Surface alias at subresource 0. The
+texture and alias definitions must precede the resolving command chunk. The
+same retained command chunk must bind that exact alias and perform an
+unrestricted full clear as its first terminal access; it resolves one
+obligation exactly once, and no seed mutation is permitted. A
+`PresentComplete` with an unresolved obligation is invalid. Partial clears,
+draw/read-first access, identity mismatch, multiple Produced textures,
+multiple matching aliases, multi-mip/cube/volume textures, and any ambiguous
+or out-of-order definition fail closed. Independently owned render-target,
+depth, and offscreen surfaces are `Standalone` plus `CompleteSeed`; ordinary
+texture views are `TextureSubresource` plus `Unavailable` and name the exact
+generation-qualified parent/subresource; the oracle target is
+`SwapchainBackbuffer` plus `ProducedPresentOutput`. The unversioned
+texture level-0/count payload and raw
 `D9CSurfaceDesc` Surface payload are Retired and must be rejected by capture
 registration, bootstrap/JIT materialization, validation, inspection,
 projection, and provider replay. A provider may return a typed unsupported

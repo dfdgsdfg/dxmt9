@@ -49,6 +49,13 @@ std::size_t alignUp(std::size_t value, std::size_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
+template <typename T>
+std::vector<std::byte> bytesOf(const T& value) {
+  std::vector<std::byte> bytes(sizeof(value));
+  std::memcpy(bytes.data(), &value, sizeof(value));
+  return bytes;
+}
+
 std::vector<std::byte> singleRecordChunk(
     std::uint32_t type, std::span<const std::byte> payload) {
   const auto recordsOffset = sizeof(D9CCommandChunkWireHeader);
@@ -242,6 +249,249 @@ std::vector<std::byte> presentChunk() {
                            std::as_bytes(std::span(&present, 1u)));
 }
 
+constexpr D9CWireObjectIdentity kProducedTexture{
+    .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+    .generation = 9u,
+    .objectId = 43u,
+};
+constexpr D9CWireObjectIdentity kProducedAlias{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 7u,
+    .objectId = 41u,
+};
+constexpr D9CWireObjectIdentity kProducedOutput{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 7u,
+    .objectId = 40u,
+};
+
+std::vector<std::byte> producedTextureDescriptor() {
+  RenderTapeTextureDescriptorV2 header{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 1u,
+      .subresourceCount = 1u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedByCapturedPass),
+  };
+  const D9CSurfaceDesc level{
+      .format = 22u,
+      .resourceType = 3u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  std::vector<std::byte> descriptor(sizeof(header) + sizeof(level));
+  std::memcpy(descriptor.data(), &header, sizeof(header));
+  std::memcpy(descriptor.data() + sizeof(header), &level, sizeof(level));
+  return descriptor;
+}
+
+std::vector<std::byte> producedAliasDescriptor() {
+  const RenderTapeSurfaceDescriptorV2 alias{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = kProducedTexture,
+      .surface = D9CSurfaceDesc{
+          .format = 22u,
+          .resourceType = 1u,
+          .usage = 1u,
+          .pool = 0u,
+          .width = 4u,
+          .height = 4u,
+          .depth = 1u,
+      },
+  };
+  return std::vector<std::byte>(
+      reinterpret_cast<const std::byte*>(&alias),
+      reinterpret_cast<const std::byte*>(&alias) + sizeof(alias));
+}
+
+struct ProducedRecord {
+  std::uint32_t type = 0u;
+  std::vector<std::byte> payload{};
+  std::vector<D9CCommandChunkWireHandleEntry> handles{};
+};
+
+std::vector<std::byte> makeProducedChunk(
+    std::span<const ProducedRecord> specs) {
+  const auto recordTableOffset = sizeof(D9CCommandChunkWireHeader);
+  std::size_t handleCount = 0u;
+  for (const auto& spec : specs) handleCount += spec.handles.size();
+  const auto handleTableOffset = alignUp(
+      recordTableOffset + specs.size() * sizeof(D9CCommandChunkWireRecordHeader),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadArenaOffset = alignUp(
+      handleTableOffset + handleCount * sizeof(D9CCommandChunkWireHandleEntry),
+      alignof(std::uint32_t));
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
+  std::vector<std::byte> payload;
+  for (const auto& spec : specs) {
+    const auto* rule = recordRule(spec.type);
+    if (!rule) return {};
+    payload.resize(alignUp(payload.size(), rule->payloadAlignment));
+    records.push_back(D9CCommandChunkWireRecordHeader{
+        .type = spec.type,
+        .payloadOffset = static_cast<std::uint32_t>(payload.size()),
+        .payloadSize = static_cast<std::uint32_t>(spec.payload.size()),
+        .firstHandle = static_cast<std::uint32_t>(handles.size()),
+        .handleCount = static_cast<std::uint32_t>(spec.handles.size()),
+    });
+    handles.insert(handles.end(), spec.handles.begin(), spec.handles.end());
+    payload.insert(payload.end(), spec.payload.begin(), spec.payload.end());
+  }
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
+      .recordCount = static_cast<std::uint32_t>(records.size()),
+      .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
+      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
+  };
+  std::vector<std::byte> bytes(payloadArenaOffset + payload.size());
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  std::memcpy(bytes.data() + recordTableOffset, records.data(),
+              records.size() * sizeof(records[0]));
+  if (!handles.empty()) {
+    std::memcpy(bytes.data() + handleTableOffset, handles.data(),
+                handles.size() * sizeof(handles[0]));
+  }
+  std::memcpy(bytes.data() + payloadArenaOffset, payload.data(), payload.size());
+  return bytes;
+}
+
+std::vector<std::byte> producedFullClearChunk(bool partial = false,
+                                              bool drawFirst = false,
+                                              bool wrongIdentity = false,
+                                              bool omitAlias = false,
+                                              D9CWireObjectIdentity aliasIdentity =
+                                                  kProducedAlias) {
+  const bool bindAlias = !omitAlias;
+  const auto target = wrongIdentity
+      ? D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                              .generation = 7u,
+                              .objectId = 99u}
+      : aliasIdentity;
+  const D9CCommandChunkWireRenderTargetBinding renderTarget{
+      .slot = 0u,
+      .valid = bindAlias ? 1u : 0u,
+      .handleIndex = bindAlias ? 0u : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
+      textures{};
+  std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
+      streams{};
+  for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
+    textures[slot] = {.slot = slot, .valid = 1u,
+                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  }
+  for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
+    streams[slot] = {.slot = slot, .valid = 1u,
+                     .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  }
+  constexpr std::uint32_t sectionCount = 3u;
+  const D9CCommandChunkWireDrawHeader apply{
+      .flags = 0u,
+      .sectionCount = sectionCount,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
+          sizeof(D9CCommandChunkWireDrawHeader) +
+              sectionCount * sizeof(D9CCommandChunkWireSectionDesc),
+          alignof(std::uint32_t))),
+  };
+  const auto streamOffset = apply.sectionPayloadOffset + sizeof(textures);
+  const auto renderTargetOffset = streamOffset + sizeof(streams);
+  const std::array sections{
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+          .elementSize = sizeof(textures[0]),
+          .count = static_cast<std::uint32_t>(textures.size()),
+          .payloadOffset = apply.sectionPayloadOffset,
+          .byteSize = sizeof(textures),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+          .elementSize = sizeof(streams[0]),
+          .count = static_cast<std::uint32_t>(streams.size()),
+          .payloadOffset = static_cast<std::uint32_t>(streamOffset),
+          .byteSize = sizeof(streams),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+          .elementSize = sizeof(renderTarget),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(renderTargetOffset),
+          .byteSize = sizeof(renderTarget),
+      },
+  };
+  std::vector<std::byte> applyPayload(
+      renderTargetOffset + sizeof(renderTarget));
+  std::memcpy(applyPayload.data(), &apply, sizeof(apply));
+  std::memcpy(applyPayload.data() + apply.sectionTableOffset, sections.data(),
+              sizeof(sections));
+  std::memcpy(applyPayload.data() + apply.sectionPayloadOffset, textures.data(),
+              sizeof(textures));
+  std::memcpy(applyPayload.data() + streamOffset, streams.data(),
+              sizeof(streams));
+  std::memcpy(applyPayload.data() + renderTargetOffset, &renderTarget,
+              sizeof(renderTarget));
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectCount = partial ? 1u : 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const D9CRect rect{0, 0, 2, 2};
+  std::vector<std::byte> clearPayload = bytesOf(clear);
+  if (partial) {
+    const auto rectBytes = std::as_bytes(std::span(&rect, 1u));
+    clearPayload.insert(clearPayload.end(), rectBytes.begin(), rectBytes.end());
+  }
+  auto drawPayload = applyPayload;
+  D9CCommandChunkWireDrawHeader drawHeader{};
+  std::memcpy(&drawHeader, drawPayload.data(), sizeof(drawHeader));
+  drawHeader.primitiveType = 4u;
+  drawHeader.primitiveCount = 1u;
+  std::memcpy(drawPayload.data(), &drawHeader, sizeof(drawHeader));
+  const std::array clearFirstRecords{
+      ProducedRecord{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+                     .payload = applyPayload,
+                     .handles = bindAlias
+                         ? std::vector<D9CCommandChunkWireHandleEntry>{
+                               {target.kind, target.generation, target.objectId}}
+                         : std::vector<D9CCommandChunkWireHandleEntry>{}},
+      ProducedRecord{.type = D9C_COMMAND_RECORD_CLEAR,
+                     .payload = clearPayload},
+      ProducedRecord{.type = D9C_COMMAND_RECORD_PRESENT,
+                     .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  if (!drawFirst) return makeProducedChunk(clearFirstRecords);
+  const std::array drawFirstRecords{
+      ProducedRecord{.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                     .payload = drawPayload,
+                     .handles = bindAlias
+                         ? std::vector<D9CCommandChunkWireHandleEntry>{
+                               {target.kind, target.generation, target.objectId}}
+                         : std::vector<D9CCommandChunkWireHandleEntry>{}},
+      ProducedRecord{.type = D9C_COMMAND_RECORD_CLEAR,
+                     .payload = clearPayload},
+      ProducedRecord{.type = D9C_COMMAND_RECORD_PRESENT,
+                     .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  return makeProducedChunk(drawFirstRecords);
+}
+
 constexpr D9CWireObjectIdentity kSurface{
     .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
     .generation = 2u,
@@ -274,7 +524,224 @@ RenderTapeOracleAttachment oracle() {
   return RenderTapeOracleAttachment{
       .identity = kSurface,
       .descriptorKind = static_cast<std::uint32_t>(
-          RenderTapeDescriptorKind::Surface)};
+      RenderTapeDescriptorKind::Surface)};
+}
+
+RenderTapeSurfaceDescriptorV2 outputSurfaceDescriptor();
+
+void testProducedByCapturedPassCaptureEndToEnd() {
+  const auto outputDescriptorBytes = outputSurfaceDescriptor();
+  const auto textureDescriptorBytes = producedTextureDescriptor();
+  const auto aliasDescriptorBytes = producedAliasDescriptor();
+  const auto flush = flushControl();
+  const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
+  const RenderTapeOracleAttachment outputOracle{
+      .identity = kProducedOutput,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+
+  auto capture = [&](std::span<const std::byte> chunk,
+                     std::span<const std::byte> textureDescriptor,
+                     bool secondAlias = false,
+                     bool secondProduced = false,
+                     std::uint32_t chunkHandleCount = 1u) {
+    RenderTapeCaptureSession session(true);
+    check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() ==
+                  RenderTapeCaptureStatus::Accepted,
+          "ProducedByCapturedPass capture fixture starts");
+    check(session.objectDefine(
+              kProducedOutput,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              std::as_bytes(std::span(&outputDescriptorBytes, 1u)), 0u,
+              {}) == RenderTapeCaptureStatus::Accepted,
+          "ProducedByCapturedPass capture defines output");
+    check(session.objectDefine(
+              kProducedTexture,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+              textureDescriptor, 0u, {}, 0u, 0u) ==
+              RenderTapeCaptureStatus::Accepted,
+          "ProducedByCapturedPass capture defines zero-seed texture");
+    check(session.objectDefine(
+              kProducedAlias,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              aliasDescriptorBytes, 0u, {}, 0u, 0u) ==
+              RenderTapeCaptureStatus::Accepted,
+          "ProducedByCapturedPass capture defines texture alias");
+    if (secondAlias) {
+      const D9CWireObjectIdentity alias2{
+          .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+          .generation = 7u,
+          .objectId = 42u,
+      };
+      auto alias2Descriptor = aliasDescriptorBytes;
+      std::memcpy(alias2Descriptor.data() + offsetof(
+                       RenderTapeSurfaceDescriptorV2, parentTexture),
+                  &kProducedTexture, sizeof(kProducedTexture));
+      const auto aliasStatus = session.objectDefine(
+          alias2, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+          alias2Descriptor, 0u, {}, 0u, 0u);
+      if (aliasStatus != RenderTapeCaptureStatus::Accepted)
+        return std::pair{aliasStatus, session.sealedArtifact().empty()};
+    }
+    if (secondProduced) {
+      const D9CWireObjectIdentity texture2{
+          .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+          .generation = 9u,
+          .objectId = 44u,
+      };
+      check(session.objectDefine(
+                texture2,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+                textureDescriptor, 0u, {}, 0u, 0u) ==
+                RenderTapeCaptureStatus::Accepted,
+            "multiple Produced fixture defines the second texture");
+    }
+    if (!chunk.empty()) {
+      ImportedChunkView imported;
+      const auto chunkValidation = validateCommandChunk(
+          chunk, CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                      .recordCount = 3u,
+                                      .handleCount = chunkHandleCount},
+          &imported);
+      check(chunkValidation.valid(),
+            "ProducedByCapturedPass fixture chunk is canonically encoded");
+      check(session.commandChunk(
+                CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                     .recordCount = 3u,
+                                     .handleCount = chunkHandleCount},
+                chunk) == RenderTapeCaptureStatus::Accepted,
+            "ProducedByCapturedPass capture retains the command chunk");
+    }
+    check(session.orderedControl(flush, std::as_bytes(std::span(&wait, 1u))) ==
+              RenderTapeCaptureStatus::Accepted,
+          "ProducedByCapturedPass capture records completion fence");
+    const auto status = session.completePresent(
+        5u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&outputOracle, 1u)));
+    return std::pair{status, session.sealedArtifact().empty()};
+  };
+
+  const auto positive = capture(producedFullClearChunk(), textureDescriptorBytes);
+  check(positive.first == RenderTapeCaptureStatus::Complete && !positive.second,
+        "capture publishes Produced texture, alias, and the same full-clear chunk");
+
+  auto partial = capture(producedFullClearChunk(true), textureDescriptorBytes);
+  auto drawFirst = capture(producedFullClearChunk(false, true),
+                           textureDescriptorBytes);
+  auto identityMismatch = capture(
+      producedFullClearChunk(false, false, true), textureDescriptorBytes);
+  auto unresolved = capture(producedFullClearChunk(false, false, false, true),
+                            textureDescriptorBytes, false, false, 0u);
+  check(partial.first != RenderTapeCaptureStatus::Complete && partial.second &&
+            drawFirst.first != RenderTapeCaptureStatus::Complete &&
+            drawFirst.second &&
+            identityMismatch.first != RenderTapeCaptureStatus::Complete &&
+            identityMismatch.second &&
+            unresolved.first != RenderTapeCaptureStatus::Complete &&
+            unresolved.second,
+        "partial, draw-first, identity-mismatch, and unresolved Produced captures publish nothing");
+
+  const auto multipleAlias = capture(producedFullClearChunk(),
+                                     textureDescriptorBytes, true);
+  const auto multipleProduced = capture(producedFullClearChunk(),
+                                        textureDescriptorBytes, false, true);
+  check(multipleAlias.first != RenderTapeCaptureStatus::Complete &&
+            multipleAlias.second &&
+            multipleProduced.first != RenderTapeCaptureStatus::Complete &&
+            multipleProduced.second,
+        "multiple aliases and multiple Produced textures abort before publication");
+
+  auto multiMip = textureDescriptorBytes;
+  RenderTapeTextureDescriptorV2 multiMipHeader{};
+  std::memcpy(&multiMipHeader, multiMip.data(), sizeof(multiMipHeader));
+  multiMipHeader.mipLevelCount = 2u;
+  multiMipHeader.subresourceCount = 2u;
+  const D9CSurfaceDesc level1{
+      .format = 22u, .resourceType = 3u, .usage = 1u, .pool = 0u,
+      .width = 2u, .height = 2u, .depth = 1u,
+  };
+  multiMip.resize(sizeof(multiMipHeader) + 2u * sizeof(D9CSurfaceDesc));
+  std::memcpy(multiMip.data(), &multiMipHeader, sizeof(multiMipHeader));
+  std::memcpy(multiMip.data() + sizeof(multiMipHeader) +
+                  sizeof(level1),
+              &level1, sizeof(level1));
+  const auto multiMipResult = capture(producedFullClearChunk(), multiMip);
+  check(multiMipResult.first != RenderTapeCaptureStatus::Complete &&
+            multiMipResult.second,
+        "multi-mip Produced capture aborts without a partial tape");
+}
+
+void testProducedDefinitionTemporalOrderAndAliasJournal() {
+  const auto outputDescriptorBytes = outputSurfaceDescriptor();
+  const auto textureDescriptorBytes = producedTextureDescriptor();
+  const auto aliasDescriptorBytes = producedAliasDescriptor();
+  const RenderTapeOracleAttachment outputOracle{
+      .identity = kProducedOutput,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+
+  RenderTapeBuilder temporal;
+  temporal.appendBootstrapState(bootstrapChunk());
+  // This command precedes all Produced definitions. It is deliberately
+  // handle-free: the validator must not try to prove a future obligation here.
+  temporal.appendCommandChunk(
+      CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                           .recordCount = 1u,
+                           .handleCount = 0u},
+      bootstrapChunk());
+  temporal.appendObjectDefine(
+      kProducedOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptorBytes, 1u)), 0u, {});
+  temporal.appendObjectDefine(
+      kProducedTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptorBytes, 0u, {}, 0u, 0u);
+  temporal.appendObjectDefine(
+      kProducedAlias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      aliasDescriptorBytes, 0u, {}, 0u, 0u);
+  temporal.appendCommandChunk(
+      CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                           .recordCount = 3u,
+                           .handleCount = 1u},
+      producedFullClearChunk());
+  temporal.appendPresentComplete(
+      6u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&outputOracle, 1u)));
+  check(validateRenderTape(temporal.seal(), {}).valid(),
+        "Produced proof ignores command chunks before its definitions");
+
+  const D9CWireObjectIdentity alias2{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 7u,
+      .objectId = 42u,
+  };
+  RenderTapeBuilder duplicateAlias;
+  duplicateAlias.appendBootstrapState(bootstrapChunk());
+  duplicateAlias.appendObjectDefine(
+      kProducedOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptorBytes, 1u)), 0u, {});
+  duplicateAlias.appendObjectDefine(
+      kProducedTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptorBytes, 0u, {}, 0u, 0u);
+  duplicateAlias.appendObjectDefine(
+      kProducedAlias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      aliasDescriptorBytes, 0u, {}, 0u, 0u);
+  duplicateAlias.appendObjectDestroy(kProducedAlias);
+  duplicateAlias.appendObjectDefine(
+      alias2, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      aliasDescriptorBytes, 0u, {}, 0u, 0u);
+  duplicateAlias.appendCommandChunk(
+      CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                           .recordCount = 3u,
+                           .handleCount = 1u},
+      producedFullClearChunk(false, false, false, false, alias2));
+  duplicateAlias.appendPresentComplete(
+      7u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&outputOracle, 1u)));
+  check(!validateRenderTape(duplicateAlias.seal(), {}).valid(),
+        "two journaled matching aliases fail the single-alias obligation");
 }
 
 RenderTapeSurfaceDescriptorV2 outputSurfaceDescriptor() {
@@ -2975,6 +3442,8 @@ int main(int argc, char** argv) {
     testKindZeroIntervalDefineUsesNonZeroDescriptorTag();
     testProductionHookGateTruthTable();
     testProfileSelectionTruthTable();
+    testProducedByCapturedPassCaptureEndToEnd();
+    testProducedDefinitionTemporalOrderAndAliasJournal();
     testCompletePresentPublishesExactlyOneTape();
     testSequenceCaptureDefersSealUntilSecondPresent();
     testValidationFailurePreservesEventAndChunkLocation();
