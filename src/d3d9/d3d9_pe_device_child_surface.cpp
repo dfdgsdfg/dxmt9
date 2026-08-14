@@ -708,11 +708,23 @@ public:
     // content. Standalone surfaces retain their own identity and remain
     // independently mutable.
     const bool captureTextureAlias = parentTexture && descValid_;
+    const auto registrationRoute =
+        dxmt9::d3d9::renderTapeSurfaceRegistrationRoute(captureTextureAlias);
     mutationObject_ = captureTextureAlias ? *parentTexture : wireObject_;
     mutationSubresource_ = captureTextureAlias ? parentSubresource : 0u;
     if (recorder_ && captureTextureAlias) {
       recorder_->NotifyRenderTapeSurfaceAliasForChild(
           wireObject_, *parentTexture, parentSubresource, desc_);
+    } else if (recorder_ && descValid_ &&
+               registrationRoute ==
+                   dxmt9::d3d9::RenderTapeSurfaceRegistrationRoute::Standalone) {
+      // Every standalone PE surface wrapper is a possible command-chunk
+      // handle, including wrappers created by GetBackBuffer/GetRenderTarget/
+      // GetDepthStencilSurface. Register its exact generation-qualified
+      // identity before the wrapper can be admitted to a chunk. Explicit
+      // Create* callers use this same constructor hook, so they do not need a
+      // second wrapper-registration notification after construction.
+      recorder_->NotifyRenderTapeStandaloneSurfaceForChild(wireObject_, desc_);
     }
     if (container_)
       container_->AddRef();

@@ -119,6 +119,9 @@ struct D3D9PeRecorderFlush {
       const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
       std::uint32_t subresource,
       const D9CSurfaceDesc &descriptor) noexcept = 0;
+  virtual void NotifyRenderTapeStandaloneSurfaceForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &surface,
+      const D9CSurfaceDesc &descriptor) noexcept = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

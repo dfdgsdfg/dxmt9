@@ -7332,28 +7332,48 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!renderTapeRegistry_) {
             return false;
         }
-        auto *swapchain = dxmt9c_device_get_swap_chain(dev_, 0u);
-        if (!swapchain) {
+        // Use the stable cached PE backbuffer wrapper. Calling the C getter
+        // directly would allocate a fresh D9CSurface and therefore a second
+        // generation-qualified identity, while command chunks use the
+        // wrapper-owned raw surface returned by the swap-chain cache.
+        IDirect3DSwapChain9 *swapchain = nullptr;
+        if (FAILED(GetSwapChain(0u, &swapchain)) || !swapchain) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture producer aborted reason=present_output_swapchain_missing");
             return false;
         }
-        auto *surface = dxmt9c_swapchain_get_back_buffer(swapchain, 0u, 0u);
-        dxmt9c_swapchain_release(swapchain);
-        if (!surface) {
+        IDirect3DSurface9 *backBuffer = nullptr;
+        const HRESULT backBufferHr = swapchain->GetBackBuffer(
+            0u, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
+        swapchain->Release();
+        // These getters only observe the post-Present call-cadence counters;
+        // neither path calls Present or arms capture. The swap-chain cache
+        // keeps its own backbuffer-wrapper reference, so releasing this
+        // temporary COM reference cannot release the identity used by the
+        // command chunks or the PresentOutput role.
+        if (FAILED(backBufferHr) || !backBuffer) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture producer aborted reason=present_output_surface_missing");
             return false;
         }
+        auto *surface = D3D9PeRawSurface(backBuffer);
         D9CWireObjectIdentity identity{};
+        D9CWireObjectIdentity rawIdentity{};
         D9CSurfaceDesc descriptor{};
-        const bool identityOk =
-            dxmt9c_surface_get_wire_identity(surface, &identity) >= 0;
+        const auto &cachedWireObject = D3D9PeWireSurface(backBuffer);
+        const bool rawIdentityOk =
+            dxmt9c_surface_get_wire_identity(surface, &rawIdentity) >= 0;
+        identity = rawIdentity;
+        const bool identityOk = cachedWireObject.valid(
+                                    D9C_CHUNK_HANDLE_KIND_SURFACE) &&
+            rawIdentityOk &&
+            dxmt9::d3d9::renderTapePresentOutputIdentityMatchesCommand(
+                cachedWireObject.identity, rawIdentity);
         const bool descriptorOk = dxmt9c_surface_get_desc(surface, &descriptor) >= 0;
         if (!identityOk || !descriptorOk ||
             identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
             identity.generation == 0u || identity.objectId == 0u) {
-            dxmt9c_surface_release(surface);
+            backBuffer->Release();
             dxmt9DeviceInfoLog(
                 "render_tape_capture producer aborted reason=present_output_identity_or_descriptor_invalid");
             return false;
@@ -7393,7 +7413,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     sizeof(descriptor)),
                 {}, RenderTapeLiveObject::Role::PresentOutput);
         }
-        dxmt9c_surface_release(surface);
+        backBuffer->Release();
         const auto *admitted = findRenderTapeObject(object);
         if (!admitted || admitted->role != RenderTapeLiveObject::Role::PresentOutput) {
             dxmt9DeviceInfoLog(
@@ -9768,6 +9788,17 @@ public:
             std::span<const std::byte>(
                 reinterpret_cast<const std::byte *>(&alias), sizeof(alias)));
     }
+    void NotifyRenderTapeStandaloneSurfaceForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &surface,
+        const D9CSurfaceDesc &descriptor) noexcept override {
+        if (!IsRenderTapeCaptureTrackingEnabledForChild())
+            return;
+        notifyRenderTapeCreatedObject(
+            surface,
+            std::span<const std::byte>(
+                reinterpret_cast<const std::byte *>(&descriptor),
+                sizeof(descriptor)));
+    }
 
     void retireRenderTapeAliasesForParent(
         const D9CWireObjectIdentity &parent) noexcept {
@@ -9948,23 +9979,6 @@ public:
             return;
         D9CBufferDesc descriptor{};
         if (!buffer || FAILED(hr32(dxmt9c_buffer_get_desc(buffer, &descriptor)))) {
-            AbortRenderTapeCaptureForChild();
-            return;
-        }
-        notifyRenderTapeCreatedObject(
-            object,
-            std::span<const std::byte>(
-                reinterpret_cast<const std::byte *>(&descriptor),
-                sizeof(descriptor)));
-    }
-    void notifyRenderTapeCreatedSurface(
-        D9CSurface *surface,
-        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-        if (!IsRenderTapeCaptureTrackingEnabledForChild())
-            return;
-        D9CSurfaceDesc descriptor{};
-        if (!surface ||
-            FAILED(hr32(dxmt9c_surface_get_desc(surface, &descriptor)))) {
             AbortRenderTapeCaptureForChild();
             return;
         }
@@ -11213,7 +11227,6 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
-        notifyRenderTapeCreatedSurface(s, D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
         return S_OK;
     }
@@ -11251,7 +11264,6 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
-        notifyRenderTapeCreatedSurface(s, D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -11660,7 +11672,6 @@ public:
         if (!s) return D3DERR_INVALIDCALL;
         if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this, true, userPtr, userPitch);
-        notifyRenderTapeCreatedSurface(s, D3D9PeWireSurface(*ppS));
         dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
     }

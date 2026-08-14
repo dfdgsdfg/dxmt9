@@ -38,6 +38,26 @@ enum class RenderTapeSurfaceStorage : std::uint32_t {
   SwapchainBackbuffer = 3u,
 };
 
+enum class RenderTapeSurfaceRegistrationRoute : std::uint8_t {
+  Standalone,
+  TextureParentAlias,
+};
+
+inline constexpr RenderTapeSurfaceRegistrationRoute
+renderTapeSurfaceRegistrationRoute(bool hasParentTexture) noexcept {
+  return hasParentTexture
+             ? RenderTapeSurfaceRegistrationRoute::TextureParentAlias
+             : RenderTapeSurfaceRegistrationRoute::Standalone;
+}
+
+inline constexpr bool renderTapePresentOutputIdentityMatchesCommand(
+    const D9CWireObjectIdentity &commandIdentity,
+    const D9CWireObjectIdentity &presentOutputIdentity) noexcept {
+  return commandIdentity.kind == presentOutputIdentity.kind &&
+         commandIdentity.generation == presentOutputIdentity.generation &&
+         commandIdentity.objectId == presentOutputIdentity.objectId;
+}
+
 constexpr std::uint32_t renderTapeTextureDescriptorMipLevel(
     RenderTapeTextureDimension dimension, std::uint32_t mipLevelCount,
     std::uint32_t subresource) noexcept {

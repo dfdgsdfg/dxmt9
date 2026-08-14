@@ -96,8 +96,8 @@ predicate relaxed: no correctness-preserving layout or registry-only treatment w
 provable from the existing artifact, so none was applied, and the next GT2 run
 must name the failing predicate before any further capacity change is considered.
 
-The subsequent GT2 r7 exact-closure artifact identifies the failing predicate:
-line 63 records `detail=blob_register status=CapacityExceeded` with
+The subsequent GT2 r7 exact-closure capture attempt log identifies the failing
+predicate: line 63 records `detail=blob_register status=CapacityExceeded` with
 `owned_blob_bytes=66847615/67108864`, `incoming=524288`, and
 `overage=263039`, so that run established a required owned-byte lower bound of
 67,371,903. GT2 r8 then proved that the former 68 MiB value was only a prefix
@@ -106,10 +106,29 @@ now a 256 MiB default, an optional decimal-byte
 `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES` override, and a hard 1 GiB ceiling;
 unset/invalid/zero values use the default and valid over-ceiling values clamp
 to 1 GiB. Digest, descriptor, generation, event, and replay validation remain
-unchanged. A complete GT2 bundle fitting this policy is still unproven, so
-neither r7 nor r8 is evidence that the default is sufficient for the whole
-bundle. PresentOutput retry ownership is a separate fixed capture correctness
-issue and is not used to justify this capacity policy.
+unchanged. A complete GT2 bundle fitting this policy is still unproven; the r7
+capture attempt log is not a bundle artifact, and r8 is not evidence that the
+default is sufficient for the whole bundle. PresentOutput retry ownership is a
+separate fixed capture correctness issue and is not used to justify this
+capacity policy.
+
+### GT2 r9 surface identity closure (capture-only)
+
+GT2 r9 removed the 256 MiB blob-capacity blocker: the capture attempt no longer
+fails at `blob_register` capacity. Its next typed failure is
+`unmaterialized_pre_arm_object kind=SURFACE`, which identifies a missing
+generation-qualified Render Tape registry identity rather than another blob
+capacity shortfall. Standalone wrappers from the cached swap-chain
+`GetBackBuffer` path and device `GetRenderTarget`/
+`GetDepthStencilSurface` now register their exact surface identities before
+chunk admission; texture-derived aliases continue to register through their
+parent texture dependency. `PresentOutput` is admitted against the same stable
+cached backbuffer identity used by commands, with a raw wire-identity check
+against the cached PE identity to detect cache drift. Exact-generation
+fail-close remains unchanged, and duplicate wrapper references are not added
+for explicit `Create*` calls or aliases. Native bridge coverage exercises
+standalone registration routing, two wrapper references and balanced release,
+alias non-regression, and stale-generation rejection.
 
 ### GT2 buffer partial-seed closure (capture-only)
 

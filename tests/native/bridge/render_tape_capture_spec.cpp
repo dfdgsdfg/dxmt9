@@ -1053,6 +1053,69 @@ void testPresentOutputRoleOwnershipTruthTable() {
         "every present output transition has a stable log name");
 }
 
+void testStandaloneSurfaceIdentityClosureTruthTable() {
+  check(renderTapeSurfaceRegistrationRoute(false) ==
+            RenderTapeSurfaceRegistrationRoute::Standalone &&
+            renderTapeSurfaceRegistrationRoute(true) ==
+                RenderTapeSurfaceRegistrationRoute::TextureParentAlias,
+        "standalone wrappers register independently while texture levels use the parent");
+
+  constexpr D9CWireObjectIdentity surface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 4u,
+      .objectId = 0x100000041ull,
+  };
+  check(renderTapePresentOutputIdentityMatchesCommand(surface, surface),
+        "PresentOutput is pinned to the command-visible cached backbuffer identity");
+  auto secondWrapper = surface;
+  ++secondWrapper.objectId;
+  check(!renderTapePresentOutputIdentityMatchesCommand(surface, secondWrapper),
+        "a separately wrapped backbuffer identity cannot become the oracle target");
+  constexpr D9CSurfaceDesc descriptor{
+      .format = render_tape_d3d_format::A8R8G8B8,
+      .width = 640u,
+      .height = 480u,
+  };
+  const auto descriptorBytes = std::as_bytes(std::span(&descriptor, 1u));
+  const auto slot = renderTapeLogicalObjectSlot(surface, descriptorBytes);
+  check(!slot.textureSubresourceAlias && !slot.malformedSurfaceDescriptor,
+        "a standalone surface keeps an independent logical slot");
+
+  RenderTapeCaptureSession session(true);
+  RenderTapeObjectDefineDisposition disposition{};
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+            session.objectDefine(
+                surface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                descriptorBytes, 0u, {}) == RenderTapeCaptureStatus::Accepted,
+        "a standalone wrapper identity is admitted with its exact descriptor");
+  check(session.objectDefine(
+            surface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+                RenderTapeCaptureStatus::InvalidInput &&
+            disposition == RenderTapeObjectDefineDisposition::ExactIdentityConflict,
+        "the tape validator rejects a repeated standalone identity as a conflicting definition");
+
+  auto stale = surface;
+  --stale.generation;
+  check(session.objectDestroy(surface) == RenderTapeCaptureStatus::Accepted &&
+            session.objectDefine(
+                stale, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+                RenderTapeCaptureStatus::InvalidInput &&
+            disposition == RenderTapeObjectDefineDisposition::StaleOrEqualGeneration,
+        "standalone surface reuse remains exact-generation fail-closed");
+
+  RenderTapeSurfaceAliasLifetime standalone;
+  check(standalone.acquire() && standalone.acquire() &&
+            standalone.wrapperRefs == 2u && !standalone.releaseWrapper() &&
+            standalone.wrapperRefs == 1u && standalone.releaseWrapper() &&
+            standalone.wrapperRefs == 0u &&
+            standalone.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "one standalone logical slot tracks two wrapper refs and retires after both release");
+}
+
 void testSurfaceAliasGenerationReplacementTransition() {
   constexpr D9CWireObjectIdentity priorIdentity{
       .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -1764,6 +1827,7 @@ int main(int argc, char** argv) {
     testProductionBlobDefaultIsCaptureBounded();
     testObjectLifetimeAndTerminalControls();
     testPresentOutputRoleOwnershipTruthTable();
+    testStandaloneSurfaceIdentityClosureTruthTable();
     testSurfaceAliasGenerationReplacementTransition();
     testPresentCaptureResultAbiAndOneShotCancellation();
     testBlockCompressedLockCaptureLayouts();
