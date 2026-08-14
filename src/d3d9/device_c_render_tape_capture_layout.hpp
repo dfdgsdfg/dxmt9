@@ -47,6 +47,11 @@ enum class RenderTapeCaptureRejectionReason : std::uint32_t {
   LockCopyFailed = 6u,
   IncompleteSubresourceSeed = 7u,
   DescriptorMismatch = 8u,
+  FullSnapshotLockFailed = 9u,
+  FullSnapshotCopyFailed = 10u,
+  FullSnapshotUnlockFailed = 11u,
+  FullSnapshotIdentityMismatch = 12u,
+  FullSnapshotExtentMismatch = 13u,
 };
 
 const char* renderTapeCaptureRejectionReasonName(
@@ -65,6 +70,19 @@ struct RenderTapeCaptureLayoutDiagnostic {
   std::uint32_t height = 0u;
   std::int32_t pitch = 0;
   std::uint64_t bytes = 0u;
+};
+
+// This status is shared by the value-only snapshot decision and the PE
+// texture seam.  A required snapshot is the only path allowed to turn an
+// unseeded partial lock into a complete seed; every failure remains typed and
+// fail-closed.
+enum class RenderTapeFullSnapshotStatus : std::uint32_t {
+  Accepted = 0u,
+  NotRequired,
+  Required,
+  InvalidIdentity,
+  InvalidExtent,
+  InvalidBytes,
 };
 
 struct RenderTapeBlockLockLayout {
@@ -105,6 +123,15 @@ enum class RenderTapeLockBitsOrigin : std::uint32_t {
   Rectangle = 0u,
   Subresource = 1u,
 };
+
+RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
+    bool captureTrackingEnabled, bool identityMatches, bool extentMatches,
+    bool partialLock, std::size_t existingContentBytes,
+    std::uint64_t expectedBytes) noexcept;
+
+RenderTapeFullSnapshotStatus renderTapeValidateFullSnapshot(
+    bool fullSubresource, std::uint64_t expectedBytes,
+    std::span<const std::byte> bytes) noexcept;
 
 enum class RenderTapeBlockLayoutStatus : std::uint32_t {
   Accepted = 0u,

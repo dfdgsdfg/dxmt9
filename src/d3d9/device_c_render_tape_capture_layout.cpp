@@ -79,8 +79,46 @@ const char* renderTapeCaptureRejectionReasonName(
     return "incomplete_subresource_seed";
   case RenderTapeCaptureRejectionReason::DescriptorMismatch:
     return "descriptor_mismatch";
+  case RenderTapeCaptureRejectionReason::FullSnapshotLockFailed:
+    return "full_snapshot_lock_failed";
+  case RenderTapeCaptureRejectionReason::FullSnapshotCopyFailed:
+    return "full_snapshot_copy_failed";
+  case RenderTapeCaptureRejectionReason::FullSnapshotUnlockFailed:
+    return "full_snapshot_unlock_failed";
+  case RenderTapeCaptureRejectionReason::FullSnapshotIdentityMismatch:
+    return "full_snapshot_identity_mismatch";
+  case RenderTapeCaptureRejectionReason::FullSnapshotExtentMismatch:
+    return "full_snapshot_extent_mismatch";
   }
   return "unknown_capture_rejection";
+}
+
+RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
+    bool captureTrackingEnabled, bool identityMatches, bool extentMatches,
+    bool partialLock, std::size_t existingContentBytes,
+    std::uint64_t expectedBytes) noexcept {
+  if (!captureTrackingEnabled)
+    return RenderTapeFullSnapshotStatus::NotRequired;
+  if (!identityMatches)
+    return RenderTapeFullSnapshotStatus::InvalidIdentity;
+  if (!extentMatches || expectedBytes == 0u)
+    return RenderTapeFullSnapshotStatus::InvalidExtent;
+  if (!partialLock || existingContentBytes == expectedBytes)
+    return RenderTapeFullSnapshotStatus::NotRequired;
+  if (existingContentBytes != 0u)
+    return RenderTapeFullSnapshotStatus::InvalidExtent;
+  return RenderTapeFullSnapshotStatus::Required;
+}
+
+RenderTapeFullSnapshotStatus renderTapeValidateFullSnapshot(
+    bool fullSubresource, std::uint64_t expectedBytes,
+    std::span<const std::byte> bytes) noexcept {
+  if (!fullSubresource || expectedBytes == 0u)
+    return RenderTapeFullSnapshotStatus::InvalidExtent;
+  if (expectedBytes > std::numeric_limits<std::size_t>::max() ||
+      bytes.size() != expectedBytes)
+    return RenderTapeFullSnapshotStatus::InvalidBytes;
+  return RenderTapeFullSnapshotStatus::Accepted;
 }
 
 RenderTapeBlockLayoutStatus renderTapeBlockLockLayout(

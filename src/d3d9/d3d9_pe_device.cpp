@@ -6882,6 +6882,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
     }
 
+    const RenderTapeLiveObject *findRenderTapeObject(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) const noexcept {
+        if (!renderTapeRegistry_) {
+            return nullptr;
+        }
+        const auto it = std::find_if(
+            renderTapeRegistry_->objects.begin(),
+            renderTapeRegistry_->objects.end(),
+            [&](const auto &entry) {
+                return renderTapeSameIdentity(entry.identity, object.identity);
+            });
+        return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
+    }
+
     bool hasRenderTapeDeadObject(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) const noexcept {
         return renderTapeRegistry_ &&
@@ -8995,6 +9009,56 @@ public:
         }
         if (IsRenderTapeCaptureActiveForChild())
             abortRenderTapeCapture(name);
+    }
+    dxmt9::d3d9::RenderTapeFullSnapshotStatus
+    RenderTapeFullSnapshotStatusForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, std::uint32_t fullRowBytes,
+        std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept override {
+        using Status = dxmt9::d3d9::RenderTapeFullSnapshotStatus;
+        if (!renderTapeRegistry_ ||
+            object.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+            return Status::NotRequired;
+        }
+        const auto *entry = findRenderTapeObject(object);
+        if (!entry || subresource >= entry->content.size())
+            return Status::InvalidIdentity;
+        D9CSurfaceDesc desc{};
+        if (!renderTapeObjectSubresourceDesc(*entry, object, subresource, desc))
+            return Status::InvalidIdentity;
+        if (fullRowBytes == 0u || fullRows == 0u || fullBytes == 0u)
+            return Status::InvalidExtent;
+        std::uint64_t expectedBytes = 0u;
+        if (renderTapeFormatIsBlockCompressed(desc.format)) {
+            dxmt9::d3d9::RenderTapeBlockLockLayout expected{};
+            if (dxmt9::d3d9::renderTapeBlockLockLayout(
+                    desc, static_cast<std::int32_t>(fullRowBytes), nullptr,
+                    expected) !=
+                    dxmt9::d3d9::RenderTapeBlockLayoutStatus::Accepted ||
+                !expected.fullSubresource ||
+                expected.fullRowBytes != fullRowBytes ||
+                expected.fullRows != fullRows) {
+                return Status::InvalidExtent;
+            }
+            expectedBytes = expected.tightBytes;
+        } else {
+            dxmt9::d3d9::RenderTapeLinearLockLayout expected{};
+            if (dxmt9::d3d9::renderTapeLinearLockLayout(
+                    desc, static_cast<std::int32_t>(fullRowBytes), nullptr,
+                    expected) !=
+                    dxmt9::d3d9::RenderTapeLinearLayoutStatus::Accepted ||
+                !expected.fullSubresource ||
+                expected.fullRowBytes != fullRowBytes ||
+                expected.fullRows != fullRows) {
+                return Status::InvalidExtent;
+            }
+            expectedBytes = expected.tightBytes;
+        }
+        if (expectedBytes != fullBytes)
+            return Status::InvalidExtent;
+        const auto &content = entry->content[subresource];
+        return dxmt9::d3d9::renderTapeClassifySnapshot(
+            true, true, true, true, content.size(), expectedBytes);
     }
     void NotifyRenderTapeBlockMutationForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,

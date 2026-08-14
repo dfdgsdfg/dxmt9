@@ -99,6 +99,11 @@ struct D3D9PeRecorderFlush {
       std::uint32_t subresource,
       const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic =
           {}) noexcept = 0;
+  virtual dxmt9::d3d9::RenderTapeFullSnapshotStatus
+  RenderTapeFullSnapshotStatusForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      std::uint32_t subresource, std::uint32_t fullRowBytes,
+      std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept = 0;
   virtual void NotifyRenderTapeBlockMutationForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &object,
       std::uint32_t subresource,

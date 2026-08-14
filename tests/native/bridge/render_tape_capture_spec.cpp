@@ -1433,6 +1433,51 @@ void testLinearLockCaptureLayouts() {
         "linear descriptor conversion and byte ranges reject overflow");
 }
 
+void testFullSnapshotClosureTruthTable() {
+  constexpr std::uint64_t fullBytes = 128u * 32u * 4u;
+  const std::array<std::byte, 8u> bytes{};
+  check(renderTapeClassifySnapshot(true, true, true, true, 0u, fullBytes) ==
+            RenderTapeFullSnapshotStatus::Required &&
+            renderTapeClassifySnapshot(true, true, true, true, fullBytes,
+                                       fullBytes) ==
+                RenderTapeFullSnapshotStatus::NotRequired,
+        "snapshot decision distinguishes unseeded partial and seeded overlay");
+  check(renderTapeClassifySnapshot(false, true, true, true, 0u, fullBytes) ==
+            RenderTapeFullSnapshotStatus::NotRequired &&
+            renderTapeClassifySnapshot(true, false, true, true, 0u,
+                                       fullBytes) ==
+                RenderTapeFullSnapshotStatus::InvalidIdentity &&
+            renderTapeClassifySnapshot(true, true, false, true, 0u,
+                                       fullBytes) ==
+                RenderTapeFullSnapshotStatus::InvalidExtent &&
+            renderTapeClassifySnapshot(true, true, true, true, 7u,
+                                       fullBytes) ==
+                RenderTapeFullSnapshotStatus::InvalidExtent,
+        "capture-off, stale identity, and malformed extent are fail-closed");
+  check(renderTapeClassifySnapshot(true, true, true, false, 0u, fullBytes) ==
+            RenderTapeFullSnapshotStatus::NotRequired,
+        "full locks never resnapshot");
+  check(renderTapeValidateFullSnapshot(true, fullBytes,
+                                      std::span<const std::byte>(
+                                          bytes.data(), bytes.size())) ==
+            RenderTapeFullSnapshotStatus::InvalidBytes,
+        "a short full snapshot is rejected");
+  std::vector<std::byte> exact(static_cast<std::size_t>(fullBytes));
+  check(renderTapeValidateFullSnapshot(true, fullBytes, exact) ==
+            RenderTapeFullSnapshotStatus::Accepted,
+        "an exact full snapshot is accepted");
+  exact.push_back(std::byte{0});
+  check(renderTapeValidateFullSnapshot(true, fullBytes, exact) ==
+            RenderTapeFullSnapshotStatus::InvalidBytes,
+        "a long full snapshot is rejected");
+  check(renderTapeValidateFullSnapshot(false, fullBytes, exact) ==
+            RenderTapeFullSnapshotStatus::InvalidExtent,
+        "a malformed partial full-lock proof is rejected");
+  check(RenderTapeFullSnapshotStatus::InvalidIdentity !=
+            RenderTapeFullSnapshotStatus::Accepted,
+        "stale identity remains a typed rejection state");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1461,6 +1506,7 @@ int main(int argc, char** argv) {
     testBlockCompressedSubrectMipAndOddExtentLayouts();
     testBlockCompressedCaptureRejectsInvalidLayouts();
     testLinearLockCaptureLayouts();
+    testFullSnapshotClosureTruthTable();
     testObjectExpectedContentContractTruthTable();
     return 0;
   } catch (const TestFailure& failure) {

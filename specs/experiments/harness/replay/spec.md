@@ -697,7 +697,15 @@ surface/texture, complete-buffer, and DXT1/DXT3/DXT5 block-compressed 2D/cube
 face-and-mip lock layouts. Full locks establish tightly packed complete seeds;
 partial locks strip row padding, require an existing exact-size seed, overlay
 at the checked descriptor coordinates, and publish the resulting complete
-content. Texture-derived surface wrappers for both
+content. For an already-lockable 2D texture subresource whose first writable
+lock is partial and unseeded, the PE owner may take one capture-only full
+CPU-visible lock through the exact texture handle after user unlock, strip row
+padding, and record that complete snapshot; only exact bytes returned by that
+successful full lock are admissible, while inferred or otherwise unproven
+allocation bytes and partial seeds remain inadmissible. Full-lock, copy, unlock, identity,
+generation, or extent proof failure rejects the tape without changing the D3D9
+HRESULT. This seam is not general GPU readback and does not claim indexed GT2
+replay. Texture-derived surface wrappers for both
 uncompressed and block-compressed formats mutate the owning texture identity
 at the exact generation-qualified subresource; standalone surfaces remain
 surface-owned, and repeated wrappers for one underlying surface are

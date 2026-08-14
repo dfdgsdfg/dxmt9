@@ -529,7 +529,16 @@ bytes by retaining or dereferencing stale COM pointers.
 
 Supported CPU-owned texture contents include uncompressed 2D locks and
 block-compressed DXT1, DXT3, and DXT5 locks on 2D mip levels and cube face/mip
-subresources. Every supported full lock and partial rectangle validates pitch,
+subresources. When an already-lockable 2D texture subresource receives its
+first partial writable lock and has no complete seed, the PE owner may perform
+one capture-only full CPU-visible lock through that exact texture handle after
+the user unlock, strip row pitch, and record the resulting complete seed. This
+closure admits only the exact bytes returned by a successful complete full lock;
+it never admits inferred or otherwise unproven allocation bytes or the partial seed,
+and aborts only the tape with a typed rejection when identity, generation,
+extent, full-lock, copy, or unlock proof fails. It does not apply to standalone
+or texture-derived Surface wrappers, which keep their existing owner routing.
+Every supported full lock and partial rectangle validates pitch,
 bounds, and all byte arithmetic, strips row padding, and maintains tightly
 packed complete canonical subresource content; block-compressed rectangles are
 D3D9-valid block aligned and use rounded terminal blocks for odd dimensions.
