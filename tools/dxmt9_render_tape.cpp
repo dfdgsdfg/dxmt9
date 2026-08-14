@@ -1,4 +1,5 @@
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_projection.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -111,6 +112,10 @@ void usage() {
                "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape reduce <input> <output> "
                "--select-command-event <index>... "
+               "[--verified-blob <sha256>:<bytes>]...\n"
+               "       dxmt9-render-tape project <tape.bin> "
+               "--command-event-ordinal <ordinal> --first-record <index> "
+               "--record-count <count> "
                "[--verified-blob <sha256>:<bytes>]...\n";
 }
 
@@ -161,6 +166,133 @@ void appendVerifiedBlob(RenderTapeBlobCatalogue& catalogue,
   catalogue.blobs.push_back(blob);
 }
 
+std::uint64_t parseUnsigned(std::string_view value, const char* description) {
+  if (value.empty() ||
+      std::any_of(value.begin(), value.end(), [](char character) {
+        return character < '0' || character > '9';
+      })) {
+    throw std::invalid_argument(std::string("invalid ") + description);
+  }
+  const auto text = std::string(value);
+  std::size_t parsed = 0u;
+  const auto number = std::stoull(text, &parsed);
+  if (parsed != text.size()) {
+    throw std::invalid_argument(std::string("invalid ") + description);
+  }
+  return number;
+}
+
+std::uint32_t parseU32(std::string_view value, const char* description) {
+  const auto number = parseUnsigned(value, description);
+  if (number > std::numeric_limits<std::uint32_t>::max()) {
+    throw std::invalid_argument(std::string("invalid ") + description);
+  }
+  return static_cast<std::uint32_t>(number);
+}
+
+void writeIdentity(std::ostream& output,
+                   const D9CWireObjectIdentity& identity) {
+  output << "{\"kind\":" << identity.kind
+         << ",\"object_id\":" << identity.objectId
+         << ",\"generation\":" << identity.generation << '}';
+}
+
+void writeLocator(std::ostream& output,
+                  const RenderTapeProjectionLocator& locator) {
+  output << "{\"event_ordinal\":" << locator.eventOrdinal
+         << ",\"source_event_index\":" << locator.sourceEventIndex
+         << ",\"record_index\":" << locator.recordIndex
+         << ",\"record_type\":" << locator.recordType << '}';
+}
+
+void writeProjection(const RenderTapeProjectionResult& projection) {
+  std::cout << "{\"schema\":\"" << kRenderTapeProjectionSchema
+            << "\",\"status\":\"projection-ready\",\"ready\":true,"
+               "\"scope\":{\"profile\":\"frame-tape\","
+               "\"claim\":\"structural-projection-readiness-only\","
+               "\"wire_bytes_rewritten\":false,"
+               "\"legacy_mini_replay_manifest\":false,"
+               "\"provider_replay\":false,\"gt2_replay\":false},"
+               "\"source\":{\"schema\":\"dxmt9.render_tape.v2\","
+               "\"sha256\":\""
+            << encodeDigest(projection.sourceDigest) << "\",\"bytes\":"
+            << projection.sourceBytes << ",\"events\":"
+            << projection.sourceEventCount << ",\"records\":"
+            << projection.sourceRecordCount << "},\"selector\":{"
+               "\"command_event_ordinal\":"
+            << projection.selector.commandEventOrdinal
+            << ",\"first_record_index\":"
+            << projection.selector.firstRecordIndex
+            << ",\"record_count\":" << projection.selector.recordCount
+            << "},\"boundaries\":{\"clear\":";
+  writeLocator(std::cout, projection.clearLocator);
+  std::cout << ",\"present\":";
+  writeLocator(std::cout, projection.presentLocator);
+  std::cout << "},\"conservation\":{\"selected_draws\":"
+            << projection.selectedDrawCount << ",\"excluded_records\":"
+            << projection.excludedRecordCount << ",\"objects\":"
+            << projection.objects.size() << ",\"blob_references\":"
+            << projection.blobReferences.size()
+            << ",\"excluded_coordinator_events\":"
+            << projection.excludedEvents.size() << "},\"draws\":[";
+  for (std::size_t i = 0u; i < projection.selectedLocators.size(); ++i) {
+    if (i != 0u) std::cout << ',';
+    writeLocator(std::cout, projection.selectedLocators[i]);
+  }
+  std::cout << "],\"objects\":[";
+  for (std::size_t i = 0u; i < projection.objects.size(); ++i) {
+    if (i != 0u) std::cout << ',';
+    const auto& object = projection.objects[i];
+    std::cout << "{\"identity\":";
+    writeIdentity(std::cout, object.identity);
+    std::cout << ",\"descriptor_kind\":" << object.descriptorKind
+              << ",\"descriptor_bytes\":" << object.descriptorBytes
+              << ",\"definition\":{\"event_ordinal\":"
+              << object.definitionEventOrdinal
+              << ",\"source_event_index\":" << object.definitionEventIndex
+              << "},\"immutable_payload_bytes\":"
+              << object.immutablePayloadBytes
+              << ",\"expected_initial_content_bytes\":"
+              << object.expectedContentBytes
+              << ",\"expected_initial_content_count\":"
+              << object.expectedContentCount
+              << ",\"closed_initial_content_bytes\":"
+              << object.initialContentBytes
+              << ",\"closed_initial_content_count\":"
+              << object.initialContentCount << '}';
+  }
+  std::cout << "],\"blob_references\":[";
+  for (std::size_t i = 0u; i < projection.blobReferences.size(); ++i) {
+    if (i != 0u) std::cout << ',';
+    const auto& reference = projection.blobReferences[i];
+    std::cout << "{\"kind\":\""
+              << renderTapeProjectionBlobKindName(reference.kind)
+              << "\",\"identity\":";
+    writeIdentity(std::cout, reference.identity);
+    std::cout << ",\"digest\":\"" << encodeDigest(reference.digest)
+              << "\",\"bytes\":" << reference.size
+              << ",\"source_event_ordinal\":"
+              << reference.sourceEventOrdinal
+              << ",\"source_event_index\":" << reference.sourceEventIndex
+              << ",\"mutation_kind\":" << reference.mutationKind
+              << ",\"subresource\":" << reference.subresource
+              << ",\"byte_offset\":" << reference.byteOffset
+              << ",\"initial_content\":"
+              << (reference.initialContent != 0u ? "true" : "false") << '}';
+  }
+  std::cout << "],\"excluded_coordinator_events\":[";
+  for (std::size_t i = 0u; i < projection.excludedEvents.size(); ++i) {
+    if (i != 0u) std::cout << ',';
+    const auto& excluded = projection.excludedEvents[i];
+    std::cout << "{\"kind\":\""
+              << renderTapeProjectionExcludedKindName(excluded.kind)
+              << "\",\"event_ordinal\":" << excluded.eventOrdinal
+              << ",\"source_event_index\":" << excluded.sourceEventIndex
+              << ",\"event_type\":" << excluded.eventType << '}';
+  }
+  std::cout << "]}\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -169,7 +301,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   const std::string command = argv[1];
-  if (command != "validate" && command != "inspect" && command != "reduce") {
+  if (command != "validate" && command != "inspect" && command != "reduce" &&
+      command != "project") {
     usage();
     return 2;
   }
@@ -177,6 +310,10 @@ int main(int argc, char** argv) {
   try {
     RenderTapeBlobCatalogue catalogue;
     std::vector<std::uint32_t> selected;
+    RenderTapeProjectionSelector projectionSelector{};
+    bool hasProjectionOrdinal = false;
+    bool hasProjectionFirst = false;
+    bool hasProjectionCount = false;
     const char* inputPath = argv[2];
     const char* outputPath = nullptr;
     int optionStart = 3;
@@ -195,14 +332,25 @@ int main(int argc, char** argv) {
         i += 2;
       } else if (command == "reduce" && option == "--select-command-event" &&
                  i + 1 < argc) {
-        const std::string indexText(argv[i + 1]);
-        std::size_t parsed = 0u;
-        const auto index = std::stoull(indexText, &parsed);
-        if (parsed != indexText.size() ||
-            index > std::numeric_limits<std::uint32_t>::max()) {
-          throw std::invalid_argument("invalid command event index");
-        }
-        selected.push_back(static_cast<std::uint32_t>(index));
+        selected.push_back(parseU32(argv[i + 1], "command event index"));
+        i += 2;
+      } else if (command == "project" &&
+                 option == "--command-event-ordinal" && i + 1 < argc) {
+        projectionSelector.commandEventOrdinal =
+            parseUnsigned(argv[i + 1], "command event ordinal");
+        hasProjectionOrdinal = true;
+        i += 2;
+      } else if (command == "project" && option == "--first-record" &&
+                 i + 1 < argc) {
+        projectionSelector.firstRecordIndex =
+            parseU32(argv[i + 1], "first record index");
+        hasProjectionFirst = true;
+        i += 2;
+      } else if (command == "project" && option == "--record-count" &&
+                 i + 1 < argc) {
+        projectionSelector.recordCount =
+            parseU32(argv[i + 1], "record count");
+        hasProjectionCount = true;
         i += 2;
       } else {
         usage();
@@ -243,6 +391,29 @@ int main(int argc, char** argv) {
                   << '\"';
       }
       std::cout << "]}\n";
+      return 0;
+    }
+
+    if (command == "project") {
+      if (!hasProjectionOrdinal || !hasProjectionFirst ||
+          !hasProjectionCount) {
+        usage();
+        return 2;
+      }
+      const auto bytes = readFile(inputPath);
+      const auto projection =
+          projectRenderTapeDrawSlice(bytes, catalogue, projectionSelector);
+      if (!projection.valid()) {
+        std::cerr << "render tape projection failed status="
+                  << renderTapeProjectionStatusName(projection.status)
+                  << " validation="
+                  << renderTapeValidationStatusName(
+                         projection.sourceValidation.status)
+                  << " event=" << projection.failedEventIndex
+                  << " record=" << projection.failedRecordIndex << '\n';
+        return 1;
+      }
+      writeProjection(projection);
       return 0;
     }
 

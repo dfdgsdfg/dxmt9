@@ -576,3 +576,31 @@ It must validate the candidate before effects and accept it only when an
 explicit production-provider oracle succeeds. Deterministic bisection may
 search this same finite selection space; it must not silently omit live
 mutations, controls, destruction, or other semantics it cannot close.
+
+**R-HARN-REPLAY-7.16** The first Render Tape v2 draw-slice projector must be a
+pure, cold value transform over a structurally validated `frame-tape` and an
+explicitly verified blob catalogue. Its selector names exactly one canonical
+`CommandChunk` event by event ordinal and one non-empty contiguous record
+interval within that event. Every selected record must be a Draw, the first
+selected Draw must carry a validator-accepted `FULL_SNAPSHOT`, and the selected
+interval must be preceded by a Clear and followed by the frame's Present;
+Clear, Present, `OrderedControl`, `ObjectDestroy`, and `PresentComplete` remain
+outside the child interval. Successful output preserves selected Draw order as
+`(event ordinal, record index)` locators, exact generation-qualified identities,
+definition locators, immutable-payload references, and every digest-backed
+resource mutation for those identities before the selected event. Missing
+source validity, wrong generation, definition, verified digest, initial
+full-content closure, boundary, snapshot, or range proof must reject before any
+replay sink, provider, Metal, or artifact-write effect. This is an offline
+transform and must add no per-Draw capture-path work.
+
+**R-HARN-REPLAY-7.17** The native projection command emits
+`dxmt9.render_tape.projection.v1`, a versioned pointer-free JSON readiness
+artifact bound to the unchanged source `events.bin` by its SHA-256 and byte
+count. The artifact must state that it is structural projection readiness only,
+did not rewrite v2 wire bytes, is not
+`dxmt9.3dmark05.mini_replay_manifest.v1`, and establishes neither provider nor
+GT2 replay. Render Tape v2 does not carry authoritative frame ID, application
+source/sequence ID, or logical-pass identity, so the command must not invent or
+label those fields as verified; the canonical event ordinal plus record index is
+the admitted locator until a separately captured mapping exists.

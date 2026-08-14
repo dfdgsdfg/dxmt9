@@ -149,6 +149,7 @@ foreach spec : [
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
+  ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],
 ]
   sources = [spec[1]]
@@ -181,6 +182,8 @@ foreach spec : [
     render_tape_fixture_spec = target
   elif spec[0] == 'render-tape-capture'
     render_tape_capture_fixture_spec = target
+  elif spec[0] == 'render-tape-projection'
+    render_tape_projection_fixture_spec = target
   elif spec[0] == 'render-tape-provider'
     render_tape_provider_fixture_spec = target
   endif
@@ -207,6 +210,15 @@ test('dxmt9-render-tape-capture-cli-spec', python3,
                   'scripts/tools/run_dxmt9_render_tape.py'),
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape_capture_fixture.py'),
+     ],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-projection-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_projection_cli.py'),
+       render_tape_projection_fixture_spec,
+       dxmt9_render_tape_tool,
      ],
      env: dxmt9_native_test_env)
 

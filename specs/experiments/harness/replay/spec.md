@@ -48,7 +48,7 @@ The replay domain has one evidence vocabulary and three scopes:
 | Profile | Status | Captured scope | Reference execution |
 |---|---|---|---|
 | `draw-slice` | implemented | Selected draws from one encoder in one captured frame, with extracted geometry, shaders, constants, textures, and attachments | Generated standalone Metal program owned by the three scripts in §1 |
-| `frame-tape` | bounded implementation | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, captured-bundle identity for full-surface `Clear` and non-uniform textured-UP intervals, fresh-device repetition, and whole-command reducer/bisect | Broaden the fail-closed frame grammar and add tape-to-draw-slice projection |
+| `frame-tape` | bounded implementation | Structural v2 event tape, bounded PE capture owner, production-provider identity host, exact native offscreen oracles, captured-bundle identity for full-surface `Clear` and non-uniform textured-UP intervals, fresh-device repetition, whole-command reducer/bisect, and a structural draw-range projection planner | Broaden the fail-closed capture grammar and turn a validated projection into an executable draw-slice only after indexed/VB/IB/shader/attachment closure exists |
 | `sequence-tape` | bounded two-interval implementation | Exactly two complete textured-UP Present intervals separated by one complete digest-backed texture mutation, with per-interval completion/output conservation and repeat identity; explicit PE capture/publication defers sealing and publication until interval 2; a captured Sikarugir bundle reproduces both ordered output digests through the production provider | Widen the interval count or grammar only with new closure and oracle evidence |
 
 `draw-slice` remains deliberately small and shader/geometry-centric. It is
@@ -659,7 +659,7 @@ tell what the contract is protecting against.
 
 ## 8. Full Render Tape Architecture
 
-**Implementation status (2026-08-13).** The structural substrate is Render
+**Implementation status (2026-08-14).** The structural substrate is Render
 Tape v2. `device_c_render_tape.*` owns the pointer-free event grammar described
 by R-HARN-REPLAY-7.3/7.4, validates the fixed typed baseline plus canonical
 `APPLY_STATE|FULL_SNAPSHOT` bootstrap completeness, object generations,
@@ -965,16 +965,84 @@ captured-bundle run above promotes this narrow slice from native identity
 evidence to production artifact evidence; it does not claim general grammar
 support or non-degenerate pixel equivalence.
 
-Replay has three modes:
+The structural/replay tools have these modes:
 
 | Mode | Purpose | Timing claim |
 |---|---|---|
 | `validate` / `inspect` | schema/resource/order validation and structural conservation; no provider execution | none |
 | `provider-replay` | production-provider execution with declared fresh-process reset, warm-up, repetition, and exact run identity | identity only; no performance sampling |
 | `reduce` / `bisect` | deterministic whole-command frame reduction with closure validation and explicit provider oracle | none |
+| `project` | pure one-command-event contiguous Draw-range readiness projection; no provider execution or wire rewrite | none |
 | future `benchmark` | repeated execution with a declared sampling policy beyond identity checks | explicit and profile-bound |
 
-### 8.4 Profile relationship and migration
+### 8.4 Draw-slice projection foundation
+
+`device_c_render_tape_projection.*` implements the first bounded
+R-HARN-REPLAY-7.16 transform. It calls the production Render Tape validator
+with the supplied verified blob catalogue before constructing output, accepts
+only `frame-tape`, and selects one non-empty contiguous record interval from
+one `CommandChunk` named by canonical event ordinal. All selected records must
+be Draw records. The first Draw must carry a command-validator-accepted
+`FULL_SNAPSHOT`, which is the child state anchor; the frame bootstrap is not
+silently inherited as child state. The planner locates a preceding Clear and a
+following Present without adding them to the selected range. The end comparison
+is exclusive, so a Present immediately after the last selected Draw in the same
+command chunk is a valid outside boundary.
+
+The planner walks selected record handle slices in serial order, deduplicates
+only exact `(kind, objectId, generation)` identities, and resolves them against
+the source's exact `ObjectDefine` events. It reports definitions in source
+order, one blob entry per source reference, immutable shader/declaration
+payloads, complete seed mutations, and subsequent digest-backed mutations for
+those identities before the selected command event. Duplicate digests remain
+separate references so conservation and source order stay observable. The
+source validator proves global initial-content closure; the planner additionally
+checks each selected object's projected seed byte/count totals against its
+definition. Any missing proof returns a status before invoking a replay sink,
+provider, Metal owner, or writer. The capture/Draw hot path is unchanged; this
+is a cold offline transform.
+
+`dxmt9-render-tape project` exposes the transform. Its required selector is
+`--command-event-ordinal`, `--first-record`, and `--record-count`, plus the same
+explicit `--verified-blob <sha256>:<bytes>` catalogue syntax as structural
+validation. On success it writes one
+`dxmt9.render_tape.projection.v1` JSON object to stdout with:
+
+- the unchanged source tape SHA-256, byte/event/record counts, and frame profile;
+- canonical Draw, preceding-Clear, and following-Present locators;
+- exact objects, definition locators, initial-content totals, and ordered blob
+  references;
+- excluded record and coordinator-event conservation; and
+- explicit false claims for wire rewriting, legacy mini-replay compatibility,
+  provider replay, and GT2 replay.
+
+The command writes no JSON on rejection. The artifact is not a rewritten v2
+tape and is not `dxmt9.3dmark05.mini_replay_manifest.v1`; the legacy manifest
+builder remains authoritative for executable mini-replay input. Render Tape v2
+has canonical event ordinals but no authoritative frame ID, application
+source/sequence ID, or logical-pass/DAG identity. The selector and artifact
+therefore use event ordinal plus record index and do not manufacture those
+broader identities. Adding a captured mapping is a separate gap.
+
+This pure selector/conservation transform neither changes replay order nor
+executes stateful rendering, so the formal scheduling layer from
+`agents/rules/rendering_correctness.rules.md` is not applicable to this
+milestone. `dxmt9-render-tape-projection-spec` binds the production validator
+and planner with accepted `Clear -> FULL_SNAPSHOT Draw range -> Present`,
+same-chunk exclusive-end boundary, locator/order/object/blob conservation, and
+fail-closed sequence, non-Draw/coordinator, snapshot, range, definition,
+generation, and seed cases. `dxmt9-render-tape-projection-cli-spec` pins the JSON
+schema/source digest, negative no-output behavior, and absence of unsupported
+selector identities.
+
+This foundation deliberately does not change
+`device_c_render_tape_provider.*` admission grammar. Actual GT2 projection and
+replay remain blocked by capture closure for indexed draws, vertex/index-buffer
+bytes, shader/declaration payloads, render/depth attachment state and contents,
+plus an actual captured GT2 `events.bin`. Until those exist, the artifact is a
+structural readiness plan, not an executable or pixel-equivalence claim.
+
+### 8.5 Profile relationship and migration
 
 The current mini replay is the `draw-slice` implementation, not deprecated
 code. It owns a different execution adapter and deliberately narrow coverage.
@@ -982,18 +1050,21 @@ The first full-tape milestone does not replace its shader-mutation or draw-order
 tools. Instead, both profiles are managed under this replay domain, share the
 parent artifact envelope, and report compatible evidence blocks.
 
-A future tape-to-draw-slice projector may extract a selected encoder/draw range
-and content-addressed payloads from a validated full tape. Until projection
-identity is tested, the current manifest builder remains authoritative for
-mini-replay inputs. Once tested, its useful transforms can consume the projection
-without maintaining an independent resource-dump format.
+The bounded tape-to-draw-slice planner now extracts one contiguous Draw range
+and its content-addressed dependency references from a validated frame tape.
+It does not yet translate that readiness artifact into standalone Metal replay
+inputs, so the current manifest builder remains authoritative for mini-replay
+inputs. Once indexed geometry, shader, and attachment capture closure is tested,
+the useful legacy transforms can consume the projection without maintaining an
+independent resource-dump format.
 
 The completed bounded implementation order is one `frame-tape`, production-
 provider identity, deterministic output/conservation repetition, whole-command
 reducer/bisection, and an exactly two-interval `sequence-tape` with a mutation
 across the boundary, production sequence capture, and captured identity. The
-next increments are broader grammar/interval count, optional tape-to-`draw-slice`
-projection, and benchmark corpus management. A nominal ten-second capture
+next increments are broader grammar/interval count, executable tape-to-
+`draw-slice` conversion, and benchmark corpus management. A nominal ten-second
+capture
 remains a future corpus-selection policy over complete intervals, not a claim
 provided by the current two-interval profile.
 
