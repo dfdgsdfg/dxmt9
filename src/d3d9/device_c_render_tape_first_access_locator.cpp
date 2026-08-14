@@ -36,11 +36,11 @@ bool recordPayload(const ImportedRecordView& record, std::size_t bytes) noexcept
 
 bool validRectTail(const ImportedRecordView& record, std::uint32_t count,
                    std::uint32_t offset) noexcept {
-  if (count == 0u)
-    return offset == 0u;
-  return offset <= record.payload.size() &&
-         static_cast<std::uint64_t>(count) * sizeof(D9CRect) <=
-             record.payload.size() - offset;
+  if (offset != sizeof(D9CCommandChunkWireClear))
+    return false;
+  const auto rectBytes = static_cast<std::uint64_t>(count) * sizeof(D9CRect);
+  return rectBytes <= std::numeric_limits<std::size_t>::max() - offset &&
+         record.payload.size() == offset + rectBytes;
 }
 
 RenderTapeFirstAccessObservation baseObservation(
@@ -486,8 +486,6 @@ const char* renderTapeFirstAccessClassName(
     return "copy_destination_partial";
   case RenderTapeFirstAccessClass::PresentRead:
     return "present_read";
-  case RenderTapeFirstAccessClass::OrderedBoundary:
-    return "ordered_boundary";
   case RenderTapeFirstAccessClass::Unknown:
     return "unknown";
   }

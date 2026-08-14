@@ -130,6 +130,25 @@ Fixture fixed(std::uint32_t recordType, const void* value, std::size_t bytes,
   return fixture;
 }
 
+Fixture clearWithRects(const D9CCommandChunkWireClear& header,
+                       std::span<const D9CRect> rects) {
+  Fixture fixture;
+  fixture.payload.resize(sizeof(header) + rects.size_bytes());
+  std::memcpy(fixture.payload.data(), &header, sizeof(header));
+  if (!rects.empty()) {
+    std::memcpy(fixture.payload.data() + sizeof(header), rects.data(),
+                rects.size_bytes());
+  }
+  fixture.record = {
+      .type = D9C_COMMAND_RECORD_CLEAR,
+      .payloadOffset = 0u,
+      .payloadSize = static_cast<std::uint32_t>(fixture.payload.size()),
+      .firstHandle = 0u,
+      .handleCount = 0u,
+  };
+  return fixture;
+}
+
 void arm(RenderTapeFirstAccessLedger& ledger,
          const D9CWireObjectIdentity& origin,
          const D9CWireObjectIdentity& resolved) {
@@ -185,8 +204,12 @@ void testReadWriteConflictAndClear() {
   check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
             RenderTapeFirstAccessStatus::Observing,
         "clear fixture binding");
-  const D9CCommandChunkWireClear clear{1u, 0u, 1.0f, 0u, 0u, 0u};
+  const D9CCommandChunkWireClear clear{
+      1u, 0u, 1.0f, 0u, 0u, sizeof(D9CCommandChunkWireClear)};
   auto clearFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &clear, sizeof(clear));
+  check(clear.rectOffset == sizeof(D9CCommandChunkWireClear) &&
+            clearFixture.payload.size() == sizeof(D9CCommandChunkWireClear),
+        "full clear uses production appendClear wire shape");
   auto full = renderTapeFirstAccessObserve(ledger, clearFixture.view());
   check(full.classification == RenderTapeFirstAccessClass::FullClearWrite,
         "unrestricted target clear is full");
@@ -197,12 +220,10 @@ void testReadWriteConflictAndClear() {
             RenderTapeFirstAccessStatus::Observing,
         "partial clear fixture binding");
   const D9CRect rect{0, 0, 8, 8};
-  D9CCommandChunkWireClear partialClear{1u, 0u, 1.0f, 0u, 1u,
-                                        sizeof(partialClear)};
-  auto partialFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &partialClear,
-                              sizeof(partialClear) + sizeof(rect));
-  std::memcpy(partialFixture.payload.data() + sizeof(partialClear), &rect,
-              sizeof(rect));
+  const D9CCommandChunkWireClear partialClear{
+      1u, 0u, 1.0f, 0u, 1u, sizeof(D9CCommandChunkWireClear)};
+  const std::array<D9CRect, 1> rects{{rect}};
+  auto partialFixture = clearWithRects(partialClear, rects);
   auto partial = renderTapeFirstAccessObserve(ledger, partialFixture.view());
   check(partial.classification ==
             RenderTapeFirstAccessClass::PartialClearWrite,

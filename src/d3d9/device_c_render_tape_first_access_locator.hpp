@@ -18,7 +18,6 @@ enum class RenderTapeFirstAccessClass : std::uint32_t {
   CopyDestinationFull,
   CopyDestinationPartial,
   PresentRead,
-  OrderedBoundary,
   Unknown,
 };
 

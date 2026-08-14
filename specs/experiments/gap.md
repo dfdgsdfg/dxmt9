@@ -289,7 +289,9 @@ chunks after capture has failed closed. Its bounded ledger carries RT/depth
 attachment bindings across chunk boundaries and emits one terminal typed result:
 unrestricted or partial clears, draw write with unknown coverage, shader-read
 candidate, copy/readback source or conservative partial destination, present
-read, and `Unknown` for malformed or same-draw read/write ambiguity. An
+read, and `Unknown` for malformed or same-draw read/write ambiguity. Command
+chunks do not expose an ordered-control observation seam, so ordered boundaries
+are intentionally outside this increment. An
 `APPLY_STATE` binding is non-terminal; generation mismatches are ignored, and
 the result is emitted exactly once. This is observation of command/binding
 evidence only: it does not claim an actual GPU read, full draw overwrite, or
