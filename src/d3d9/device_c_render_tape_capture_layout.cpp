@@ -412,6 +412,22 @@ RenderTapeFullSnapshotStatus renderTapeValidateFullSnapshot(
   return RenderTapeFullSnapshotStatus::Accepted;
 }
 
+RenderTapeUserMemorySeedRoute renderTapeClassifyUserMemorySeedRoute(
+    RenderTapeFullSnapshotStatus status) noexcept {
+  switch (status) {
+  case RenderTapeFullSnapshotStatus::Required:
+    return RenderTapeUserMemorySeedRoute::FullOnly;
+  case RenderTapeFullSnapshotStatus::NotRequired:
+    return RenderTapeUserMemorySeedRoute::PartialOnly;
+  case RenderTapeFullSnapshotStatus::Accepted:
+  case RenderTapeFullSnapshotStatus::InvalidIdentity:
+  case RenderTapeFullSnapshotStatus::InvalidExtent:
+  case RenderTapeFullSnapshotStatus::InvalidBytes:
+    return RenderTapeUserMemorySeedRoute::Reject;
+  }
+  return RenderTapeUserMemorySeedRoute::Reject;
+}
+
 RenderTapeBlockLayoutStatus renderTapeBlockLockLayout(
     const D9CSurfaceDesc& desc, std::int32_t pitch,
     const RenderTapeLockRect* rect, RenderTapeBlockLockLayout& out) noexcept {
@@ -698,6 +714,19 @@ RenderTapeLinearLayoutStatus renderTapeLinearLockLayout(
                          static_cast<std::uint32_t>(right) == desc.width &&
                          static_cast<std::uint32_t>(bottom) == desc.height,
   };
+  return RenderTapeLinearLayoutStatus::Accepted;
+}
+
+RenderTapeLinearLayoutStatus renderTapeUserMemoryFullSeedLayout(
+    const D9CSurfaceDesc& desc, std::int32_t pitch,
+    RenderTapeLinearLockLayout& out) noexcept {
+  const auto status = renderTapeLinearLockLayout(desc, pitch, nullptr, out);
+  if (status != RenderTapeLinearLayoutStatus::Accepted)
+    return status;
+  if (!out.fullSubresource || out.destinationByteOffset != 0u ||
+      out.top != 0u || out.rowBytes != out.fullRowBytes ||
+      out.rows != out.fullRows)
+    return RenderTapeLinearLayoutStatus::InvalidExtent;
   return RenderTapeLinearLayoutStatus::Accepted;
 }
 

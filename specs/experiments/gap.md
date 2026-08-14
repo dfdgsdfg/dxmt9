@@ -231,8 +231,10 @@ objects at the first failed arm and later grew to 1073 while the same typed
 failure remained latched. This is evidence that texture/surface descriptor
 migration reached the next closure boundary; it is not evidence of a complete
 GT2 capture. The identity matches the already documented 128x32 A8R8G8B8
-user-memory texture whose first observed write covers only 728 bytes; exact
-capture-only user-memory full-subresource seed acquisition remains open.
+user-memory texture whose first observed write covers only 728 bytes. The
+capture-only full-subresource seed seam is now implemented for this bounded
+Texture2D path, but still needs a supervised wild run to establish GT2 capture
+evidence.
 
 This closes the representation migration only. Actual GT2 bundle evidence,
 provider replay of the captured indexed workload, and output-oracle

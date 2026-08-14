@@ -157,6 +157,18 @@ enum class RenderTapeFullSnapshotStatus : std::uint32_t {
   InvalidBytes,
 };
 
+enum class RenderTapeUserMemorySeedRoute : std::uint32_t {
+  PartialOnly = 0u,
+  FullOnly,
+  Reject,
+};
+
+// Required closure must suppress the partial event until the exact
+// caller-owned full seed is copied; an already-seeded subresource keeps the
+// ordinary partial overlay ordering. All typed proof failures reject capture.
+RenderTapeUserMemorySeedRoute renderTapeClassifyUserMemorySeedRoute(
+    RenderTapeFullSnapshotStatus status) noexcept;
+
 // A surface wrapper may only use the exact-owner full snapshot fallback when
 // it is a 2D texture-level alias and its mutation identity is the owning
 // texture generation.  Keep this route decision value-only so the PE seam and
@@ -277,6 +289,13 @@ enum class RenderTapeLinearLayoutStatus : std::uint32_t {
 RenderTapeLinearLayoutStatus renderTapeLinearLockLayout(
     const D9CSurfaceDesc& desc, std::int32_t pitch,
     const RenderTapeLockRect* rect, RenderTapeLinearLockLayout& out) noexcept;
+
+// User-memory Texture2D locks expose the subresource base even for a partial
+// rectangle.  A capture-only full seed therefore needs the descriptor extent
+// and the caller's actual pitch, with no rectangle-origin adjustment.
+RenderTapeLinearLayoutStatus renderTapeUserMemoryFullSeedLayout(
+    const D9CSurfaceDesc& desc, std::int32_t pitch,
+    RenderTapeLinearLockLayout& out) noexcept;
 
 bool copyRenderTapeLinearRows(const void* bits,
                               const RenderTapeLinearLockLayout& layout,

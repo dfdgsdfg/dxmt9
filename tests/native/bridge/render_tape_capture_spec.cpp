@@ -2486,6 +2486,38 @@ void testLinearLockCaptureLayouts() {
   check(renderTapeLinearLockLayout(desc, 15, nullptr, full) ==
             RenderTapeLinearLayoutStatus::InvalidPitch,
         "linear pitch shorter than descriptor row rejects fail-closed");
+  check(renderTapeUserMemoryFullSeedLayout(
+            D9CSurfaceDesc{.format = argb, .width = 128u, .height = 32u},
+            128u * 4u, full) == RenderTapeLinearLayoutStatus::Accepted &&
+            full.fullSubresource && full.destinationByteOffset == 0u &&
+            full.top == 0u && full.rowBytes == 128u * 4u && full.rows == 32u &&
+            full.tightBytes == 128u * 32u * 4u,
+        "user-memory full seed uses the exact 128x32 subresource extent");
+  std::vector<std::byte> userMemorySeed(
+      static_cast<std::size_t>(128u * 32u * 4u), std::byte{0});
+  for (std::uint32_t row = 0u; row < 32u; ++row) {
+    for (std::uint32_t byte = 0u; byte < 128u * 4u; ++byte)
+      userMemorySeed[static_cast<std::size_t>(row) * 128u * 4u + byte] =
+          static_cast<std::byte>((row * 17u + byte) & 0xffu);
+  }
+  std::vector<std::byte> userMemoryTight;
+  std::vector<std::byte> completeSeed;
+  check(copyRenderTapeLinearRows(
+            userMemorySeed.data(), full, userMemoryTight,
+            RenderTapeLockBitsOrigin::Subresource) &&
+            userMemoryTight.size() == 128u * 32u * 4u &&
+            applyRenderTapeLinearMutation(full, userMemoryTight,
+                                          completeSeed) ==
+                RenderTapeBlockMutationStatus::Accepted &&
+            completeSeed == userMemoryTight,
+        "a 128x32 user-memory partial-first-write closure publishes a complete seed");
+  check(renderTapeUserMemoryFullSeedLayout(
+            D9CSurfaceDesc{.format = argb, .width = 128u, .height = 32u},
+            128u * 4u - 1u, full) == RenderTapeLinearLayoutStatus::InvalidPitch &&
+            renderTapeUserMemoryFullSeedLayout(
+                D9CSurfaceDesc{.format = argb, .width = 0u, .height = 32u},
+                128u * 4u, full) == RenderTapeLinearLayoutStatus::InvalidExtent,
+        "user-memory full seed rejects invalid pitch and descriptor extent");
   D9CSurfaceDesc huge{.format = argb,
                       .width = 0xffffffffu,
                       .height = 2u};
@@ -2515,6 +2547,19 @@ void testFullSnapshotClosureTruthTable() {
                                        fullBytes) ==
                 RenderTapeFullSnapshotStatus::InvalidExtent,
         "capture-off, stale identity, and malformed extent are fail-closed");
+  check(renderTapeClassifyUserMemorySeedRoute(
+            RenderTapeFullSnapshotStatus::Required) ==
+                RenderTapeUserMemorySeedRoute::FullOnly &&
+            renderTapeClassifyUserMemorySeedRoute(
+                RenderTapeFullSnapshotStatus::NotRequired) ==
+                RenderTapeUserMemorySeedRoute::PartialOnly &&
+            renderTapeClassifyUserMemorySeedRoute(
+                RenderTapeFullSnapshotStatus::InvalidIdentity) ==
+                RenderTapeUserMemorySeedRoute::Reject &&
+            renderTapeClassifyUserMemorySeedRoute(
+                RenderTapeFullSnapshotStatus::InvalidExtent) ==
+                RenderTapeUserMemorySeedRoute::Reject,
+        "user-memory closure routes full-only, partial-only, or reject");
   check(renderTapeClassifySnapshot(true, true, true, false, 0u, fullBytes) ==
             RenderTapeFullSnapshotStatus::NotRequired,
         "full locks never resnapshot");

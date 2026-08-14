@@ -1709,12 +1709,9 @@ public:
       if (recorder_ && linearLock_ &&
           (lockFlags_ & D3DLOCK_READONLY) == 0u) {
         std::vector<std::byte> mutationCopy;
-        if (dxmt9::d3d9::copyRenderTapeLinearRows(
-                lockBits_, linearLockLayout_, mutationCopy,
-                linearBitsOrigin_)) {
-          recorder_->NotifyRenderTapeLinearMutationForChild(
-              wireObject_, level, linearLockLayout_, mutationCopy);
-        } else {
+        const bool mutationReady = dxmt9::d3d9::copyRenderTapeLinearRows(
+            lockBits_, linearLockLayout_, mutationCopy, linearBitsOrigin_);
+        if (!mutationReady) {
           D9CSurfaceDesc userDesc{};
           (void)textureLevelDesc(t_, level, &userDesc);
           recorder_->RejectRenderTapeCaptureForChild(
@@ -1722,6 +1719,89 @@ public:
               wireObject_, level,
               renderTapeLayoutDiagnostic(userDesc, userMemoryPitch_,
                                          linearLockLayout_.sourceBytes));
+        } else if (!linearLockLayout_.fullSubresource) {
+          // Classify the capture-only closure before publishing any mutation
+          // so Required can remain full-only and stale identity/descriptor
+          // evidence is attributed to the typed full-snapshot diagnostic.
+          D9CSurfaceDesc userDesc{};
+          const HRESULT descHr = textureLevelDesc(t_, level, &userDesc);
+          dxmt9::d3d9::RenderTapeFullSnapshotStatus snapshotStatus =
+              dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent;
+          dxmt9::d3d9::RenderTapeLinearLockLayout fullLayout{};
+          if (SUCCEEDED(descHr)) {
+            const auto layoutStatus =
+                dxmt9::d3d9::renderTapeUserMemoryFullSeedLayout(
+                    userDesc, userMemoryPitch_, fullLayout);
+            if (layoutStatus ==
+                dxmt9::d3d9::RenderTapeLinearLayoutStatus::Accepted) {
+              snapshotStatus = recorder_->RenderTapeFullSnapshotStatusForChild(
+                  wireObject_, level, fullLayout.fullRowBytes,
+                  fullLayout.fullRows, fullLayout.tightBytes);
+            }
+          }
+          const auto snapshotRoute =
+              dxmt9::d3d9::renderTapeClassifyUserMemorySeedRoute(
+                  snapshotStatus);
+          if (snapshotStatus ==
+                  dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity ||
+              snapshotStatus ==
+                  dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
+            rejectRenderTapeFullSnapshot(
+                recorder_,
+                snapshotStatus ==
+                        dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
+                    ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                          FullSnapshotIdentityMismatch
+                    : dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                          FullSnapshotExtentMismatch,
+                wireObject_, level, userDesc, userMemoryPitch_,
+                mutationCopy.size());
+          } else if (snapshotRoute ==
+                     dxmt9::d3d9::RenderTapeUserMemorySeedRoute::FullOnly) {
+            // Required closure is full-only: do not publish the partial
+            // mutation first, since an admitted object could latch that
+            // incomplete seed before this capture-only copy is recorded.
+            std::vector<std::byte> fullCopy;
+            const bool fullCopied = dxmt9::d3d9::copyRenderTapeLinearRows(
+                userMemory_, fullLayout, fullCopy,
+                dxmt9::d3d9::RenderTapeLockBitsOrigin::Subresource);
+            const auto validation =
+                dxmt9::d3d9::renderTapeValidateFullSnapshot(
+                    fullLayout.fullSubresource, fullLayout.tightBytes,
+                    fullCopied ? std::span<const std::byte>(fullCopy)
+                               : std::span<const std::byte>{});
+            if (validation !=
+                dxmt9::d3d9::RenderTapeFullSnapshotStatus::Accepted) {
+              rejectRenderTapeFullSnapshot(
+                  recorder_,
+                  dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                      FullSnapshotCopyFailed,
+                  wireObject_, level, userDesc, userMemoryPitch_,
+                  fullCopied ? fullCopy.size() : 0u);
+            } else {
+              // `fullLayout` is deliberately full and zero-offset, so the
+              // existing mutation reducer publishes these exact rows as a
+              // complete seed rather than overlaying the partial write.
+              recorder_->NotifyRenderTapeLinearMutationForChild(
+                  wireObject_, level, fullLayout, fullCopy);
+            }
+          } else if (snapshotRoute ==
+                     dxmt9::d3d9::RenderTapeUserMemorySeedRoute::PartialOnly) {
+            // A complete seed already exists, so preserve the ordinary
+            // partial mutation event and its descriptor-relative overlay.
+            recorder_->NotifyRenderTapeLinearMutationForChild(
+                wireObject_, level, linearLockLayout_, mutationCopy);
+          } else {
+            rejectRenderTapeFullSnapshot(
+                recorder_,
+                dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                    FullSnapshotCopyFailed,
+                wireObject_, level, userDesc, userMemoryPitch_,
+                mutationCopy.size());
+          }
+        } else {
+          recorder_->NotifyRenderTapeLinearMutationForChild(
+              wireObject_, level, linearLockLayout_, mutationCopy);
         }
       }
       lockBits_ = nullptr;
