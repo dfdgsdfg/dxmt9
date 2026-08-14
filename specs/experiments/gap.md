@@ -295,8 +295,19 @@ are intentionally outside this increment. An
 `APPLY_STATE` binding is non-terminal; generation mismatches are ignored, and
 the result is emitted exactly once. This is observation of command/binding
 evidence only: it does not claim an actual GPU read, full draw overwrite, or
-`ProducedByCapturedPass`. A wild r27 run is still required to decide between
-provider GPU snapshot and produced-pass proof.
+`ProducedByCapturedPass`.
+
+The bounded GT2 r27 run at
+`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-first-access-r27-20260815`
+observed the r26 alias-qualified RT as `full_clear_write`: the missing seed was
+the generation-14 Texture2D storage behind the generation-28 RT surface, and
+record 1 was a production-shaped unrestricted target `CLEAR` immediately after
+the binding. This rules out a pre-commit GPU snapshot for this exact blocker.
+The next increment may admit this generation as `ProducedByCapturedPass` only
+if it preserves and validates the failing command chunk, proves that the full
+clear precedes every read, and retains the existing fail-closed fallback for
+all partial, draw-coverage-unknown, read-first, malformed, and identity-mismatch
+cases. No such admission policy is implemented by r27.
 
 ## Render Tape bounded wild evidence
 
