@@ -7959,14 +7959,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     hasDesc ? 1 : 0, desc.size, desc.usage,
                                     desc.pool, desc.format, desc.fvf);
                             }
+                            D9CSurfaceDesc rejectionDesc{};
+                            const dxmt9::d3d9::pe::PeWireObjectRef reference{
+                                .identity = object->identity,
+                            };
+                            (void)renderTapeObjectSubresourceDesc(
+                                *object, reference, subresource, rejectionDesc);
                             RejectRenderTapeCaptureForChild(
                                 dxmt9::d3d9::
                                     RenderTapeCaptureRejectionReason::
                                         IncompleteSubresourceSeed,
-                                dxmt9::d3d9::pe::PeWireObjectRef{
-                                    .identity = object->identity,
-                                },
-                                subresource, {});
+                                reference, subresource,
+                                {.format = rejectionDesc.format,
+                                 .width = rejectionDesc.width,
+                                 .height = rejectionDesc.height,
+                                 .pitch = 0,
+                                 .bytes = 0u});
                             return false;
                         }
                         const auto digest =
