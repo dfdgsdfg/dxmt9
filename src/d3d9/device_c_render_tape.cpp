@@ -217,11 +217,13 @@ bool seedContentComplete(
 RenderTapeValidationResult
 failure(RenderTapeValidationStatus status, std::uint32_t eventIndex = kNoIndex,
         CommandChunkValidationStatus chunkStatus =
-            CommandChunkValidationStatus::Valid) noexcept {
+            CommandChunkValidationStatus::Valid,
+        RenderTapeObjectDefineValidationDetail objectDefine = {}) noexcept {
   return RenderTapeValidationResult{
       .status = status,
       .failedEventIndex = eventIndex,
       .chunkStatus = chunkStatus,
+      .objectDefine = objectDefine,
   };
 }
 
@@ -329,6 +331,192 @@ bool requiresImmutablePayload(
          identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL;
 }
 
+RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
+    const RenderTapeObjectDefineHeader& fixed,
+    std::span<const std::byte> descriptor) noexcept {
+  RenderTapeObjectDefineValidationDetail detail{
+      .identity = fixed.identity,
+      .descriptorKind = fixed.descriptorKind,
+      .descriptorBytes = fixed.descriptorBytes,
+      .descriptorPayloadBytes = static_cast<std::uint32_t>(
+          std::min<std::size_t>(descriptor.size(),
+                                std::numeric_limits<std::uint32_t>::max())),
+      .payloadValidity = fixed.payloadValidity,
+      .immutablePayloadBytes = fixed.immutablePayloadBytes,
+      .expectedContentBytes = fixed.expectedContentBytes,
+      .expectedContentCount = fixed.expectedContentCount,
+  };
+  const auto reject = [&](RenderTapeObjectDefineValidationSubreason reason) {
+    detail.subreason = reason;
+    return detail;
+  };
+
+  if (!validIdentity(fixed.identity))
+    return reject(RenderTapeObjectDefineValidationSubreason::InvalidIdentity);
+  if (fixed.descriptorKind != static_cast<std::uint32_t>(
+                                  renderTapeDescriptorKindForObject(
+                                      fixed.identity.kind))) {
+    return reject(
+        RenderTapeObjectDefineValidationSubreason::DescriptorKindMismatch);
+  }
+  if (fixed.descriptorBytes == 0u)
+    return reject(RenderTapeObjectDefineValidationSubreason::DescriptorBytesZero);
+  if (fixed.reserved0 != 0u || fixed.reserved1 != 0u)
+    return reject(RenderTapeObjectDefineValidationSubreason::ReservedFields);
+  if ((fixed.expectedContentBytes == 0u) !=
+      (fixed.expectedContentCount == 0u)) {
+    return reject(RenderTapeObjectDefineValidationSubreason::ExpectedContentPair);
+  }
+  if (fixed.expectedContentBytes != 0u &&
+      !mutationCapableIdentity(fixed.identity)) {
+    return reject(
+        RenderTapeObjectDefineValidationSubreason::ExpectedContentUnsupported);
+  }
+
+  const auto payloadValidity =
+      static_cast<RenderTapeDigestValidity>(fixed.payloadValidity);
+  if (payloadValidity != RenderTapeDigestValidity::NotCaptured &&
+      payloadValidity != RenderTapeDigestValidity::Sha256) {
+    return reject(RenderTapeObjectDefineValidationSubreason::PayloadValidity);
+  }
+  if (requiresImmutablePayload(fixed.identity) &&
+      payloadValidity != RenderTapeDigestValidity::Sha256) {
+    return reject(
+        RenderTapeObjectDefineValidationSubreason::ImmutablePayloadRequired);
+  }
+  if (payloadValidity == RenderTapeDigestValidity::Sha256 &&
+      fixed.immutablePayloadBytes == 0u) {
+    return reject(RenderTapeObjectDefineValidationSubreason::ImmutablePayloadBytes);
+  }
+  if (payloadValidity == RenderTapeDigestValidity::NotCaptured &&
+      (fixed.immutablePayloadBytes != 0u ||
+       !zeroDigest(fixed.immutablePayloadDigest))) {
+    return reject(
+        RenderTapeObjectDefineValidationSubreason::ImmutablePayloadDigest);
+  }
+  if (descriptor.size() != fixed.descriptorBytes)
+    return reject(RenderTapeObjectDefineValidationSubreason::DescriptorExtent);
+
+  const auto descriptorBytes = descriptor;
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+      descriptorBytes.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
+    RenderTapeTextureDescriptorV2 texture{};
+    std::memcpy(&texture, descriptorBytes.data(), sizeof(texture));
+    detail.descriptorSchemaVersion = texture.schemaVersion;
+    detail.descriptorDimension = texture.dimension;
+    detail.descriptorMipLevelCount = texture.mipLevelCount;
+    detail.descriptorSubresourceCount = texture.subresourceCount;
+    detail.descriptorDisposition = texture.initialContentDisposition;
+    if (texture.schemaVersion == kRenderTapeTextureDescriptorVersion2) {
+      const auto dimension =
+          static_cast<RenderTapeTextureDimension>(texture.dimension);
+      if (dimension != RenderTapeTextureDimension::Texture2D &&
+          dimension != RenderTapeTextureDimension::Cube &&
+          dimension != RenderTapeTextureDimension::Volume) {
+        return reject(
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension);
+      }
+      std::uint64_t expectedSubresources = texture.mipLevelCount;
+      if (dimension == RenderTapeTextureDimension::Cube &&
+          !checkedMul(texture.mipLevelCount, 6u, expectedSubresources)) {
+        return reject(
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+      }
+      std::uint64_t subresourceBytes = 0u;
+      std::uint64_t expectedExtent = 0u;
+      if (texture.mipLevelCount == 0u ||
+          texture.subresourceCount != expectedSubresources ||
+          texture.reserved0 != 0u ||
+          !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
+                      subresourceBytes) ||
+          !checkedAdd(sizeof(texture), subresourceBytes, expectedExtent)) {
+        return reject(
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+      }
+      detail.descriptorExpectedExtentBytes = expectedExtent;
+      detail.descriptorExtentBytes = descriptorBytes.size();
+      if (expectedExtent != descriptorBytes.size()) {
+        return reject(
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+      }
+      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+          texture.initialContentDisposition);
+      if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
+        if (fixed.expectedContentBytes == 0u ||
+            fixed.expectedContentCount != texture.subresourceCount) {
+          return reject(RenderTapeObjectDefineValidationSubreason::
+                            TextureDescriptorDisposition);
+        }
+      } else if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
+                 fixed.expectedContentBytes != 0u ||
+                 fixed.expectedContentCount != 0u) {
+        return reject(RenderTapeObjectDefineValidationSubreason::
+                          TextureDescriptorDisposition);
+      }
+    }
+  }
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+      descriptorBytes.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
+    RenderTapeSurfaceDescriptorV2 surface{};
+    std::memcpy(&surface, descriptorBytes.data(), sizeof(surface));
+    detail.descriptorSchemaVersion = surface.schemaVersion;
+    detail.descriptorStorage = surface.storage;
+    detail.descriptorDisposition = surface.initialContentDisposition;
+    detail.descriptorSubresource = surface.subresource;
+    detail.parentTexture = surface.parentTexture;
+    detail.descriptorExpectedExtentBytes = sizeof(surface);
+    detail.descriptorExtentBytes = descriptorBytes.size();
+    if (surface.schemaVersion == kRenderTapeSurfaceDescriptorVersion2) {
+      const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
+      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+          surface.initialContentDisposition);
+      if (storage != RenderTapeSurfaceStorage::Standalone &&
+          storage != RenderTapeSurfaceStorage::TextureSubresource &&
+          storage != RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+        return reject(
+            RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorStorage);
+      }
+      if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
+        if (surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+            !validIdentity(surface.parentTexture)) {
+          return reject(
+              RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorParent);
+        }
+        if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
+            fixed.expectedContentBytes != 0u ||
+            fixed.expectedContentCount != 0u) {
+          return reject(RenderTapeObjectDefineValidationSubreason::
+                            SurfaceDescriptorDisposition);
+        }
+      } else if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+        if (disposition !=
+                RenderTapeInitialContentDisposition::ProducedPresentOutput ||
+            fixed.expectedContentBytes != 0u ||
+            fixed.expectedContentCount != 0u) {
+          return reject(RenderTapeObjectDefineValidationSubreason::
+                            SurfaceDescriptorDisposition);
+        }
+      } else if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
+        if (fixed.expectedContentBytes == 0u ||
+            fixed.expectedContentCount != 1u) {
+          return reject(RenderTapeObjectDefineValidationSubreason::
+                            SurfaceDescriptorDisposition);
+        }
+      } else if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
+                 fixed.expectedContentBytes != 0u ||
+                 fixed.expectedContentCount != 0u) {
+        return reject(RenderTapeObjectDefineValidationSubreason::
+                          SurfaceDescriptorDisposition);
+      }
+    }
+  }
+  if (!validDescriptorContentDisposition(fixed, descriptorBytes)) {
+    return reject(
+        RenderTapeObjectDefineValidationSubreason::DescriptorContentDisposition);
+  }
+  return detail;
+}
+
 // DERIVES total byte length of a canonical command chunk from its own wire
 // header (payloadArenaOffset + payloadArenaSize).
 bool chunkTotalBytes(std::span<const std::byte> blob,
@@ -352,6 +540,66 @@ std::span<const std::byte> tailAfter(std::span<const std::byte> payload,
 }
 
 } // namespace
+
+const char* renderTapeObjectDefineValidationSubreasonName(
+    RenderTapeObjectDefineValidationSubreason subreason) noexcept {
+  switch (subreason) {
+  case RenderTapeObjectDefineValidationSubreason::None:
+    return "none";
+  case RenderTapeObjectDefineValidationSubreason::InvalidIdentity:
+    return "invalid-identity";
+  case RenderTapeObjectDefineValidationSubreason::DescriptorKindMismatch:
+    return "descriptor-kind-mismatch";
+  case RenderTapeObjectDefineValidationSubreason::DescriptorBytesZero:
+    return "descriptor-bytes-zero";
+  case RenderTapeObjectDefineValidationSubreason::ReservedFields:
+    return "reserved-fields";
+  case RenderTapeObjectDefineValidationSubreason::ExpectedContentPair:
+    return "expected-content-pair";
+  case RenderTapeObjectDefineValidationSubreason::ExpectedContentUnsupported:
+    return "expected-content-unsupported";
+  case RenderTapeObjectDefineValidationSubreason::PayloadValidity:
+    return "payload-validity";
+  case RenderTapeObjectDefineValidationSubreason::ImmutablePayloadRequired:
+    return "immutable-payload-required";
+  case RenderTapeObjectDefineValidationSubreason::ImmutablePayloadBytes:
+    return "immutable-payload-bytes";
+  case RenderTapeObjectDefineValidationSubreason::ImmutablePayloadDigest:
+    return "immutable-payload-digest";
+  case RenderTapeObjectDefineValidationSubreason::DescriptorExtent:
+    return "descriptor-extent";
+  case RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension:
+    return "texture-descriptor-dimension";
+  case RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent:
+    return "texture-descriptor-extent";
+  case RenderTapeObjectDefineValidationSubreason::TextureDescriptorDisposition:
+    return "texture-descriptor-disposition";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorStorage:
+    return "surface-descriptor-storage";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorDisposition:
+    return "surface-descriptor-disposition";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorParent:
+    return "surface-descriptor-parent";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorExtent:
+    return "surface-descriptor-extent";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorSchema:
+    return "surface-descriptor-schema";
+  case RenderTapeObjectDefineValidationSubreason::SurfaceParentMismatch:
+    return "surface-parent-mismatch";
+  case RenderTapeObjectDefineValidationSubreason::DescriptorContentDisposition:
+    return "descriptor-content-disposition";
+  case RenderTapeObjectDefineValidationSubreason::ParentLifetime:
+    return "parent-lifetime";
+  }
+  return "unknown";
+}
+
+RenderTapeObjectDefineValidationDetail
+renderTapeClassifyObjectDefineValidation(
+    const RenderTapeObjectDefineHeader& fixed,
+    std::span<const std::byte> descriptor) noexcept {
+  return classifyObjectDefineValidation(fixed, descriptor);
+}
 
 RenderTapeBlobLookup RenderTapeBlobCatalogue::lookup(
     std::span<const std::byte, kRenderTapeDigestSize> digest,
@@ -485,31 +733,38 @@ validateRenderTape(std::span<const std::byte> blob,
     }
     const auto event = candidate.event(i);
     RenderTapeObjectDefineHeader fixed{};
-    if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
-        fixed.descriptorKind != static_cast<std::uint32_t>(
-            renderTapeDescriptorKindForObject(fixed.identity.kind)) ||
-        fixed.descriptorBytes == 0u ||
-        fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
-        ((fixed.expectedContentBytes == 0u) !=
-         (fixed.expectedContentCount == 0u)) ||
-        (fixed.expectedContentBytes != 0u &&
-         !mutationCapableIdentity(fixed.identity)) ||
-        event.payload.size() != sizeof(fixed) + fixed.descriptorBytes) {
-      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    if (!load(event.payload, 0u, fixed)) {
+      RenderTapeObjectDefineValidationDetail detail{};
+      detail.subreason = RenderTapeObjectDefineValidationSubreason::
+          DescriptorExtent;
+      detail.descriptorPayloadBytes = static_cast<std::uint32_t>(
+          std::min<std::size_t>(event.payload.size(),
+                                std::numeric_limits<std::uint32_t>::max()));
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                     CommandChunkValidationStatus::Valid, detail);
+    }
+    const auto objectDefineDetail = renderTapeClassifyObjectDefineValidation(
+        fixed, event.payload.subspan(sizeof(fixed)));
+    if (objectDefineDetail.valid()) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                     CommandChunkValidationStatus::Valid, objectDefineDetail);
     }
     const auto payloadValidity =
         static_cast<RenderTapeDigestValidity>(fixed.payloadValidity);
     if (payloadValidity != RenderTapeDigestValidity::NotCaptured &&
         payloadValidity != RenderTapeDigestValidity::Sha256) {
-      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                     CommandChunkValidationStatus::Valid, objectDefineDetail);
     }
     if (requiresImmutablePayload(fixed.identity) &&
         payloadValidity != RenderTapeDigestValidity::Sha256) {
-      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                     CommandChunkValidationStatus::Valid, objectDefineDetail);
     }
     if (payloadValidity == RenderTapeDigestValidity::Sha256) {
       if (fixed.immutablePayloadBytes == 0u) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, objectDefineDetail);
       }
       switch (catalogue.lookup(fixed.immutablePayloadDigest,
                                fixed.immutablePayloadBytes)) {
@@ -522,13 +777,6 @@ validateRenderTape(std::span<const std::byte> blob,
       case RenderTapeBlobLookup::Unverified:
         return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
       }
-    } else if (fixed.immutablePayloadBytes != 0u ||
-               !zeroDigest(fixed.immutablePayloadDigest)) {
-      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
-    }
-    if (!validDescriptorContentDisposition(
-            fixed, event.payload.subspan(sizeof(fixed)))) {
-      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
     }
     if (findDefinition(scratch.objectDefinitions, fixed.identity) != nullptr) {
       return failure(RenderTapeValidationStatus::DuplicateGeneration, i);
@@ -697,34 +945,43 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       RenderTapeObjectDefineHeader fixed{};
-      if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
-          fixed.descriptorKind != static_cast<std::uint32_t>(
-              renderTapeDescriptorKindForObject(fixed.identity.kind)) ||
-          fixed.descriptorBytes == 0u ||
-          fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
-          ((fixed.expectedContentBytes == 0u) !=
-           (fixed.expectedContentCount == 0u)) ||
-          (fixed.expectedContentBytes != 0u &&
-           !mutationCapableIdentity(fixed.identity))) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+      if (!load(event.payload, 0u, fixed)) {
+        RenderTapeObjectDefineValidationDetail detail{};
+        detail.subreason = RenderTapeObjectDefineValidationSubreason::
+            DescriptorExtent;
+        detail.descriptorPayloadBytes = static_cast<std::uint32_t>(
+            std::min<std::size_t>(event.payload.size(),
+                                  std::numeric_limits<std::uint32_t>::max()));
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, detail);
+      }
+      const auto objectDefineDetail = renderTapeClassifyObjectDefineValidation(
+          fixed, event.payload.subspan(sizeof(fixed)));
+      if (objectDefineDetail.valid()) {
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, objectDefineDetail);
       }
       const auto payloadValidity =
           static_cast<RenderTapeDigestValidity>(fixed.payloadValidity);
       if (payloadValidity != RenderTapeDigestValidity::NotCaptured &&
           payloadValidity != RenderTapeDigestValidity::Sha256) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, objectDefineDetail);
       }
       if (requiresImmutablePayload(fixed.identity) &&
           payloadValidity != RenderTapeDigestValidity::Sha256) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, objectDefineDetail);
       }
       const std::uint64_t expectedSize = sizeof(fixed) + fixed.descriptorBytes;
       if (event.payload.size() != expectedSize) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, objectDefineDetail);
       }
       if (payloadValidity == RenderTapeDigestValidity::Sha256) {
         if (fixed.immutablePayloadBytes == 0u) {
-          return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+          return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                         CommandChunkValidationStatus::Valid, objectDefineDetail);
         }
         switch (catalogue.lookup(fixed.immutablePayloadDigest,
                                  fixed.immutablePayloadBytes)) {
@@ -737,9 +994,6 @@ validateRenderTape(std::span<const std::byte> blob,
         case RenderTapeBlobLookup::Unverified:
           return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
         }
-      } else if (fixed.immutablePayloadBytes != 0u ||
-                 !zeroDigest(fixed.immutablePayloadDigest)) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
       }
       const auto descriptor = event.payload.subspan(sizeof(fixed));
       if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
@@ -754,12 +1008,20 @@ validateRenderTape(std::span<const std::byte> blob,
           if (!parent || parent->eventIndex >= i ||
               findLiveSlot(scratch.liveObjects, surface.parentTexture) ==
                   scratch.liveObjects.end()) {
-            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+            auto detail = objectDefineDetail;
+            detail.subreason =
+                RenderTapeObjectDefineValidationSubreason::ParentLifetime;
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                           CommandChunkValidationStatus::Valid, detail);
           }
           const auto parentEvent = candidate.event(parent->eventIndex);
           RenderTapeObjectDefineHeader parentFixed{};
           if (!load(parentEvent.payload, 0u, parentFixed)) {
-            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+            auto detail = objectDefineDetail;
+            detail.subreason =
+                RenderTapeObjectDefineValidationSubreason::ParentLifetime;
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                           CommandChunkValidationStatus::Valid, detail);
           }
           const auto parentDescriptor =
               parentEvent.payload.subspan(sizeof(parentFixed));
@@ -790,7 +1052,11 @@ validateRenderTape(std::span<const std::byte> blob,
           if (!parentSurfaceLoaded ||
               !renderTapeSurfaceDescriptorsEqual(surface.surface,
                                                   parentSurface)) {
-            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+            auto detail = objectDefineDetail;
+            detail.subreason = RenderTapeObjectDefineValidationSubreason::
+                SurfaceParentMismatch;
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                           CommandChunkValidationStatus::Valid, detail);
           }
         }
       }
@@ -802,7 +1068,11 @@ validateRenderTape(std::span<const std::byte> blob,
       const auto logicalSlot =
           renderTapeLogicalObjectSlot(fixed.identity, descriptor);
       if (logicalSlot.malformedSurfaceDescriptor) {
-        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+        auto detail = objectDefineDetail;
+        detail.subreason =
+            RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorSchema;
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i,
+                       CommandChunkValidationStatus::Valid, detail);
       }
       bool sameWireSlotSeen = false;
       std::uint32_t latestWireGeneration = 0u;

@@ -277,6 +277,67 @@ static_assert(alignof(RenderTapePresentCompleteHeader) == 8u);
 static_assert(sizeof(RenderTapeOracleAttachment) == 24u);
 static_assert(alignof(RenderTapeOracleAttachment) == 8u);
 
+enum class RenderTapeObjectDefineValidationSubreason : std::uint8_t {
+  None,
+  InvalidIdentity,
+  DescriptorKindMismatch,
+  DescriptorBytesZero,
+  ReservedFields,
+  ExpectedContentPair,
+  ExpectedContentUnsupported,
+  PayloadValidity,
+  ImmutablePayloadRequired,
+  ImmutablePayloadBytes,
+  ImmutablePayloadDigest,
+  DescriptorExtent,
+  TextureDescriptorDimension,
+  TextureDescriptorExtent,
+  TextureDescriptorDisposition,
+  SurfaceDescriptorStorage,
+  SurfaceDescriptorDisposition,
+  SurfaceDescriptorParent,
+  SurfaceDescriptorExtent,
+  SurfaceDescriptorSchema,
+  SurfaceParentMismatch,
+  DescriptorContentDisposition,
+  ParentLifetime,
+};
+
+struct RenderTapeObjectDefineValidationDetail {
+  RenderTapeObjectDefineValidationSubreason subreason =
+      RenderTapeObjectDefineValidationSubreason::None;
+  D9CWireObjectIdentity identity{};
+  std::uint32_t descriptorKind = 0u;
+  std::uint32_t descriptorBytes = 0u;
+  std::uint32_t descriptorPayloadBytes = 0u;
+  std::uint32_t payloadValidity = 0u;
+  std::uint64_t immutablePayloadBytes = 0u;
+  std::uint64_t expectedContentBytes = 0u;
+  std::uint32_t expectedContentCount = 0u;
+  std::uint32_t descriptorSchemaVersion = 0u;
+  std::uint32_t descriptorDimension = 0u;
+  std::uint32_t descriptorMipLevelCount = 0u;
+  std::uint32_t descriptorSubresourceCount = 0u;
+  std::uint32_t descriptorStorage = 0u;
+  std::uint32_t descriptorDisposition = 0u;
+  std::uint32_t descriptorSubresource = 0u;
+  std::uint64_t descriptorExtentBytes = 0u;
+  std::uint64_t descriptorExpectedExtentBytes = 0u;
+  D9CWireObjectIdentity parentTexture{};
+
+  bool valid() const noexcept {
+    return subreason != RenderTapeObjectDefineValidationSubreason::None;
+  }
+};
+
+const char* renderTapeObjectDefineValidationSubreasonName(
+    RenderTapeObjectDefineValidationSubreason subreason) noexcept;
+
+RenderTapeObjectDefineValidationDetail
+renderTapeClassifyObjectDefineValidation(
+    const RenderTapeObjectDefineHeader& fixed,
+    std::span<const std::byte> descriptor) noexcept;
+
 enum class RenderTapeValidationStatus : std::uint8_t {
   Valid,
   MissingHeader,
@@ -323,6 +384,7 @@ struct RenderTapeValidationResult {
   std::uint32_t failedEventIndex = 0xffffffffu;
   CommandChunkValidationStatus chunkStatus =
       CommandChunkValidationStatus::Valid;
+  RenderTapeObjectDefineValidationDetail objectDefine{};
 
   bool valid() const noexcept {
     return status == RenderTapeValidationStatus::Valid;

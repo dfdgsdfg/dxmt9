@@ -169,6 +169,34 @@ bridge-failure retry contract unchanged. Native coverage binds the production
 classification to the bounded old-command-to-new-definition sequence; GT2 r12
 wild evidence and cross-build validation remain pending.
 
+### GT2 r12 ObjectDefine validation attribution (capture-only)
+
+GT2 r12
+(`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r12-20260814`)
+reached final validation with 2303 events and 144 command chunks, then reported
+`invalid-object-define` at event index 2. The event is an early seed definition
+immediately after `BootstrapState`, before the r11 pending-alias flush sequence;
+the artifact did not identify which ObjectDefine predicate failed. The r11
+flush ordering therefore remains unchanged and the r12 artifact does not prove
+that the flush introduced the invalid definition.
+
+Final validation now carries a bounded, value-owned ObjectDefine failure detail
+through the capture-only result. Its typed subreason identifies the failing
+intrinsic, descriptor-extent, versioned texture/surface metadata, parent
+lifetime, or parent-extent predicate and retains the exact identity, descriptor
+kind/declared and observed bytes, immutable-payload fields, expected-content
+extent, and safely decoded V2 dimension/storage/disposition/parent/subresource
+fields. `finishRenderTapeCaptureAtPresentBoundary` emits that detail only when
+final validation fails; it does not change wire bytes, bridge ABI, validator
+semantics, or capture-off behavior. Native coverage pins representative
+subreasons and extends
+`testPendingAliasFlushBeforeReplacementSequence` through Present/PresentComplete
+to successful final canonical validation.
+
+GT2 r13 remains open: a new wild retry is required to use the diagnostic and
+establish the exact production ObjectDefine failure before any validator or
+producer change is considered.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with

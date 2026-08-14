@@ -8474,6 +8474,38 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9::d3d9::renderTapeValidationStatusName(validation.status),
                 validation.failedEventIndex,
                 static_cast<unsigned>(validation.chunkStatus));
+            if (validation.objectDefine.valid()) {
+                const auto &detail = validation.objectDefine;
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture object_define_detail subreason=%u "
+                    "name=%s kind=%u generation=%u object_id=%llu "
+                    "descriptor_kind=%u descriptor_bytes=%u "
+                    "descriptor_payload_bytes=%u payload_validity=%u "
+                    "immutable_bytes=%llu expected_bytes=%llu "
+                    "expected_count=%u schema=%u dimension=%u mips=%u "
+                    "subresources=%u storage=%u disposition=%u subresource=%u "
+                    "descriptor_extent=%llu/%llu parent_kind=%u "
+                    "parent_generation=%u parent_object_id=%llu",
+                    static_cast<unsigned>(detail.subreason),
+                    dxmt9::d3d9::renderTapeObjectDefineValidationSubreasonName(
+                        detail.subreason),
+                    detail.identity.kind, detail.identity.generation,
+                    static_cast<unsigned long long>(detail.identity.objectId),
+                    detail.descriptorKind, detail.descriptorBytes,
+                    detail.descriptorPayloadBytes, detail.payloadValidity,
+                    static_cast<unsigned long long>(detail.immutablePayloadBytes),
+                    static_cast<unsigned long long>(detail.expectedContentBytes),
+                    detail.expectedContentCount, detail.descriptorSchemaVersion,
+                    detail.descriptorDimension, detail.descriptorMipLevelCount,
+                    detail.descriptorSubresourceCount, detail.descriptorStorage,
+                    detail.descriptorDisposition, detail.descriptorSubresource,
+                    static_cast<unsigned long long>(detail.descriptorExtentBytes),
+                    static_cast<unsigned long long>(
+                        detail.descriptorExpectedExtentBytes),
+                    detail.parentTexture.kind, detail.parentTexture.generation,
+                    static_cast<unsigned long long>(
+                        detail.parentTexture.objectId));
+            }
             abortRenderTapeCapture("completion");
             return;
         }
