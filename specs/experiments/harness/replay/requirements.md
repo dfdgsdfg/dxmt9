@@ -537,7 +537,14 @@ closure admits only the exact bytes returned by a successful complete full lock;
 it never admits inferred or otherwise unproven allocation bytes or the partial seed,
 and aborts only the tape with a typed rejection when identity, generation,
 extent, full-lock, copy, or unlock proof fails. It does not apply to standalone
-or texture-derived Surface wrappers, which keep their existing owner routing.
+Surface wrappers, cube or volume wrappers, or user-memory surfaces. A
+texture-derived 2D Surface wrapper may use the same fallback only after proving
+that its live container texture has the exact generation-qualified texture
+identity and flattened subresource recorded by the mutation. The relock occurs
+only after the application's Surface unlock succeeds and admits only bytes from
+the successful exact-owner full lock. Because that capture-only readback may
+repeat backend dirty or autogen work, it remains explicit side-effect and
+performance debt and is not evidence for promotion.
 Every supported full lock and partial rectangle validates pitch,
 bounds, and all byte arithmetic, strips row padding, and maintains tightly
 packed complete canonical subresource content; block-compressed rectangles are

@@ -85,6 +85,22 @@ enum class RenderTapeFullSnapshotStatus : std::uint32_t {
   InvalidBytes,
 };
 
+// A surface wrapper may only use the exact-owner full snapshot fallback when
+// it is a 2D texture-level alias and its mutation identity is the owning
+// texture generation.  Keep this route decision value-only so the PE seam and
+// native tests cannot silently widen it to standalone/cube/volume surfaces.
+enum class RenderTapeSurfaceSnapshotRoute : std::uint32_t {
+  NotRequired = 0u,
+  TextureDerived,
+  StandaloneSurface,
+  InvalidIdentity,
+};
+
+RenderTapeSurfaceSnapshotRoute renderTapeClassifySurfaceSnapshotRoute(
+    bool captureTrackingEnabled, bool ownerIsTexture2D,
+    bool mutationIdentityIsTexture, bool partialMutation,
+    bool mutationBytesPresent) noexcept;
+
 struct RenderTapeBlockLockLayout {
   std::uint32_t blockBytes = 0u;
   std::uint32_t fullRowBytes = 0u;

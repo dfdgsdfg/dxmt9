@@ -69,6 +69,14 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
   va_end(args);
 }
 
+static void dxmt9DeviceInfoLog(const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-device", fmt,
+                     args);
+  va_end(args);
+}
+
 [[nodiscard]] static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
                               REFGUID guid, const void *data, DWORD size,
                               DWORD flags, const char *label,
@@ -300,11 +308,32 @@ static void rejectRenderTapeFullSnapshot(
   }
 }
 
+static bool renderTapeIdentityMatches(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    const D9CWireObjectIdentity &identity) noexcept {
+  return object.identity.kind == identity.kind &&
+         object.identity.generation == identity.generation &&
+         object.identity.objectId == identity.objectId;
+}
+
+static void logRenderTapeSurfaceSnapshot(
+    const char *phase, const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint32_t subresource,
+    dxmt9::d3d9::RenderTapeFullSnapshotStatus status) noexcept {
+  dxmt9DeviceInfoLog(
+      "render_tape_capture surface_snapshot phase=%s status=%u kind=%u "
+      "generation=%u object_id=%llu subresource=%u",
+      phase, static_cast<unsigned>(status), object.identity.kind,
+      object.identity.generation,
+      static_cast<unsigned long long>(object.identity.objectId), subresource);
+}
+
 // A partial Texture::UnlockRect cannot establish a seed. Once the registry
 // proves that this exact texture generation/subresource is unseeded, take one
 // full CPU-visible lock through the same D9C texture handle and immediately
-// canonicalize its rows. This helper deliberately does not exist on the
-// Surface wrapper: a texture-derived surface must never guess its owner.
+// canonicalize its rows. A texture-derived Surface may call this helper only
+// after resolving its live container texture and proving that exact owner's
+// generation-qualified mutation identity; it must never guess the owner.
 static bool captureRenderTapeFullTextureSnapshot(
     D3D9PeRecorderFlush *recorder, D9CTexture *texture,
     const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
@@ -1044,6 +1073,109 @@ public:
                            : linearLockLayout_.sourceBytes));
       }
     }
+    dxmt9::d3d9::RenderTapeFullSnapshotStatus snapshotStatus =
+        dxmt9::d3d9::RenderTapeFullSnapshotStatus::NotRequired;
+    D9CTexture *snapshotOwner = nullptr;
+    D9CSurfaceDesc snapshotDesc = desc_;
+    const bool partialMutation =
+        (blockLock_ && !blockLockLayout_.fullSubresource) ||
+        (linearLock_ && !linearLockLayout_.fullSubresource);
+    const bool snapshotCandidate =
+        partialMutation && mutationReady && !mutationCopy.empty();
+    const bool captureTracking =
+        snapshotCandidate && recorder_ &&
+        recorder_->IsRenderTapeCaptureTrackingEnabledForChild();
+    const auto surfaceRoute = captureTracking
+        ? dxmt9::d3d9::renderTapeClassifySurfaceSnapshotRoute(
+              true, ownerIsTexture2D_,
+              mutationObject_.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE,
+              partialMutation, true)
+        : dxmt9::d3d9::RenderTapeSurfaceSnapshotRoute::NotRequired;
+    if (surfaceRoute ==
+        dxmt9::d3d9::RenderTapeSurfaceSnapshotRoute::InvalidIdentity) {
+      snapshotStatus =
+          dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity;
+      rejectRenderTapeFullSnapshot(
+          recorder_,
+          dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+              FullSnapshotIdentityMismatch,
+          mutationObject_, mutationSubresource_, desc_,
+          blockLock_ ? static_cast<LONG>(blockLockLayout_.pitch)
+                    : static_cast<LONG>(linearLockLayout_.pitch),
+          mutationCopy.size());
+      logRenderTapeSurfaceSnapshot("preflight", mutationObject_,
+                                   mutationSubresource_, snapshotStatus);
+    } else if (surfaceRoute ==
+               dxmt9::d3d9::RenderTapeSurfaceSnapshotRoute::TextureDerived) {
+      // The wrapper's parent identity is only a routing hint. The unix
+      // surface owner and its generation-qualified identity are the proof.
+      snapshotOwner = dxmt9c_surface_get_container_texture(s_);
+      D9CWireObjectIdentity ownerIdentity{};
+      if (!snapshotOwner ||
+          FAILED(hr32(dxmt9c_texture_get_wire_identity(snapshotOwner,
+                                                       &ownerIdentity))) ||
+          !renderTapeIdentityMatches(mutationObject_, ownerIdentity)) {
+        snapshotStatus =
+            dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity;
+        rejectRenderTapeFullSnapshot(
+            recorder_,
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                FullSnapshotIdentityMismatch,
+            mutationObject_, mutationSubresource_, desc_,
+            blockLock_ ? static_cast<LONG>(blockLockLayout_.pitch)
+                      : static_cast<LONG>(linearLockLayout_.pitch),
+            mutationCopy.size());
+      } else if (FAILED(hr32(dxmt9c_texture_get_level_desc(
+                         snapshotOwner, mutationSubresource_, &snapshotDesc)))) {
+        snapshotStatus =
+            dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent;
+        rejectRenderTapeFullSnapshot(
+            recorder_,
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                FullSnapshotExtentMismatch,
+            mutationObject_, mutationSubresource_, snapshotDesc,
+            blockLock_ ? static_cast<LONG>(blockLockLayout_.pitch)
+                      : static_cast<LONG>(linearLockLayout_.pitch),
+            mutationCopy.size());
+      } else {
+        const std::uint32_t fullRowBytes =
+            blockLock_ ? blockLockLayout_.fullRowBytes
+                       : linearLockLayout_.fullRowBytes;
+        const std::uint32_t fullRows =
+            blockLock_ ? blockLockLayout_.fullRows : linearLockLayout_.fullRows;
+        const std::uint64_t fullBytes =
+            blockLock_ ? blockLockLayout_.fullRowBytes *
+                              static_cast<std::uint64_t>(blockLockLayout_.fullRows)
+                       : linearLockLayout_.fullRowBytes *
+                              static_cast<std::uint64_t>(linearLockLayout_.fullRows);
+        snapshotStatus = recorder_->RenderTapeFullSnapshotStatusForChild(
+            mutationObject_, mutationSubresource_, fullRowBytes, fullRows,
+            fullBytes);
+        if (snapshotStatus ==
+                dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity ||
+            snapshotStatus ==
+                dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
+          rejectRenderTapeFullSnapshot(
+              recorder_,
+              snapshotStatus ==
+                      dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
+                  ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                        FullSnapshotIdentityMismatch
+                  : dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                        FullSnapshotExtentMismatch,
+              mutationObject_, mutationSubresource_, snapshotDesc,
+              blockLock_ ? static_cast<LONG>(blockLockLayout_.pitch)
+                        : static_cast<LONG>(linearLockLayout_.pitch),
+              mutationCopy.size());
+        }
+      }
+      logRenderTapeSurfaceSnapshot("preflight", mutationObject_,
+                                   mutationSubresource_, snapshotStatus);
+    } else if (surfaceRoute !=
+               dxmt9::d3d9::RenderTapeSurfaceSnapshotRoute::NotRequired) {
+      logRenderTapeSurfaceSnapshot("preflight", mutationObject_,
+                                   mutationSubresource_, snapshotStatus);
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -1057,7 +1189,22 @@ public:
       hr = S_OK;
     }
     if (SUCCEEDED(hr)) {
-      if (mutationReady && !mutationCopy.empty()) {
+      if (snapshotStatus ==
+          dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
+        const bool captured = snapshotOwner &&
+            captureRenderTapeFullTextureSnapshot(
+                recorder_, snapshotOwner, mutationObject_, mutationSubresource_,
+                snapshotDesc);
+        logRenderTapeSurfaceSnapshot(
+            captured ? "snapshot_accepted" : "snapshot_rejected",
+            mutationObject_, mutationSubresource_,
+            captured ? dxmt9::d3d9::RenderTapeFullSnapshotStatus::Accepted
+                     : dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidBytes);
+      } else if (mutationReady && !mutationCopy.empty() &&
+                 snapshotStatus !=
+                     dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity &&
+                 snapshotStatus !=
+                     dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
         if (blockLock_) {
           recorder_->NotifyRenderTapeBlockMutationForChild(
               mutationObject_, mutationSubresource_, blockLockLayout_,

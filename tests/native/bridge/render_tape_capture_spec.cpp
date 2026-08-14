@@ -1476,6 +1476,26 @@ void testFullSnapshotClosureTruthTable() {
   check(RenderTapeFullSnapshotStatus::InvalidIdentity !=
             RenderTapeFullSnapshotStatus::Accepted,
         "stale identity remains a typed rejection state");
+  check(renderTapeClassifySurfaceSnapshotRoute(
+            false, true, true, true, true) ==
+            RenderTapeSurfaceSnapshotRoute::NotRequired &&
+            renderTapeClassifySurfaceSnapshotRoute(
+                true, false, false, true, true) ==
+                RenderTapeSurfaceSnapshotRoute::StandaloneSurface &&
+            renderTapeClassifySurfaceSnapshotRoute(
+                true, true, false, true, true) ==
+                RenderTapeSurfaceSnapshotRoute::InvalidIdentity &&
+            renderTapeClassifySurfaceSnapshotRoute(
+                true, true, true, true, true) ==
+                RenderTapeSurfaceSnapshotRoute::TextureDerived,
+        "surface snapshot route only admits an exact 2D texture alias");
+  check(renderTapeClassifySurfaceSnapshotRoute(
+            true, true, true, false, true) ==
+            RenderTapeSurfaceSnapshotRoute::NotRequired &&
+            renderTapeClassifySurfaceSnapshotRoute(
+                true, true, true, true, false) ==
+                RenderTapeSurfaceSnapshotRoute::NotRequired,
+        "full or byte-less surface mutations do not trigger a snapshot");
 }
 
 } // namespace

@@ -705,11 +705,16 @@ successful full lock are admissible, while inferred or otherwise unproven
 allocation bytes and partial seeds remain inadmissible. Full-lock, copy, unlock, identity,
 generation, or extent proof failure rejects the tape without changing the D3D9
 HRESULT. This seam is not general GPU readback and does not claim indexed GT2
-replay. Texture-derived surface wrappers for both
-uncompressed and block-compressed formats mutate the owning texture identity
-at the exact generation-qualified subresource; standalone surfaces remain
-surface-owned, and repeated wrappers for one underlying surface are
-idempotent. For block-compressed locks it validates 4x4-block
+replay. Texture-derived 2D surface wrappers for both uncompressed and
+block-compressed formats may take the same exact-owner full CPU-visible lock
+after the original surface unlock, but only after proving the owner texture
+identity and generation-qualified subresource; standalone, cube, volume, and
+user-memory surfaces remain surface-owned and do not use this fallback. The
+capture-only relock may repeat backend dirty/autogen work even though the
+bytes are read-only; this remains an explicit side-effect/performance debt.
+Texture-derived surface wrappers mutate the owning texture identity at the
+exact generation-qualified subresource; repeated wrappers for one underlying
+surface are idempotent. For block-compressed locks it validates 4x4-block
 alignment (allowing the rounded terminal block at odd extents), pitch, bounds,
 and overflow, copies rows without pitch padding, and maintains tightly packed
 complete subresource bytes. An aligned partial rectangle requires an existing

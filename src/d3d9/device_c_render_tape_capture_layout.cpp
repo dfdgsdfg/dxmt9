@@ -110,6 +110,19 @@ RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
   return RenderTapeFullSnapshotStatus::Required;
 }
 
+RenderTapeSurfaceSnapshotRoute renderTapeClassifySurfaceSnapshotRoute(
+    bool captureTrackingEnabled, bool ownerIsTexture2D,
+    bool mutationIdentityIsTexture, bool partialMutation,
+    bool mutationBytesPresent) noexcept {
+  if (!captureTrackingEnabled || !partialMutation || !mutationBytesPresent)
+    return RenderTapeSurfaceSnapshotRoute::NotRequired;
+  if (!ownerIsTexture2D)
+    return RenderTapeSurfaceSnapshotRoute::StandaloneSurface;
+  if (!mutationIdentityIsTexture)
+    return RenderTapeSurfaceSnapshotRoute::InvalidIdentity;
+  return RenderTapeSurfaceSnapshotRoute::TextureDerived;
+}
+
 RenderTapeFullSnapshotStatus renderTapeValidateFullSnapshot(
     bool fullSubresource, std::uint64_t expectedBytes,
     std::span<const std::byte> bytes) noexcept {
