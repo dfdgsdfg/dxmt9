@@ -23,6 +23,7 @@ enum class RenderTapeInitialContentDisposition : std::uint32_t {
   CompleteSeed = 1u,
   Unavailable = 2u,
   ProducedPresentOutput = 3u,
+  ProducedByCapturedPass = 4u,
 };
 
 enum class RenderTapeSurfaceStorage : std::uint32_t {

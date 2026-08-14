@@ -465,6 +465,26 @@ RenderTapeFirstAccessObservation renderTapeFirstAccessObserve(
   return result;
 }
 
+bool renderTapeProveProducedByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity) noexcept {
+  if (originIdentity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
+      resolvedIdentity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+      sameIdentity(originIdentity, resolvedIdentity)) {
+    return false;
+  }
+  RenderTapeFirstAccessLedger ledger{};
+  renderTapeFirstAccessArm(ledger, originIdentity, resolvedIdentity);
+  const auto observation = renderTapeFirstAccessObserve(ledger, chunk);
+  return observation.status == RenderTapeFirstAccessStatus::Terminal &&
+         observation.classification == RenderTapeFirstAccessClass::FullClearWrite &&
+         observation.aliasOrigin &&
+         sameIdentity(observation.originIdentity, originIdentity) &&
+         sameIdentity(observation.resolvedIdentity, resolvedIdentity) &&
+         sameIdentity(observation.observedIdentity, originIdentity);
+}
+
 const char* renderTapeFirstAccessClassName(
     RenderTapeFirstAccessClass classification) noexcept {
   switch (classification) {

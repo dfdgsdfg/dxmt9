@@ -316,6 +316,28 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
       if (!containsIdentity(closure, definition.fixed.identity)) {
         continue;
       }
+      std::uint32_t disposition = 0u;
+      D9CWireObjectIdentity aliasParent{};
+      std::uint32_t aliasSubresource = 0u;
+      const auto definitionEvent = tape.event(definition.eventIndex);
+      const auto descriptor = definitionEvent.payload.subspan(
+          sizeof(definition.fixed));
+      if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+        RenderTapeTextureDescriptorV2 texture{};
+        if (load(descriptor, 0u, texture))
+          disposition = texture.initialContentDisposition;
+      } else if (definition.fixed.identity.kind ==
+                 D9C_CHUNK_HANDLE_KIND_SURFACE) {
+        RenderTapeSurfaceDescriptorV2 surface{};
+        if (load(descriptor, 0u, surface)) {
+          disposition = surface.initialContentDisposition;
+          if (surface.storage == static_cast<std::uint32_t>(
+                  RenderTapeSurfaceStorage::TextureSubresource)) {
+            aliasParent = surface.parentTexture;
+            aliasSubresource = surface.subresource;
+          }
+        }
+      }
       result.objects.push_back(RenderTapeProjectionObject{
           .identity = definition.fixed.identity,
           .descriptorKind = definition.fixed.descriptorKind,
@@ -325,6 +347,9 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
           .immutablePayloadBytes = definition.fixed.immutablePayloadBytes,
           .expectedContentBytes = definition.fixed.expectedContentBytes,
           .expectedContentCount = definition.fixed.expectedContentCount,
+          .initialContentDisposition = disposition,
+          .aliasParentTexture = aliasParent,
+          .aliasSubresource = aliasSubresource,
       });
     }
     for (const auto& identity : closure) {

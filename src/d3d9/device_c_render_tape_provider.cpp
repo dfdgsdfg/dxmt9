@@ -118,6 +118,7 @@ struct PreflightPlan {
   D9CWireObjectIdentity textureIdentity{};
   RenderTapeTextureDescriptorV2 textureDesc{};
   D9CSurfaceDesc textureLevel0{};
+  bool textureProducedByCapturedPass = false;
   D9CWireObjectIdentity vertexDeclarationIdentity{};
 };
 
@@ -403,8 +404,10 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
           static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
       texture.mipLevelCount == 0u ||
       texture.subresourceCount != texture.mipLevelCount ||
-      texture.initialContentDisposition != static_cast<std::uint32_t>(
-          RenderTapeInitialContentDisposition::CompleteSeed) ||
+      (texture.initialContentDisposition != static_cast<std::uint32_t>(
+           RenderTapeInitialContentDisposition::CompleteSeed) &&
+       texture.initialContentDisposition != static_cast<std::uint32_t>(
+           RenderTapeInitialContentDisposition::ProducedByCapturedPass)) ||
       texture.reserved0 != 0u ||
       descriptor.size() !=
           sizeof(texture) +
@@ -414,7 +417,12 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
       level0.resourceType != 3u || level0.width == 0u ||
       level0.height == 0u || level0.depth != 1u || level0.pool != 0u ||
       level0.multiSampleType != 0u || level0.multiSampleQuality != 0u ||
-      (level0.usage & 3u) != 0u) return false;
+      ((texture.initialContentDisposition == static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed) &&
+        (level0.usage & 3u) != 0u) ||
+       (texture.initialContentDisposition == static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::ProducedByCapturedPass) &&
+        (level0.usage & 1u) == 0u))) return false;
   const auto format = devicec::fmtFromD3D(level0.format);
   if (format == core::Format::Unknown || core::isCompressedFormat(format))
     return false;
@@ -505,18 +513,30 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         if (!noImmutablePayload || descriptor.size() != sizeof(surface) ||
             !load(descriptor, 0u, surface) ||
             surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2 ||
-            surface.storage != static_cast<std::uint32_t>(
-                RenderTapeSurfaceStorage::SwapchainBackbuffer) ||
-            surface.initialContentDisposition != static_cast<std::uint32_t>(
-                RenderTapeInitialContentDisposition::ProducedPresentOutput) ||
-            surface.subresource != 0u ||
-            !renderTapeZeroIdentity(surface.parentTexture) ||
-            !acceptedSurface(surface.surface) ||
-            fixed.expectedContentBytes != 0u ||
-            fixed.expectedContentCount != 0u ||
-            candidate.outputIdentity.objectId != 0u) goto unsupported;
-        candidate.outputIdentity = fixed.identity;
-        candidate.outputDesc = surface.surface;
+            !acceptedSurface(surface.surface)) goto unsupported;
+        if (surface.storage == static_cast<std::uint32_t>(
+                RenderTapeSurfaceStorage::SwapchainBackbuffer)) {
+          if (surface.initialContentDisposition != static_cast<std::uint32_t>(
+                  RenderTapeInitialContentDisposition::ProducedPresentOutput) ||
+              surface.subresource != 0u ||
+              !renderTapeZeroIdentity(surface.parentTexture) ||
+              fixed.expectedContentBytes != 0u ||
+              fixed.expectedContentCount != 0u ||
+              candidate.outputIdentity.objectId != 0u) goto unsupported;
+          candidate.outputIdentity = fixed.identity;
+          candidate.outputDesc = surface.surface;
+        } else if (surface.storage == static_cast<std::uint32_t>(
+                       RenderTapeSurfaceStorage::TextureSubresource)) {
+          if (surface.initialContentDisposition != static_cast<std::uint32_t>(
+                  RenderTapeInitialContentDisposition::Unavailable) ||
+              surface.subresource != 0u || fixed.expectedContentBytes != 0u ||
+              fixed.expectedContentCount != 0u ||
+              surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+              surface.parentTexture.generation == 0u ||
+              surface.parentTexture.objectId == 0u) goto unsupported;
+        } else {
+          goto unsupported;
+        }
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
         D9CBufferDesc buffer{};
         if (!noImmutablePayload || descriptor.size() != sizeof(buffer) ||
@@ -529,12 +549,22 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         if (!noImmutablePayload || descriptor.size() < sizeof(texture) ||
             !load(descriptor, 0u, texture) ||
             !acceptedTextureDescriptor(descriptor, texture, level0) ||
-            fixed.expectedContentCount != texture.subresourceCount ||
-            fixed.expectedContentBytes == 0u ||
+            fixed.expectedContentCount !=
+                (texture.initialContentDisposition == static_cast<std::uint32_t>(
+                     RenderTapeInitialContentDisposition::ProducedByCapturedPass)
+                     ? 0u
+                     : texture.subresourceCount) ||
+            (texture.initialContentDisposition == static_cast<std::uint32_t>(
+                 RenderTapeInitialContentDisposition::ProducedByCapturedPass)
+                 ? fixed.expectedContentBytes != 0u
+                 : fixed.expectedContentBytes == 0u) ||
             candidate.textureIdentity.objectId != 0u) goto unsupported;
         candidate.textureIdentity = fixed.identity;
         candidate.textureDesc = texture;
         candidate.textureLevel0 = level0;
+        candidate.textureProducedByCapturedPass =
+            texture.initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedByCapturedPass);
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
         const Definition definition{.fixed = fixed, .descriptor = descriptor};
         if (candidate.vertexDeclarationIdentity.objectId != 0u ||
@@ -592,6 +622,10 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         ++result.coverage.commandRecords;
         auto& recordState = recordStates[intervalIndex];
         if (recordState == FrameRecordState::ExpectClear &&
+            candidate.textureProducedByCapturedPass &&
+            record.header.type == D9C_COMMAND_RECORD_APPLY_STATE) {
+          if (!applyBoundedBindings(chunk, record, drawState)) goto unsupported;
+        } else if (recordState == FrameRecordState::ExpectClear &&
             record.header.type == D9C_COMMAND_RECORD_CLEAR) {
           D9CCommandChunkWireClear clear{};
           if (!load(record.payload, 0u, clear) || clear.flags != 1u ||
@@ -713,13 +747,13 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       candidate.intervals.begin(),
       candidate.intervals.begin() + candidate.intervalCount,
       [](const auto& interval) { return interval.sawTexturedDraw; });
-  if (!anyTexturedDraw &&
+  if (!anyTexturedDraw && !candidate.textureProducedByCapturedPass &&
       (candidate.textureIdentity.objectId != 0u ||
        candidate.vertexDeclarationIdentity.objectId != 0u))
     goto unsupported;
   if (tape.header.profile == kRenderTapeProfileSequence && !anyTexturedDraw)
     goto unsupported;
-  if (anyTexturedDraw) {
+  if (anyTexturedDraw || candidate.textureProducedByCapturedPass) {
     std::uint64_t texturePixels = 0u;
     std::uint64_t tightTextureBytes = 0u;
     if (!checkedMul(candidate.textureLevel0.width,
@@ -734,6 +768,31 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
     const bool productionDeclaration =
         candidate.vertexDeclarationIdentity.objectId != 0u;
     const std::size_t expectedDefinitions = productionDeclaration ? 3u : 2u;
+    const std::size_t expectedSurfaceAliases = std::count_if(
+        candidate.definitions.begin(), candidate.definitions.end(),
+        [&](const auto& definition) {
+          if (definition.fixed.identity.kind !=
+              D9C_CHUNK_HANDLE_KIND_SURFACE)
+            return false;
+          RenderTapeSurfaceDescriptorV2 surface{};
+          return load(definition.descriptor, 0u, surface) &&
+                 surface.storage == static_cast<std::uint32_t>(
+                     RenderTapeSurfaceStorage::TextureSubresource);
+        });
+    const bool aliasesNameCandidateTexture = std::all_of(
+        candidate.definitions.begin(), candidate.definitions.end(),
+        [&](const auto& definition) {
+          if (definition.fixed.identity.kind !=
+              D9C_CHUNK_HANDLE_KIND_SURFACE)
+            return true;
+          RenderTapeSurfaceDescriptorV2 surface{};
+          if (!load(definition.descriptor, 0u, surface) ||
+              surface.storage != static_cast<std::uint32_t>(
+                  RenderTapeSurfaceStorage::TextureSubresource))
+            return true;
+          return sameIdentity(surface.parentTexture,
+                              candidate.textureIdentity);
+        });
     const bool sequence = tape.header.profile == kRenderTapeProfileSequence;
     const std::size_t expectedBlobs =
         (productionDeclaration ? 2u : 1u) + (sequence ? 1u : 0u);
@@ -742,19 +801,28 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
              mutation.subresource == 0u && mutation.byteOffset == 0u &&
              mutation.byteSize == textureDefinition->fixed.expectedContentBytes;
     };
-    if (candidate.definitions.size() != expectedDefinitions ||
+    if (candidate.definitions.size() !=
+            expectedDefinitions + expectedSurfaceAliases ||
         candidate.textureIdentity.objectId == 0u ||
+        !aliasesNameCandidateTexture ||
         textureDefinition == candidate.definitions.end() ||
-        !sameIdentity(drawState.texture, candidate.textureIdentity) ||
+        (!candidate.textureProducedByCapturedPass &&
+         !sameIdentity(drawState.texture, candidate.textureIdentity)) ||
         candidate.textureDesc.mipLevelCount != 1u ||
         candidate.textureLevel0.format != 21u ||
-        textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
-        textureDefinition->fixed.expectedContentBytes %
-                candidate.textureLevel0.height != 0u ||
-        candidate.initialMutations.size() != 1u ||
-        !mutationShapeMatches(candidate.initialMutations[0]) ||
-        blobs.size() != expectedBlobs ||
-        textureDefinition->fixed.expectedContentCount != 1u) {
+        (!candidate.textureProducedByCapturedPass &&
+         (textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
+          textureDefinition->fixed.expectedContentBytes %
+                  candidate.textureLevel0.height != 0u ||
+          candidate.initialMutations.size() != 1u ||
+          !mutationShapeMatches(candidate.initialMutations[0]) ||
+          blobs.size() != expectedBlobs ||
+          textureDefinition->fixed.expectedContentCount != 1u)) ||
+        (candidate.textureProducedByCapturedPass &&
+         (!candidate.initialMutations.empty() ||
+          blobs.size() != (productionDeclaration ? 1u : 0u) +
+                              (sequence ? 1u : 0u) ||
+          textureDefinition->fixed.expectedContentCount != 0u))) {
       goto unsupported;
     }
     if (sequence) {
@@ -898,13 +966,41 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     }
   };
 
-  for (const auto& definition : plan.definitions) {
+  // Texture-derived surfaces borrow their parent storage. Create all owning
+  // objects first, then materialize aliases so replay is independent of
+  // ObjectDefine event order while preserving every identity exactly.
+  for (unsigned creationPass = 0u; creationPass != 2u; ++creationPass) {
+    for (const auto& definition : plan.definitions) {
+      bool textureAlias = false;
+      if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+        RenderTapeSurfaceDescriptorV2 surface{};
+        textureAlias = load(definition.descriptor, 0u, surface) &&
+                       surface.storage == static_cast<std::uint32_t>(
+                           RenderTapeSurfaceStorage::TextureSubresource);
+      }
+      if ((creationPass == 1u) != textureAlias)
+        continue;
     void* value = nullptr;
     if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
-      auto* swap = device->iface->GetSwapChain(0u);
-      if (swap) {
-        value = new D9CSurface{swap->backBuffer(), nullptr, 0u, device};
-        swap->Release();
+      RenderTapeSurfaceDescriptorV2 surface{};
+      if (!load(definition.descriptor, 0u, surface)) {
+        result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+        cleanup();
+        return result;
+      }
+      if (surface.storage == static_cast<std::uint32_t>(
+              RenderTapeSurfaceStorage::TextureSubresource)) {
+        void* parent = findObject(objects, surface.parentTexture);
+        if (parent) {
+          value = dxmt9c_texture_get_surface_level(
+              static_cast<D9CTexture*>(parent), surface.subresource);
+        }
+      } else {
+        auto* swap = device->iface->GetSwapChain(0u);
+        if (swap) {
+          value = new D9CSurface{swap->backBuffer(), nullptr, 0u, device};
+          swap->Release();
+        }
       }
     } else if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
       D9CBufferDesc desc{};
@@ -939,6 +1035,7 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     }
     objects.push_back({.identity = definition.fixed.identity, .value = value});
     ++result.conservation.objectsCreated;
+    }
   }
 
   // Definitions are fully indexed before bootstrap application.

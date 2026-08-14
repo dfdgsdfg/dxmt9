@@ -75,6 +75,17 @@ RenderTapeFirstAccessObservation renderTapeFirstAccessObserve(
     RenderTapeFirstAccessLedger& ledger,
     const ImportedChunkView& chunk) noexcept;
 
+// Exact, value-only admission proof for a missing texture seed. The origin is
+// the generation-qualified surface handle carried by the chunk and the
+// resolved identity is its generation-qualified texture storage. A produced
+// pass is admitted only when that exact alias is bound as a render target and
+// its first terminal access in this chunk is an unrestricted target Clear;
+// malformed, ambiguous, read-first, partial-clear, and draw paths reject.
+bool renderTapeProveProducedByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity) noexcept;
+
 const char* renderTapeFirstAccessClassName(
     RenderTapeFirstAccessClass classification) noexcept;
 const char* renderTapeFirstAccessStatusName(

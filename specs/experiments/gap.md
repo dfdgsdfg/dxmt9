@@ -303,11 +303,16 @@ observed the r26 alias-qualified RT as `full_clear_write`: the missing seed was
 the generation-14 Texture2D storage behind the generation-28 RT surface, and
 record 1 was a production-shaped unrestricted target `CLEAR` immediately after
 the binding. This rules out a pre-commit GPU snapshot for this exact blocker.
-The next increment may admit this generation as `ProducedByCapturedPass` only
-if it preserves and validates the failing command chunk, proves that the full
-clear precedes every read, and retains the existing fail-closed fallback for
-all partial, draw-coverage-unknown, read-first, malformed, and identity-mismatch
-cases. No such admission policy is implemented by r27.
+The follow-on admission is now bounded to one generation-qualified
+`Texture2D` with exactly one mip/subresource and one exact texture-derived
+surface alias. Capture validates the current command chunk before defining the
+produced texture, retains that same chunk after `ObjectDefine`, emits no seed
+mutation, and the tape validator resolves the one obligation exactly once at
+the first alias/full-clear chunk. Partial, draw-coverage-unknown, read-first,
+malformed, identity-mismatch, multiple-target, later-unresolved, cube, and
+multi-mip cases remain fail-closed. Native provider planning can construct the
+texture without an initial mutation and construct the alias after its parent;
+no wild visual or promotion evidence is claimed here.
 
 ## Render Tape bounded wild evidence
 

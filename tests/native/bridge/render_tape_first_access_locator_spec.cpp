@@ -272,6 +272,55 @@ void testMismatchMalformedAndPresentHandle() {
         "malformed validated-view input fails closed");
 }
 
+void testProducedByCapturedPassProof() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 28u, 7527u);
+  const auto resolved = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14u, 7525u);
+  const std::array<SectionSpec, 1> binding{{
+      {D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, origin);
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u, .rectCount = 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear)};
+  const auto clearFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &clear,
+                                  sizeof(clear));
+  std::array<D9CCommandChunkWireRecordHeader, 2> records{
+      apply.record, clearFixture.record};
+  records[1].payloadOffset = static_cast<std::uint32_t>(apply.payload.size());
+  std::vector<std::byte> payload = apply.payload;
+  payload.insert(payload.end(), clearFixture.payload.begin(),
+                 clearFixture.payload.end());
+  ImportedChunkView view{
+      .records = records,
+      .handles = apply.handles,
+      .payloadArena = payload,
+  };
+  check(renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "exact alias binding followed by full clear is admitted");
+
+  const D9CRect rect{0, 0, 8, 8};
+  const D9CCommandChunkWireClear partial{
+      .flags = 1u, .rectCount = 1u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear)};
+  const auto partialFixture = clearWithRects(partial, std::array{rect});
+  records[1] = partialFixture.record;
+  records[1].payloadOffset = static_cast<std::uint32_t>(apply.payload.size());
+  payload = apply.payload;
+  payload.insert(payload.end(), partialFixture.payload.begin(),
+                 partialFixture.payload.end());
+  view.payloadArena = payload;
+  check(!renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "partial clear is rejected");
+
+  auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, {}, origin);
+  records[1] = draw.record;
+  records[1].payloadOffset = static_cast<std::uint32_t>(apply.payload.size());
+  payload = apply.payload;
+  payload.insert(payload.end(), draw.payload.begin(), draw.payload.end());
+  view.payloadArena = payload;
+  check(!renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "unknown draw coverage is rejected");
+}
+
 } // namespace
 
 int main() {
@@ -279,6 +328,7 @@ int main() {
     testCrossChunkDrawAndExactlyOnce();
     testReadWriteConflictAndClear();
     testMismatchMalformedAndPresentHandle();
+    testProducedByCapturedPassProof();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

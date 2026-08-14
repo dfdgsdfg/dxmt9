@@ -39,6 +39,9 @@ struct RenderTapeProjectionObject {
   std::uint64_t immutablePayloadBytes = 0u;
   std::uint64_t expectedContentBytes = 0u;
   std::uint32_t expectedContentCount = 0u;
+  std::uint32_t initialContentDisposition = 0u;
+  D9CWireObjectIdentity aliasParentTexture{};
+  std::uint32_t aliasSubresource = 0u;
   std::uint64_t initialContentBytes = 0u;
   std::uint32_t initialContentCount = 0u;
 };

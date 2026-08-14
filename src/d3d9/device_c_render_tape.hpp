@@ -463,6 +463,12 @@ struct RenderTapeValidationScratch {
     std::uint32_t subresource = 0u;
   };
 
+  struct ProducedPassObligation {
+    D9CWireObjectIdentity identity{};
+    std::uint32_t definitionEventIndex = 0xffffffffu;
+    bool resolved = false;
+  };
+
   // The definition index is populated before the ordered semantic pass. It
   // lets BootstrapState close handles against definitions journaled after the
   // bootstrap event without borrowing any event payload storage.
@@ -474,6 +480,7 @@ struct RenderTapeValidationScratch {
   // ObjectDefine extent before the first non-seed event.
   std::vector<SeedContentExpectation> seedContentExpectations;
   std::vector<SeedSubresource> seedSubresources;
+  std::vector<ProducedPassObligation> producedPassObligations;
   CommandChunkValidationScratch chunk;
 };
 

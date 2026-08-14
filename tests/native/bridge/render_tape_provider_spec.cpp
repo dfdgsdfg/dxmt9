@@ -569,6 +569,149 @@ struct Fixture {
   }
 };
 
+void testProducedByCapturedPassTape() {
+  constexpr D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 7u,
+      .objectId = 40u,
+  };
+  constexpr D9CWireObjectIdentity alias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 7u,
+      .objectId = 41u,
+  };
+  constexpr D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 9u,
+      .objectId = 43u,
+  };
+  auto level = D9CSurfaceDesc{
+      .format = 21u,
+      .resourceType = 3u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  auto producedTexture = texture2DDescriptor(
+      D9CSurfaceDesc{.format = 21u, .resourceType = 3u, .pool = 0u,
+                     .width = 4u, .height = 4u, .depth = 1u});
+  RenderTapeTextureDescriptorV2 producedHeader{};
+  std::memcpy(&producedHeader, producedTexture.data(), sizeof(producedHeader));
+  producedHeader.initialContentDisposition = static_cast<std::uint32_t>(
+      RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+  std::memcpy(producedTexture.data(), &producedHeader, sizeof(producedHeader));
+  std::memcpy(producedTexture.data() + sizeof(RenderTapeTextureDescriptorV2),
+              &level, sizeof(level));
+  const RenderTapeSurfaceDescriptorV2 aliasDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = texture,
+      .surface = D9CSurfaceDesc{.format = 21u,
+                                .resourceType = 1u,
+                                .usage = 1u,
+                                .pool = 0u,
+                                .width = 4u,
+                                .height = 4u,
+                                .depth = 1u},
+  };
+  const auto clear = bytesOf(D9CCommandChunkWireClear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectCount = 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  });
+  const auto present = bytesOf(D9CCommandChunkWirePresent{});
+  ImportedChunkView bootstrap;
+  const auto applyBytes = bootstrapChunkWithRenderTargets(
+      std::array{D9CCommandChunkWireRenderTargetBinding{
+          .slot = 0u, .valid = 1u, .handleIndex = 0u}});
+  check(importPrevalidatedCommandChunk(
+            applyBytes,
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+            bootstrap),
+        "produced-pass apply fixture imports");
+  const auto applyRecord = bootstrap.record(0u);
+  const std::array frameRecords{
+      Record{.type = applyRecord.header.type,
+             .payload = std::vector<std::byte>(applyRecord.payload.begin(),
+                                               applyRecord.payload.end()),
+             .handles = std::vector<D9CCommandChunkWireHandleEntry>(
+                 bootstrap.handles.begin(), bootstrap.handles.end())},
+      Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = clear},
+      Record{.type = D9C_COMMAND_RECORD_PRESENT, .payload = present},
+  };
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(implicitBootstrapChunk());
+  const auto outputDescriptorV2 = outputDescriptor(D9CSurfaceDesc{
+      .format = 21u, .resourceType = 1u, .usage = 1u, .pool = 0u,
+      .width = 4u, .height = 4u, .depth = 1u});
+  builder.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      producedTexture, 0u, {}, 0u, 0u);
+  builder.appendObjectDefine(
+      alias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {}, 0u, 0u);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 3u,
+                           .handleCount = static_cast<std::uint32_t>(
+                               bootstrap.handles.size())},
+      makeChunk(frameRecords));
+  const RenderTapeOracleAttachment oracle{
+      .identity = output,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  builder.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto tape = builder.seal();
+  const RenderTapeBlobCatalogue catalogue;
+  const auto validation = validateRenderTape(tape, catalogue);
+  check(validation.valid(),
+        "produced full-clear tape retains and validates its command chunk");
+  const auto preflight = preflightFrameTapeIdentity(tape, {});
+  check(preflight.complete(),
+        "provider admits the bounded produced full-clear tape without a seed");
+
+  auto multiMipTexture = producedTexture;
+  RenderTapeTextureDescriptorV2 multiMipHeader{};
+  std::memcpy(&multiMipHeader, multiMipTexture.data(), sizeof(multiMipHeader));
+  multiMipHeader.mipLevelCount = 2u;
+  multiMipHeader.subresourceCount = 2u;
+  multiMipTexture.resize(sizeof(multiMipHeader) + 2u * sizeof(D9CSurfaceDesc));
+  std::memcpy(multiMipTexture.data(), &multiMipHeader,
+              sizeof(multiMipHeader));
+  std::memcpy(multiMipTexture.data() + sizeof(multiMipHeader), &level,
+              sizeof(level));
+  auto level1 = level;
+  level1.width = 2u;
+  level1.height = 2u;
+  std::memcpy(multiMipTexture.data() + sizeof(multiMipHeader) +
+                  sizeof(level),
+              &level1, sizeof(level1));
+  const RenderTapeObjectDefineHeader multiMipFixed{
+      .identity = texture,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture),
+      .descriptorBytes = static_cast<std::uint32_t>(multiMipTexture.size()),
+  };
+  const auto multiMipDetail = renderTapeClassifyObjectDefineValidation(
+      multiMipFixed, multiMipTexture);
+  check(multiMipDetail.subreason ==
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorDisposition,
+        "produced multi-mip texture remains fail-closed");
+}
+
 struct TexturedFixture {
   std::array<std::byte, 16u> seed{
       std::byte{0x10}, std::byte{0x20}, std::byte{0xf0}, std::byte{0xff},
@@ -1590,6 +1733,7 @@ int main(int argc, char** argv) {
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     canonicalUnsupportedDimensionsReturnTypedGrammar();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
+    testProducedByCapturedPassTape();
     acceptsSplitTexturedUpGrammarAndRejectsNearMisses();
     productionPresenterMirrorGpuOracle();
     nativeMetalOffscreenIdentityReplay();

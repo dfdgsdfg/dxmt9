@@ -168,6 +168,9 @@ RenderTapeExpectedContentStatus renderTapeValidateExpectedContentExtents(
 struct RenderTapeBootstrapClosureObject {
   D9CWireObjectIdentity identity{};
   bool complete = false;
+  // The object may be defined after the bootstrap and admitted only when the
+  // current command chunk proves a generation-qualified full-clear write.
+  bool producedByCapturedPassCandidate = false;
   bool hasDescriptorDependency = false;
   D9CWireObjectIdentity descriptorDependency{};
 };

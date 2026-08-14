@@ -1,4 +1,6 @@
 #include "device_c_render_tape.hpp"
+
+#include "device_c_render_tape_first_access_locator.hpp"
 #include "device_c_render_tape_descriptors.hpp"
 
 #include <algorithm>
@@ -46,6 +48,7 @@ bool validDescriptorContentDisposition(
         static_cast<RenderTapeTextureDimension>(texture.dimension);
     const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
         texture.initialContentDisposition);
+    D9CSurfaceDesc level0{};
     std::uint64_t expectedSubresources = texture.mipLevelCount;
     std::uint64_t subresourceBytes = 0u;
     std::uint64_t descriptorBytes = 0u;
@@ -66,9 +69,18 @@ bool validDescriptorContentDisposition(
         !validTextureSubresourceDescriptors(descriptor, texture)) {
       return false;
     }
-    return disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
-           fixed.expectedContentBytes != 0u &&
-           fixed.expectedContentCount == texture.subresourceCount;
+    const bool completeSeed =
+        disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+        fixed.expectedContentBytes != 0u &&
+        fixed.expectedContentCount == texture.subresourceCount;
+    const bool produced =
+        disposition == RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
+        dimension == RenderTapeTextureDimension::Texture2D &&
+        texture.mipLevelCount == 1u && texture.subresourceCount == 1u &&
+        renderTapeTextureSubresourceDescriptor(descriptor, 0u, level0) &&
+        (level0.usage & 1u) != 0u &&
+        fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
+    return completeSeed || produced;
   }
   if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
     if (descriptor.size() != sizeof(RenderTapeSurfaceDescriptorV2))
@@ -467,9 +479,19 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
     }
     const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
         texture.initialContentDisposition);
-    if (disposition != RenderTapeInitialContentDisposition::CompleteSeed ||
-        fixed.expectedContentBytes == 0u ||
-        fixed.expectedContentCount != texture.subresourceCount) {
+    D9CSurfaceDesc level0{};
+    const bool completeSeed =
+        disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+        fixed.expectedContentBytes != 0u &&
+        fixed.expectedContentCount == texture.subresourceCount;
+    const bool producedByCapturedPass =
+        disposition == RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
+        dimension == RenderTapeTextureDimension::Texture2D &&
+        texture.mipLevelCount == 1u && texture.subresourceCount == 1u &&
+        renderTapeTextureSubresourceDescriptor(descriptorBytes, 0u, level0) &&
+        (level0.usage & 1u) != 0u &&
+        fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
+    if (!completeSeed && !producedByCapturedPass) {
       return reject(RenderTapeObjectDefineValidationSubreason::
                         TextureDescriptorDisposition);
     }
@@ -745,11 +767,13 @@ validateRenderTape(std::span<const std::byte> blob,
   scratch.objectDefinitions.clear();
   scratch.seedContentExpectations.clear();
   scratch.seedSubresources.clear();
+  scratch.producedPassObligations.clear();
   try {
     scratch.liveObjects.reserve(header.eventCount);
     scratch.objectDefinitions.reserve(header.eventCount);
     scratch.seedContentExpectations.reserve(header.eventCount);
     scratch.seedSubresources.reserve(header.eventCount);
+    scratch.producedPassObligations.reserve(header.eventCount);
   } catch (...) {
     return failure(RenderTapeValidationStatus::ScratchAllocationFailed);
   }
@@ -829,6 +853,20 @@ validateRenderTape(std::span<const std::byte> blob,
                 .expectedCount = fixed.expectedContentCount,
             });
       }
+      const auto descriptor = event.payload.subspan(sizeof(fixed));
+      if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+          descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
+        RenderTapeTextureDescriptorV2 texture{};
+        std::memcpy(&texture, descriptor.data(), sizeof(texture));
+        if (texture.initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedByCapturedPass)) {
+          if (!scratch.producedPassObligations.empty())
+            return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+          scratch.producedPassObligations.push_back(
+              RenderTapeValidationScratch::ProducedPassObligation{
+                  .identity = fixed.identity, .definitionEventIndex = i});
+        }
+      }
     } catch (...) {
       return failure(RenderTapeValidationStatus::ScratchAllocationFailed, i);
     }
@@ -851,6 +889,66 @@ validateRenderTape(std::span<const std::byte> blob,
     return expectation != scratch.seedContentExpectations.end() &&
            (expectation->recordedBytes != expectation->expectedBytes ||
             expectation->recordedCount != expectation->expectedCount);
+  };
+
+  const auto validateProducedPassChunk = [&](const ImportedChunkView& chunk) {
+    for (auto& obligation : scratch.producedPassObligations) {
+      if (obligation.resolved)
+        continue;
+      const auto event = candidate.event(obligation.definitionEventIndex);
+      RenderTapeObjectDefineHeader fixed{};
+      RenderTapeTextureDescriptorV2 texture{};
+      if (!load(event.payload, 0u, fixed) ||
+          !load(event.payload, sizeof(fixed), texture) ||
+          texture.initialContentDisposition != static_cast<std::uint32_t>(
+              RenderTapeInitialContentDisposition::ProducedByCapturedPass))
+        return false;
+
+      D9CWireObjectIdentity origin{};
+      std::uint32_t originCount = 0u;
+      for (const auto& candidateDefinition : scratch.objectDefinitions) {
+        if (candidateDefinition.identity.kind !=
+            D9C_CHUNK_HANDLE_KIND_SURFACE)
+          continue;
+        const auto surfaceEvent = candidate.event(candidateDefinition.eventIndex);
+        RenderTapeObjectDefineHeader surfaceFixed{};
+        RenderTapeSurfaceDescriptorV2 surface{};
+        if (!load(surfaceEvent.payload, 0u, surfaceFixed) ||
+            !load(surfaceEvent.payload, sizeof(surfaceFixed), surface) ||
+            surface.storage != static_cast<std::uint32_t>(
+                RenderTapeSurfaceStorage::TextureSubresource) ||
+            surface.subresource != 0u ||
+            !renderTapePresentOutputIdentityMatchesCommand(
+                surface.parentTexture, obligation.identity))
+          continue;
+        const bool referenced = std::any_of(
+            chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
+              return handle.kind == candidateDefinition.identity.kind &&
+                     handle.generation == candidateDefinition.identity.generation &&
+                     handle.objectId == candidateDefinition.identity.objectId;
+            });
+        if (referenced) {
+          origin = candidateDefinition.identity;
+          ++originCount;
+        }
+      }
+      const bool directReference = std::any_of(
+          chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
+            return handle.kind == obligation.identity.kind &&
+                   handle.generation == obligation.identity.generation &&
+                   handle.objectId == obligation.identity.objectId;
+          });
+      if (directReference || originCount > 1u) {
+        return false;
+      }
+      if (originCount == 0u)
+        continue;
+      if (!renderTapeProveProducedByCapturedPass(chunk, origin,
+                                                  obligation.identity))
+        return false;
+      obligation.resolved = true;
+    }
+    return true;
   };
 
   for (std::uint32_t i = 0u; i < header.eventCount; ++i) {
@@ -1263,6 +1361,9 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::InvalidCommandChunk, i,
                        chunkResult.status);
       }
+      if (!validateProducedPassChunk(chunk)) {
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+      }
       // Every handle referenced by the chunk must name a live object.
       for (const auto& handle : chunk.handles) {
         const D9CWireObjectIdentity identity{
@@ -1391,6 +1492,13 @@ validateRenderTape(std::span<const std::byte> blob,
           : true;
       if (finalCompletion != (i == header.eventCount - 1u)) {
         return failure(RenderTapeValidationStatus::PresentNotLast, i);
+      }
+      if (std::any_of(scratch.producedPassObligations.begin(),
+                      scratch.producedPassObligations.end(),
+                      [](const auto& obligation) {
+                        return !obligation.resolved;
+                      })) {
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
       }
       RenderTapePresentCompleteHeader fixed{};
       if (!sawBootstrap || sawReset || !sawChunkPresent ||

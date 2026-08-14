@@ -429,7 +429,7 @@ RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
           });
       if (object == objects.end())
         return RenderTapeBootstrapClosureStatus::ReferencedObjectMissing;
-      if (!object->complete)
+      if (!object->complete && !object->producedByCapturedPassCandidate)
         return RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete;
       if (!object->hasDescriptorDependency) continue;
       const auto dependency = object->descriptorDependency;
@@ -445,7 +445,8 @@ RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
           });
       if (dependencyObject == objects.end())
         return RenderTapeBootstrapClosureStatus::DescriptorDependencyMissing;
-      if (!dependencyObject->complete)
+      if (!dependencyObject->complete &&
+          !dependencyObject->producedByCapturedPassCandidate)
         return RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete;
       append(dependency);
     }

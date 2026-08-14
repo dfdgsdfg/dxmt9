@@ -7784,12 +7784,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     presentOutput = object->identity;
                     ++presentOutputCount;
                 }
-                const bool complete = object->contentCount == object->content.size() &&
-                    std::all_of(object->content.begin(), object->content.end(),
-                                [](const auto &bytes) { return !bytes.empty(); });
+                const bool complete = object->lifetime.textureAlias ||
+                    (object->contentCount == object->content.size() &&
+                     std::all_of(object->content.begin(), object->content.end(),
+                                 [](const auto &bytes) { return !bytes.empty(); }));
+                bool producedByCapturedPassCandidate = false;
+                if (!complete &&
+                    object->identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+                    RenderTapeTextureDescriptorV2 texture{};
+                    if (renderTapeLoadTextureDescriptorV2(object->descriptor,
+                                                          texture) &&
+                        texture.dimension == static_cast<std::uint32_t>(
+                            RenderTapeTextureDimension::Texture2D) &&
+                        texture.mipLevelCount == 1u &&
+                        texture.subresourceCount == 1u) {
+                        D9CSurfaceDesc desc{};
+                        producedByCapturedPassCandidate =
+                            renderTapeTextureSubresourceDescriptor(
+                                object->descriptor, 0u, desc) &&
+                            (desc.usage & 1u) != 0u;
+                    }
+                }
                 closureObjects.push_back({
                     .identity = object->identity,
                     .complete = complete,
+                    .producedByCapturedPassCandidate =
+                        producedByCapturedPassCandidate,
                     .hasDescriptorDependency = object->lifetime.textureAlias,
                     .descriptorDependency = object->aliasParentTexture,
                 });
@@ -7836,6 +7856,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             for (const auto *object : objects) {
                 if (!dxmt9::d3d9::renderTapeBootstrapClosureContains(
                         closure, object->identity)) {
+                    continue;
+                }
+                const auto closureObject = std::find_if(
+                    closureObjects.begin(), closureObjects.end(),
+                    [&](const auto &candidate) {
+                        return renderTapeSameIdentity(candidate.identity,
+                                                      object->identity);
+                    });
+                const auto dependencyObject =
+                    closureObject != closureObjects.end() &&
+                            closureObject->hasDescriptorDependency
+                        ? std::find_if(
+                              closureObjects.begin(), closureObjects.end(),
+                              [&](const auto &candidate) {
+                                return renderTapeSameIdentity(
+                                    candidate.identity,
+                                    closureObject->descriptorDependency);
+                              })
+                        : closureObjects.end();
+                if (closureObject != closureObjects.end() &&
+                    ((!closureObject->complete &&
+                      closureObject->producedByCapturedPassCandidate) ||
+                     (dependencyObject != closureObjects.end() &&
+                      !dependencyObject->complete &&
+                      dependencyObject->producedByCapturedPassCandidate))) {
+                    // The generation-qualified storage is defined only after
+                    // the current command chunk proves its first terminal
+                    // access is the matching unrestricted attachment Clear.
                     continue;
                 }
                 dxmt9::d3d9::RenderTapeCaptureObjectSeed objectSeed{};
@@ -8253,7 +8301,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::numeric_limits<std::uint32_t>::max(),
         std::uint32_t recordType = 0u,
         const dxmt9::d3d9::RenderTapeOriginLocator *originLocator =
-            nullptr) noexcept {
+            nullptr,
+        const dxmt9::d3d9::ImportedChunkView *currentChunk = nullptr) noexcept {
         if (renderTapeObjectAdmitted(identity))
             return true;
         if (!renderTapeRegistry_) {
@@ -8306,12 +8355,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (object->lifetime.textureAlias &&
             !materializeRenderTapeObjectForReference(
                 object->aliasParentTexture, handleIndex, recordIndex,
-                recordType, originLocator)) {
+                recordType, originLocator, currentChunk)) {
             return false;
         }
-        if (object->contentCount != object->content.size() ||
+        const bool incomplete =
+            object->contentCount != object->content.size() ||
             std::any_of(object->content.begin(), object->content.end(),
-                        [](const auto &bytes) { return bytes.empty(); })) {
+                        [](const auto &bytes) { return bytes.empty(); });
+        bool producedByCapturedPass = false;
+        if (incomplete && object->lifetime.textureAlias) {
+            // A texture-derived surface owns no independent seed. Its parent
+            // was resolved above; preserve the alias descriptor as Unavailable.
+        } else if (incomplete && currentChunk && originLocator) {
+            RenderTapeTextureDescriptorV2 texture{};
+            const bool exactTexture =
+                renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
+                texture.dimension == static_cast<std::uint32_t>(
+                    RenderTapeTextureDimension::Texture2D) &&
+                texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
+            producedByCapturedPass =
+                exactTexture &&
+                dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
+                    *currentChunk, originLocator->originIdentity,
+                    object->identity);
+        } else if (incomplete) {
             const auto missing = std::find_if(
                 object->content.begin(), object->content.end(),
                 [](const auto &bytes) { return bytes.empty(); });
@@ -8400,7 +8467,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 static_cast<std::uint32_t>(missing - object->content.begin()));
         }
         dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
-        if (!renderTapeValidateExpectedContent(
+        if (!producedByCapturedPass && !object->lifetime.textureAlias &&
+            !renderTapeValidateExpectedContent(
                 object->identity, object->descriptor, object->content,
                 contentContract)) {
             dxmt9DeviceInfoLog(
@@ -8429,13 +8497,40 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto descriptorKind = static_cast<std::uint32_t>(
             dxmt9::d3d9::renderTapeDescriptorKindForObject(identity.kind));
+        std::vector<std::byte> descriptor = object->descriptor;
+        if (producedByCapturedPass) {
+            RenderTapeTextureDescriptorV2 texture{};
+            if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+                texture.initialContentDisposition != static_cast<std::uint32_t>(
+                    RenderTapeInitialContentDisposition::CompleteSeed)) {
+                return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                                   DescriptorMismatch);
+            }
+            texture.initialContentDisposition = static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+            std::memcpy(descriptor.data(), &texture, sizeof(texture));
+        }
         if (renderTapeCapture_->objectDefine(
-                identity, descriptorKind, object->descriptor, immutableBytes,
-                immutableDigest, contentContract.bytes,
-                contentContract.count) !=
+                identity, descriptorKind, descriptor, immutableBytes,
+                immutableDigest,
+                producedByCapturedPass || object->lifetime.textureAlias
+                    ? 0u
+                    : contentContract.bytes,
+                producedByCapturedPass || object->lifetime.textureAlias
+                    ? 0u
+                    : contentContract.count) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             abortRenderTapeCapture("jit_object_define");
             return false;
+        }
+        if (producedByCapturedPass || object->lifetime.textureAlias) {
+            try {
+                renderTapeAdmittedIdentities_.push_back(identity);
+            } catch (...) {
+                abortRenderTapeCapture("jit_identity_allocation");
+                return false;
+            }
+            return true;
         }
         for (std::uint32_t subresource = 0u;
              subresource < object->content.size(); ++subresource) {
@@ -8481,6 +8576,68 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             abortRenderTapeCapture("command_chunk_validation");
             return false;
         }
+        const auto canMaterialize = [&](const auto &self,
+                                        const D9CWireObjectIdentity &identity,
+                                        const dxmt9::d3d9::RenderTapeOriginLocator
+                                            &originLocator,
+                                        std::vector<D9CWireObjectIdentity>
+                                            &producedIdentities) -> bool {
+            if (renderTapeObjectAdmitted(identity))
+                return true;
+            if (!renderTapeRegistry_)
+                return false;
+            const auto object = std::find_if(
+                renderTapeRegistry_->objects.begin(),
+                renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+                    return renderTapeSameIdentity(candidate.identity, identity);
+                });
+            if (object == renderTapeRegistry_->objects.end())
+                return false;
+            if (object->lifetime.textureAlias &&
+                !self(self, object->aliasParentTexture, originLocator,
+                      producedIdentities))
+                return false;
+            const bool incomplete =
+                object->contentCount != object->content.size() ||
+                std::any_of(object->content.begin(), object->content.end(),
+                            [](const auto &bytes) { return bytes.empty(); });
+            if (!incomplete || object->lifetime.textureAlias)
+                return true;
+            RenderTapeTextureDescriptorV2 texture{};
+            if (!renderTapeLoadTextureDescriptorV2(object->descriptor, texture) ||
+                texture.dimension != static_cast<std::uint32_t>(
+                    RenderTapeTextureDimension::Texture2D) ||
+                texture.mipLevelCount != 1u || texture.subresourceCount != 1u)
+                return false;
+            if (!dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
+                    imported, originLocator.originIdentity, identity))
+                return false;
+            if (std::none_of(producedIdentities.begin(), producedIdentities.end(),
+                             [&](const auto& prior) {
+                               return renderTapeSameIdentity(prior, identity);
+                             })) {
+                producedIdentities.push_back(identity);
+            }
+            return producedIdentities.size() <= 1u;
+        };
+        std::vector<D9CWireObjectIdentity> producedIdentities;
+        for (std::size_t handleIndex = 0u;
+             handleIndex < imported.handles.size(); ++handleIndex) {
+            const auto &handle = imported.handles[handleIndex];
+            const D9CWireObjectIdentity identity{
+                .kind = handle.kind,
+                .generation = handle.generation,
+                .objectId = handle.objectId};
+            const auto originLocator = dxmt9::d3d9::renderTapeLocateOrigin(
+                imported, static_cast<std::uint32_t>(handleIndex), identity);
+            if (originLocator.status !=
+                    dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted ||
+                !canMaterialize(canMaterialize, identity, originLocator,
+                                producedIdentities)) {
+                abortRenderTapeCapture("command_chunk_produced_pass_preflight");
+                return false;
+            }
+        }
         for (std::size_t handleIndex = 0u;
              handleIndex < imported.handles.size(); ++handleIndex) {
             const auto &handle = imported.handles[handleIndex];
@@ -8491,9 +8648,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const auto originLocator = dxmt9::d3d9::renderTapeLocateOrigin(
                 imported, static_cast<std::uint32_t>(handleIndex), identity);
             if (!materializeRenderTapeObjectForReference(
-                    identity, originLocator.handleIndex,
-                    originLocator.recordIndex, originLocator.recordType,
-                    &originLocator)) {
+                identity, originLocator.handleIndex,
+                originLocator.recordIndex, originLocator.recordType,
+                &originLocator, &imported)) {
                 return false;
             }
         }
