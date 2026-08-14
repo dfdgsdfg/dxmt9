@@ -1358,11 +1358,6 @@ void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
                                                .handleCount = 1u},
             kOutput) == FrameTapeBootstrapOutputDisposition::SlotOutOfRange,
         "non-zero RT slot must fail closed");
-  check(renderTapeTextureSeedExtentMatches(64u, 16, 4u) &&
-            !renderTapeTextureSeedExtentMatches(63u, 16, 4u) &&
-            !renderTapeTextureSeedExtentMatches(64u, 0, 4u),
-        "texture seed extent predicate must be exact and checked");
-
   auto* factory = dxmt9c_factory_create();
   check(factory != nullptr, "production fixture factory must be available");
   const D9CPresentParams params{

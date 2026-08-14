@@ -500,12 +500,63 @@ void immutableObjectsAndRetirementFailClosed() {
                             0u, {});
   reused.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  const RenderTapeOracleAttachment newerOracle{
+      .identity = newerSurface,
+      .descriptorKind =
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+  };
   reused.appendPresentComplete(
       5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&newerOracle, 1u)));
+  check(validateRenderTape(reused.seal(), {}).valid(),
+        "a destroyed slot admits a strictly newer generation");
+
+  RenderTapeBuilder overlapping;
+  overlapping.appendBootstrapState(bootstrap);
+  overlapping.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+                                  0u, {});
+  overlapping.appendObjectDefine(newerSurface, kSurfaceDescriptorKind,
+                                  descriptor, 0u, {});
+  overlapping.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  overlapping.appendPresentComplete(
+      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
-  check(validateRenderTape(reused.seal(), {}).status ==
+  check(validateRenderTape(overlapping.seal(), {}).status ==
+            RenderTapeValidationStatus::DuplicateGeneration,
+        "overlapping live generations of one slot fail closed");
+
+  RenderTapeBuilder stale;
+  stale.appendBootstrapState(bootstrap);
+  stale.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, descriptor,
+                           0u, {});
+  stale.appendObjectDestroy(newerSurface);
+  stale.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                           {});
+  stale.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  stale.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(stale.seal(), {}).status ==
             RenderTapeValidationStatus::RetainedSlotReuse,
-        "a retired slot cannot be reused while the tape retains it");
+        "destroyed slots reject stale generation reintroduction");
+
+  RenderTapeBuilder equal;
+  equal.appendBootstrapState(bootstrap);
+  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                           {});
+  equal.appendObjectDestroy(kSurface);
+  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                           {});
+  equal.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+  equal.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(equal.seal(), {}).status ==
+            RenderTapeValidationStatus::DuplicateGeneration,
+        "an exact identity definition remains unique after destroy");
 
   RenderTapeBuilder mismatched;
   mismatched.appendBootstrapState(bootstrap);
@@ -703,6 +754,630 @@ void seedContentClosesByUniqueSubresourceAndSummedBytes() {
   check(incompleteResult.status == RenderTapeValidationStatus::IncompleteFrame &&
             incompleteResult.failedEventIndex == 4u,
         "seed extents close before the first non-seed command event");
+}
+
+void versionedSubresourceDescriptorsFailClosed() {
+  constexpr D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 4u,
+      .objectId = 0x4400u,
+  };
+  constexpr D9CWireObjectIdentity staleTexture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 3u,
+      .objectId = 0x4400u,
+  };
+  constexpr D9CWireObjectIdentity surface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 0x5500u,
+  };
+  constexpr D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 0x6600u,
+  };
+  const D9CSurfaceDesc outputDescriptor{
+      .format = 21u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  const RenderTapeOracleAttachment outputOracle{
+      .identity = output,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  const auto finish = [&](RenderTapeBuilder& builder,
+                          std::uint64_t presentOrdinal) {
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        makePresentChunk());
+    builder.appendPresentComplete(
+        presentOrdinal, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&outputOracle, 1u)));
+  };
+  const RenderTapeTextureDescriptorV2 textureHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension =
+          static_cast<std::uint32_t>(RenderTapeTextureDimension::Cube),
+      .mipLevelCount = 2u,
+      .subresourceCount = 12u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  std::vector<std::byte> textureDescriptor(
+      sizeof(textureHeader) + 12u * sizeof(D9CSurfaceDesc));
+  check(textureHeader.subresourceCount ==
+                6u * textureHeader.mipLevelCount &&
+            textureDescriptor.size() ==
+                sizeof(textureHeader) +
+                    static_cast<std::size_t>(textureHeader.subresourceCount) *
+                        sizeof(D9CSurfaceDesc),
+        "versioned cube descriptor contains exactly six complete mip chains");
+  std::memcpy(textureDescriptor.data(), &textureHeader, sizeof(textureHeader));
+  for (std::uint32_t subresource = 0u; subresource < 12u; ++subresource) {
+    const auto mipLevel = renderTapeTextureDescriptorMipLevel(
+        RenderTapeTextureDimension::Cube, textureHeader.mipLevelCount,
+        subresource);
+    const D9CSurfaceDesc desc{
+        .format = 0x33545844u,
+        .resourceType = 3u,
+        .width = mipLevel == 0u ? 8u : 4u,
+        .height = mipLevel == 0u ? 8u : 4u,
+        .depth = 1u,
+    };
+    std::memcpy(textureDescriptor.data() + sizeof(textureHeader) +
+                    static_cast<std::size_t>(subresource) * sizeof(desc),
+                &desc, sizeof(desc));
+  }
+  for (std::uint32_t face = 0u; face < 6u; ++face) {
+    for (std::uint32_t mipLevel = 0u;
+         mipLevel < textureHeader.mipLevelCount; ++mipLevel) {
+      const auto subresource = face * textureHeader.mipLevelCount + mipLevel;
+      D9CSurfaceDesc desc{};
+      std::memcpy(&desc,
+                  textureDescriptor.data() + sizeof(textureHeader) +
+                      static_cast<std::size_t>(subresource) * sizeof(desc),
+                  sizeof(desc));
+      const auto expectedExtent = mipLevel == 0u ? 8u : 4u;
+      check(desc.width == expectedExtent && desc.height == expectedExtent,
+            "all six cube faces repeat the complete mip descriptor chain");
+    }
+  }
+
+  RenderTapeBuilder incompleteSeed;
+  incompleteSeed.appendBootstrapState(makeApplyStateChunk());
+  incompleteSeed.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  incompleteSeed.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptor, 0u, {}, 64u, 1u);
+  finish(incompleteSeed, 4u);
+  check(validateRenderTape(incompleteSeed.seal(), {}).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "versioned cube descriptor rejects an incomplete face/mip seed count");
+
+  const RenderTapeSurfaceDescriptorV2 staleAlias{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 7u,
+      .parentTexture = staleTexture,
+      .surface = D9CSurfaceDesc{
+          .format = 0x33545844u,
+          .resourceType = 1u,
+          .width = 4u,
+          .height = 4u,
+          .depth = 1u,
+      },
+  };
+  RenderTapeBuilder stale;
+  stale.appendBootstrapState(makeApplyStateChunk());
+  stale.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  stale.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptor, 0u, {}, 768u, 12u);
+  stale.appendObjectDefine(
+      surface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&staleAlias, 1u)), 0u, {});
+  finish(stale, 5u);
+  check(validateRenderTape(stale.seal(), {}).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "surface alias rejects a stale parent texture generation");
+
+  auto outOfRangeAlias = staleAlias;
+  outOfRangeAlias.parentTexture = texture;
+  outOfRangeAlias.subresource = 12u;
+  RenderTapeBuilder outOfRange;
+  outOfRange.appendBootstrapState(makeApplyStateChunk());
+  outOfRange.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  outOfRange.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptor, 0u, {}, 768u, 12u);
+  outOfRange.appendObjectDefine(
+      surface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outOfRangeAlias, 1u)), 0u, {});
+  finish(outOfRange, 5u);
+  check(validateRenderTape(outOfRange.seal(), {}).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "surface alias rejects a parent subresource outside the exact texture");
+
+  auto exactAlias = staleAlias;
+  exactAlias.parentTexture = texture;
+  RenderTapeBuilder exact;
+  exact.appendBootstrapState(makeApplyStateChunk());
+  exact.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  exact.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptor, 0u, {}, 768u, 12u);
+  exact.appendObjectDefine(
+      surface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&exactAlias, 1u)), 0u, {});
+  finish(exact, 5u);
+  check(validateRenderTape(exact.seal(), {}).status !=
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "surface alias accepts the exact generation-qualified parent identity");
+}
+
+void textureAliasLogicalSlotsUseParentSubresources() {
+  constexpr D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 0x7700u,
+  };
+  constexpr D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 4u,
+      .objectId = 0x8800u,
+  };
+  constexpr D9CWireObjectIdentity firstAlias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 0x9900u,
+  };
+  constexpr D9CWireObjectIdentity secondAlias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 3u,
+      .objectId = firstAlias.objectId,
+  };
+  const D9CSurfaceDesc outputDescriptor{
+      .format = 21u,
+      .resourceType = 1u,
+      .width = 8u,
+      .height = 8u,
+      .depth = 1u,
+  };
+  const std::array<D9CSurfaceDesc, 2u> levels{{
+      D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 3u,
+          .width = 8u,
+          .height = 8u,
+          .depth = 1u,
+      },
+      D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 3u,
+          .width = 4u,
+          .height = 4u,
+          .depth = 1u,
+      },
+  }};
+  const RenderTapeTextureDescriptorV2 textureHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension =
+          static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 2u,
+      .subresourceCount = 2u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+  };
+  std::vector<std::byte> textureDescriptor(sizeof(textureHeader) +
+                                           sizeof(levels));
+  std::memcpy(textureDescriptor.data(), &textureHeader, sizeof(textureHeader));
+  std::memcpy(textureDescriptor.data() + sizeof(textureHeader), levels.data(),
+              sizeof(levels));
+  const RenderTapeSurfaceDescriptorV2 firstDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = texture,
+      .surface = levels[0],
+  };
+  const RenderTapeSurfaceDescriptorV2 secondDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 1u,
+      .parentTexture = texture,
+      .surface = levels[1],
+  };
+  const RenderTapeOracleAttachment oracle{
+      .identity = output,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  const auto finish = [&](RenderTapeBuilder& builder,
+                          std::uint64_t presentOrdinal) {
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        makePresentChunk());
+    builder.appendPresentComplete(
+        presentOrdinal, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+  };
+  const auto defineCommon = [&](RenderTapeBuilder& builder) {
+    builder.appendBootstrapState(makeApplyStateChunk());
+    builder.appendObjectDefine(
+        output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+    builder.appendObjectDefine(
+        texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        textureDescriptor, 0u, {});
+  };
+
+  RenderTapeBuilder coexist;
+  defineCommon(coexist);
+  coexist.appendObjectDefine(
+      firstAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  coexist.appendObjectDefine(
+      secondAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&secondDescriptor, 1u)), 0u, {});
+  finish(coexist, 6u);
+  const auto coexistResult = validateRenderTape(coexist.seal(), {});
+  if (!coexistResult.valid()) {
+    throw TestFailure(
+        "two live alias subresources may share one wire surface object id: " +
+        std::to_string(static_cast<unsigned>(coexistResult.status)) + "/" +
+        std::to_string(coexistResult.failedEventIndex));
+  }
+
+  auto ordinarySurface = firstAlias;
+  ordinarySurface.generation = 20u;
+  RenderTapeBuilder mixed;
+  defineCommon(mixed);
+  mixed.appendObjectDefine(
+      firstAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  mixed.appendObjectDefine(
+      ordinarySurface,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  finish(mixed, 6u);
+  check(validateRenderTape(mixed.seal(), {}).valid(),
+        "an alias and ordinary surface may share one wire object id");
+
+  RenderTapeBuilder overlapping;
+  defineCommon(overlapping);
+  overlapping.appendObjectDefine(
+      firstAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  overlapping.appendObjectDefine(
+      secondAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(overlapping, 6u);
+  check(validateRenderTape(overlapping.seal(), {}).status ==
+            RenderTapeValidationStatus::DuplicateGeneration,
+        "two live generations of one logical alias slot fail closed");
+
+  RenderTapeBuilder wrongDestroy;
+  defineCommon(wrongDestroy);
+  wrongDestroy.appendObjectDefine(
+      firstAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  wrongDestroy.appendObjectDestroy(secondAlias);
+  finish(wrongDestroy, 6u);
+  check(validateRenderTape(wrongDestroy.seal(), {}).status ==
+            RenderTapeValidationStatus::UnknownIdentity,
+        "alias destruction requires the exact defined identity");
+
+  RenderTapeBuilder replacement;
+  defineCommon(replacement);
+  replacement.appendObjectDefine(
+      firstAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  replacement.appendObjectDestroy(firstAlias);
+  replacement.appendObjectDefine(
+      secondAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(replacement, 7u);
+  check(validateRenderTape(replacement.seal(), {}).valid(),
+        "one wire object id admits a monotone alias generation replacement");
+
+  auto highAlias = firstAlias;
+  highAlias.generation = 28u;
+  auto lowerCrossObject = firstAlias;
+  ++lowerCrossObject.objectId;
+  lowerCrossObject.generation = 3u;
+  RenderTapeBuilder crossObjectReplacement;
+  defineCommon(crossObjectReplacement);
+  crossObjectReplacement.appendObjectDefine(
+      highAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  crossObjectReplacement.appendObjectDestroy(highAlias);
+  crossObjectReplacement.appendObjectDefine(
+      lowerCrossObject,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(crossObjectReplacement, 7u);
+  check(validateRenderTape(crossObjectReplacement.seal(), {}).valid(),
+        "event order admits a lower generation from a new alias wire object");
+
+  auto equalFirst = firstAlias;
+  equalFirst.generation = 1u;
+  auto equalSecond = equalFirst;
+  ++equalSecond.objectId;
+  RenderTapeBuilder equalCrossObject;
+  defineCommon(equalCrossObject);
+  equalCrossObject.appendObjectDefine(
+      equalFirst,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  equalCrossObject.appendObjectDestroy(equalFirst);
+  equalCrossObject.appendObjectDefine(
+      equalSecond,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(equalCrossObject, 7u);
+  check(validateRenderTape(equalCrossObject.seal(), {}).valid(),
+        "event order admits equal generations from distinct alias wire objects");
+
+  RenderTapeBuilder fullHistoryStale;
+  defineCommon(fullHistoryStale);
+  fullHistoryStale.appendObjectDefine(
+      highAlias,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  fullHistoryStale.appendObjectDestroy(highAlias);
+  fullHistoryStale.appendObjectDefine(
+      lowerCrossObject,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  fullHistoryStale.appendObjectDestroy(lowerCrossObject);
+  auto staleOriginalObject = highAlias;
+  --staleOriginalObject.generation;
+  fullHistoryStale.appendObjectDefine(
+      staleOriginalObject,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(fullHistoryStale, 9u);
+  check(validateRenderTape(fullHistoryStale.seal(), {}).status ==
+            RenderTapeValidationStatus::RetainedSlotReuse,
+        "same-object monotonicity scans alias history across other wire objects");
+
+  auto historyOne = firstAlias;
+  historyOne.generation = 1u;
+  auto historyTwo = historyOne;
+  historyTwo.generation = 2u;
+  auto historyThree = historyOne;
+  historyThree.generation = 3u;
+  RenderTapeBuilder historyOverlap;
+  defineCommon(historyOverlap);
+  historyOverlap.appendObjectDefine(
+      historyOne,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  historyOverlap.appendObjectDestroy(historyOne);
+  historyOverlap.appendObjectDefine(
+      historyTwo,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  historyOverlap.appendObjectDefine(
+      historyThree,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
+  finish(historyOverlap, 8u);
+  check(validateRenderTape(historyOverlap.seal(), {}).status ==
+            RenderTapeValidationStatus::DuplicateGeneration,
+        "gen1-retired gen2-live gen3 remains an overlapping alias generation");
+}
+
+void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
+  constexpr D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 8u,
+      .objectId = 0x8800u,
+  };
+  constexpr D9CWireObjectIdentity aliasSurface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 9u,
+      .objectId = 0x9900u,
+  };
+  constexpr D9CWireObjectIdentity standaloneSurface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 9u,
+      .objectId = 0x9901u,
+  };
+  constexpr D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 0x9902u,
+  };
+  const D9CSurfaceDesc level0{
+      .format = 21u,
+      .resourceType = 3u,
+      .width = 8u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  const D9CSurfaceDesc level1{
+      .format = 21u,
+      .resourceType = 3u,
+      .width = 4u,
+      .height = 2u,
+      .depth = 1u,
+  };
+  const RenderTapeTextureDescriptor textureDescriptor{
+      .level0 = level0,
+      .levelCount = 2u,
+  };
+  std::vector<std::byte> textureDescriptorBytes(
+      sizeof(textureDescriptor) + sizeof(level1));
+  std::memcpy(textureDescriptorBytes.data(), &textureDescriptor,
+              sizeof(textureDescriptor));
+  std::memcpy(textureDescriptorBytes.data() + sizeof(textureDescriptor),
+              &level1, sizeof(level1));
+  const RenderTapeSurfaceDescriptorV2 aliasDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 1u,
+      .parentTexture = texture,
+      .surface = D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 1u,
+          .width = 4u,
+          .height = 2u,
+          .depth = 1u,
+      },
+  };
+  D9CSurfaceDesc resolvedLevel1{};
+  check(renderTapeTextureSubresourceDescriptor(
+            textureDescriptorBytes, 1u,
+            resolvedLevel1) &&
+            resolvedLevel1.width == aliasDescriptor.surface.width &&
+            resolvedLevel1.height == aliasDescriptor.surface.height,
+        "legacy 2D descriptor resolves the aliased mip dimensions");
+  const D9CSurfaceDesc standaloneDescriptor{
+      .format = 21u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  const D9CSurfaceDesc outputDescriptor = standaloneDescriptor;
+  const auto firstDigest = digest(std::byte{0x61});
+  const auto secondDigest = digest(std::byte{0x71});
+  const auto standaloneDigest = digest(std::byte{0x81});
+  const RenderTapeBlobCatalogue catalogue{.blobs = {
+      RenderTapeBlob{.digest = firstDigest, .size = 128u, .verified = 1u},
+      RenderTapeBlob{.digest = secondDigest, .size = 32u, .verified = 1u},
+      RenderTapeBlob{.digest = standaloneDigest, .size = 64u, .verified = 1u},
+  }};
+
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(makeApplyStateChunk());
+  builder.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptorBytes, 0u, {}, 160u, 2u);
+  builder.appendObjectDefine(
+      aliasSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      standaloneSurface,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&standaloneDescriptor, 1u)), 0u, {}, 64u, 1u);
+  builder.appendResourceMutation(texture, RenderTapeMutationKind::Upload, 0u,
+                                 0u, 128u, firstDigest);
+  builder.appendResourceMutation(texture, RenderTapeMutationKind::Upload, 1u,
+                                 0u, 32u, secondDigest);
+  builder.appendResourceMutation(standaloneSurface,
+                                 RenderTapeMutationKind::Upload, 0u, 0u, 64u,
+                                 standaloneDigest);
+  const RenderTapeOracleAttachment oracle{
+      .identity = output,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  builder.appendPresentComplete(
+      9u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto aliasResult = validateRenderTape(builder.seal(), catalogue);
+  if (!aliasResult.valid()) {
+    throw TestFailure(
+        "uncompressed texture-level alias resolves through a legacy 2D parent " +
+        std::to_string(static_cast<unsigned>(aliasResult.status)) + "/" +
+        std::to_string(aliasResult.failedEventIndex));
+  }
+
+  auto wrongSubresource = aliasDescriptor;
+  wrongSubresource.subresource = 0u;
+  wrongSubresource.surface = aliasDescriptor.surface;
+  wrongSubresource.surface.width = level1.width;
+  wrongSubresource.surface.height = level1.height;
+  RenderTapeBuilder rejected;
+  rejected.appendBootstrapState(makeApplyStateChunk());
+  rejected.appendObjectDefine(
+      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+  rejected.appendObjectDefine(
+      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      textureDescriptorBytes, 0u, {}, 160u, 2u);
+  rejected.appendObjectDefine(
+      aliasSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&wrongSubresource, 1u)), 0u, {});
+  rejected.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  rejected.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(rejected.seal(), catalogue).status ==
+            RenderTapeValidationStatus::InvalidObjectDefine,
+        "texture-level alias keeps exact parent generation and subresource");
+}
+
+void textureSurfaceWrapperLifetimeIsIdempotent() {
+  RenderTapeSurfaceAliasLifetime alias;
+  alias.textureAlias = true;
+  check(alias.acquire(), "first texture-derived surface wrapper acquires");
+  check(alias.acquire(), "duplicate texture-derived wrapper acquires idempotently");
+  check(!alias.releaseWrapper() && alias.wrapperRefs == 1u,
+        "releasing one duplicate wrapper keeps the alias live");
+  check(!alias.releaseWrapper() && alias.wrapperRefs == 0u &&
+            alias.disposition == RenderTapeSurfaceAliasLifetime::Disposition::RetainedAlias,
+        "release-to-zero retains the alias until parent retirement");
+  check(alias.acquire() && alias.wrapperRefs == 1u &&
+            alias.disposition == RenderTapeSurfaceAliasLifetime::Disposition::Live,
+        "rewrapping a retained alias does not redefine its identity");
+  check(!alias.releaseWrapper() && alias.wrapperRefs == 0u,
+        "rewrapped alias returns to retained state without destruction");
+  check(alias.retireParent() &&
+            alias.disposition == RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "parent retirement is the alias destroy transition");
+  check(!alias.acquire(), "retired alias cannot be resurrected");
+
+  RenderTapeSurfaceAliasLifetime standalone;
+  check(standalone.acquire() && standalone.releaseWrapper() &&
+            standalone.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "standalone surface remains independently wrapper-owned");
 }
 
 void invalidInputsFailBeforeCallbacks() {
@@ -1067,9 +1742,8 @@ void boundedCaptureReplayRefinementIsExhaustive() {
           "stale registry rejection must happen before retain effects");
   }
 
-  // Domain D (3 tape decisions): the retained whole-tape journal is
-  // intentionally stricter than the live registry and rejects slot reuse for
-  // each mutable resource kind, even when the generation advances.
+  // Domain D (3 tape decisions): tape validation follows the same sequential
+  // generation contract as the production registry for each mutable kind.
   for (const std::uint32_t kind : {
            std::uint32_t{D9C_CHUNK_HANDLE_KIND_TEXTURE},
            std::uint32_t{D9C_CHUNK_HANDLE_KIND_SURFACE},
@@ -1106,8 +1780,11 @@ void boundedCaptureReplayRefinementIsExhaustive() {
         presentOrdinal, presentOrdinal + 1u,
         RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&oracle, 1u)));
-    expectStatus(builder.seal(), RenderTapeValidationStatus::RetainedSlotReuse,
-                 "bounded retained-tape generation trace", 0u, 0u, 0u, {});
+    ++checkedCases;
+    const auto validation = validateRenderTape(builder.seal(), catalogue);
+    check(validation.valid(),
+          std::string("bounded retained-tape generation trace: expected valid, got ") +
+              renderTapeValidationStatusName(validation.status));
   }
 
   check(checkedCases == 45u,
@@ -1277,6 +1954,10 @@ int main(int argc, char** argv) {
     descriptorKindIdentityMismatchFailsClosed();
     bootstrapAndCommandHandlesCloseBeforeReplay();
     seedContentClosesByUniqueSubresourceAndSummedBytes();
+    versionedSubresourceDescriptorsFailClosed();
+    textureAliasLogicalSlotsUseParentSubresources();
+    textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces();
+    textureSurfaceWrapperLifetimeIsIdempotent();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();
     wholeEventReductionIsCanonicalAndFailClosed();

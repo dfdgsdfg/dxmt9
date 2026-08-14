@@ -84,6 +84,24 @@ struct RenderTapeCaptureBootstrapSeed {
   std::vector<RenderTapeOracleAttachment> oracleAttachments{};
 };
 
+enum class RenderTapeObjectDefineDisposition : std::uint32_t {
+  Appended = 0u,
+  IdempotentSurfaceAlias,
+  InvalidState,
+  InvalidIdentity,
+  InvalidDescriptor,
+  InvalidExpectedContent,
+  MissingImmutableBlob,
+  ExactIdentityConflict,
+  OverlappingLiveGeneration,
+  StaleOrEqualGeneration,
+  CapacityExceeded,
+  AllocationFailed,
+};
+
+const char* renderTapeObjectDefineDispositionName(
+    RenderTapeObjectDefineDisposition disposition) noexcept;
+
 class RenderTapeCaptureSession {
 public:
   explicit RenderTapeCaptureSession(
@@ -127,7 +145,8 @@ public:
       const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
       std::span<const std::byte> descriptor, std::uint64_t immutableBytes,
       RenderTapeDigest immutableDigest, std::uint64_t expectedContentBytes = 0u,
-      std::uint32_t expectedContentCount = 0u);
+      std::uint32_t expectedContentCount = 0u,
+      RenderTapeObjectDefineDisposition* disposition = nullptr);
   RenderTapeCaptureStatus objectDestroy(
       const D9CWireObjectIdentity& identity);
   RenderTapeCaptureStatus resourceMutation(
@@ -181,6 +200,13 @@ public:
 private:
   struct ObjectSlot {
     D9CWireObjectIdentity identity{};
+    RenderTapeLogicalObjectSlot logicalSlot{};
+    std::uint32_t descriptorKind = 0u;
+    std::vector<std::byte> descriptor{};
+    std::uint64_t immutableBytes = 0u;
+    RenderTapeDigest immutableDigest{};
+    std::uint64_t expectedContentBytes = 0u;
+    std::uint32_t expectedContentCount = 0u;
     bool live = false;
   };
 

@@ -692,10 +692,32 @@ object, writable-lock mutation, and true chunk-bypass control call sites feed
 that owner; chunkized operations are not duplicated. PE object definitions
 carry value-owned C-side buffer/surface/texture/query descriptors, vertex
 declaration elements, exact validated shader bytecode, and resource expected
-extent/count closure. The capture seam accepts only full, uncompressed 2D
-surface/texture and complete-buffer seed layouts; partial rectangles,
-block-compressed layouts, cube/volume lock paths, missing initial bytes, and
-unavailable descriptor or bytecode data fail closed before publication.
+extent/count closure. The capture seam accepts bounds-checked uncompressed 2D
+surface/texture, complete-buffer, and DXT1/DXT3/DXT5 block-compressed 2D/cube
+face-and-mip lock layouts. Full locks establish tightly packed complete seeds;
+partial locks strip row padding, require an existing exact-size seed, overlay
+at the checked descriptor coordinates, and publish the resulting complete
+content. Texture-derived surface wrappers for both
+uncompressed and block-compressed formats mutate the owning texture identity
+at the exact generation-qualified subresource; standalone surfaces remain
+surface-owned, and repeated wrappers for one underlying surface are
+idempotent. For block-compressed locks it validates 4x4-block
+alignment (allowing the rounded terminal block at odd extents), pitch, bounds,
+and overflow, copies rows without pitch padding, and maintains tightly packed
+complete subresource bytes. An aligned partial rectangle requires an existing
+complete seed and publishes the resulting full subresource as the next ordered
+immutable mutation. Version-2 texture and surface descriptor payloads distinguish
+complete from unavailable initial bytes and bind a surface alias to its exact
+generation-qualified parent texture plus flattened subresource. Alias logical
+slots are keyed by that parent/subresource metadata, not by the wrapper's wire
+object ID: distinct alias object IDs are ordered by journal
+events, and only generations within one object ID require numeric monotonicity.
+An alias and an ordinary surface with a shared object ID remain distinct slots.
+Invalid layouts,
+stale aliases, incomplete partial-write seeds, volume locks, missing initial
+bytes, and unavailable descriptor or bytecode data fail closed with a typed
+first capture-rejection diagnostic before publication; this metadata does not
+widen provider replay claims or alter canonical D9C v2 records or the bridge ABI.
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. One bounded
 `perf-d3d9-present-loop` production capture now closes the capture-time output

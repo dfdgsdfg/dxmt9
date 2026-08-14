@@ -3,6 +3,7 @@
 #include "device_c_chunk_replay.hpp"
 #include "device_c_common.hpp"
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_capture_layout.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 
@@ -948,12 +949,16 @@ FrameTapeReplayResult replayRenderTapeIdentity(
              dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
                                       nullptr, 0u) == core::D3D_OK &&
              locked.bits;
-        if (ok && !renderTapeTextureSeedExtentMatches(
-                      blob->bytes.size(), locked.pitch, levelDesc.height)) {
+        RenderTapeLinearLockLayout layout{};
+        if (ok &&
+            (renderTapeLinearLockLayout(levelDesc, locked.pitch, nullptr,
+                                        layout) !=
+                 RenderTapeLinearLayoutStatus::Accepted ||
+             blob->bytes.size() != layout.tightBytes ||
+             !writeRenderTapeLinearRows(blob->bytes, locked.bits, layout))) {
           (void)dxmt9c_texture_unlock_rect(texture, mutation.subresource);
           ok = false;
         } else if (ok) {
-          std::memcpy(locked.bits, blob->bytes.data(), blob->bytes.size());
           ok = dxmt9c_texture_unlock_rect(texture, mutation.subresource) ==
                core::D3D_OK;
         }
@@ -1179,17 +1184,6 @@ FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
     return FrameTapeBootstrapOutputDisposition::ImplicitDefault;
   }
   return FrameTapeBootstrapOutputDisposition::ExplicitExact;
-}
-
-bool renderTapeTextureSeedExtentMatches(std::uint64_t blobBytes,
-                                        std::int32_t pitch,
-                                        std::uint32_t mipHeight) noexcept {
-  if (pitch <= 0 || mipHeight == 0u) return false;
-  const auto rowPitch = static_cast<std::uint64_t>(pitch);
-  if (rowPitch > std::numeric_limits<std::uint64_t>::max() / mipHeight) {
-    return false;
-  }
-  return blobBytes == rowPitch * mipHeight;
 }
 
 const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept {

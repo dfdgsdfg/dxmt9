@@ -112,11 +112,6 @@ FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
     std::span<const std::byte> bytes, const CommandChunkEnvelope& envelope,
     const D9CWireObjectIdentity& output) noexcept;
 
-// Pure checked extent predicate used immediately before a texture lock copy.
-bool renderTapeTextureSeedExtentMatches(std::uint64_t blobBytes,
-                                        std::int32_t pitch,
-                                        std::uint32_t mipHeight) noexcept;
-
 // Transactional admission for the one-frame identity grammar. No provider or
 // device operation is performed until this returns Complete.
 FrameTapeReplayResult preflightFrameTapeIdentity(

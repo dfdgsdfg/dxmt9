@@ -5,6 +5,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_capture_layout.hpp"
 
 #include <array>
 #include <cstddef>
@@ -92,6 +93,27 @@ struct D3D9PeRecorderFlush {
   virtual bool IsRenderTapeCaptureActiveForChild() const noexcept = 0;
   virtual bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept = 0;
   virtual void AbortRenderTapeCaptureForChild() noexcept = 0;
+  virtual void RejectRenderTapeCaptureForChild(
+      dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      std::uint32_t subresource,
+      const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic =
+          {}) noexcept = 0;
+  virtual void NotifyRenderTapeBlockMutationForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      std::uint32_t subresource,
+      const dxmt9::d3d9::RenderTapeBlockLockLayout &layout,
+      std::span<const std::byte> bytes) noexcept = 0;
+  virtual void NotifyRenderTapeLinearMutationForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &object,
+      std::uint32_t subresource,
+      const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
+      std::span<const std::byte> bytes) noexcept = 0;
+  virtual void NotifyRenderTapeSurfaceAliasForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &surface,
+      const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
+      std::uint32_t subresource,
+      const D9CSurfaceDesc &descriptor) noexcept = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

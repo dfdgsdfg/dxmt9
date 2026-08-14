@@ -381,6 +381,7 @@ struct RenderTapeValidationScratch {
 
   struct LiveSlot {
     D9CWireObjectIdentity identity{};
+    RenderTapeLogicalObjectSlot logicalSlot{};
     std::uint32_t descriptorKind = 0u;
     std::uint64_t lastUseOrdinal = 0u;
     bool retired = false;

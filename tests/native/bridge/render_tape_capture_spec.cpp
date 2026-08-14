@@ -1,4 +1,5 @@
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_capture_layout.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "dxmt9/device_c.h"
@@ -720,12 +721,164 @@ void testObjectLifetimeAndTerminalControls() {
         "lifetime definition succeeds");
   check(lifetime.objectDestroy(kSurface) == RenderTapeCaptureStatus::Accepted,
         "lifetime destroy succeeds");
+  auto newerSurface = kSurface;
+  ++newerSurface.generation;
+  check(lifetime.objectDefine(
+            newerSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}) == RenderTapeCaptureStatus::Accepted,
+        "capture session admits a strictly newer destroyed-slot generation");
+  auto overlappingSurface = newerSurface;
+  ++overlappingSurface.generation;
+  RenderTapeObjectDefineDisposition defineDisposition{};
+  check(lifetime.objectDefine(
+            overlappingSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 0u, 0u, &defineDisposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::OverlappingLiveGeneration,
+        "capture session rejects overlapping live slot generations");
+  check(lifetime.objectDestroy(newerSurface) ==
+            RenderTapeCaptureStatus::Accepted,
+        "newer lifetime generation retires exactly");
+  check(lifetime.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 0u, 0u, &defineDisposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::ExactIdentityConflict &&
+            lifetime.objectDefine(
+                newerSurface,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                descriptor, 0u, {}, 0u, 0u, &defineDisposition) ==
+                RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::ExactIdentityConflict,
+        "capture session keeps exact definitions globally unique after destroy");
+  auto futureSurface = newerSurface;
+  futureSurface.generation += 2u;
+  check(lifetime.objectDefine(
+            futureSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+            lifetime.objectDestroy(futureSurface) ==
+                RenderTapeCaptureStatus::Accepted,
+        "an unseen monotone generation advances a destroyed ordinary slot");
+  auto staleSurface = newerSurface;
+  ++staleSurface.generation;
+  check(lifetime.objectDefine(
+            staleSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptor, 0u, {}, 0u, 0u, &defineDisposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::StaleOrEqualGeneration,
+        "an unseen stale generation cannot re-enter a destroyed slot");
   const auto value = digest();
   check(lifetime.resourceMutation(
-            kSurface, RenderTapeMutationKind::Upload, 0u, 0u, 4u,
+            newerSurface, RenderTapeMutationKind::Upload, 0u, 0u, 4u,
             std::span<const std::byte, kRenderTapeDigestSize>(value)) ==
             RenderTapeCaptureStatus::InvalidInput,
         "retired object cannot receive a mutation");
+
+  constexpr D9CWireObjectIdentity parentTexture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 4u,
+      .objectId = 900u,
+  };
+  constexpr D9CSurfaceDesc aliasSurface{
+      .format = render_tape_d3d_format::A8R8G8B8,
+      .width = 64u,
+      .height = 32u,
+  };
+  const RenderTapeTextureDescriptor parentDescriptor{
+      .level0 = aliasSurface,
+      .levelCount = 1u,
+  };
+  const RenderTapeSurfaceDescriptorV2 aliasDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = parentTexture,
+      .surface = aliasSurface,
+  };
+  RenderTapeCaptureSession aliasLifetime(true);
+  check(aliasLifetime.arm(bootstrapChunk()) ==
+            RenderTapeCaptureStatus::Accepted &&
+            aliasLifetime.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "surface-alias lifetime fixture starts");
+  check(aliasLifetime.objectDefine(
+            parentTexture,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+            std::as_bytes(std::span(&parentDescriptor, 1u)), 0u, {}) ==
+            RenderTapeCaptureStatus::Accepted &&
+            aliasLifetime.objectDefine(
+                kSurface,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {}, 0u,
+                0u, &defineDisposition) == RenderTapeCaptureStatus::Accepted,
+        "surface alias follows its exact parent definition with no seed extent");
+  const auto aliasEventCount = aliasLifetime.eventCount();
+  check(aliasLifetime.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {}, 0u, 0u,
+            &defineDisposition) == RenderTapeCaptureStatus::Accepted &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::IdempotentSurfaceAlias &&
+            aliasLifetime.eventCount() == aliasEventCount &&
+            std::string_view(renderTapeObjectDefineDispositionName(
+                defineDisposition)) == "idempotent_surface_alias",
+        "an exact lazy surface wrapper is idempotent and emits no redefinition");
+  auto conflictingAlias = aliasDescriptor;
+  conflictingAlias.subresource = 1u;
+  check(aliasLifetime.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&conflictingAlias, 1u)), 0u, {}, 0u, 0u,
+            &defineDisposition) == RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::ExactIdentityConflict,
+        "an exact identity with conflicting alias metadata still rejects");
+  auto secondAliasIdentity = kSurface;
+  ++secondAliasIdentity.generation;
+  check(aliasLifetime.objectDefine(
+            secondAliasIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&conflictingAlias, 1u)), 0u, {}, 0u, 0u,
+            &defineDisposition) == RenderTapeCaptureStatus::Accepted,
+        "one wire object id admits a distinct texture subresource alias");
+  auto overlappingAliasIdentity = secondAliasIdentity;
+  ++overlappingAliasIdentity.generation;
+  check(aliasLifetime.objectDefine(
+            overlappingAliasIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&conflictingAlias, 1u)), 0u, {}, 0u, 0u,
+            &defineDisposition) == RenderTapeCaptureStatus::InvalidInput &&
+            defineDisposition ==
+                RenderTapeObjectDefineDisposition::OverlappingLiveGeneration,
+        "one logical alias slot still rejects overlapping live generations");
+  auto wrongDestroyIdentity = secondAliasIdentity;
+  ++wrongDestroyIdentity.generation;
+  check(aliasLifetime.objectDestroy(wrongDestroyIdentity) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            aliasLifetime.objectDestroy(secondAliasIdentity) ==
+                RenderTapeCaptureStatus::Accepted,
+        "surface alias destruction resolves the exact identity");
+  auto ordinarySurfaceIdentity = kSurface;
+  ordinarySurfaceIdentity.generation += 18u;
+  check(aliasLifetime.objectDefine(
+            ordinarySurfaceIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&aliasSurface, 1u)), 0u, {}) ==
+            RenderTapeCaptureStatus::Accepted,
+        "an ordinary surface may share an alias wrapper wire object id");
 
   RenderTapeCaptureSession reset(true);
   check(reset.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted,
@@ -771,6 +924,198 @@ void testObjectLifetimeAndTerminalControls() {
         "device lost has no partial artifact");
 }
 
+void testSurfaceAliasGenerationReplacementTransition() {
+  constexpr D9CWireObjectIdentity priorIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 0x100000002ull,
+  };
+  constexpr D9CWireObjectIdentity nextIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 3u,
+      .objectId = priorIdentity.objectId,
+  };
+  constexpr D9CWireObjectIdentity parentIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 7u,
+      .objectId = 0x100000009ull,
+  };
+  constexpr D9CSurfaceDesc surface{
+      .format = render_tape_d3d_format::A8R8G8B8,
+      .width = 128u,
+      .height = 32u,
+  };
+  const RenderTapeSurfaceDescriptorV2 descriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = parentIdentity,
+      .surface = surface,
+  };
+  const auto descriptorBytes = std::as_bytes(std::span(&descriptor, 1u));
+  RenderTapeSurfaceAliasLifetime retained{
+      .wrapperRefs = 0u,
+      .textureAlias = true,
+      .disposition =
+          RenderTapeSurfaceAliasLifetime::Disposition::RetainedAlias,
+  };
+  using Status = RenderTapeSurfaceAliasReplacementStatus;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            descriptorBytes) == Status::Accepted,
+        "a retained alias admits a semantically identical newer generation");
+
+  auto staleIdentity = nextIdentity;
+  staleIdentity.generation = priorIdentity.generation;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, staleIdentity,
+            descriptorBytes) == Status::NonMonotoneGeneration,
+        "one wire object id rejects equal and stale alias generations");
+
+  auto crossObjectEqual = nextIdentity;
+  ++crossObjectEqual.objectId;
+  crossObjectEqual.generation = priorIdentity.generation;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, crossObjectEqual,
+            descriptorBytes) == Status::Accepted,
+        "event order admits an equal generation from a distinct wire object id");
+  auto crossObjectLower = crossObjectEqual;
+  ++crossObjectLower.objectId;
+  crossObjectLower.generation = 1u;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, crossObjectLower,
+            descriptorBytes) == Status::Accepted,
+        "event order admits a lower generation from a distinct wire object id");
+
+  auto live = retained;
+  live.wrapperRefs = 1u;
+  live.disposition = RenderTapeSurfaceAliasLifetime::Disposition::Live;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, live, descriptorBytes, nextIdentity,
+            descriptorBytes) == Status::LiveWrapper,
+        "a live alias wrapper prevents generation replacement");
+
+  auto standalone = retained;
+  standalone.textureAlias = false;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, standalone, descriptorBytes, nextIdentity,
+            descriptorBytes) == Status::PriorNotRetainedAlias,
+        "a standalone surface never enters alias generation replacement");
+  const auto ordinaryDescriptor =
+      std::as_bytes(std::span(&surface, 1u));
+  check(renderTapeLogicalSlotRelation(
+            renderTapeLogicalObjectSlot(priorIdentity, descriptorBytes),
+            renderTapeLogicalObjectSlot(nextIdentity, ordinaryDescriptor)) ==
+            RenderTapeLogicalSlotRelation::Different,
+        "an alias and ordinary surface never collide by shared wire object id");
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            ordinaryDescriptor) == Status::DifferentLogicalSlot,
+        "mixed alias and ordinary surfaces coexist instead of replacing");
+
+  auto differentParent = descriptor;
+  ++differentParent.parentTexture.generation;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            std::as_bytes(std::span(&differentParent, 1u))) ==
+            Status::DifferentLogicalSlot,
+        "a different exact parent names a distinct logical alias slot");
+
+  auto differentSubresource = descriptor;
+  ++differentSubresource.subresource;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            std::as_bytes(std::span(&differentSubresource, 1u))) ==
+            Status::DifferentLogicalSlot,
+        "a different parent subresource names a distinct logical alias slot");
+  check(renderTapeLogicalSlotRelation(
+            renderTapeLogicalObjectSlot(priorIdentity, descriptorBytes),
+            renderTapeLogicalObjectSlot(
+                nextIdentity,
+                std::as_bytes(std::span(&differentSubresource, 1u)))) ==
+            RenderTapeLogicalSlotRelation::Different,
+        "shared wire object ids do not merge distinct alias subresources");
+
+  auto differentSurface = descriptor;
+  ++differentSurface.surface.width;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            std::as_bytes(std::span(&differentSurface, 1u))) ==
+            Status::SurfaceMismatch,
+        "alias generation replacement preserves the semantic surface descriptor");
+
+  auto invalidDescriptor = descriptor;
+  invalidDescriptor.parentTexture.generation = 0u;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, retained, descriptorBytes, nextIdentity,
+            std::as_bytes(std::span(&invalidDescriptor, 1u))) ==
+            Status::InvalidDescriptor,
+        "malformed alias metadata prevents generation replacement");
+
+  RenderTapeCaptureSession orderedAlias(true);
+  RenderTapeObjectDefineDisposition disposition{};
+  check(orderedAlias.arm(bootstrapChunk()) ==
+            RenderTapeCaptureStatus::Accepted &&
+            orderedAlias.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted &&
+            orderedAlias.objectDefine(
+                priorIdentity,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                descriptorBytes, 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+            orderedAlias.objectDestroy(priorIdentity) ==
+                RenderTapeCaptureStatus::Accepted,
+        "ordered alias replacement fixture retires its first exact identity");
+  check(orderedAlias.objectDefine(
+            priorIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            disposition ==
+                RenderTapeObjectDefineDisposition::ExactIdentityConflict,
+        "a retired exact alias identity cannot be defined again");
+  auto sameObjectStale = priorIdentity;
+  sameObjectStale.generation = 1u;
+  check(orderedAlias.objectDefine(
+            sameObjectStale,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            disposition ==
+                RenderTapeObjectDefineDisposition::StaleOrEqualGeneration,
+        "a retired alias wire object rejects an unseen lower generation");
+  auto lowerCrossObject = priorIdentity;
+  ++lowerCrossObject.objectId;
+  lowerCrossObject.generation = 1u;
+  check(orderedAlias.objectDefine(
+            lowerCrossObject,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+            RenderTapeCaptureStatus::Accepted,
+        "a lower generation from a new wire object follows ordered destroy");
+  auto overlappingCrossObject = lowerCrossObject;
+  ++overlappingCrossObject.objectId;
+  check(orderedAlias.objectDefine(
+            overlappingCrossObject,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}, 0u, 0u, &disposition) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            disposition ==
+                RenderTapeObjectDefineDisposition::OverlappingLiveGeneration,
+        "a second live cross-object alias generation remains rejected");
+
+  RenderTapeCaptureSession missingDestroy(true);
+  check(missingDestroy.arm(bootstrapChunk()) ==
+            RenderTapeCaptureStatus::Accepted &&
+            missingDestroy.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted &&
+            missingDestroy.objectDestroy(priorIdentity) ==
+                RenderTapeCaptureStatus::InvalidInput,
+        "a missing exact capture identity makes the ordered destroy fail closed");
+}
+
 void testPresentCaptureResultAbiAndOneShotCancellation() {
   D9CRenderTapePresentCaptureResult result{};
   check(result.status == D9C_RENDER_TAPE_PRESENT_CAPTURE_NONE &&
@@ -810,6 +1155,284 @@ void testPresentCaptureResultAbiAndOneShotCancellation() {
         "encoded mirror ticket is consumed exactly once and is not cancelled");
 }
 
+void testBlockCompressedLockCaptureLayouts() {
+  constexpr std::uint32_t dxt1 = render_tape_d3d_format::DXT1;
+  constexpr std::uint32_t dxt3 = render_tape_d3d_format::DXT3;
+  constexpr std::uint32_t dxt5 = render_tape_d3d_format::DXT5;
+  for (const auto [format, blockBytes] :
+       std::array<std::pair<std::uint32_t, std::uint32_t>, 3>{
+           {{dxt1, 8u}, {dxt3, 16u}, {dxt5, 16u}}}) {
+    D9CSurfaceDesc desc{.format = format, .width = 8u, .height = 8u};
+    RenderTapeBlockLockLayout layout{};
+    const std::int32_t pitch = static_cast<std::int32_t>(blockBytes * 2u + 8u);
+    check(renderTapeBlockLockLayout(desc, pitch, nullptr, layout) ==
+              RenderTapeBlockLayoutStatus::Accepted &&
+              layout.fullSubresource && layout.blockBytes == blockBytes &&
+              layout.fullRowBytes == blockBytes * 2u && layout.fullRows == 2u &&
+              layout.rowBytes == blockBytes * 2u && layout.rows == 2u &&
+              layout.pitch == static_cast<std::uint32_t>(pitch) &&
+              layout.tightBytes == blockBytes * 4u,
+          "DXT1/DXT3/DXT5 full-face layout uses block rows and tight bytes");
+
+    std::vector<std::byte> pitched(static_cast<std::size_t>(pitch) * 2u,
+                                  std::byte{0xeeu});
+    for (std::uint32_t i = 0u; i < layout.rowBytes; ++i) {
+      pitched[i] = static_cast<std::byte>(i);
+      pitched[static_cast<std::size_t>(pitch) + i] =
+          static_cast<std::byte>(0x40u + i);
+    }
+    std::vector<std::byte> tight;
+    check(copyRenderTapeBlockRows(pitched.data(), layout, tight) &&
+              tight.size() == layout.tightBytes &&
+              tight[layout.rowBytes] == std::byte{0x40u},
+          "block capture honors source pitch without persisting padding");
+    std::vector<std::byte> content;
+    check(applyRenderTapeBlockMutation(layout, tight, content) ==
+              RenderTapeBlockMutationStatus::Accepted &&
+              content == tight,
+          "full block lock establishes a complete immutable seed");
+  }
+}
+
+void testBlockCompressedSubrectMipAndOddExtentLayouts() {
+  constexpr std::uint32_t dxt1 = render_tape_d3d_format::DXT1;
+  constexpr std::uint32_t dxt5 = render_tape_d3d_format::DXT5;
+  D9CSurfaceDesc desc{.format = dxt5, .width = 16u, .height = 12u};
+  RenderTapeBlockLockLayout full{};
+  check(renderTapeBlockLockLayout(desc, 80, nullptr, full) ==
+            RenderTapeBlockLayoutStatus::Accepted &&
+            full.fullRowBytes == 64u && full.fullRows == 3u &&
+            full.tightBytes == 192u,
+        "full mip layout rounds to complete block rows independently of pitch");
+  std::vector<std::byte> content(192u, std::byte{0x11u});
+  const auto priorImmutableContent = content;
+  const auto priorDigest = RenderTapeCaptureSession::sha256(content);
+
+  const RenderTapeLockRect rect{4, 4, 12, 12};
+  RenderTapeBlockLockLayout partial{};
+  check(renderTapeBlockLockLayout(desc, 80, &rect, partial) ==
+            RenderTapeBlockLayoutStatus::Accepted &&
+            !partial.fullSubresource && partial.blockLeft == 1u &&
+            partial.blockTop == 1u && partial.rowBytes == 32u &&
+            partial.rows == 2u && partial.tightBytes == 64u,
+        "aligned DXT subrect records exact block coordinates and mip layout");
+  std::vector<std::byte> patchBytes(64u, std::byte{0x7au});
+  check(applyRenderTapeBlockMutation(partial, patchBytes, content) ==
+            RenderTapeBlockMutationStatus::Accepted &&
+            content[0] == std::byte{0x11u} &&
+            content[80u] == std::byte{0x7au} &&
+            content[144u] == std::byte{0x7au} &&
+            priorImmutableContent ==
+                std::vector<std::byte>(192u, std::byte{0x11u}) &&
+            RenderTapeCaptureSession::sha256(content) != priorDigest,
+        "aligned subrect creates the next full immutable mutation in order");
+
+  D9CSurfaceDesc odd{.format = dxt1, .width = 7u, .height = 5u};
+  RenderTapeBlockLockLayout oddFull{};
+  check(renderTapeBlockLockLayout(odd, 24, nullptr, oddFull) ==
+            RenderTapeBlockLayoutStatus::Accepted &&
+            oddFull.fullRowBytes == 16u && oddFull.fullRows == 2u &&
+            oddFull.tightBytes == 32u,
+        "odd DXT dimensions round width and height independently to blocks");
+  const RenderTapeLockRect oddEdge{4, 4, 7, 5};
+  RenderTapeBlockLockLayout oddPartial{};
+  check(renderTapeBlockLockLayout(odd, 24, &oddEdge, oddPartial) ==
+            RenderTapeBlockLayoutStatus::Accepted &&
+            oddPartial.blockLeft == 1u && oddPartial.blockTop == 1u &&
+            oddPartial.rowBytes == 8u && oddPartial.rows == 1u,
+        "edge-aligned odd mip subrect admits a non-multiple terminal edge");
+}
+
+void testBlockCompressedCaptureRejectsInvalidLayouts() {
+  constexpr std::uint32_t dxt1 = render_tape_d3d_format::DXT1;
+  constexpr std::uint32_t dxt2 = render_tape_d3d_format::DXT2;
+  D9CSurfaceDesc desc{.format = dxt1, .width = 16u, .height = 16u};
+  RenderTapeBlockLockLayout layout{};
+  check(std::string_view(renderTapeCaptureRejectionReasonName(
+            RenderTapeCaptureRejectionReason::IncompleteSubresourceSeed)) ==
+            "incomplete_subresource_seed" &&
+            std::string_view(renderTapeCaptureRejectionReasonName(
+                RenderTapeCaptureRejectionReason::InvalidBlockAlignment)) ==
+                "invalid_block_alignment",
+        "typed first-rejection diagnostics have stable observable names");
+  D9CSurfaceDesc unsupported{.format = dxt2, .width = 16u, .height = 16u};
+  check(renderTapeBlockLockLayout(unsupported, 64, nullptr, layout) ==
+            RenderTapeBlockLayoutStatus::UnsupportedFormat,
+        "DXT2 remains outside the narrowly admitted capture family");
+  const RenderTapeLockRect badLeft{2, 0, 8, 8};
+  const RenderTapeLockRect badRight{4, 4, 10, 12};
+  check(renderTapeBlockLockLayout(desc, 32, &badLeft, layout) ==
+            RenderTapeBlockLayoutStatus::InvalidAlignment &&
+            renderTapeBlockLockLayout(desc, 32, &badRight, layout) ==
+                RenderTapeBlockLayoutStatus::InvalidAlignment,
+        "non-edge DXT lock bounds must be block aligned");
+  const RenderTapeLockRect full{0, 0, 16, 16};
+  check(renderTapeBlockLockLayout(desc, 31, &full, layout) ==
+            RenderTapeBlockLayoutStatus::InvalidPitch,
+        "pitch shorter than one block row rejects before copying");
+  const RenderTapeLockRect oneBlock{4, 4, 8, 8};
+  check(renderTapeBlockLockLayout(desc, 8, &oneBlock, layout) ==
+            RenderTapeBlockLayoutStatus::InvalidPitch,
+        "subrect pitch must still span the complete compressed mip row");
+  D9CSurfaceDesc huge{.format = render_tape_d3d_format::DXT5,
+                      .width = 0xffffffffu,
+                      .height = 4u};
+  check(renderTapeBlockLockLayout(huge, 0x7fffffff, nullptr, layout) ==
+            RenderTapeBlockLayoutStatus::Overflow,
+        "block-row arithmetic overflow is rejected");
+
+  RenderTapeBlockLockLayout partial{};
+  const RenderTapeLockRect aligned{4, 4, 8, 8};
+  check(renderTapeBlockLockLayout(desc, 32, &aligned, partial) ==
+            RenderTapeBlockLayoutStatus::Accepted,
+        "aligned partial fixture is valid");
+  std::vector<std::byte> patchBytes(partial.tightBytes, std::byte{0x33u});
+  std::vector<std::byte> unavailable;
+  check(applyRenderTapeBlockMutation(partial, patchBytes, unavailable) ==
+            RenderTapeBlockMutationStatus::IncompleteSeed &&
+            unavailable.empty(),
+        "partial block write cannot manufacture unavailable initial bytes");
+}
+
+void testLinearLockCaptureLayouts() {
+  constexpr std::uint32_t argb = render_tape_d3d_format::A8R8G8B8;
+  check(render_tape_d3d_format::X4R4G4B4 == 30u,
+        "X4R4G4B4 pins the authoritative public D3DFORMAT value");
+  check(render_tape_d3d_format::L16 == 81u,
+        "L16 pins the authoritative public D3DFORMAT value");
+  constexpr std::array supportedFormats{
+      std::pair{render_tape_d3d_format::R8G8B8, 3u},
+      std::pair{render_tape_d3d_format::A8R8G8B8, 4u},
+      std::pair{render_tape_d3d_format::X8R8G8B8, 4u},
+      std::pair{render_tape_d3d_format::R5G6B5, 2u},
+      std::pair{render_tape_d3d_format::X1R5G5B5, 2u},
+      std::pair{render_tape_d3d_format::A1R5G5B5, 2u},
+      std::pair{render_tape_d3d_format::A4R4G4B4, 2u},
+      std::pair{render_tape_d3d_format::X4R4G4B4, 2u},
+      std::pair{render_tape_d3d_format::A8, 1u},
+      std::pair{render_tape_d3d_format::A8B8G8R8, 4u},
+      std::pair{render_tape_d3d_format::X8B8G8R8, 4u},
+      std::pair{render_tape_d3d_format::A8P8, 2u},
+      std::pair{render_tape_d3d_format::P8, 1u},
+      std::pair{render_tape_d3d_format::L8, 1u},
+      std::pair{render_tape_d3d_format::A8L8, 2u},
+      std::pair{render_tape_d3d_format::V8U8, 2u},
+      std::pair{render_tape_d3d_format::L16, 2u},
+  };
+  for (const auto [format, bytesPerPixel] : supportedFormats) {
+    const D9CSurfaceDesc formatDesc{
+        .format = format, .width = 3u, .height = 2u};
+    RenderTapeLinearLockLayout formatLayout{};
+    check(renderTapeLinearBytesPerPixel(format) == bytesPerPixel &&
+              renderTapeLinearLockLayout(
+                  formatDesc,
+                  static_cast<std::int32_t>(3u * bytesPerPixel + 4u), nullptr,
+                  formatLayout) == RenderTapeLinearLayoutStatus::Accepted &&
+              formatLayout.bytesPerPixel == bytesPerPixel &&
+              formatLayout.tightBytes == 6u * bytesPerPixel,
+          "every admitted linear format uses its authoritative layout");
+  }
+  check(renderTapeLinearBytesPerPixel(render_tape_d3d_format::DXT1) == 0u,
+        "block-compressed formats do not enter the linear layout path");
+  const D9CSurfaceDesc l16Desc{
+      .format = render_tape_d3d_format::L16,
+      .width = 1024u,
+      .height = 64u,
+  };
+  RenderTapeLinearLockLayout l16Layout{};
+  check(renderTapeLinearLockLayout(l16Desc, 2048, nullptr, l16Layout) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            l16Layout.bytesPerPixel == 2u &&
+            l16Layout.fullRowBytes == 2048u && l16Layout.fullRows == 64u &&
+            l16Layout.tightBytes == 131072u &&
+            l16Layout.sourceBytes == 131072u && l16Layout.fullSubresource,
+        "Firefly Forest L16 full lock closes to exactly 131072 tight bytes");
+  const D9CSurfaceDesc desc{.format = argb, .width = 4u, .height = 3u};
+  RenderTapeLinearLockLayout full{};
+  check(renderTapeLinearLockLayout(desc, 24, nullptr, full) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            full.fullRowBytes == 16u && full.rows == 3u &&
+            full.tightBytes == 48u && full.sourceBytes == 64u &&
+            full.fullSubresource,
+        "linear full LockRect keeps descriptor extent and actual pitch");
+
+  std::vector<std::byte> source(24u * 3u, std::byte{0});
+  for (std::uint32_t row = 0u; row < 3u; ++row) {
+    for (std::uint32_t byte = 0u; byte < 16u; ++byte) {
+      source[row * 24u + byte] =
+          static_cast<std::byte>(row * 16u + byte + 1u);
+    }
+  }
+  std::vector<std::byte> copied;
+  check(copyRenderTapeLinearRows(source.data(), full, copied) &&
+            copied.size() == 48u && copied[23] == std::byte{24u} &&
+            copied[24] == std::byte{25u},
+        "linear full copy strips only row padding");
+  std::vector<std::byte> content;
+  check(applyRenderTapeLinearMutation(full, copied, content) ==
+            RenderTapeBlockMutationStatus::Accepted &&
+            content == copied,
+        "linear full mutation establishes the complete seed");
+
+  std::vector<std::byte> providerDestination(24u * 3u, std::byte{0xeeu});
+  check(writeRenderTapeLinearRows(copied, providerDestination.data(), full) &&
+            providerDestination[15] == copied[15] &&
+            providerDestination[16] == std::byte{0xeeu} &&
+            providerDestination[24] == copied[16],
+        "provider upload restores tight rows without overwriting lock padding");
+
+  const RenderTapeLockRect partialRect{1, 1, 3, 3};
+  RenderTapeLinearLockLayout partial{};
+  check(renderTapeLinearLockLayout(desc, 24, &partialRect, partial) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            partial.destinationByteOffset == 4u && partial.top == 1u &&
+            partial.rowBytes == 8u && partial.rows == 2u &&
+            partial.tightBytes == 16u && partial.sourceBytes == 32u &&
+            partial.subresourceSourceOffset == 28u &&
+            partial.subresourceSourceBytes == 60u &&
+            !partial.fullSubresource,
+        "linear partial LockRect records exact rectangle extent");
+  std::vector<std::byte> partialSource(24u * 2u, std::byte{0});
+  for (std::uint32_t row = 0u; row < 2u; ++row) {
+    for (std::uint32_t byte = 0u; byte < 8u; ++byte)
+      partialSource[row * 24u + byte] = static_cast<std::byte>(
+          0xa0u + row * 8u + byte);
+  }
+  std::vector<std::byte> partialBytes;
+  check(copyRenderTapeLinearRows(partialSource.data(), partial, partialBytes) &&
+            applyRenderTapeLinearMutation(partial, partialBytes, content) ==
+                RenderTapeBlockMutationStatus::Accepted &&
+            content[16u + 4u] == std::byte{0xa0u} &&
+            content[32u + 4u] == std::byte{0xa8u},
+        "linear partial mutation merges rows at descriptor coordinates");
+
+  std::vector<std::byte> fullSubresourceSource(24u * 3u, std::byte{0u});
+  std::copy(partialSource.begin(), partialSource.begin() + 8u,
+            fullSubresourceSource.begin() + 28u);
+  std::copy(partialSource.begin() + 24u, partialSource.begin() + 32u,
+            fullSubresourceSource.begin() + 52u);
+  std::vector<std::byte> userMemoryBytes;
+  check(copyRenderTapeLinearRows(
+            fullSubresourceSource.data(), partial, userMemoryBytes,
+            RenderTapeLockBitsOrigin::Subresource) &&
+            userMemoryBytes == partialBytes,
+        "user-memory LockRect applies the checked rectangle offset to base pBits");
+
+  std::vector<std::byte> unavailable;
+  check(applyRenderTapeLinearMutation(partial, partialBytes, unavailable) ==
+            RenderTapeBlockMutationStatus::IncompleteSeed,
+        "linear partial mutation cannot manufacture an unavailable seed");
+  check(renderTapeLinearLockLayout(desc, 15, nullptr, full) ==
+            RenderTapeLinearLayoutStatus::InvalidPitch,
+        "linear pitch shorter than descriptor row rejects fail-closed");
+  D9CSurfaceDesc huge{.format = argb,
+                      .width = 0xffffffffu,
+                      .height = 2u};
+  check(renderTapeLinearLockLayout(huge, 0x7fffffff, nullptr, full) ==
+            RenderTapeLinearLayoutStatus::Overflow,
+        "linear descriptor conversion and byte ranges reject overflow");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -832,7 +1455,12 @@ int main(int argc, char** argv) {
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();
+    testSurfaceAliasGenerationReplacementTransition();
     testPresentCaptureResultAbiAndOneShotCancellation();
+    testBlockCompressedLockCaptureLayouts();
+    testBlockCompressedSubrectMipAndOddExtentLayouts();
+    testBlockCompressedCaptureRejectsInvalidLayouts();
+    testLinearLockCaptureLayouts();
     testObjectExpectedContentContractTruthTable();
     return 0;
   } catch (const TestFailure& failure) {

@@ -1,5 +1,7 @@
 #include "device_c_render_tape_capture.hpp"
 
+#include "device_c_render_tape_descriptors.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -42,9 +44,16 @@ bool sameIdentity(const D9CWireObjectIdentity& a,
          a.objectId == b.objectId;
 }
 
-bool sameSlot(const D9CWireObjectIdentity& a,
-              const D9CWireObjectIdentity& b) noexcept {
-  return a.kind == b.kind && a.objectId == b.objectId;
+bool sameObjectDefinitionMetadata(
+    const auto& slot, std::uint32_t descriptorKind,
+    std::uint64_t immutableBytes, const RenderTapeDigest& immutableDigest,
+    std::uint64_t expectedContentBytes,
+    std::uint32_t expectedContentCount) noexcept {
+  return slot.descriptorKind == descriptorKind &&
+         slot.immutableBytes == immutableBytes &&
+         slot.immutableDigest == immutableDigest &&
+         slot.expectedContentBytes == expectedContentBytes &&
+         slot.expectedContentCount == expectedContentCount;
 }
 
 bool mutationCapableIdentity(
@@ -55,6 +64,37 @@ bool mutationCapableIdentity(
 }
 
 } // namespace
+
+const char* renderTapeObjectDefineDispositionName(
+    RenderTapeObjectDefineDisposition disposition) noexcept {
+  switch (disposition) {
+  case RenderTapeObjectDefineDisposition::Appended:
+    return "appended";
+  case RenderTapeObjectDefineDisposition::IdempotentSurfaceAlias:
+    return "idempotent_surface_alias";
+  case RenderTapeObjectDefineDisposition::InvalidState:
+    return "invalid_state";
+  case RenderTapeObjectDefineDisposition::InvalidIdentity:
+    return "invalid_identity";
+  case RenderTapeObjectDefineDisposition::InvalidDescriptor:
+    return "invalid_descriptor";
+  case RenderTapeObjectDefineDisposition::InvalidExpectedContent:
+    return "invalid_expected_content";
+  case RenderTapeObjectDefineDisposition::MissingImmutableBlob:
+    return "missing_immutable_blob";
+  case RenderTapeObjectDefineDisposition::ExactIdentityConflict:
+    return "exact_identity_conflict";
+  case RenderTapeObjectDefineDisposition::OverlappingLiveGeneration:
+    return "overlapping_live_generation";
+  case RenderTapeObjectDefineDisposition::StaleOrEqualGeneration:
+    return "stale_or_equal_generation";
+  case RenderTapeObjectDefineDisposition::CapacityExceeded:
+    return "capacity_exceeded";
+  case RenderTapeObjectDefineDisposition::AllocationFailed:
+    return "allocation_failed";
+  }
+  return "unknown";
+}
 
 RenderTapeCaptureSession::RenderTapeCaptureSession(
     bool enabled, RenderTapeCaptureLimits limits, std::uint32_t profile)
@@ -381,37 +421,117 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::objectDefine(
     const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
     std::span<const std::byte> descriptor, std::uint64_t immutableBytes,
     RenderTapeDigest immutableDigest, std::uint64_t expectedContentBytes,
-    std::uint32_t expectedContentCount) {
+    std::uint32_t expectedContentCount,
+    RenderTapeObjectDefineDisposition* disposition) {
+  const auto decide = [&](RenderTapeObjectDefineDisposition value) {
+    if (disposition) *disposition = value;
+  };
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
+    decide(RenderTapeObjectDefineDisposition::InvalidState);
     return status;
   }
-  if (!validIdentity(identity) || descriptorKind == 0u || descriptor.empty() ||
-      ((expectedContentBytes == 0u) != (expectedContentCount == 0u)) ||
-      (expectedContentBytes != 0u && !mutationCapableIdentity(identity)) ||
-      hasObject(identity, false) ||
-      std::any_of(objects_.begin(), objects_.end(), [&](const auto& slot) {
-        return sameSlot(slot.identity, identity);
-      }) ||
-      (immutableBytes != 0u && !hasVerifiedBlob(immutableDigest,
-                                                  immutableBytes))) {
+  if (!validIdentity(identity)) {
+    decide(RenderTapeObjectDefineDisposition::InvalidIdentity);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  if (descriptorKind == 0u || descriptor.empty()) {
+    decide(RenderTapeObjectDefineDisposition::InvalidDescriptor);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  if ((expectedContentBytes == 0u) != (expectedContentCount == 0u) ||
+      (expectedContentBytes != 0u && !mutationCapableIdentity(identity))) {
+    decide(RenderTapeObjectDefineDisposition::InvalidExpectedContent);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  if (immutableBytes != 0u &&
+      !hasVerifiedBlob(immutableDigest, immutableBytes)) {
+    decide(RenderTapeObjectDefineDisposition::MissingImmutableBlob);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  const auto exact = std::find_if(
+      objects_.begin(), objects_.end(), [&](const auto& candidate) {
+        return sameIdentity(candidate.identity, identity);
+      });
+  if (exact != objects_.end()) {
+    if (exact->live &&
+        identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+        descriptorKind == static_cast<std::uint32_t>(
+                              RenderTapeDescriptorKind::Surface) &&
+        renderTapeSurfaceAliasDescriptorsEqual(exact->descriptor, descriptor) &&
+        sameObjectDefinitionMetadata(*exact, descriptorKind, immutableBytes,
+                                     immutableDigest, expectedContentBytes,
+                                     expectedContentCount)) {
+      // Texture level wrappers may be materialized lazily after the arm seed.
+      // The parent retains this alias identity, so an exact repeat is a
+      // lifecycle observation, not a second ObjectDefine event.
+      decide(RenderTapeObjectDefineDisposition::IdempotentSurfaceAlias);
+      return RenderTapeCaptureStatus::Accepted;
+    }
+    decide(RenderTapeObjectDefineDisposition::ExactIdentityConflict);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  const auto logicalSlot = renderTapeLogicalObjectSlot(identity, descriptor);
+  if (logicalSlot.malformedSurfaceDescriptor) {
+    decide(RenderTapeObjectDefineDisposition::InvalidDescriptor);
+    return RenderTapeCaptureStatus::InvalidInput;
+  }
+  bool sameWireSlotSeen = false;
+  std::uint32_t latestWireGeneration = 0u;
+  for (auto candidate = objects_.begin(); candidate != objects_.end();
+       ++candidate) {
+    if (renderTapeSameWireObject(candidate->identity, identity)) {
+      sameWireSlotSeen = true;
+      latestWireGeneration =
+          std::max(latestWireGeneration, candidate->identity.generation);
+    }
+    const auto relation =
+        renderTapeLogicalSlotRelation(candidate->logicalSlot, logicalSlot);
+    if (relation == RenderTapeLogicalSlotRelation::Different)
+      continue;
+    if (relation == RenderTapeLogicalSlotRelation::AliasDescriptorMismatch) {
+      decide(RenderTapeObjectDefineDisposition::InvalidDescriptor);
+      return RenderTapeCaptureStatus::InvalidInput;
+    }
+    if (candidate->live) {
+      decide(RenderTapeObjectDefineDisposition::OverlappingLiveGeneration);
+      return RenderTapeCaptureStatus::InvalidInput;
+    }
+  }
+  if (sameWireSlotSeen && identity.generation <= latestWireGeneration) {
+    decide(RenderTapeObjectDefineDisposition::StaleOrEqualGeneration);
     return RenderTapeCaptureStatus::InvalidInput;
   }
   const auto status = reserveEvent(sizeof(RenderTapeObjectDefineHeader) +
                                    descriptor.size());
   if (status != RenderTapeCaptureStatus::Accepted) {
+    decide(RenderTapeObjectDefineDisposition::CapacityExceeded);
     return status;
   }
   try {
     builder_.appendObjectDefine(identity, descriptorKind, descriptor,
                                 immutableBytes, immutableDigest,
                                 expectedContentBytes, expectedContentCount);
-    objects_.push_back(ObjectSlot{.identity = identity, .live = true});
+    ObjectSlot next{
+        .identity = identity,
+        .logicalSlot = logicalSlot,
+        .descriptorKind = descriptorKind,
+        .descriptor = std::vector<std::byte>(descriptor.begin(),
+                                             descriptor.end()),
+        .immutableBytes = immutableBytes,
+        .immutableDigest = immutableDigest,
+        .expectedContentBytes = expectedContentBytes,
+        .expectedContentCount = expectedContentCount,
+        .live = true,
+    };
+    objects_.push_back(std::move(next));
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapeObjectDefineHeader) + descriptor.size();
+    decide(RenderTapeObjectDefineDisposition::Appended);
     return RenderTapeCaptureStatus::Accepted;
   } catch (...) {
     abortInternal();
+    decide(RenderTapeObjectDefineDisposition::AllocationFailed);
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
 }

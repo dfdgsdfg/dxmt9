@@ -1,4 +1,5 @@
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_descriptors.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -11,6 +12,88 @@ namespace dxmt9::d3d9 {
 namespace {
 
 constexpr std::uint32_t kNoIndex = 0xffffffffu;
+
+bool checkedMul(std::uint64_t a, std::uint64_t b,
+                std::uint64_t& out) noexcept;
+bool checkedAdd(std::uint64_t a, std::uint64_t b,
+                std::uint64_t& out) noexcept;
+
+bool validDescriptorContentDisposition(
+    const RenderTapeObjectDefineHeader& fixed,
+    std::span<const std::byte> descriptor) noexcept {
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+      descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
+    RenderTapeTextureDescriptorV2 texture{};
+    std::memcpy(&texture, descriptor.data(), sizeof(texture));
+    if (texture.schemaVersion == kRenderTapeTextureDescriptorVersion2) {
+      const auto dimension =
+          static_cast<RenderTapeTextureDimension>(texture.dimension);
+      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+          texture.initialContentDisposition);
+      std::uint64_t expectedSubresources = texture.mipLevelCount;
+      std::uint64_t subresourceBytes = 0u;
+      std::uint64_t descriptorBytes = 0u;
+      if (dimension == RenderTapeTextureDimension::Cube) {
+        if (!checkedMul(texture.mipLevelCount, 6u, expectedSubresources))
+          return false;
+      } else if (dimension != RenderTapeTextureDimension::Texture2D &&
+                 dimension != RenderTapeTextureDimension::Volume) {
+        return false;
+      }
+      if (texture.mipLevelCount == 0u ||
+          texture.subresourceCount != expectedSubresources ||
+          texture.reserved0 != 0u ||
+          !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
+                      subresourceBytes) ||
+          !checkedAdd(sizeof(texture), subresourceBytes, descriptorBytes) ||
+          descriptorBytes != descriptor.size()) {
+        return false;
+      }
+      if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
+        return fixed.expectedContentBytes != 0u &&
+               fixed.expectedContentCount == texture.subresourceCount;
+      }
+      return disposition == RenderTapeInitialContentDisposition::Unavailable &&
+             fixed.expectedContentBytes == 0u &&
+             fixed.expectedContentCount == 0u;
+    }
+  }
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+      descriptor.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
+    RenderTapeSurfaceDescriptorV2 surface{};
+    std::memcpy(&surface, descriptor.data(), sizeof(surface));
+    if (surface.schemaVersion == kRenderTapeSurfaceDescriptorVersion2) {
+      const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
+      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+          surface.initialContentDisposition);
+      if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
+        return disposition == RenderTapeInitialContentDisposition::Unavailable &&
+               surface.parentTexture.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+               surface.parentTexture.generation != 0u &&
+               surface.parentTexture.objectId != 0u &&
+               fixed.expectedContentBytes == 0u &&
+               fixed.expectedContentCount == 0u;
+      }
+      if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+        return disposition ==
+                   RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+               fixed.expectedContentBytes == 0u &&
+               fixed.expectedContentCount == 0u;
+      }
+      if (storage == RenderTapeSurfaceStorage::Standalone) {
+        return disposition == RenderTapeInitialContentDisposition::CompleteSeed
+                   ? fixed.expectedContentBytes != 0u &&
+                         fixed.expectedContentCount == 1u
+                   : disposition ==
+                             RenderTapeInitialContentDisposition::Unavailable &&
+                         fixed.expectedContentBytes == 0u &&
+                         fixed.expectedContentCount == 0u;
+      }
+      return false;
+    }
+  }
+  return true;
+}
 
 bool checkedAdd(std::uint64_t a, std::uint64_t b, std::uint64_t& out) noexcept {
   if (a > std::numeric_limits<std::uint64_t>::max() - b) {
@@ -90,11 +173,6 @@ bool sameIdentity(const D9CWireObjectIdentity& a,
                   const D9CWireObjectIdentity& b) noexcept {
   return a.kind == b.kind && a.generation == b.generation &&
          a.objectId == b.objectId;
-}
-
-bool sameSlot(const D9CWireObjectIdentity& a,
-              const D9CWireObjectIdentity& b) noexcept {
-  return a.kind == b.kind && a.objectId == b.objectId;
 }
 
 auto findLiveSlot(std::vector<RenderTapeValidationScratch::LiveSlot>& live,
@@ -408,7 +486,9 @@ validateRenderTape(std::span<const std::byte> blob,
     const auto event = candidate.event(i);
     RenderTapeObjectDefineHeader fixed{};
     if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
-        fixed.descriptorKind == 0u || fixed.descriptorBytes == 0u ||
+        fixed.descriptorKind != static_cast<std::uint32_t>(
+            renderTapeDescriptorKindForObject(fixed.identity.kind)) ||
+        fixed.descriptorBytes == 0u ||
         fixed.reserved0 != 0u || fixed.reserved1 != 0u ||
         ((fixed.expectedContentBytes == 0u) !=
          (fixed.expectedContentCount == 0u)) ||
@@ -445,6 +525,13 @@ validateRenderTape(std::span<const std::byte> blob,
     } else if (fixed.immutablePayloadBytes != 0u ||
                !zeroDigest(fixed.immutablePayloadDigest)) {
       return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    if (!validDescriptorContentDisposition(
+            fixed, event.payload.subspan(sizeof(fixed)))) {
+      return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+    }
+    if (findDefinition(scratch.objectDefinitions, fixed.identity) != nullptr) {
+      return failure(RenderTapeValidationStatus::DuplicateGeneration, i);
     }
     try {
       scratch.objectDefinitions.push_back(
@@ -657,22 +744,97 @@ validateRenderTape(std::span<const std::byte> blob,
                  !zeroDigest(fixed.immutablePayloadDigest)) {
         return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
       }
-      // Prevent duplicate live generations and reuse while a live slot holds
-      // the same {kind,objectId}.
-      const auto priorSlot = std::find_if(
-          scratch.liveObjects.begin(), scratch.liveObjects.end(),
-          [&](const auto& entry) { return sameSlot(entry.identity, fixed.identity); });
-      if (priorSlot != scratch.liveObjects.end()) {
-        if (priorSlot->descriptorKind != fixed.descriptorKind) {
+      const auto descriptor = event.payload.subspan(sizeof(fixed));
+      if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+          descriptor.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
+        RenderTapeSurfaceDescriptorV2 surface{};
+        std::memcpy(&surface, descriptor.data(), sizeof(surface));
+        if (surface.schemaVersion == kRenderTapeSurfaceDescriptorVersion2 &&
+            surface.storage == static_cast<std::uint32_t>(
+                RenderTapeSurfaceStorage::TextureSubresource)) {
+          const auto* parent = findDefinition(
+              scratch.objectDefinitions, surface.parentTexture);
+          if (!parent || parent->eventIndex >= i ||
+              findLiveSlot(scratch.liveObjects, surface.parentTexture) ==
+                  scratch.liveObjects.end()) {
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+          }
+          const auto parentEvent = candidate.event(parent->eventIndex);
+          RenderTapeObjectDefineHeader parentFixed{};
+          if (!load(parentEvent.payload, 0u, parentFixed)) {
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+          }
+          const auto parentDescriptor =
+              parentEvent.payload.subspan(sizeof(parentFixed));
+          D9CSurfaceDesc parentSurface{};
+          bool parentSurfaceLoaded = false;
+          RenderTapeTextureDescriptorV2 parentTexture{};
+          const bool parentIsVersioned =
+              parentDescriptor.size() >= sizeof(parentTexture) &&
+              load(parentDescriptor, 0u, parentTexture) &&
+              parentTexture.schemaVersion ==
+                  kRenderTapeTextureDescriptorVersion2;
+          if (parentIsVersioned &&
+              surface.subresource < parentTexture.subresourceCount) {
+            const auto parentSurfaceOffset =
+                sizeof(parentTexture) +
+                static_cast<std::size_t>(surface.subresource) *
+                    sizeof(parentSurface);
+            parentSurfaceLoaded =
+                load(parentDescriptor, parentSurfaceOffset, parentSurface);
+          } else if (!parentIsVersioned) {
+            // Legacy 2D texture descriptors remain valid and are still
+            // sufficient for a level alias. Cube descriptors are always
+            // versioned because their flat face*mip identity cannot be
+            // represented by the legacy levelCount shape.
+            parentSurfaceLoaded = renderTapeTextureSubresourceDescriptor(
+                parentDescriptor, surface.subresource, parentSurface);
+          }
+          if (!parentSurfaceLoaded ||
+              !renderTapeSurfaceDescriptorsEqual(surface.surface,
+                                                  parentSurface)) {
+            return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+          }
+        }
+      }
+      // Exact definitions are globally unique (checked in the value-owned
+      // prepass). Ordinary slots use kind/objectId, while texture-derived
+      // surfaces use their generation-qualified parent and subresource.
+      // Alias generations are numeric only within one wrapper objectId;
+      // cross-object replacements are ordered by their journal events.
+      const auto logicalSlot =
+          renderTapeLogicalObjectSlot(fixed.identity, descriptor);
+      if (logicalSlot.malformedSurfaceDescriptor) {
+        return failure(RenderTapeValidationStatus::InvalidObjectDefine, i);
+      }
+      bool sameWireSlotSeen = false;
+      std::uint32_t latestWireGeneration = 0u;
+      for (const auto& priorSlot : scratch.liveObjects) {
+        if (renderTapeSameWireObject(priorSlot.identity, fixed.identity)) {
+          sameWireSlotSeen = true;
+          latestWireGeneration = std::max(
+              latestWireGeneration, priorSlot.identity.generation);
+        }
+        const auto slotRelation =
+            renderTapeLogicalSlotRelation(priorSlot.logicalSlot, logicalSlot);
+        if (slotRelation == RenderTapeLogicalSlotRelation::Different)
+          continue;
+        if (slotRelation ==
+                RenderTapeLogicalSlotRelation::AliasDescriptorMismatch ||
+            priorSlot.descriptorKind != fixed.descriptorKind) {
           return failure(RenderTapeValidationStatus::DescriptorMismatch, i);
         }
-        return failure(priorSlot->retired
-                           ? RenderTapeValidationStatus::RetainedSlotReuse
-                           : RenderTapeValidationStatus::DuplicateGeneration,
-                       i);
+        if (!priorSlot.retired) {
+          return failure(RenderTapeValidationStatus::DuplicateGeneration, i);
+        }
+      }
+      if (sameWireSlotSeen &&
+          fixed.identity.generation <= latestWireGeneration) {
+        return failure(RenderTapeValidationStatus::RetainedSlotReuse, i);
       }
       scratch.liveObjects.push_back(RenderTapeValidationScratch::LiveSlot{
           .identity = fixed.identity,
+          .logicalSlot = logicalSlot,
           .descriptorKind = fixed.descriptorKind,
           .lastUseOrdinal = eventHeader.ordinal,
           .retired = false,

@@ -527,6 +527,28 @@ failed validation, missing/rejecting publisher, or producer failure aborts the
 interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
 
+Supported CPU-owned texture contents include uncompressed 2D locks and
+block-compressed DXT1, DXT3, and DXT5 locks on 2D mip levels and cube face/mip
+subresources. Every supported full lock and partial rectangle validates pitch,
+bounds, and all byte arithmetic, strips row padding, and maintains tightly
+packed complete canonical subresource content; block-compressed rectangles are
+D3D9-valid block aligned and use rounded terminal blocks for odd dimensions.
+A partial write is admissible only after an exact-size complete seed exists;
+each committed write produces an ordered immutable full-subresource mutation.
+Texture-derived surface locks, whether uncompressed or block
+compressed, mutate the owning texture identity at the exact
+generation-qualified subresource; standalone surfaces remain surface-owned.
+Repeated wrappers for one underlying surface identity are idempotent and do
+not duplicate ObjectDefine/ObjectDestroy interval events. Versioned descriptor
+metadata names the exact parent texture and flattened subresource for surface
+aliases and distinguishes complete seed bytes from unavailable bytes. Capture
+orders replacements between distinct surface-alias object IDs by their
+ObjectDestroy/ObjectDefine events; generation numbers are monotone only within
+one wire object ID. An alias and a standalone surface never share a logical
+slot merely because their wire object IDs match. Capture rejection at this cold
+path records a typed first-rejection reason; the capture-off path performs none of
+the block layout or byte-copy work.
+
 **R-HARN-REPLAY-7.12** Production capture publication requires the explicit
 `DXMT9_RENDER_TAPE_OUTPUT_ROOT` PE-visible absolute-root policy. Under Wine the
 value is a Windows drive-qualified path such as `Z:\\...`; a host-only POSIX
