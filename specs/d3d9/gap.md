@@ -724,3 +724,30 @@ local array and emitted silently-wrong output. Re-enabling it is its own project
 — the parked comment records that it previously over-rejected valid SM3
 control-flow operands — but this is the second time this session that a missing
 range check turned a wrong input into wrong pixels rather than an error.
+
+## Render-tape pending command-chunk ownership
+
+The PE render-tape registry has two independent bounded lifetime axes for a
+resource identity: wrapper references and pending command-chunk references.
+For one builder, `pendingChunkRefs` is a boolean-shaped bounded value: an
+identity has either zero or one pending ref. A wrapper can release, reacquire,
+and release again before the same builder drains without increasing that ref.
+When the last PE wrapper is released while `CommandChunkBuilder::referencesObject`
+is true, the release transfers to `pendingChunkRefs`; it does not retire the
+identity or emit `ObjectDestroy`. This preserves the generation-qualified
+registry entry while the command is still pending.
+
+The successful path is ordered:
+
+1. bridge-commit the sealed command;
+2. validate/materialize its referenced objects and append the command event;
+3. drain pending chunk references and append each admitted `ObjectDestroy` (and
+   parent-driven alias retirement) at most once;
+4. reset the builder, which releases the physical COM references.
+
+Bridge failure leaves the builder and pending references intact for retry.
+Clear/discard drains the logical pending references without journaling a
+command-dependent destroy. Texture-derived surfaces retain their identity
+until parent retirement, including when a pending command overlaps the last
+wrapper release. The native truth table is
+`tests/native/bridge/render_tape_capture_spec.cpp:testPendingChunkLifetimeTruthTable`.

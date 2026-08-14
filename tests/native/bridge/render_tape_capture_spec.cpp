@@ -963,6 +963,62 @@ void testObjectLifetimeAndTerminalControls() {
         "device lost has no partial artifact");
 }
 
+void testPendingChunkLifetimeTruthTable() {
+  RenderTapeSurfaceAliasLifetime ordinary;
+  check(ordinary.acquire(), "ordinary wrapper acquires");
+  check(ordinary.retainPendingChunk() && ordinary.pendingChunkRefs == 1u,
+        "pending chunk ownership is bounded and retained");
+  check(!ordinary.releaseWrapper() && ordinary.wrapperRefs == 0u &&
+            ordinary.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedChunk,
+        "last wrapper release transfers ordinary identity to pending chunk");
+  check(ordinary.releasePendingChunk() && ordinary.pendingChunkRefs == 0u &&
+            ordinary.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "ordinary pending release retires exactly at the drain point");
+  check(!ordinary.releasePendingChunk() && !ordinary.acquire(),
+        "drained pending ownership cannot be released or resurrected");
+
+  RenderTapeSurfaceAliasLifetime reacquired;
+  check(reacquired.acquire() && reacquired.retainPendingChunk() &&
+            !reacquired.releaseWrapper() && reacquired.acquire() &&
+            !reacquired.releaseWrapper() && reacquired.pendingChunkRefs == 1u &&
+            !reacquired.retainPendingChunk(),
+        "reacquire/release before one builder drain stays at one pending ref");
+  check(reacquired.releasePendingChunk() &&
+            reacquired.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "one pending drain retires the reacquired wrapper identity");
+
+  RenderTapeSurfaceAliasLifetime alias;
+  alias.textureAlias = true;
+  check(alias.acquire() && alias.retainPendingChunk() &&
+            !alias.releaseWrapper() && alias.wrapperRefs == 0u,
+        "alias keeps both parent and pending lifetime axes independent");
+  check(!alias.releasePendingChunk() &&
+            alias.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedAlias,
+        "alias pending drain preserves identity until parent retirement");
+  check(alias.retireParent() &&
+            alias.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "alias parent retirement is the final destroy transition");
+
+  RenderTapeSurfaceAliasLifetime parentRetiresWhilePending;
+  parentRetiresWhilePending.textureAlias = true;
+  check(parentRetiresWhilePending.acquire() &&
+            parentRetiresWhilePending.retainPendingChunk() &&
+            !parentRetiresWhilePending.releaseWrapper() &&
+            !parentRetiresWhilePending.retireParent() &&
+            parentRetiresWhilePending.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedChunk,
+        "parent retirement waits for the pending alias command");
+  check(parentRetiresWhilePending.releasePendingChunk() &&
+            parentRetiresWhilePending.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::Retired,
+        "pending alias command retires after an already-retired parent");
+}
+
 // R-RT-CAP-9.4: the PresentOutput role is capture-owned and single-holder.
 // GT2 frame-tape retries (artifact
 // experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r6-20260814)
@@ -1826,6 +1882,7 @@ int main(int argc, char** argv) {
     testRenderTapeBlobCapacityResolverTruthTable();
     testProductionBlobDefaultIsCaptureBounded();
     testObjectLifetimeAndTerminalControls();
+    testPendingChunkLifetimeTruthTable();
     testPresentOutputRoleOwnershipTruthTable();
     testStandaloneSurfaceIdentityClosureTruthTable();
     testSurfaceAliasGenerationReplacementTransition();

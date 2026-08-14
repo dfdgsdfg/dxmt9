@@ -1502,6 +1502,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     void clearPendingCommandChunk() {
+        // Discarded chunks never acquire a tape ObjectDestroy event. Drain
+        // the logical pending refs before raw D9C retainer reset.
+        drainPendingRenderTapeChunk(false);
         commandChunk_.reset();
     }
 
@@ -7470,14 +7473,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!it->lifetime.releaseWrapper()) {
             return false;
         }
-        try {
-            renderTapeRegistry_->knownDead.push_back(it->identity);
-        } catch (...) {
-            markRenderTapeInvalidOnce("object_destroy_tombstone_allocation",
-                                     &object);
-            return false;
-        }
-        renderTapeRegistry_->objects.erase(it);
+        // The caller performs the shared ObjectDestroy/tombstone/erase step.
+        // Keeping the live entry here makes immediate and pending retirement
+        // use the same exact-once ordering.
         return true;
     }
 
@@ -8559,6 +8557,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         };
         const HRESULT hr = commitPendingCommandChunk(reason, chunk, info);
         if (SUCCEEDED(hr)) {
+            const bool recordDestroy =
+                renderTapeCapture_ &&
+                renderTapeCapture_->state() ==
+                    dxmt9::d3d9::RenderTapeCaptureState::Capturing;
+            // commitPendingCommandChunk has first copied/materialized the
+            // command into the capture session. Only now may a deferred last
+            // wrapper become an ObjectDestroy event. Bridge failure leaves
+            // both the builder and pending refs intact for retry.
+            drainPendingRenderTapeChunk(recordDestroy);
             commandChunk_.reset();
         }
         return hr;
@@ -9800,8 +9807,49 @@ public:
                 sizeof(descriptor)));
     }
 
+    bool retireRenderTapeObject(
+        const D9CWireObjectIdentity &identity, bool recordDestroy,
+        const char *failureReason) noexcept {
+        if (!renderTapeRegistry_)
+            return false;
+        const auto it = std::find_if(
+            renderTapeRegistry_->objects.begin(),
+            renderTapeRegistry_->objects.end(), [&](const auto &entry) {
+                return renderTapeSameIdentity(entry.identity, identity);
+            });
+        if (it == renderTapeRegistry_->objects.end())
+            return false;
+        const bool admitted = renderTapeObjectAdmitted(identity);
+        if (recordDestroy && admitted && renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            const auto status = renderTapeCapture_->objectDestroy(identity);
+            dxmt9DeviceInfoLog(
+                "render_tape_capture object_destroy status=%u kind=%u "
+                "generation=%u object_id=%llu",
+                static_cast<unsigned>(status), identity.kind,
+                identity.generation,
+                static_cast<unsigned long long>(identity.objectId));
+            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                abortRenderTapeCapture(failureReason);
+            } else {
+                removeRenderTapeObjectAdmitted(identity);
+            }
+        }
+        try {
+            renderTapeRegistry_->knownDead.push_back(identity);
+        } catch (...) {
+            const dxmt9::d3d9::pe::PeWireObjectRef object{.identity = identity};
+            markRenderTapeInvalidOnce("object_destroy_tombstone_allocation",
+                                     &object);
+            return false;
+        }
+        renderTapeRegistry_->objects.erase(it);
+        return true;
+    }
+
     void retireRenderTapeAliasesForParent(
-        const D9CWireObjectIdentity &parent) noexcept {
+        const D9CWireObjectIdentity &parent, bool recordDestroy = true) noexcept {
         if (!renderTapeRegistry_) {
             return;
         }
@@ -9824,41 +9872,69 @@ public:
                 continue;
             }
             const auto identity = it->identity;
-            const bool admitted = renderTapeObjectAdmitted(identity);
-            try {
-                renderTapeRegistry_->knownDead.push_back(identity);
-            } catch (...) {
-                const dxmt9::d3d9::pe::PeWireObjectRef aliasObject{
-                    .identity = identity};
-                markRenderTapeInvalidOnce("alias_destroy_tombstone_allocation",
-                                         &aliasObject);
-                return;
-            }
-            (void)it->lifetime.retireParent();
-            it = renderTapeRegistry_->objects.erase(it);
-            if (!admitted || !renderTapeCapture_ ||
-                renderTapeCapture_->state() !=
-                    dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            if (!it->lifetime.retireParent()) {
+                ++it;
                 continue;
             }
-            const auto status = renderTapeCapture_->objectDestroy(identity);
-            dxmt9DeviceInfoLog(
-                "render_tape_capture alias_object_destroy status=%u kind=%u "
-                "generation=%u object_id=%llu",
-                static_cast<unsigned>(status), identity.kind,
-                identity.generation,
-                static_cast<unsigned long long>(identity.objectId));
-            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-                abortRenderTapeCapture("alias_object_destroy");
-            } else {
-                removeRenderTapeObjectAdmitted(identity);
-            }
+            (void)retireRenderTapeObject(identity, recordDestroy,
+                                          "alias_object_destroy");
+            // The helper erases the identity. Restarting from a value lookup
+            // keeps iterator invalidation out of this bounded registry walk.
+            it = renderTapeRegistry_->objects.begin();
+        }
+    }
+
+    void drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
+        if (!renderTapeRegistry_)
+            return;
+        // Handles are intentionally walked after the command has been
+        // materialized. Duplicate handles across records are harmless because
+        // the bounded lifetime ref reaches zero on the first visit.
+        for (const auto &handle : commandChunk_.handles()) {
+            const D9CWireObjectIdentity identity{
+                .kind = handle.kind,
+                .generation = handle.generation,
+                .objectId = handle.objectId,
+            };
+            auto *entry = findRenderTapeObject(
+                dxmt9::d3d9::pe::PeWireObjectRef{.identity = identity});
+            if (!entry || entry->lifetime.pendingChunkRefs == 0u)
+                continue;
+            if (!entry->lifetime.releasePendingChunk())
+                continue;
+            const bool isTexture = identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE;
+            if (isTexture)
+                retireRenderTapeAliasesForParent(identity, recordDestroy);
+            // Preserve the established alias-before-parent event order. The
+            // parent entry remains in the registry until the alias scan has
+            // completed, so the scan is safe for both immediate and pending
+            // retirement.
+            retireRenderTapeObject(identity, recordDestroy, "object_destroy");
         }
     }
 
     void NotifyRenderTapeObjectDestroyForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override {
-        const bool admitted = renderTapeObjectAdmitted(object.identity);
+        if (renderTapeRegistry_) {
+            auto *entry = findRenderTapeObject(object);
+            // The PE wrapper destructor has already delivered this callback.
+            // Transfer the logical lifetime to the bounded pending chunk ref;
+            // drain it after command materialization and before raw D9C
+            // retainer reset.
+            if (entry && entry->lifetime.wrapperRefs == 1u &&
+                entry->lifetime.pendingChunkRefs == 0u &&
+                commandChunk_.referencesObject(object.object) &&
+                entry->lifetime.retainPendingChunk()) {
+                (void)entry->lifetime.releaseWrapper();
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture object_destroy deferred kind=%u "
+                    "generation=%u object_id=%llu pending=%u",
+                    object.identity.kind, object.identity.generation,
+                    static_cast<unsigned long long>(object.identity.objectId),
+                    entry->lifetime.pendingChunkRefs);
+                return;
+            }
+        }
         const bool retired = unregisterRenderTapeObject(object);
         if (!retired) {
             return;
@@ -9866,23 +9942,7 @@ public:
         if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
             retireRenderTapeAliasesForParent(object.identity);
         }
-        if (!admitted || !renderTapeCapture_ ||
-            renderTapeCapture_->state() !=
-                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
-            return;
-        }
-        const auto status = renderTapeCapture_->objectDestroy(object.identity);
-        dxmt9DeviceInfoLog(
-            "render_tape_capture object_destroy status=%u kind=%u generation=%u "
-            "object_id=%llu",
-            static_cast<unsigned>(status), object.identity.kind,
-            object.identity.generation,
-            static_cast<unsigned long long>(object.identity.objectId));
-        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            abortRenderTapeCapture("object_destroy");
-        } else {
-            removeRenderTapeObjectAdmitted(object.identity);
-        }
+        retireRenderTapeObject(object.identity, true, "object_destroy");
     }
     void NotifyRenderTapeResourceMutationForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,

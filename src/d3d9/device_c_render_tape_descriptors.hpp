@@ -97,21 +97,49 @@ struct RenderTapeSurfaceDescriptorV2 {
 struct RenderTapeSurfaceAliasLifetime {
   enum class Disposition : std::uint8_t {
     Live,
+    RetainedChunk,
     RetainedAlias,
     Retired,
   };
 
   std::uint32_t wrapperRefs = 0u;
+  std::uint32_t pendingChunkRefs = 0u;
   bool textureAlias = false;
+  bool parentRetired = false;
   Disposition disposition = Disposition::Live;
 
   bool acquire() noexcept {
-    if (disposition == Disposition::Retired ||
+    if (disposition == Disposition::Retired || parentRetired ||
         wrapperRefs == std::numeric_limits<std::uint32_t>::max())
       return false;
     ++wrapperRefs;
     disposition = Disposition::Live;
     return true;
+  }
+
+  bool retainPendingChunk() noexcept {
+    // One builder owns at most one logical pending ref per identity. A
+    // wrapper may release, reacquire, and release again before that builder
+    // drains; this is still one pending ownership interval.
+    if (disposition == Disposition::Retired || pendingChunkRefs != 0u)
+      return false;
+    ++pendingChunkRefs;
+    if (wrapperRefs == 0u)
+      disposition = Disposition::RetainedChunk;
+    return true;
+  }
+
+  bool releasePendingChunk() noexcept {
+    if (pendingChunkRefs == 0u)
+      return false;
+    --pendingChunkRefs;
+    if (wrapperRefs == 0u && (!textureAlias || parentRetired)) {
+      disposition = Disposition::Retired;
+      return true;
+    }
+    if (wrapperRefs == 0u)
+      disposition = Disposition::RetainedAlias;
+    return false;
   }
 
   bool releaseWrapper() noexcept {
@@ -122,8 +150,12 @@ struct RenderTapeSurfaceAliasLifetime {
       return false;
     }
     wrapperRefs = 0u;
-    if (textureAlias) {
+    if (textureAlias && !parentRetired) {
       disposition = Disposition::RetainedAlias;
+      return false;
+    }
+    if (pendingChunkRefs != 0u) {
+      disposition = Disposition::RetainedChunk;
       return false;
     }
     disposition = Disposition::Retired;
@@ -131,10 +163,16 @@ struct RenderTapeSurfaceAliasLifetime {
   }
 
   bool retireParent() noexcept {
-    if (!textureAlias || disposition == Disposition::Retired)
+    if (!textureAlias || parentRetired || disposition == Disposition::Retired)
       return false;
-    disposition = Disposition::Retired;
-    return true;
+    parentRetired = true;
+    if (wrapperRefs == 0u && pendingChunkRefs == 0u) {
+      disposition = Disposition::Retired;
+      return true;
+    }
+    disposition = pendingChunkRefs != 0u ? Disposition::RetainedChunk
+                                         : Disposition::RetainedAlias;
+    return false;
   }
 };
 

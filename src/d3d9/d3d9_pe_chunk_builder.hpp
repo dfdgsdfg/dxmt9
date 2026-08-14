@@ -115,6 +115,9 @@ class CommandChunkBuilder {
       const noexcept {
     return handles_;
   }
+  const std::vector<D9CCommandChunkWireHandleEntry>& handles() const noexcept {
+    return handles_;
+  }
   const std::vector<std::byte>& payloadForTest() const noexcept {
     return payload_;
   }
