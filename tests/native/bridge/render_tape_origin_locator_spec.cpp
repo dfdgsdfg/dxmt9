@@ -262,7 +262,9 @@ void testMalformedAndAliasPreservation() {
             alias.resolvedIdentity.kind == resolved.kind &&
             alias.resolvedIdentity.generation == resolved.generation &&
             alias.resolvedIdentity.objectId == resolved.objectId &&
-            alias.aliasOrigin,
+            alias.aliasOrigin &&
+            alias.role == RenderTapeCommandRole::RenderTargetBinding &&
+            alias.storageRole == RenderTapeStorageRole::RenderTargetCandidate,
         "alias resolution preserves original handle identity");
 
   check(renderTapeLocateOrigin(fixture.view(), 4u, origin).status ==

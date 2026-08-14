@@ -8347,7 +8347,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 "origin_kind=%u origin_generation=%u origin_object_id=%llu "
                 "resolved_kind=%u resolved_generation=%u "
                 "resolved_object_id=%llu section_kind=%u binding_slot=%u "
-                "alias_origin=%d command_role=%s locator_status=%s",
+                "alias_origin=%d command_role=%s storage_role=%s "
+                "locator_status=%s",
                 missingSeed.identity.kind, missingSeed.identity.generation,
                 static_cast<unsigned long long>(missingSeed.identity.objectId),
                 dxmt9::d3d9::renderTapeMissingSeedDescriptorStatusName(
@@ -8374,6 +8375,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 locator.sectionKind, locator.bindingSlot,
                 locator.aliasOrigin ? 1 : 0,
                 dxmt9::d3d9::renderTapeCommandRoleName(locator.role),
+                dxmt9::d3d9::renderTapeStorageRoleName(locator.storageRole),
                 dxmt9::d3d9::renderTapeOriginLocatorStatusName(
                     locator.status));
             if (recordType == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&

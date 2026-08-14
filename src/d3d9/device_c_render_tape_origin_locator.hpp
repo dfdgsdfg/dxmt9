@@ -18,6 +18,19 @@ enum class RenderTapeCommandRole : std::uint32_t {
   ReadbackSource,
 };
 
+// Semantic role of the recursively resolved storage identity. Every value is
+// still a candidate: this locator observes command bindings, not GPU access.
+enum class RenderTapeStorageRole : std::uint32_t {
+  Unknown = 0u,
+  BindingStorage,
+  ShaderReadCandidate,
+  RenderTargetCandidate,
+  DepthStencilCandidate,
+  CopySourceCandidate,
+  CopyDestinationCandidate,
+  ReadbackSourceCandidate,
+};
+
 enum class RenderTapeOriginLocatorStatus : std::uint32_t {
   InvalidHandle = 0u,
   NotReferenced,
@@ -44,6 +57,7 @@ struct RenderTapeOriginLocator {
   std::uint32_t sectionKind = kRenderTapeOriginSentinel;
   std::uint32_t bindingSlot = kRenderTapeOriginSentinel;
   RenderTapeCommandRole role = RenderTapeCommandRole::Unknown;
+  RenderTapeStorageRole storageRole = RenderTapeStorageRole::Unknown;
   bool aliasOrigin = false;
 };
 
@@ -52,6 +66,9 @@ RenderTapeOriginLocator renderTapeLocateOrigin(
     const D9CWireObjectIdentity& resolvedIdentity) noexcept;
 
 const char* renderTapeCommandRoleName(RenderTapeCommandRole role) noexcept;
+RenderTapeStorageRole renderTapeStorageRoleForCommandRole(
+    RenderTapeCommandRole role) noexcept;
+const char* renderTapeStorageRoleName(RenderTapeStorageRole role) noexcept;
 const char* renderTapeOriginLocatorStatusName(
     RenderTapeOriginLocatorStatus status) noexcept;
 

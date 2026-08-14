@@ -91,6 +91,33 @@ RenderTapeCommandRole sparseRole(std::uint32_t recordType,
   }
 }
 
+} // namespace
+
+RenderTapeStorageRole renderTapeStorageRoleForCommandRole(
+    RenderTapeCommandRole role) noexcept {
+  switch (role) {
+  case RenderTapeCommandRole::BindingOnly:
+    return RenderTapeStorageRole::BindingStorage;
+  case RenderTapeCommandRole::ShaderReadCandidate:
+    return RenderTapeStorageRole::ShaderReadCandidate;
+  case RenderTapeCommandRole::RenderTargetBinding:
+    return RenderTapeStorageRole::RenderTargetCandidate;
+  case RenderTapeCommandRole::DepthStencilBinding:
+    return RenderTapeStorageRole::DepthStencilCandidate;
+  case RenderTapeCommandRole::CopySource:
+    return RenderTapeStorageRole::CopySourceCandidate;
+  case RenderTapeCommandRole::CopyDestination:
+    return RenderTapeStorageRole::CopyDestinationCandidate;
+  case RenderTapeCommandRole::ReadbackSource:
+    return RenderTapeStorageRole::ReadbackSourceCandidate;
+  case RenderTapeCommandRole::Unknown:
+    return RenderTapeStorageRole::Unknown;
+  }
+  return RenderTapeStorageRole::Unknown;
+}
+
+namespace {
+
 bool nonDrawBinding(const ImportedRecordView& record,
                     std::uint32_t handleIndex, std::uint32_t& sectionKind,
                     std::uint32_t& bindingSlot,
@@ -242,6 +269,8 @@ RenderTapeOriginLocator renderTapeLocateOrigin(
         result.sectionKind = section.descriptor.kind;
         result.bindingSlot = slot;
         result.role = sparseRole(record.header.type, result.sectionKind);
+        result.storageRole =
+            renderTapeStorageRoleForCommandRole(result.role);
         return result;
       }
       result.status = RenderTapeOriginLocatorStatus::Accepted;
@@ -253,6 +282,7 @@ RenderTapeOriginLocator renderTapeLocateOrigin(
       result.status = RenderTapeOriginLocatorStatus::MalformedRecord;
       return result;
     }
+    result.storageRole = renderTapeStorageRoleForCommandRole(result.role);
     result.status = RenderTapeOriginLocatorStatus::Accepted;
     return result;
   }
@@ -279,6 +309,28 @@ const char* renderTapeCommandRoleName(RenderTapeCommandRole role) noexcept {
     return "copy_destination";
   case RenderTapeCommandRole::ReadbackSource:
     return "readback_source";
+  }
+  return "unknown";
+}
+
+const char* renderTapeStorageRoleName(RenderTapeStorageRole role) noexcept {
+  switch (role) {
+  case RenderTapeStorageRole::Unknown:
+    return "unknown";
+  case RenderTapeStorageRole::BindingStorage:
+    return "binding_storage";
+  case RenderTapeStorageRole::ShaderReadCandidate:
+    return "shader_read_candidate";
+  case RenderTapeStorageRole::RenderTargetCandidate:
+    return "render_target_candidate";
+  case RenderTapeStorageRole::DepthStencilCandidate:
+    return "depth_stencil_candidate";
+  case RenderTapeStorageRole::CopySourceCandidate:
+    return "copy_source_candidate";
+  case RenderTapeStorageRole::CopyDestinationCandidate:
+    return "copy_destination_candidate";
+  case RenderTapeStorageRole::ReadbackSourceCandidate:
+    return "readback_source_candidate";
   }
   return "unknown";
 }
