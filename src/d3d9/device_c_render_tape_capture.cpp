@@ -99,7 +99,10 @@ const char* renderTapeObjectDefineDispositionName(
 RenderTapeCaptureSession::RenderTapeCaptureSession(
     bool enabled, RenderTapeCaptureLimits limits, std::uint32_t profile)
     : enabled_(enabled), limits_(limits),
-      state_(RenderTapeCaptureState::Disabled), builder_(profile) {}
+      state_(RenderTapeCaptureState::Disabled), builder_(profile) {
+  limits_.maxBlobBytes =
+      std::min(limits_.maxBlobBytes, kRenderTapeHardMaxBlobBytes);
+}
 
 RenderTapeDigest RenderTapeCaptureSession::sha256(
     std::span<const std::byte> bytes) {

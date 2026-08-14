@@ -531,12 +531,17 @@ interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
 
 The capture owner must also enforce an overflow-safe total owned-blob byte
-budget before hashing or copying a new blob. The fixed production default is
-68 MiB (71,303,168 bytes), which covers the 67,371,903 bytes required by the
-GT2 r7 exact-closure artifact while retaining a bounded allocation budget.
-Exact duplicate bytes may be admitted without a second charge; an over-budget
-blob is rejected as a capture capacity failure, and this policy must not relax
-digest, descriptor, generation, event, or replay-grammar validation.
+budget before hashing or copying a new blob. The capture-only production
+default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`
+overrides it in decimal bytes only while capture is enabled; unset, invalid, or
+zero resolves to the default, and a valid value above the hard 1 GiB
+(1,073,741,824-byte) ceiling resolves to that ceiling. Exact duplicate bytes
+may be admitted without a second charge; an over-budget blob is rejected as a
+capture capacity failure, and this policy must not relax digest, descriptor,
+generation, event, or replay-grammar validation. Capture-off must not read the
+override or change the normal recorder/bridge path. GT2 r7 and r8 measurements
+are lower bounds on the required owned bytes, not a proof that a complete GT2
+bundle fits; that bundle-capacity claim remains unproven.
 
 Frame-tape bootstrap materialization is an exact closure, not an all-live
 snapshot. Its roots are the generation-qualified handles in the freshly

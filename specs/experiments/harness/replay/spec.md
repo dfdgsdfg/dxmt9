@@ -853,12 +853,16 @@ no predicate is relaxed and no capacity is raised. This makes the fused
 distinguishable from an unverified blob — so an interval abort can be told
 apart from a registry-shape or capacity failure without guessing.
 
-The capture owner also bounds the total owned blob bytes (68 MiB by default,
-71,303,168 bytes), with overflow-safe admission before hashing or copying. The
-rounded default covers the 67,371,903 bytes required by the GT2 r7
-exact-closure artifact while retaining a fixed bounded budget. Exact duplicate
-blobs are admitted without a second charge, and a rejected blob cannot relax
-digest, descriptor, generation, event, or replay-grammar validation.
+The capture owner also bounds the total owned blob bytes (256 MiB by default,
+268,435,456 bytes), with overflow-safe admission before hashing or copying.
+`DXMT9_RENDER_TAPE_MAX_BLOB_BYTES` is a capture-only decimal-byte override:
+unset, invalid, and zero values resolve to the default, while valid values
+above the hard 1 GiB (1,073,741,824-byte) ceiling resolve to that ceiling. The
+override is not read when capture is disabled. Exact duplicate blobs are
+admitted without a second charge, and a rejected blob cannot relax digest,
+descriptor, generation, event, or replay-grammar validation. GT2 r7 and r8
+measurements establish lower bounds only; no complete GT2 bundle has yet
+proved that this bounded policy is sufficient for the full capture.
 
 Production publication is enabled only when `DXMT9_RENDER_TAPE_OUTPUT_ROOT`
 names an explicit safe **PE-visible absolute** directory. Under Wine callers

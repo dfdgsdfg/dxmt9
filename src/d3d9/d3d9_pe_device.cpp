@@ -140,6 +140,16 @@ static std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
     return profile;
 }
 
+static dxmt9::d3d9::RenderTapeCaptureLimits
+dxmt9PeRenderTapeCaptureLimits(bool captureEnabled) {
+    dxmt9::d3d9::RenderTapeCaptureLimits limits{};
+    if (captureEnabled) {
+        limits.maxBlobBytes = dxmt9PeRenderTapeMaxBlobBytesFromText(
+            dxmt9::util::getenvString("DXMT9_RENDER_TAPE_MAX_BLOB_BYTES"));
+    }
+    return limits;
+}
+
 static std::atomic<D3D9PeRenderTapeBootstrapProducer>
     dxmt9PeRenderTapeBootstrapProducer{nullptr};
 static std::atomic<D3D9PeRenderTapeArtifactPublisher>
@@ -10297,7 +10307,8 @@ public:
         , extended_(extended)
         , renderTapeCapture_(
               std::in_place, dxmt9PeRenderTapeCaptureEnabled(),
-              dxmt9::d3d9::RenderTapeCaptureLimits{},
+              dxmt9PeRenderTapeCaptureLimits(
+                  dxmt9PeRenderTapeCaptureEnabled()),
               dxmt9PeRenderTapeCaptureProfile())
         , renderTapeRegistry_(dxmt9PeRenderTapeCaptureEnabled()
                                   ? std::optional<RenderTapeLiveRegistry>{

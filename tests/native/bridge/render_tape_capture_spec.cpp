@@ -706,14 +706,43 @@ void testBoundedBlobBytesAndDeduplication() {
         "duplicate bootstrap blobs consume one entry and one byte charge");
 }
 
-void testProductionBlobDefaultCoversGt2R7Requirement() {
+void testRenderTapeBlobCapacityResolverTruthTable() {
+  struct ResolverCase {
+    std::string_view value;
+    std::uint64_t expected;
+  };
+  constexpr std::array cases{
+      ResolverCase{"", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"invalid", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"0", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"000", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"+1", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"1x", kRenderTapeDefaultMaxBlobBytes},
+      ResolverCase{"268435456", 268435456u},
+      ResolverCase{"1073741824", kRenderTapeHardMaxBlobBytes},
+      ResolverCase{"1073741825", kRenderTapeHardMaxBlobBytes},
+      ResolverCase{"18446744073709551616", kRenderTapeDefaultMaxBlobBytes},
+  };
+  for (const auto& testCase : cases) {
+    check(dxmt9PeRenderTapeMaxBlobBytesFromText(testCase.value) ==
+              testCase.expected,
+          "Render Tape blob capacity resolver truth table is stable");
+  }
+}
+
+void testProductionBlobDefaultIsCaptureBounded() {
   constexpr std::uint64_t gt2R7RequiredBytes = 67371903u;
   const RenderTapeCaptureLimits limits{};
   check(limits.maxBlobBytes == kRenderTapeDefaultMaxBlobBytes &&
             limits.maxBlobBytes >= gt2R7RequiredBytes,
-        "the bounded production blob default covers the measured GT2 r7 closure");
-  check(limits.maxBlobBytes - gt2R7RequiredBytes == 3931265u,
-        "the production blob default keeps only the measured bounded headroom");
+        "the capture-only blob default covers the measured GT2 r7 lower bound");
+  check(kRenderTapeDefaultMaxBlobBytes < kRenderTapeHardMaxBlobBytes,
+        "the capture-only blob default remains below the hard ceiling");
+  const RenderTapeCaptureLimits overMax{
+      .maxBlobBytes = kRenderTapeHardMaxBlobBytes + 1u};
+  RenderTapeCaptureSession clamped(true, overMax);
+  check(clamped.limits().maxBlobBytes == kRenderTapeHardMaxBlobBytes,
+        "the capture session enforces the hard blob ceiling");
 }
 
 void testObjectLifetimeAndTerminalControls() {
@@ -1731,7 +1760,8 @@ int main(int argc, char** argv) {
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
-    testProductionBlobDefaultCoversGt2R7Requirement();
+    testRenderTapeBlobCapacityResolverTruthTable();
+    testProductionBlobDefaultIsCaptureBounded();
     testObjectLifetimeAndTerminalControls();
     testPresentOutputRoleOwnershipTruthTable();
     testSurfaceAliasGenerationReplacementTransition();
