@@ -65,11 +65,14 @@ complete all-live arm snapshot because its second interval cannot admit
 `PresentOutput` is a capture-owned single-holder role. The admission that names
 a new holder hands the role back first, and an arm attempt that does not reach
 an active interval hands it back immediately rather than at the next attempt.
-A holder the admission itself registered and that still carries only the
-admission's own wrapper reference is retired into the tombstone set, so the
+A surface holder the admission itself registered and that still carries only
+the admission's own wrapper reference is retired into the tombstone set, so the
 existing monotone-generation and alias-replacement rules keep applying to it
 unchanged; any other holder is demoted back to its exact displaced
-initial-content state. This closes the two r6 GT2 failures in
+initial-content state and stays registered. Retirement is scoped to that proven
+swap-chain output handoff — a generic standalone or texture-derived alias the
+capture merely re-roled is only ever demoted, so the policy never removes an
+entry the alias rules still own. This closes the two r6 GT2 failures in
 `experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r6-20260814`:
 `present_output_count count=2..8` across retries, and the terminal
 `prior_not_retained_alias` registry invalidation that a recycled wire object id
@@ -77,13 +80,21 @@ produced when it met a stale holder in the logical-slot replacement scan.
 
 The **initial** r6 abort remains open. Its first arm reached an active interval
 and then aborted with `first_abort reason=block_resource_mutation`, with no
-attribution for which branch failed. Only diagnosis, not a fix, is claimed here:
-the failing CPU-unlock append now logs `registry_entry_missing`,
-`subresource_out_of_range`, or the exact session status, so the next GT2 run
-distinguishes a registry-shape failure from a session-side rejection
-(identity not live in the tape, unverified blob, or blob/event capacity). No
-correctness-preserving layout or registry-only treatment was provable from the
-existing artifact, so none was applied.
+attribution for which branch failed. Only diagnosis, not a fix, is claimed
+here, and the fail-closed behaviour is unchanged. The append can be rejected by
+exactly three things — the PE registry shape, blob registration, and the
+mutation event's own validation — so the owner now drives the blob-register and
+mutation steps separately (the same pair `resourceMutationBytes` performs) and
+emits one bounded `mutation_reject` line naming the failing step
+(`registry_entry_missing`, `subresource_out_of_range`, `blob_register`,
+`mutation_event`), the status, the capture state, identity/subresource/bytes,
+whether the identity is still live in the tape, and each counter against its
+limit (`event_count`, `buffered_bytes`, `owned_blob_bytes`,
+`owned_blob_entries`). That makes the mutation event's fused `InvalidInput`
+decidable rather than inferred. No capacity was raised and no predicate
+relaxed: no correctness-preserving layout or registry-only treatment was
+provable from the existing artifact, so none was applied, and the next GT2 run
+must name the failing predicate before any capacity change is considered.
 
 ### GT2 buffer partial-seed closure (capture-only)
 

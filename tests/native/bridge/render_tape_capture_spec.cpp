@@ -975,6 +975,16 @@ void testPresentOutputRoleOwnershipTruthTable() {
             Transition::Demote,
         "a surviving app wrapper demotes instead of retiring");
 
+  // Retirement is scoped to the swap-chain output handoff. Anything the
+  // capture only re-roled stays registered, so the alias rules keep owning it.
+  auto nonSurface = held;
+  nonSurface.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+  const RenderTapePresentOutputRole captureOwnedTexture{
+      .identity = nonSurface, .held = true, .captureOwned = true};
+  check(renderTapePresentOutputRoleTransition(captureOwnedTexture, &other, true,
+                                              1u) == Transition::Demote,
+        "only a surface holder takes the swap-chain output retirement");
+
   const RenderTapePresentOutputRole appOwned{
       .identity = held, .held = true, .captureOwned = false};
   check(renderTapePresentOutputRoleTransition(appOwned, &other, true, 1u) ==

@@ -8040,19 +8040,52 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
+    // Bounded capture-rejection attribution shared by the CpuUnlock append
+    // branches. Every field is already-owned session state; nothing here
+    // relaxes a predicate or raises a capacity.
+    void logRenderTapeMutationRejection(
+        const char *reason, const char *detail,
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, std::uint64_t bytes,
+        dxmt9::d3d9::RenderTapeCaptureStatus status) noexcept {
+        const auto &limits = renderTapeCapture_->limits();
+        dxmt9DeviceInfoLog(
+            "render_tape_capture mutation_reject reason=%s detail=%s status=%u "
+            "capture_state=%u kind=%u generation=%u object_id=%llu "
+            "subresource=%u bytes=%llu live_object=%d event_count=%u/%u "
+            "buffered_bytes=%llu/%llu owned_blob_bytes=%llu/%llu "
+            "owned_blob_entries=%u/%u",
+            reason, detail, static_cast<unsigned>(status),
+            static_cast<unsigned>(renderTapeCapture_->state()),
+            object.identity.kind, object.identity.generation,
+            static_cast<unsigned long long>(object.identity.objectId),
+            subresource, static_cast<unsigned long long>(bytes),
+            renderTapeCapture_->hasLiveObject(object.identity) ? 1 : 0,
+            renderTapeCapture_->eventCount(), limits.maxEvents,
+            static_cast<unsigned long long>(renderTapeCapture_->bufferedBytes()),
+            static_cast<unsigned long long>(limits.maxEventBytes),
+            static_cast<unsigned long long>(
+                renderTapeCapture_->ownedBlobBytes()),
+            static_cast<unsigned long long>(limits.maxBlobBytes),
+            renderTapeCapture_->ownedBlobEntries(), limits.maxBlobEntries);
+    }
+
     // Append one CpuUnlock mutation event for an already-admitted object and
     // attribute the exact failing branch. The r6 GT2 log reported only
     // `first_abort reason=block_resource_mutation`, which cannot distinguish a
     // missing registry entry, a subresource outside the admitted content
-    // shape, and a session-side rejection (identity not live in the tape,
-    // unverified blob, or blob/event capacity).
+    // shape, blob admission, and the mutation event itself. The two session
+    // steps are therefore driven separately here — `resourceMutationBytes`
+    // performs exactly this blob-register-then-mutate pair, so splitting it
+    // narrows attribution without changing what is admitted or when the tape
+    // fails closed.
     bool appendRenderTapeUnlockMutation(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::uint32_t subresource, const char *reason) noexcept {
         const auto *entry = findRenderTapeObject(object);
         if (!entry || subresource >= entry->content.size()) {
             dxmt9DeviceInfoLog(
-                "render_tape_capture mutation_event reason=%s detail=%s kind=%u "
+                "render_tape_capture mutation_reject reason=%s detail=%s kind=%u "
                 "generation=%u object_id=%llu subresource=%u content=%zu",
                 reason,
                 entry ? "subresource_out_of_range" : "registry_entry_missing",
@@ -8061,18 +8094,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 subresource, entry ? entry->content.size() : 0u);
             return false;
         }
-        const auto status = renderTapeCapture_->resourceMutationBytes(
+        const auto &bytes = entry->content[subresource];
+        dxmt9::d3d9::RenderTapeDigest digest{};
+        const auto blobStatus =
+            renderTapeCapture_->registerBlobBytes(bytes, &digest);
+        if (blobStatus != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            logRenderTapeMutationRejection(reason, "blob_register", object,
+                                           subresource, bytes.size(),
+                                           blobStatus);
+            return false;
+        }
+        const auto status = renderTapeCapture_->resourceMutation(
             object.identity, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
-            subresource, 0u, entry->content[subresource]);
+            subresource, 0u, bytes.size(),
+            std::span<const std::byte, dxmt9::d3d9::kRenderTapeDigestSize>(
+                digest));
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            dxmt9DeviceInfoLog(
-                "render_tape_capture mutation_event reason=%s detail=session "
-                "status=%u kind=%u generation=%u object_id=%llu subresource=%u "
-                "bytes=%zu",
-                reason, static_cast<unsigned>(status), object.identity.kind,
-                object.identity.generation,
-                static_cast<unsigned long long>(object.identity.objectId),
-                subresource, entry->content[subresource].size());
+            logRenderTapeMutationRejection(reason, "mutation_event", object,
+                                           subresource, bytes.size(), status);
             return false;
         }
         return true;

@@ -811,12 +811,16 @@ admission that names a new holder hands the role back first. Handing it back is
 a pure transition over the recorded holder, whether the holder is still in the
 live registry, and its wrapper reference count there: re-admitting the same
 exact identity retains the role; a holder that already left the registry needs
-no transition; a holder the admission itself registered and that still carries
-only the admission's own wrapper reference is **retired** (tombstoned, so the
-generation rules keep applying to it); any other holder is **demoted** back to
-its exact displaced initial-content state and stays registered. The transition
-never inspects generations — identity monotonicity stays owned by registration,
-so handing the role back can never admit an identity registration would reject.
+no transition; a **surface** holder the admission itself registered and that
+still carries only the admission's own wrapper reference is **retired**
+(tombstoned, so the generation rules keep applying to it); any other holder is
+**demoted** back to its exact displaced initial-content state and stays
+registered. Retirement is therefore scoped to the proven swap-chain output
+handoff. A generic standalone or texture-derived alias the capture merely
+re-roled is only ever demoted, so this policy never removes an entry the alias
+replacement rules still own. The transition never inspects generations —
+identity monotonicity stays owned by registration, so handing the role back can
+never admit an identity registration would reject.
 The role is also handed back whenever an arm attempt ends without an active
 interval, and again at the start of the next attempt, because an admission
 releases its PE wrapper before the arm returns and the C-side wire registry is
@@ -834,9 +838,20 @@ remaining life of the process. Retiring the stale holder removes the collision
 without relaxing that alias predicate.
 
 A CPU-unlock mutation on an already-admitted object that fails to append now
-carries typed attribution — `registry_entry_missing`,
-`subresource_out_of_range`, or the session status — so an interval abort can be
-told apart from a registry-shape failure without another wild run.
+carries typed attribution instead of a single fused status. The owner drives
+the two session steps separately — the blob registration and then the mutation
+event, which is exactly the pair `resourceMutationBytes` performs, so nothing
+about what is admitted or when the tape fails closed changes — and a rejection
+emits `mutation_reject` with the failing step (`registry_entry_missing`,
+`subresource_out_of_range`, `blob_register`, or `mutation_event`), the status,
+the capture state, the identity/subresource/byte size, whether the identity is
+still live in the tape, and each bounded counter against its limit
+(`event_count`, `buffered_bytes`, `owned_blob_bytes`, `owned_blob_entries`).
+Every field is already-owned session state exposed through const accessors;
+no predicate is relaxed and no capacity is raised. This makes the fused
+`InvalidInput` of a mutation event decidable — a non-live identity is now
+distinguishable from an unverified blob — so an interval abort can be told
+apart from a registry-shape or capacity failure without guessing.
 
 The capture owner also bounds the total owned blob bytes (64 MiB by default),
 with overflow-safe admission before hashing or copying. Exact duplicate blobs

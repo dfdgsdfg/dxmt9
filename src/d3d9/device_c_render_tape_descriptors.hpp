@@ -304,10 +304,15 @@ renderTapePresentOutputRoleTransition(
       role.identity.objectId == next->objectId) {
     return RenderTapePresentOutputRoleTransition::Retained;
   }
-  // A capture-owned holder with exactly the admission's own reference has no
-  // remaining app wrapper, so retiring it is the same transition the ordinary
-  // child destroy path would have produced.
-  if (role.captureOwned && priorWrapperRefs == 1u)
+  // Retirement is scoped to the proven swap-chain output handoff: a surface
+  // the admission itself registered that still carries only the admission's
+  // own wrapper reference, and therefore has no remaining app wrapper. That is
+  // the same transition the ordinary child destroy path would have produced.
+  // Every other holder — including any generic standalone or texture-derived
+  // alias the capture merely re-roled — is demoted and stays registered, so
+  // this policy never removes an entry the alias rules still own.
+  if (role.captureOwned && priorWrapperRefs == 1u &&
+      role.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE)
     return RenderTapePresentOutputRoleTransition::Retire;
   return RenderTapePresentOutputRoleTransition::Demote;
 }

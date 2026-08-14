@@ -176,6 +176,16 @@ public:
   }
   std::uint64_t bufferedBytes() const noexcept { return eventBytes_; }
   std::uint64_t ownedBlobBytes() const noexcept { return blobBytes_; }
+  // Bounded observability for capture-rejection attribution. A rejected
+  // append fuses several predicates into one status, so an owner must be able
+  // to name which one failed without raising a capacity to find out.
+  std::uint32_t ownedBlobEntries() const noexcept {
+    return static_cast<std::uint32_t>(catalogue_.blobs.size());
+  }
+  const RenderTapeCaptureLimits& limits() const noexcept { return limits_; }
+  bool hasLiveObject(const D9CWireObjectIdentity& identity) const noexcept {
+    return hasObject(identity, true);
+  }
   const std::vector<std::byte>& sealedArtifact() const noexcept {
     return sealedArtifact_;
   }
