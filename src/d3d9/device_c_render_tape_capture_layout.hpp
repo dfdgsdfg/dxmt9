@@ -169,6 +169,8 @@ enum class RenderTapeUserMemorySeedRoute : std::uint32_t {
 RenderTapeUserMemorySeedRoute renderTapeClassifyUserMemorySeedRoute(
     RenderTapeFullSnapshotStatus status) noexcept;
 
+bool renderTapeUserMemoryLockRequiresFlush(bool captureTrackingEnabled) noexcept;
+
 // A surface wrapper may only use the exact-owner full snapshot fallback when
 // it is a 2D texture-level alias and its mutation identity is the owning
 // texture generation.  Keep this route decision value-only so the PE seam and

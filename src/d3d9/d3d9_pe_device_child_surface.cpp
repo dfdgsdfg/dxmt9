@@ -929,6 +929,13 @@ public:
     // base pBits + format pitch even for partial rects in the
     // user-memory path, see test_user_memory).
     if (userMemory_) {
+      if (dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
+              recorder_ &&
+                  recorder_->IsRenderTapeCaptureTrackingEnabledForChild())) {
+        const HRESULT flushHr = flushChildRecorder(recorder_);
+        if (FAILED(flushHr))
+          return flushHr;
+      }
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
       locked_ = true;
@@ -1606,6 +1613,13 @@ public:
     // partial scope only creates level-1 textures, so level == 0 is the
     // only valid lock target.
     if (userMemory_ && level == 0) {
+      if (dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
+              recorder_ &&
+                  recorder_->IsRenderTapeCaptureTrackingEnabledForChild())) {
+        const HRESULT flushHr = flushChildRecorder(recorder_);
+        if (FAILED(flushHr))
+          return flushHr;
+      }
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
       lockBits_ = userMemory_;

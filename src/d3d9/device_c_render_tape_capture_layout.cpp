@@ -428,6 +428,10 @@ RenderTapeUserMemorySeedRoute renderTapeClassifyUserMemorySeedRoute(
   return RenderTapeUserMemorySeedRoute::Reject;
 }
 
+bool renderTapeUserMemoryLockRequiresFlush(bool captureTrackingEnabled) noexcept {
+  return captureTrackingEnabled;
+}
+
 RenderTapeBlockLayoutStatus renderTapeBlockLockLayout(
     const D9CSurfaceDesc& desc, std::int32_t pitch,
     const RenderTapeLockRect* rect, RenderTapeBlockLockLayout& out) noexcept {

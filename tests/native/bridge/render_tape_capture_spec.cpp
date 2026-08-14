@@ -2494,12 +2494,34 @@ void testLinearLockCaptureLayouts() {
             full.tightBytes == 128u * 32u * 4u,
         "user-memory full seed uses the exact 128x32 subresource extent");
   std::vector<std::byte> userMemorySeed(
-      static_cast<std::size_t>(128u * 32u * 4u), std::byte{0});
-  for (std::uint32_t row = 0u; row < 32u; ++row) {
-    for (std::uint32_t byte = 0u; byte < 128u * 4u; ++byte)
+      static_cast<std::size_t>(128u * 32u * 4u), std::byte{0x11u});
+  const RenderTapeLockRect userMemoryPatch{7, 5, 23, 13};
+  RenderTapeLinearLockLayout userMemoryPartial{};
+  check(renderTapeLinearLockLayout(
+            D9CSurfaceDesc{.format = argb, .width = 128u, .height = 32u},
+            128u * 4u, &userMemoryPatch, userMemoryPartial) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            !userMemoryPartial.fullSubresource,
+        "user-memory fixture begins with a bounded partial rectangle");
+  for (std::uint32_t row = userMemoryPatch.top;
+       row < static_cast<std::uint32_t>(userMemoryPatch.bottom); ++row) {
+    for (std::uint32_t byte =
+             static_cast<std::uint32_t>(userMemoryPatch.left) * 4u;
+         byte < static_cast<std::uint32_t>(userMemoryPatch.right) * 4u;
+         ++byte)
       userMemorySeed[static_cast<std::size_t>(row) * 128u * 4u + byte] =
           static_cast<std::byte>((row * 17u + byte) & 0xffu);
   }
+  std::vector<std::byte> partialUserMemoryBytes;
+  std::vector<std::byte> unavailableSeed;
+  check(copyRenderTapeLinearRows(
+            userMemorySeed.data(), userMemoryPartial, partialUserMemoryBytes,
+            RenderTapeLockBitsOrigin::Subresource) &&
+            applyRenderTapeLinearMutation(userMemoryPartial,
+                                          partialUserMemoryBytes,
+                                          unavailableSeed) ==
+                RenderTapeBlockMutationStatus::IncompleteSeed,
+        "the first user-memory partial write remains incomplete by itself");
   std::vector<std::byte> userMemoryTight;
   std::vector<std::byte> completeSeed;
   check(copyRenderTapeLinearRows(
@@ -2509,7 +2531,10 @@ void testLinearLockCaptureLayouts() {
             applyRenderTapeLinearMutation(full, userMemoryTight,
                                           completeSeed) ==
                 RenderTapeBlockMutationStatus::Accepted &&
-            completeSeed == userMemoryTight,
+            completeSeed == userMemoryTight &&
+            completeSeed[5u * 128u * 4u + 7u * 4u] != std::byte{0x11u} &&
+            completeSeed[12u * 128u * 4u + 22u * 4u + 3u] !=
+                std::byte{0x11u},
         "a 128x32 user-memory partial-first-write closure publishes a complete seed");
   check(renderTapeUserMemoryFullSeedLayout(
             D9CSurfaceDesc{.format = argb, .width = 128u, .height = 32u},
@@ -2560,6 +2585,9 @@ void testFullSnapshotClosureTruthTable() {
                 RenderTapeFullSnapshotStatus::InvalidExtent) ==
                 RenderTapeUserMemorySeedRoute::Reject,
         "user-memory closure routes full-only, partial-only, or reject");
+  check(renderTapeUserMemoryLockRequiresFlush(true) &&
+            !renderTapeUserMemoryLockRequiresFlush(false),
+        "capture-tracked user-memory locks flush before mutation or CPU reads while capture-off stays fast");
   check(renderTapeClassifySnapshot(true, true, true, false, 0u, fullBytes) ==
             RenderTapeFullSnapshotStatus::NotRequired,
         "full locks never resnapshot");
