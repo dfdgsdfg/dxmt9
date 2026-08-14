@@ -563,7 +563,14 @@ validateRenderTape(std::span<const std::byte> blob,
   std::uint64_t presentCommandOrdinal = 0u;
   std::uint64_t previousCompletion = 0u;
   std::uint64_t expectedPayloadEnd = 0u;
-  bool seedPhaseOpen = true;
+
+  const auto hasIncompleteSeed = [&](const D9CWireObjectIdentity& identity) {
+    const auto expectation = findSeedContentExpectation(
+        scratch.seedContentExpectations, identity);
+    return expectation != scratch.seedContentExpectations.end() &&
+           (expectation->recordedBytes != expectation->expectedBytes ||
+            expectation->recordedCount != expectation->expectedCount);
+  };
 
   for (std::uint32_t i = 0u; i < header.eventCount; ++i) {
     const auto& eventHeader = events[i];
@@ -601,16 +608,6 @@ validateRenderTape(std::span<const std::byte> blob,
     }
 
     const auto eventType = static_cast<RenderTapeEventType>(eventHeader.type);
-    const bool seedPrefixEvent =
-        eventType == RenderTapeEventType::BootstrapState ||
-        eventType == RenderTapeEventType::ObjectDefine ||
-        eventType == RenderTapeEventType::ResourceMutation;
-    if (seedPhaseOpen && !seedPrefixEvent) {
-      seedPhaseOpen = false;
-      if (!seedContentComplete(scratch.seedContentExpectations)) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
-      }
-    }
 
     switch (eventType) {
     case RenderTapeEventType::BootstrapState: {
@@ -854,6 +851,9 @@ validateRenderTape(std::span<const std::byte> blob,
       if (live == scratch.liveObjects.end()) {
         return failure(RenderTapeValidationStatus::UnknownIdentity, i);
       }
+      if (hasIncompleteSeed(fixed.identity)) {
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+      }
       live->retired = true;
       break;
     }
@@ -893,64 +893,54 @@ validateRenderTape(std::span<const std::byte> blob,
       case RenderTapeBlobLookup::Unverified:
         return failure(RenderTapeValidationStatus::BlobDigestMismatch, i);
       }
-      if (sequenceProfile && presentCompleteCount == 1u) {
+      const auto expectation = findSeedContentExpectation(
+          scratch.seedContentExpectations, fixed.identity);
+      const bool advancesIncompleteSeed =
+          expectation != scratch.seedContentExpectations.end() &&
+          (expectation->recordedBytes != expectation->expectedBytes ||
+           expectation->recordedCount != expectation->expectedCount);
+      if (sequenceProfile && presentCompleteCount == 1u &&
+          !advancesIncompleteSeed) {
+        // The sequence profile requires observable interval traffic between
+        // Presents. Completing an identity's deferred initial seed is not
+        // such a mutation and cannot satisfy that boundary contract.
         sawBetweenPresentMutation = true;
       }
-      if (seedPhaseOpen) {
-        const auto expectation = findSeedContentExpectation(
-            scratch.seedContentExpectations, fixed.identity);
-        const bool advancesIncompleteSeed =
-            expectation != scratch.seedContentExpectations.end() &&
-            (expectation->recordedBytes != expectation->expectedBytes ||
-             expectation->recordedCount != expectation->expectedCount);
-        if (advancesIncompleteSeed) {
-          if (fixed.kind !=
-                  static_cast<std::uint32_t>(RenderTapeMutationKind::Upload) &&
-              fixed.kind != static_cast<std::uint32_t>(
-                                 RenderTapeMutationKind::CpuUnlock)) {
-            return failure(RenderTapeValidationStatus::InvalidMutationKind, i);
-          }
-          const bool duplicate = std::any_of(
-              scratch.seedSubresources.begin(),
-              scratch.seedSubresources.end(), [&](const auto& seed) {
-                return sameIdentity(seed.identity, fixed.identity) &&
-                       seed.subresource == fixed.subresource;
-              });
-          std::uint64_t recordedBytes = 0u;
-          if (fixed.byteOffset != 0u || duplicate ||
-              expectation->recordedCount ==
-                  std::numeric_limits<std::uint32_t>::max() ||
-              !checkedAdd(expectation->recordedBytes, fixed.byteSize,
-                          recordedBytes) ||
-              recordedBytes > expectation->expectedBytes ||
-              expectation->recordedCount + 1u > expectation->expectedCount) {
-            return failure(RenderTapeValidationStatus::InvalidMutationRange, i);
-          }
-          try {
-            scratch.seedSubresources.push_back(
-                RenderTapeValidationScratch::SeedSubresource{
-                    .identity = fixed.identity,
-                    .subresource = fixed.subresource,
-                });
-          } catch (...) {
-            return failure(RenderTapeValidationStatus::ScratchAllocationFailed,
-                           i);
-          }
-          expectation->recordedBytes = recordedBytes;
-          ++expectation->recordedCount;
-          if (seedContentComplete(scratch.seedContentExpectations)) {
-            seedPhaseOpen = false;
-          }
-        } else {
-          // The first mutation that does not advance an incomplete declared
-          // expectation is ordinary interval traffic. Close the seed prefix
-          // before accepting it; a still-incomplete different identity fails
-          // here and cannot be repaired by a later mutation.
-          seedPhaseOpen = false;
-          if (!seedContentComplete(scratch.seedContentExpectations)) {
-            return failure(RenderTapeValidationStatus::IncompleteFrame, i);
-          }
+      if (advancesIncompleteSeed) {
+        if (fixed.kind !=
+                static_cast<std::uint32_t>(RenderTapeMutationKind::Upload) &&
+            fixed.kind != static_cast<std::uint32_t>(
+                               RenderTapeMutationKind::CpuUnlock)) {
+          return failure(RenderTapeValidationStatus::InvalidMutationKind, i);
         }
+        const bool duplicate = std::any_of(
+            scratch.seedSubresources.begin(), scratch.seedSubresources.end(),
+            [&](const auto& seed) {
+              return sameIdentity(seed.identity, fixed.identity) &&
+                     seed.subresource == fixed.subresource;
+            });
+        std::uint64_t recordedBytes = 0u;
+        if (fixed.byteOffset != 0u || duplicate ||
+            expectation->recordedCount ==
+                std::numeric_limits<std::uint32_t>::max() ||
+            !checkedAdd(expectation->recordedBytes, fixed.byteSize,
+                        recordedBytes) ||
+            recordedBytes > expectation->expectedBytes ||
+            expectation->recordedCount + 1u > expectation->expectedCount) {
+          return failure(RenderTapeValidationStatus::InvalidMutationRange, i);
+        }
+        try {
+          scratch.seedSubresources.push_back(
+              RenderTapeValidationScratch::SeedSubresource{
+                  .identity = fixed.identity,
+                  .subresource = fixed.subresource,
+              });
+        } catch (...) {
+          return failure(RenderTapeValidationStatus::ScratchAllocationFailed,
+                         i);
+        }
+        expectation->recordedBytes = recordedBytes;
+        ++expectation->recordedCount;
       }
       break;
     }
@@ -996,6 +986,9 @@ validateRenderTape(std::span<const std::byte> blob,
                 scratch.liveObjects.end()) {
           return failure(RenderTapeValidationStatus::UnknownIdentity, i);
         }
+        if (hasIncompleteSeed(identity)) {
+          return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        }
       }
       for (const auto& record : chunk.records) {
         if (record.type == D9C_COMMAND_RECORD_PRESENT) {
@@ -1038,6 +1031,9 @@ validateRenderTape(std::span<const std::byte> blob,
             findLiveSlot(scratch.liveObjects, fixed.identity) ==
                 scratch.liveObjects.end()) {
           return failure(RenderTapeValidationStatus::UnknownIdentity, i);
+        }
+        if (hasIncompleteSeed(fixed.identity)) {
+          return failure(RenderTapeValidationStatus::IncompleteFrame, i);
         }
       } else if (!nullIdentity(fixed.identity)) {
         return failure(RenderTapeValidationStatus::InvalidControlKind, i);

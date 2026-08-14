@@ -3,6 +3,7 @@
 // R-HARN-REPLAY-7.16/7.17: pure frame-tape draw-range projection, canonical
 // locator conservation, exact object/blob closure, and pre-effect rejection.
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -272,7 +273,8 @@ RenderTapeBlobCatalogue catalogue() {
 
 std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
                                      bool includeTextureDefinition = true,
-                                     std::uint64_t expectedTextureBytes = 4u) {
+                                     std::uint64_t expectedTextureBytes = 4u,
+                                     bool lateTextureSeed = false) {
   constexpr std::array<std::byte, 8u> descriptor{};
   constexpr std::array<std::byte, 4u> shaderDescriptor{};
   const auto frame = frameChunk(firstFullSnapshot);
@@ -295,7 +297,7 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
   builder.appendObjectDefine(
       kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       descriptor, 0u, {});
-  if (includeTextureDefinition) {
+  if (includeTextureDefinition && !lateTextureSeed) {
     builder.appendObjectDefine(
         kTexture,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
@@ -304,6 +306,18 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
   builder.appendObjectDefine(
       kShader, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
       shaderDescriptor, 4u, kShaderDigest);
+  if (lateTextureSeed) {
+    // An unrelated command must not close another identity's seed
+    // expectation. The texture is defined and seeded immediately before its
+    // first selected draw reference.
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        bootstrapChunk());
+    builder.appendObjectDefine(
+        kTexture,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        descriptor, 0u, {}, expectedTextureBytes, 1u);
+  }
   builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
                                  0u, 4u, kTextureDigest);
   builder.appendCommandChunk(
@@ -406,6 +420,29 @@ void acceptedRangeConservesCanonicalIdentity() {
         "destroy, control, and completion stay coordinator-owned and excluded");
 }
 
+void projectionAccountsLatePerIdentitySeed() {
+  const auto tape = makeFrameTape(true, true, 4u, true);
+  const auto blobs = catalogue();
+  check(validateRenderTape(tape, blobs).valid(),
+        "late-seed projection fixture source must validate");
+  auto lateSelector = selector();
+  lateSelector.commandEventOrdinal = 7u;
+  const auto projected =
+      projectRenderTapeDrawSlice(tape, blobs, lateSelector);
+  check(projected.valid(), renderTapeProjectionStatusName(projected.status));
+  const auto texture = std::find_if(
+      projected.objects.begin(), projected.objects.end(), [](const auto& object) {
+        return object.identity.objectId == kTexture.objectId;
+      });
+  check(projected.blobReferences.size() == 2u &&
+            projected.blobReferences[1].identity.objectId == kTexture.objectId &&
+            projected.blobReferences[1].initialContent == 1u &&
+            texture != projected.objects.end() &&
+            texture->initialContentBytes == 4u &&
+            texture->initialContentCount == 1u,
+        "projection must classify a late matching mutation as initial content");
+}
+
 void failClosedSelectionAndClosureCases() {
   const auto blobs = catalogue();
   check(projectRenderTapeDrawSlice(makeSequenceTape(), blobs, selector()).status ==
@@ -473,6 +510,7 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_projection_spec [--write-fixture path]");
     acceptedRangeConservesCanonicalIdentity();
+    projectionAccountsLatePerIdentitySeed();
     failClosedSelectionAndClosureCases();
   } catch (const std::exception& error) {
     std::cerr << "render_tape_projection_spec failed: " << error.what() << '\n';

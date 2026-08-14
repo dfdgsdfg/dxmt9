@@ -1253,7 +1253,10 @@ void testBlockCompressedCaptureRejectsInvalidLayouts() {
             "incomplete_subresource_seed" &&
             std::string_view(renderTapeCaptureRejectionReasonName(
                 RenderTapeCaptureRejectionReason::InvalidBlockAlignment)) ==
-                "invalid_block_alignment",
+                "invalid_block_alignment" &&
+            std::string_view(renderTapeCaptureRejectionReasonName(
+                RenderTapeCaptureRejectionReason::UnmaterializedPreArmObject)) ==
+                "unmaterialized_pre_arm_object",
         "typed first-rejection diagnostics have stable observable names");
   D9CSurfaceDesc unsupported{.format = dxt2, .width = 16u, .height = 16u};
   check(renderTapeBlockLockLayout(unsupported, 64, nullptr, layout) ==
@@ -1536,6 +1539,77 @@ void testFullSnapshotClosureTruthTable() {
         "full or byte-less surface mutations do not trigger a snapshot");
 }
 
+void testBootstrapClosureTruthTable() {
+  check(!renderTapeBootstrapRequiresAllLiveObjects(kRenderTapeProfileFrame) &&
+            renderTapeBootstrapRequiresAllLiveObjects(
+                kRenderTapeProfileSequence),
+        "frame tapes use exact closure while sequence tapes retain all live objects");
+  const D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 1u, .objectId = 41u};
+  const D9CWireObjectIdentity staleTexture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 2u, .objectId = 41u};
+  const D9CWireObjectIdentity alias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 1u, .objectId = 42u};
+  const D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 1u, .objectId = 43u};
+  const std::array<RenderTapeBootstrapClosureObject, 3u> complete{
+      RenderTapeBootstrapClosureObject{.identity = texture, .complete = true},
+      RenderTapeBootstrapClosureObject{
+          .identity = alias,
+          .complete = true,
+          .hasDescriptorDependency = true,
+          .descriptorDependency = texture},
+      RenderTapeBootstrapClosureObject{.identity = output, .complete = true},
+  };
+  std::vector<D9CWireObjectIdentity> closure;
+  check(renderTapeBuildBootstrapClosure(std::span<const D9CWireObjectIdentity>{},
+                                        output, complete, closure) ==
+            RenderTapeBootstrapClosureStatus::Accepted &&
+            closure.size() == 1u && closure[0].objectId == output.objectId,
+        "bootstrap closure always includes only the required Present output");
+  const std::array<D9CWireObjectIdentity, 1u> roots{alias};
+  const std::array<D9CWireObjectIdentity, 1u> textureRoot{texture};
+  check(renderTapeBuildBootstrapClosure(roots, output, complete, closure) ==
+            RenderTapeBootstrapClosureStatus::Accepted &&
+            closure.size() == 3u &&
+            renderTapeBootstrapClosureContains(closure, texture),
+        "bootstrap closure unions overlay roots, Present output, and alias parent");
+
+  auto incomplete = complete;
+  incomplete[0].complete = false;
+  check(renderTapeBuildBootstrapClosure(textureRoot, output, incomplete, closure) ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete,
+        "referenced incomplete seed is rejected");
+  incomplete = complete;
+  incomplete[1].complete = false;
+  check(renderTapeBuildBootstrapClosure(roots, output, incomplete, closure) ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete,
+        "referenced incomplete alias is rejected");
+  incomplete = complete;
+  incomplete[0].complete = false;
+  check(renderTapeBuildBootstrapClosure(roots, output, incomplete, closure) ==
+            RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete,
+        "incomplete texture-derived surface parent is rejected");
+  incomplete = complete;
+  const std::array<D9CWireObjectIdentity, 1u> staleRoot{staleTexture};
+  check(renderTapeBuildBootstrapClosure(staleRoot, output, incomplete, closure) ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectMissing,
+        "stale generation is not satisfied by a live prior generation");
+  const std::array<RenderTapeBootstrapClosureObject, 4u> withUnreferenced{
+      complete[0], complete[1], complete[2],
+      RenderTapeBootstrapClosureObject{
+          .identity = D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                             .generation = 1u,
+                                             .objectId = 99u},
+          .complete = false},
+  };
+  check(renderTapeBuildBootstrapClosure({}, output, withUnreferenced, closure) ==
+            RenderTapeBootstrapClosureStatus::Accepted &&
+            !renderTapeBootstrapClosureContains(
+                closure, withUnreferenced.back().identity),
+        "unreferenced incomplete live objects are pruned");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1565,6 +1639,7 @@ int main(int argc, char** argv) {
     testBlockCompressedCaptureRejectsInvalidLayouts();
     testLinearLockCaptureLayouts();
     testFullSnapshotClosureTruthTable();
+    testBootstrapClosureTruthTable();
     testObjectExpectedContentContractTruthTable();
     return 0;
   } catch (const TestFailure& failure) {

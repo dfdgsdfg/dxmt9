@@ -1,5 +1,8 @@
 #include "device_c_render_tape_capture_layout.hpp"
 
+#include "device_c_render_tape.hpp"
+
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -89,8 +92,85 @@ const char* renderTapeCaptureRejectionReasonName(
     return "full_snapshot_identity_mismatch";
   case RenderTapeCaptureRejectionReason::FullSnapshotExtentMismatch:
     return "full_snapshot_extent_mismatch";
+  case RenderTapeCaptureRejectionReason::UnmaterializedPreArmObject:
+    return "unmaterialized_pre_arm_object";
   }
   return "unknown_capture_rejection";
+}
+
+bool renderTapeBootstrapClosureContains(
+    std::span<const D9CWireObjectIdentity> closure,
+    const D9CWireObjectIdentity& identity) noexcept {
+  return std::any_of(closure.begin(), closure.end(), [&](const auto& candidate) {
+    return candidate.kind == identity.kind &&
+           candidate.generation == identity.generation &&
+           candidate.objectId == identity.objectId;
+  });
+}
+
+bool renderTapeBootstrapRequiresAllLiveObjects(
+    std::uint32_t profile) noexcept {
+  return profile == kRenderTapeProfileSequence;
+}
+
+RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
+    std::span<const D9CWireObjectIdentity> bootstrapHandles,
+    const D9CWireObjectIdentity& presentOutput,
+    std::span<const RenderTapeBootstrapClosureObject> objects,
+    std::vector<D9CWireObjectIdentity>& closure) noexcept {
+  closure.clear();
+  const auto append = [&](const D9CWireObjectIdentity& identity) {
+    if (!renderTapeBootstrapClosureContains(closure, identity))
+      closure.push_back(identity);
+  };
+  try {
+    for (std::size_t index = 0u; index < objects.size(); ++index) {
+      const auto duplicate = std::find_if(
+          objects.begin() + index + 1u, objects.end(), [&](const auto& candidate) {
+            return candidate.identity.kind == objects[index].identity.kind &&
+                   candidate.identity.generation == objects[index].identity.generation &&
+                   candidate.identity.objectId == objects[index].identity.objectId;
+          });
+      if (duplicate != objects.end())
+        return RenderTapeBootstrapClosureStatus::DuplicateObjectIdentity;
+    }
+    for (const auto& identity : bootstrapHandles) append(identity);
+    append(presentOutput);
+    for (std::size_t index = 0u; index < closure.size(); ++index) {
+      const auto& identity = closure[index];
+      const auto object = std::find_if(
+          objects.begin(), objects.end(), [&](const auto& candidate) {
+            return candidate.identity.kind == identity.kind &&
+                   candidate.identity.generation == identity.generation &&
+                   candidate.identity.objectId == identity.objectId;
+          });
+      if (object == objects.end())
+        return RenderTapeBootstrapClosureStatus::ReferencedObjectMissing;
+      if (!object->complete)
+        return RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete;
+      if (!object->hasDescriptorDependency) continue;
+      const auto dependency = object->descriptorDependency;
+      if (dependency.kind == identity.kind &&
+          dependency.generation == identity.generation &&
+          dependency.objectId == identity.objectId)
+        return RenderTapeBootstrapClosureStatus::InvalidDescriptorDependency;
+      const auto dependencyObject = std::find_if(
+          objects.begin(), objects.end(), [&](const auto& candidate) {
+            return candidate.identity.kind == dependency.kind &&
+                   candidate.identity.generation == dependency.generation &&
+                   candidate.identity.objectId == dependency.objectId;
+          });
+      if (dependencyObject == objects.end())
+        return RenderTapeBootstrapClosureStatus::DescriptorDependencyMissing;
+      if (!dependencyObject->complete)
+        return RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete;
+      append(dependency);
+    }
+  } catch (...) {
+    closure.clear();
+    return RenderTapeBootstrapClosureStatus::ReferencedObjectMissing;
+  }
+  return RenderTapeBootstrapClosureStatus::Accepted;
 }
 
 RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(

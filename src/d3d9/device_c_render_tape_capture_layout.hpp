@@ -52,6 +52,7 @@ enum class RenderTapeCaptureRejectionReason : std::uint32_t {
   FullSnapshotUnlockFailed = 11u,
   FullSnapshotIdentityMismatch = 12u,
   FullSnapshotExtentMismatch = 13u,
+  UnmaterializedPreArmObject = 14u,
 };
 
 const char* renderTapeCaptureRejectionReasonName(
@@ -71,6 +72,41 @@ struct RenderTapeCaptureLayoutDiagnostic {
   std::int32_t pitch = 0;
   std::uint64_t bytes = 0u;
 };
+
+// Cold, value-only description of one live object at the capture boundary.
+// `complete` means that every content subresource required by the descriptor
+// has an exact seed.  A descriptor dependency is deliberately explicit: the
+// closure must not infer ownership from a kind/object-id pair or from a stale
+// generation.
+struct RenderTapeBootstrapClosureObject {
+  D9CWireObjectIdentity identity{};
+  bool complete = false;
+  bool hasDescriptorDependency = false;
+  D9CWireObjectIdentity descriptorDependency{};
+};
+
+enum class RenderTapeBootstrapClosureStatus : std::uint32_t {
+  Accepted = 0u,
+  ReferencedObjectMissing,
+  ReferencedObjectIncomplete,
+  DescriptorDependencyMissing,
+  DescriptorDependencyIncomplete,
+  DuplicateObjectIdentity,
+  InvalidDescriptorDependency,
+};
+
+RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
+    std::span<const D9CWireObjectIdentity> bootstrapHandles,
+    const D9CWireObjectIdentity& presentOutput,
+    std::span<const RenderTapeBootstrapClosureObject> objects,
+    std::vector<D9CWireObjectIdentity>& closure) noexcept;
+
+bool renderTapeBootstrapClosureContains(
+    std::span<const D9CWireObjectIdentity> closure,
+    const D9CWireObjectIdentity& identity) noexcept;
+
+bool renderTapeBootstrapRequiresAllLiveObjects(
+    std::uint32_t profile) noexcept;
 
 // This status is shared by the value-only snapshot decision and the PE
 // texture seam.  A required snapshot is the only path allowed to turn an

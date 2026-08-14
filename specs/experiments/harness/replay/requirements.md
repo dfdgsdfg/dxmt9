@@ -454,15 +454,18 @@ that cannot establish these predicates is invalid rather than partial full-tape
 evidence. Instantiates R-HARN-3.1, R-HARN-4.4, and R-HARN-7.3.
 
 Each resource `ObjectDefine` may declare a non-zero expected total byte extent
-and subresource count; the two fields must be both zero or both non-zero. Before
-the first non-seed event, validation must close every non-zero expectation
+and subresource count; the two fields must be both zero or both non-zero. For
+each identity independently, validation must close every non-zero expectation
 against unique, zero-offset initial `ResourceMutation` subresources whose byte
-sizes sum exactly to the declared extent and whose count matches exactly. The
-seed prefix closes immediately when all expectations are satisfied; subsequent
-in-frame mutations are ordinary interval traffic even if they precede the first
-`CommandChunk`, and cannot be reclassified as seeds. The ordered live-generation
-registry remains identity/lifetime-only; seed-closure accounting is a separate
-bounded value table and cannot be satisfied by a later in-frame mutation.
+sizes sum exactly to the declared extent and whose count matches exactly.
+Unrelated events do not close another identity's expectation. A matching seed
+mutation may arrive after unrelated commands, but only before that identity's
+first command, identity-bearing control, or destroy use; once that identity is
+complete, later mutations are ordinary interval traffic. The final journal
+still requires every declared expectation to be complete. The ordered
+live-generation registry remains identity/lifetime-only; seed accounting is a
+separate bounded value table and cannot be satisfied by a mutation after the
+identity's first use.
 
 **R-HARN-REPLAY-7.6** Reference full-tape replay reconstructs objects and imports
 wire chunks through production validation, queue, lifetime, and provider code.
@@ -526,6 +529,27 @@ failed bridge commit, capacity failure, terminal Reset or device-lost control,
 failed validation, missing/rejecting publisher, or producer failure aborts the
 interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
+
+Frame-tape bootstrap materialization is an exact closure, not an all-live
+snapshot. Its roots are the generation-qualified handles in the freshly
+validated bootstrap overlay plus the required Present output; versioned
+descriptor dependencies, including a texture-derived Surface's exact parent
+texture/subresource owner, are added recursively. Unreferenced live objects,
+including incomplete ones, are omitted. A referenced missing,
+stale-generation, incomplete, or missing dependency seed rejects the tape with
+a typed first reason. After arm, a complete pre-arm object omitted from that
+closure may be materialized once, with its exact descriptor and complete
+current seeds, immediately before its first command-chunk or identity-bearing
+control reference. A missing or incomplete first-reference seed fails closed
+before the event is recorded; mutations and destroys of unadmitted objects
+remain registry-only. This per-identity JIT does not make an object available
+after it has been destroyed and does not claim arbitrary deferred closure
+across opaque producer-side references.
+
+Sequence-tape retains a complete all-live arm snapshot. Its second interval
+cannot admit `ObjectDefine`, so applying frame-tape JIT after the first
+`PresentComplete` would violate the sequence grammar. Any unexpected
+unadmitted sequence identity therefore rejects before an event is emitted.
 
 For a generation-qualified buffer whose first writable lock is a partial
 range and has no complete seed, the PE owner may, only while capture tracking

@@ -752,8 +752,93 @@ void seedContentClosesByUniqueSubresourceAndSummedBytes() {
   const auto incompleteResult =
       validateRenderTape(incomplete.seal(), catalogue);
   check(incompleteResult.status == RenderTapeValidationStatus::IncompleteFrame &&
-            incompleteResult.failedEventIndex == 4u,
-        "seed extents close before the first non-seed command event");
+            incompleteResult.failedEventIndex ==
+                std::numeric_limits<std::uint32_t>::max(),
+        "incomplete seed remains pending until its exact first use or frame end");
+}
+
+void perIdentityLateSeedClosureIsExact() {
+  constexpr std::array<std::byte, 8u> descriptor{};
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = kSurfaceDescriptorKind,
+  };
+  const auto seedDigest = mutationDigest();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {
+      RenderTapeBlob{.digest = seedDigest, .size = 4u, .verified = 1u},
+  }};
+
+  RenderTapeBuilder late;
+  late.appendBootstrapState(makeApplyStateChunk());
+  late.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                          {});
+  late.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makeApplyStateChunk());
+  late.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+                          {}, 4u, 1u);
+  late.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                              0u, 4u, seedDigest);
+  late.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      makeApplyStateChunk(true, kTexture));
+  late.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  late.appendPresentComplete(
+      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  check(validateRenderTape(late.seal(), catalogue).valid(),
+        "an exact identity may define and complete its seed after unrelated traffic");
+
+  RenderTapeBuilder firstUse;
+  firstUse.appendBootstrapState(makeApplyStateChunk());
+  firstUse.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                              {});
+  firstUse.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makeApplyStateChunk());
+  firstUse.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+                              {}, 4u, 1u);
+  firstUse.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      makeApplyStateChunk(true, kTexture));
+  firstUse.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  firstUse.appendPresentComplete(
+      6u, 7u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto rejected = validateRenderTape(firstUse.seal(), catalogue);
+  check(rejected.status == RenderTapeValidationStatus::IncompleteFrame &&
+            rejected.failedEventIndex == 4u,
+        "first use of an exact identity rejects before a missing seed can be bypassed");
+
+  RenderTapeBuilder sequence(kRenderTapeProfileSequence);
+  sequence.appendBootstrapState(makeApplyStateChunk());
+  sequence.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+                               {});
+  sequence.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+                               {}, 4u, 1u);
+  sequence.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  sequence.appendPresentComplete(
+      4u, 5u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  sequence.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                                  0u, 4u, seedDigest);
+  sequence.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  sequence.appendPresentComplete(
+      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto sequenceRejected =
+      validateRenderTape(sequence.seal(), catalogue);
+  check(sequenceRejected.status == RenderTapeValidationStatus::IncompleteFrame &&
+            sequenceRejected.failedEventIndex == 6u,
+        "late initial seed cannot satisfy the sequence between-Present mutation");
 }
 
 void versionedSubresourceDescriptorsFailClosed() {
@@ -1633,10 +1718,10 @@ void boundedCaptureReplayRefinementIsExhaustive() {
             std::as_bytes(std::span(&oracle, 1u)));
 
         auto expected = RenderTapeValidationStatus::Valid;
-        if (seedCase == SeedCase::Missing || seedCase == SeedCase::Short) {
-          expected = RenderTapeValidationStatus::IncompleteFrame;
-        } else if (seedCase == SeedCase::Stale || staleDraw) {
+        if (seedCase == SeedCase::Stale || staleDraw) {
           expected = RenderTapeValidationStatus::UnknownIdentity;
+        } else if (seedCase == SeedCase::Missing || seedCase == SeedCase::Short) {
+          expected = RenderTapeValidationStatus::IncompleteFrame;
         } else if (staleOracle) {
           expected = RenderTapeValidationStatus::InvalidPresentComplete;
         }
@@ -1954,6 +2039,7 @@ int main(int argc, char** argv) {
     descriptorKindIdentityMismatchFailsClosed();
     bootstrapAndCommandHandlesCloseBeforeReplay();
     seedContentClosesByUniqueSubresourceAndSummedBytes();
+    perIdentityLateSeedClosureIsExact();
     versionedSubresourceDescriptorsFailClosed();
     textureAliasLogicalSlotsUseParentSubresources();
     textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces();

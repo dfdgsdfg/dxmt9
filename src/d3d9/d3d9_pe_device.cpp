@@ -31,6 +31,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_render_tape_publisher.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
+#include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_descriptors.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
@@ -1200,6 +1201,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeCaptureOracle_{};
     std::optional<dxmt9::d3d9::RenderTapeDigest> renderTapeExpectedDigest_{};
     std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
+    // Exact identities admitted to the current tape. Pre-arm live objects
+    // outside the bootstrap closure are materialized only on first reference.
+    std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities_{};
     const char *renderTapeAbortReason_ = nullptr;
     std::uint64_t renderTapeCompletionOrdinal_ = 0u;
     std::uint64_t commandChunkCommits_ = 0;
@@ -7185,9 +7189,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             entry.content.resize(entry.contentCount);
             if (replacingRetainedAlias) {
                 auto &prior = renderTapeRegistry_->objects[replacementIndex];
+                const bool priorAdmitted = renderTapeObjectAdmitted(prior.identity);
                 renderTapeRegistry_->knownDead.reserve(
                     renderTapeRegistry_->knownDead.size() + 1u);
-                if (IsRenderTapeCaptureActiveForChild()) {
+                if (priorAdmitted && IsRenderTapeCaptureActiveForChild()) {
                     const auto destroyStatus =
                         renderTapeCapture_->objectDestroy(prior.identity);
                     if (destroyStatus != dxmt9::d3d9::
@@ -7198,6 +7203,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             "alias_generation_destroy_failed");
                         return RenderTapeObjectRegistration::Rejected;
                     }
+                    removeRenderTapeObjectAdmitted(prior.identity);
                 }
                 dxmt9DeviceInfoLog(
                     "render_tape_capture alias_generation replaced "
@@ -7557,7 +7563,70 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                        std::tie(b->identity.kind, b->identity.generation,
                                 b->identity.objectId);
             });
+            std::vector<dxmt9::d3d9::RenderTapeBootstrapClosureObject>
+                closureObjects;
+            closureObjects.reserve(objects.size());
+            D9CWireObjectIdentity presentOutput{};
+            std::size_t presentOutputCount = 0u;
             for (const auto *object : objects) {
+                if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
+                    presentOutput = object->identity;
+                    ++presentOutputCount;
+                }
+                const bool complete = object->contentCount == object->content.size() &&
+                    std::all_of(object->content.begin(), object->content.end(),
+                                [](const auto &bytes) { return !bytes.empty(); });
+                closureObjects.push_back({
+                    .identity = object->identity,
+                    .complete = complete,
+                    .hasDescriptorDependency = object->lifetime.textureAlias,
+                    .descriptorDependency = object->aliasParentTexture,
+                });
+            }
+            if (presentOutputCount != 1u) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=present_output_count "
+                    "count=%zu",
+                    presentOutputCount);
+                return false;
+            }
+            if (dxmt9::d3d9::renderTapeBootstrapRequiresAllLiveObjects(
+                    dxmt9PeRenderTapeCaptureProfile())) {
+                // Sequence tapes cannot define a pre-arm object after their
+                // first PresentComplete. Preserve the complete arm snapshot
+                // for that profile; exact JIT closure is a frame-tape policy.
+                for (const auto *object : objects)
+                    bootstrapHandles.push_back(object->identity);
+            }
+            std::vector<D9CWireObjectIdentity> closure;
+            const auto closureStatus =
+                dxmt9::d3d9::renderTapeBuildBootstrapClosure(
+                    bootstrapHandles, presentOutput,
+                    closureObjects, closure);
+            if (closureStatus !=
+                dxmt9::d3d9::RenderTapeBootstrapClosureStatus::Accepted) {
+                const char *reason =
+                    closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete
+                        ? "bootstrap_referenced_incomplete_seed"
+                        : closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete
+                            ? "bootstrap_descriptor_dependency_incomplete_seed"
+                            : closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::DescriptorDependencyMissing
+                                ? "bootstrap_descriptor_dependency_missing"
+                                : closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::DuplicateObjectIdentity
+                                    ? "bootstrap_duplicate_object_identity"
+                                    : closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::InvalidDescriptorDependency
+                                        ? "bootstrap_invalid_descriptor_dependency"
+                                        : "bootstrap_referenced_object_missing";
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=%s",
+                    reason);
+                return false;
+            }
+            for (const auto *object : objects) {
+                if (!dxmt9::d3d9::renderTapeBootstrapClosureContains(
+                        closure, object->identity)) {
+                    continue;
+                }
                 dxmt9::d3d9::RenderTapeCaptureObjectSeed objectSeed{};
                 objectSeed.identity = object->identity;
                 objectSeed.descriptorKind = static_cast<std::uint32_t>(
@@ -7576,14 +7645,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                          subresource < object->content.size(); ++subresource) {
                         const auto &bytes = object->content[subresource];
                         if (bytes.empty()) {
-                            bool bootstrapReferenced = false;
-                            for (const auto& identity : bootstrapHandles) {
-                                if (renderTapeSameIdentity(identity,
-                                                            object->identity)) {
-                                    bootstrapReferenced = true;
-                                    break;
-                                }
-                            }
                             if (object->identity.kind ==
                                 D9C_CHUNK_HANDLE_KIND_TEXTURE) {
                                 RenderTapeTextureDescriptorV2 texture{};
@@ -7624,7 +7685,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     object->identity.generation,
                                     static_cast<unsigned long long>(
                                         object->identity.objectId),
-                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    subresource, 1,
                                     textureVersion, levels, count, hasDesc ? 1 : 0,
                                     desc.format, desc.width, desc.height, desc.depth,
                                     desc.usage, desc.pool, desc.resourceType);
@@ -7647,7 +7708,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     object->identity.generation,
                                     static_cast<unsigned long long>(
                                         object->identity.objectId),
-                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    subresource, 1,
                                     hasDesc ? 1 : 0, desc.format, desc.width,
                                     desc.height, desc.depth, desc.usage, desc.pool,
                                     desc.resourceType);
@@ -7669,7 +7730,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     object->identity.generation,
                                     static_cast<unsigned long long>(
                                         object->identity.objectId),
-                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    subresource, 1,
                                     hasDesc ? 1 : 0, desc.size, desc.usage,
                                     desc.pool, desc.format, desc.fvf);
                             }
@@ -7742,6 +7803,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // Keep the first-abort marker sticky only for this arm/interval
         // lifecycle; a retry must get independent attribution.
         renderTapeAbortReason_ = nullptr;
+        renderTapeAdmittedIdentities_.clear();
         renderTapeExpectedDigest_.reset();
         renderTapeOutputDesc_.reset();
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
@@ -7818,6 +7880,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 abortRenderTapeCapture("seed_object_define");
                 return false;
             }
+            try {
+                renderTapeAdmittedIdentities_.push_back(object.identity);
+            } catch (...) {
+                abortRenderTapeCapture("seed_identity_allocation");
+                return false;
+            }
         }
         for (const auto& mutation : seed.mutations) {
             const auto status = renderTapeCapture_->resourceMutation(
@@ -7840,6 +7908,160 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
+    bool renderTapeObjectAdmitted(
+        const D9CWireObjectIdentity &identity) const noexcept {
+        return dxmt9::d3d9::renderTapeBootstrapClosureContains(
+            renderTapeAdmittedIdentities_, identity);
+    }
+
+    void removeRenderTapeObjectAdmitted(
+        const D9CWireObjectIdentity &identity) noexcept {
+        const auto it = std::find_if(
+            renderTapeAdmittedIdentities_.begin(),
+            renderTapeAdmittedIdentities_.end(), [&](const auto &candidate) {
+                return renderTapeSameIdentity(candidate, identity);
+            });
+        if (it != renderTapeAdmittedIdentities_.end())
+            renderTapeAdmittedIdentities_.erase(it);
+    }
+
+    bool materializeRenderTapeObjectForReference(
+        const D9CWireObjectIdentity &identity) noexcept {
+        if (renderTapeObjectAdmitted(identity))
+            return true;
+        if (!renderTapeRegistry_) {
+            abortRenderTapeCapture("jit_materialize_registry_missing");
+            return false;
+        }
+        if (!renderTapeCapture_ ||
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return false;
+        }
+        const auto reject = [&](dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
+                                std::uint32_t subresource =
+                                    std::numeric_limits<std::uint32_t>::max()) {
+            const dxmt9::d3d9::pe::PeWireObjectRef object{.identity = identity};
+            RejectRenderTapeCaptureForChild(reason, object, subresource, {});
+            return false;
+        };
+        if (dxmt9::d3d9::renderTapeBootstrapRequiresAllLiveObjects(
+                dxmt9PeRenderTapeCaptureProfile())) {
+            // An unadmitted pre-arm identity is impossible after the sequence
+            // profile's complete arm snapshot. Reject before emitting an
+            // ObjectDefine that the second interval grammar cannot accept.
+            return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                              UnmaterializedPreArmObject);
+        }
+        const auto object = std::find_if(
+            renderTapeRegistry_->objects.begin(),
+            renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+                return renderTapeSameIdentity(candidate.identity, identity);
+            });
+        if (object == renderTapeRegistry_->objects.end()) {
+            return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                              UnmaterializedPreArmObject);
+        }
+        if (object->lifetime.textureAlias &&
+            !materializeRenderTapeObjectForReference(object->aliasParentTexture)) {
+            return false;
+        }
+        if (object->contentCount != object->content.size() ||
+            std::any_of(object->content.begin(), object->content.end(),
+                        [](const auto &bytes) { return bytes.empty(); })) {
+            const auto missing = std::find_if(
+                object->content.begin(), object->content.end(),
+                [](const auto &bytes) { return bytes.empty(); });
+            return reject(
+                dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                    IncompleteSubresourceSeed,
+                static_cast<std::uint32_t>(missing - object->content.begin()));
+        }
+        std::uint64_t expectedBytes = 0u;
+        for (const auto &bytes : object->content) {
+            if (expectedBytes > std::numeric_limits<std::uint64_t>::max() -
+                                   bytes.size()) {
+                return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                                  DescriptorMismatch);
+            }
+            expectedBytes += bytes.size();
+        }
+        dxmt9::d3d9::RenderTapeDigest immutableDigest{};
+        std::uint64_t immutableBytes = 0u;
+        if (!object->immutablePayload.empty()) {
+            if (renderTapeCapture_->registerBlobBytes(object->immutablePayload,
+                                                      &immutableDigest) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                abortRenderTapeCapture("jit_object_define_blob");
+                return false;
+            }
+            immutableBytes = object->immutablePayload.size();
+        }
+        const auto descriptorKind = static_cast<std::uint32_t>(
+            dxmt9::d3d9::renderTapeDescriptorKindForObject(identity.kind));
+        if (renderTapeCapture_->objectDefine(
+                identity, descriptorKind, object->descriptor, immutableBytes,
+                immutableDigest, expectedBytes,
+                static_cast<std::uint32_t>(object->content.size())) !=
+            dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            abortRenderTapeCapture("jit_object_define");
+            return false;
+        }
+        for (std::uint32_t subresource = 0u;
+             subresource < object->content.size(); ++subresource) {
+            if (renderTapeCapture_->resourceMutationBytes(
+                    identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
+                    subresource, 0u, object->content[subresource]) !=
+                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                abortRenderTapeCapture("jit_resource_mutation");
+                return false;
+            }
+        }
+        try {
+            renderTapeAdmittedIdentities_.push_back(identity);
+        } catch (...) {
+            abortRenderTapeCapture("jit_identity_allocation");
+            return false;
+        }
+        return true;
+    }
+
+    bool admitRenderTapeChunkHandles(
+        const D9CCommandChunk &chunk,
+        const PeCommandChunkCommitInfo &info) noexcept {
+        (void)info;
+        if (chunk.recordBytes < sizeof(D9CCommandChunkWireHeader) ||
+            d9cWireHandleValue(chunk.records) == 0u) {
+            abortRenderTapeCapture("command_chunk_invalid");
+            return false;
+        }
+        const auto bytes = std::span<const std::byte>(
+            reinterpret_cast<const std::byte *>(static_cast<std::uintptr_t>(
+                d9cWireHandleValue(chunk.records))),
+            chunk.recordBytes);
+        dxmt9::d3d9::ImportedChunkView imported{};
+        dxmt9::d3d9::CommandChunkValidationScratch scratch{};
+        const auto validation = dxmt9::d3d9::validateCommandChunk(
+            bytes, dxmt9::d3d9::CommandChunkEnvelope{
+                       .version = chunk.version,
+                       .recordCount = info.recordCount,
+                       .handleCount = info.handleCount},
+            &imported, scratch);
+        if (!validation.valid()) {
+            abortRenderTapeCapture("command_chunk_validation");
+            return false;
+        }
+        for (const auto &handle : imported.handles) {
+            if (!materializeRenderTapeObjectForReference(D9CWireObjectIdentity{
+                    .kind = handle.kind,
+                    .generation = handle.generation,
+                    .objectId = handle.objectId})) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void captureCommittedRenderTapeChunk(
         const D9CCommandChunk& chunk,
         const PeCommandChunkCommitInfo& info) noexcept {
@@ -7848,6 +8070,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
         }
+        if (!admitRenderTapeChunkHandles(chunk, info))
+            return;
         const auto status = renderTapeCapture_->commandChunk(
             dxmt9::d3d9::CommandChunkEnvelope{
                 .version = chunk.version,
@@ -9225,6 +9449,10 @@ public:
             recordRenderTapeBlockBytes(object, subresource, layout, bytes);
         if (status !=
             dxmt9::d3d9::RenderTapeBlockMutationStatus::Accepted) {
+            if (status == dxmt9::d3d9::RenderTapeBlockMutationStatus::IncompleteSeed &&
+                !renderTapeObjectAdmitted(object.identity)) {
+                return;
+            }
             const auto reason =
                 status == dxmt9::d3d9::
                               RenderTapeBlockMutationStatus::IncompleteSeed
@@ -9249,6 +9477,8 @@ public:
         }
         if (!IsRenderTapeCaptureActiveForChild())
             return;
+        if (!renderTapeObjectAdmitted(object.identity))
+            return;
         const auto *entry = findRenderTapeObject(object);
         if (!entry || subresource >= entry->content.size() ||
             renderTapeCapture_->resourceMutationBytes(
@@ -9266,6 +9496,10 @@ public:
         const auto status =
             recordRenderTapeLinearBytes(object, subresource, layout, bytes);
         if (status != dxmt9::d3d9::RenderTapeBlockMutationStatus::Accepted) {
+            if (status == dxmt9::d3d9::RenderTapeBlockMutationStatus::IncompleteSeed &&
+                !renderTapeObjectAdmitted(object.identity)) {
+                return;
+            }
             const auto reason =
                 status == dxmt9::d3d9::RenderTapeBlockMutationStatus::IncompleteSeed
                     ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
@@ -9288,6 +9522,8 @@ public:
             return;
         }
         if (!IsRenderTapeCaptureActiveForChild())
+            return;
+        if (!renderTapeObjectAdmitted(object.identity))
             return;
         const auto *entry = findRenderTapeObject(object);
         if (!entry || subresource >= entry->content.size() ||
@@ -9346,6 +9582,7 @@ public:
                 continue;
             }
             const auto identity = it->identity;
+            const bool admitted = renderTapeObjectAdmitted(identity);
             try {
                 renderTapeRegistry_->knownDead.push_back(identity);
             } catch (...) {
@@ -9357,7 +9594,7 @@ public:
             }
             (void)it->lifetime.retireParent();
             it = renderTapeRegistry_->objects.erase(it);
-            if (!renderTapeCapture_ ||
+            if (!admitted || !renderTapeCapture_ ||
                 renderTapeCapture_->state() !=
                     dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
                 continue;
@@ -9371,12 +9608,15 @@ public:
                 static_cast<unsigned long long>(identity.objectId));
             if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 abortRenderTapeCapture("alias_object_destroy");
+            } else {
+                removeRenderTapeObjectAdmitted(identity);
             }
         }
     }
 
     void NotifyRenderTapeObjectDestroyForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override {
+        const bool admitted = renderTapeObjectAdmitted(object.identity);
         const bool retired = unregisterRenderTapeObject(object);
         if (!retired) {
             return;
@@ -9384,7 +9624,7 @@ public:
         if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
             retireRenderTapeAliasesForParent(object.identity);
         }
-        if (!renderTapeCapture_ ||
+        if (!admitted || !renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
@@ -9398,6 +9638,8 @@ public:
             static_cast<unsigned long long>(object.identity.objectId));
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             abortRenderTapeCapture("object_destroy");
+        } else {
+            removeRenderTapeObjectAdmitted(object.identity);
         }
     }
     void NotifyRenderTapeResourceMutationForChild(
@@ -9405,12 +9647,20 @@ public:
         dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
         std::uint64_t byteOffset,
         std::span<const std::byte> bytes) noexcept override {
-        (void)recordRenderTapeCpuBytes(object, subresource, byteOffset, bytes);
+        const bool registryAccepted =
+            recordRenderTapeCpuBytes(object, subresource, byteOffset, bytes);
+        if (!registryAccepted) {
+            if (IsRenderTapeCaptureActiveForChild())
+                abortRenderTapeCapture("resource_mutation_registry");
+            return;
+        }
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
         }
+        if (!renderTapeObjectAdmitted(object.identity))
+            return;
         try {
             if (renderTapeCapture_->resourceMutationBytes(
                     object.identity, kind, subresource, byteOffset, bytes) !=
@@ -9427,6 +9677,10 @@ public:
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            return;
+        }
+        if (fixed.identity.objectId != 0u &&
+            !materializeRenderTapeObjectForReference(fixed.identity)) {
             return;
         }
         auto recorded = fixed;
@@ -9456,8 +9710,25 @@ public:
         }
         if (!IsRenderTapeCaptureActiveForChild())
             return;
+        const auto *registered = findRenderTapeObject(object);
+        if (registered && registered->lifetime.textureAlias &&
+            !materializeRenderTapeObjectForReference(
+                registered->aliasParentTexture)) {
+            // A texture-derived surface is not self-contained: its exact
+            // parent identity must be admitted before the alias definition.
+            // This also closes over a pruned pre-arm parent before the first
+            // alias reference can reach the journal validator.
+            return;
+        }
         NotifyRenderTapeObjectDefineForChild(object, descriptor,
                                              immutablePayload);
+        if (IsRenderTapeCaptureActiveForChild()) {
+            try {
+                renderTapeAdmittedIdentities_.push_back(object.identity);
+            } catch (...) {
+                abortRenderTapeCapture("object_define_identity_allocation");
+            }
+        }
     }
     void notifyRenderTapeCreatedBuffer(
         D9CBuffer *buffer,

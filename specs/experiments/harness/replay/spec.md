@@ -695,7 +695,20 @@ declaration elements, exact validated shader bytecode, and resource expected
 extent/count closure. Immediately before building the bootstrap, the PE producer
 refreshes the complete binding view and validates the sealed overlay through the
 canonical chunk validator; its exact `(kind,generation,objectId)` handle set is
-used only to annotate fail-closed missing-seed diagnostics. The capture seam
+used by frame-tape to form an exact bootstrap closure over those roots plus the
+required Present output and recursive descriptor dependencies (in particular a
+texture-derived Surface's exact parent texture/subresource owner). Unreferenced
+live objects, including incomplete ones, are not materialized; referenced
+missing, stale-generation, incomplete, or dependency seeds fail closed with a
+typed diagnostic. A complete pre-arm object omitted from the closure may be
+materialized once immediately before its first command-chunk or identity-bearing
+control reference, with exact current seeds. A missing or incomplete
+first-reference seed fails closed with the typed pre-arm-materialization reason;
+mutations and destroys of unadmitted objects remain registry-only. This
+per-identity JIT is not arbitrary deferred closure for opaque producer-side
+references. Sequence-tape instead retains the complete all-live arm snapshot,
+because its second interval cannot admit a new `ObjectDefine`; an unexpected
+unadmitted sequence identity rejects before event emission. The capture seam
 accepts bounds-checked uncompressed 2D
 surface/texture, complete-buffer, and DXT1/DXT3/DXT5 block-compressed 2D/cube
 face-and-mip lock layouts. Full locks establish tightly packed complete seeds;
@@ -834,10 +847,13 @@ The structural v2 schema represents recorded initial/resource bytes as
 digest-backed `ResourceMutation` events and adds only a total expected byte
 extent plus subresource count to resource `ObjectDefine`. A separate bounded
 seed-closure table rejects duplicate subresources and requires their zero-offset
-mutation sizes to sum to the exact extent. The seed prefix closes immediately
-when all expectations are satisfied; subsequent live mutations remain ordinary
-interval traffic even before the first command, and cannot repair an incomplete
-checkpoint. The ordered live-generation registry remains identity/lifetime-only.
+mutation sizes to sum to the exact extent. Each identity's expectation closes
+when its exact seeds are satisfied; unrelated events do not close another
+identity's expectation. A matching mutation may arrive before that identity's
+first command, control, or destroy use; later mutations for a complete identity
+are ordinary interval traffic. The final journal still requires all
+expectations complete. The ordered live-generation registry remains
+identity/lifetime-only.
 
 ### 8.1 Capture boundary
 
@@ -1047,7 +1063,7 @@ order, one blob entry per source reference, immutable shader/declaration
 payloads, complete seed mutations, and subsequent digest-backed mutations for
 those identities before the selected command event. Duplicate digests remain
 separate references so conservation and source order stay observable. The
-source validator proves global initial-content closure; the planner additionally
+source validator proves per-identity initial-content closure; the planner additionally
 checks each selected object's projected seed byte/count totals against its
 definition. Any missing proof returns a status before invoking a replay sink,
 provider, Metal owner, or writer. The capture/Draw hot path is unchanged; this

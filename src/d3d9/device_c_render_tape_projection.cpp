@@ -68,13 +68,6 @@ struct SeedState {
   std::uint32_t recordedCount = 0u;
 };
 
-bool seedComplete(std::span<const SeedState> states) noexcept {
-  return std::all_of(states.begin(), states.end(), [](const auto& state) {
-    return state.recordedBytes == state.expectedBytes &&
-           state.recordedCount == state.expectedCount;
-  });
-}
-
 bool before(std::uint32_t eventIndex, std::uint32_t recordIndex,
             std::uint32_t selectedEvent,
             std::uint32_t firstSelectedRecord) noexcept {
@@ -353,18 +346,10 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
           .expectedCount = definition.fixed.expectedContentCount,
       });
     }
-    bool seedPhaseOpen = true;
     for (std::uint32_t eventIndex = 0u; eventIndex < tape.events.size();
          ++eventIndex) {
       const auto event = tape.event(eventIndex);
       const auto type = static_cast<RenderTapeEventType>(event.header.type);
-      const bool seedPrefixEvent =
-          type == RenderTapeEventType::BootstrapState ||
-          type == RenderTapeEventType::ObjectDefine ||
-          type == RenderTapeEventType::ResourceMutation;
-      if (seedPhaseOpen && !seedPrefixEvent) {
-        seedPhaseOpen = false;
-      }
 
       if (type == RenderTapeEventType::ObjectDefine) {
         RenderTapeObjectDefineHeader fixed{};
@@ -405,23 +390,16 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
         return result;
       }
       bool initialContent = false;
-      if (seedPhaseOpen) {
-        const auto seed = std::find_if(
-            seedStates.begin(), seedStates.end(), [&](const auto& state) {
-              return sameIdentity(state.identity, mutation.identity);
-            });
-        if (seed != seedStates.end() &&
-            (seed->recordedBytes != seed->expectedBytes ||
-             seed->recordedCount != seed->expectedCount)) {
-          seed->recordedBytes += mutation.byteSize;
-          ++seed->recordedCount;
-          initialContent = true;
-          if (seedComplete(seedStates)) {
-            seedPhaseOpen = false;
-          }
-        } else {
-          seedPhaseOpen = false;
-        }
+      const auto seed = std::find_if(
+          seedStates.begin(), seedStates.end(), [&](const auto& state) {
+            return sameIdentity(state.identity, mutation.identity);
+          });
+      if (seed != seedStates.end() &&
+          (seed->recordedBytes != seed->expectedBytes ||
+           seed->recordedCount != seed->expectedCount)) {
+        seed->recordedBytes += mutation.byteSize;
+        ++seed->recordedCount;
+        initialContent = true;
       }
 
       if (eventIndex >= selectedEvent ||
