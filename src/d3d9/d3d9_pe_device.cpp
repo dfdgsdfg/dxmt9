@@ -7606,6 +7606,50 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             layout, bytes, entry->content[subresource]);
     }
 
+    void logRenderTapeMutationFailure(
+        const char *route,
+        dxmt9::d3d9::RenderTapeBlockMutationStatus status,
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, std::uint32_t fullRowBytes,
+        std::uint32_t fullRows, std::uint32_t rowBytes,
+        std::uint32_t rows, std::uint32_t pitch,
+        std::span<const std::byte> bytes) const noexcept {
+        if (!renderTapeRegistry_ || renderTapeRegistry_->invalid)
+            return;
+        const auto *entry = findRenderTapeObject(object);
+        D9CSurfaceDesc desc{};
+        const bool descValid =
+            entry && renderTapeObjectSubresourceDesc(
+                         *entry, object, subresource, desc);
+        dxmt9::d3d9::RenderTapeTextureDescriptorV2 texture{};
+        const bool textureValid =
+            entry && object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+            dxmt9::d3d9::renderTapeLoadTextureDescriptorV2(
+                entry->descriptor, texture);
+        const std::size_t contentBytes =
+            entry && subresource < entry->content.size()
+                ? entry->content[subresource].size()
+                : 0u;
+        dxmt9DeviceInfoLog(
+            "render_tape_capture mutation_rejected route=%s status=%u "
+            "kind=%u generation=%u object_id=%llu subresource=%u admitted=%d "
+            "entry=%d descriptor_bytes=%zu desc_valid=%d format=%u width=%u "
+            "height=%u depth=%u texture_v2=%d dimension=%u mips=%u "
+            "subresources=%u disposition=%u content_slots=%zu content_bytes=%zu "
+            "full_row_bytes=%u full_rows=%u row_bytes=%u rows=%u pitch=%u "
+            "mutation_bytes=%zu",
+            route, static_cast<unsigned>(status), object.identity.kind,
+            object.identity.generation,
+            static_cast<unsigned long long>(object.identity.objectId),
+            subresource, renderTapeObjectAdmitted(object.identity) ? 1 : 0,
+            entry ? 1 : 0, entry ? entry->descriptor.size() : 0u,
+            descValid ? 1 : 0, desc.format, desc.width, desc.height, desc.depth,
+            textureValid ? 1 : 0, texture.dimension, texture.mipLevelCount,
+            texture.subresourceCount, texture.initialContentDisposition,
+            entry ? entry->content.size() : 0u, contentBytes, fullRowBytes,
+            fullRows, rowBytes, rows, pitch, bytes.size());
+    }
+
     bool produceRenderTapeBootstrap(
         dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
         if (!renderTapeRegistry_) {
@@ -9814,6 +9858,10 @@ public:
                 (void)renderTapeObjectSubresourceDesc(
                     *entry, object, subresource, desc);
             }
+            logRenderTapeMutationFailure(
+                "block", status, object, subresource, layout.fullRowBytes,
+                layout.fullRows, layout.rowBytes, layout.rows, layout.pitch,
+                bytes);
             RejectRenderTapeCaptureForChild(
                 reason, object, subresource,
                 {.format = desc.format,
@@ -9856,6 +9904,10 @@ public:
                 (void)renderTapeObjectSubresourceDesc(
                     *entry, object, subresource, desc);
             }
+            logRenderTapeMutationFailure(
+                "linear", status, object, subresource, layout.fullRowBytes,
+                layout.fullRows, layout.rowBytes, layout.rows, layout.pitch,
+                bytes);
             RejectRenderTapeCaptureForChild(
                 reason, object, subresource,
                 {.format = desc.format,
