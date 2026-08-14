@@ -1148,6 +1148,154 @@ void testExpectedContentContractDerivation() {
         "depth/render-target format is classified unsupported by the linear table");
 }
 
+void testUpdateTextureClosureTruthTable() {
+  auto sourceDescriptor = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Texture2D, 1u,
+      render_tape_d3d_format::A8R8G8B8, 2u, 2u);
+  auto destinationDescriptor = sourceDescriptor;
+  const auto setPool = [](std::vector<std::byte>& descriptor,
+                          std::uint32_t pool) {
+    RenderTapeTextureDescriptorV2 fixed{};
+    std::memcpy(&fixed, descriptor.data(), sizeof(fixed));
+    for (std::uint32_t index = 0u; index < fixed.subresourceCount; ++index) {
+      D9CSurfaceDesc desc{};
+      const auto offset = sizeof(fixed) +
+                          static_cast<std::size_t>(index) * sizeof(desc);
+      std::memcpy(&desc, descriptor.data() + offset, sizeof(desc));
+      desc.pool = pool;
+      std::memcpy(descriptor.data() + offset, &desc, sizeof(desc));
+    }
+  };
+  setPool(sourceDescriptor, 2u);       // D3DPOOL_SYSTEMMEM
+  setPool(destinationDescriptor, 0u);  // D3DPOOL_DEFAULT
+  const std::vector<std::byte> sourceBytes(16u, std::byte{0x5a});
+  std::vector<std::vector<std::byte>> completeSource{sourceBytes};
+  {
+    std::vector<std::vector<std::byte>> destination(1u);
+    check(applyRenderTapeUpdateTextureClosure(
+              sourceDescriptor, completeSource, destinationDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::Accepted &&
+              destination[0] == sourceBytes,
+          "UpdateTexture establishes an exact empty destination seed");
+    completeSource[0][0] = std::byte{0x7f};
+    check(destination[0][0] == std::byte{0x5a},
+          "UpdateTexture destination owns a copy independent of source mutation");
+  }
+  {
+    std::vector<std::vector<std::byte>> destination{
+        std::vector<std::byte>(16u, std::byte{0x22})};
+    check(applyRenderTapeUpdateTextureClosure(
+              sourceDescriptor, completeSource, destinationDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::Accepted &&
+              destination[0] == completeSource[0],
+          "UpdateTexture overwrites an already-seeded destination exactly");
+  }
+  {
+    const std::vector<std::vector<std::byte>> incompleteSource{
+        std::vector<std::byte>(4u, std::byte{0x11})};
+    std::vector<std::vector<std::byte>> destination(1u);
+    check(applyRenderTapeUpdateTextureClosure(
+              sourceDescriptor, incompleteSource, destinationDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::IncompleteSource &&
+              destination[0].empty(),
+          "UpdateTexture leaves the destination unknown for an incomplete source");
+  }
+  {
+    auto mismatchDescriptor = versionedTextureDescriptor(
+        RenderTapeTextureDimension::Texture2D, 1u,
+        render_tape_d3d_format::A8R8G8B8, 4u, 2u);
+    setPool(mismatchDescriptor, 0u);
+    std::vector<std::vector<std::byte>> destination{
+        std::vector<std::byte>(8u, std::byte{0x22})};
+    const auto prior = destination[0];
+    check(applyRenderTapeUpdateTextureClosure(
+              sourceDescriptor, completeSource, mismatchDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::
+                                 DescriptorMismatch &&
+              destination[0] == prior,
+          "UpdateTexture rejects extent mismatch without changing destination");
+  }
+  {
+    auto cubeSourceDescriptor = versionedTextureDescriptor(
+        RenderTapeTextureDimension::Cube, 2u,
+        render_tape_d3d_format::DXT1, 4u, 4u);
+    auto cubeDestinationDescriptor = cubeSourceDescriptor;
+    for (std::uint32_t face = 0u; face < 6u; ++face) {
+      D9CSurfaceDesc mipOne{};
+      const auto offset = sizeof(RenderTapeTextureDescriptorV2) +
+                          static_cast<std::size_t>(face * 2u + 1u) *
+                              sizeof(mipOne);
+      std::memcpy(&mipOne, cubeSourceDescriptor.data() + offset,
+                  sizeof(mipOne));
+      mipOne.width = 2u;
+      mipOne.height = 2u;
+      std::memcpy(cubeSourceDescriptor.data() + offset, &mipOne,
+                  sizeof(mipOne));
+      std::memcpy(cubeDestinationDescriptor.data() + offset, &mipOne,
+                  sizeof(mipOne));
+    }
+    setPool(cubeSourceDescriptor, 2u);
+    setPool(cubeDestinationDescriptor, 0u);
+    std::vector<std::vector<std::byte>> cubeSource(
+        12u);
+    std::vector<std::vector<std::byte>> cubeDestination(
+        12u);
+    for (std::uint32_t index = 0u; index < 12u; ++index) {
+      cubeSource[index].assign(8u,
+                               std::byte{static_cast<unsigned char>(0x30u + index)});
+      cubeDestination[index].assign(8u, std::byte{0x44});
+    }
+    check(applyRenderTapeUpdateTextureClosure(
+              cubeSourceDescriptor, cubeSource, cubeDestinationDescriptor,
+              cubeDestination) == RenderTapeUpdateTextureStatus::Accepted &&
+              cubeDestination == cubeSource,
+          "UpdateTexture copies all cube face subresources in face-major order");
+  }
+  {
+    auto autogenDescriptor = destinationDescriptor;
+    D9CSurfaceDesc desc{};
+    std::memcpy(&desc, autogenDescriptor.data() +
+                              sizeof(RenderTapeTextureDescriptorV2),
+                sizeof(desc));
+    desc.usage = 0x00000400u;
+    std::memcpy(autogenDescriptor.data() + sizeof(RenderTapeTextureDescriptorV2),
+                &desc, sizeof(desc));
+    std::vector<std::vector<std::byte>> destination(1u);
+    check(applyRenderTapeUpdateTextureClosure(
+              sourceDescriptor, completeSource, autogenDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::UnsupportedFormat &&
+              destination[0].empty(),
+          "UpdateTexture rejects autogen-mipmap closure");
+  }
+  {
+    auto palettizedSourceDescriptor = versionedTextureDescriptor(
+        RenderTapeTextureDimension::Texture2D, 1u,
+        render_tape_d3d_format::P8, 2u, 2u);
+    auto palettizedDestinationDescriptor = palettizedSourceDescriptor;
+    setPool(palettizedSourceDescriptor, 2u);
+    setPool(palettizedDestinationDescriptor, 0u);
+    std::vector<std::vector<std::byte>> destination(1u);
+    check(applyRenderTapeUpdateTextureClosure(
+              palettizedSourceDescriptor,
+              std::vector<std::vector<std::byte>>{
+                  std::vector<std::byte>(4u, std::byte{0x11})},
+              palettizedDestinationDescriptor, destination) ==
+              RenderTapeUpdateTextureStatus::UnsupportedFormat,
+          "UpdateTexture rejects palettized closure without palette proof");
+  }
+  {
+    const auto volumeDescriptor = versionedTextureDescriptor(
+        RenderTapeTextureDimension::Volume, 1u,
+        render_tape_d3d_format::A8R8G8B8, 2u, 2u);
+    std::vector<std::vector<std::byte>> destination(1u);
+    check(applyRenderTapeUpdateTextureClosure(
+              volumeDescriptor, completeSource, volumeDescriptor,
+              destination) == RenderTapeUpdateTextureStatus::
+                                 UnsupportedDimension,
+          "UpdateTexture rejects volume closure");
+  }
+}
+
 void testExpectedContentValidatorOrdering() {
   constexpr D9CWireObjectIdentity textureA{
       .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 1u, .objectId = 301u};
@@ -2780,6 +2928,7 @@ int main(int argc, char** argv) {
     testBootstrapClosureTruthTable();
     testObjectExpectedContentContractTruthTable();
     testExpectedContentContractDerivation();
+    testUpdateTextureClosureTruthTable();
     testExpectedContentValidatorOrdering();
     return 0;
   } catch (const TestFailure& failure) {

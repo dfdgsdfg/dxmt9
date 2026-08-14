@@ -313,4 +313,25 @@ RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
     const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
 
+// Capture-only closure for the D3D9 UpdateTexture full-resource copy. The
+// destination may have no CPU-visible seed yet; this transform proves that
+// every source subresource is complete and copies those exact bytes into the
+// destination shadow. Volume/unknown dimensions and descriptor or extent
+// mismatches are intentionally rejected.
+enum class RenderTapeUpdateTextureStatus : std::uint32_t {
+  Accepted = 0u,
+  IncompleteSource,
+  DescriptorMismatch,
+  UnsupportedDimension,
+  UnsupportedFormat,
+  InvalidDescriptor,
+  AllocationFailed,
+};
+
+RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+    std::span<const std::byte> sourceDescriptor,
+    std::span<const std::vector<std::byte>> sourceContent,
+    std::span<const std::byte> destinationDescriptor,
+    std::span<std::vector<std::byte>> destinationContent) noexcept;
+
 } // namespace dxmt9::d3d9

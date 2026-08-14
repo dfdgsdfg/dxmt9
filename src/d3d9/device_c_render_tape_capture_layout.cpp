@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 
 namespace dxmt9::d3d9 {
 namespace {
@@ -849,6 +850,113 @@ RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
                 layout.rowBytes);
   }
   return RenderTapeBlockMutationStatus::Accepted;
+}
+
+RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+    std::span<const std::byte> sourceDescriptor,
+    std::span<const std::vector<std::byte>> sourceContent,
+    std::span<const std::byte> destinationDescriptor,
+    std::span<std::vector<std::byte>> destinationContent) noexcept {
+  try {
+    RenderTapeTextureDescriptorV2 source{};
+    RenderTapeTextureDescriptorV2 destination{};
+    if (!renderTapeLoadTextureDescriptorV2(sourceDescriptor, source) ||
+        !renderTapeLoadTextureDescriptorV2(destinationDescriptor, destination))
+      return RenderTapeUpdateTextureStatus::InvalidDescriptor;
+    const auto sourceDimension =
+        static_cast<RenderTapeTextureDimension>(source.dimension);
+    const auto destinationDimension =
+        static_cast<RenderTapeTextureDimension>(destination.dimension);
+    if ((sourceDimension != RenderTapeTextureDimension::Texture2D &&
+         sourceDimension != RenderTapeTextureDimension::Cube) ||
+        (destinationDimension != RenderTapeTextureDimension::Texture2D &&
+         destinationDimension != RenderTapeTextureDimension::Cube))
+      return RenderTapeUpdateTextureStatus::UnsupportedDimension;
+    if (sourceDimension != destinationDimension ||
+        source.mipLevelCount == 0u ||
+        source.mipLevelCount != destination.mipLevelCount ||
+        source.subresourceCount == 0u ||
+        source.subresourceCount != destination.subresourceCount ||
+        sourceContent.size() != source.subresourceCount ||
+        destinationContent.size() != destination.subresourceCount ||
+        source.initialContentDisposition != static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed) ||
+        destination.initialContentDisposition != static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed))
+      return RenderTapeUpdateTextureStatus::DescriptorMismatch;
+
+    std::vector<std::uint64_t> expected(source.subresourceCount);
+    const auto sourceContract = renderTapeDeriveExpectedContentContract(
+        D9C_CHUNK_HANDLE_KIND_TEXTURE, sourceDescriptor, expected);
+    if (sourceContract.status == RenderTapeExpectedContentStatus::UnsupportedFormat)
+      return RenderTapeUpdateTextureStatus::UnsupportedFormat;
+    if (sourceContract.status != RenderTapeExpectedContentStatus::Accepted ||
+        sourceContract.count != source.subresourceCount)
+      return RenderTapeUpdateTextureStatus::InvalidDescriptor;
+    std::vector<std::uint64_t> destinationExpected(source.subresourceCount);
+    const auto destinationContract = renderTapeDeriveExpectedContentContract(
+        D9C_CHUNK_HANDLE_KIND_TEXTURE, destinationDescriptor,
+        destinationExpected);
+    if (destinationContract.status ==
+        RenderTapeExpectedContentStatus::UnsupportedFormat)
+      return RenderTapeUpdateTextureStatus::UnsupportedFormat;
+    if (destinationContract.status != RenderTapeExpectedContentStatus::Accepted ||
+        destinationContract.count != destination.subresourceCount)
+      return RenderTapeUpdateTextureStatus::InvalidDescriptor;
+
+    for (std::uint32_t subresource = 0u;
+         subresource < source.subresourceCount; ++subresource) {
+      D9CSurfaceDesc sourceDesc{};
+      D9CSurfaceDesc destinationDesc{};
+      if (!renderTapeTextureSubresourceDescriptor(
+              sourceDescriptor, subresource, sourceDesc) ||
+          !renderTapeTextureSubresourceDescriptor(
+              destinationDescriptor, subresource, destinationDesc))
+        return RenderTapeUpdateTextureStatus::InvalidDescriptor;
+      // Usage need not match: UpdateTexture is a legal SYSTEMMEM -> DEFAULT
+      // transition. Pool legality and all storage/layout identity fields must
+      // nevertheless be proven before bytes are copied.
+      if (sourceDesc.format != destinationDesc.format ||
+          sourceDesc.resourceType != destinationDesc.resourceType ||
+          sourceDesc.width != destinationDesc.width ||
+          sourceDesc.height != destinationDesc.height ||
+          sourceDesc.depth != destinationDesc.depth ||
+          sourceDesc.multiSampleType != destinationDesc.multiSampleType ||
+          sourceDesc.multiSampleQuality != destinationDesc.multiSampleQuality)
+        return RenderTapeUpdateTextureStatus::DescriptorMismatch;
+      // D3DPOOL values are part of the API precondition even though pool does
+      // not affect the copied byte layout: source must be SYSTEMMEM, while
+      // destination must be neither SYSTEMMEM nor SCRATCH.
+      constexpr std::uint32_t kD3DPoolSystemMem = 2u;
+      constexpr std::uint32_t kD3DPoolScratch = 3u;
+      if (sourceDesc.pool != kD3DPoolSystemMem ||
+          destinationDesc.pool == kD3DPoolSystemMem ||
+          destinationDesc.pool == kD3DPoolScratch)
+        return RenderTapeUpdateTextureStatus::DescriptorMismatch;
+      constexpr std::uint32_t kD3DUsageAutogenMipmap = 0x00000400u;
+      if ((sourceDesc.usage & kD3DUsageAutogenMipmap) != 0u ||
+          (destinationDesc.usage & kD3DUsageAutogenMipmap) != 0u ||
+          sourceDesc.format == render_tape_d3d_format::P8 ||
+          sourceDesc.format == render_tape_d3d_format::A8P8)
+        return RenderTapeUpdateTextureStatus::UnsupportedFormat;
+      if (expected[subresource] == 0u ||
+          sourceContent[subresource].size() != expected[subresource] ||
+          destinationExpected[subresource] != expected[subresource])
+        return RenderTapeUpdateTextureStatus::IncompleteSource;
+    }
+    std::vector<std::vector<std::byte>> replacement;
+    replacement.reserve(sourceContent.size());
+    for (const auto& bytes : sourceContent)
+      replacement.emplace_back(bytes);
+    for (std::uint32_t subresource = 0u;
+         subresource < source.subresourceCount; ++subresource)
+      destinationContent[subresource].swap(replacement[subresource]);
+    return RenderTapeUpdateTextureStatus::Accepted;
+  } catch (const std::bad_alloc&) {
+    return RenderTapeUpdateTextureStatus::AllocationFailed;
+  } catch (...) {
+    return RenderTapeUpdateTextureStatus::InvalidDescriptor;
+  }
 }
 
 } // namespace dxmt9::d3d9

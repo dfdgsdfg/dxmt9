@@ -8306,6 +8306,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const auto missing = std::find_if(
                 object->content.begin(), object->content.end(),
                 [](const auto &bytes) { return bytes.empty(); });
+            if (recordType == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
+                !renderTapeObjectAdmitted(identity)) {
+                // UpdateTexture's destination initial bytes must precede the
+                // command. Do not poison the long-lived registry when that
+                // proof is absent; the post-append closure can retain a
+                // complete source copy for the next arm attempt.
+                abortRenderTapeCapture("update_texture_destination_unadmitted");
+                return false;
+            }
             return reject(
                 dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                     IncompleteSubresourceSeed,
@@ -9934,6 +9943,72 @@ public:
             abortRenderTapeCapture("linear_resource_mutation");
         }
     }
+
+    // UpdateTexture is a full-resource SYSTEMMEM -> DEFAULT copy. Keep the
+    // normal command record untouched, but use its successful append as the
+    // capture-only registry commit point. Before an interval, the resulting
+    // bytes become the destination's future exact seed. During an interval,
+    // only an already-admitted destination is safe: materializing an unseen
+    // destination with post-copy bytes would move the initial state across the
+    // command boundary and make replay depend on an unproven refinement. The
+    // successful copy is still retained for a later retry.
+    void applyRenderTapeUpdateTextureClosure(
+        const dxmt9::d3d9::pe::PeWireObjectRef &source,
+        const dxmt9::d3d9::pe::PeWireObjectRef &destination) noexcept {
+        if (!renderTapeRegistry_ ||
+            source.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+            destination.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+            return;
+        }
+        if (renderTapeSameIdentity(source.identity, destination.identity)) {
+            if (IsRenderTapeCaptureActiveForChild())
+                abortRenderTapeCapture("update_texture_self_copy");
+            return;
+        }
+        auto *sourceEntry = findRenderTapeObject(source);
+        auto *destinationEntry = findRenderTapeObject(destination);
+        const bool active = IsRenderTapeCaptureActiveForChild();
+        if (!sourceEntry || !destinationEntry) {
+            if (active)
+                abortRenderTapeCapture("update_texture_registry_missing");
+            return;
+        }
+        const bool destinationAdmitted =
+            renderTapeObjectAdmitted(destination.identity);
+        if (active && !destinationAdmitted) {
+            // The destination's pre-copy bytes are not in the session. Keep
+            // this interval fail-closed rather than defining it with the
+            // post-copy source bytes before the UpdateTexture command.
+            abortRenderTapeCapture("update_texture_destination_unadmitted");
+        }
+        const auto status = dxmt9::d3d9::applyRenderTapeUpdateTextureClosure(
+            sourceEntry->descriptor, sourceEntry->content,
+            destinationEntry->descriptor, destinationEntry->content);
+        if (status == dxmt9::d3d9::RenderTapeUpdateTextureStatus::Accepted)
+            return;
+        const auto reason =
+            status == dxmt9::d3d9::RenderTapeUpdateTextureStatus::IncompleteSource
+                ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                      IncompleteSubresourceSeed
+                : dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                      DescriptorMismatch;
+        if (active)
+            abortRenderTapeCapture(
+                reason == dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                              IncompleteSubresourceSeed
+                    ? "update_texture_source_incomplete"
+                    : "update_texture_descriptor_mismatch");
+        dxmt9DeviceInfoLog(
+            "render_tape_capture update_texture_closure status=%u active=%d "
+            "source_generation=%u source_object_id=%llu "
+            "destination_generation=%u destination_object_id=%llu",
+            static_cast<unsigned>(status), active ? 1 : 0,
+            source.identity.generation,
+            static_cast<unsigned long long>(source.identity.objectId),
+            destination.identity.generation,
+            static_cast<unsigned long long>(destination.identity.objectId));
+    }
+
     void NotifyRenderTapeSurfaceAliasForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &surface,
         const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
@@ -11545,6 +11620,8 @@ public:
         }
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
+        const auto sourceWire = D3D9PeWireTexture(src);
+        const auto destinationWire = D3D9PeWireTexture(dst);
         // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
         // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
         const HRESULT appendHr = appendRecord(
@@ -11554,10 +11631,17 @@ public:
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
                 const bool ok = dxmt9::d3d9::pe::appendUpdateTexture(
-                    builder, D3D9PeWireTexture(src), D3D9PeWireTexture(dst));
+                    builder, sourceWire, destinationWire);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
+        // The registry shadow is committed only after appendRecord accepts the
+        // record. If the append's capacity flush or emitter fails, the
+        // destination remains unchanged; the normal command bytes are also
+        // left on their existing failure path.
+        if (SUCCEEDED(appendHr)) {
+            applyRenderTapeUpdateTextureClosure(sourceWire, destinationWire);
+        }
         if (FAILED(appendHr) || !palettizedUpdate) {
             return appendHr;
         }

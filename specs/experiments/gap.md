@@ -230,15 +230,33 @@ instead failed before arm with `incomplete_subresource_seed` for texture kind
 objects at the first failed arm and later grew to 1073 while the same typed
 failure remained latched. This is evidence that texture/surface descriptor
 migration reached the next closure boundary; it is not evidence of a complete
-GT2 capture. The identity matches the already documented 128x32 A8R8G8B8
-user-memory texture whose first observed write covers only 728 bytes. The
-capture-only full-subresource seed seam is now implemented for this bounded
-Texture2D path, but still needs a supervised wild run to establish GT2 capture
-evidence.
+GT2 capture. The earlier attribution of this identity to the documented
+128x32 A8R8G8B8 user-memory texture was not proven: later diagnostics show the
+successful user-memory snapshot on object 7526, while object 7525 remains
+unclassified. GT2 r15 and r16 reproduced the same rejection without producing
+a bundle. The UpdateTexture seam below is therefore a bounded code-audit
+hypothesis for a possible future source-to-destination closure, not an
+explanation of r14-r16 or GT2 capture evidence.
 
 This closes the representation migration only. Actual GT2 bundle evidence,
 provider replay of the captured indexed workload, and output-oracle
 conservation remains open.
+
+### UpdateTexture exact closure (capture-only)
+
+The PE recorder now has a bounded value-only seam for a successful full-resource
+`UpdateTexture`: it requires canonical V2 Texture2D or cube descriptors with
+matching subresource extents and complete source bytes, then carries those
+exact bytes into the destination registry shadow after the command append is
+accepted. An active interval fails closed when the destination was not already
+admitted, because defining it with post-copy bytes before the command would
+move an unproven initial state across the command boundary. The successful
+copy still updates the registry for a later retry. Autogen-mipmap, P8/A8P8,
+volume, self-copy, unsupported-format, incomplete-source, and descriptor or
+generation mismatch cases remain fail-closed; normal command bytes and the
+capture-off path are unchanged. Native truth-table coverage proves empty and
+pre-observed destinations, incomplete sources, extent mismatch, autogen, and
+volume rejection. No GT2 bundle or provider-replay promotion is claimed yet.
 
 ## Render Tape bounded wild evidence
 
