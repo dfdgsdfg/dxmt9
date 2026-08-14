@@ -220,10 +220,23 @@ CPU-seeded 2D payload; texture `Unavailable` and V2 volume `CompleteSeed`
 are rejected with typed diagnostics because their closure is not proven.
 Texture-derived aliases and swapchain outputs remain zero/zero dispositions.
 
+GT2 r14
+(`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r14-20260814`)
+ran the staged canonical-V2 build under Sikarugir for 90 seconds without an
+application failure, but published no Render Tape bundle. The former V2 cube
+`ObjectDefine` zero/zero mismatch was no longer the first rejection. Capture
+instead failed before arm with `incomplete_subresource_seed` for texture kind
+0, generation 14, object id 4294967525, subresource 0. The registry retained 1021
+objects at the first failed arm and later grew to 1073 while the same typed
+failure remained latched. This is evidence that texture/surface descriptor
+migration reached the next closure boundary; it is not evidence of a complete
+GT2 capture. The identity matches the already documented 128x32 A8R8G8B8
+user-memory texture whose first observed write covers only 728 bytes; exact
+capture-only user-memory full-subresource seed acquisition remains open.
+
 This closes the representation migration only. Actual GT2 bundle evidence,
-including the r13 diagnostic retry, provider replay of the captured indexed
-workload, and output-oracle conservation remains open; no wild GT2 run was
-performed for this migration.
+provider replay of the captured indexed workload, and output-oracle
+conservation remains open.
 
 ## Render Tape bounded wild evidence
 
