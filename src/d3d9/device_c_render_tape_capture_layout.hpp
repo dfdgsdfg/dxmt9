@@ -31,6 +31,7 @@ inline constexpr std::uint32_t L8 = 50u;
 inline constexpr std::uint32_t A8L8 = 51u;
 inline constexpr std::uint32_t V8U8 = 60u;
 inline constexpr std::uint32_t L16 = 81u;
+inline constexpr std::uint32_t D24S8 = 75u;
 inline constexpr std::uint32_t DXT1 = 0x31545844u;
 inline constexpr std::uint32_t DXT2 = 0x32545844u;
 inline constexpr std::uint32_t DXT3 = 0x33545844u;
@@ -53,6 +54,7 @@ enum class RenderTapeCaptureRejectionReason : std::uint32_t {
   FullSnapshotIdentityMismatch = 12u,
   FullSnapshotExtentMismatch = 13u,
   UnmaterializedPreArmObject = 14u,
+  ExpectedContentContract = 15u,
 };
 
 const char* renderTapeCaptureRejectionReasonName(
@@ -72,6 +74,40 @@ struct RenderTapeCaptureLayoutDiagnostic {
   std::int32_t pitch = 0;
   std::uint64_t bytes = 0u;
 };
+
+enum class RenderTapeExpectedContentStatus : std::uint32_t {
+  NotRequired = 0u,
+  Accepted,
+  InvalidDescriptor,
+  UnsupportedFormat,
+  UnsupportedDimension,
+  InvalidExtent,
+  Overflow,
+};
+
+struct RenderTapeExpectedContentContract {
+  RenderTapeExpectedContentStatus status =
+      RenderTapeExpectedContentStatus::NotRequired;
+  std::uint64_t bytes = 0u;
+  std::uint32_t count = 0u;
+};
+
+const char* renderTapeExpectedContentStatusName(
+    RenderTapeExpectedContentStatus status) noexcept;
+
+// Derives the exact initial-content extent for every content-bearing resource
+// descriptor. Texture and standalone-surface inputs must use their canonical
+// V2 descriptors; volume seed closure is explicitly unsupported. Identities
+// whose contents are supplied by an immutable blob, an alias parent, or
+// PresentOutput return NotRequired with a zero/zero contract.
+RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
+    std::uint32_t identityKind,
+    std::span<const std::byte> descriptor,
+    std::span<std::uint64_t> subresourceBytes = {}) noexcept;
+
+RenderTapeExpectedContentStatus renderTapeValidateExpectedContentExtents(
+    std::uint32_t identityKind, std::span<const std::byte> descriptor,
+    std::span<const std::uint64_t> actualSubresourceBytes) noexcept;
 
 // Cold, value-only description of one live object at the capture boundary.
 // `complete` means that every content subresource required by the descriptor

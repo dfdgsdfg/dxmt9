@@ -777,6 +777,38 @@ static bool renderTapeTextureSubresourceDescriptor(
         descriptor, subresource, out);
 }
 
+static bool renderTapeValidateExpectedContent(
+    const D9CWireObjectIdentity &identity,
+    std::span<const std::byte> descriptor,
+    const std::vector<std::vector<std::byte>> &content,
+    dxmt9::d3d9::RenderTapeExpectedContentContract &contract) noexcept {
+    try {
+        std::vector<std::uint64_t> expected(content.size());
+        contract = dxmt9::d3d9::renderTapeDeriveExpectedContentContract(
+            identity.kind, descriptor, expected);
+        if (contract.status ==
+            dxmt9::d3d9::RenderTapeExpectedContentStatus::NotRequired)
+            return contract.bytes == 0u && contract.count == 0u &&
+                   content.empty();
+        if (contract.status !=
+                dxmt9::d3d9::RenderTapeExpectedContentStatus::Accepted ||
+            contract.count != content.size())
+            return false;
+        std::uint64_t total = 0u;
+        for (std::size_t index = 0u; index < content.size(); ++index) {
+            if (expected[index] != content[index].size() ||
+                total > std::numeric_limits<std::uint64_t>::max() -
+                            expected[index])
+                return false;
+            total += expected[index];
+        }
+        return total == contract.bytes;
+    } catch (...) {
+        contract = {};
+        return false;
+    }
+}
+
 static bool renderTapeSameIdentity(
     const D9CWireObjectIdentity &a,
     const D9CWireObjectIdentity &b) noexcept {
@@ -7763,6 +7795,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     dxmt9::d3d9::renderTapeDescriptorKindForObject(
                         object->identity.kind));
                 objectSeed.descriptor = object->descriptor;
+                dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
+                if (!renderTapeValidateExpectedContent(
+                        object->identity, object->descriptor, object->content,
+                        contentContract)) {
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture producer aborted reason=expected_content_contract "
+                        "status=%s kind=%u generation=%u object_id=%llu expected_bytes=%llu "
+                        "expected_count=%u actual_count=%zu",
+                        dxmt9::d3d9::renderTapeExpectedContentStatusName(
+                            contentContract.status),
+                        object->identity.kind, object->identity.generation,
+                        static_cast<unsigned long long>(object->identity.objectId),
+                        static_cast<unsigned long long>(contentContract.bytes),
+                        contentContract.count, object->content.size());
+                    RejectRenderTapeCaptureForChild(
+                        dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                            ExpectedContentContract,
+                        dxmt9::d3d9::pe::PeWireObjectRef{
+                            .identity = object->identity},
+                        std::numeric_limits<std::uint32_t>::max(), {});
+                    return false;
+                }
+                objectSeed.expectedContentBytes = contentContract.bytes;
+                objectSeed.expectedContentCount = contentContract.count;
                 if (!object->immutablePayload.empty()) {
                     objectSeed.immutableBytes = object->immutablePayload.size();
                     objectSeed.immutableDigest =
@@ -7868,16 +7924,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                 subresource, {});
                             return false;
                         }
-                        if (objectSeed.expectedContentBytes >
-                            std::numeric_limits<std::uint64_t>::max() - bytes.size()) {
-                            dxmt9DeviceInfoLog(
-                                "render_tape_capture producer aborted reason=content_size_overflow "
-                                "object_id=%llu",
-                                static_cast<unsigned long long>(object->identity.objectId));
-                            return false;
-                        }
-                        ++objectSeed.expectedContentCount;
-                        objectSeed.expectedContentBytes += bytes.size();
                         const auto digest =
                             dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes);
                         seed.blobs.push_back({.bytes = bytes});
@@ -8212,14 +8258,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     IncompleteSubresourceSeed,
                 static_cast<std::uint32_t>(missing - object->content.begin()));
         }
-        std::uint64_t expectedBytes = 0u;
-        for (const auto &bytes : object->content) {
-            if (expectedBytes > std::numeric_limits<std::uint64_t>::max() -
-                                   bytes.size()) {
-                return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
-                                  DescriptorMismatch);
-            }
-            expectedBytes += bytes.size();
+        dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
+        if (!renderTapeValidateExpectedContent(
+                object->identity, object->descriptor, object->content,
+                contentContract)) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture materialize rejected reason=expected_content_contract "
+                "status=%s kind=%u generation=%u object_id=%llu expected_bytes=%llu "
+                "expected_count=%u actual_count=%zu",
+                dxmt9::d3d9::renderTapeExpectedContentStatusName(
+                    contentContract.status),
+                object->identity.kind, object->identity.generation,
+                static_cast<unsigned long long>(object->identity.objectId),
+                static_cast<unsigned long long>(contentContract.bytes),
+                contentContract.count, object->content.size());
+            return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                              ExpectedContentContract);
         }
         dxmt9::d3d9::RenderTapeDigest immutableDigest{};
         std::uint64_t immutableBytes = 0u;
@@ -8236,8 +8290,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::renderTapeDescriptorKindForObject(identity.kind));
         if (renderTapeCapture_->objectDefine(
                 identity, descriptorKind, object->descriptor, immutableBytes,
-                immutableDigest, expectedBytes,
-                static_cast<std::uint32_t>(object->content.size())) !=
+                immutableDigest, contentContract.bytes,
+                contentContract.count) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             abortRenderTapeCapture("jit_object_define");
             return false;

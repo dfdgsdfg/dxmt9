@@ -123,6 +123,59 @@ std::vector<std::byte> singleSurfaceColorFillChunk(
   return result;
 }
 
+std::vector<std::byte> singleUpdateTextureChunk(
+    const D9CWireObjectIdentity& source,
+    const D9CWireObjectIdentity& destination) {
+  const auto recordsOffset = sizeof(D9CCommandChunkWireHeader);
+  const auto handlesOffset = alignUp(
+      recordsOffset + sizeof(D9CCommandChunkWireRecordHeader),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadOffset = alignUp(
+      handlesOffset + 2u * sizeof(D9CCommandChunkWireHandleEntry),
+      alignof(std::uint32_t));
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = static_cast<std::uint32_t>(recordsOffset),
+      .recordCount = 1u,
+      .handleTableOffset = static_cast<std::uint32_t>(handlesOffset),
+      .handleCount = 2u,
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadOffset),
+      .payloadArenaSize = sizeof(D9CCommandChunkWireUpdateTexture),
+  };
+  const D9CCommandChunkWireRecordHeader record{
+      .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+      .payloadSize = sizeof(D9CCommandChunkWireUpdateTexture),
+      .firstHandle = 0u,
+      .handleCount = 2u,
+  };
+  const std::array handles{
+      D9CCommandChunkWireHandleEntry{
+          .kind = source.kind,
+          .generation = source.generation,
+          .objectId = source.objectId,
+      },
+      D9CCommandChunkWireHandleEntry{
+          .kind = destination.kind,
+          .generation = destination.generation,
+          .objectId = destination.objectId,
+      },
+  };
+  const D9CCommandChunkWireUpdateTexture update{
+      .srcHandleIndex = 0u,
+      .dstHandleIndex = 1u,
+  };
+  std::vector<std::byte> result(
+      payloadOffset + sizeof(D9CCommandChunkWireUpdateTexture));
+  std::memcpy(result.data(), &header, sizeof(header));
+  std::memcpy(result.data() + recordsOffset, &record, sizeof(record));
+  std::memcpy(result.data() + handlesOffset, handles.data(), sizeof(handles));
+  std::memcpy(result.data() + payloadOffset, &update, sizeof(update));
+  return result;
+}
+
 std::vector<std::byte> bootstrapChunk() {
   std::array<D9CCommandChunkWireTextureBinding,
              D9C_DRAW_PACKET_MAX_TEXTURES>
@@ -922,6 +975,251 @@ void testObjectExpectedContentContractTruthTable() {
               testCase.expected,
           "ObjectDefine expected extent/count pair truth table is stable");
   }
+}
+
+std::vector<std::byte> versionedTextureDescriptor(
+    RenderTapeTextureDimension dimension, std::uint32_t mipLevelCount,
+    std::uint32_t format, std::uint32_t width, std::uint32_t height) {
+  const auto subresourceCount = dimension == RenderTapeTextureDimension::Cube
+                                    ? mipLevelCount * 6u
+                                    : mipLevelCount;
+  const RenderTapeTextureDescriptorV2 fixed{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(dimension),
+      .mipLevelCount = mipLevelCount,
+      .subresourceCount = subresourceCount,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  const auto resourceType = dimension == RenderTapeTextureDimension::Texture2D
+                                ? 3u
+                                : dimension == RenderTapeTextureDimension::Cube
+                                      ? 5u
+                                      : 4u;
+  std::vector<std::byte> descriptor(
+      sizeof(fixed) + static_cast<std::size_t>(subresourceCount) *
+                           sizeof(D9CSurfaceDesc));
+  std::memcpy(descriptor.data(), &fixed, sizeof(fixed));
+  for (std::uint32_t i = 0u; i < subresourceCount; ++i) {
+    const D9CSurfaceDesc surface{
+        .format = format,
+        .resourceType = resourceType,
+        .width = width,
+        .height = height,
+        .depth = dimension == RenderTapeTextureDimension::Volume ? width : 1u,
+    };
+    std::memcpy(descriptor.data() + sizeof(fixed) +
+                    static_cast<std::size_t>(i) * sizeof(surface),
+                &surface, sizeof(surface));
+  }
+  return descriptor;
+}
+
+void testExpectedContentContractDerivation() {
+  constexpr auto texture = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+  constexpr auto surface = D9C_CHUNK_HANDLE_KIND_SURFACE;
+  constexpr auto buffer = D9C_CHUNK_HANDLE_KIND_BUFFER;
+  const auto cube = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Cube, 1u, render_tape_d3d_format::DXT1, 4u,
+      4u);
+  std::array<std::uint64_t, 6u> cubeExtents{};
+  auto contract = renderTapeDeriveExpectedContentContract(
+      texture, cube, cubeExtents);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 6u * 8u && contract.count == 6u,
+        "V2 cube CompleteSeed derives six exact DXT1 subresource extents");
+  check(std::all_of(cubeExtents.begin(), cubeExtents.end(),
+                    [](std::uint64_t bytes) { return bytes == 8u; }),
+        "V2 cube exposes one exact tight extent per face");
+  auto wrongCubeExtents = cubeExtents;
+  wrongCubeExtents.front() = 0u;
+  wrongCubeExtents.back() = 16u;
+  check(renderTapeValidateExpectedContentExtents(texture, cube,
+                                                 wrongCubeExtents) ==
+            RenderTapeExpectedContentStatus::InvalidExtent,
+        "wrong per-subresource distribution is rejected despite matching total");
+
+  const auto dxt2d = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Texture2D, 1u,
+      render_tape_d3d_format::DXT3, 7u, 5u);
+  contract = renderTapeDeriveExpectedContentContract(texture, dxt2d);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 2u * 2u * 16u && contract.count == 1u,
+        "V2 2D CompleteSeed derives the exact compressed extent");
+
+  const D9CSurfaceDesc standaloneSurfaceDesc{
+      .format = render_tape_d3d_format::A8R8G8B8,
+      .resourceType = 1u,
+      .width = 4u,
+      .height = 2u,
+      .depth = 1u,
+  };
+  const auto standaloneSurface = RenderTapeSurfaceDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+      .surface = standaloneSurfaceDesc,
+  };
+  contract = renderTapeDeriveExpectedContentContract(
+      surface, std::as_bytes(std::span(&standaloneSurface, 1u)));
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 32u && contract.count == 1u,
+        "V2 standalone surface derives its tight uncompressed extent");
+
+  const D9CBufferDesc vb{.size = 257u};
+  contract = renderTapeDeriveExpectedContentContract(
+      buffer, std::as_bytes(std::span(&vb, 1u)));
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 257u && contract.count == 1u,
+        "D9CBufferDesc derives exact VB/IB bytes and one subresource");
+
+  constexpr std::array<std::byte, 8u> immutableDescriptor{};
+  contract = renderTapeDeriveExpectedContentContract(
+      D9C_CHUNK_HANDLE_KIND_SHADER, immutableDescriptor);
+  check(contract.status == RenderTapeExpectedContentStatus::NotRequired &&
+            contract.bytes == 0u && contract.count == 0u,
+        "immutable shader content remains zero/zero");
+
+  RenderTapeSurfaceDescriptorV2 alias{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .parentTexture = D9CWireObjectIdentity{.kind = texture,
+                                             .generation = 1u,
+                                             .objectId = 2u},
+      .surface = standaloneSurfaceDesc,
+  };
+  contract = renderTapeDeriveExpectedContentContract(
+      surface, std::as_bytes(std::span(&alias, 1u)));
+  check(contract.status == RenderTapeExpectedContentStatus::NotRequired &&
+            contract.bytes == 0u && contract.count == 0u,
+        "texture-derived aliases remain zero/zero");
+
+  const auto malformed = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Texture2D, 1u, 0xdeadbeefu, 4u, 4u);
+  contract = renderTapeDeriveExpectedContentContract(texture, malformed);
+  check(contract.status == RenderTapeExpectedContentStatus::UnsupportedFormat,
+        "unknown CompleteSeed format is rejected before ObjectDefine");
+  const std::array<std::byte, sizeof(std::uint32_t)> shortV2 = [&] {
+    std::array<std::byte, sizeof(std::uint32_t)> bytes{};
+    const auto schema = kRenderTapeTextureDescriptorVersion2;
+    std::memcpy(bytes.data(), &schema, sizeof(schema));
+    return bytes;
+  }();
+  contract = renderTapeDeriveExpectedContentContract(texture, shortV2);
+  check(contract.status == RenderTapeExpectedContentStatus::InvalidDescriptor,
+        "short V2 descriptor is rejected before fixed-layout copy");
+  auto overflow = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Texture2D, 1u,
+      render_tape_d3d_format::A8R8G8B8, std::numeric_limits<std::uint32_t>::max(),
+      2u);
+  contract = renderTapeDeriveExpectedContentContract(texture, overflow);
+  check(contract.status == RenderTapeExpectedContentStatus::Overflow,
+        "overflowing CompleteSeed extent is rejected");
+  auto incomplete = cube;
+  incomplete.resize(incomplete.size() - sizeof(D9CSurfaceDesc));
+  contract = renderTapeDeriveExpectedContentContract(texture, incomplete);
+  check(contract.status == RenderTapeExpectedContentStatus::InvalidDescriptor,
+        "malformed CompleteSeed descriptor is rejected");
+  auto volume = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Volume, 1u,
+      render_tape_d3d_format::A8R8G8B8, 4u, 4u);
+  contract = renderTapeDeriveExpectedContentContract(
+      texture, volume);
+  check(contract.status == RenderTapeExpectedContentStatus::UnsupportedDimension,
+        "V2 volume is rejected before ObjectDefine because seed closure is unsupported");
+  const RenderTapeSurfaceDescriptorV2 depthSurface{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+      .surface = D9CSurfaceDesc{.format = render_tape_d3d_format::D24S8,
+                                .resourceType = 1u,
+                                .width = 4u,
+                                .height = 2u,
+                                .depth = 1u},
+  };
+  contract = renderTapeDeriveExpectedContentContract(
+      surface, std::as_bytes(std::span(&depthSurface, 1u)));
+  check(contract.status == RenderTapeExpectedContentStatus::UnsupportedFormat,
+        "depth/render-target format is classified unsupported by the linear table");
+}
+
+void testExpectedContentValidatorOrdering() {
+  constexpr D9CWireObjectIdentity textureA{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 1u, .objectId = 301u};
+  constexpr D9CWireObjectIdentity textureB{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 1u, .objectId = 302u};
+  const auto descriptor = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Texture2D, 1u,
+      render_tape_d3d_format::A8R8G8B8, 4u, 1u);
+  const auto partial = std::vector<std::byte>(8u, std::byte{0x11});
+  const auto complete = std::vector<std::byte>(16u, std::byte{0x22});
+  const std::array<RenderTapeCaptureBlob, 2u> partialBlobs{
+      RenderTapeCaptureBlob{.bytes = partial},
+      RenderTapeCaptureBlob{.bytes = complete}};
+  const auto run = [&](std::span<const RenderTapeCaptureBlob> blobs,
+                       bool fullSeeds) {
+    RenderTapeCaptureSession session(true);
+    check(session.armWithBlobs(bootstrapChunk(), blobs) ==
+              RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() ==
+                  RenderTapeCaptureStatus::Accepted,
+          "expected-content validator fixture starts");
+    const auto surfaceDescriptor = outputSurfaceDescriptor();
+    check(session.objectDefine(
+              kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              std::as_bytes(std::span(&surfaceDescriptor, 1u)), 0u, {}) ==
+                  RenderTapeCaptureStatus::Accepted,
+          "validator fixture admits Present target");
+    check(session.objectDefine(
+              textureA, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+              descriptor, 0u, {}, 16u, 1u) == RenderTapeCaptureStatus::Accepted &&
+              session.objectDefine(
+                  textureB,
+                  static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+                  descriptor, 0u, {}, 16u, 1u) ==
+                  RenderTapeCaptureStatus::Accepted,
+          "validator fixture journals dynamic texture contracts");
+    const auto first = fullSeeds ? complete : partial;
+    check(session.resourceMutationBytes(
+              textureA, RenderTapeMutationKind::Upload, 0u, 0u, first) ==
+              RenderTapeCaptureStatus::Accepted,
+          "validator fixture records the first unique subresource mutation");
+    check(session.resourceMutationBytes(
+              textureB, RenderTapeMutationKind::Upload, 0u, 0u, complete) ==
+              RenderTapeCaptureStatus::Accepted,
+          "validator fixture records the second unique subresource mutation");
+    const auto update = singleUpdateTextureChunk(textureA, textureB);
+    check(session.commandChunk(
+              CommandChunkEnvelope{.recordCount = 1u, .handleCount = 2u}, update) ==
+              RenderTapeCaptureStatus::Accepted,
+          "validator fixture admits the command-reference event to the journal");
+    const auto present = presentChunk();
+    check(session.commandChunk(
+              CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present) ==
+              RenderTapeCaptureStatus::Accepted,
+          "validator fixture records the canonical Present event");
+    const auto attachment = oracle();
+    const auto status = session.completePresent(
+        8u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&attachment, 1u)));
+    return std::pair{status, session.validationResult().status};
+  };
+  const auto partialResult = run(partialBlobs, false);
+  check(partialResult.first == RenderTapeCaptureStatus::ValidationFailed &&
+            partialResult.second == RenderTapeValidationStatus::IncompleteFrame,
+        "partial seed fails closed before first command reference");
+  const std::array<RenderTapeCaptureBlob, 2u> completeBlobs{
+      RenderTapeCaptureBlob{.bytes = complete},
+      RenderTapeCaptureBlob{.bytes = complete}};
+  const auto completeResult = run(completeBlobs, true);
+  check(completeResult.first == RenderTapeCaptureStatus::Complete &&
+            completeResult.second == RenderTapeValidationStatus::Valid,
+        "unique complete seeds allow command reference and final validation");
 }
 
 void testFailureBeforePublishAndBoundedBackpressure() {
@@ -2408,6 +2706,8 @@ int main(int argc, char** argv) {
     testFullSnapshotClosureTruthTable();
     testBootstrapClosureTruthTable();
     testObjectExpectedContentContractTruthTable();
+    testExpectedContentContractDerivation();
+    testExpectedContentValidatorOrdering();
     return 0;
   } catch (const TestFailure& failure) {
     std::cerr << "render tape capture spec failed: " << failure.what() << '\n';

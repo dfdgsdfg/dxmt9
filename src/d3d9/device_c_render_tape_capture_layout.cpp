@@ -9,6 +9,22 @@
 namespace dxmt9::d3d9 {
 namespace {
 
+bool checkedAdd(std::uint64_t a, std::uint64_t b,
+                std::uint64_t& out) noexcept {
+  if (a > std::numeric_limits<std::uint64_t>::max() - b)
+    return false;
+  out = a + b;
+  return true;
+}
+
+bool checkedMul(std::uint64_t a, std::uint64_t b,
+                std::uint64_t& out) noexcept {
+  if (a != 0u && b > std::numeric_limits<std::uint64_t>::max() / a)
+    return false;
+  out = a * b;
+  return true;
+}
+
 std::uint32_t blockBytes(std::uint32_t format) noexcept {
   switch (format) {
   case render_tape_d3d_format::DXT1:
@@ -21,7 +37,190 @@ std::uint32_t blockBytes(std::uint32_t format) noexcept {
   }
 }
 
+RenderTapeExpectedContentContract expectedContentFailure(
+    RenderTapeExpectedContentStatus status) noexcept {
+  return RenderTapeExpectedContentContract{.status = status};
+}
+
+RenderTapeExpectedContentContract expectedContentForSurface(
+    const D9CSurfaceDesc& desc) noexcept {
+  if (desc.width == 0u || desc.height == 0u || desc.depth != 1u)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+
+  const auto blockSize = blockBytes(desc.format);
+  const auto bytesPerPixel = renderTapeLinearBytesPerPixel(desc.format);
+  if (blockSize == 0u && bytesPerPixel == 0u)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedFormat);
+
+  std::uint64_t fullRowBytes = 0u;
+  if (blockSize != 0u) {
+    if (!checkedMul((static_cast<std::uint64_t>(desc.width) + 3u) / 4u,
+                    blockSize, fullRowBytes) ||
+        fullRowBytes == 0u ||
+        fullRowBytes > static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int32_t>::max()))
+      return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+    RenderTapeBlockLockLayout layout{};
+    if (renderTapeBlockLockLayout(desc, static_cast<std::int32_t>(fullRowBytes),
+                                  nullptr, layout) !=
+        RenderTapeBlockLayoutStatus::Accepted)
+      return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+    return {.status = RenderTapeExpectedContentStatus::Accepted,
+            .bytes = layout.tightBytes,
+            .count = 1u};
+  }
+
+  if (!checkedMul(desc.width, bytesPerPixel, fullRowBytes) ||
+      fullRowBytes == 0u ||
+      fullRowBytes > static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int32_t>::max()))
+    return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+  RenderTapeLinearLockLayout layout{};
+  if (renderTapeLinearLockLayout(desc, static_cast<std::int32_t>(fullRowBytes),
+                                 nullptr, layout) !=
+      RenderTapeLinearLayoutStatus::Accepted)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+  return {.status = RenderTapeExpectedContentStatus::Accepted,
+          .bytes = layout.tightBytes,
+          .count = 1u};
+}
+
+RenderTapeExpectedContentContract expectedContentForTexture(
+    std::span<const std::byte> descriptor,
+    std::span<std::uint64_t> subresourceBytes) noexcept {
+  RenderTapeTextureDescriptorV2 texture{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture))
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+  const auto dimension = static_cast<RenderTapeTextureDimension>(texture.dimension);
+  if (dimension == RenderTapeTextureDimension::Volume)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedDimension);
+  if (texture.initialContentDisposition != static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed))
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+  if (!subresourceBytes.empty() && subresourceBytes.size() < texture.subresourceCount)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+
+  std::uint64_t totalBytes = 0u;
+  for (std::uint32_t subresource = 0u;
+       subresource < texture.subresourceCount; ++subresource) {
+    D9CSurfaceDesc desc{};
+    if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource, desc))
+      return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+    const auto content = expectedContentForSurface(desc);
+    if (content.status != RenderTapeExpectedContentStatus::Accepted)
+      return content;
+    if (!subresourceBytes.empty())
+      subresourceBytes[subresource] = content.bytes;
+    if (!checkedAdd(totalBytes, content.bytes, totalBytes))
+      return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+  }
+  return {.status = RenderTapeExpectedContentStatus::Accepted,
+          .bytes = totalBytes,
+          .count = texture.subresourceCount};
+}
+
 } // namespace
+
+const char* renderTapeExpectedContentStatusName(
+    RenderTapeExpectedContentStatus status) noexcept {
+  switch (status) {
+  case RenderTapeExpectedContentStatus::NotRequired:
+    return "not_required";
+  case RenderTapeExpectedContentStatus::Accepted:
+    return "accepted";
+  case RenderTapeExpectedContentStatus::InvalidDescriptor:
+    return "invalid_descriptor";
+  case RenderTapeExpectedContentStatus::UnsupportedFormat:
+    return "unsupported_format";
+  case RenderTapeExpectedContentStatus::UnsupportedDimension:
+    return "unsupported_dimension";
+  case RenderTapeExpectedContentStatus::InvalidExtent:
+    return "invalid_extent";
+  case RenderTapeExpectedContentStatus::Overflow:
+    return "overflow";
+  }
+  return "unknown";
+}
+
+RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
+    std::uint32_t identityKind,
+    std::span<const std::byte> descriptor,
+    std::span<std::uint64_t> subresourceBytes) noexcept {
+  if (identityKind == D9C_CHUNK_HANDLE_KIND_SHADER ||
+      identityKind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL ||
+      identityKind == D9C_CHUNK_HANDLE_KIND_QUERY)
+    return {};
+  if (identityKind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+    if (descriptor.size() != sizeof(D9CBufferDesc))
+      return expectedContentFailure(
+          RenderTapeExpectedContentStatus::InvalidDescriptor);
+    D9CBufferDesc buffer{};
+    std::memcpy(&buffer, descriptor.data(), sizeof(buffer));
+    if (buffer.size == 0u)
+      return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+    if (!subresourceBytes.empty())
+      subresourceBytes[0] = buffer.size;
+    return {.status = RenderTapeExpectedContentStatus::Accepted,
+            .bytes = buffer.size,
+            .count = 1u};
+  }
+  if (identityKind == D9C_CHUNK_HANDLE_KIND_TEXTURE)
+    return expectedContentForTexture(descriptor, subresourceBytes);
+  if (identityKind != D9C_CHUNK_HANDLE_KIND_SURFACE)
+    return {};
+
+  if (descriptor.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
+    RenderTapeSurfaceDescriptorV2 surface{};
+    if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface))
+      return expectedContentFailure(
+          RenderTapeExpectedContentStatus::InvalidDescriptor);
+    const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
+    const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+        surface.initialContentDisposition);
+    if ((storage == RenderTapeSurfaceStorage::TextureSubresource &&
+         disposition == RenderTapeInitialContentDisposition::Unavailable) ||
+        (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer &&
+         disposition == RenderTapeInitialContentDisposition::ProducedPresentOutput))
+      return {};
+    if (storage != RenderTapeSurfaceStorage::Standalone ||
+        disposition != RenderTapeInitialContentDisposition::CompleteSeed)
+      return expectedContentFailure(
+          RenderTapeExpectedContentStatus::InvalidDescriptor);
+    auto content = expectedContentForSurface(surface.surface);
+    if (content.status != RenderTapeExpectedContentStatus::Accepted)
+      return content;
+    if (!subresourceBytes.empty())
+      subresourceBytes[0] = content.bytes;
+    content.count = 1u;
+    return content;
+  }
+  return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+}
+
+RenderTapeExpectedContentStatus renderTapeValidateExpectedContentExtents(
+    std::uint32_t identityKind, std::span<const std::byte> descriptor,
+    std::span<const std::uint64_t> actualSubresourceBytes) noexcept {
+  try {
+    std::vector<std::uint64_t> expected(actualSubresourceBytes.size());
+    const auto contract = renderTapeDeriveExpectedContentContract(
+        identityKind, descriptor, expected);
+    if (contract.status == RenderTapeExpectedContentStatus::NotRequired)
+      return actualSubresourceBytes.empty()
+                 ? RenderTapeExpectedContentStatus::NotRequired
+                 : RenderTapeExpectedContentStatus::InvalidExtent;
+    if (contract.status != RenderTapeExpectedContentStatus::Accepted)
+      return contract.status;
+    if (contract.count != actualSubresourceBytes.size())
+      return RenderTapeExpectedContentStatus::InvalidExtent;
+    for (std::size_t index = 0u; index < expected.size(); ++index) {
+      if (expected[index] != actualSubresourceBytes[index])
+        return RenderTapeExpectedContentStatus::InvalidExtent;
+    }
+    return RenderTapeExpectedContentStatus::Accepted;
+  } catch (...) {
+    return RenderTapeExpectedContentStatus::InvalidExtent;
+  }
+}
 
 std::uint32_t renderTapeLinearBytesPerPixel(std::uint32_t format) noexcept {
   switch (format) {
@@ -50,18 +249,6 @@ std::uint32_t renderTapeLinearBytesPerPixel(std::uint32_t format) noexcept {
     return 0u;
   }
 }
-
-namespace {
-
-bool checkedMul(std::uint64_t a, std::uint64_t b,
-                std::uint64_t& out) noexcept {
-  if (a != 0u && b > std::numeric_limits<std::uint64_t>::max() / a)
-    return false;
-  out = a * b;
-  return true;
-}
-
-} // namespace
 
 const char* renderTapeCaptureRejectionReasonName(
     RenderTapeCaptureRejectionReason reason) noexcept {
@@ -94,6 +281,8 @@ const char* renderTapeCaptureRejectionReasonName(
     return "full_snapshot_extent_mismatch";
   case RenderTapeCaptureRejectionReason::UnmaterializedPreArmObject:
     return "unmaterialized_pre_arm_object";
+  case RenderTapeCaptureRejectionReason::ExpectedContentContract:
+    return "expected_content_contract";
   }
   return "unknown_capture_rejection";
 }

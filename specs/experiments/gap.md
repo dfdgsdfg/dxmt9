@@ -210,6 +210,16 @@ raw surface descriptors are Retired and rejected rather than accepted behind
 a compatibility flag. The event/chunk/bridge wire ABI and hash are unchanged
 because descriptor bytes remain `ObjectDefine` schema payload.
 
+The production bootstrap and frame-tape JIT paths now preflight the same
+pure V2-only expected-content contract before registering a capture blob,
+`ObjectDefine`, or seed mutation. The contract derives each exact tight
+subresource extent (linear and DXT1/DXT3/DXT5) and compares every actual seed
+payload, not only the aggregate byte/count pair. Buffers require exactly one
+`D9CBufferDesc::size` payload; standalone surfaces require one supported
+CPU-seeded 2D payload; texture `Unavailable` and V2 volume `CompleteSeed`
+are rejected with typed diagnostics because their closure is not proven.
+Texture-derived aliases and swapchain outputs remain zero/zero dispositions.
+
 This closes the representation migration only. Actual GT2 bundle evidence,
 including the r13 diagnostic retry, provider replay of the captured indexed
 workload, and output-oracle conservation remains open; no wild GT2 run was
