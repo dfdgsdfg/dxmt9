@@ -805,6 +805,39 @@ currently calls the provider without emitting the canonical D9C `PRESENT`
 record, so `presentChunkSeen=false` and frame completion fail closed; PresentEx
 event support is a separate gap from canonical `Present` capture evidence.
 
+That admission is a **capture-owned single-holder role**, not a property of the
+D3D9 object. Exactly one live registry entry may hold `PresentOutput`, and the
+admission that names a new holder hands the role back first. Handing it back is
+a pure transition over the recorded holder, whether the holder is still in the
+live registry, and its wrapper reference count there: re-admitting the same
+exact identity retains the role; a holder that already left the registry needs
+no transition; a holder the admission itself registered and that still carries
+only the admission's own wrapper reference is **retired** (tombstoned, so the
+generation rules keep applying to it); any other holder is **demoted** back to
+its exact displaced initial-content state and stays registered. The transition
+never inspects generations — identity monotonicity stays owned by registration,
+so handing the role back can never admit an identity registration would reject.
+The role is also handed back whenever an arm attempt ends without an active
+interval, and again at the start of the next attempt, because an admission
+releases its PE wrapper before the arm returns and the C-side wire registry is
+free to recycle that object id at a newer generation in the meantime.
+
+Without that policy a retried arm accumulates holders. The GT2 frame-tape
+evidence (`experiments/output/`
+`app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r6-20260814/dxmt9.log`) shows
+both consequences: `producer aborted reason=present_output_count count=2`
+through `count=8` across successive retries, and then a recycled wire object id
+meeting its stale holder in the logical-slot replacement scan, where a
+standalone surface is deliberately not an alias replacement candidate, so it
+rejected as `prior_not_retained_alias` and marked the registry invalid for the
+remaining life of the process. Retiring the stale holder removes the collision
+without relaxing that alias predicate.
+
+A CPU-unlock mutation on an already-admitted object that fails to append now
+carries typed attribution — `registry_entry_missing`,
+`subresource_out_of_range`, or the session status — so an interval abort can be
+told apart from a registry-shape failure without another wild run.
+
 The capture owner also bounds the total owned blob bytes (64 MiB by default),
 with overflow-safe admission before hashing or copying. Exact duplicate blobs
 are admitted without a second charge, and failed admission or publication

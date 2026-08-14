@@ -242,6 +242,76 @@ inline RenderTapeLogicalSlotRelation renderTapeLogicalSlotRelation(
              : RenderTapeLogicalSlotRelation::Different;
 }
 
+// The present output is a capture-owned role, not a property of the D3D9
+// object. Exactly one live registry entry may hold it, and the admission that
+// names a new holder must first hand the role back. The PE wrapper an
+// admission opens is released before the arm returns, so a retained holder
+// both multiplies the role across retries and keeps a stale entry alive for a
+// wire object id the C-side registry is free to recycle at a newer generation.
+enum class RenderTapePresentOutputRoleTransition : std::uint32_t {
+  // No prior holder, or the prior holder already left the live registry.
+  None = 0u,
+  // The same exact identity is being re-admitted; the role does not move.
+  Retained,
+  // The holder is an app-owned object the capture only re-roled. Restore its
+  // ordinary initial-content state and leave the object registered.
+  Demote,
+  // The holder exists only because the admission registered it. Release the
+  // admission's wrapper reference and retire the identity.
+  Retire,
+};
+
+inline const char* renderTapePresentOutputRoleTransitionName(
+    RenderTapePresentOutputRoleTransition transition) noexcept {
+  switch (transition) {
+  case RenderTapePresentOutputRoleTransition::None:
+    return "none";
+  case RenderTapePresentOutputRoleTransition::Retained:
+    return "retained";
+  case RenderTapePresentOutputRoleTransition::Demote:
+    return "demote";
+  case RenderTapePresentOutputRoleTransition::Retire:
+    return "retire";
+  }
+  return "unknown";
+}
+
+struct RenderTapePresentOutputRole {
+  D9CWireObjectIdentity identity{};
+  bool held = false;
+  // True when the admission registered the holder itself, so the capture owns
+  // the single wrapper reference recorded for it.
+  bool captureOwned = false;
+};
+
+// `priorFound` reports whether the holder is still in the live registry, and
+// `priorWrapperRefs` its wrapper reference count there. Both are ignored when
+// no role is held. The transition never inspects generations: identity
+// monotonicity stays owned by registration, so handing the role back cannot
+// admit an identity that registration would reject.
+inline RenderTapePresentOutputRoleTransition
+renderTapePresentOutputRoleTransition(
+    const RenderTapePresentOutputRole& role,
+    const D9CWireObjectIdentity* next, bool priorFound,
+    std::uint32_t priorWrapperRefs) noexcept {
+  // A holder that already left the live registry is checked before identity,
+  // so a re-admission that has to register the object again is classified as a
+  // fresh admission rather than as a retained role.
+  if (!role.held || !priorFound)
+    return RenderTapePresentOutputRoleTransition::None;
+  if (next != nullptr && role.identity.kind == next->kind &&
+      role.identity.generation == next->generation &&
+      role.identity.objectId == next->objectId) {
+    return RenderTapePresentOutputRoleTransition::Retained;
+  }
+  // A capture-owned holder with exactly the admission's own reference has no
+  // remaining app wrapper, so retiring it is the same transition the ordinary
+  // child destroy path would have produced.
+  if (role.captureOwned && priorWrapperRefs == 1u)
+    return RenderTapePresentOutputRoleTransition::Retire;
+  return RenderTapePresentOutputRoleTransition::Demote;
+}
+
 enum class RenderTapeSurfaceAliasReplacementStatus : std::uint32_t {
   Accepted = 0u,
   InvalidIdentity,

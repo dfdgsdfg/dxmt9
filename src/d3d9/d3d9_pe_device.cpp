@@ -728,6 +728,12 @@ struct RenderTapeLiveRegistry {
     std::uint64_t invalidObjectId = 0u;
     std::uint32_t invalidSubresource = std::numeric_limits<std::uint32_t>::max();
     dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic invalidLayout{};
+    // Current holder of the PresentOutput role plus the exact initial-content
+    // state the admission displaced, so a demotion restores the object rather
+    // than approximating it from the descriptor.
+    dxmt9::d3d9::RenderTapePresentOutputRole presentOutputRole{};
+    std::uint32_t presentOutputPriorContentCount = 0u;
+    std::vector<std::vector<std::byte>> presentOutputPriorContent{};
 };
 
 static bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
@@ -7224,6 +7230,94 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    // Hand the PresentOutput role back before a new admission names a holder,
+    // and again whenever an arm attempt ends without an active interval. A
+    // retained holder is the r6 GT2 failure: every retry re-admitted a fresh
+    // back-buffer wrapper while the previous one stayed live and roled, so the
+    // arm saw two through eight present outputs, and a recycled wire object id
+    // then collided with the stale entry and marked the registry invalid for
+    // the rest of the process.
+    void releaseRenderTapePresentOutputRole(
+        const D9CWireObjectIdentity *next) noexcept {
+        if (!renderTapeRegistry_) {
+            return;
+        }
+        // Only a pre-arm or aborted lifecycle may move the role. An armed or
+        // capturing interval owns its holder until it terminates.
+        if (renderTapeCapture_ &&
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Disabled &&
+            renderTapeCapture_->state() !=
+                dxmt9::d3d9::RenderTapeCaptureState::Aborted) {
+            return;
+        }
+        auto &role = renderTapeRegistry_->presentOutputRole;
+        const dxmt9::d3d9::pe::PeWireObjectRef priorObject{
+            .identity = role.identity,
+        };
+        auto *prior = role.held ? findRenderTapeObject(priorObject) : nullptr;
+        const auto transition = dxmt9::d3d9::renderTapePresentOutputRoleTransition(
+            role, next, prior != nullptr,
+            prior ? prior->lifetime.wrapperRefs : 0u);
+        if (transition == dxmt9::d3d9::RenderTapePresentOutputRoleTransition::
+                              Retained) {
+            return;
+        }
+        const auto identity = role.identity;
+        // Only a capture-owned holder carries a wrapper reference this device
+        // took; an app-owned entry was merely re-roled in place.
+        const bool releaseAdmissionRef = role.captureOwned;
+        const auto priorContentCount =
+            renderTapeRegistry_->presentOutputPriorContentCount;
+        auto priorContent =
+            std::move(renderTapeRegistry_->presentOutputPriorContent);
+        role = {};
+        renderTapeRegistry_->presentOutputPriorContentCount = 0u;
+        renderTapeRegistry_->presentOutputPriorContent.clear();
+        if (transition ==
+            dxmt9::d3d9::RenderTapePresentOutputRoleTransition::None) {
+            return;
+        }
+        if (prior->role != RenderTapeLiveObject::Role::PresentOutput) {
+            // Something else already reclaimed the entry; leave it alone.
+            return;
+        }
+        if (transition ==
+            dxmt9::d3d9::RenderTapePresentOutputRoleTransition::Demote) {
+            prior->role = RenderTapeLiveObject::Role::Ordinary;
+            prior->contentCount = priorContentCount;
+            prior->content = std::move(priorContent);
+            if (releaseAdmissionRef)
+                (void)prior->lifetime.releaseWrapper();
+            dxmt9DeviceInfoLog(
+                "render_tape_capture present_output released transition=%s "
+                "kind=%u generation=%u object_id=%llu",
+                dxmt9::d3d9::renderTapePresentOutputRoleTransitionName(
+                    transition),
+                identity.kind, identity.generation,
+                static_cast<unsigned long long>(identity.objectId));
+            return;
+        }
+        try {
+            renderTapeRegistry_->knownDead.push_back(identity);
+        } catch (...) {
+            markRenderTapeInvalidOnce("present_output_tombstone_allocation",
+                                      &priorObject);
+            return;
+        }
+        if (releaseAdmissionRef)
+            (void)prior->lifetime.releaseWrapper();
+        renderTapeRegistry_->objects.erase(
+            renderTapeRegistry_->objects.begin() +
+            (prior - renderTapeRegistry_->objects.data()));
+        dxmt9DeviceInfoLog(
+            "render_tape_capture present_output released transition=%s kind=%u "
+            "generation=%u object_id=%llu",
+            dxmt9::d3d9::renderTapePresentOutputRoleTransitionName(transition),
+            identity.kind, identity.generation,
+            static_cast<unsigned long long>(identity.objectId));
+    }
+
     bool admitRenderTapePresentOutput() noexcept {
         if (!renderTapeRegistry_) {
             return false;
@@ -7259,12 +7353,29 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             .identity = identity,
             .object = surface,
         };
+        // The role must leave its previous holder before this identity is
+        // registered: a recycled wire object id would otherwise meet the stale
+        // entry in the logical-slot replacement scan, and a standalone surface
+        // is deliberately not an alias replacement candidate there.
+        releaseRenderTapePresentOutputRole(&identity);
+        // A retained role already stashed this holder's displaced content on an
+        // earlier admission; re-stashing would capture the cleared state.
+        const bool roleRetained = renderTapeRegistry_->presentOutputRole.held;
         auto *existing = findRenderTapeObject(object);
+        const bool captureOwned = existing == nullptr;
         if (existing) {
+            if (!roleRetained) {
+                renderTapeRegistry_->presentOutputPriorContentCount =
+                    existing->contentCount;
+                renderTapeRegistry_->presentOutputPriorContent =
+                    std::move(existing->content);
+            }
             existing->role = RenderTapeLiveObject::Role::PresentOutput;
             existing->contentCount = 0u;
             existing->content.clear();
         } else {
+            renderTapeRegistry_->presentOutputPriorContentCount = 0u;
+            renderTapeRegistry_->presentOutputPriorContent.clear();
             registerRenderTapeObject(
                 object,
                 std::span<const std::byte>(
@@ -7282,12 +7393,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 static_cast<unsigned long long>(identity.objectId));
             return false;
         }
+        auto &role = renderTapeRegistry_->presentOutputRole;
+        role.identity = identity;
+        role.captureOwned = roleRetained ? role.captureOwned : captureOwned;
+        role.held = true;
         dxmt9DeviceInfoLog(
             "render_tape_capture present_output admitted kind=%u generation=%u "
-            "object_id=%llu descriptor=%zu initial_content=not_required",
+            "object_id=%llu descriptor=%zu initial_content=not_required "
+            "capture_owned=%d",
             identity.kind, identity.generation,
             static_cast<unsigned long long>(identity.objectId),
-            sizeof(descriptor));
+            sizeof(descriptor),
+            renderTapeRegistry_->presentOutputRole.captureOwned ? 1 : 0);
         return true;
     }
 
@@ -7791,7 +7908,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    // An arm attempt that does not reach an active interval must hand the
+    // PresentOutput role back immediately. Deferring it to the next attempt
+    // leaves a stale live entry across the window in which the C-side wire
+    // registry can recycle its object id at a newer generation.
     bool armRenderTapeCaptureAtPresentBoundary() {
+        if (armRenderTapeCaptureAtPresentBoundaryInterval()) {
+            return true;
+        }
+        releaseRenderTapePresentOutputRole(nullptr);
+        return false;
+    }
+
+    bool armRenderTapeCaptureAtPresentBoundaryInterval() {
         if (!renderTapeCapture_ ||
             !renderTapeCapture_->enabled() ||
             (renderTapeCapture_->state() !=
@@ -7800,6 +7929,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                  dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
             return false;
         }
+        // An interval that aborted after arming still holds the role; release
+        // it here so a retry starts from exactly one live present output.
+        releaseRenderTapePresentOutputRole(nullptr);
         // Keep the first-abort marker sticky only for this arm/interval
         // lifecycle; a retry must get independent attribution.
         renderTapeAbortReason_ = nullptr;
@@ -7905,6 +8037,44 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
         }
         renderTapeCaptureOracle_ = std::move(seed.oracleAttachments);
+        return true;
+    }
+
+    // Append one CpuUnlock mutation event for an already-admitted object and
+    // attribute the exact failing branch. The r6 GT2 log reported only
+    // `first_abort reason=block_resource_mutation`, which cannot distinguish a
+    // missing registry entry, a subresource outside the admitted content
+    // shape, and a session-side rejection (identity not live in the tape,
+    // unverified blob, or blob/event capacity).
+    bool appendRenderTapeUnlockMutation(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, const char *reason) noexcept {
+        const auto *entry = findRenderTapeObject(object);
+        if (!entry || subresource >= entry->content.size()) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture mutation_event reason=%s detail=%s kind=%u "
+                "generation=%u object_id=%llu subresource=%u content=%zu",
+                reason,
+                entry ? "subresource_out_of_range" : "registry_entry_missing",
+                object.identity.kind, object.identity.generation,
+                static_cast<unsigned long long>(object.identity.objectId),
+                subresource, entry ? entry->content.size() : 0u);
+            return false;
+        }
+        const auto status = renderTapeCapture_->resourceMutationBytes(
+            object.identity, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
+            subresource, 0u, entry->content[subresource]);
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture mutation_event reason=%s detail=session "
+                "status=%u kind=%u generation=%u object_id=%llu subresource=%u "
+                "bytes=%zu",
+                reason, static_cast<unsigned>(status), object.identity.kind,
+                object.identity.generation,
+                static_cast<unsigned long long>(object.identity.objectId),
+                subresource, entry->content[subresource].size());
+            return false;
+        }
         return true;
     }
 
@@ -9479,12 +9649,8 @@ public:
             return;
         if (!renderTapeObjectAdmitted(object.identity))
             return;
-        const auto *entry = findRenderTapeObject(object);
-        if (!entry || subresource >= entry->content.size() ||
-            renderTapeCapture_->resourceMutationBytes(
-                object.identity, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
-                subresource, 0u, entry->content[subresource]) !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+        if (!appendRenderTapeUnlockMutation(object, subresource,
+                                            "block_resource_mutation")) {
             abortRenderTapeCapture("block_resource_mutation");
         }
     }
@@ -9525,12 +9691,8 @@ public:
             return;
         if (!renderTapeObjectAdmitted(object.identity))
             return;
-        const auto *entry = findRenderTapeObject(object);
-        if (!entry || subresource >= entry->content.size() ||
-            renderTapeCapture_->resourceMutationBytes(
-                object.identity, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
-                subresource, 0u, entry->content[subresource]) !=
-                dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+        if (!appendRenderTapeUnlockMutation(object, subresource,
+                                            "linear_resource_mutation")) {
             abortRenderTapeCapture("linear_resource_mutation");
         }
     }

@@ -60,6 +60,31 @@ producer-side references remains out of scope. Sequence-tape retains the
 complete all-live arm snapshot because its second interval cannot admit
 `ObjectDefine` events.
 
+### GT2 frame-tape retry lifecycle (capture-only)
+
+`PresentOutput` is a capture-owned single-holder role. The admission that names
+a new holder hands the role back first, and an arm attempt that does not reach
+an active interval hands it back immediately rather than at the next attempt.
+A holder the admission itself registered and that still carries only the
+admission's own wrapper reference is retired into the tombstone set, so the
+existing monotone-generation and alias-replacement rules keep applying to it
+unchanged; any other holder is demoted back to its exact displaced
+initial-content state. This closes the two r6 GT2 failures in
+`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r6-20260814`:
+`present_output_count count=2..8` across retries, and the terminal
+`prior_not_retained_alias` registry invalidation that a recycled wire object id
+produced when it met a stale holder in the logical-slot replacement scan.
+
+The **initial** r6 abort remains open. Its first arm reached an active interval
+and then aborted with `first_abort reason=block_resource_mutation`, with no
+attribution for which branch failed. Only diagnosis, not a fix, is claimed here:
+the failing CPU-unlock append now logs `registry_entry_missing`,
+`subresource_out_of_range`, or the exact session status, so the next GT2 run
+distinguishes a registry-shape failure from a session-side rejection
+(identity not live in the tape, unverified blob, or blob/event capacity). No
+correctness-preserving layout or registry-only treatment was provable from the
+existing artifact, so none was applied.
+
 ### GT2 buffer partial-seed closure (capture-only)
 
 The remaining GT2 seed gap for indexed buffer inputs is now narrowed to one

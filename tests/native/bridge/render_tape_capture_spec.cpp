@@ -924,6 +924,86 @@ void testObjectLifetimeAndTerminalControls() {
         "device lost has no partial artifact");
 }
 
+// R-RT-CAP-9.4: the PresentOutput role is capture-owned and single-holder.
+// GT2 frame-tape retries (artifact
+// experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r6-20260814)
+// re-admitted a fresh back-buffer wrapper per attempt while the previous
+// holder stayed live and roled: the arm saw `present_output_count count=2..8`,
+// and a recycled wire object id then met the stale entry in the logical-slot
+// scan and rejected as `prior_not_retained_alias`, marking the registry
+// invalid for the rest of the process.
+void testPresentOutputRoleOwnershipTruthTable() {
+  constexpr D9CWireObjectIdentity held{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 0x10000009bull,
+  };
+  auto recycled = held;
+  recycled.generation = 10u;
+  D9CWireObjectIdentity other = held;
+  other.objectId = held.objectId + 1u;
+
+  using Transition = RenderTapePresentOutputRoleTransition;
+  const RenderTapePresentOutputRole unheld{};
+  check(renderTapePresentOutputRoleTransition(unheld, &other, true, 1u) ==
+            Transition::None,
+        "an unheld role has nothing to hand back");
+
+  const RenderTapePresentOutputRole captureOwned{
+      .identity = held, .held = true, .captureOwned = true};
+  check(renderTapePresentOutputRoleTransition(captureOwned, &held, true, 1u) ==
+            Transition::Retained,
+        "re-admitting the same exact identity keeps the role in place");
+  check(renderTapePresentOutputRoleTransition(captureOwned, nullptr, true,
+                                              1u) == Transition::Retire,
+        "a capture-owned holder with only the admission reference retires");
+  check(renderTapePresentOutputRoleTransition(captureOwned, &other, true, 1u) ==
+            Transition::Retire,
+        "naming a different holder retires the capture-owned entry");
+  check(renderTapePresentOutputRoleTransition(captureOwned, &recycled, true,
+                                              1u) == Transition::Retire,
+        "a recycled wire object id retires the stale holder before "
+        "registration sees it");
+  check(renderTapePresentOutputRoleTransition(captureOwned, &other, false,
+                                              0u) == Transition::None,
+        "a holder already gone from the live registry needs no transition");
+  check(renderTapePresentOutputRoleTransition(captureOwned, &held, false, 0u) ==
+            Transition::None,
+        "re-admitting an identity that left the registry is a fresh admission, "
+        "not a retained role");
+  check(renderTapePresentOutputRoleTransition(captureOwned, &other, true, 2u) ==
+            Transition::Demote,
+        "a surviving app wrapper demotes instead of retiring");
+
+  const RenderTapePresentOutputRole appOwned{
+      .identity = held, .held = true, .captureOwned = false};
+  check(renderTapePresentOutputRoleTransition(appOwned, &other, true, 1u) ==
+            Transition::Demote,
+        "an app-owned holder is only re-roled, so it is only demoted");
+  check(renderTapePresentOutputRoleTransition(appOwned, nullptr, true, 0u) ==
+            Transition::Demote,
+        "an app-owned holder without wrapper references still demotes");
+
+  // The transition never inspects generations. Monotonicity stays owned by
+  // registration, so handing the role back cannot admit an identity that
+  // registration would reject.
+  auto stale = held;
+  stale.generation = 1u;
+  check(renderTapePresentOutputRoleTransition(captureOwned, &stale, true, 1u) ==
+            Transition::Retire,
+        "a stale generation is retired here and rejected by registration");
+
+  check(std::string_view(renderTapePresentOutputRoleTransitionName(
+            Transition::Retire)) == "retire" &&
+            std::string_view(renderTapePresentOutputRoleTransitionName(
+                Transition::Demote)) == "demote" &&
+            std::string_view(renderTapePresentOutputRoleTransitionName(
+                Transition::Retained)) == "retained" &&
+            std::string_view(renderTapePresentOutputRoleTransitionName(
+                Transition::None)) == "none",
+        "every present output transition has a stable log name");
+}
+
 void testSurfaceAliasGenerationReplacementTransition() {
   constexpr D9CWireObjectIdentity priorIdentity{
       .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -1632,6 +1712,7 @@ int main(int argc, char** argv) {
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
     testObjectLifetimeAndTerminalControls();
+    testPresentOutputRoleOwnershipTruthTable();
     testSurfaceAliasGenerationReplacementTransition();
     testPresentCaptureResultAbiAndOneShotCancellation();
     testBlockCompressedLockCaptureLayouts();
