@@ -33,6 +33,7 @@
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_descriptors.hpp"
+#include "device_c_render_tape_first_access_locator.hpp"
 #include "device_c_render_tape_origin_locator.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
@@ -1215,6 +1216,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Exact identities admitted to the current tape. Pre-arm live objects
     // outside the bootstrap closure are materialized only on first reference.
     std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities_{};
+    // Capture-only observation state; this remains usable after capture aborts.
+    dxmt9::d3d9::RenderTapeFirstAccessLedger renderTapeFirstAccessLedger_{};
     const char *renderTapeAbortReason_ = nullptr;
     std::uint64_t renderTapeCompletionOrdinal_ = 0u;
     std::uint64_t commandChunkCommits_ = 0;
@@ -8045,6 +8048,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeAdmittedIdentities_.clear();
         renderTapeExpectedDigest_.reset();
         renderTapeOutputDesc_.reset();
+        renderTapeFirstAccessLedger_ = {};
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
             std::memory_order_acquire);
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -8335,6 +8339,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .recordIndex = locator.recordIndex,
                     .recordType = locator.recordType,
                 });
+            dxmt9::d3d9::renderTapeFirstAccessArm(
+                renderTapeFirstAccessLedger_, locator.originIdentity,
+                object->identity);
             dxmt9DeviceInfoLog(
                 "render_tape_capture missing_seed identity_kind=%u "
                 "generation=%u object_id=%llu descriptor_status=%s "
@@ -8493,16 +8500,97 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
+    void observeRenderTapeFirstAccessChunk(
+        const D9CCommandChunk &chunk,
+        const PeCommandChunkCommitInfo &info) noexcept {
+        if (!renderTapeFirstAccessLedger_.armed ||
+            chunk.recordBytes < sizeof(D9CCommandChunkWireHeader) ||
+            d9cWireHandleValue(chunk.records) == 0u) {
+            return;
+        }
+        const auto bytes = std::span<const std::byte>(
+            reinterpret_cast<const std::byte *>(static_cast<std::uintptr_t>(
+                d9cWireHandleValue(chunk.records))),
+            chunk.recordBytes);
+        dxmt9::d3d9::ImportedChunkView imported{};
+        dxmt9::d3d9::CommandChunkValidationScratch scratch{};
+        const auto validation = dxmt9::d3d9::validateCommandChunk(
+            bytes, dxmt9::d3d9::CommandChunkEnvelope{
+                       .version = chunk.version,
+                       .recordCount = info.recordCount,
+                       .handleCount = info.handleCount},
+            &imported, scratch);
+        if (!validation.valid()) {
+            if (!renderTapeFirstAccessLedger_.terminal) {
+                renderTapeFirstAccessLedger_.terminal = true;
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture first_access status=malformed "
+                    "class=unknown reason=chunk_validation origin_kind=%u "
+                    "origin_generation=%u origin_object_id=%llu "
+                    "resolved_kind=%u resolved_generation=%u "
+                    "resolved_object_id=%llu",
+                    renderTapeFirstAccessLedger_.originIdentity.kind,
+                    renderTapeFirstAccessLedger_.originIdentity.generation,
+                    static_cast<unsigned long long>(
+                        renderTapeFirstAccessLedger_.originIdentity.objectId),
+                    renderTapeFirstAccessLedger_.resolvedIdentity.kind,
+                    renderTapeFirstAccessLedger_.resolvedIdentity.generation,
+                    static_cast<unsigned long long>(
+                        renderTapeFirstAccessLedger_.resolvedIdentity.objectId));
+            }
+            return;
+        }
+        const auto observation = dxmt9::d3d9::renderTapeFirstAccessObserve(
+            renderTapeFirstAccessLedger_, imported);
+        if (observation.status !=
+                dxmt9::d3d9::RenderTapeFirstAccessStatus::Terminal &&
+            observation.status !=
+                dxmt9::d3d9::RenderTapeFirstAccessStatus::Malformed) {
+            return;
+        }
+        dxmt9DeviceInfoLog(
+            "render_tape_capture first_access status=%s class=%s "
+            "origin_kind=%u origin_generation=%u origin_object_id=%llu "
+            "resolved_kind=%u resolved_generation=%u resolved_object_id=%llu "
+            "observed_kind=%u observed_generation=%u observed_object_id=%llu "
+            "record_index=%u record_type=%u handle_index=%u section_kind=%u "
+            "binding_slot=%u alias_origin=%d",
+            dxmt9::d3d9::renderTapeFirstAccessStatusName(observation.status),
+            dxmt9::d3d9::renderTapeFirstAccessClassName(
+                observation.classification),
+            observation.originIdentity.kind, observation.originIdentity.generation,
+            static_cast<unsigned long long>(observation.originIdentity.objectId),
+            observation.resolvedIdentity.kind,
+            observation.resolvedIdentity.generation,
+            static_cast<unsigned long long>(observation.resolvedIdentity.objectId),
+            observation.observedIdentity.kind,
+            observation.observedIdentity.generation,
+            static_cast<unsigned long long>(observation.observedIdentity.objectId),
+            observation.recordIndex, observation.recordType,
+            observation.handleIndex, observation.sectionKind,
+            observation.bindingSlot, observation.aliasOrigin ? 1 : 0);
+    }
+
     void captureCommittedRenderTapeChunk(
         const D9CCommandChunk& chunk,
         const PeCommandChunkCommitInfo& info) noexcept {
+        const bool captureWasActive =
+            renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
+        if (!captureWasActive)
+            observeRenderTapeFirstAccessChunk(chunk, info);
         if (!renderTapeCapture_ ||
             renderTapeCapture_->state() !=
                 dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
             return;
         }
-        if (!admitRenderTapeChunkHandles(chunk, info))
+        if (!admitRenderTapeChunkHandles(chunk, info)) {
+            // The missing-seed arm can happen while admitting this very
+            // chunk. Re-scan it now that the exact target is known.
+            observeRenderTapeFirstAccessChunk(chunk, info);
             return;
+        }
         const auto status = renderTapeCapture_->commandChunk(
             dxmt9::d3d9::CommandChunkEnvelope{
                 .version = chunk.version,

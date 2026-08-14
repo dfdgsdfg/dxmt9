@@ -1,0 +1,267 @@
+#include "device_c_render_tape_first_access_locator.hpp"
+#include "dxmt9/device_c.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+using namespace dxmt9::d3d9;
+
+struct Failure : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+void check(bool condition, std::string_view message) {
+  if (!condition)
+    throw Failure(std::string(message));
+}
+
+struct SectionSpec {
+  std::uint16_t kind = 0u;
+  std::uint32_t handleIndex = 0u;
+  std::uint32_t slot = 0u;
+};
+
+struct Fixture {
+  D9CCommandChunkWireRecordHeader record{};
+  std::vector<D9CCommandChunkWireHandleEntry> handles{};
+  std::vector<std::byte> payload{};
+  std::vector<D9CCommandChunkWireSectionDesc> sections{};
+
+  ImportedChunkView view() const noexcept {
+    return ImportedChunkView{
+        .records = std::span<const D9CCommandChunkWireRecordHeader>(&record, 1u),
+        .handles = handles,
+        .payloadArena = payload,
+    };
+  }
+};
+
+D9CWireObjectIdentity identity(std::uint32_t kind, std::uint32_t generation,
+                               std::uint64_t objectId) {
+  return {kind, generation, objectId};
+}
+
+Fixture sparse(std::uint32_t recordType, std::span<const SectionSpec> specs,
+               D9CWireObjectIdentity handleIdentity) {
+  Fixture fixture;
+  fixture.handles.push_back({handleIdentity.kind, handleIdentity.generation,
+                             handleIdentity.objectId});
+  D9CCommandChunkWireDrawHeader draw{};
+  draw.sectionCount = static_cast<std::uint32_t>(specs.size());
+  draw.sectionTableOffset = sizeof(draw);
+  draw.sectionPayloadOffset =
+      draw.sectionTableOffset + specs.size() * sizeof(fixture.sections[0]);
+  fixture.sections.reserve(specs.size());
+  std::size_t payloadOffset = draw.sectionPayloadOffset;
+  for (const auto& spec : specs) {
+    const auto elementSize = static_cast<std::uint16_t>(
+        spec.kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE
+            ? sizeof(D9CCommandChunkWireTextureBinding)
+            : spec.kind == D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET
+                  ? sizeof(D9CCommandChunkWireRenderTargetBinding)
+                  : sizeof(D9CCommandChunkWireDepthStencilBinding));
+    fixture.sections.push_back({spec.kind, elementSize, 1u,
+                                static_cast<std::uint32_t>(payloadOffset),
+                                elementSize});
+    payloadOffset += elementSize;
+  }
+  fixture.payload.resize(payloadOffset);
+  std::memcpy(fixture.payload.data(), &draw, sizeof(draw));
+  if (!fixture.sections.empty()) {
+    std::memcpy(fixture.payload.data() + draw.sectionTableOffset,
+                fixture.sections.data(),
+                fixture.sections.size() * sizeof(fixture.sections[0]));
+  }
+  payloadOffset = draw.sectionPayloadOffset;
+  for (const auto& spec : specs) {
+    if (spec.kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE) {
+      const D9CCommandChunkWireTextureBinding binding{
+          spec.slot, 1u, spec.handleIndex, 0u};
+      std::memcpy(fixture.payload.data() + payloadOffset, &binding,
+                  sizeof(binding));
+      payloadOffset += sizeof(binding);
+    } else if (spec.kind == D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) {
+      const D9CCommandChunkWireRenderTargetBinding binding{
+          spec.slot, 1u, spec.handleIndex, 0u};
+      std::memcpy(fixture.payload.data() + payloadOffset, &binding,
+                  sizeof(binding));
+      payloadOffset += sizeof(binding);
+    } else {
+      const D9CCommandChunkWireDepthStencilBinding binding{1u, spec.handleIndex};
+      std::memcpy(fixture.payload.data() + payloadOffset, &binding,
+                  sizeof(binding));
+      payloadOffset += sizeof(binding);
+    }
+  }
+  std::memcpy(fixture.payload.data(), &draw, sizeof(draw));
+  fixture.record = {
+      .type = recordType,
+      .payloadOffset = 0u,
+      .payloadSize = static_cast<std::uint32_t>(fixture.payload.size()),
+      .firstHandle = 0u,
+      .handleCount = static_cast<std::uint32_t>(fixture.handles.size()),
+  };
+  return fixture;
+}
+
+Fixture fixed(std::uint32_t recordType, const void* value, std::size_t bytes,
+              D9CWireObjectIdentity handleIdentity = {}) {
+  Fixture fixture;
+  fixture.handles.push_back({handleIdentity.kind, handleIdentity.generation,
+                             handleIdentity.objectId});
+  fixture.payload.resize(bytes);
+  std::memcpy(fixture.payload.data(), value, bytes);
+  fixture.record = {
+      .type = recordType,
+      .payloadOffset = 0u,
+      .payloadSize = static_cast<std::uint32_t>(bytes),
+      .firstHandle = 0u,
+      .handleCount = handleIdentity.objectId == 0u ? 0u : 1u,
+  };
+  return fixture;
+}
+
+void arm(RenderTapeFirstAccessLedger& ledger,
+         const D9CWireObjectIdentity& origin,
+         const D9CWireObjectIdentity& resolved) {
+  renderTapeFirstAccessArm(ledger, origin, resolved);
+}
+
+void testCrossChunkDrawAndExactlyOnce() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 28u, 7527u);
+  const auto resolved = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14u, 7525u);
+  RenderTapeFirstAccessLedger ledger{};
+  arm(ledger, origin, resolved);
+  const std::array<SectionSpec, 1> binding{{
+      {D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, origin);
+  auto first = renderTapeFirstAccessObserve(ledger, apply.view());
+  check(first.status == RenderTapeFirstAccessStatus::Observing &&
+            first.classification == RenderTapeFirstAccessClass::BindingOnly,
+        "APPLY_STATE binding is non-terminal");
+
+  auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, {}, origin);
+  auto observation = renderTapeFirstAccessObserve(ledger, draw.view());
+  check(observation.status == RenderTapeFirstAccessStatus::Terminal &&
+            observation.classification ==
+                RenderTapeFirstAccessClass::DrawWriteUnknownCoverage &&
+            observation.aliasOrigin &&
+            observation.originIdentity.objectId == 7527u &&
+            observation.resolvedIdentity.objectId == 7525u,
+        "carried RT binding reaches a sparse next-chunk Draw");
+  check(renderTapeFirstAccessObserve(ledger, draw.view()).status ==
+            RenderTapeFirstAccessStatus::Complete,
+        "terminal first access is emitted exactly once");
+}
+
+void testReadWriteConflictAndClear() {
+  const auto target = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14u, 7525u);
+  RenderTapeFirstAccessLedger ledger{};
+  arm(ledger, target, target);
+  const std::array<SectionSpec, 1> binding{{
+      {D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, target);
+  check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+            RenderTapeFirstAccessStatus::Observing,
+        "RT binding arms carried state");
+  const std::array<SectionSpec, 1> texture{{
+      {D9C_COMMAND_CHUNK_SECTION_TEXTURE, 0u, 0u}}};
+  auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, texture, target);
+  check(renderTapeFirstAccessObserve(ledger, draw.view()).classification ==
+            RenderTapeFirstAccessClass::Unknown,
+        "same draw read/write conflict fails closed");
+
+  ledger = {};
+  arm(ledger, target, target);
+  check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+            RenderTapeFirstAccessStatus::Observing,
+        "clear fixture binding");
+  const D9CCommandChunkWireClear clear{1u, 0u, 1.0f, 0u, 0u, 0u};
+  auto clearFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &clear, sizeof(clear));
+  auto full = renderTapeFirstAccessObserve(ledger, clearFixture.view());
+  check(full.classification == RenderTapeFirstAccessClass::FullClearWrite,
+        "unrestricted target clear is full");
+
+  ledger = {};
+  arm(ledger, target, target);
+  check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+            RenderTapeFirstAccessStatus::Observing,
+        "partial clear fixture binding");
+  const D9CRect rect{0, 0, 8, 8};
+  D9CCommandChunkWireClear partialClear{1u, 0u, 1.0f, 0u, 1u,
+                                        sizeof(partialClear)};
+  auto partialFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &partialClear,
+                              sizeof(partialClear) + sizeof(rect));
+  std::memcpy(partialFixture.payload.data() + sizeof(partialClear), &rect,
+              sizeof(rect));
+  auto partial = renderTapeFirstAccessObserve(ledger, partialFixture.view());
+  check(partial.classification ==
+            RenderTapeFirstAccessClass::PartialClearWrite,
+        "rect-restricted target clear is partial");
+
+  RenderTapeFirstAccessLedger readLedger{};
+  arm(readLedger, target, target);
+  const std::array<SectionSpec, 1> readBinding{{
+      {D9C_COMMAND_CHUNK_SECTION_TEXTURE, 0u, 0u}}};
+  auto readDraw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, readBinding, target);
+  auto read = renderTapeFirstAccessObserve(readLedger, readDraw.view());
+  check(read.classification == RenderTapeFirstAccessClass::ShaderReadCandidate,
+        "texture use before any write is a read candidate");
+}
+
+void testMismatchMalformedAndPresentHandle() {
+  const auto target = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 4u, 40u);
+  const auto other = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 5u, 40u);
+  RenderTapeFirstAccessLedger ledger{};
+  arm(ledger, target, target);
+  const std::array<SectionSpec, 1> binding{{
+      {D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  auto mismatch = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, other);
+  check(renderTapeFirstAccessObserve(ledger, mismatch.view()).status ==
+            RenderTapeFirstAccessStatus::Observing,
+        "generation mismatch does not bind the target");
+
+  D9CCommandChunkWirePresent present{};
+  auto presentFixture = fixed(D9C_COMMAND_RECORD_PRESENT, &present,
+                              sizeof(present), target);
+  auto presentObservation =
+      renderTapeFirstAccessObserve(ledger, presentFixture.view());
+  check(presentObservation.classification ==
+            RenderTapeFirstAccessClass::PresentRead &&
+            presentObservation.handleIndex == 0u,
+        "present uses its exact target handle when supplied");
+
+  RenderTapeFirstAccessLedger malformedLedger{};
+  arm(malformedLedger, target, target);
+  Fixture malformedFixture;
+  malformedFixture.record.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  malformedFixture.record.payloadSize = 1u;
+  malformedFixture.payload.resize(1u);
+  check(renderTapeFirstAccessObserve(malformedLedger, malformedFixture.view())
+                .status == RenderTapeFirstAccessStatus::Malformed,
+        "malformed validated-view input fails closed");
+}
+
+} // namespace
+
+int main() {
+  try {
+    testCrossChunkDrawAndExactlyOnce();
+    testReadWriteConflictAndClear();
+    testMismatchMalformedAndPresentHandle();
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+  std::cout << "render tape first access locator spec passed\n";
+  return 0;
+}

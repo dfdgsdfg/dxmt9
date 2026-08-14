@@ -201,6 +201,18 @@ test('dxmt9-render-tape-origin-locator-spec',
      render_tape_origin_locator_spec,
      env: dxmt9_native_test_env)
 
+render_tape_first_access_locator_spec = executable(
+  'dxmt9-render-tape-first-access-locator-spec',
+  'render_tape_first_access_locator_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-first-access-locator-spec',
+     render_tape_first_access_locator_spec,
+     env: dxmt9_native_test_env)
+
 test('dxmt9-render-tape-cli-spec', python3,
      args: [
        join_paths(meson.project_source_root(),

@@ -281,6 +281,21 @@ descriptor/generation validation,
 event/chunk/bridge ABI, and capture-off cost are unchanged. No complete GT2
 bundle or provider-replay promotion is claimed.
 
+### GT2 r27 first-access locator (capture-only, observation-only)
+
+The r27 increment arms one exact generation-qualified target at the r26
+missing-seed diagnostic, then continues to inspect later validated command
+chunks after capture has failed closed. Its bounded ledger carries RT/depth
+attachment bindings across chunk boundaries and emits one terminal typed result:
+unrestricted or partial clears, draw write with unknown coverage, shader-read
+candidate, copy/readback source or conservative partial destination, present
+read, and `Unknown` for malformed or same-draw read/write ambiguity. An
+`APPLY_STATE` binding is non-terminal; generation mismatches are ignored, and
+the result is emitted exactly once. This is observation of command/binding
+evidence only: it does not claim an actual GPU read, full draw overwrite, or
+`ProducedByCapturedPass`. A wild r27 run is still required to decide between
+provider GPU snapshot and produced-pass proof.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with
