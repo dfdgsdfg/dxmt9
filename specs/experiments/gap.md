@@ -145,6 +145,30 @@ synchronization/dirty side effects remain explicit capture-only debt, and
 `D3DLOCK_DISCARD` is not promoted. This does not widen provider indexed-draw
 grammar or claim that GT2 replay is complete.
 
+### GT2 r11 pending alias replacement (capture-only)
+
+GT2 r11
+(`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-exact-closure-r11-20260814`)
+retained surface identity `kind=1 generation=1 object_id=4294967602` for a
+pending command (`object_destroy deferred ... pending=1`) but then rejected the
+same exact handle as `unmaterialized_pre_arm_object`. The registry lifetime
+truth table classified a texture-derived alias with zero wrapper references as
+`RetainedAlias` before considering its pending chunk reference, so a later
+wrapper for the same parent/subresource logical slot could replace the registry
+entry before `captureCommittedRenderTapeChunk` materialized the old handle.
+
+Pending chunk ownership now takes precedence over retained-alias ownership.
+Logical-slot replacement classifies that state as
+`PendingChunkRequiresFlush`; the capture-enabled registry synchronously commits,
+captures, and drains the existing builder with the child flush reason, then
+restarts registration once. This preserves the required order of old exact
+generation materialization, old command, pending drain and old destroy before
+the new generation definition. Flush failure or an unresolved second attempt
+invalidates and aborts only capture, leaving the application call and the
+bridge-failure retry contract unchanged. Native coverage binds the production
+classification to the bounded old-command-to-new-definition sequence; GT2 r12
+wild evidence and cross-build validation remain pending.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with

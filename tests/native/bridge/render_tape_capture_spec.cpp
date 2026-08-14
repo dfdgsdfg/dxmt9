@@ -78,6 +78,50 @@ std::vector<std::byte> singleRecordChunk(
   return result;
 }
 
+std::vector<std::byte> singleSurfaceColorFillChunk(
+    const D9CWireObjectIdentity& identity) {
+  const auto recordsOffset = sizeof(D9CCommandChunkWireHeader);
+  const auto handlesOffset = alignUp(
+      recordsOffset + sizeof(D9CCommandChunkWireRecordHeader),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadOffset = alignUp(
+      handlesOffset + sizeof(D9CCommandChunkWireHandleEntry),
+      alignof(std::uint32_t));
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = static_cast<std::uint32_t>(recordsOffset),
+      .recordCount = 1u,
+      .handleTableOffset = static_cast<std::uint32_t>(handlesOffset),
+      .handleCount = 1u,
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadOffset),
+      .payloadArenaSize = sizeof(D9CCommandChunkWireColorFill),
+  };
+  const D9CCommandChunkWireRecordHeader record{
+      .type = D9C_COMMAND_RECORD_COLOR_FILL,
+      .payloadSize = sizeof(D9CCommandChunkWireColorFill),
+      .firstHandle = 0u,
+      .handleCount = 1u,
+  };
+  const D9CCommandChunkWireHandleEntry handle{
+      .kind = identity.kind,
+      .generation = identity.generation,
+      .objectId = identity.objectId,
+  };
+  const D9CCommandChunkWireColorFill fill{
+      .surfaceHandleIndex = 0u,
+  };
+  std::vector<std::byte> result(
+      payloadOffset + sizeof(D9CCommandChunkWireColorFill));
+  std::memcpy(result.data(), &header, sizeof(header));
+  std::memcpy(result.data() + recordsOffset, &record, sizeof(record));
+  std::memcpy(result.data() + handlesOffset, &handle, sizeof(handle));
+  std::memcpy(result.data() + payloadOffset, &fill, sizeof(fill));
+  return result;
+}
+
 std::vector<std::byte> bootstrapChunk() {
   std::array<D9CCommandChunkWireTextureBinding,
              D9C_DRAW_PACKET_MAX_TEXTURES>
@@ -993,7 +1037,9 @@ void testPendingChunkLifetimeTruthTable() {
   RenderTapeSurfaceAliasLifetime alias;
   alias.textureAlias = true;
   check(alias.acquire() && alias.retainPendingChunk() &&
-            !alias.releaseWrapper() && alias.wrapperRefs == 0u,
+            !alias.releaseWrapper() && alias.wrapperRefs == 0u &&
+            alias.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedChunk,
         "alias keeps both parent and pending lifetime axes independent");
   check(!alias.releasePendingChunk() &&
             alias.disposition ==
@@ -1216,6 +1262,15 @@ void testSurfaceAliasGenerationReplacementTransition() {
             descriptorBytes) == Status::Accepted,
         "a retained alias admits a semantically identical newer generation");
 
+  auto pending = retained;
+  pending.pendingChunkRefs = 1u;
+  pending.disposition =
+      RenderTapeSurfaceAliasLifetime::Disposition::RetainedChunk;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            priorIdentity, pending, descriptorBytes, nextIdentity,
+            descriptorBytes) == Status::PendingChunkRequiresFlush,
+        "a pending alias generation must flush before logical-slot replacement");
+
   auto staleIdentity = nextIdentity;
   staleIdentity.generation = priorIdentity.generation;
   check(renderTapeSurfaceAliasReplacementStatus(
@@ -1362,6 +1417,94 @@ void testSurfaceAliasGenerationReplacementTransition() {
             missingDestroy.objectDestroy(priorIdentity) ==
                 RenderTapeCaptureStatus::InvalidInput,
         "a missing exact capture identity makes the ordered destroy fail closed");
+}
+
+void testPendingAliasFlushBeforeReplacementSequence() {
+  constexpr D9CWireObjectIdentity oldIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 0x100000132ull,
+  };
+  constexpr D9CWireObjectIdentity newIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 0x100000135ull,
+  };
+  constexpr D9CWireObjectIdentity parentIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 4u,
+      .objectId = 0x100000120ull,
+  };
+  constexpr D9CSurfaceDesc surface{
+      .format = render_tape_d3d_format::A8R8G8B8,
+      .width = 64u,
+      .height = 64u,
+  };
+  const RenderTapeSurfaceDescriptorV2 descriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u,
+      .parentTexture = parentIdentity,
+      .surface = surface,
+  };
+  const auto descriptorBytes = std::as_bytes(std::span(&descriptor, 1u));
+  RenderTapeSurfaceAliasLifetime lifetime;
+  lifetime.textureAlias = true;
+  check(lifetime.acquire() && lifetime.retainPendingChunk() &&
+            !lifetime.releaseWrapper() &&
+            lifetime.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedChunk,
+        "pending replacement fixture transfers the old wrapper to its chunk");
+  using Status = RenderTapeSurfaceAliasReplacementStatus;
+  check(renderTapeSurfaceAliasReplacementStatus(
+            oldIdentity, lifetime, descriptorBytes, newIdentity,
+            descriptorBytes) == Status::PendingChunkRequiresFlush,
+        "the production predicate blocks direct replacement of the old identity");
+
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "pending replacement fixture starts one frame interval");
+  check(session.objectDefine(
+            oldIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}) == RenderTapeCaptureStatus::Accepted,
+        "flush materializes the old exact generation before its command");
+  const auto oldCommand = singleSurfaceColorFillChunk(oldIdentity);
+  const auto beforeCommand = session.eventCount();
+  check(session.commandChunk(
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                 .recordCount = 1u, .handleCount = 1u},
+            oldCommand) == RenderTapeCaptureStatus::Accepted &&
+            session.eventCount() == beforeCommand + 1u &&
+            session.hasLiveObject(oldIdentity),
+        "forced flush records the old command while its exact identity is live");
+  check(!lifetime.releasePendingChunk() &&
+            lifetime.disposition ==
+                RenderTapeSurfaceAliasLifetime::Disposition::RetainedAlias,
+        "successful command capture drains pending ownership before replacement");
+  const auto beforeDestroy = session.eventCount();
+  check(session.objectDestroy(oldIdentity) ==
+                RenderTapeCaptureStatus::Accepted &&
+            session.eventCount() == beforeDestroy + 1u &&
+            !session.hasLiveObject(oldIdentity),
+        "replacement journals the old destroy after the old command");
+  check(renderTapeSurfaceAliasReplacementStatus(
+            oldIdentity, lifetime, descriptorBytes, newIdentity,
+            descriptorBytes) == Status::Accepted,
+        "drained retained alias is replaceable after ordered destroy");
+  const auto beforeNew = session.eventCount();
+  check(session.objectDefine(
+            newIdentity,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            descriptorBytes, 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+            session.eventCount() == beforeNew + 1u &&
+            session.hasLiveObject(newIdentity),
+        "new registration follows old materialize, command, drain, and destroy");
 }
 
 void testPresentCaptureResultAbiAndOneShotCancellation() {
@@ -1886,6 +2029,7 @@ int main(int argc, char** argv) {
     testPresentOutputRoleOwnershipTruthTable();
     testStandaloneSurfaceIdentityClosureTruthTable();
     testSurfaceAliasGenerationReplacementTransition();
+    testPendingAliasFlushBeforeReplacementSequence();
     testPresentCaptureResultAbiAndOneShotCancellation();
     testBlockCompressedLockCaptureLayouts();
     testBlockCompressedSubrectMipAndOddExtentLayouts();

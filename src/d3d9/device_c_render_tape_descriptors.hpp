@@ -150,12 +150,12 @@ struct RenderTapeSurfaceAliasLifetime {
       return false;
     }
     wrapperRefs = 0u;
-    if (textureAlias && !parentRetired) {
-      disposition = Disposition::RetainedAlias;
-      return false;
-    }
     if (pendingChunkRefs != 0u) {
       disposition = Disposition::RetainedChunk;
+      return false;
+    }
+    if (textureAlias && !parentRetired) {
+      disposition = Disposition::RetainedAlias;
       return false;
     }
     disposition = Disposition::Retired;
@@ -382,6 +382,7 @@ enum class RenderTapeSurfaceAliasReplacementStatus : std::uint32_t {
   NonMonotoneGeneration,
   PriorNotRetainedAlias,
   LiveWrapper,
+  PendingChunkRequiresFlush,
   InvalidDescriptor,
   SurfaceMismatch,
 };
@@ -401,6 +402,8 @@ inline const char* renderTapeSurfaceAliasReplacementStatusName(
     return "prior_not_retained_alias";
   case RenderTapeSurfaceAliasReplacementStatus::LiveWrapper:
     return "live_wrapper";
+  case RenderTapeSurfaceAliasReplacementStatus::PendingChunkRequiresFlush:
+    return "pending_chunk_requires_flush";
   case RenderTapeSurfaceAliasReplacementStatus::InvalidDescriptor:
     return "invalid_descriptor";
   case RenderTapeSurfaceAliasReplacementStatus::SurfaceMismatch:
@@ -441,6 +444,8 @@ renderTapeSurfaceAliasReplacementStatus(
     return RenderTapeSurfaceAliasReplacementStatus::PriorNotRetainedAlias;
   if (priorLifetime.wrapperRefs != 0u)
     return RenderTapeSurfaceAliasReplacementStatus::LiveWrapper;
+  if (priorLifetime.pendingChunkRefs != 0u)
+    return RenderTapeSurfaceAliasReplacementStatus::PendingChunkRequiresFlush;
   if (priorLifetime.disposition !=
       RenderTapeSurfaceAliasLifetime::Disposition::RetainedAlias) {
     return RenderTapeSurfaceAliasReplacementStatus::PriorNotRetainedAlias;

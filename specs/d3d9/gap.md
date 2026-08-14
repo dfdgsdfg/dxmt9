@@ -751,3 +751,14 @@ command-dependent destroy. Texture-derived surfaces retain their identity
 until parent retirement, including when a pending command overlaps the last
 wrapper release. The native truth table is
 `tests/native/bridge/render_tape_capture_spec.cpp:testPendingChunkLifetimeTruthTable`.
+
+A pending texture-derived alias is not yet eligible for logical-slot
+replacement. `PendingChunkRequiresFlush` forces the capture-enabled registry to
+commit and capture the current builder, drain its pending ownership, and only
+then restart the replacement lookup. The restart is bounded to one; failure
+invalidates and aborts capture without changing capture-off chunk boundaries or
+the application result. This closes the GT2 r11 counterexample where pending
+identity `kind=1 generation=1 object_id=4294967602` was overwritten before
+exact-generation materialization. The production-bound native sequence fixture
+is `testPendingAliasFlushBeforeReplacementSequence`; GT2 r12 and cross-build
+evidence remain open.

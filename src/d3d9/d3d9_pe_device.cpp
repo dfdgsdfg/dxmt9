@@ -6969,7 +6969,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
         std::span<const std::byte> immutablePayload,
-        RenderTapeLiveObject::Role role = RenderTapeLiveObject::Role::Ordinary) noexcept {
+        RenderTapeLiveObject::Role role = RenderTapeLiveObject::Role::Ordinary,
+        std::uint32_t replacementRestart = 0u) noexcept {
         if (!renderTapeRegistry_) {
             return RenderTapeObjectRegistration::Rejected;
         }
@@ -7065,6 +7066,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     renderTapeSurfaceAliasReplacementStatus(
                         replacement->identity, replacement->lifetime,
                         replacement->descriptor, object.identity, descriptor);
+                if (transition == dxmt9::d3d9::
+                                      RenderTapeSurfaceAliasReplacementStatus::
+                                          PendingChunkRequiresFlush) {
+                    const auto priorIdentity = replacement->identity;
+                    const auto priorPending =
+                        replacement->lifetime.pendingChunkRefs;
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture alias_pending_flush profile=%u "
+                        "device=%p registry=%p restart=%u "
+                        "old_kind=%u old_generation=%u old_object_id=%llu "
+                        "new_kind=%u new_generation=%u new_object_id=%llu "
+                        "pending=%u admitted=%d known_dead=%d",
+                        dxmt9PeRenderTapeCaptureProfile(), this,
+                        static_cast<void *>(&*renderTapeRegistry_),
+                        replacementRestart, priorIdentity.kind,
+                        priorIdentity.generation,
+                        static_cast<unsigned long long>(priorIdentity.objectId),
+                        object.identity.kind, object.identity.generation,
+                        static_cast<unsigned long long>(object.identity.objectId),
+                        priorPending,
+                        renderTapeObjectAdmitted(priorIdentity) ? 1 : 0,
+                        hasRenderTapeDeadObject(dxmt9::d3d9::pe::PeWireObjectRef{
+                            .identity = priorIdentity}) ? 1 : 0);
+                    if (replacementRestart != 0u) {
+                        markRenderTapeInvalidOnce(
+                            "alias_pending_flush_restart_exhausted", &object);
+                        if (IsRenderTapeCaptureActiveForChild())
+                            abortRenderTapeCapture(
+                                "alias_pending_flush_restart_exhausted");
+                        return RenderTapeObjectRegistration::Rejected;
+                    }
+                    const HRESULT flushHr = flushPendingCommandChunk(
+                        PeRecorderFlushReason::Child);
+                    if (FAILED(flushHr)) {
+                        markRenderTapeInvalidOnce(
+                            "alias_pending_flush_failed", &object);
+                        if (IsRenderTapeCaptureActiveForChild())
+                            abortRenderTapeCapture(
+                                "alias_pending_flush_failed");
+                        return RenderTapeObjectRegistration::Rejected;
+                    }
+                    return registerRenderTapeObject(
+                        object, descriptor, immutablePayload, role,
+                        replacementRestart + 1u);
+                }
                 if (transition != dxmt9::d3d9::
                                       RenderTapeSurfaceAliasReplacementStatus::
                                           Accepted) {
@@ -8163,7 +8209,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool materializeRenderTapeObjectForReference(
-        const D9CWireObjectIdentity &identity) noexcept {
+        const D9CWireObjectIdentity &identity,
+        std::uint32_t handleIndex =
+            std::numeric_limits<std::uint32_t>::max(),
+        std::uint32_t recordIndex =
+            std::numeric_limits<std::uint32_t>::max(),
+        std::uint32_t recordType = 0u) noexcept {
         if (renderTapeObjectAdmitted(identity))
             return true;
         if (!renderTapeRegistry_) {
@@ -8182,20 +8233,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             RejectRenderTapeCaptureForChild(reason, object, subresource, {});
             return false;
         };
-        if (dxmt9::d3d9::renderTapeBootstrapRequiresAllLiveObjects(
-                dxmt9PeRenderTapeCaptureProfile())) {
-            // An unadmitted pre-arm identity is impossible after the sequence
-            // profile's complete arm snapshot. Reject before emitting an
-            // ObjectDefine that the second interval grammar cannot accept.
-            return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
-                              UnmaterializedPreArmObject);
-        }
         const auto object = std::find_if(
             renderTapeRegistry_->objects.begin(),
             renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
                 return renderTapeSameIdentity(candidate.identity, identity);
             });
         if (object == renderTapeRegistry_->objects.end()) {
+            const dxmt9::d3d9::pe::PeWireObjectRef reference{
+                .identity = identity};
+            dxmt9DeviceInfoLog(
+                "render_tape_capture materialize_miss profile=%u device=%p "
+                "registry=%p kind=%u generation=%u object_id=%llu live=0 "
+                "pending=0 admitted=%d known_dead=%d handle_index=%u "
+                "record_index=%u record_type=%u",
+                dxmt9PeRenderTapeCaptureProfile(), this,
+                static_cast<void *>(&*renderTapeRegistry_), identity.kind,
+                identity.generation,
+                static_cast<unsigned long long>(identity.objectId),
+                renderTapeObjectAdmitted(identity) ? 1 : 0,
+                hasRenderTapeDeadObject(reference) ? 1 : 0, handleIndex,
+                recordIndex, recordType);
+            return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                              UnmaterializedPreArmObject);
+        }
+        if (dxmt9::d3d9::renderTapeBootstrapRequiresAllLiveObjects(
+                dxmt9PeRenderTapeCaptureProfile())) {
+            // An unadmitted pre-arm identity is impossible after the sequence
+            // profile's complete arm snapshot. Reject before emitting an
+            // ObjectDefine that the second interval grammar cannot accept.
             return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                               UnmaterializedPreArmObject);
         }
@@ -8288,11 +8353,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             abortRenderTapeCapture("command_chunk_validation");
             return false;
         }
-        for (const auto &handle : imported.handles) {
+        for (std::size_t handleIndex = 0u;
+             handleIndex < imported.handles.size(); ++handleIndex) {
+            const auto &handle = imported.handles[handleIndex];
+            std::uint32_t ownerRecord =
+                std::numeric_limits<std::uint32_t>::max();
+            std::uint32_t ownerType = 0u;
+            for (std::size_t recordIndex = 0u;
+                 recordIndex < imported.records.size(); ++recordIndex) {
+                const auto &record = imported.records[recordIndex];
+                if (handleIndex >= record.firstHandle &&
+                    handleIndex - record.firstHandle < record.handleCount) {
+                    ownerRecord = static_cast<std::uint32_t>(recordIndex);
+                    ownerType = record.type;
+                    break;
+                }
+            }
             if (!materializeRenderTapeObjectForReference(D9CWireObjectIdentity{
                     .kind = handle.kind,
                     .generation = handle.generation,
-                    .objectId = handle.objectId})) {
+                    .objectId = handle.objectId},
+                    static_cast<std::uint32_t>(handleIndex), ownerRecord,
+                    ownerType)) {
                 return false;
             }
         }
