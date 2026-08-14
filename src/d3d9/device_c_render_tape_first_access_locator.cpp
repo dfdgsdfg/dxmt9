@@ -469,20 +469,76 @@ bool renderTapeProveProducedByCapturedPass(
     const ImportedChunkView& chunk,
     const D9CWireObjectIdentity& originIdentity,
     const D9CWireObjectIdentity& resolvedIdentity) noexcept {
-  if (originIdentity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
-      resolvedIdentity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
-      sameIdentity(originIdentity, resolvedIdentity)) {
-    return false;
-  }
+  return renderTapeClassifyProducedByCapturedPass(
+             chunk, originIdentity, resolvedIdentity)
+      .accepted();
+}
+
+RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity) noexcept {
+  if (sameIdentity(originIdentity, resolvedIdentity))
+    return {.status = RenderTapeProducedProofStatus::DirectTextureAmbiguity};
+  if (originIdentity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
+    return {.status = RenderTapeProducedProofStatus::InvalidOriginKind};
+  if (resolvedIdentity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE)
+    return {.status = RenderTapeProducedProofStatus::InvalidResolvedKind};
   RenderTapeFirstAccessLedger ledger{};
   renderTapeFirstAccessArm(ledger, originIdentity, resolvedIdentity);
   const auto observation = renderTapeFirstAccessObserve(ledger, chunk);
-  return observation.status == RenderTapeFirstAccessStatus::Terminal &&
-         observation.classification == RenderTapeFirstAccessClass::FullClearWrite &&
-         observation.aliasOrigin &&
-         sameIdentity(observation.originIdentity, originIdentity) &&
-         sameIdentity(observation.resolvedIdentity, resolvedIdentity) &&
-         sameIdentity(observation.observedIdentity, originIdentity);
+  if (observation.status == RenderTapeFirstAccessStatus::Malformed)
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = observation};
+  if (observation.status != RenderTapeFirstAccessStatus::Terminal)
+    return {.status = RenderTapeProducedProofStatus::NoTerminalAccess,
+            .observation = observation};
+  if (observation.classification != RenderTapeFirstAccessClass::FullClearWrite)
+    return {.status = RenderTapeProducedProofStatus::NotFullClearWrite,
+            .observation = observation};
+  if (!observation.aliasOrigin)
+    return {.status = RenderTapeProducedProofStatus::AliasOriginMismatch,
+            .observation = observation};
+  if (!sameIdentity(observation.originIdentity, originIdentity))
+    return {.status = RenderTapeProducedProofStatus::OriginIdentityMismatch,
+            .observation = observation};
+  if (!sameIdentity(observation.resolvedIdentity, resolvedIdentity))
+    return {.status = RenderTapeProducedProofStatus::ResolvedIdentityMismatch,
+            .observation = observation};
+  if (!sameIdentity(observation.observedIdentity, originIdentity))
+    return {.status = RenderTapeProducedProofStatus::ObservedIdentityMismatch,
+            .observation = observation};
+  return {.status = RenderTapeProducedProofStatus::Accepted,
+          .observation = observation};
+}
+
+const char* renderTapeProducedProofStatusName(
+    RenderTapeProducedProofStatus status) noexcept {
+  switch (status) {
+  case RenderTapeProducedProofStatus::Accepted:
+    return "accepted";
+  case RenderTapeProducedProofStatus::InvalidOriginKind:
+    return "invalid_origin_kind";
+  case RenderTapeProducedProofStatus::InvalidResolvedKind:
+    return "invalid_resolved_kind";
+  case RenderTapeProducedProofStatus::DirectTextureAmbiguity:
+    return "direct_texture_ambiguity";
+  case RenderTapeProducedProofStatus::NoTerminalAccess:
+    return "no_terminal_access";
+  case RenderTapeProducedProofStatus::Malformed:
+    return "malformed";
+  case RenderTapeProducedProofStatus::NotFullClearWrite:
+    return "not_full_clear_write";
+  case RenderTapeProducedProofStatus::AliasOriginMismatch:
+    return "alias_origin_mismatch";
+  case RenderTapeProducedProofStatus::OriginIdentityMismatch:
+    return "origin_identity_mismatch";
+  case RenderTapeProducedProofStatus::ResolvedIdentityMismatch:
+    return "resolved_identity_mismatch";
+  case RenderTapeProducedProofStatus::ObservedIdentityMismatch:
+    return "observed_identity_mismatch";
+  }
+  return "unknown";
 }
 
 const char* renderTapeFirstAccessClassName(

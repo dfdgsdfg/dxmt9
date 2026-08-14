@@ -185,6 +185,28 @@ enum class RenderTapeBootstrapClosureStatus : std::uint32_t {
   InvalidDescriptorDependency,
 };
 
+// The status alone is insufficient for a production capture retry: it must
+// identify the exact generation-qualified root or descriptor dependency that
+// failed. This value is populated without retaining any registry pointers.
+struct RenderTapeBootstrapClosureResult {
+  RenderTapeBootstrapClosureStatus status =
+      RenderTapeBootstrapClosureStatus::Accepted;
+  D9CWireObjectIdentity offendingIdentity{};
+  D9CWireObjectIdentity dependencyIdentity{};
+  bool hasOffendingIdentity = false;
+  bool hasDependencyIdentity = false;
+
+  bool accepted() const noexcept {
+    return status == RenderTapeBootstrapClosureStatus::Accepted;
+  }
+};
+
+RenderTapeBootstrapClosureResult renderTapeBuildBootstrapClosureAttributed(
+    std::span<const D9CWireObjectIdentity> bootstrapHandles,
+    const D9CWireObjectIdentity& presentOutput,
+    std::span<const RenderTapeBootstrapClosureObject> objects,
+    std::vector<D9CWireObjectIdentity>& closure) noexcept;
+
 RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
     std::span<const D9CWireObjectIdentity> bootstrapHandles,
     const D9CWireObjectIdentity& presentOutput,
@@ -197,6 +219,53 @@ bool renderTapeBootstrapClosureContains(
 
 bool renderTapeBootstrapRequiresAllLiveObjects(
     std::uint32_t profile) noexcept;
+
+// Allocation-free decision shared by command-chunk admission diagnostics and
+// native truth tables. The PE caller supplies only already-derived registry,
+// descriptor, and same-chunk proof facts; this helper performs no lookup and
+// cannot change capture state.
+enum class RenderTapeCommandAdmissionStatus : std::uint32_t {
+  Accepted = 0u,
+  OriginRejected,
+  RegistryMissing,
+  ObjectMissing,
+  DeadObject,
+  AliasDependencyRejected,
+  UnsupportedProducedDescriptor,
+  ProducedProofRejected,
+  MultipleProducedCandidates,
+  IncompleteSeed,
+};
+
+struct RenderTapeCommandAdmissionFacts {
+  bool originAccepted = false;
+  bool registryPresent = false;
+  bool liveObject = false;
+  bool deadObject = false;
+  bool admitted = false;
+  bool aliasDependencyAccepted = true;
+  bool contentComplete = false;
+  bool textureAlias = false;
+  bool producedDescriptorSupported = false;
+  bool producedProofAccepted = false;
+  bool producedIdentityConflict = false;
+};
+
+struct RenderTapeCommandAdmissionResult {
+  RenderTapeCommandAdmissionStatus status =
+      RenderTapeCommandAdmissionStatus::OriginRejected;
+  bool requiresMaterialization = false;
+  bool usesProducedProof = false;
+
+  bool accepted() const noexcept {
+    return status == RenderTapeCommandAdmissionStatus::Accepted;
+  }
+};
+
+RenderTapeCommandAdmissionResult renderTapeClassifyCommandAdmission(
+    const RenderTapeCommandAdmissionFacts& facts) noexcept;
+const char* renderTapeCommandAdmissionStatusName(
+    RenderTapeCommandAdmissionStatus status) noexcept;
 
 // This status is shared by the value-only snapshot decision and the PE
 // texture seam.  A required snapshot is the only path allowed to turn an

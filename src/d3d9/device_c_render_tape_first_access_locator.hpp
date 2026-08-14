@@ -86,6 +86,41 @@ bool renderTapeProveProducedByCapturedPass(
     const D9CWireObjectIdentity& originIdentity,
     const D9CWireObjectIdentity& resolvedIdentity) noexcept;
 
+// Capture-only typed attribution for the ProducedByCapturedPass proof.  Keep
+// the observation value even on rejection so production diagnostics can name
+// the first terminal access without repeating or weakening the proof.
+enum class RenderTapeProducedProofStatus : std::uint32_t {
+  Accepted = 0u,
+  InvalidOriginKind,
+  InvalidResolvedKind,
+  DirectTextureAmbiguity,
+  NoTerminalAccess,
+  Malformed,
+  NotFullClearWrite,
+  AliasOriginMismatch,
+  OriginIdentityMismatch,
+  ResolvedIdentityMismatch,
+  ObservedIdentityMismatch,
+};
+
+struct RenderTapeProducedProofResult {
+  RenderTapeProducedProofStatus status =
+      RenderTapeProducedProofStatus::NoTerminalAccess;
+  RenderTapeFirstAccessObservation observation{};
+
+  bool accepted() const noexcept {
+    return status == RenderTapeProducedProofStatus::Accepted;
+  }
+};
+
+RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity) noexcept;
+
+const char* renderTapeProducedProofStatusName(
+    RenderTapeProducedProofStatus status) noexcept;
+
 const char* renderTapeFirstAccessClassName(
     RenderTapeFirstAccessClass classification) noexcept;
 const char* renderTapeFirstAccessStatusName(

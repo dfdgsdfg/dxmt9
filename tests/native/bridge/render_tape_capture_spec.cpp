@@ -3394,9 +3394,14 @@ void testBootstrapClosureTruthTable() {
 
   auto incomplete = complete;
   incomplete[0].complete = false;
-  check(renderTapeBuildBootstrapClosure(textureRoot, output, incomplete, closure) ==
-            RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete,
-        "referenced incomplete seed is rejected");
+  const auto incompleteRoot = renderTapeBuildBootstrapClosureAttributed(
+      textureRoot, output, incomplete, closure);
+  check(incompleteRoot.status ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete &&
+            incompleteRoot.hasOffendingIdentity &&
+            incompleteRoot.offendingIdentity.objectId == texture.objectId &&
+            !incompleteRoot.hasDependencyIdentity,
+        "referenced incomplete seed names its exact root");
   incomplete = complete;
   incomplete[1].complete = false;
   check(renderTapeBuildBootstrapClosure(roots, output, incomplete, closure) ==
@@ -3404,9 +3409,15 @@ void testBootstrapClosureTruthTable() {
         "referenced incomplete alias is rejected");
   incomplete = complete;
   incomplete[0].complete = false;
-  check(renderTapeBuildBootstrapClosure(roots, output, incomplete, closure) ==
-            RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete,
-        "incomplete texture-derived surface parent is rejected");
+  const auto incompleteDependency = renderTapeBuildBootstrapClosureAttributed(
+      roots, output, incomplete, closure);
+  check(incompleteDependency.status ==
+            RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete &&
+            incompleteDependency.hasOffendingIdentity &&
+            incompleteDependency.offendingIdentity.objectId == alias.objectId &&
+            incompleteDependency.hasDependencyIdentity &&
+            incompleteDependency.dependencyIdentity.objectId == texture.objectId,
+        "incomplete texture-derived surface names alias and parent");
   incomplete = complete;
   const std::array<D9CWireObjectIdentity, 1u> staleRoot{staleTexture};
   check(renderTapeBuildBootstrapClosure(staleRoot, output, incomplete, closure) ==
@@ -3425,6 +3436,66 @@ void testBootstrapClosureTruthTable() {
             !renderTapeBootstrapClosureContains(
                 closure, withUnreferenced.back().identity),
         "unreferenced incomplete live objects are pruned");
+}
+
+void testCommandAdmissionTruthTable() {
+  struct Row {
+    RenderTapeCommandAdmissionFacts facts{};
+    RenderTapeCommandAdmissionStatus expected =
+        RenderTapeCommandAdmissionStatus::OriginRejected;
+    bool materializes = false;
+    bool produced = false;
+  };
+  const std::array rows{
+      Row{{}, RenderTapeCommandAdmissionStatus::OriginRejected},
+      Row{{.originAccepted = true},
+          RenderTapeCommandAdmissionStatus::RegistryMissing},
+      Row{{.originAccepted = true, .registryPresent = true},
+          RenderTapeCommandAdmissionStatus::ObjectMissing},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .deadObject = true},
+          RenderTapeCommandAdmissionStatus::DeadObject},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .admitted = true},
+          RenderTapeCommandAdmissionStatus::Accepted},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .aliasDependencyAccepted = false,
+           .textureAlias = true},
+          RenderTapeCommandAdmissionStatus::AliasDependencyRejected, true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .contentComplete = true},
+          RenderTapeCommandAdmissionStatus::Accepted, true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .textureAlias = true},
+          RenderTapeCommandAdmissionStatus::Accepted, true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true},
+          RenderTapeCommandAdmissionStatus::UnsupportedProducedDescriptor,
+          true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .producedDescriptorSupported = true},
+          RenderTapeCommandAdmissionStatus::ProducedProofRejected, true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .producedDescriptorSupported = true,
+           .producedProofAccepted = true,
+           .producedIdentityConflict = true},
+          RenderTapeCommandAdmissionStatus::MultipleProducedCandidates, true,
+          true},
+      Row{{.originAccepted = true, .registryPresent = true,
+           .liveObject = true, .producedDescriptorSupported = true,
+           .producedProofAccepted = true},
+          RenderTapeCommandAdmissionStatus::Accepted, true, true},
+  };
+  for (const auto& row : rows) {
+    const auto result = renderTapeClassifyCommandAdmission(row.facts);
+    check(result.status == row.expected &&
+              result.requiresMaterialization == row.materializes &&
+              result.usesProducedProof == row.produced,
+          "command admission truth table row");
+    check(std::string_view(renderTapeCommandAdmissionStatusName(result.status)) !=
+              "unknown",
+          "command admission status has stable text");
+  }
 }
 
 } // namespace
@@ -3466,6 +3537,7 @@ int main(int argc, char** argv) {
     testLinearLockCaptureLayouts();
     testFullSnapshotClosureTruthTable();
     testBootstrapClosureTruthTable();
+    testCommandAdmissionTruthTable();
     testObjectExpectedContentContractTruthTable();
     testMissingSeedDescriptorAndProvenanceTruthTable();
     testExpectedContentContractDerivation();

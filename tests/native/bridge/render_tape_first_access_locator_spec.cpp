@@ -294,8 +294,36 @@ void testProducedByCapturedPassProof() {
       .handles = apply.handles,
       .payloadArena = payload,
   };
-  check(renderTapeProveProducedByCapturedPass(view, origin, resolved),
-        "exact alias binding followed by full clear is admitted");
+  const auto accepted =
+      renderTapeClassifyProducedByCapturedPass(view, origin, resolved);
+  check(accepted.accepted() &&
+            accepted.observation.classification ==
+                RenderTapeFirstAccessClass::FullClearWrite &&
+            std::string_view(renderTapeProducedProofStatusName(
+                accepted.status)) == "accepted" &&
+            renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "exact alias binding followed by full clear is typed and admitted");
+
+  check(renderTapeClassifyProducedByCapturedPass(
+            view, resolved, resolved).status ==
+            RenderTapeProducedProofStatus::DirectTextureAmbiguity &&
+            renderTapeClassifyProducedByCapturedPass(
+                view,
+                identity(D9C_CHUNK_HANDLE_KIND_BUFFER, 1u, 2u),
+                resolved).status ==
+                RenderTapeProducedProofStatus::InvalidOriginKind &&
+            renderTapeClassifyProducedByCapturedPass(
+                view, origin,
+                identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 2u)).status ==
+                RenderTapeProducedProofStatus::InvalidResolvedKind,
+        "identity-shape proof rejections are distinct");
+
+  const auto bindingOnly =
+      renderTapeClassifyProducedByCapturedPass(apply.view(), origin, resolved);
+  check(bindingOnly.status == RenderTapeProducedProofStatus::NoTerminalAccess &&
+            bindingOnly.observation.classification ==
+                RenderTapeFirstAccessClass::BindingOnly,
+        "binding-only same-chunk proof is attributed");
 
   const D9CRect rect{0, 0, 8, 8};
   const D9CCommandChunkWireClear partial{
@@ -308,8 +336,14 @@ void testProducedByCapturedPassProof() {
   payload.insert(payload.end(), partialFixture.payload.begin(),
                  partialFixture.payload.end());
   view.payloadArena = payload;
-  check(!renderTapeProveProducedByCapturedPass(view, origin, resolved),
-        "partial clear is rejected");
+  const auto partialResult =
+      renderTapeClassifyProducedByCapturedPass(view, origin, resolved);
+  check(partialResult.status ==
+            RenderTapeProducedProofStatus::NotFullClearWrite &&
+            partialResult.observation.classification ==
+                RenderTapeFirstAccessClass::PartialClearWrite &&
+            !renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "partial clear rejection names the terminal access");
 
   auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, {}, origin);
   records[1] = draw.record;
@@ -317,8 +351,13 @@ void testProducedByCapturedPassProof() {
   payload = apply.payload;
   payload.insert(payload.end(), draw.payload.begin(), draw.payload.end());
   view.payloadArena = payload;
-  check(!renderTapeProveProducedByCapturedPass(view, origin, resolved),
-        "unknown draw coverage is rejected");
+  const auto drawResult =
+      renderTapeClassifyProducedByCapturedPass(view, origin, resolved);
+  check(drawResult.status == RenderTapeProducedProofStatus::NotFullClearWrite &&
+            drawResult.observation.classification ==
+                RenderTapeFirstAccessClass::DrawWriteUnknownCoverage &&
+            !renderTapeProveProducedByCapturedPass(view, origin, resolved),
+        "draw-first rejection names unknown write coverage");
 }
 
 } // namespace

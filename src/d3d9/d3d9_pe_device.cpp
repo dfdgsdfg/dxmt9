@@ -7832,10 +7832,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     bootstrapHandles.push_back(object->identity);
             }
             std::vector<D9CWireObjectIdentity> closure;
-            const auto closureStatus =
-                dxmt9::d3d9::renderTapeBuildBootstrapClosure(
+            const auto closureResult =
+                dxmt9::d3d9::renderTapeBuildBootstrapClosureAttributed(
                     bootstrapHandles, presentOutput,
                     closureObjects, closure);
+            const auto closureStatus = closureResult.status;
             if (closureStatus !=
                 dxmt9::d3d9::RenderTapeBootstrapClosureStatus::Accepted) {
                 const char *reason =
@@ -7850,9 +7851,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     : closureStatus == dxmt9::d3d9::RenderTapeBootstrapClosureStatus::InvalidDescriptorDependency
                                         ? "bootstrap_invalid_descriptor_dependency"
                                         : "bootstrap_referenced_object_missing";
+                const auto &offending = closureResult.offendingIdentity;
+                const auto &dependency = closureResult.dependencyIdentity;
                 dxmt9DeviceInfoLog(
-                    "render_tape_capture producer aborted reason=%s",
-                    reason);
+                    "render_tape_capture producer aborted reason=%s "
+                    "closure_status=%u offending_present=%d "
+                    "offending_kind=%u offending_generation=%u "
+                    "offending_object_id=%llu dependency_present=%d "
+                    "dependency_kind=%u dependency_generation=%u "
+                    "dependency_object_id=%llu bootstrap_handles=%zu "
+                    "live_objects=%zu",
+                    reason, static_cast<unsigned>(closureStatus),
+                    closureResult.hasOffendingIdentity ? 1 : 0,
+                    offending.kind, offending.generation,
+                    static_cast<unsigned long long>(offending.objectId),
+                    closureResult.hasDependencyIdentity ? 1 : 0,
+                    dependency.kind, dependency.generation,
+                    static_cast<unsigned long long>(dependency.objectId),
+                    bootstrapHandles.size(), objects.size());
                 return false;
             }
             for (const auto *object : objects) {
@@ -8578,47 +8594,159 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             abortRenderTapeCapture("command_chunk_validation");
             return false;
         }
+        struct PreflightAttribution {
+            dxmt9::d3d9::RenderTapeCommandAdmissionResult admission{};
+            dxmt9::d3d9::RenderTapeOriginLocator locator{};
+            dxmt9::d3d9::RenderTapeProducedProofResult producedProof{};
+            dxmt9::d3d9::RenderTapeMissingSeedDescriptor missingSeed{};
+            D9CWireObjectIdentity resolvedIdentity{};
+            D9CWireObjectIdentity dependencyIdentity{};
+            bool hasDependency = false;
+            bool registryPresent = false;
+            bool admitted = false;
+            bool live = false;
+            bool dead = false;
+            bool contentComplete = false;
+            bool textureAlias = false;
+            bool producedDescriptorSupported = false;
+            std::size_t descriptorBytes = 0u;
+            std::uint32_t expectedContentCount = 0u;
+            std::size_t actualContentCount = 0u;
+        };
         const auto canMaterialize = [&](const auto &self,
                                         const D9CWireObjectIdentity &identity,
                                         const dxmt9::d3d9::RenderTapeOriginLocator
                                             &originLocator,
                                         std::optional<D9CWireObjectIdentity>
-                                            &producedIdentity) -> bool {
-            if (renderTapeObjectAdmitted(identity))
-                return true;
-            if (!renderTapeRegistry_)
-                return false;
+                                            &producedIdentity)
+            -> PreflightAttribution {
+            PreflightAttribution attribution{};
+            attribution.locator = originLocator;
+            attribution.locator.resolvedIdentity = identity;
+            attribution.locator.aliasOrigin = !renderTapeSameIdentity(
+                originLocator.originIdentity, identity);
+            attribution.resolvedIdentity = identity;
+            attribution.registryPresent = renderTapeRegistry_.has_value();
+            attribution.admitted = renderTapeObjectAdmitted(identity);
+            if (attribution.admitted) {
+                attribution.admission =
+                    dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                        .originAccepted = originLocator.status ==
+                            dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                        .registryPresent = attribution.registryPresent,
+                        .admitted = true,
+                    });
+                return attribution;
+            }
+            if (!renderTapeRegistry_) {
+                attribution.admission =
+                    dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                        .originAccepted = originLocator.status ==
+                            dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                    });
+                return attribution;
+            }
             const auto object = std::find_if(
                 renderTapeRegistry_->objects.begin(),
                 renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
                     return renderTapeSameIdentity(candidate.identity, identity);
                 });
-            if (object == renderTapeRegistry_->objects.end())
-                return false;
-            if (object->lifetime.textureAlias &&
-                !self(self, object->aliasParentTexture, originLocator,
-                      producedIdentity))
-                return false;
+            attribution.live = object != renderTapeRegistry_->objects.end();
+            if (!attribution.live) {
+                const dxmt9::d3d9::pe::PeWireObjectRef reference{
+                    .identity = identity};
+                attribution.dead = hasRenderTapeDeadObject(reference);
+                attribution.admission =
+                    dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                        .originAccepted = originLocator.status ==
+                            dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                        .registryPresent = true,
+                        .deadObject = attribution.dead,
+                    });
+                return attribution;
+            }
+            attribution.textureAlias = object->lifetime.textureAlias;
+            attribution.descriptorBytes = object->descriptor.size();
+            attribution.expectedContentCount = object->contentCount;
+            attribution.actualContentCount = object->content.size();
+            if (attribution.textureAlias) {
+                auto dependency = self(self, object->aliasParentTexture,
+                                       originLocator, producedIdentity);
+                if (!dependency.admission.accepted()) {
+                    dependency.hasDependency = true;
+                    dependency.dependencyIdentity = object->aliasParentTexture;
+                    dependency.admission =
+                        dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                            .originAccepted = originLocator.status ==
+                                dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                            .registryPresent = true,
+                            .liveObject = true,
+                            .aliasDependencyAccepted = false,
+                            .textureAlias = true,
+                        });
+                    return dependency;
+                }
+            }
             const bool incomplete =
                 object->contentCount != object->content.size() ||
                 std::any_of(object->content.begin(), object->content.end(),
                             [](const auto &bytes) { return bytes.empty(); });
-            if (!incomplete || object->lifetime.textureAlias)
-                return true;
+            attribution.contentComplete = !incomplete;
+            if (!incomplete || attribution.textureAlias) {
+                attribution.admission =
+                    dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                        .originAccepted = originLocator.status ==
+                            dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                        .registryPresent = true,
+                        .liveObject = true,
+                        .aliasDependencyAccepted = true,
+                        .contentComplete = !incomplete,
+                        .textureAlias = attribution.textureAlias,
+                    });
+                return attribution;
+            }
+            const auto missing = std::find_if(
+                object->content.begin(), object->content.end(),
+                [](const auto &bytes) { return bytes.empty(); });
+            const auto missingSubresource = static_cast<std::uint32_t>(
+                missing - object->content.begin());
+            attribution.missingSeed = dxmt9::d3d9::renderTapeDescribeMissingSeed(
+                identity, object->descriptor, missingSubresource,
+                {.handleIndex = originLocator.handleIndex,
+                 .recordIndex = originLocator.recordIndex,
+                 .recordType = originLocator.recordType});
             RenderTapeTextureDescriptorV2 texture{};
-            if (!renderTapeLoadTextureDescriptorV2(object->descriptor, texture) ||
-                texture.dimension != static_cast<std::uint32_t>(
-                    RenderTapeTextureDimension::Texture2D) ||
-                texture.mipLevelCount != 1u || texture.subresourceCount != 1u)
-                return false;
-            if (!dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
-                    imported, originLocator.originIdentity, identity))
-                return false;
-            if (producedIdentity &&
-                !renderTapeSameIdentity(*producedIdentity, identity))
-                return false;
-            producedIdentity = identity;
-            return true;
+            attribution.producedDescriptorSupported =
+                renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
+                texture.dimension == static_cast<std::uint32_t>(
+                    RenderTapeTextureDimension::Texture2D) &&
+                texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
+            if (attribution.producedDescriptorSupported) {
+                attribution.producedProof = dxmt9::d3d9::
+                    renderTapeClassifyProducedByCapturedPass(
+                        imported, originLocator.originIdentity, identity);
+            }
+            const bool producedIdentityConflict =
+                producedIdentity &&
+                !renderTapeSameIdentity(*producedIdentity, identity);
+            attribution.admission =
+                dxmt9::d3d9::renderTapeClassifyCommandAdmission({
+                    .originAccepted = originLocator.status ==
+                        dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted,
+                    .registryPresent = true,
+                    .liveObject = true,
+                    .aliasDependencyAccepted = true,
+                    .contentComplete = false,
+                    .textureAlias = false,
+                    .producedDescriptorSupported =
+                        attribution.producedDescriptorSupported,
+                    .producedProofAccepted =
+                        attribution.producedProof.accepted(),
+                    .producedIdentityConflict = producedIdentityConflict,
+                });
+            if (attribution.admission.accepted())
+                producedIdentity = identity;
+            return attribution;
         };
         std::optional<D9CWireObjectIdentity> producedIdentity;
         for (std::size_t handleIndex = 0u;
@@ -8630,10 +8758,84 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 .objectId = handle.objectId};
             const auto originLocator = dxmt9::d3d9::renderTapeLocateOrigin(
                 imported, static_cast<std::uint32_t>(handleIndex), identity);
-            if (originLocator.status !=
-                    dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted ||
-                !canMaterialize(canMaterialize, identity, originLocator,
-                                producedIdentity)) {
+            const auto attribution = canMaterialize(
+                canMaterialize, identity, originLocator, producedIdentity);
+            if (!attribution.admission.accepted()) {
+                const auto &locator = attribution.locator;
+                const auto &missing = attribution.missingSeed;
+                const auto &observation = attribution.producedProof.observation;
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture command_chunk_preflight "
+                    "status=%s handle_index=%u record_index=%u record_type=%u "
+                    "section_kind=%u binding_slot=%u command_role=%s "
+                    "storage_role=%s locator_status=%s origin_kind=%u "
+                    "origin_generation=%u origin_object_id=%llu "
+                    "resolved_kind=%u resolved_generation=%u "
+                    "resolved_object_id=%llu alias_origin=%d registry=%d "
+                    "admitted=%d live=%d dead=%d content_complete=%d "
+                    "content_expected=%u content_actual=%zu descriptor_bytes=%zu "
+                    "descriptor_status=%s expected_status=%s dimension=%u "
+                    "mips=%u subresources=%u missing_subresource=%u format=%u "
+                    "width=%u height=%u multisample_type=%u usage=%u "
+                    "produced_descriptor=%d produced_proof=%s "
+                    "first_access_status=%s first_access_class=%s "
+                    "dependency_present=%d dependency_kind=%u "
+                    "dependency_generation=%u dependency_object_id=%llu "
+                    "produced_candidate_present=%d produced_candidate_kind=%u "
+                    "produced_candidate_generation=%u "
+                    "produced_candidate_object_id=%llu",
+                    dxmt9::d3d9::renderTapeCommandAdmissionStatusName(
+                        attribution.admission.status),
+                    locator.handleIndex, locator.recordIndex,
+                    locator.recordType, locator.sectionKind,
+                    locator.bindingSlot,
+                    dxmt9::d3d9::renderTapeCommandRoleName(locator.role),
+                    dxmt9::d3d9::renderTapeStorageRoleName(locator.storageRole),
+                    dxmt9::d3d9::renderTapeOriginLocatorStatusName(locator.status),
+                    locator.originIdentity.kind,
+                    locator.originIdentity.generation,
+                    static_cast<unsigned long long>(
+                        locator.originIdentity.objectId),
+                    attribution.resolvedIdentity.kind,
+                    attribution.resolvedIdentity.generation,
+                    static_cast<unsigned long long>(
+                        attribution.resolvedIdentity.objectId),
+                    locator.aliasOrigin ? 1 : 0,
+                    attribution.registryPresent ? 1 : 0,
+                    attribution.admitted ? 1 : 0,
+                    attribution.live ? 1 : 0,
+                    attribution.dead ? 1 : 0,
+                    attribution.contentComplete ? 1 : 0,
+                    attribution.expectedContentCount,
+                    attribution.actualContentCount,
+                    attribution.descriptorBytes,
+                    dxmt9::d3d9::renderTapeMissingSeedDescriptorStatusName(
+                        missing.descriptorStatus),
+                    dxmt9::d3d9::renderTapeExpectedContentStatusName(
+                        missing.expectedContentStatus),
+                    static_cast<unsigned>(missing.textureDimension),
+                    missing.mipLevelCount, missing.subresourceCount,
+                    missing.missingSubresource, missing.missingSurface.format,
+                    missing.missingSurface.width, missing.missingSurface.height,
+                    missing.missingSurface.multiSampleType,
+                    missing.missingSurface.usage,
+                    attribution.producedDescriptorSupported ? 1 : 0,
+                    dxmt9::d3d9::renderTapeProducedProofStatusName(
+                        attribution.producedProof.status),
+                    dxmt9::d3d9::renderTapeFirstAccessStatusName(
+                        observation.status),
+                    dxmt9::d3d9::renderTapeFirstAccessClassName(
+                        observation.classification),
+                    attribution.hasDependency ? 1 : 0,
+                    attribution.dependencyIdentity.kind,
+                    attribution.dependencyIdentity.generation,
+                    static_cast<unsigned long long>(
+                        attribution.dependencyIdentity.objectId),
+                    producedIdentity ? 1 : 0,
+                    producedIdentity ? producedIdentity->kind : 0u,
+                    producedIdentity ? producedIdentity->generation : 0u,
+                    static_cast<unsigned long long>(
+                        producedIdentity ? producedIdentity->objectId : 0u));
                 abortRenderTapeCapture("command_chunk_produced_pass_preflight");
                 return false;
             }

@@ -396,7 +396,81 @@ bool renderTapeBootstrapRequiresAllLiveObjects(
   return profile == kRenderTapeProfileSequence;
 }
 
+RenderTapeCommandAdmissionResult renderTapeClassifyCommandAdmission(
+    const RenderTapeCommandAdmissionFacts& facts) noexcept {
+  if (!facts.originAccepted)
+    return {.status = RenderTapeCommandAdmissionStatus::OriginRejected};
+  if (facts.admitted)
+    return {.status = RenderTapeCommandAdmissionStatus::Accepted};
+  if (!facts.registryPresent)
+    return {.status = RenderTapeCommandAdmissionStatus::RegistryMissing};
+  if (!facts.liveObject)
+    return {.status = facts.deadObject
+                          ? RenderTapeCommandAdmissionStatus::DeadObject
+                          : RenderTapeCommandAdmissionStatus::ObjectMissing};
+  if (!facts.aliasDependencyAccepted)
+    return {.status =
+                RenderTapeCommandAdmissionStatus::AliasDependencyRejected,
+            .requiresMaterialization = true};
+  if (facts.contentComplete || facts.textureAlias)
+    return {.status = RenderTapeCommandAdmissionStatus::Accepted,
+            .requiresMaterialization = true};
+  if (!facts.producedDescriptorSupported)
+    return {.status =
+                RenderTapeCommandAdmissionStatus::UnsupportedProducedDescriptor,
+            .requiresMaterialization = true};
+  if (!facts.producedProofAccepted)
+    return {.status =
+                RenderTapeCommandAdmissionStatus::ProducedProofRejected,
+            .requiresMaterialization = true};
+  if (facts.producedIdentityConflict)
+    return {.status =
+                RenderTapeCommandAdmissionStatus::MultipleProducedCandidates,
+            .requiresMaterialization = true,
+            .usesProducedProof = true};
+  return {.status = RenderTapeCommandAdmissionStatus::Accepted,
+          .requiresMaterialization = true,
+          .usesProducedProof = true};
+}
+
+const char* renderTapeCommandAdmissionStatusName(
+    RenderTapeCommandAdmissionStatus status) noexcept {
+  switch (status) {
+  case RenderTapeCommandAdmissionStatus::Accepted:
+    return "accepted";
+  case RenderTapeCommandAdmissionStatus::OriginRejected:
+    return "origin_rejected";
+  case RenderTapeCommandAdmissionStatus::RegistryMissing:
+    return "registry_missing";
+  case RenderTapeCommandAdmissionStatus::ObjectMissing:
+    return "object_missing";
+  case RenderTapeCommandAdmissionStatus::DeadObject:
+    return "dead_object";
+  case RenderTapeCommandAdmissionStatus::AliasDependencyRejected:
+    return "alias_dependency_rejected";
+  case RenderTapeCommandAdmissionStatus::UnsupportedProducedDescriptor:
+    return "unsupported_produced_descriptor";
+  case RenderTapeCommandAdmissionStatus::ProducedProofRejected:
+    return "produced_proof_rejected";
+  case RenderTapeCommandAdmissionStatus::MultipleProducedCandidates:
+    return "multiple_produced_candidates";
+  case RenderTapeCommandAdmissionStatus::IncompleteSeed:
+    return "incomplete_seed";
+  }
+  return "unknown";
+}
+
 RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
+    std::span<const D9CWireObjectIdentity> bootstrapHandles,
+    const D9CWireObjectIdentity& presentOutput,
+    std::span<const RenderTapeBootstrapClosureObject> objects,
+    std::vector<D9CWireObjectIdentity>& closure) noexcept {
+  return renderTapeBuildBootstrapClosureAttributed(
+             bootstrapHandles, presentOutput, objects, closure)
+      .status;
+}
+
+RenderTapeBootstrapClosureResult renderTapeBuildBootstrapClosureAttributed(
     std::span<const D9CWireObjectIdentity> bootstrapHandles,
     const D9CWireObjectIdentity& presentOutput,
     std::span<const RenderTapeBootstrapClosureObject> objects,
@@ -415,7 +489,11 @@ RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
                    candidate.identity.objectId == objects[index].identity.objectId;
           });
       if (duplicate != objects.end())
-        return RenderTapeBootstrapClosureStatus::DuplicateObjectIdentity;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::DuplicateObjectIdentity,
+            .offendingIdentity = objects[index].identity,
+            .hasOffendingIdentity = true,
+        };
     }
     for (const auto& identity : bootstrapHandles) append(identity);
     append(presentOutput);
@@ -428,15 +506,29 @@ RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
                    candidate.identity.objectId == identity.objectId;
           });
       if (object == objects.end())
-        return RenderTapeBootstrapClosureStatus::ReferencedObjectMissing;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::ReferencedObjectMissing,
+            .offendingIdentity = identity,
+            .hasOffendingIdentity = true,
+        };
       if (!object->complete && !object->producedByCapturedPassCandidate)
-        return RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete,
+            .offendingIdentity = identity,
+            .hasOffendingIdentity = true,
+        };
       if (!object->hasDescriptorDependency) continue;
       const auto dependency = object->descriptorDependency;
       if (dependency.kind == identity.kind &&
           dependency.generation == identity.generation &&
           dependency.objectId == identity.objectId)
-        return RenderTapeBootstrapClosureStatus::InvalidDescriptorDependency;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::InvalidDescriptorDependency,
+            .offendingIdentity = identity,
+            .dependencyIdentity = dependency,
+            .hasOffendingIdentity = true,
+            .hasDependencyIdentity = true,
+        };
       const auto dependencyObject = std::find_if(
           objects.begin(), objects.end(), [&](const auto& candidate) {
             return candidate.identity.kind == dependency.kind &&
@@ -444,17 +536,30 @@ RenderTapeBootstrapClosureStatus renderTapeBuildBootstrapClosure(
                    candidate.identity.objectId == dependency.objectId;
           });
       if (dependencyObject == objects.end())
-        return RenderTapeBootstrapClosureStatus::DescriptorDependencyMissing;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::DescriptorDependencyMissing,
+            .offendingIdentity = identity,
+            .dependencyIdentity = dependency,
+            .hasOffendingIdentity = true,
+            .hasDependencyIdentity = true,
+        };
       if (!dependencyObject->complete &&
           !dependencyObject->producedByCapturedPassCandidate)
-        return RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete;
+        return {
+            .status = RenderTapeBootstrapClosureStatus::DescriptorDependencyIncomplete,
+            .offendingIdentity = identity,
+            .dependencyIdentity = dependency,
+            .hasOffendingIdentity = true,
+            .hasDependencyIdentity = true,
+        };
       append(dependency);
     }
   } catch (...) {
     closure.clear();
-    return RenderTapeBootstrapClosureStatus::ReferencedObjectMissing;
+    return {.status =
+                RenderTapeBootstrapClosureStatus::ReferencedObjectMissing};
   }
-  return RenderTapeBootstrapClosureStatus::Accepted;
+  return {.status = RenderTapeBootstrapClosureStatus::Accepted};
 }
 
 RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
