@@ -527,6 +527,20 @@ failed validation, missing/rejecting publisher, or producer failure aborts the
 interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
 
+For a generation-qualified buffer whose first writable lock is a partial
+range and has no complete seed, the PE owner may, only while capture tracking
+is enabled, relock that same `D9CBuffer` at offset zero for exactly
+`D9CBufferDesc::size` bytes with `D3DLOCK_READONLY` after the application's
+unlock succeeds. The returned bytes are copied exactly and recorded as one
+zero-offset complete seed; allocation bytes, the partial write, and inferred
+padding are never substituted. A stale or missing buffer identity, descriptor
+extent mismatch, failed full lock/copy/unlock, or generation proof rejects
+only the tape with a typed reason and preserves the application's `Unlock`
+HRESULT. Capture-off performs no such relock or copy. The capture-only
+read-lock may repeat backend synchronization or dirty-side effects and this
+remains explicit performance/semantic debt; `D3DLOCK_DISCARD` is not promoted
+by this closure.
+
 Supported CPU-owned texture contents include uncompressed 2D locks and
 block-compressed DXT1, DXT3, and DXT5 locks on 2D mip levels and cube face/mip
 subresources. When an already-lockable 2D texture subresource receives its
@@ -549,8 +563,10 @@ Every supported full lock and partial rectangle validates pitch,
 bounds, and all byte arithmetic, strips row padding, and maintains tightly
 packed complete canonical subresource content; block-compressed rectangles are
 D3D9-valid block aligned and use rounded terminal blocks for odd dimensions.
-A partial write is admissible only after an exact-size complete seed exists;
-each committed write produces an ordered immutable full-subresource mutation.
+A partial write is admissible only after an exact-size complete seed already
+exists or one of the exact-owner capture-only closure paths above succeeds;
+each committed write then produces an ordered immutable full-subresource
+mutation.
 Texture-derived surface locks, whether uncompressed or block
 compressed, mutate the owning texture identity at the exact
 generation-qualified subresource; standalone surfaces remain surface-owned.

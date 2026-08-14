@@ -697,7 +697,19 @@ surface/texture, complete-buffer, and DXT1/DXT3/DXT5 block-compressed 2D/cube
 face-and-mip lock layouts. Full locks establish tightly packed complete seeds;
 partial locks strip row padding, require an existing exact-size seed, overlay
 at the checked descriptor coordinates, and publish the resulting complete
-content. For an already-lockable 2D texture subresource whose first writable
+content. For a generation-qualified buffer whose first writable lock is a
+partial range with no complete seed, the PE owner may, only while capture
+tracking is enabled, relock that same `D9CBuffer` at offset zero for exactly
+`D9CBufferDesc::size` bytes with `D3DLOCK_READONLY` after the application
+unlock succeeds. It copies exactly the returned bytes and records one
+zero-offset complete seed; allocation bytes, the partial write, and inferred
+padding are never substituted. Identity, descriptor extent, generation,
+full-lock, copy, or unlock proof failure rejects only the tape with a typed
+reason and preserves the application's `Unlock` HRESULT. Capture-off performs
+no relock or copy. The capture-only read-lock may repeat backend
+synchronization or dirty-side effects and remains explicit performance/semantic
+debt; `D3DLOCK_DISCARD` is not promoted by this closure. For an
+already-lockable 2D texture subresource whose first writable
 lock is partial and unseeded, the PE owner may take one capture-only full
 CPU-visible lock through the exact texture handle after user unlock, strip row
 padding, and record that complete snapshot; only exact bytes returned by that

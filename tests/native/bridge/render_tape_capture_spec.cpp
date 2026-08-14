@@ -1457,6 +1457,44 @@ void testFullSnapshotClosureTruthTable() {
   check(renderTapeClassifySnapshot(true, true, true, false, 0u, fullBytes) ==
             RenderTapeFullSnapshotStatus::NotRequired,
         "full locks never resnapshot");
+  constexpr std::uint64_t fullBufferBytes = 4096u;
+  std::vector<std::byte> bufferContent(
+      static_cast<std::size_t>(fullBufferBytes), std::byte{0x11});
+  const std::array<std::byte, 4u> bufferPatch{
+      std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24}};
+  check(applyRenderTapeBufferMutation(fullBufferBytes, 0u, bufferPatch,
+                                      bufferContent) ==
+                RenderTapeBlockMutationStatus::Accepted &&
+            bufferContent.size() == fullBufferBytes &&
+            bufferContent[0] == std::byte{0x21} &&
+            bufferContent[3] == std::byte{0x24} &&
+            bufferContent[4] == std::byte{0x11},
+        "offset-zero partial buffer writes overlay an existing complete seed");
+  std::vector<std::byte> missingBufferSeed;
+  check(applyRenderTapeBufferMutation(fullBufferBytes, 0u, bufferPatch,
+                                      missingBufferSeed) ==
+            RenderTapeBlockMutationStatus::IncompleteSeed,
+        "offset-zero partial buffer writes cannot manufacture a seed");
+  check(renderTapeClassifyBufferSnapshot(
+            true, true, true, true, 0u, fullBufferBytes) ==
+            RenderTapeFullSnapshotStatus::Required &&
+            renderTapeClassifyBufferSnapshot(
+                true, true, true, true, fullBufferBytes, fullBufferBytes) ==
+                RenderTapeFullSnapshotStatus::NotRequired &&
+            renderTapeClassifyBufferSnapshot(
+                false, true, true, true, 0u, fullBufferBytes) ==
+                RenderTapeFullSnapshotStatus::NotRequired,
+        "buffer snapshot closure only relocks an unseeded partial writable range");
+  check(renderTapeClassifyBufferSnapshot(
+            true, false, true, true, 0u, fullBufferBytes) ==
+            RenderTapeFullSnapshotStatus::InvalidIdentity &&
+            renderTapeClassifyBufferSnapshot(
+                true, true, false, true, 0u, fullBufferBytes) ==
+                RenderTapeFullSnapshotStatus::InvalidExtent &&
+            renderTapeClassifyBufferSnapshot(
+                true, true, true, false, 0u, fullBufferBytes) ==
+                RenderTapeFullSnapshotStatus::NotRequired,
+        "buffer identity, extent, and full-lock failures remain typed and fail-closed");
   check(renderTapeValidateFullSnapshot(true, fullBytes,
                                       std::span<const std::byte>(
                                           bytes.data(), bytes.size())) ==

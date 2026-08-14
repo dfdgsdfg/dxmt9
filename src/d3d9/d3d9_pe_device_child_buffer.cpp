@@ -77,10 +77,19 @@ static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {
 
 static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
                                          const void *data, std::size_t bytes,
-                                         std::vector<std::byte> &copy) noexcept {
-  if (!recorder ||
-      (!recorder->IsRenderTapeCaptureActiveForChild() &&
-       !recorder->IsRenderTapeCaptureTrackingEnabledForChild()))
+                                         std::vector<std::byte> &copy,
+                                         bool *captureTrackingEnabled = nullptr)
+    noexcept {
+  if (captureTrackingEnabled)
+    *captureTrackingEnabled = false;
+  if (!recorder)
+    return true;
+  const bool captureActive = recorder->IsRenderTapeCaptureActiveForChild();
+  const bool captureTracking =
+      recorder->IsRenderTapeCaptureTrackingEnabledForChild();
+  if (captureTrackingEnabled)
+    *captureTrackingEnabled = captureTracking;
+  if (!captureActive && !captureTracking)
     return true;
   if (!data || bytes == 0u) {
     recorder->AbortRenderTapeCaptureForChild();
@@ -94,6 +103,80 @@ static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
     recorder->AbortRenderTapeCaptureForChild();
     return false;
   }
+}
+
+static void rejectRenderTapeBufferSnapshot(
+    D3D9PeRecorderFlush *recorder,
+    dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint64_t bytes = 0u) noexcept {
+  if (recorder) {
+    recorder->RejectRenderTapeCaptureForChild(
+        reason, object, 0u, {.bytes = bytes});
+  }
+}
+
+// A partial buffer write cannot establish the bytes outside the write range.
+// Once the generation-qualified registry says this exact buffer is unseeded,
+// take one capture-only read lock over the exact D9CBuffer extent after the
+// application unlock has committed.  No allocation or backend inference is
+// admitted; only the bytes returned by this lock may close the seed.
+static bool captureRenderTapeFullBufferSnapshot(
+    D3D9PeRecorderFlush *recorder, D9CBuffer *buffer,
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    const D9CBufferDesc &desc) noexcept {
+  if (!recorder || !buffer || desc.size == 0u)
+    return false;
+
+  void *bits = nullptr;
+  const HRESULT lockHr = hr32(dxmt9c_buffer_lock(
+      buffer, 0u, desc.size, &bits, D3DLOCK_READONLY));
+  if (FAILED(lockHr) || !bits) {
+    if (SUCCEEDED(lockHr)) {
+      (void)dxmt9c_buffer_unlock(buffer);
+    }
+    rejectRenderTapeBufferSnapshot(
+        recorder,
+        dxmt9::d3d9::RenderTapeCaptureRejectionReason::FullSnapshotLockFailed,
+        object);
+    return false;
+  }
+
+  std::vector<std::byte> full;
+  bool copied = false;
+  try {
+    full.assign(static_cast<const std::byte *>(bits),
+                static_cast<const std::byte *>(bits) + desc.size);
+    copied = full.size() == desc.size;
+  } catch (...) {
+    full.clear();
+  }
+  const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
+  if (FAILED(unlockHr)) {
+    rejectRenderTapeBufferSnapshot(
+        recorder,
+        dxmt9::d3d9::RenderTapeCaptureRejectionReason::FullSnapshotUnlockFailed,
+        object, full.size());
+    return false;
+  }
+  const auto validation = dxmt9::d3d9::renderTapeValidateFullSnapshot(
+      true, desc.size,
+      copied ? std::span<const std::byte>(full) : std::span<const std::byte>{});
+  if (validation !=
+      dxmt9::d3d9::RenderTapeFullSnapshotStatus::Accepted) {
+    rejectRenderTapeBufferSnapshot(
+        recorder,
+        validation == dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidBytes
+            ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                  FullSnapshotCopyFailed
+            : dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                  FullSnapshotExtentMismatch,
+        object, full.size());
+    return false;
+  }
+  recorder->NotifyRenderTapeResourceMutationForChild(
+      object, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u, 0u, full);
+  return true;
 }
 
 static bool bufferIsDefaultPool(const D9CBufferDesc &desc, bool valid) {
@@ -160,6 +243,8 @@ static void untrackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
 struct D3D9PeBufferLockState {
   bool locked = false;
   bool servedFromReadonlyCache = false;
+  bool descValid = false;
+  D9CBufferDesc desc{};
   DWORD flags = 0;
   void *data = nullptr;
   UINT offset = 0;
@@ -232,6 +317,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     *pp = state.readonlyCache.dataFor(off);
     state.locked = true;
     state.servedFromReadonlyCache = true;
+    state.descValid = descValid;
+    state.desc = desc;
     state.flags = flags;
     state.data = *pp;
     state.offset = off;
@@ -248,6 +335,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
   if (SUCCEEDED(lockHr)) {
     state.locked = true;
     state.servedFromReadonlyCache = false;
+    state.descValid = descValid;
+    state.desc = desc;
     state.flags = flags;
     state.data = *pp;
     state.offset = off;
@@ -278,6 +367,8 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
   if (state.servedFromReadonlyCache) {
     state.locked = false;
     state.servedFromReadonlyCache = false;
+    state.descValid = false;
+    state.desc = {};
     state.flags = 0;
     state.data = nullptr;
     state.offset = 0;
@@ -289,13 +380,46 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
   if (FAILED(flushHr))
     return flushHr;
   std::vector<std::byte> mutationCopy;
+  bool captureTrackingEnabled = false;
   const bool mutationReady =
       (state.flags & D3DLOCK_READONLY) != 0u ||
       copyRenderTapeBufferMutation(recorder, state.data, state.size,
-                                    mutationCopy);
+                                    mutationCopy, &captureTrackingEnabled);
+  const bool partialWritableLock =
+      state.descValid && (state.flags & D3DLOCK_READONLY) == 0u &&
+      (state.flags & D3DLOCK_DISCARD) == 0u && state.size != state.desc.size;
+  dxmt9::d3d9::RenderTapeFullSnapshotStatus snapshotStatus =
+      dxmt9::d3d9::RenderTapeFullSnapshotStatus::NotRequired;
+  if (captureTrackingEnabled && mutationReady && !mutationCopy.empty() &&
+      partialWritableLock) {
+    snapshotStatus = recorder->RenderTapeFullSnapshotStatusForChild(
+        wireObject, 0u, state.desc.size, 1u, state.desc.size);
+    if (snapshotStatus ==
+            dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity ||
+        snapshotStatus ==
+            dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
+      rejectRenderTapeBufferSnapshot(
+          recorder,
+          snapshotStatus ==
+                  dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
+              ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                    FullSnapshotIdentityMismatch
+              : dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                    FullSnapshotExtentMismatch,
+          wireObject, mutationCopy.size());
+    }
+  }
   const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
   if (SUCCEEDED(unlockHr)) {
-    if (mutationReady && !mutationCopy.empty()) {
+    if (snapshotStatus ==
+        dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
+      (void)captureRenderTapeFullBufferSnapshot(recorder, buffer, wireObject,
+                                                state.desc);
+    } else if (mutationReady && !mutationCopy.empty() &&
+               snapshotStatus !=
+                   dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity &&
+               snapshotStatus !=
+                   dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
       recorder->NotifyRenderTapeResourceMutationForChild(
           wireObject, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u,
           state.offset,
@@ -303,6 +427,8 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     }
     state.locked = false;
     state.servedFromReadonlyCache = false;
+    state.descValid = false;
+    state.desc = {};
     state.flags = 0;
     state.data = nullptr;
     state.offset = 0;

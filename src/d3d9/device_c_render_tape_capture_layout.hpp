@@ -145,6 +145,14 @@ RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
     bool partialLock, std::size_t existingContentBytes,
     std::uint64_t expectedBytes) noexcept;
 
+// Buffer seed closure has a one-dimensional extent rather than a surface
+// row/column layout. Keep its decision predicate explicit and value-only so
+// PE lock code and native tests share the same generation/extent gate.
+RenderTapeFullSnapshotStatus renderTapeClassifyBufferSnapshot(
+    bool captureTrackingEnabled, bool identityMatches, bool extentMatches,
+    bool partialWritableLock, std::size_t existingContentBytes,
+    std::uint64_t expectedBytes) noexcept;
+
 RenderTapeFullSnapshotStatus renderTapeValidateFullSnapshot(
     bool fullSubresource, std::uint64_t expectedBytes,
     std::span<const std::byte> bytes) noexcept;
@@ -179,6 +187,11 @@ enum class RenderTapeBlockMutationStatus : std::uint32_t {
 
 RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
     const RenderTapeBlockLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& completeContent) noexcept;
+
+RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+    std::uint64_t expectedBytes, std::uint64_t byteOffset,
+    std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
 
 enum class RenderTapeLinearLayoutStatus : std::uint32_t {

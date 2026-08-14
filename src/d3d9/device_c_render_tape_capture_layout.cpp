@@ -110,6 +110,15 @@ RenderTapeFullSnapshotStatus renderTapeClassifySnapshot(
   return RenderTapeFullSnapshotStatus::Required;
 }
 
+RenderTapeFullSnapshotStatus renderTapeClassifyBufferSnapshot(
+    bool captureTrackingEnabled, bool identityMatches, bool extentMatches,
+    bool partialWritableLock, std::size_t existingContentBytes,
+    std::uint64_t expectedBytes) noexcept {
+  return renderTapeClassifySnapshot(
+      captureTrackingEnabled, identityMatches, extentMatches,
+      partialWritableLock, existingContentBytes, expectedBytes);
+}
+
 RenderTapeSurfaceSnapshotRoute renderTapeClassifySurfaceSnapshotRoute(
     bool captureTrackingEnabled, bool ownerIsTexture2D,
     bool mutationIdentityIsTexture, bool partialMutation,
@@ -305,6 +314,31 @@ RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
                 bytes.data() + static_cast<std::size_t>(row) * layout.rowBytes,
                 layout.rowBytes);
   }
+  return RenderTapeBlockMutationStatus::Accepted;
+}
+
+RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+    std::uint64_t expectedBytes, std::uint64_t byteOffset,
+    std::span<const std::byte> bytes,
+    std::vector<std::byte>& completeContent) noexcept {
+  if (expectedBytes == 0u || bytes.empty() ||
+      expectedBytes > std::numeric_limits<std::size_t>::max()) {
+    return RenderTapeBlockMutationStatus::InvalidBytes;
+  }
+  if (byteOffset > expectedBytes || bytes.size() > expectedBytes - byteOffset)
+    return RenderTapeBlockMutationStatus::InvalidLayout;
+  if (byteOffset == 0u && bytes.size() == expectedBytes) {
+    try {
+      completeContent.assign(bytes.begin(), bytes.end());
+      return RenderTapeBlockMutationStatus::Accepted;
+    } catch (...) {
+      return RenderTapeBlockMutationStatus::AllocationFailed;
+    }
+  }
+  if (completeContent.size() != expectedBytes)
+    return RenderTapeBlockMutationStatus::IncompleteSeed;
+  std::memcpy(completeContent.data() + static_cast<std::size_t>(byteOffset),
+              bytes.data(), bytes.size());
   return RenderTapeBlockMutationStatus::Accepted;
 }
 

@@ -7343,32 +7343,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         D9CBufferDesc desc{};
         std::memcpy(&desc, entry->descriptor.data(), sizeof(desc));
-        if (byteOffset == 0u) {
-            if (bytes.size() != desc.size) {
-                markRenderTapeInvalidOnce("mutation_extent", &object,
-                                          subresource,
-                                          {.format = desc.format,
-                                           .bytes = bytes.size()});
-                return false;
-            }
-            try {
-                entry->content[subresource].assign(bytes.begin(), bytes.end());
-                return true;
-            } catch (...) {
-                markRenderTapeInvalidOnce("mutation_copy_exception", &object,
-                                          subresource);
-                return false;
-            }
-        }
         auto &existing = entry->content[subresource];
-        if (existing.empty() || byteOffset > existing.size() ||
-            bytes.size() > existing.size() - byteOffset) {
+        const auto status = dxmt9::d3d9::applyRenderTapeBufferMutation(
+            desc.size, byteOffset, bytes, existing);
+        if (status == dxmt9::d3d9::RenderTapeBlockMutationStatus::Accepted)
+            return true;
+        if (status ==
+            dxmt9::d3d9::RenderTapeBlockMutationStatus::IncompleteSeed) {
             // A partial write before a complete CPU-owned seed is not enough
             // to establish initial contents. Leave it unknown and fail at arm.
             return true;
         }
-        std::memcpy(existing.data() + byteOffset, bytes.data(), bytes.size());
-        return true;
+        markRenderTapeInvalidOnce(
+            status == dxmt9::d3d9::RenderTapeBlockMutationStatus::AllocationFailed
+                ? "mutation_copy_exception"
+                : "mutation_extent",
+            &object, subresource,
+            {.format = desc.format, .bytes = bytes.size()});
+        return false;
     }
 
     bool renderTapeObjectSubresourceDesc(
@@ -9017,12 +9009,29 @@ public:
         std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept override {
         using Status = dxmt9::d3d9::RenderTapeFullSnapshotStatus;
         if (!renderTapeRegistry_ ||
-            object.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+            (object.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+             object.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER)) {
             return Status::NotRequired;
         }
         const auto *entry = findRenderTapeObject(object);
-        if (!entry || subresource >= entry->content.size())
+        if (!entry || subresource >= entry->content.size()) {
             return Status::InvalidIdentity;
+        }
+        if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+            if (entry->descriptor.size() != sizeof(D9CBufferDesc) ||
+                fullRowBytes == 0u || fullRows != 1u ||
+                fullBytes != fullRowBytes) {
+                return Status::InvalidExtent;
+            }
+            D9CBufferDesc desc{};
+            std::memcpy(&desc, entry->descriptor.data(), sizeof(desc));
+            if (fullRowBytes != desc.size || fullBytes != desc.size) {
+                return Status::InvalidExtent;
+            }
+            return dxmt9::d3d9::renderTapeClassifyBufferSnapshot(
+                true, true, true, true, entry->content[subresource].size(),
+                desc.size);
+        }
         D9CSurfaceDesc desc{};
         if (!renderTapeObjectSubresourceDesc(*entry, object, subresource, desc))
             return Status::InvalidIdentity;
