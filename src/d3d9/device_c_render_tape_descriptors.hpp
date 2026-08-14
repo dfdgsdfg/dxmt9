@@ -10,13 +10,6 @@
 
 namespace dxmt9::d3d9 {
 
-// Bounded, pointer-free descriptor payloads shared by PE capture and unix
-// provider replay. These are tape schema payloads, not bridge ABI structs.
-struct RenderTapeTextureDescriptor {
-  D9CSurfaceDesc level0{};
-  std::uint32_t levelCount = 0u;
-};
-
 inline constexpr std::uint32_t kRenderTapeTextureDescriptorVersion2 = 2u;
 inline constexpr std::uint32_t kRenderTapeSurfaceDescriptorVersion2 = 2u;
 
@@ -56,6 +49,12 @@ inline constexpr bool renderTapePresentOutputIdentityMatchesCommand(
   return commandIdentity.kind == presentOutputIdentity.kind &&
          commandIdentity.generation == presentOutputIdentity.generation &&
          commandIdentity.objectId == presentOutputIdentity.objectId;
+}
+
+inline constexpr bool renderTapeZeroIdentity(
+    const D9CWireObjectIdentity &identity) noexcept {
+  return identity.kind == 0u && identity.generation == 0u &&
+         identity.objectId == 0u;
 }
 
 constexpr std::uint32_t renderTapeTextureDescriptorMipLevel(
@@ -191,7 +190,42 @@ inline bool renderTapeLoadSurfaceAliasDescriptor(
                                                   Unavailable) &&
          out.parentTexture.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
          out.parentTexture.generation != 0u &&
-         out.parentTexture.objectId != 0u;
+         out.parentTexture.objectId != 0u && out.surface.resourceType == 1u &&
+         out.surface.width != 0u && out.surface.height != 0u &&
+         out.surface.depth != 0u;
+}
+
+inline bool renderTapeLoadSurfaceDescriptorV2(
+    std::span<const std::byte> descriptor,
+    RenderTapeSurfaceDescriptorV2 &out) noexcept {
+  out = {};
+  if (descriptor.size() != sizeof(out))
+    return false;
+  std::memcpy(&out, descriptor.data(), sizeof(out));
+  if (out.schemaVersion != kRenderTapeSurfaceDescriptorVersion2 ||
+      out.surface.resourceType != 1u ||
+      out.surface.width == 0u || out.surface.height == 0u ||
+      out.surface.depth == 0u) {
+    return false;
+  }
+  const auto storage = static_cast<RenderTapeSurfaceStorage>(out.storage);
+  const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+      out.initialContentDisposition);
+  switch (storage) {
+  case RenderTapeSurfaceStorage::Standalone:
+    return disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+           out.subresource == 0u && renderTapeZeroIdentity(out.parentTexture);
+  case RenderTapeSurfaceStorage::TextureSubresource:
+    return disposition == RenderTapeInitialContentDisposition::Unavailable &&
+           out.parentTexture.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+           out.parentTexture.generation != 0u &&
+           out.parentTexture.objectId != 0u;
+  case RenderTapeSurfaceStorage::SwapchainBackbuffer:
+    return disposition ==
+               RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+           out.subresource == 0u && renderTapeZeroIdentity(out.parentTexture);
+  }
+  return false;
 }
 
 inline bool renderTapeSurfaceDescriptorsEqual(const D9CSurfaceDesc &a,
@@ -233,25 +267,18 @@ inline RenderTapeLogicalObjectSlot renderTapeLogicalObjectSlot(
   RenderTapeLogicalObjectSlot slot{.identity = identity};
   if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
     return slot;
-  if (descriptor.size() != sizeof(RenderTapeSurfaceDescriptorV2))
+  if (descriptor.size() != sizeof(RenderTapeSurfaceDescriptorV2)) {
+    slot.malformedSurfaceDescriptor = true;
     return slot;
+  }
   RenderTapeSurfaceDescriptorV2 alias{};
-  std::memcpy(&alias, descriptor.data(), sizeof(alias));
-  if (alias.schemaVersion != kRenderTapeSurfaceDescriptorVersion2) {
+  if (!renderTapeLoadSurfaceDescriptorV2(descriptor, alias)) {
     slot.malformedSurfaceDescriptor = true;
     return slot;
   }
   const auto storage = static_cast<RenderTapeSurfaceStorage>(alias.storage);
-  if (storage != RenderTapeSurfaceStorage::TextureSubresource) {
-    slot.malformedSurfaceDescriptor =
-        storage != RenderTapeSurfaceStorage::Standalone &&
-        storage != RenderTapeSurfaceStorage::SwapchainBackbuffer;
+  if (storage != RenderTapeSurfaceStorage::TextureSubresource)
     return slot;
-  }
-  if (!renderTapeLoadSurfaceAliasDescriptor(descriptor, alias)) {
-    slot.malformedSurfaceDescriptor = true;
-    return slot;
-  }
   slot.textureSubresourceAlias = true;
   slot.parentTexture = alias.parentTexture;
   slot.subresource = alias.subresource;
@@ -471,44 +498,92 @@ inline bool renderTapeDescriptorSubresourceCountFits(
 inline bool renderTapeTextureSubresourceDescriptor(
     std::span<const std::byte> descriptor, std::uint32_t subresource,
     D9CSurfaceDesc &out) noexcept {
-  if (descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
-    RenderTapeTextureDescriptorV2 texture{};
-    std::memcpy(&texture, descriptor.data(), sizeof(texture));
-    if (texture.schemaVersion == kRenderTapeTextureDescriptorVersion2) {
-      if (subresource >= texture.subresourceCount ||
-          !renderTapeDescriptorSubresourceCountFits(
-              texture.subresourceCount, sizeof(texture)) ||
-          descriptor.size() !=
-              sizeof(texture) +
-                  static_cast<std::size_t>(texture.subresourceCount) *
-                      sizeof(D9CSurfaceDesc)) {
-        return false;
-      }
-      std::memcpy(&out,
-                  descriptor.data() + sizeof(texture) +
-                      static_cast<std::size_t>(subresource) *
-                          sizeof(D9CSurfaceDesc),
-                  sizeof(out));
-      return true;
+  if (descriptor.size() < sizeof(RenderTapeTextureDescriptorV2))
+    return false;
+  RenderTapeTextureDescriptorV2 texture{};
+  std::memcpy(&texture, descriptor.data(), sizeof(texture));
+  if (texture.schemaVersion != kRenderTapeTextureDescriptorVersion2 ||
+      subresource >= texture.subresourceCount ||
+      !renderTapeDescriptorSubresourceCountFits(texture.subresourceCount,
+                                                sizeof(texture)) ||
+      descriptor.size() !=
+          sizeof(texture) +
+              static_cast<std::size_t>(texture.subresourceCount) *
+                  sizeof(D9CSurfaceDesc)) {
+    return false;
+  }
+  std::memcpy(&out,
+              descriptor.data() + sizeof(texture) +
+                  static_cast<std::size_t>(subresource) *
+                      sizeof(D9CSurfaceDesc),
+              sizeof(out));
+  return true;
+}
+
+inline std::uint32_t renderTapeTextureMipExtent(
+    std::uint32_t extent, std::uint32_t mipLevel) noexcept {
+  if (mipLevel >= 32u)
+    return 1u;
+  const auto value = extent >> mipLevel;
+  return value == 0u ? 1u : value;
+}
+
+inline bool renderTapeLoadTextureDescriptorV2(
+    std::span<const std::byte> descriptor,
+    RenderTapeTextureDescriptorV2 &out) noexcept {
+  out = {};
+  if (descriptor.size() < sizeof(out))
+    return false;
+  std::memcpy(&out, descriptor.data(), sizeof(out));
+  const auto dimension = static_cast<RenderTapeTextureDimension>(out.dimension);
+  std::uint64_t expectedSubresources = out.mipLevelCount;
+  if (dimension == RenderTapeTextureDimension::Cube)
+    expectedSubresources *= 6u;
+  else if (dimension != RenderTapeTextureDimension::Texture2D &&
+           dimension != RenderTapeTextureDimension::Volume)
+    return false;
+  if (out.schemaVersion != kRenderTapeTextureDescriptorVersion2 ||
+      out.mipLevelCount == 0u ||
+      out.subresourceCount != expectedSubresources || out.reserved0 != 0u ||
+      !renderTapeDescriptorSubresourceCountFits(out.subresourceCount,
+                                                sizeof(out)) ||
+      descriptor.size() !=
+          sizeof(out) + static_cast<std::size_t>(out.subresourceCount) *
+                            sizeof(D9CSurfaceDesc)) {
+    return false;
+  }
+  const std::uint32_t resourceType =
+      dimension == RenderTapeTextureDimension::Texture2D
+          ? 3u
+          : dimension == RenderTapeTextureDimension::Volume ? 4u : 5u;
+  D9CSurfaceDesc base{};
+  if (!renderTapeTextureSubresourceDescriptor(descriptor, 0u, base) ||
+      base.resourceType != resourceType || base.width == 0u ||
+      base.height == 0u || base.depth == 0u ||
+      (dimension != RenderTapeTextureDimension::Volume && base.depth != 1u)) {
+    return false;
+  }
+  for (std::uint32_t subresource = 0u; subresource < out.subresourceCount;
+       ++subresource) {
+    const auto mipLevel = renderTapeTextureDescriptorMipLevel(
+        dimension, out.mipLevelCount, subresource);
+    D9CSurfaceDesc current{};
+    if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource,
+                                                current) ||
+        current.format != base.format ||
+        current.resourceType != resourceType || current.usage != base.usage ||
+        current.pool != base.pool ||
+        current.multiSampleType != base.multiSampleType ||
+        current.multiSampleQuality != base.multiSampleQuality ||
+        current.width != renderTapeTextureMipExtent(base.width, mipLevel) ||
+        current.height != renderTapeTextureMipExtent(base.height, mipLevel) ||
+        current.depth !=
+            (dimension == RenderTapeTextureDimension::Volume
+                 ? renderTapeTextureMipExtent(base.depth, mipLevel)
+                 : 1u)) {
+      return false;
     }
   }
-  if (descriptor.size() < sizeof(RenderTapeTextureDescriptor))
-    return false;
-  RenderTapeTextureDescriptor texture{};
-  std::memcpy(&texture, descriptor.data(), sizeof(texture));
-  if (subresource >= texture.levelCount)
-    return false;
-  if (subresource == 0u) {
-    out = texture.level0;
-    return true;
-  }
-  const auto offset = sizeof(texture) +
-      (static_cast<std::size_t>(subresource) - 1u) * sizeof(D9CSurfaceDesc);
-  if (offset > descriptor.size() ||
-      descriptor.size() - offset < sizeof(out)) {
-    return false;
-  }
-  std::memcpy(&out, descriptor.data() + offset, sizeof(out));
   return true;
 }
 
@@ -527,7 +602,6 @@ struct RenderTapeQueryDescriptor {
   std::uint32_t dataBytes = 0u;
 };
 
-static_assert(sizeof(RenderTapeTextureDescriptor) == sizeof(D9CSurfaceDesc) + 4u);
 static_assert(sizeof(RenderTapeTextureDescriptorV2) == 24u);
 static_assert(sizeof(RenderTapeSurfaceDescriptorV2) == 72u);
 static_assert(offsetof(RenderTapeSurfaceDescriptorV2, parentTexture) == 16u);

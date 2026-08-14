@@ -290,6 +290,7 @@ enum class RenderTapeObjectDefineValidationSubreason : std::uint8_t {
   ImmutablePayloadBytes,
   ImmutablePayloadDigest,
   DescriptorExtent,
+  TextureDescriptorSchema,
   TextureDescriptorDimension,
   TextureDescriptorExtent,
   TextureDescriptorDisposition,

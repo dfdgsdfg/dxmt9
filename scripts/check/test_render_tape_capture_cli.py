@@ -96,6 +96,8 @@ def main() -> int:
             "profile": "frame-tape",
             "records": 1,
             "schema": "dxmt9.render_tape.v2",
+            "surface_descriptors_v2": 1,
+            "texture_descriptors_v2": 0,
             "scope": {
                 "production_capture": False,
                 "production_provider_replay": False,

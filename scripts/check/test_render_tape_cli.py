@@ -52,6 +52,8 @@ def main() -> int:
         assert inspected["valid"] is True
         assert inspected["events"] == 6
         assert inspected["defines"] == 1
+        assert inspected["texture_descriptors_v2"] == 0
+        assert inspected["surface_descriptors_v2"] == 1
         assert inspected["mutations"] == 1
         assert inspected["mutation_bytes"] == 4
         assert inspected["chunks"] == 1

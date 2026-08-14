@@ -195,6 +195,56 @@ constexpr std::uint32_t kTextureDescriptorKind = static_cast<std::uint32_t>(
 constexpr std::uint32_t kShaderDescriptorKind = static_cast<std::uint32_t>(
     RenderTapeDescriptorKind::Shader);
 
+RenderTapeSurfaceDescriptorV2 outputSurfaceDescriptor() {
+  return RenderTapeSurfaceDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::SwapchainBackbuffer),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedPresentOutput),
+      .surface = D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 1u,
+          .usage = 1u,
+          .pool = 0u,
+          .width = 4u,
+          .height = 4u,
+          .depth = 1u,
+      },
+  };
+}
+
+std::vector<std::byte> texture2DDescriptor(
+    std::uint32_t mipLevelCount = 1u,
+    RenderTapeInitialContentDisposition disposition =
+        RenderTapeInitialContentDisposition::CompleteSeed) {
+  const RenderTapeTextureDescriptorV2 header{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = mipLevelCount,
+      .subresourceCount = mipLevelCount,
+      .initialContentDisposition = static_cast<std::uint32_t>(disposition),
+  };
+  std::vector<std::byte> descriptor(
+      sizeof(header) + mipLevelCount * sizeof(D9CSurfaceDesc));
+  std::memcpy(descriptor.data(), &header, sizeof(header));
+  for (std::uint32_t mip = 0u; mip < mipLevelCount; ++mip) {
+    const D9CSurfaceDesc level{
+        .format = 21u,
+        .resourceType = 3u,
+        .pool = 0u,
+        .width = std::max(1u, 4u >> mip),
+        .height = std::max(1u, 4u >> mip),
+        .depth = 1u,
+    };
+    std::memcpy(descriptor.data() + sizeof(header) +
+                    mip * sizeof(D9CSurfaceDesc),
+                &level, sizeof(level));
+  }
+  return descriptor;
+}
+
 RenderTapeDigest digest(std::byte seed) {
   RenderTapeDigest value{};
   for (std::size_t i = 0u; i < value.size(); ++i) {
@@ -227,7 +277,7 @@ std::vector<std::byte> makeCompleteTape(
         RenderTapeDigestValidity::NotCaptured) {
   const auto bootstrap = makeApplyStateChunk();
   const auto present = makePresentChunk();
-  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto descriptor = outputSurfaceDescriptor();
   const auto resourceDigest = mutationDigest();
   const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
   const RenderTapeOrderedControlHeader control{
@@ -246,7 +296,7 @@ std::vector<std::byte> makeCompleteTape(
   builder.appendBootstrapState(bootstrap);
   builder.appendObjectDefine(
       kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
+      std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
   builder.appendResourceMutation(mutationIdentity,
                                  RenderTapeMutationKind::CpuUnlock, 0u,
                                  mutationOffset, mutationBytes,
@@ -457,6 +507,9 @@ void immutableObjectsAndRetirementFailClosed() {
       .objectId = 23u,
   };
   constexpr std::array<std::byte, 4u> descriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
   const auto shaderDigest = digest(std::byte{0x70});
   const auto bootstrap = makeApplyStateChunk();
   const auto present = makePresentChunk();
@@ -469,7 +522,7 @@ void immutableObjectsAndRetirementFailClosed() {
   immutable.appendBootstrapState(bootstrap);
   immutable.appendObjectDefine(
       kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
+      surfaceDescriptorBytes, 0u, {});
   immutable.appendObjectDefine(shader, kShaderDescriptorKind, descriptor, 12u,
                                shaderDigest);
   immutable.appendCommandChunk(
@@ -491,12 +544,12 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder reused;
   reused.appendBootstrapState(bootstrap);
-  reused.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  reused.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                             {});
   reused.appendObjectDestroy(kSurface);
   auto newerSurface = kSurface;
   ++newerSurface.generation;
-  reused.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, descriptor,
+  reused.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                             0u, {});
   reused.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
@@ -513,10 +566,10 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder overlapping;
   overlapping.appendBootstrapState(bootstrap);
-  overlapping.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+  overlapping.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                   0u, {});
   overlapping.appendObjectDefine(newerSurface, kSurfaceDescriptorKind,
-                                  descriptor, 0u, {});
+                                  surfaceDescriptorBytes, 0u, {});
   overlapping.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   overlapping.appendPresentComplete(
@@ -528,10 +581,10 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder stale;
   stale.appendBootstrapState(bootstrap);
-  stale.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, descriptor,
+  stale.appendObjectDefine(newerSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                            0u, {});
   stale.appendObjectDestroy(newerSurface);
-  stale.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  stale.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                            {});
   stale.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
@@ -544,10 +597,10 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder equal;
   equal.appendBootstrapState(bootstrap);
-  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                            {});
   equal.appendObjectDestroy(kSurface);
-  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  equal.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                            {});
   equal.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
@@ -560,7 +613,7 @@ void immutableObjectsAndRetirementFailClosed() {
 
   RenderTapeBuilder mismatched;
   mismatched.appendBootstrapState(bootstrap);
-  mismatched.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+  mismatched.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                 0u, {});
   mismatched.appendObjectDefine(kSurface, kTextureDescriptorKind, descriptor,
                                 0u, {});
@@ -594,7 +647,14 @@ void descriptorKindIdentityMismatchFailsClosed() {
 }
 
 void bootstrapAndCommandHandlesCloseBeforeReplay() {
-  constexpr std::array<std::byte, 1u> descriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
+  const auto textureDescriptor = texture2DDescriptor();
+  const auto seedDigest = mutationDigest();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = seedDigest, .size = 4u, .verified = 1u,
+  }}};
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
       .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
@@ -606,18 +666,20 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
   // closure index makes this safe without applying the provider state early.
   deferred.appendObjectDefine(
       kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
-  deferred.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
-                              0u, {});
+      surfaceDescriptorBytes, 0u, {});
+  deferred.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor,
+                              0u, {}, 4u, 1u);
+  deferred.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                  0u, 0u, 4u, seedDigest);
   deferred.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
   deferred.appendPresentComplete(
-      4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
   ImportedRenderTapeView imported;
   const auto deferredValidation =
-      validateRenderTape(deferred.seal(), {}, &imported);
+      validateRenderTape(deferred.seal(), catalogue, &imported);
   check(deferredValidation.valid(),
         std::string(renderTapeValidationStatusName(deferredValidation.status)) +
             " chunk=" +
@@ -630,7 +692,7 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
   missingBootstrapDefinition.appendBootstrapState(
       makeApplyStateChunk(true, stale));
   missingBootstrapDefinition.appendObjectDefine(
-      kTexture, kTextureDescriptorKind, descriptor, 0u, {});
+      kTexture, kTextureDescriptorKind, textureDescriptor, 0u, {}, 4u, 1u);
   missingBootstrapDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
@@ -644,7 +706,7 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
   RenderTapeBuilder missingCommandDefinition;
   missingCommandDefinition.appendBootstrapState(makeApplyStateChunk());
   missingCommandDefinition.appendObjectDefine(
-      kSurface, kSurfaceDescriptorKind, descriptor, 0u, {});
+      kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u, {});
   missingCommandDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
       makeApplyStateChunk(true, stale));
@@ -661,7 +723,9 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
   RenderTapeBuilder retiredCommandDefinition;
   retiredCommandDefinition.appendBootstrapState(makeApplyStateChunk());
   retiredCommandDefinition.appendObjectDefine(
-      kTexture, kTextureDescriptorKind, descriptor, 0u, {});
+      kTexture, kTextureDescriptorKind, textureDescriptor, 0u, {}, 4u, 1u);
+  retiredCommandDefinition.appendResourceMutation(
+      kTexture, RenderTapeMutationKind::Upload, 0u, 0u, 4u, seedDigest);
   retiredCommandDefinition.appendObjectDestroy(kTexture);
   retiredCommandDefinition.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
@@ -670,15 +734,19 @@ void bootstrapAndCommandHandlesCloseBeforeReplay() {
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
   retiredCommandDefinition.appendPresentComplete(
-      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      6u, 1u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
-  check(validateRenderTape(retiredCommandDefinition.seal(), {}).status ==
+  check(validateRenderTape(retiredCommandDefinition.seal(), catalogue).status ==
             RenderTapeValidationStatus::UnknownIdentity,
         "retired command handles must fail closed");
 }
 
 void seedContentClosesByUniqueSubresourceAndSummedBytes() {
-  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
+  const auto textureDescriptor = texture2DDescriptor(
+      2u, RenderTapeInitialContentDisposition::CompleteSeed);
   const auto firstDigest = digest(std::byte{0x10});
   const auto secondDigest = digest(std::byte{0x30});
   const RenderTapeBlobCatalogue catalogue{.blobs = {
@@ -694,8 +762,8 @@ void seedContentClosesByUniqueSubresourceAndSummedBytes() {
     builder.appendBootstrapState(makeApplyStateChunk());
     builder.appendObjectDefine(
         kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-        descriptor, 0u, {});
-    builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+        surfaceDescriptorBytes, 0u, {});
+    builder.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor,
                                0u, {}, 7u, 2u);
   };
   const auto appendSuffix = [&](RenderTapeBuilder& builder,
@@ -758,7 +826,11 @@ void seedContentClosesByUniqueSubresourceAndSummedBytes() {
 }
 
 void perIdentityLateSeedClosureIsExact() {
-  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
+  const auto textureDescriptor = texture2DDescriptor(
+      1u, RenderTapeInitialContentDisposition::CompleteSeed);
   const RenderTapeOracleAttachment oracle{
       .identity = kSurface,
       .descriptorKind = kSurfaceDescriptorKind,
@@ -770,12 +842,12 @@ void perIdentityLateSeedClosureIsExact() {
 
   RenderTapeBuilder late;
   late.appendBootstrapState(makeApplyStateChunk());
-  late.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  late.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                           {});
   late.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makeApplyStateChunk());
-  late.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+  late.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor, 0u,
                           {}, 4u, 1u);
   late.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
                               0u, 4u, seedDigest);
@@ -793,12 +865,12 @@ void perIdentityLateSeedClosureIsExact() {
 
   RenderTapeBuilder firstUse;
   firstUse.appendBootstrapState(makeApplyStateChunk());
-  firstUse.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  firstUse.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                               {});
   firstUse.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makeApplyStateChunk());
-  firstUse.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+  firstUse.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor, 0u,
                               {}, 4u, 1u);
   firstUse.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
@@ -816,9 +888,9 @@ void perIdentityLateSeedClosureIsExact() {
 
   RenderTapeBuilder sequence(kRenderTapeProfileSequence);
   sequence.appendBootstrapState(makeApplyStateChunk());
-  sequence.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  sequence.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                                {});
-  sequence.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+  sequence.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor, 0u,
                                {}, 4u, 1u);
   sequence.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
@@ -862,14 +934,7 @@ void versionedSubresourceDescriptorsFailClosed() {
       .generation = 1u,
       .objectId = 0x6600u,
   };
-  const D9CSurfaceDesc outputDescriptor{
-      .format = 21u,
-      .resourceType = 1u,
-      .usage = 1u,
-      .width = 4u,
-      .height = 4u,
-      .depth = 1u,
-  };
+  const auto outputDescriptor = outputSurfaceDescriptor();
   const RenderTapeOracleAttachment outputOracle{
       .identity = output,
       .descriptorKind = static_cast<std::uint32_t>(
@@ -909,7 +974,7 @@ void versionedSubresourceDescriptorsFailClosed() {
         subresource);
     const D9CSurfaceDesc desc{
         .format = 0x33545844u,
-        .resourceType = 3u,
+        .resourceType = 5u,
         .width = mipLevel == 0u ? 8u : 4u,
         .height = mipLevel == 0u ? 8u : 4u,
         .depth = 1u,
@@ -932,6 +997,51 @@ void versionedSubresourceDescriptorsFailClosed() {
             "all six cube faces repeat the complete mip descriptor chain");
     }
   }
+
+  const RenderTapeTextureDescriptorV2 volumeHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Volume),
+      .mipLevelCount = 3u,
+      .subresourceCount = 3u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  std::vector<std::byte> volumeDescriptor(
+      sizeof(volumeHeader) + 3u * sizeof(D9CSurfaceDesc));
+  std::memcpy(volumeDescriptor.data(), &volumeHeader, sizeof(volumeHeader));
+  for (std::uint32_t mip = 0u; mip < 3u; ++mip) {
+    const D9CSurfaceDesc level{
+        .format = 21u,
+        .resourceType = 4u,
+        .width = std::max(1u, 8u >> mip),
+        .height = std::max(1u, 4u >> mip),
+        .depth = std::max(1u, 8u >> mip),
+    };
+    std::memcpy(volumeDescriptor.data() + sizeof(volumeHeader) +
+                    mip * sizeof(level),
+                &level, sizeof(level));
+  }
+  for (std::uint32_t mip = 0u; mip < 3u; ++mip) {
+    D9CSurfaceDesc level{};
+    check(renderTapeTextureSubresourceDescriptor(volumeDescriptor, mip,
+                                                  level) &&
+              level.depth == (8u >> mip),
+          "volume V2 preserves exact depth for every mip descriptor");
+  }
+  const RenderTapeObjectDefineHeader volumeFixed{
+      .identity = texture,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture),
+      .descriptorBytes =
+          static_cast<std::uint32_t>(volumeDescriptor.size()),
+      .expectedContentBytes = 3u,
+      .expectedContentCount = 3u,
+  };
+  check(!renderTapeClassifyObjectDefineValidation(volumeFixed,
+                                                   volumeDescriptor)
+             .valid(),
+        "canonical volume V2 descriptor validates as one descriptor per mip");
 
   RenderTapeBuilder incompleteSeed;
   incompleteSeed.appendBootstrapState(makeApplyStateChunk());
@@ -1037,13 +1147,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       .generation = 3u,
       .objectId = firstAlias.objectId,
   };
-  const D9CSurfaceDesc outputDescriptor{
-      .format = 21u,
-      .resourceType = 1u,
-      .width = 8u,
-      .height = 8u,
-      .depth = 1u,
-  };
+  const auto outputDescriptor = outputSurfaceDescriptor();
   const std::array<D9CSurfaceDesc, 2u> levels{{
       D9CSurfaceDesc{
           .format = 21u,
@@ -1067,7 +1171,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       .mipLevelCount = 2u,
       .subresourceCount = 2u,
       .initialContentDisposition = static_cast<std::uint32_t>(
-          RenderTapeInitialContentDisposition::Unavailable),
+          RenderTapeInitialContentDisposition::CompleteSeed),
   };
   std::vector<std::byte> textureDescriptor(sizeof(textureHeader) +
                                            sizeof(levels));
@@ -1082,7 +1186,13 @@ void textureAliasLogicalSlotsUseParentSubresources() {
           RenderTapeInitialContentDisposition::Unavailable),
       .subresource = 0u,
       .parentTexture = texture,
-      .surface = levels[0],
+      .surface = D9CSurfaceDesc{
+          .format = levels[0].format,
+          .resourceType = 1u,
+          .width = levels[0].width,
+          .height = levels[0].height,
+          .depth = levels[0].depth,
+      },
   };
   const RenderTapeSurfaceDescriptorV2 secondDescriptor{
       .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
@@ -1092,20 +1202,30 @@ void textureAliasLogicalSlotsUseParentSubresources() {
           RenderTapeInitialContentDisposition::Unavailable),
       .subresource = 1u,
       .parentTexture = texture,
-      .surface = levels[1],
+      .surface = D9CSurfaceDesc{
+          .format = levels[1].format,
+          .resourceType = 1u,
+          .width = levels[1].width,
+          .height = levels[1].height,
+          .depth = levels[1].depth,
+      },
   };
   const RenderTapeOracleAttachment oracle{
       .identity = output,
       .descriptorKind = static_cast<std::uint32_t>(
           RenderTapeDescriptorKind::Surface),
   };
+  const auto textureSeedDigest = mutationDigest();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = textureSeedDigest, .size = 4u, .verified = 1u,
+  }}};
   const auto finish = [&](RenderTapeBuilder& builder,
-                          std::uint64_t presentOrdinal) {
+                          std::uint64_t) {
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
         makePresentChunk());
     builder.appendPresentComplete(
-        presentOrdinal, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        builder.eventCount(), 1u, RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&oracle, 1u)));
   };
   const auto defineCommon = [&](RenderTapeBuilder& builder) {
@@ -1115,7 +1235,13 @@ void textureAliasLogicalSlotsUseParentSubresources() {
         std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
     builder.appendObjectDefine(
         texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-        textureDescriptor, 0u, {});
+        textureDescriptor, 0u, {}, 8u, 2u);
+    builder.appendResourceMutation(
+        texture, RenderTapeMutationKind::Upload, 0u, 0u, 4u,
+        textureSeedDigest);
+    builder.appendResourceMutation(
+        texture, RenderTapeMutationKind::Upload, 1u, 0u, 4u,
+        textureSeedDigest);
   };
 
   RenderTapeBuilder coexist;
@@ -1129,7 +1255,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&secondDescriptor, 1u)), 0u, {});
   finish(coexist, 6u);
-  const auto coexistResult = validateRenderTape(coexist.seal(), {});
+  const auto coexistResult = validateRenderTape(coexist.seal(), catalogue);
   if (!coexistResult.valid()) {
     throw TestFailure(
         "two live alias subresources may share one wire surface object id: " +
@@ -1150,7 +1276,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
   finish(mixed, 6u);
-  check(validateRenderTape(mixed.seal(), {}).valid(),
+  check(validateRenderTape(mixed.seal(), catalogue).valid(),
         "an alias and ordinary surface may share one wire object id");
 
   RenderTapeBuilder overlapping;
@@ -1164,7 +1290,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(overlapping, 6u);
-  check(validateRenderTape(overlapping.seal(), {}).status ==
+  check(validateRenderTape(overlapping.seal(), catalogue).status ==
             RenderTapeValidationStatus::DuplicateGeneration,
         "two live generations of one logical alias slot fail closed");
 
@@ -1176,7 +1302,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   wrongDestroy.appendObjectDestroy(secondAlias);
   finish(wrongDestroy, 6u);
-  check(validateRenderTape(wrongDestroy.seal(), {}).status ==
+  check(validateRenderTape(wrongDestroy.seal(), catalogue).status ==
             RenderTapeValidationStatus::UnknownIdentity,
         "alias destruction requires the exact defined identity");
 
@@ -1192,7 +1318,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(replacement, 7u);
-  check(validateRenderTape(replacement.seal(), {}).valid(),
+  check(validateRenderTape(replacement.seal(), catalogue).valid(),
         "one wire object id admits a monotone alias generation replacement");
 
   auto highAlias = firstAlias;
@@ -1212,7 +1338,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(crossObjectReplacement, 7u);
-  check(validateRenderTape(crossObjectReplacement.seal(), {}).valid(),
+  check(validateRenderTape(crossObjectReplacement.seal(), catalogue).valid(),
         "event order admits a lower generation from a new alias wire object");
 
   auto equalFirst = firstAlias;
@@ -1231,7 +1357,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(equalCrossObject, 7u);
-  check(validateRenderTape(equalCrossObject.seal(), {}).valid(),
+  check(validateRenderTape(equalCrossObject.seal(), catalogue).valid(),
         "event order admits equal generations from distinct alias wire objects");
 
   RenderTapeBuilder fullHistoryStale;
@@ -1253,7 +1379,7 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(fullHistoryStale, 9u);
-  check(validateRenderTape(fullHistoryStale.seal(), {}).status ==
+  check(validateRenderTape(fullHistoryStale.seal(), catalogue).status ==
             RenderTapeValidationStatus::RetainedSlotReuse,
         "same-object monotonicity scans alias history across other wire objects");
 
@@ -1279,12 +1405,12 @@ void textureAliasLogicalSlotsUseParentSubresources() {
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&firstDescriptor, 1u)), 0u, {});
   finish(historyOverlap, 8u);
-  check(validateRenderTape(historyOverlap.seal(), {}).status ==
+  check(validateRenderTape(historyOverlap.seal(), catalogue).status ==
             RenderTapeValidationStatus::DuplicateGeneration,
         "gen1-retired gen2-live gen3 remains an overlapping alias generation");
 }
 
-void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
+void textureSurfaceAliasesCoverCanonical2DAndStandaloneSurfaces() {
   constexpr D9CWireObjectIdentity texture{
       .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
       .generation = 8u,
@@ -1319,15 +1445,23 @@ void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
       .height = 2u,
       .depth = 1u,
   };
-  const RenderTapeTextureDescriptor textureDescriptor{
-      .level0 = level0,
-      .levelCount = 2u,
+  const RenderTapeTextureDescriptorV2 textureDescriptor{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 2u,
+      .subresourceCount = 2u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
   };
   std::vector<std::byte> textureDescriptorBytes(
-      sizeof(textureDescriptor) + sizeof(level1));
+      sizeof(textureDescriptor) + sizeof(level0) + sizeof(level1));
   std::memcpy(textureDescriptorBytes.data(), &textureDescriptor,
               sizeof(textureDescriptor));
   std::memcpy(textureDescriptorBytes.data() + sizeof(textureDescriptor),
+              &level0, sizeof(level0));
+  std::memcpy(textureDescriptorBytes.data() + sizeof(textureDescriptor) +
+                  sizeof(level0),
               &level1, sizeof(level1));
   const RenderTapeSurfaceDescriptorV2 aliasDescriptor{
       .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
@@ -1351,7 +1485,7 @@ void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
             resolvedLevel1) &&
             resolvedLevel1.width == aliasDescriptor.surface.width &&
             resolvedLevel1.height == aliasDescriptor.surface.height,
-        "legacy 2D descriptor resolves the aliased mip dimensions");
+        "canonical 2D descriptor resolves the aliased mip dimensions");
   const D9CSurfaceDesc standaloneDescriptor{
       .format = 21u,
       .resourceType = 1u,
@@ -1360,7 +1494,22 @@ void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
       .height = 4u,
       .depth = 1u,
   };
-  const D9CSurfaceDesc outputDescriptor = standaloneDescriptor;
+  const RenderTapeSurfaceDescriptorV2 standaloneDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+      .surface = standaloneDescriptor,
+  };
+  const RenderTapeSurfaceDescriptorV2 outputDescriptor{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::SwapchainBackbuffer),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedPresentOutput),
+      .surface = standaloneDescriptor,
+  };
   const auto firstDigest = digest(std::byte{0x61});
   const auto secondDigest = digest(std::byte{0x71});
   const auto standaloneDigest = digest(std::byte{0x81});
@@ -1384,7 +1533,7 @@ void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
   builder.appendObjectDefine(
       standaloneSurface,
       static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      std::as_bytes(std::span(&standaloneDescriptor, 1u)), 0u, {}, 64u, 1u);
+      std::as_bytes(std::span(&standaloneDescriptorV2, 1u)), 0u, {}, 64u, 1u);
   builder.appendResourceMutation(texture, RenderTapeMutationKind::Upload, 0u,
                                  0u, 128u, firstDigest);
   builder.appendResourceMutation(texture, RenderTapeMutationKind::Upload, 1u,
@@ -1406,7 +1555,7 @@ void textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces() {
   const auto aliasResult = validateRenderTape(builder.seal(), catalogue);
   if (!aliasResult.valid()) {
     throw TestFailure(
-        "uncompressed texture-level alias resolves through a legacy 2D parent " +
+        "uncompressed texture-level alias resolves through a canonical V2 parent " +
         std::to_string(static_cast<unsigned>(aliasResult.status)) + "/" +
         std::to_string(aliasResult.failedEventIndex));
   }
@@ -1491,10 +1640,10 @@ void invalidInputsFailBeforeCallbacks() {
   RenderTapeBuilder forbidden;
   const auto present = makePresentChunk();
   forbidden.appendBootstrapState(present);
-  constexpr std::array<std::byte, 1u> descriptor{};
+  const auto descriptor = outputSurfaceDescriptor();
   forbidden.appendObjectDefine(
       kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
+      std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
   forbidden.appendCommandChunk(
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
   const RenderTapeOracleAttachment oracle{.identity = kSurface,
@@ -1622,7 +1771,13 @@ void boundedCaptureReplayRefinementIsExhaustive() {
     Duplicate,
   };
 
-  constexpr std::array<std::byte, 8u> descriptor{};
+  constexpr std::array<std::byte, 8u> ordinaryDescriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
+  const auto seededTextureDescriptor = texture2DDescriptor(
+      1u, RenderTapeInitialContentDisposition::CompleteSeed);
+  const auto canonicalTextureDescriptor = texture2DDescriptor();
   const auto initialDigest = mutationDigest();
   const auto boundaryDigest = digest(std::byte{0x50});
   const auto shortDigest = digest(std::byte{0x70});
@@ -1675,9 +1830,9 @@ void boundedCaptureReplayRefinementIsExhaustive() {
         RenderTapeBuilder builder;
         builder.appendBootstrapState(makeApplyStateChunk());
         builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
-                                   descriptor, 0u, {});
+                                   surfaceDescriptorBytes, 0u, {});
         builder.appendObjectDefine(kTexture, kTextureDescriptorKind,
-                                   descriptor, 0u, {}, 4u, 1u);
+                                   seededTextureDescriptor, 0u, {}, 4u, 1u);
         switch (seedCase) {
         case SeedCase::Upload:
         case SeedCase::CpuUnlock:
@@ -1741,9 +1896,9 @@ void boundedCaptureReplayRefinementIsExhaustive() {
     for (const bool staleSecondDraw : {false, true}) {
       RenderTapeBuilder builder(kRenderTapeProfileSequence);
       builder.appendBootstrapState(makeApplyStateChunk());
-      builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+      builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                  0u, {});
-      builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+      builder.appendObjectDefine(kTexture, kTextureDescriptorKind, seededTextureDescriptor,
                                  0u, {}, 4u, 1u);
       builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
                                      0u, 0u, 4u, initialDigest);
@@ -1842,17 +1997,37 @@ void boundedCaptureReplayRefinementIsExhaustive() {
     ++newIdentity.generation;
     RenderTapeBuilder builder;
     builder.appendBootstrapState(makeApplyStateChunk());
-    builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+    builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                0u, {});
+    const std::span<const std::byte> objectDescriptor =
+        kind == D9C_CHUNK_HANDLE_KIND_TEXTURE
+            ? std::span<const std::byte>(canonicalTextureDescriptor)
+            : kind == D9C_CHUNK_HANDLE_KIND_SURFACE
+                  ? surfaceDescriptorBytes
+                  : std::span<const std::byte>(ordinaryDescriptor);
     builder.appendObjectDefine(
         oldIdentity,
         static_cast<std::uint32_t>(renderTapeDescriptorKindForObject(kind)),
-        descriptor, 0u, {});
+        objectDescriptor, 0u, {},
+        kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ? 4u : 0u,
+        kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ? 1u : 0u);
+    if (kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+      builder.appendResourceMutation(oldIdentity,
+                                     RenderTapeMutationKind::Upload, 0u, 0u,
+                                     4u, initialDigest);
+    }
     builder.appendObjectDestroy(oldIdentity);
     builder.appendObjectDefine(
         newIdentity,
         static_cast<std::uint32_t>(renderTapeDescriptorKindForObject(kind)),
-        descriptor, 0u, {});
+        objectDescriptor, 0u, {},
+        kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ? 4u : 0u,
+        kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ? 1u : 0u);
+    if (kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+      builder.appendResourceMutation(newIdentity,
+                                     RenderTapeMutationKind::Upload, 0u, 0u,
+                                     4u, initialDigest);
+    }
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
         makePresentChunk());
@@ -1877,7 +2052,11 @@ void boundedCaptureReplayRefinementIsExhaustive() {
 }
 
 void wholeEventReductionIsCanonicalAndFailClosed() {
-  constexpr std::array<std::byte, 8u> descriptor{};
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  const auto surfaceDescriptorBytes =
+      std::as_bytes(std::span(&surfaceDescriptor, 1u));
+  const auto textureDescriptor = texture2DDescriptor(
+      1u, RenderTapeInitialContentDisposition::CompleteSeed);
   const auto seedDigest = mutationDigest();
   const RenderTapeBlobCatalogue catalogue{.blobs = {{
       .digest = seedDigest,
@@ -1891,9 +2070,9 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
 
   RenderTapeBuilder builder;
   builder.appendBootstrapState(makeApplyStateChunk());
-  builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor, 0u,
+  builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u,
                              {});
-  builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+  builder.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor, 0u,
                              {}, 4u, 1u);
   builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
                                  0u, 4u, seedDigest);
@@ -1959,9 +2138,9 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
 
   RenderTapeBuilder liveMutation;
   liveMutation.appendBootstrapState(makeApplyStateChunk());
-  liveMutation.appendObjectDefine(kSurface, kSurfaceDescriptorKind, descriptor,
+  liveMutation.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                   0u, {});
-  liveMutation.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor,
+  liveMutation.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor,
                                   0u, {}, 4u, 1u);
   liveMutation.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
                                       0u, 0u, 4u, seedDigest);
@@ -1987,9 +2166,9 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
   RenderTapeBuilder preCommandMutation;
   preCommandMutation.appendBootstrapState(makeApplyStateChunk());
   preCommandMutation.appendObjectDefine(
-      kSurface, kSurfaceDescriptorKind, descriptor, 0u, {});
+      kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes, 0u, {});
   preCommandMutation.appendObjectDefine(
-      kTexture, kTextureDescriptorKind, descriptor, 0u, {}, 4u, 1u);
+      kTexture, kTextureDescriptorKind, textureDescriptor, 0u, {}, 4u, 1u);
   preCommandMutation.appendResourceMutation(
       kTexture, RenderTapeMutationKind::Upload, 0u, 0u, 4u, seedDigest);
   preCommandMutation.appendResourceMutation(
@@ -2042,7 +2221,7 @@ int main(int argc, char** argv) {
     perIdentityLateSeedClosureIsExact();
     versionedSubresourceDescriptorsFailClosed();
     textureAliasLogicalSlotsUseParentSubresources();
-    textureSurfaceAliasesCoverLegacy2DAndStandaloneSurfaces();
+    textureSurfaceAliasesCoverCanonical2DAndStandaloneSurfaces();
     textureSurfaceWrapperLifetimeIsIdempotent();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();

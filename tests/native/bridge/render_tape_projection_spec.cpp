@@ -271,12 +271,56 @@ RenderTapeBlobCatalogue catalogue() {
   }};
 }
 
+RenderTapeSurfaceDescriptorV2 outputDescriptor() {
+  return RenderTapeSurfaceDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::SwapchainBackbuffer),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedPresentOutput),
+      .surface = D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 1u,
+          .usage = 1u,
+          .pool = 0u,
+          .width = 1u,
+          .height = 1u,
+          .depth = 1u,
+      },
+  };
+}
+
+std::vector<std::byte> textureDescriptor() {
+  const RenderTapeTextureDescriptorV2 header{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 1u,
+      .subresourceCount = 1u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  const D9CSurfaceDesc level{
+      .format = 21u,
+      .resourceType = 3u,
+      .pool = 0u,
+      .width = 1u,
+      .height = 1u,
+      .depth = 1u,
+  };
+  std::vector<std::byte> descriptor(sizeof(header) + sizeof(level));
+  std::memcpy(descriptor.data(), &header, sizeof(header));
+  std::memcpy(descriptor.data() + sizeof(header), &level, sizeof(level));
+  return descriptor;
+}
+
 std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
                                      bool includeTextureDefinition = true,
                                      std::uint64_t expectedTextureBytes = 4u,
                                      bool lateTextureSeed = false) {
-  constexpr std::array<std::byte, 8u> descriptor{};
   constexpr std::array<std::byte, 4u> shaderDescriptor{};
+  const auto output = outputDescriptor();
+  const auto texture = textureDescriptor();
   const auto frame = frameChunk(firstFullSnapshot);
   const RenderTapeOracleAttachment oracle{
       .identity = kOutput,
@@ -296,12 +340,12 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
   builder.appendBootstrapState(bootstrapChunk());
   builder.appendObjectDefine(
       kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
+      std::as_bytes(std::span(&output, 1u)), 0u, {});
   if (includeTextureDefinition && !lateTextureSeed) {
     builder.appendObjectDefine(
         kTexture,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-        descriptor, 0u, {}, expectedTextureBytes, 1u);
+        texture, 0u, {}, expectedTextureBytes, 1u);
   }
   builder.appendObjectDefine(
       kShader, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
@@ -316,7 +360,7 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
     builder.appendObjectDefine(
         kTexture,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-        descriptor, 0u, {}, expectedTextureBytes, 1u);
+        texture, 0u, {}, expectedTextureBytes, 1u);
   }
   builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
                                  0u, 4u, kTextureDigest);
@@ -331,8 +375,9 @@ std::vector<std::byte> makeFrameTape(bool firstFullSnapshot = true,
 }
 
 std::vector<std::byte> makeSequenceTape() {
-  constexpr std::array<std::byte, 8u> descriptor{};
   constexpr std::array<std::byte, 4u> shaderDescriptor{};
+  const auto output = outputDescriptor();
+  const auto texture = textureDescriptor();
   const RenderTapeOracleAttachment oracle{
       .identity = kOutput,
       .descriptorKind =
@@ -343,10 +388,10 @@ std::vector<std::byte> makeSequenceTape() {
   builder.appendBootstrapState(bootstrapChunk());
   builder.appendObjectDefine(
       kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      descriptor, 0u, {});
+      std::as_bytes(std::span(&output, 1u)), 0u, {});
   builder.appendObjectDefine(
       kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-      descriptor, 0u, {}, 4u, 1u);
+      texture, 0u, {}, 4u, 1u);
   builder.appendObjectDefine(
       kShader, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
       shaderDescriptor, 4u, kShaderDigest);

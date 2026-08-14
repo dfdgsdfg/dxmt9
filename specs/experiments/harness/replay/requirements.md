@@ -618,6 +618,26 @@ slot merely because their wire object IDs match. Capture rejection at this cold
 path records a typed first-rejection reason; the capture-off path performs none of
 the block layout or byte-copy work.
 
+Texture and Surface `ObjectDefine` payloads have one production grammar:
+`RenderTapeTextureDescriptorV2` followed by exactly one `D9CSurfaceDesc` for
+each declared subresource, or exactly one `RenderTapeSurfaceDescriptorV2`.
+Texture dimensions are self-describing: 2D and volume counts equal the mip
+count, cube counts equal six times the mip count, every descriptor repeats the
+exact dimension-appropriate resource type and mip extent, and volume entries
+preserve the depth of each mip. Every texture uses `CompleteSeed`; texture
+`Unavailable` is invalid rather than a compatibility mode. Independently owned render-target, depth, and
+offscreen surfaces are `Standalone` plus `CompleteSeed`; texture views are
+`TextureSubresource` plus `Unavailable` and name the exact generation-qualified
+parent/subresource; the oracle target is `SwapchainBackbuffer` plus
+`ProducedPresentOutput`. The unversioned texture level-0/count payload and raw
+`D9CSurfaceDesc` Surface payload are Retired and must be rejected by capture
+registration, bootstrap/JIT materialization, validation, inspection,
+projection, and provider replay. A provider may return a typed unsupported
+result for a structurally valid canonical dimension outside its runtime
+capability, but must not reinterpret it through a retired grammar. These
+descriptor bytes remain schema payload inside the existing `ObjectDefine`
+event and do not change the event, chunk, bridge, or ABI/hash wire contracts.
+
 **R-HARN-REPLAY-7.12** Production capture publication requires the explicit
 `DXMT9_RENDER_TAPE_OUTPUT_ROOT` PE-visible absolute-root policy. Under Wine the
 value is a Windows drive-qualified path such as `Z:\\...`; a host-only POSIX

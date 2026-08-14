@@ -59,6 +59,35 @@ std::span<const std::byte> spanBytes(const T& value) {
   return {reinterpret_cast<const std::byte*>(&value), sizeof(value)};
 }
 
+RenderTapeSurfaceDescriptorV2 outputDescriptor(
+    const D9CSurfaceDesc& surface) {
+  return RenderTapeSurfaceDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::SwapchainBackbuffer),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedPresentOutput),
+      .surface = surface,
+  };
+}
+
+std::vector<std::byte> texture2DDescriptor(
+    const D9CSurfaceDesc& level0) {
+  const RenderTapeTextureDescriptorV2 header{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 1u,
+      .subresourceCount = 1u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  std::vector<std::byte> bytes(sizeof(header) + sizeof(level0));
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  std::memcpy(bytes.data() + sizeof(header), &level0, sizeof(level0));
+  return bytes;
+}
+
 std::vector<std::byte> makeChunk(std::span<const Record> specs) {
   const auto recordTableOffset = sizeof(D9CCommandChunkWireHeader);
   std::size_t handleCount = 0u;
@@ -442,6 +471,7 @@ struct ProductionFixture {
         .descriptorKind = static_cast<std::uint32_t>(
             RenderTapeDescriptorKind::Surface),
     };
+    const auto outputDescriptorV2 = outputDescriptor(outputDesc);
     const RenderTapeDigest expectedDigest{
         std::byte{0x5f}, std::byte{0x73}, std::byte{0x22}, std::byte{0xd0},
         std::byte{0x5f}, std::byte{0x8b}, std::byte{0xa9}, std::byte{0x74},
@@ -458,7 +488,7 @@ struct ProductionFixture {
     builder.appendBootstrapState(implicitBootstrapChunk());
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
     builder.appendPresentComplete(
@@ -515,11 +545,12 @@ struct Fixture {
         .identity = kOutput,
         .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
     };
+    const auto outputDescriptorV2 = outputDescriptor(outputDesc);
     RenderTapeBuilder builder;
     builder.appendBootstrapState(bootstrapChunk());
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
     builder.appendObjectDefine(
         kSeedBuffer, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
         std::as_bytes(std::span(&bufferDesc, 1u)), 0u, {}, seed.size(), 1u);
@@ -600,8 +631,8 @@ struct TexturedFixture {
         .height = 16u,
         .depth = 1u,
     };
-    const RenderTapeTextureDescriptor textureDesc{
-        .level0 = D9CSurfaceDesc{
+    const auto outputDescriptorV2 = outputDescriptor(outputDesc);
+    const auto textureDesc = texture2DDescriptor(D9CSurfaceDesc{
             .format = textureFormat,
             .resourceType = 3u,
             .usage = 0u,
@@ -611,9 +642,7 @@ struct TexturedFixture {
             .width = 2u,
             .height = 2u,
             .depth = 1u,
-        },
-        .levelCount = 1u,
-    };
+        });
     const RenderTapeOracleAttachment oracle{
         .identity = kOutput,
         .descriptorKind = static_cast<std::uint32_t>(
@@ -624,10 +653,10 @@ struct TexturedFixture {
         texturedBootstrapChunk(productionVertexDeclaration));
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
     builder.appendObjectDefine(
         kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-        std::as_bytes(std::span(&textureDesc, 1u)), 0u, {}, seedBytes, 1u);
+        textureDesc, 0u, {}, seedBytes, 1u);
     if (productionVertexDeclaration) {
       const RenderTapeVertexDeclDescriptor declarationDesc{
           .elementCount = static_cast<std::uint32_t>(declaration.size()),
@@ -733,8 +762,8 @@ struct SequenceFixture {
         .height = 16u,
         .depth = 1u,
     };
-    const RenderTapeTextureDescriptor textureDesc{
-        .level0 = D9CSurfaceDesc{
+    const auto outputDescriptorV2 = outputDescriptor(outputDesc);
+    const auto textureDesc = texture2DDescriptor(D9CSurfaceDesc{
             .format = 21u,
             .resourceType = 3u,
             .usage = 0u,
@@ -744,9 +773,7 @@ struct SequenceFixture {
             .width = 2u,
             .height = 2u,
             .depth = 1u,
-        },
-        .levelCount = 1u,
-    };
+        });
     const RenderTapeOracleAttachment oracle{
         .identity = kOutput,
         .descriptorKind = static_cast<std::uint32_t>(
@@ -801,10 +828,10 @@ struct SequenceFixture {
     builder.appendBootstrapState(texturedBootstrapChunk(false));
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-        std::as_bytes(std::span(&outputDesc, 1u)), 0u, {});
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
     builder.appendObjectDefine(
         kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-        std::as_bytes(std::span(&textureDesc, 1u)), 0u, {}, firstSeed.size(), 1u);
+        textureDesc, 0u, {}, firstSeed.size(), 1u);
     builder.appendResourceMutation(kTexture, RenderTapeMutationKind::CpuUnlock,
                                    0u, 0u, firstSeed.size(), firstDigest);
     builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 3u}, frame);
@@ -837,7 +864,11 @@ void acceptsSplitTexturedUpGrammarAndRejectsNearMisses() {
       .verified = 1u,
   }}};
   const auto structural = validateRenderTape(split.tape, catalogue);
-  check(structural.valid(), renderTapeValidationStatusName(structural.status));
+  check(structural.valid(),
+        std::string(renderTapeValidationStatusName(structural.status)) + "/" +
+            std::to_string(structural.failedEventIndex) + "/" +
+            renderTapeObjectDefineValidationSubreasonName(
+                structural.objectDefine.subreason));
   const auto result = preflightFrameTapeIdentity(split.tape,
                                                  std::span(&blob, 1u));
   check(result.complete(), frameTapeReplayStatusName(result.status));
@@ -946,6 +977,106 @@ void acceptsBoundedIdentityGrammarAndReportsEvidence() {
             result.conservation.presentOrdinal == 5u &&
             result.conservation.completionOrdinal == 1u,
         "conservation evidence must close blob and ordinal identities");
+}
+
+void canonicalUnsupportedDimensionsReturnTypedGrammar() {
+  const D9CSurfaceDesc outputSurface{
+      .format = 21u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 8u,
+      .height = 8u,
+      .depth = 1u,
+  };
+  const auto output = outputDescriptor(outputSurface);
+  const RenderTapeOracleAttachment oracle{
+      .identity = kOutput,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff102030u,
+      .z = 1.0f,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const std::array records{
+      Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
+      Record{.type = D9C_COMMAND_RECORD_PRESENT,
+             .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  const auto frame = makeChunk(records);
+  const std::array<std::byte, 4u> seed{
+      std::byte{1u}, std::byte{2u}, std::byte{3u}, std::byte{4u}};
+  const auto seedDigest = RenderTapeCaptureSession::sha256(seed);
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = seedDigest, .size = seed.size(), .verified = 1u,
+  }}};
+  const RenderTapeProviderBlob blob{.digest = seedDigest, .bytes = seed};
+  for (const auto dimension : {RenderTapeTextureDimension::Cube,
+                               RenderTapeTextureDimension::Volume}) {
+    const std::uint32_t mipCount = 2u;
+    const std::uint32_t subresourceCount =
+        dimension == RenderTapeTextureDimension::Cube ? 12u : mipCount;
+    const RenderTapeTextureDescriptorV2 header{
+        .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+        .dimension = static_cast<std::uint32_t>(dimension),
+        .mipLevelCount = mipCount,
+        .subresourceCount = subresourceCount,
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed),
+    };
+    std::vector<std::byte> descriptor(
+        sizeof(header) + subresourceCount * sizeof(D9CSurfaceDesc));
+    std::memcpy(descriptor.data(), &header, sizeof(header));
+    for (std::uint32_t subresource = 0u; subresource < subresourceCount;
+         ++subresource) {
+      const auto mip = renderTapeTextureDescriptorMipLevel(
+          dimension, mipCount, subresource);
+      const D9CSurfaceDesc level{
+          .format = 21u,
+          .resourceType = dimension == RenderTapeTextureDimension::Cube ? 5u
+                                                                         : 4u,
+          .pool = 0u,
+          .width = 8u >> mip,
+          .height = 8u >> mip,
+          .depth = dimension == RenderTapeTextureDimension::Volume
+                       ? 4u >> mip
+                       : 1u,
+      };
+      std::memcpy(descriptor.data() + sizeof(header) +
+                      subresource * sizeof(level),
+                  &level, sizeof(level));
+    }
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(implicitBootstrapChunk());
+    builder.appendObjectDefine(
+        kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&output, 1u)), 0u, {});
+    builder.appendObjectDefine(
+        kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        descriptor, 0u, {},
+        static_cast<std::uint64_t>(seed.size()) * subresourceCount,
+        subresourceCount);
+    for (std::uint32_t subresource = 0u;
+         subresource < subresourceCount; ++subresource) {
+      builder.appendResourceMutation(
+          kTexture, RenderTapeMutationKind::Upload, subresource, 0u,
+          seed.size(), seedDigest);
+    }
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
+    builder.appendPresentComplete(
+        builder.eventCount(), 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    const auto tape = builder.seal();
+    check(validateRenderTape(tape, catalogue).valid(),
+          "canonical unsupported texture dimension remains structurally valid");
+    check(preflightFrameTapeIdentity(tape, std::span(&blob, 1u)).status ==
+              FrameTapeReplayStatus::UnsupportedGrammar,
+          "provider reports typed unsupported after canonical V2 inspection");
+  }
 }
 
 void failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs() {
@@ -1457,6 +1588,7 @@ int main(int argc, char** argv) {
           "usage: render_tape_provider_spec "
           "[--write-production-fixture dir|--write-sequence-fixture dir]");
     acceptsBoundedIdentityGrammarAndReportsEvidence();
+    canonicalUnsupportedDimensionsReturnTypedGrammar();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();
     acceptsSplitTexturedUpGrammarAndRejectsNearMisses();
     productionPresenterMirrorGpuOracle();

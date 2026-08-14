@@ -760,6 +760,25 @@ stale aliases, incomplete partial-write seeds, volume locks, missing initial
 bytes, and unavailable descriptor or bytecode data fail closed with a typed
 first capture-rejection diagnostic before publication; this metadata does not
 widen provider replay claims or alter canonical D9C v2 records or the bridge ABI.
+
+The V2 payloads are now the single production representation. A texture
+payload is one `RenderTapeTextureDescriptorV2` header plus an exact tail of
+`D9CSurfaceDesc` values: one complete mip chain for 2D and volume textures and
+six complete mip chains for cube textures. The validator checks the declared
+dimension, mip/subresource relation, resource type, repeated format/storage
+attributes, mip extents, and volume mip depth before any replay effect. Texture
+initial content is always `CompleteSeed`; texture `Unavailable` is rejected. A
+surface payload is exactly one `RenderTapeSurfaceDescriptorV2`: independently
+owned surfaces use `Standalone`/`CompleteSeed`, aliases use
+`TextureSubresource`/`Unavailable` with an exact live parent and subresource,
+and the oracle uses `SwapchainBackbuffer`/`ProducedPresentOutput`. The old
+level-0/count texture descriptor and raw surface descriptor are Retired; there
+is no production compatibility branch. Registry admission, bootstrap and JIT
+materialization, publication validation, inspection, projection, and provider
+preflight all consume the same V2 bytes. Unsupported provider capabilities,
+including canonical cube or volume inputs outside the bounded provider slice,
+return the typed unsupported result only after structural V2 validation.
+
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. One bounded
 `perf-d3d9-present-loop` production capture now closes the capture-time output
@@ -1023,6 +1042,11 @@ loads, and all other records or descriptor families fail before effects. The
 one declaration exception is production's byte-exact four-element
 `XYZRHW|DIFFUSE|TEX1` FVF expansion; its descriptor, immutable payload digest,
 bootstrap identity, factory creation, and release are all checked explicitly.
+Texture and surface admission first parses the canonical V2 grammar shared
+with the capture validator. The bounded provider then accepts only its
+single-sample uncompressed 2D capability subset; a canonical cube, volume,
+compressed, or otherwise unsupported resource reports `UnsupportedGrammar`
+without a legacy descriptor fallback or provider effect.
 
 The native provider fixture covers combined and three-event command-chunk
 boundaries, negative near-misses, and production Metal replay. On the Apple M1

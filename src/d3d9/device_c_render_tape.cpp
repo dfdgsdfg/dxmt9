@@ -18,79 +18,92 @@ bool checkedMul(std::uint64_t a, std::uint64_t b,
 bool checkedAdd(std::uint64_t a, std::uint64_t b,
                 std::uint64_t& out) noexcept;
 
+bool validTextureSubresourceDescriptors(
+    std::span<const std::byte> descriptor,
+    const RenderTapeTextureDescriptorV2& texture) noexcept {
+  RenderTapeTextureDescriptorV2 loaded{};
+  return renderTapeLoadTextureDescriptorV2(descriptor, loaded) &&
+         loaded.schemaVersion == texture.schemaVersion &&
+         loaded.dimension == texture.dimension &&
+         loaded.mipLevelCount == texture.mipLevelCount &&
+         loaded.subresourceCount == texture.subresourceCount &&
+         loaded.initialContentDisposition ==
+             texture.initialContentDisposition &&
+         loaded.reserved0 == texture.reserved0;
+}
+
 bool validDescriptorContentDisposition(
     const RenderTapeObjectDefineHeader& fixed,
     std::span<const std::byte> descriptor) noexcept {
-  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
-      descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+    if (descriptor.size() < sizeof(RenderTapeTextureDescriptorV2))
+      return false;
     RenderTapeTextureDescriptorV2 texture{};
     std::memcpy(&texture, descriptor.data(), sizeof(texture));
-    if (texture.schemaVersion == kRenderTapeTextureDescriptorVersion2) {
-      const auto dimension =
-          static_cast<RenderTapeTextureDimension>(texture.dimension);
-      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
-          texture.initialContentDisposition);
-      std::uint64_t expectedSubresources = texture.mipLevelCount;
-      std::uint64_t subresourceBytes = 0u;
-      std::uint64_t descriptorBytes = 0u;
-      if (dimension == RenderTapeTextureDimension::Cube) {
-        if (!checkedMul(texture.mipLevelCount, 6u, expectedSubresources))
-          return false;
-      } else if (dimension != RenderTapeTextureDimension::Texture2D &&
-                 dimension != RenderTapeTextureDimension::Volume) {
+    if (texture.schemaVersion != kRenderTapeTextureDescriptorVersion2)
+      return false;
+    const auto dimension =
+        static_cast<RenderTapeTextureDimension>(texture.dimension);
+    const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+        texture.initialContentDisposition);
+    std::uint64_t expectedSubresources = texture.mipLevelCount;
+    std::uint64_t subresourceBytes = 0u;
+    std::uint64_t descriptorBytes = 0u;
+    if (dimension == RenderTapeTextureDimension::Cube) {
+      if (!checkedMul(texture.mipLevelCount, 6u, expectedSubresources))
         return false;
-      }
-      if (texture.mipLevelCount == 0u ||
-          texture.subresourceCount != expectedSubresources ||
-          texture.reserved0 != 0u ||
-          !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
-                      subresourceBytes) ||
-          !checkedAdd(sizeof(texture), subresourceBytes, descriptorBytes) ||
-          descriptorBytes != descriptor.size()) {
-        return false;
-      }
-      if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
-        return fixed.expectedContentBytes != 0u &&
-               fixed.expectedContentCount == texture.subresourceCount;
-      }
+    } else if (dimension != RenderTapeTextureDimension::Texture2D &&
+               dimension != RenderTapeTextureDimension::Volume) {
+      return false;
+    }
+    if (texture.mipLevelCount == 0u ||
+        texture.subresourceCount != expectedSubresources ||
+        texture.reserved0 != 0u ||
+        !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
+                    subresourceBytes) ||
+        !checkedAdd(sizeof(texture), subresourceBytes, descriptorBytes) ||
+        descriptorBytes != descriptor.size() ||
+        !validTextureSubresourceDescriptors(descriptor, texture)) {
+      return false;
+    }
+    return disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+           fixed.expectedContentBytes != 0u &&
+           fixed.expectedContentCount == texture.subresourceCount;
+  }
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+    if (descriptor.size() != sizeof(RenderTapeSurfaceDescriptorV2))
+      return false;
+    RenderTapeSurfaceDescriptorV2 surface{};
+    std::memcpy(&surface, descriptor.data(), sizeof(surface));
+    if (surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2 ||
+        surface.surface.resourceType != 1u || surface.surface.width == 0u ||
+        surface.surface.height == 0u || surface.surface.depth == 0u)
+      return false;
+    const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
+    const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+        surface.initialContentDisposition);
+    if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
       return disposition == RenderTapeInitialContentDisposition::Unavailable &&
+             surface.parentTexture.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+             surface.parentTexture.generation != 0u &&
+             surface.parentTexture.objectId != 0u &&
              fixed.expectedContentBytes == 0u &&
              fixed.expectedContentCount == 0u;
     }
-  }
-  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
-      descriptor.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
-    RenderTapeSurfaceDescriptorV2 surface{};
-    std::memcpy(&surface, descriptor.data(), sizeof(surface));
-    if (surface.schemaVersion == kRenderTapeSurfaceDescriptorVersion2) {
-      const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
-      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
-          surface.initialContentDisposition);
-      if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
-        return disposition == RenderTapeInitialContentDisposition::Unavailable &&
-               surface.parentTexture.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
-               surface.parentTexture.generation != 0u &&
-               surface.parentTexture.objectId != 0u &&
-               fixed.expectedContentBytes == 0u &&
-               fixed.expectedContentCount == 0u;
-      }
-      if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
-        return disposition ==
-                   RenderTapeInitialContentDisposition::ProducedPresentOutput &&
-               fixed.expectedContentBytes == 0u &&
-               fixed.expectedContentCount == 0u;
-      }
-      if (storage == RenderTapeSurfaceStorage::Standalone) {
-        return disposition == RenderTapeInitialContentDisposition::CompleteSeed
-                   ? fixed.expectedContentBytes != 0u &&
-                         fixed.expectedContentCount == 1u
-                   : disposition ==
-                             RenderTapeInitialContentDisposition::Unavailable &&
-                         fixed.expectedContentBytes == 0u &&
-                         fixed.expectedContentCount == 0u;
-      }
-      return false;
+    if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+      return disposition ==
+                 RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+             surface.subresource == 0u &&
+             renderTapeZeroIdentity(surface.parentTexture) &&
+             fixed.expectedContentBytes == 0u &&
+             fixed.expectedContentCount == 0u;
     }
+    return storage == RenderTapeSurfaceStorage::Standalone &&
+           disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+           surface.subresource == 0u &&
+           renderTapeZeroIdentity(surface.parentTexture) &&
+           fixed.expectedContentBytes != 0u &&
+           fixed.expectedContentCount == 1u;
   }
   return true;
 }
@@ -398,8 +411,14 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
     return reject(RenderTapeObjectDefineValidationSubreason::DescriptorExtent);
 
   const auto descriptorBytes = descriptor;
-  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
-      descriptorBytes.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+    if (descriptorBytes.size() < sizeof(RenderTapeTextureDescriptorV2)) {
+      detail.descriptorExtentBytes = descriptorBytes.size();
+      detail.descriptorExpectedExtentBytes =
+          sizeof(RenderTapeTextureDescriptorV2);
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+    }
     RenderTapeTextureDescriptorV2 texture{};
     std::memcpy(&texture, descriptorBytes.data(), sizeof(texture));
     detail.descriptorSchemaVersion = texture.schemaVersion;
@@ -407,56 +426,62 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
     detail.descriptorMipLevelCount = texture.mipLevelCount;
     detail.descriptorSubresourceCount = texture.subresourceCount;
     detail.descriptorDisposition = texture.initialContentDisposition;
-    if (texture.schemaVersion == kRenderTapeTextureDescriptorVersion2) {
-      const auto dimension =
-          static_cast<RenderTapeTextureDimension>(texture.dimension);
-      if (dimension != RenderTapeTextureDimension::Texture2D &&
-          dimension != RenderTapeTextureDimension::Cube &&
-          dimension != RenderTapeTextureDimension::Volume) {
-        return reject(
-            RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension);
-      }
-      std::uint64_t expectedSubresources = texture.mipLevelCount;
-      if (dimension == RenderTapeTextureDimension::Cube &&
-          !checkedMul(texture.mipLevelCount, 6u, expectedSubresources)) {
-        return reject(
-            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
-      }
-      std::uint64_t subresourceBytes = 0u;
-      std::uint64_t expectedExtent = 0u;
-      if (texture.mipLevelCount == 0u ||
-          texture.subresourceCount != expectedSubresources ||
-          texture.reserved0 != 0u ||
-          !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
-                      subresourceBytes) ||
-          !checkedAdd(sizeof(texture), subresourceBytes, expectedExtent)) {
-        return reject(
-            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
-      }
-      detail.descriptorExpectedExtentBytes = expectedExtent;
-      detail.descriptorExtentBytes = descriptorBytes.size();
-      if (expectedExtent != descriptorBytes.size()) {
-        return reject(
-            RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
-      }
-      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
-          texture.initialContentDisposition);
-      if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
-        if (fixed.expectedContentBytes == 0u ||
-            fixed.expectedContentCount != texture.subresourceCount) {
-          return reject(RenderTapeObjectDefineValidationSubreason::
-                            TextureDescriptorDisposition);
-        }
-      } else if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
-                 fixed.expectedContentBytes != 0u ||
-                 fixed.expectedContentCount != 0u) {
-        return reject(RenderTapeObjectDefineValidationSubreason::
-                          TextureDescriptorDisposition);
-      }
+    if (texture.schemaVersion != kRenderTapeTextureDescriptorVersion2) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorSchema);
+    }
+    const auto dimension =
+        static_cast<RenderTapeTextureDimension>(texture.dimension);
+    if (dimension != RenderTapeTextureDimension::Texture2D &&
+        dimension != RenderTapeTextureDimension::Cube &&
+        dimension != RenderTapeTextureDimension::Volume) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension);
+    }
+    std::uint64_t expectedSubresources = texture.mipLevelCount;
+    if (dimension == RenderTapeTextureDimension::Cube &&
+        !checkedMul(texture.mipLevelCount, 6u, expectedSubresources)) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+    }
+    std::uint64_t subresourceBytes = 0u;
+    std::uint64_t expectedExtent = 0u;
+    if (texture.mipLevelCount == 0u ||
+        texture.subresourceCount != expectedSubresources ||
+        texture.reserved0 != 0u ||
+        !checkedMul(texture.subresourceCount, sizeof(D9CSurfaceDesc),
+                    subresourceBytes) ||
+        !checkedAdd(sizeof(texture), subresourceBytes, expectedExtent)) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+    }
+    detail.descriptorExpectedExtentBytes = expectedExtent;
+    detail.descriptorExtentBytes = descriptorBytes.size();
+    if (expectedExtent != descriptorBytes.size()) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent);
+    }
+    if (!validTextureSubresourceDescriptors(descriptorBytes, texture)) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension);
+    }
+    const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+        texture.initialContentDisposition);
+    if (disposition != RenderTapeInitialContentDisposition::CompleteSeed ||
+        fixed.expectedContentBytes == 0u ||
+        fixed.expectedContentCount != texture.subresourceCount) {
+      return reject(RenderTapeObjectDefineValidationSubreason::
+                        TextureDescriptorDisposition);
     }
   }
-  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
-      descriptorBytes.size() == sizeof(RenderTapeSurfaceDescriptorV2)) {
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+    if (descriptorBytes.size() != sizeof(RenderTapeSurfaceDescriptorV2)) {
+      detail.descriptorExtentBytes = descriptorBytes.size();
+      detail.descriptorExpectedExtentBytes =
+          sizeof(RenderTapeSurfaceDescriptorV2);
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorExtent);
+    }
     RenderTapeSurfaceDescriptorV2 surface{};
     std::memcpy(&surface, descriptorBytes.data(), sizeof(surface));
     detail.descriptorSchemaVersion = surface.schemaVersion;
@@ -466,48 +491,54 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
     detail.parentTexture = surface.parentTexture;
     detail.descriptorExpectedExtentBytes = sizeof(surface);
     detail.descriptorExtentBytes = descriptorBytes.size();
-    if (surface.schemaVersion == kRenderTapeSurfaceDescriptorVersion2) {
-      const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
-      const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
-          surface.initialContentDisposition);
-      if (storage != RenderTapeSurfaceStorage::Standalone &&
-          storage != RenderTapeSurfaceStorage::TextureSubresource &&
-          storage != RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+    if (surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorSchema);
+    }
+    if (surface.surface.resourceType != 1u || surface.surface.width == 0u ||
+        surface.surface.height == 0u || surface.surface.depth == 0u) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorExtent);
+    }
+    const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
+    const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+        surface.initialContentDisposition);
+    if (storage != RenderTapeSurfaceStorage::Standalone &&
+        storage != RenderTapeSurfaceStorage::TextureSubresource &&
+        storage != RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+      return reject(
+          RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorStorage);
+    }
+    if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
+      if (surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+          !validIdentity(surface.parentTexture)) {
         return reject(
-            RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorStorage);
+            RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorParent);
       }
-      if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
-        if (surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
-            !validIdentity(surface.parentTexture)) {
-          return reject(
-              RenderTapeObjectDefineValidationSubreason::SurfaceDescriptorParent);
-        }
-        if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
-            fixed.expectedContentBytes != 0u ||
-            fixed.expectedContentCount != 0u) {
-          return reject(RenderTapeObjectDefineValidationSubreason::
-                            SurfaceDescriptorDisposition);
-        }
-      } else if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
-        if (disposition !=
-                RenderTapeInitialContentDisposition::ProducedPresentOutput ||
-            fixed.expectedContentBytes != 0u ||
-            fixed.expectedContentCount != 0u) {
-          return reject(RenderTapeObjectDefineValidationSubreason::
-                            SurfaceDescriptorDisposition);
-        }
-      } else if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
-        if (fixed.expectedContentBytes == 0u ||
-            fixed.expectedContentCount != 1u) {
-          return reject(RenderTapeObjectDefineValidationSubreason::
-                            SurfaceDescriptorDisposition);
-        }
-      } else if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
-                 fixed.expectedContentBytes != 0u ||
-                 fixed.expectedContentCount != 0u) {
+      if (disposition != RenderTapeInitialContentDisposition::Unavailable ||
+          fixed.expectedContentBytes != 0u ||
+          fixed.expectedContentCount != 0u) {
         return reject(RenderTapeObjectDefineValidationSubreason::
                           SurfaceDescriptorDisposition);
       }
+    } else if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
+      if (disposition !=
+              RenderTapeInitialContentDisposition::ProducedPresentOutput ||
+          surface.subresource != 0u ||
+          !renderTapeZeroIdentity(surface.parentTexture) ||
+          fixed.expectedContentBytes != 0u ||
+          fixed.expectedContentCount != 0u) {
+        return reject(RenderTapeObjectDefineValidationSubreason::
+                          SurfaceDescriptorDisposition);
+      }
+    } else if (disposition !=
+                   RenderTapeInitialContentDisposition::CompleteSeed ||
+               surface.subresource != 0u ||
+               !renderTapeZeroIdentity(surface.parentTexture) ||
+               fixed.expectedContentBytes == 0u ||
+               fixed.expectedContentCount != 1u) {
+      return reject(RenderTapeObjectDefineValidationSubreason::
+                        SurfaceDescriptorDisposition);
     }
   }
   if (!validDescriptorContentDisposition(fixed, descriptorBytes)) {
@@ -568,6 +599,8 @@ const char* renderTapeObjectDefineValidationSubreasonName(
     return "immutable-payload-digest";
   case RenderTapeObjectDefineValidationSubreason::DescriptorExtent:
     return "descriptor-extent";
+  case RenderTapeObjectDefineValidationSubreason::TextureDescriptorSchema:
+    return "texture-descriptor-schema";
   case RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension:
     return "texture-descriptor-dimension";
   case RenderTapeObjectDefineValidationSubreason::TextureDescriptorExtent:
@@ -1026,29 +1059,15 @@ validateRenderTape(std::span<const std::byte> blob,
           const auto parentDescriptor =
               parentEvent.payload.subspan(sizeof(parentFixed));
           D9CSurfaceDesc parentSurface{};
-          bool parentSurfaceLoaded = false;
           RenderTapeTextureDescriptorV2 parentTexture{};
-          const bool parentIsVersioned =
+          const bool parentSurfaceLoaded =
               parentDescriptor.size() >= sizeof(parentTexture) &&
               load(parentDescriptor, 0u, parentTexture) &&
               parentTexture.schemaVersion ==
-                  kRenderTapeTextureDescriptorVersion2;
-          if (parentIsVersioned &&
-              surface.subresource < parentTexture.subresourceCount) {
-            const auto parentSurfaceOffset =
-                sizeof(parentTexture) +
-                static_cast<std::size_t>(surface.subresource) *
-                    sizeof(parentSurface);
-            parentSurfaceLoaded =
-                load(parentDescriptor, parentSurfaceOffset, parentSurface);
-          } else if (!parentIsVersioned) {
-            // Legacy 2D texture descriptors remain valid and are still
-            // sufficient for a level alias. Cube descriptors are always
-            // versioned because their flat face*mip identity cannot be
-            // represented by the legacy levelCount shape.
-            parentSurfaceLoaded = renderTapeTextureSubresourceDescriptor(
-                parentDescriptor, surface.subresource, parentSurface);
-          }
+                  kRenderTapeTextureDescriptorVersion2 &&
+              surface.subresource < parentTexture.subresourceCount &&
+              renderTapeTextureSubresourceDescriptor(
+                  parentDescriptor, surface.subresource, parentSurface);
           if (!parentSurfaceLoaded ||
               !renderTapeSurfaceDescriptorsEqual(surface.surface,
                                                   parentSurface)) {

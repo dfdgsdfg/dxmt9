@@ -54,7 +54,6 @@ using dxmt9::d3d9::pe::process_vertices::ProcessShaderIo;
 using dxmt9::d3d9::pe::process_vertices::vertexElementTypeSize;
 using dxmt9::d3d9::RenderTapeQueryDescriptor;
 using dxmt9::d3d9::RenderTapeShaderDescriptor;
-using dxmt9::d3d9::RenderTapeTextureDescriptor;
 using dxmt9::d3d9::RenderTapeTextureDescriptorV2;
 using dxmt9::d3d9::RenderTapeVertexDeclDescriptor;
 
@@ -742,6 +741,7 @@ struct RenderTapeLiveRegistry {
     // state the admission displaced, so a demotion restores the object rather
     // than approximating it from the descriptor.
     dxmt9::d3d9::RenderTapePresentOutputRole presentOutputRole{};
+    std::vector<std::byte> presentOutputPriorDescriptor{};
     std::uint32_t presentOutputPriorContentCount = 0u;
     std::vector<std::vector<std::byte>> presentOutputPriorContent{};
 };
@@ -773,46 +773,8 @@ static bool renderTapeDescriptorSubresourceCountFits(
 static bool renderTapeTextureSubresourceDescriptor(
     std::span<const std::byte> descriptor, std::uint32_t subresource,
     D9CSurfaceDesc &out) noexcept {
-    if (descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
-        RenderTapeTextureDescriptorV2 texture{};
-        std::memcpy(&texture, descriptor.data(), sizeof(texture));
-        if (texture.schemaVersion ==
-            dxmt9::d3d9::kRenderTapeTextureDescriptorVersion2) {
-            if (subresource >= texture.subresourceCount ||
-                !renderTapeDescriptorSubresourceCountFits(
-                    texture.subresourceCount, sizeof(texture)) ||
-                descriptor.size() !=
-                    sizeof(texture) +
-                        static_cast<std::size_t>(texture.subresourceCount) *
-                            sizeof(D9CSurfaceDesc)) {
-                return false;
-            }
-            std::memcpy(&out,
-                        descriptor.data() + sizeof(texture) +
-                            static_cast<std::size_t>(subresource) *
-                                sizeof(D9CSurfaceDesc),
-                        sizeof(out));
-            return true;
-        }
-    }
-    if (descriptor.size() < sizeof(RenderTapeTextureDescriptor))
-        return false;
-    RenderTapeTextureDescriptor texture{};
-    std::memcpy(&texture, descriptor.data(), sizeof(texture));
-    if (subresource >= texture.levelCount)
-        return false;
-    if (subresource == 0u) {
-        out = texture.level0;
-        return true;
-    }
-    const auto offset = sizeof(texture) +
-        (static_cast<std::size_t>(subresource) - 1u) * sizeof(D9CSurfaceDesc);
-    if (offset > descriptor.size() ||
-        descriptor.size() - offset < sizeof(out)) {
-        return false;
-    }
-    std::memcpy(&out, descriptor.data() + offset, sizeof(out));
-    return true;
+    return dxmt9::d3d9::renderTapeTextureSubresourceDescriptor(
+        descriptor, subresource, out);
 }
 
 static bool renderTapeSameIdentity(
@@ -7154,24 +7116,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 entry.contentCount = 1u;
                 break;
             case D9C_CHUNK_HANDLE_KIND_SURFACE:
-                if (entry.descriptor.size() ==
-                    sizeof(dxmt9::d3d9::RenderTapeSurfaceDescriptorV2)) {
-                    dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
-                    std::memcpy(&surface, entry.descriptor.data(),
-                                sizeof(surface));
-                    if (surface.schemaVersion !=
-                            dxmt9::d3d9::kRenderTapeSurfaceDescriptorVersion2 ||
-                        surface.storage != static_cast<std::uint32_t>(
-                            dxmt9::d3d9::RenderTapeSurfaceStorage::
-                                TextureSubresource) ||
-                        surface.initialContentDisposition !=
-                            static_cast<std::uint32_t>(dxmt9::d3d9::
-                                RenderTapeInitialContentDisposition::Unavailable) ||
-                        surface.parentTexture.kind !=
-                            D9C_CHUNK_HANDLE_KIND_TEXTURE ||
-                        surface.parentTexture.generation == 0u ||
-                        surface.parentTexture.objectId == 0u) {
-                        markRenderTapeInvalidOnce("surface_descriptor_v2",
+                dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+                if (!dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
+                        entry.descriptor, surface)) {
+                    markRenderTapeInvalidOnce("surface_descriptor_v2",
+                                              &object);
+                    return RenderTapeObjectRegistration::Rejected;
+                }
+                if (surface.storage == static_cast<std::uint32_t>(
+                                           dxmt9::d3d9::RenderTapeSurfaceStorage::
+                                               TextureSubresource)) {
+                    if (role == RenderTapeLiveObject::Role::PresentOutput) {
+                        markRenderTapeInvalidOnce("surface_descriptor_role",
                                                   &object);
                         return RenderTapeObjectRegistration::Rejected;
                     }
@@ -7180,72 +7136,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     entry.contentCount = 0u;
                     break;
                 }
-                if (entry.descriptor.size() != sizeof(D9CSurfaceDesc)) {
-                    markRenderTapeInvalidOnce("surface_descriptor_size", &object);
+                if ((role == RenderTapeLiveObject::Role::PresentOutput) !=
+                    (surface.storage == static_cast<std::uint32_t>(
+                         dxmt9::d3d9::RenderTapeSurfaceStorage::
+                             SwapchainBackbuffer))) {
+                    markRenderTapeInvalidOnce("surface_descriptor_role", &object);
                     return RenderTapeObjectRegistration::Rejected;
                 }
-                // The implicit swap-chain backbuffer is the output produced by
-                // the captured interval. It is an oracle target, not a
-                // CPU-seeded input; a future prior-content capture must add a
-                // proof before it can use this disposition.
                 entry.contentCount =
                     role == RenderTapeLiveObject::Role::PresentOutput ? 0u
                                                                         : 1u;
                 break;
             case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
-                if (entry.descriptor.size() >=
-                    sizeof(RenderTapeTextureDescriptorV2)) {
-                    RenderTapeTextureDescriptorV2 texture{};
-                    std::memcpy(&texture, entry.descriptor.data(),
-                                sizeof(texture));
-                    if (texture.schemaVersion ==
-                        dxmt9::d3d9::kRenderTapeTextureDescriptorVersion2) {
-                        const auto disposition =
-                            static_cast<dxmt9::d3d9::RenderTapeInitialContentDisposition>(
-                                texture.initialContentDisposition);
-                        if (texture.mipLevelCount == 0u ||
-                            texture.subresourceCount == 0u ||
-                            texture.reserved0 != 0u ||
-                            disposition != dxmt9::d3d9::
-                                RenderTapeInitialContentDisposition::CompleteSeed ||
-                            !renderTapeDescriptorSubresourceCountFits(
-                                texture.subresourceCount, sizeof(texture)) ||
-                            entry.descriptor.size() !=
-                                sizeof(texture) +
-                                    static_cast<std::size_t>(
-                                        texture.subresourceCount) *
-                                        sizeof(D9CSurfaceDesc)) {
-                            markRenderTapeInvalidOnce(
-                                "texture_descriptor_v2", &object);
-                            return RenderTapeObjectRegistration::Rejected;
-                        }
-                        entry.contentCount = texture.subresourceCount;
-                        break;
-                    }
-                }
-                if (entry.descriptor.size() < sizeof(RenderTapeTextureDescriptor)) {
-                    markRenderTapeInvalidOnce("texture_descriptor_short", &object);
+                RenderTapeTextureDescriptorV2 texture{};
+                if (!dxmt9::d3d9::renderTapeLoadTextureDescriptorV2(
+                        entry.descriptor, texture) ||
+                    texture.initialContentDisposition !=
+                        static_cast<std::uint32_t>(dxmt9::d3d9::
+                            RenderTapeInitialContentDisposition::CompleteSeed)) {
+                    markRenderTapeInvalidOnce("texture_descriptor_v2", &object);
                     return RenderTapeObjectRegistration::Rejected;
                 }
-                RenderTapeTextureDescriptor texture{};
-                std::memcpy(&texture, entry.descriptor.data(), sizeof(texture));
-                if (texture.levelCount == 0u) {
-                    markRenderTapeInvalidOnce("texture_level_count_zero", &object);
-                    return RenderTapeObjectRegistration::Rejected;
-                }
-                const auto tailLevels =
-                    static_cast<std::size_t>(texture.levelCount - 1u);
-                if (tailLevels >
-                        (std::numeric_limits<std::size_t>::max() -
-                         sizeof(RenderTapeTextureDescriptor)) /
-                            sizeof(D9CSurfaceDesc) ||
-                    entry.descriptor.size() !=
-                        sizeof(RenderTapeTextureDescriptor) +
-                            tailLevels * sizeof(D9CSurfaceDesc)) {
-                    markRenderTapeInvalidOnce("texture_descriptor_size", &object);
-                    return RenderTapeObjectRegistration::Rejected;
-                }
-                entry.contentCount = texture.levelCount;
+                entry.contentCount = texture.subresourceCount;
                 break;
             }
             default:
@@ -7328,9 +7240,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool releaseAdmissionRef = role.captureOwned;
         const auto priorContentCount =
             renderTapeRegistry_->presentOutputPriorContentCount;
+        auto priorDescriptor =
+            std::move(renderTapeRegistry_->presentOutputPriorDescriptor);
         auto priorContent =
             std::move(renderTapeRegistry_->presentOutputPriorContent);
         role = {};
+        renderTapeRegistry_->presentOutputPriorDescriptor.clear();
         renderTapeRegistry_->presentOutputPriorContentCount = 0u;
         renderTapeRegistry_->presentOutputPriorContent.clear();
         if (transition ==
@@ -7344,6 +7259,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (transition ==
             dxmt9::d3d9::RenderTapePresentOutputRoleTransition::Demote) {
             prior->role = RenderTapeLiveObject::Role::Ordinary;
+            prior->descriptor = std::move(priorDescriptor);
             prior->contentCount = priorContentCount;
             prior->content = std::move(priorContent);
             if (releaseAdmissionRef)
@@ -7428,6 +7344,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return false;
         }
         renderTapeOutputDesc_ = descriptor;
+        const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 outputDescriptor{
+            .schemaVersion =
+                dxmt9::d3d9::kRenderTapeSurfaceDescriptorVersion2,
+            .storage = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeSurfaceStorage::SwapchainBackbuffer),
+            .initialContentDisposition = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeInitialContentDisposition::
+                    ProducedPresentOutput),
+            .surface = descriptor,
+        };
         const dxmt9::d3d9::pe::PeWireObjectRef object{
             .identity = identity,
             .object = surface,
@@ -7444,22 +7370,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool captureOwned = existing == nullptr;
         if (existing) {
             if (!roleRetained) {
+                renderTapeRegistry_->presentOutputPriorDescriptor =
+                    existing->descriptor;
                 renderTapeRegistry_->presentOutputPriorContentCount =
                     existing->contentCount;
                 renderTapeRegistry_->presentOutputPriorContent =
                     std::move(existing->content);
             }
             existing->role = RenderTapeLiveObject::Role::PresentOutput;
+            existing->descriptor.assign(
+                reinterpret_cast<const std::byte *>(&outputDescriptor),
+                reinterpret_cast<const std::byte *>(&outputDescriptor + 1u));
             existing->contentCount = 0u;
             existing->content.clear();
         } else {
+            renderTapeRegistry_->presentOutputPriorDescriptor.clear();
             renderTapeRegistry_->presentOutputPriorContentCount = 0u;
             renderTapeRegistry_->presentOutputPriorContent.clear();
             registerRenderTapeObject(
                 object,
                 std::span<const std::byte>(
-                    reinterpret_cast<const std::byte *>(&descriptor),
-                    sizeof(descriptor)),
+                    reinterpret_cast<const std::byte *>(&outputDescriptor),
+                    sizeof(outputDescriptor)),
                 {}, RenderTapeLiveObject::Role::PresentOutput);
         }
         backBuffer->Release();
@@ -7482,7 +7414,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "capture_owned=%d",
             identity.kind, identity.generation,
             static_cast<unsigned long long>(identity.objectId),
-            sizeof(descriptor),
+            sizeof(outputDescriptor),
             renderTapeRegistry_->presentOutputRole.captureOwned ? 1 : 0);
         return true;
     }
@@ -7570,11 +7502,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 entry.descriptor, subresource, out);
         }
         if (object.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
-            subresource != 0u ||
-            entry.descriptor.size() != sizeof(D9CSurfaceDesc)) {
+            subresource != 0u) {
             return false;
         }
-        std::memcpy(&out, entry.descriptor.data(), sizeof(out));
+        dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+        if (!dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
+                entry.descriptor, surface) ||
+            surface.storage != static_cast<std::uint32_t>(
+                                   dxmt9::d3d9::RenderTapeSurfaceStorage::
+                                       Standalone)) {
+            return false;
+        }
+        out = surface.surface;
         return true;
     }
 
@@ -7839,7 +7778,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             if (object->identity.kind ==
                                 D9C_CHUNK_HANDLE_KIND_TEXTURE) {
                                 RenderTapeTextureDescriptorV2 texture{};
-                                std::uint32_t textureVersion = 1u;
+                                std::uint32_t textureVersion = 0u;
                                 std::uint32_t levels = 0u;
                                 std::uint32_t count = 0u;
                                 if (object->descriptor.size() >=
@@ -7852,13 +7791,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         textureVersion = texture.schemaVersion;
                                         levels = texture.mipLevelCount;
                                         count = texture.subresourceCount;
-                                    } else if (object->descriptor.size() >=
-                                               sizeof(RenderTapeTextureDescriptor)) {
-                                        RenderTapeTextureDescriptor legacy{};
-                                        std::memcpy(&legacy, object->descriptor.data(),
-                                                    sizeof(legacy));
-                                        levels = legacy.levelCount;
-                                        count = legacy.levelCount;
                                     }
                                 }
                                 D9CSurfaceDesc desc{};
@@ -7883,12 +7815,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             } else if (object->identity.kind ==
                                        D9C_CHUNK_HANDLE_KIND_SURFACE) {
                                 D9CSurfaceDesc desc{};
-                                const bool hasDesc =
-                                    object->descriptor.size() == sizeof(desc);
-                                if (hasDesc) {
-                                    std::memcpy(&desc, object->descriptor.data(),
-                                                sizeof(desc));
-                                }
+                                dxmt9::d3d9::RenderTapeSurfaceDescriptorV2
+                                    surface{};
+                                const bool hasDesc = dxmt9::d3d9::
+                                    renderTapeLoadSurfaceDescriptorV2(
+                                        object->descriptor, surface);
+                                if (hasDesc)
+                                    desc = surface.surface;
                                 dxmt9DeviceInfoLog(
                                     "render_tape_capture missing_seed identity_kind=%u "
                                     "generation=%u object_id=%llu subresource=%u "
@@ -9914,11 +9847,20 @@ public:
         const D9CSurfaceDesc &descriptor) noexcept override {
         if (!IsRenderTapeCaptureTrackingEnabledForChild())
             return;
+        const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 standalone{
+            .schemaVersion =
+                dxmt9::d3d9::kRenderTapeSurfaceDescriptorVersion2,
+            .storage = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone),
+            .initialContentDisposition = static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeInitialContentDisposition::CompleteSeed),
+            .surface = descriptor,
+        };
         notifyRenderTapeCreatedObject(
             surface,
             std::span<const std::byte>(
-                reinterpret_cast<const std::byte *>(&descriptor),
-                sizeof(descriptor)));
+                reinterpret_cast<const std::byte *>(&standalone),
+                sizeof(standalone)));
     }
 
     bool retireRenderTapeObject(
@@ -10124,27 +10066,11 @@ public:
             // descriptors are already recorded as a registry rejection.
             return;
         }
-        if (!IsRenderTapeCaptureActiveForChild())
-            return;
-        const auto *registered = findRenderTapeObject(object);
-        if (registered && registered->lifetime.textureAlias &&
-            !materializeRenderTapeObjectForReference(
-                registered->aliasParentTexture)) {
-            // A texture-derived surface is not self-contained: its exact
-            // parent identity must be admitted before the alias definition.
-            // This also closes over a pruned pre-arm parent before the first
-            // alias reference can reach the journal validator.
-            return;
-        }
-        NotifyRenderTapeObjectDefineForChild(object, descriptor,
-                                             immutablePayload);
-        if (IsRenderTapeCaptureActiveForChild()) {
-            try {
-                renderTapeAdmittedIdentities_.push_back(object.identity);
-            } catch (...) {
-                abortRenderTapeCapture("object_define_identity_allocation");
-            }
-        }
+        // A newly created frame-tape identity is materialized immediately
+        // before its first command/control reference. That cold JIT point can
+        // require complete seeds and emit the exact descriptor plus mutations
+        // transactionally; creation alone cannot claim initialized bytes.
+        // Sequence-tape deliberately rejects such post-arm identities.
     }
     void notifyRenderTapeCreatedBuffer(
         D9CBuffer *buffer,
@@ -10176,58 +10102,6 @@ public:
             dxmt9c_texture_get_level_count(texture);
         if (mipLevelCount == 0u) {
             AbortRenderTapeCaptureForChild();
-            return;
-        }
-        D9CSurfaceDesc level0{};
-        if (FAILED(hr32(dxmt9c_texture_get_level_desc(texture, 0u,
-                                                      &level0)))) {
-            AbortRenderTapeCaptureForChild();
-            return;
-        }
-        // Versioned descriptors are required for exact texture-subresource
-        // aliases. Cube surfaces use flat face*mip identities for every
-        // format; 2D textures retain the legacy descriptor when no alias
-        // metadata is needed, preserving the bounded provider grammar.
-        const bool versionedSubresourceCapture =
-            dimension == dxmt9::d3d9::RenderTapeTextureDimension::Cube ||
-            level0.format == D3DFMT_DXT1 || level0.format == D3DFMT_DXT3 ||
-            level0.format == D3DFMT_DXT5;
-        if (!versionedSubresourceCapture) {
-            const RenderTapeTextureDescriptor descriptor{
-                .level0 = level0,
-                .levelCount = mipLevelCount,
-            };
-            const auto tailLevels =
-                static_cast<std::size_t>(mipLevelCount - 1u);
-            if (tailLevels >
-                (std::numeric_limits<std::size_t>::max() -
-                 sizeof(RenderTapeTextureDescriptor)) /
-                    sizeof(D9CSurfaceDesc)) {
-                AbortRenderTapeCaptureForChild();
-                return;
-            }
-            std::vector<std::byte> descriptorBytes;
-            try {
-                descriptorBytes.resize(
-                    sizeof(descriptor) + tailLevels * sizeof(D9CSurfaceDesc));
-            } catch (...) {
-                AbortRenderTapeCaptureForChild();
-                return;
-            }
-            std::memcpy(descriptorBytes.data(), &descriptor, sizeof(descriptor));
-            for (std::uint32_t level = 1u; level < mipLevelCount; ++level) {
-                D9CSurfaceDesc levelDesc{};
-                if (FAILED(hr32(dxmt9c_texture_get_level_desc(
-                        texture, level, &levelDesc)))) {
-                    AbortRenderTapeCaptureForChild();
-                    return;
-                }
-                std::memcpy(descriptorBytes.data() + sizeof(descriptor) +
-                                static_cast<std::size_t>(level - 1u) *
-                                    sizeof(D9CSurfaceDesc),
-                            &levelDesc, sizeof(levelDesc));
-            }
-            notifyRenderTapeCreatedObject(object, descriptorBytes);
             return;
         }
         std::uint32_t subresourceCount = mipLevelCount;

@@ -52,8 +52,19 @@ public:
     ++events;
     return true;
   }
-  bool objectDefine(const RenderTapeObjectDefineHeader&,
-                    std::span<const std::byte>) override {
+  bool objectDefine(const RenderTapeObjectDefineHeader& fixed,
+                    std::span<const std::byte> descriptor) override {
+    if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+      RenderTapeTextureDescriptorV2 texture{};
+      if (!renderTapeLoadTextureDescriptorV2(descriptor, texture)) {
+        return false;
+      }
+      ++textureDescriptorsV2;
+    } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+      RenderTapeSurfaceDescriptorV2 surface{};
+      if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface)) return false;
+      ++surfaceDescriptorsV2;
+    }
     ++defines;
     ++events;
     return true;
@@ -96,6 +107,8 @@ public:
   std::uint64_t events = 0u;
   std::uint64_t bootstraps = 0u;
   std::uint64_t defines = 0u;
+  std::uint64_t textureDescriptorsV2 = 0u;
+  std::uint64_t surfaceDescriptorsV2 = 0u;
   std::uint64_t mutations = 0u;
   std::uint64_t mutationBytes = 0u;
   std::uint64_t chunks = 0u;
@@ -482,6 +495,10 @@ int main(int argc, char** argv) {
               << sink.events
               << ",\"bootstraps\":" << sink.bootstraps
               << ",\"defines\":" << sink.defines
+              << ",\"texture_descriptors_v2\":"
+              << sink.textureDescriptorsV2
+              << ",\"surface_descriptors_v2\":"
+              << sink.surfaceDescriptorsV2
               << ",\"mutations\":" << sink.mutations
               << ",\"mutation_bytes\":" << sink.mutationBytes
               << ",\"chunks\":" << sink.chunks

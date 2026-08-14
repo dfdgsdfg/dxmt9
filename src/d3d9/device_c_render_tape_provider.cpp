@@ -116,7 +116,8 @@ struct PreflightPlan {
   D9CWireObjectIdentity outputIdentity{};
   D9CSurfaceDesc outputDesc{};
   D9CWireObjectIdentity textureIdentity{};
-  RenderTapeTextureDescriptor textureDesc{};
+  RenderTapeTextureDescriptorV2 textureDesc{};
+  D9CSurfaceDesc textureLevel0{};
   D9CWireObjectIdentity vertexDeclarationIdentity{};
 };
 
@@ -383,30 +384,49 @@ bool acceptedSurface(const D9CSurfaceDesc& desc) {
   return desc.format == 21u || desc.format == 22u;
 }
 
+std::uint32_t mipExtent(std::uint32_t extent,
+                        std::uint32_t mipLevel) noexcept {
+  return mipLevel >= 32u ? 1u : std::max(1u, extent >> mipLevel);
+}
+
 bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
-                               const RenderTapeTextureDescriptor& texture) {
-  if (texture.levelCount == 0u || texture.level0.resourceType != 3u ||
-      texture.level0.width == 0u || texture.level0.height == 0u ||
-      texture.level0.depth != 1u || texture.level0.pool != 0u ||
-      texture.level0.multiSampleType != 0u ||
-      texture.level0.multiSampleQuality != 0u ||
-      (texture.level0.usage & 3u) != 0u) return false;
-  const auto format = devicec::fmtFromD3D(texture.level0.format);
+                               const RenderTapeTextureDescriptorV2& texture,
+                               D9CSurfaceDesc& level0) {
+  RenderTapeTextureDescriptorV2 canonical{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, canonical) ||
+      canonical.dimension != texture.dimension ||
+      canonical.mipLevelCount != texture.mipLevelCount ||
+      canonical.subresourceCount != texture.subresourceCount ||
+      canonical.initialContentDisposition !=
+          texture.initialContentDisposition ||
+      texture.dimension !=
+          static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
+      texture.mipLevelCount == 0u ||
+      texture.subresourceCount != texture.mipLevelCount ||
+      texture.initialContentDisposition != static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed) ||
+      texture.reserved0 != 0u ||
+      descriptor.size() !=
+          sizeof(texture) +
+              static_cast<std::size_t>(texture.subresourceCount) *
+                  sizeof(D9CSurfaceDesc) ||
+      !load(descriptor, sizeof(texture), level0) ||
+      level0.resourceType != 3u || level0.width == 0u ||
+      level0.height == 0u || level0.depth != 1u || level0.pool != 0u ||
+      level0.multiSampleType != 0u || level0.multiSampleQuality != 0u ||
+      (level0.usage & 3u) != 0u) return false;
+  const auto format = devicec::fmtFromD3D(level0.format);
   if (format == core::Format::Unknown || core::isCompressedFormat(format))
     return false;
-  const std::size_t expectedBytes = sizeof(RenderTapeTextureDescriptor) +
-      static_cast<std::size_t>(texture.levelCount - 1u) *
-          sizeof(D9CSurfaceDesc);
-  if (descriptor.size() != expectedBytes) return false;
-  for (std::uint32_t level = 1u; level < texture.levelCount; ++level) {
+  for (std::uint32_t level = 1u; level < texture.mipLevelCount; ++level) {
     D9CSurfaceDesc desc{};
-    if (!load(descriptor, sizeof(RenderTapeTextureDescriptor) +
-                              (level - 1u) * sizeof(D9CSurfaceDesc), desc) ||
-        desc.format != texture.level0.format || desc.resourceType != 3u ||
-        desc.usage != texture.level0.usage || desc.pool != texture.level0.pool ||
+    if (!load(descriptor, sizeof(texture) +
+                              level * sizeof(D9CSurfaceDesc), desc) ||
+        desc.format != level0.format || desc.resourceType != 3u ||
+        desc.usage != level0.usage || desc.pool != level0.pool ||
         desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
-        desc.width != std::max(1u, texture.level0.width >> level) ||
-        desc.height != std::max(1u, texture.level0.height >> level) ||
+        desc.width != mipExtent(level0.width, level) ||
+        desc.height != mipExtent(level0.height, level) ||
         desc.depth != 1u) return false;
   }
   return true;
@@ -481,14 +501,22 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               RenderTapeDigestValidity::NotCaptured) &&
           fixed.immutablePayloadBytes == 0u;
       if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
-        D9CSurfaceDesc surface{};
+        RenderTapeSurfaceDescriptorV2 surface{};
         if (!noImmutablePayload || descriptor.size() != sizeof(surface) ||
-            !load(descriptor, 0u, surface) || !acceptedSurface(surface) ||
+            !load(descriptor, 0u, surface) ||
+            surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2 ||
+            surface.storage != static_cast<std::uint32_t>(
+                RenderTapeSurfaceStorage::SwapchainBackbuffer) ||
+            surface.initialContentDisposition != static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedPresentOutput) ||
+            surface.subresource != 0u ||
+            !renderTapeZeroIdentity(surface.parentTexture) ||
+            !acceptedSurface(surface.surface) ||
             fixed.expectedContentBytes != 0u ||
             fixed.expectedContentCount != 0u ||
             candidate.outputIdentity.objectId != 0u) goto unsupported;
         candidate.outputIdentity = fixed.identity;
-        candidate.outputDesc = surface;
+        candidate.outputDesc = surface.surface;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
         D9CBufferDesc buffer{};
         if (!noImmutablePayload || descriptor.size() != sizeof(buffer) ||
@@ -496,15 +524,17 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
             buffer.size == 0u || fixed.expectedContentCount != 1u ||
             fixed.expectedContentBytes != buffer.size) goto unsupported;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
-        RenderTapeTextureDescriptor texture{};
+        RenderTapeTextureDescriptorV2 texture{};
+        D9CSurfaceDesc level0{};
         if (!noImmutablePayload || descriptor.size() < sizeof(texture) ||
             !load(descriptor, 0u, texture) ||
-            !acceptedTextureDescriptor(descriptor, texture) ||
-            fixed.expectedContentCount != texture.levelCount ||
+            !acceptedTextureDescriptor(descriptor, texture, level0) ||
+            fixed.expectedContentCount != texture.subresourceCount ||
             fixed.expectedContentBytes == 0u ||
             candidate.textureIdentity.objectId != 0u) goto unsupported;
         candidate.textureIdentity = fixed.identity;
         candidate.textureDesc = texture;
+        candidate.textureLevel0 = level0;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
         const Definition definition{.fixed = fixed, .descriptor = descriptor};
         if (candidate.vertexDeclarationIdentity.objectId != 0u ||
@@ -692,8 +722,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
   if (anyTexturedDraw) {
     std::uint64_t texturePixels = 0u;
     std::uint64_t tightTextureBytes = 0u;
-    if (!checkedMul(candidate.textureDesc.level0.width,
-                    candidate.textureDesc.level0.height, texturePixels) ||
+    if (!checkedMul(candidate.textureLevel0.width,
+                    candidate.textureLevel0.height, texturePixels) ||
         !checkedMul(texturePixels, 4u, tightTextureBytes)) goto unsupported;
     const auto textureDefinition = std::find_if(
         candidate.definitions.begin(), candidate.definitions.end(),
@@ -716,11 +746,11 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         candidate.textureIdentity.objectId == 0u ||
         textureDefinition == candidate.definitions.end() ||
         !sameIdentity(drawState.texture, candidate.textureIdentity) ||
-        candidate.textureDesc.levelCount != 1u ||
-        candidate.textureDesc.level0.format != 21u ||
+        candidate.textureDesc.mipLevelCount != 1u ||
+        candidate.textureLevel0.format != 21u ||
         textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
         textureDefinition->fixed.expectedContentBytes %
-                candidate.textureDesc.level0.height != 0u ||
+                candidate.textureLevel0.height != 0u ||
         candidate.initialMutations.size() != 1u ||
         !mutationShapeMatches(candidate.initialMutations[0]) ||
         blobs.size() != expectedBlobs ||
@@ -885,11 +915,13 @@ FrameTapeReplayResult replayRenderTapeIdentity(
           : static_cast<void*>(dxmt9c_device_create_vertex_buffer(
                 device, desc.size, desc.usage, desc.fvf, desc.pool));
     } else if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
-      RenderTapeTextureDescriptor desc{};
+      RenderTapeTextureDescriptorV2 desc{};
+      D9CSurfaceDesc level0{};
       load(definition.descriptor, 0u, desc);
+      load(definition.descriptor, sizeof(desc), level0);
       value = dxmt9c_device_create_texture(
-          device, desc.level0.width, desc.level0.height, desc.levelCount,
-          desc.level0.usage, desc.level0.format, desc.level0.pool);
+          device, level0.width, level0.height, desc.mipLevelCount,
+          level0.usage, level0.format, level0.pool);
     } else if (definition.fixed.identity.kind ==
                D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
       const auto* blob = findBlob(blobs, definition.fixed.immutablePayloadDigest);
