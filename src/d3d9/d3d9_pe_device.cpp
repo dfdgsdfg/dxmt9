@@ -8582,8 +8582,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         const D9CWireObjectIdentity &identity,
                                         const dxmt9::d3d9::RenderTapeOriginLocator
                                             &originLocator,
-                                        std::vector<D9CWireObjectIdentity>
-                                            &producedIdentities) -> bool {
+                                        std::optional<D9CWireObjectIdentity>
+                                            &producedIdentity) -> bool {
             if (renderTapeObjectAdmitted(identity))
                 return true;
             if (!renderTapeRegistry_)
@@ -8597,7 +8597,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 return false;
             if (object->lifetime.textureAlias &&
                 !self(self, object->aliasParentTexture, originLocator,
-                      producedIdentities))
+                      producedIdentity))
                 return false;
             const bool incomplete =
                 object->contentCount != object->content.size() ||
@@ -8614,15 +8614,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (!dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
                     imported, originLocator.originIdentity, identity))
                 return false;
-            if (std::none_of(producedIdentities.begin(), producedIdentities.end(),
-                             [&](const auto& prior) {
-                               return renderTapeSameIdentity(prior, identity);
-                             })) {
-                producedIdentities.push_back(identity);
-            }
-            return producedIdentities.size() <= 1u;
+            if (producedIdentity &&
+                !renderTapeSameIdentity(*producedIdentity, identity))
+                return false;
+            producedIdentity = identity;
+            return true;
         };
-        std::vector<D9CWireObjectIdentity> producedIdentities;
+        std::optional<D9CWireObjectIdentity> producedIdentity;
         for (std::size_t handleIndex = 0u;
              handleIndex < imported.handles.size(); ++handleIndex) {
             const auto &handle = imported.handles[handleIndex];
@@ -8635,7 +8633,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (originLocator.status !=
                     dxmt9::d3d9::RenderTapeOriginLocatorStatus::Accepted ||
                 !canMaterialize(canMaterialize, identity, originLocator,
-                                producedIdentities)) {
+                                producedIdentity)) {
                 abortRenderTapeCapture("command_chunk_produced_pass_preflight");
                 return false;
             }
