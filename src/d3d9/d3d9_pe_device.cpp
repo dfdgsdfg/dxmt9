@@ -7147,7 +7147,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 }
                 entry.contentCount = 1u;
                 break;
-            case D9C_CHUNK_HANDLE_KIND_SURFACE:
+            case D9C_CHUNK_HANDLE_KIND_SURFACE: {
                 dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
                 if (!dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
                         entry.descriptor, surface)) {
@@ -7179,6 +7179,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     role == RenderTapeLiveObject::Role::PresentOutput ? 0u
                                                                         : 1u;
                 break;
+            }
             case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
                 RenderTapeTextureDescriptorV2 texture{};
                 if (!dxmt9::d3d9::renderTapeLoadTextureDescriptorV2(
