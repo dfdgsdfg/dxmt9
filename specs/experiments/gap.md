@@ -314,6 +314,30 @@ multi-mip cases remain fail-closed. Native provider planning can construct the
 texture without an initial mutation and construct the alias after its parent;
 no wild visual or promotion evidence is claimed here.
 
+### GT2 r28 produced-pass admission retry (capture-only, failed gate)
+
+The bounded 32-second GT2 r28 run at
+`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-produced-pass-r28-20260815`
+used the production PE/unix provider builds with frame-tape capture enabled.
+The first capture interval reached the new admission seam but failed closed
+once with `command_chunk_produced_pass_preflight`. No produced identity or
+specific preflight rejection reason is currently emitted, so this run does not
+prove that the r27 alias/full-clear pair itself was the rejected handle. After
+that failure, 183 later arm attempts failed earlier with
+`bootstrap_referenced_incomplete_seed`; each was reported as
+`first_abort=arm_validation`. The output root
+`experiments/render-tapes/gt2-produced-pass-r28-20260815` remained empty.
+
+Therefore the native `ProducedByCapturedPass` value contract and provider path
+remain implemented, but the GT2 production-capture gate is not satisfied. The
+next bounded increment must first add typed, generation-qualified attribution
+for each preflight rejection. If the rejected identity is already referenced
+by `BootstrapState`, the start-state producer must carry an independently
+validated produced obligation across the bootstrap-to-command boundary; it
+must not infer completeness from the later clear or silently omit the live
+reference. No complete GT2 bundle, replay result, visual oracle, or promotion
+claim follows from r28.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with
