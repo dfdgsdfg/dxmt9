@@ -266,15 +266,18 @@ measured the bounded typed diagnostic: texture kind, generation 14, object id
 4294967525, Texture2D, one mip and one subresource, 1024x768 format 22,
 `D3DUSAGE_RENDERTARGET`, `D3DPOOL_DEFAULT`, no multisampling, and an exact
 3,145,728-byte tight extent. The original consumer provenance is handle 0 of
-record 0, type 28 (`APPLY_STATE`), but r25 identifies only that resolved storage
-and does not identify an origin role or prove an actual GPU read/write. The
-capture-only origin locator now preserves the original handle identity while
-alias-parent recursion resolves storage, and classifies `APPLY_STATE` texture
-bindings as `BindingOnly`; draw texture sections are only
-`ShaderReadCandidate`, while render-target/depth bindings remain write
-candidates rather than access proof. One more locator wild run is required
-before choosing provider GPU snapshot versus produced-pass proof for this
-identity. Rejection semantics, descriptor/generation validation,
+record 0, type 28 (`APPLY_STATE`). The r26 locator run at
+`experiments/output/app-d3d9-3dmark05-gt2-frame-tape-origin-locator-r26-20260815`
+resolved the original reference as a generation-28 `SURFACE` in render-target
+section 7, slot 0, aliased to the generation-14 `TEXTURE` storage above. Its
+typed roles are `RenderTargetBinding` and `RenderTargetCandidate`; they prove
+the binding/storage shape but deliberately do not claim an actual GPU write.
+The next evidence layer must classify the capture interval's first access to
+that generation-qualified storage and prove a full render-pass overwrite before
+any read before a `ProducedByCapturedPass` seed disposition can replace the
+missing bootstrap bytes. If that proof fails, a generation-qualified
+pre-commit GPU snapshot remains the general fallback. Rejection semantics,
+descriptor/generation validation,
 event/chunk/bridge ABI, and capture-off cost are unchanged. No complete GT2
 bundle or provider-replay promotion is claimed.
 
