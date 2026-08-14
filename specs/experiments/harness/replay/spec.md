@@ -692,7 +692,11 @@ object, writable-lock mutation, and true chunk-bypass control call sites feed
 that owner; chunkized operations are not duplicated. PE object definitions
 carry value-owned C-side buffer/surface/texture/query descriptors, vertex
 declaration elements, exact validated shader bytecode, and resource expected
-extent/count closure. The capture seam accepts bounds-checked uncompressed 2D
+extent/count closure. Immediately before building the bootstrap, the PE producer
+refreshes the complete binding view and validates the sealed overlay through the
+canonical chunk validator; its exact `(kind,generation,objectId)` handle set is
+used only to annotate fail-closed missing-seed diagnostics. The capture seam
+accepts bounds-checked uncompressed 2D
 surface/texture, complete-buffer, and DXT1/DXT3/DXT5 block-compressed 2D/cube
 face-and-mip lock layouts. Full locks establish tightly packed complete seeds;
 partial locks strip row padding, require an existing exact-size seed, overlay

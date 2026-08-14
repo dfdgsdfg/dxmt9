@@ -7474,6 +7474,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 .payloadBytes = 1024u * 1024u,
                 .sealedBytes = 1024u * 1024u,
             });
+            // The bootstrap is a checkpoint of the live PE shadow, not of the
+            // last draw packet. Rebuild every binding slot immediately before
+            // producing it so streams, null unbinds, and the current index
+            // binding are authoritative even when no draw made them pending.
+            populateBindingView(peBindingView_, true, true);
             const bool snapshotBuilt = dxmt9::d3d9::pe::buildFullSnapshotState(
                 peState_, peConsts_, peBindingView_, peSparseScratch_,
                 peSparseHeader_, peSparseState_);
@@ -7493,6 +7498,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9DeviceInfoLog(
                     "render_tape_capture producer aborted reason=overlay_invalid");
                 return false;
+            }
+
+            // Keep the bootstrap closure tied to the exact generation-qualified
+            // handles emitted by the sealed overlay. The canonical validator is
+            // the authority for wire bounds, record/section shape, and handle
+            // references; this side table only answers whether a live object's
+            // missing seed is actually reachable from the checkpoint.
+            dxmt9::d3d9::ImportedChunkView bootstrapChunk{};
+            dxmt9::d3d9::CommandChunkValidationScratch bootstrapScratch{};
+            const auto bootstrapValidation =
+                dxmt9::d3d9::validateCommandChunk(
+                    overlay.blob,
+                    dxmt9::d3d9::CommandChunkEnvelope{
+                        .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                        .recordCount = overlay.recordCount,
+                        .handleCount = overlay.handleCount,
+                    },
+                    &bootstrapChunk, bootstrapScratch);
+            if (!bootstrapValidation.valid()) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=overlay_validation "
+                    "status=%u record=%u section=%u handle=%u offset=%u",
+                    static_cast<unsigned>(bootstrapValidation.status),
+                    bootstrapValidation.failedRecordIndex,
+                    bootstrapValidation.failedSectionIndex,
+                    bootstrapValidation.failedHandleIndex,
+                    bootstrapValidation.byteOffset);
+                return false;
+            }
+            std::vector<D9CWireObjectIdentity> bootstrapHandles;
+            bootstrapHandles.reserve(bootstrapChunk.handles.size());
+            for (const auto& handle : bootstrapChunk.handles) {
+                const D9CWireObjectIdentity identity{
+                    .kind = handle.kind,
+                    .generation = handle.generation,
+                    .objectId = handle.objectId,
+                };
+                const auto alreadyPresent = std::find_if(
+                    bootstrapHandles.begin(), bootstrapHandles.end(),
+                    [&](const auto& candidate) {
+                        return renderTapeSameIdentity(candidate, identity);
+                    });
+                if (alreadyPresent == bootstrapHandles.end()) {
+                    bootstrapHandles.push_back(identity);
+                }
             }
             seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
 
@@ -7526,6 +7576,103 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                          subresource < object->content.size(); ++subresource) {
                         const auto &bytes = object->content[subresource];
                         if (bytes.empty()) {
+                            bool bootstrapReferenced = false;
+                            for (const auto& identity : bootstrapHandles) {
+                                if (renderTapeSameIdentity(identity,
+                                                            object->identity)) {
+                                    bootstrapReferenced = true;
+                                    break;
+                                }
+                            }
+                            if (object->identity.kind ==
+                                D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+                                RenderTapeTextureDescriptorV2 texture{};
+                                std::uint32_t textureVersion = 1u;
+                                std::uint32_t levels = 0u;
+                                std::uint32_t count = 0u;
+                                if (object->descriptor.size() >=
+                                    sizeof(texture)) {
+                                    std::memcpy(&texture, object->descriptor.data(),
+                                                sizeof(texture));
+                                    if (texture.schemaVersion ==
+                                        dxmt9::d3d9::
+                                            kRenderTapeTextureDescriptorVersion2) {
+                                        textureVersion = texture.schemaVersion;
+                                        levels = texture.mipLevelCount;
+                                        count = texture.subresourceCount;
+                                    } else if (object->descriptor.size() >=
+                                               sizeof(RenderTapeTextureDescriptor)) {
+                                        RenderTapeTextureDescriptor legacy{};
+                                        std::memcpy(&legacy, object->descriptor.data(),
+                                                    sizeof(legacy));
+                                        levels = legacy.levelCount;
+                                        count = legacy.levelCount;
+                                    }
+                                }
+                                D9CSurfaceDesc desc{};
+                                const bool hasDesc =
+                                    renderTapeTextureSubresourceDescriptor(
+                                        object->descriptor, subresource, desc);
+                                dxmt9DeviceInfoLog(
+                                    "render_tape_capture missing_seed identity_kind=%u "
+                                    "generation=%u object_id=%llu subresource=%u "
+                                    "bootstrap_referenced=%d texture_version=%u "
+                                    "levels=%u count=%u desc_valid=%d format=%u "
+                                    "width=%u height=%u depth=%u usage=%u pool=%u "
+                                    "resource_type=%u",
+                                    object->identity.kind,
+                                    object->identity.generation,
+                                    static_cast<unsigned long long>(
+                                        object->identity.objectId),
+                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    textureVersion, levels, count, hasDesc ? 1 : 0,
+                                    desc.format, desc.width, desc.height, desc.depth,
+                                    desc.usage, desc.pool, desc.resourceType);
+                            } else if (object->identity.kind ==
+                                       D9C_CHUNK_HANDLE_KIND_SURFACE) {
+                                D9CSurfaceDesc desc{};
+                                const bool hasDesc =
+                                    object->descriptor.size() == sizeof(desc);
+                                if (hasDesc) {
+                                    std::memcpy(&desc, object->descriptor.data(),
+                                                sizeof(desc));
+                                }
+                                dxmt9DeviceInfoLog(
+                                    "render_tape_capture missing_seed identity_kind=%u "
+                                    "generation=%u object_id=%llu subresource=%u "
+                                    "bootstrap_referenced=%d surface_desc_valid=%d "
+                                    "format=%u width=%u height=%u depth=%u usage=%u "
+                                    "pool=%u resource_type=%u",
+                                    object->identity.kind,
+                                    object->identity.generation,
+                                    static_cast<unsigned long long>(
+                                        object->identity.objectId),
+                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    hasDesc ? 1 : 0, desc.format, desc.width,
+                                    desc.height, desc.depth, desc.usage, desc.pool,
+                                    desc.resourceType);
+                            } else if (object->identity.kind ==
+                                       D9C_CHUNK_HANDLE_KIND_BUFFER) {
+                                D9CBufferDesc desc{};
+                                const bool hasDesc =
+                                    object->descriptor.size() == sizeof(desc);
+                                if (hasDesc) {
+                                    std::memcpy(&desc, object->descriptor.data(),
+                                                sizeof(desc));
+                                }
+                                dxmt9DeviceInfoLog(
+                                    "render_tape_capture missing_seed identity_kind=%u "
+                                    "generation=%u object_id=%llu subresource=%u "
+                                    "bootstrap_referenced=%d buffer_desc_valid=%d "
+                                    "size=%u usage=%u pool=%u format=%u fvf=%u",
+                                    object->identity.kind,
+                                    object->identity.generation,
+                                    static_cast<unsigned long long>(
+                                        object->identity.objectId),
+                                    subresource, bootstrapReferenced ? 1 : 0,
+                                    hasDesc ? 1 : 0, desc.size, desc.usage,
+                                    desc.pool, desc.format, desc.fvf);
+                            }
                             RejectRenderTapeCaptureForChild(
                                 dxmt9::d3d9::
                                     RenderTapeCaptureRejectionReason::
