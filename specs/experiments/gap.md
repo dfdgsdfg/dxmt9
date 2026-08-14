@@ -266,9 +266,15 @@ measured the bounded typed diagnostic: texture kind, generation 14, object id
 4294967525, Texture2D, one mip and one subresource, 1024x768 format 22,
 `D3DUSAGE_RENDERTARGET`, `D3DPOOL_DEFAULT`, no multisampling, and an exact
 3,145,728-byte tight extent. The original consumer provenance is handle 0 of
-record 0, type 28 (`APPLY_STATE`). This disproves `UpdateTexture` for this
-identity and distinguishes the consumer boundary from the still-unmeasured GPU
-producer. Rejection semantics, descriptor/generation validation,
+record 0, type 28 (`APPLY_STATE`), but r25 identifies only that resolved storage
+and does not identify an origin role or prove an actual GPU read/write. The
+capture-only origin locator now preserves the original handle identity while
+alias-parent recursion resolves storage, and classifies `APPLY_STATE` texture
+bindings as `BindingOnly`; draw texture sections are only
+`ShaderReadCandidate`, while render-target/depth bindings remain write
+candidates rather than access proof. One more locator wild run is required
+before choosing provider GPU snapshot versus produced-pass proof for this
+identity. Rejection semantics, descriptor/generation validation,
 event/chunk/bridge ABI, and capture-off cost are unchanged. No complete GT2
 bundle or provider-replay promotion is claimed.
 

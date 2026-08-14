@@ -33,6 +33,7 @@
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_descriptors.hpp"
+#include "device_c_render_tape_origin_locator.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -8246,7 +8247,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::numeric_limits<std::uint32_t>::max(),
         std::uint32_t recordIndex =
             std::numeric_limits<std::uint32_t>::max(),
-        std::uint32_t recordType = 0u) noexcept {
+        std::uint32_t recordType = 0u,
+        const dxmt9::d3d9::RenderTapeOriginLocator *originLocator =
+            nullptr) noexcept {
         if (renderTapeObjectAdmitted(identity))
             return true;
         if (!renderTapeRegistry_) {
@@ -8299,7 +8302,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (object->lifetime.textureAlias &&
             !materializeRenderTapeObjectForReference(
                 object->aliasParentTexture, handleIndex, recordIndex,
-                recordType)) {
+                recordType, originLocator)) {
             return false;
         }
         if (object->contentCount != object->content.size() ||
@@ -8312,12 +8315,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             // below: a count mismatch with no empty slot reports content.size().
             const auto missingSubresource = static_cast<std::uint32_t>(
                 missing - object->content.begin());
+            dxmt9::d3d9::RenderTapeOriginLocator locator{};
+            locator.originIdentity = identity;
+            locator.resolvedIdentity = identity;
+            locator.recordIndex = recordIndex;
+            locator.recordType = recordType;
+            locator.handleIndex = handleIndex;
+            if (originLocator) {
+                locator = *originLocator;
+                locator.resolvedIdentity = identity;
+                locator.aliasOrigin =
+                    !dxmt9::d3d9::renderTapeSameWireObject(
+                        locator.originIdentity, identity);
+            }
             const auto missingSeed = dxmt9::d3d9::renderTapeDescribeMissingSeed(
                 object->identity, object->descriptor, missingSubresource,
                 dxmt9::d3d9::RenderTapeReferenceProvenance{
-                    .handleIndex = handleIndex,
-                    .recordIndex = recordIndex,
-                    .recordType = recordType,
+                    .handleIndex = locator.handleIndex,
+                    .recordIndex = locator.recordIndex,
+                    .recordType = locator.recordType,
                 });
             dxmt9DeviceInfoLog(
                 "render_tape_capture missing_seed identity_kind=%u "
@@ -8327,7 +8343,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 "resource_type=%u pool=%u format=%u width=%u height=%u "
                 "multisample_type=%u multisample_quality=%u "
                 "expected_tight_bytes=%llu expected_tight_bytes_valid=%d "
-                "handle_index=%u record_index=%u record_type=%u",
+                "handle_index=%u record_index=%u record_type=%u "
+                "origin_kind=%u origin_generation=%u origin_object_id=%llu "
+                "resolved_kind=%u resolved_generation=%u "
+                "resolved_object_id=%llu section_kind=%u binding_slot=%u "
+                "alias_origin=%d command_role=%s locator_status=%s",
                 missingSeed.identity.kind, missingSeed.identity.generation,
                 static_cast<unsigned long long>(missingSeed.identity.objectId),
                 dxmt9::d3d9::renderTapeMissingSeedDescriptorStatusName(
@@ -8346,7 +8366,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 missingSeed.expectedTightBytesValid ? 1 : 0,
                 missingSeed.provenance.handleIndex,
                 missingSeed.provenance.recordIndex,
-                missingSeed.provenance.recordType);
+                missingSeed.provenance.recordType, locator.originIdentity.kind,
+                locator.originIdentity.generation,
+                static_cast<unsigned long long>(locator.originIdentity.objectId),
+                locator.resolvedIdentity.kind, locator.resolvedIdentity.generation,
+                static_cast<unsigned long long>(locator.resolvedIdentity.objectId),
+                locator.sectionKind, locator.bindingSlot,
+                locator.aliasOrigin ? 1 : 0,
+                dxmt9::d3d9::renderTapeCommandRoleName(locator.role),
+                dxmt9::d3d9::renderTapeOriginLocatorStatusName(
+                    locator.status));
             if (recordType == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
                 !renderTapeObjectAdmitted(identity)) {
                 // UpdateTexture's destination initial bytes must precede the
@@ -8446,25 +8475,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         for (std::size_t handleIndex = 0u;
              handleIndex < imported.handles.size(); ++handleIndex) {
             const auto &handle = imported.handles[handleIndex];
-            std::uint32_t ownerRecord =
-                std::numeric_limits<std::uint32_t>::max();
-            std::uint32_t ownerType = 0u;
-            for (std::size_t recordIndex = 0u;
-                 recordIndex < imported.records.size(); ++recordIndex) {
-                const auto &record = imported.records[recordIndex];
-                if (handleIndex >= record.firstHandle &&
-                    handleIndex - record.firstHandle < record.handleCount) {
-                    ownerRecord = static_cast<std::uint32_t>(recordIndex);
-                    ownerType = record.type;
-                    break;
-                }
-            }
-            if (!materializeRenderTapeObjectForReference(D9CWireObjectIdentity{
-                    .kind = handle.kind,
-                    .generation = handle.generation,
-                    .objectId = handle.objectId},
-                    static_cast<std::uint32_t>(handleIndex), ownerRecord,
-                    ownerType)) {
+            const D9CWireObjectIdentity identity{
+                .kind = handle.kind,
+                .generation = handle.generation,
+                .objectId = handle.objectId};
+            const auto originLocator = dxmt9::d3d9::renderTapeLocateOrigin(
+                imported, static_cast<std::uint32_t>(handleIndex), identity);
+            if (!materializeRenderTapeObjectForReference(
+                    identity, originLocator.handleIndex,
+                    originLocator.recordIndex, originLocator.recordType,
+                    &originLocator)) {
                 return false;
             }
         }
