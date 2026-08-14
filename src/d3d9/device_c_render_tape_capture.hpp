@@ -9,6 +9,9 @@
 
 namespace dxmt9::d3d9 {
 
+inline constexpr std::uint64_t kRenderTapeDefaultMaxBlobBytes =
+    68u * 1024u * 1024u;
+
 // The capture owner is deliberately independent of the PE COM wrappers and
 // of the unix provider. Callers hand it complete, value-owned shadow snapshots
 // and canonical wire bytes; it never retains a PE pointer or crosses the ABI.
@@ -35,7 +38,10 @@ struct RenderTapeCaptureLimits {
   std::uint32_t maxEvents = 4096u;
   std::uint64_t maxEventBytes = 64u * 1024u * 1024u;
   std::uint32_t maxBlobEntries = 4096u;
-  std::uint64_t maxBlobBytes = 64u * 1024u * 1024u;
+  // The GT2 r7 capture required 67,371,903 owned bytes. Keep the production
+  // budget bounded while rounding the measured requirement to a stable MiB
+  // boundary; blob admission remains fail-closed at this limit.
+  std::uint64_t maxBlobBytes = kRenderTapeDefaultMaxBlobBytes;
 };
 
 // Value-only handoff for the device-owned production checkpoint and the

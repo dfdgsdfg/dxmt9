@@ -706,6 +706,16 @@ void testBoundedBlobBytesAndDeduplication() {
         "duplicate bootstrap blobs consume one entry and one byte charge");
 }
 
+void testProductionBlobDefaultCoversGt2R7Requirement() {
+  constexpr std::uint64_t gt2R7RequiredBytes = 67371903u;
+  const RenderTapeCaptureLimits limits{};
+  check(limits.maxBlobBytes == kRenderTapeDefaultMaxBlobBytes &&
+            limits.maxBlobBytes >= gt2R7RequiredBytes,
+        "the bounded production blob default covers the measured GT2 r7 closure");
+  check(limits.maxBlobBytes - gt2R7RequiredBytes == 3931265u,
+        "the production blob default keeps only the measured bounded headroom");
+}
+
 void testObjectLifetimeAndTerminalControls() {
   constexpr std::array<std::byte, 8u> descriptor{};
   RenderTapeCaptureSession lifetime(true);
@@ -1721,6 +1731,7 @@ int main(int argc, char** argv) {
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
     testBoundedBlobBytesAndDeduplication();
+    testProductionBlobDefaultCoversGt2R7Requirement();
     testObjectLifetimeAndTerminalControls();
     testPresentOutputRoleOwnershipTruthTable();
     testSurfaceAliasGenerationReplacementTransition();

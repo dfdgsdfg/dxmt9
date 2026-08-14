@@ -91,10 +91,20 @@ emits one bounded `mutation_reject` line naming the failing step
 whether the identity is still live in the tape, and each counter against its
 limit (`event_count`, `buffered_bytes`, `owned_blob_bytes`,
 `owned_blob_entries`). That makes the mutation event's fused `InvalidInput`
-decidable rather than inferred. No capacity was raised and no predicate
-relaxed: no correctness-preserving layout or registry-only treatment was
+decidable rather than inferred. At that point no capacity was raised and no
+predicate relaxed: no correctness-preserving layout or registry-only treatment was
 provable from the existing artifact, so none was applied, and the next GT2 run
-must name the failing predicate before any capacity change is considered.
+must name the failing predicate before any further capacity change is considered.
+
+The subsequent GT2 r7 exact-closure artifact identifies the failing predicate:
+line 63 records `detail=blob_register status=CapacityExceeded` with
+`owned_blob_bytes=66847615/67108864`, `incoming=524288`, and
+`overage=263039`, so the required owned-byte total is 67,371,903. The
+production bound is therefore rounded to the smallest whole-MiB budget above
+that measured requirement, 68 MiB; digest, descriptor, generation, event, and
+replay validation remain unchanged, and no blob-size environment knob is
+introduced. PresentOutput retry ownership is a separate fixed capture
+correctness issue and is not used to justify this capacity policy.
 
 ### GT2 buffer partial-seed closure (capture-only)
 
