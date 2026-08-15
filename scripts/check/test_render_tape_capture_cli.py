@@ -58,7 +58,7 @@ def main() -> int:
             ).stdout
         )
         assert validated["valid"] is True
-        assert validated["events"] == 6
+        assert validated["events"] == 7
         assert validated["presents"] == 1
         assert validated["scope"] == {
             "production_capture": False,
@@ -80,23 +80,41 @@ def main() -> int:
             "bootstraps": 1,
             "bundle_schema": "dxmt9.render_tape.bundle.v2",
             "chunks": 1,
-            "command_event_indices": [3],
+            "command_event_indices": [4],
             "controls": 1,
-            "defines": 1,
+            "defines": 2,
             "destroys": 0,
-            "events": 6,
+            "events": 7,
             "events_sha256": inspected["events_sha256"],
-            "handles": 0,
-            "last_present_ordinal": 4,
+            "grammar": {
+                "content_dispositions": {
+                    "complete_seed": 1,
+                    "produced_present_output": 1,
+                },
+                "control_kinds": {"flush_wait": 1},
+                "descriptor_kinds": {"surface": 2},
+                "destroy_object_kinds": {},
+                "mutation_kinds": {"upload": 1},
+                "mutation_object_kinds": {"surface": 1},
+                "record_types": {"present": 1},
+                "section_kinds": {},
+                "surface_storages": {
+                    "standalone": 1,
+                    "swapchain_backbuffer": 1,
+                },
+                "texture_dimensions": {},
+            },
+            "handles": 1,
+            "last_present_ordinal": 5,
             "mutations": 1,
             "mutation_bytes": 4,
             "present_completions": 1,
-            "present_command_event": 3,
-            "present_command_events": [3],
+            "present_command_event": 4,
+            "present_command_events": [4],
             "profile": "frame-tape",
             "records": 1,
             "schema": "dxmt9.render_tape.v2",
-            "surface_descriptors_v2": 1,
+            "surface_descriptors_v2": 2,
             "texture_descriptors_v2": 0,
             "scope": {
                 "production_capture": False,

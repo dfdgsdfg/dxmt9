@@ -12,11 +12,13 @@
 
 namespace dxmt9::d3d9 {
 
+inline constexpr std::uint32_t kRenderTapeGammaRampBytes = 3u * 256u * 2u;
+
 inline constexpr std::uint64_t kRenderTapeMagic = 0x32505452544d5844ull;
 inline constexpr std::uint32_t kRenderTapeVersion = 2u;
 inline constexpr std::uint32_t kRenderTapeProfileFrame = 1u;
 inline constexpr std::uint32_t kRenderTapeProfileSequence = 2u;
-inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 1u;
+inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 2u;
 inline constexpr std::uint32_t kRenderTapePayloadAlignment = 8u;
 inline constexpr std::uint32_t kRenderTapeDigestSize = 32u;
 using RenderTapeDigest = std::array<std::byte, kRenderTapeDigestSize>;
@@ -98,6 +100,10 @@ enum class RenderTapeControlKind : std::uint32_t {
   FlushWait = 3u,
   Reset = 4u,
   DeviceLost = 5u,
+  // Ordered, direct state mutation. The payload is exactly one
+  // D3DGAMMARAMP (3 * 256 * uint16_t) and is applied before subsequent
+  // command chunks/present.
+  GammaRampSet = 6u,
 };
 
 enum class RenderTapeControlDisposition : std::uint32_t {
@@ -147,6 +153,12 @@ struct RenderTapeBootstrapHeader {
   std::uint32_t overlayCount = 0u;
   std::uint32_t reserved0 = 0u;
   std::uint64_t requiredCategoryMask = kRenderTapeRequiredCategoryMask;
+  // The bootstrap carries the initial gamma ramp inline after all overlay
+  // chunks. Zero is retained for compatibility fixtures; production captures
+  // provide exactly 1536 bytes and a verified digest.
+  std::uint32_t gammaRampBytes = 0u;
+  std::uint32_t gammaRampIsIdentity = 0u;
+  RenderTapeDigest gammaRampDigest{};
 };
 
 // ObjectDefine: generation-qualified creation of an object slot. Carries the
@@ -260,7 +272,7 @@ static_assert(sizeof(RenderTapeHeader) == 64u);
 static_assert(alignof(RenderTapeHeader) == 8u);
 static_assert(sizeof(RenderTapeEventHeader) == 32u);
 static_assert(alignof(RenderTapeEventHeader) == 8u);
-static_assert(sizeof(RenderTapeBootstrapHeader) == 24u);
+static_assert(sizeof(RenderTapeBootstrapHeader) == 64u);
 static_assert(alignof(RenderTapeBootstrapHeader) == 8u);
 static_assert(sizeof(RenderTapeObjectDefineHeader) == 88u);
 static_assert(alignof(RenderTapeObjectDefineHeader) == 8u);
@@ -590,7 +602,9 @@ public:
   // event ordinals, offsets, padding, and presentCount canonically.
   void appendRawEvent(RenderTapeEventType type,
                       std::span<const std::byte> payload);
-  void appendBootstrapState(std::span<const std::byte> overlayChunks);
+  void appendBootstrapState(
+      std::span<const std::byte> overlayChunks,
+      std::span<const std::byte> gammaRamp = {});
   void appendObjectDefine(const D9CWireObjectIdentity& identity,
                           std::uint32_t descriptorKind,
                           std::span<const std::byte> descriptor,

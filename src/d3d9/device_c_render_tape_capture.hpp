@@ -80,10 +80,14 @@ struct RenderTapePublishedBlob {
 struct RenderTapePublicationBundle {
   std::vector<std::byte> events{};
   std::vector<RenderTapePublishedBlob> blobs{};
+  // Captured presentation output is an authoritative comparison sidecar, not
+  // a replay input and therefore not part of the immutable blob catalogue.
+  std::vector<std::byte> outputOracle{};
 };
 
 struct RenderTapeCaptureBootstrapSeed {
   std::vector<std::byte> bootstrapOverlay{};
+  std::vector<std::byte> gammaRamp{};
   std::vector<RenderTapeCaptureBlob> blobs{};
   std::vector<RenderTapeCaptureObjectSeed> objects{};
   std::vector<RenderTapeCaptureMutationSeed> mutations{};
@@ -123,12 +127,15 @@ public:
   // The supplied overlay must be the complete PE shadow checkpoint for the
   // next interval. It is copied before this call returns. Blob entries must
   // be verified by the capture owner before they are registered.
-  RenderTapeCaptureStatus arm(std::span<const std::byte> bootstrapOverlay,
-                              std::span<const RenderTapeBlob> blobs = {});
+  RenderTapeCaptureStatus arm(
+      std::span<const std::byte> bootstrapOverlay,
+      std::span<const RenderTapeBlob> blobs = {},
+      std::span<const std::byte> gammaRamp = {});
 
   RenderTapeCaptureStatus armWithBlobs(
       std::span<const std::byte> bootstrapOverlay,
-      std::span<const RenderTapeCaptureBlob> blobs);
+      std::span<const RenderTapeCaptureBlob> blobs,
+      std::span<const std::byte> gammaRamp = {});
 
   // Starts the bounded profile selected at construction. Frame captures seal
   // after one successful Present; sequence captures retain the first boundary
@@ -172,7 +179,8 @@ public:
   RenderTapeCaptureStatus completePresent(
       std::uint64_t presentOrdinal, std::uint64_t completionOrdinal,
       RenderTapeDigestValidity digestValidity, RenderTapeDigest expectedDigest,
-      std::span<const std::byte> oracleAttachments = {});
+      std::span<const std::byte> oracleAttachments = {},
+      std::span<const std::byte> outputOracle = {});
 
   void abort() noexcept;
 

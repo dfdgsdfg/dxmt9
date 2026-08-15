@@ -1,4 +1,5 @@
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_capture.hpp"
 
 #include "device_c_render_tape_first_access_locator.hpp"
 #include "device_c_render_tape_descriptors.hpp"
@@ -102,12 +103,15 @@ bool validDescriptorContentDisposition(
              fixed.expectedContentCount == 0u;
     }
     if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
-      return disposition ==
-                 RenderTapeInitialContentDisposition::ProducedPresentOutput &&
-             surface.subresource == 0u &&
-             renderTapeZeroIdentity(surface.parentTexture) &&
-             fixed.expectedContentBytes == 0u &&
-             fixed.expectedContentCount == 0u;
+      const bool produced =
+          disposition == RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+          fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
+      const bool seeded =
+          disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+          renderTapeArmColorSnapshotSwapchainSurfaceSupported(surface.surface) &&
+          fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+      return surface.subresource == 0u &&
+             renderTapeZeroIdentity(surface.parentTexture) && (produced || seeded);
     }
     const bool completeSeed =
         disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
@@ -280,7 +284,7 @@ bool knownEventType(std::uint32_t value) noexcept {
 bool knownControlKind(std::uint32_t value) noexcept {
   return value >=
              static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData) &&
-         value <= static_cast<std::uint32_t>(RenderTapeControlKind::DeviceLost);
+         value <= static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet);
 }
 
 bool knownControlDisposition(std::uint32_t value) noexcept {
@@ -305,6 +309,8 @@ bool validControlDisposition(RenderTapeControlKind kind,
   case RenderTapeControlKind::DeviceLost:
     return disposition == RenderTapeControlDisposition::Terminal ||
            disposition == RenderTapeControlDisposition::Failed;
+  case RenderTapeControlKind::GammaRampSet:
+    return disposition == RenderTapeControlDisposition::Completed;
   }
   return false;
 }
@@ -561,12 +567,16 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
                           SurfaceDescriptorDisposition);
       }
     } else if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
-      if (disposition !=
-              RenderTapeInitialContentDisposition::ProducedPresentOutput ||
-          surface.subresource != 0u ||
+      const bool produced =
+          disposition == RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+          fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
+      const bool seeded =
+          disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+          renderTapeArmColorSnapshotSwapchainSurfaceSupported(surface.surface) &&
+          fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+      if (surface.subresource != 0u ||
           !renderTapeZeroIdentity(surface.parentTexture) ||
-          fixed.expectedContentBytes != 0u ||
-          fixed.expectedContentCount != 0u) {
+          (!produced && !seeded)) {
         return reject(RenderTapeObjectDefineValidationSubreason::
                           SurfaceDescriptorDisposition);
       }
@@ -918,6 +928,8 @@ validateRenderTape(std::span<const std::byte> blob,
   bool sawBetweenPresentMutation = false;
   bool secondIntervalStarted = false;
   bool sawReset = false;
+  bool presentSourceMapped = false;
+  D9CWireObjectIdentity presentSourceIdentity{};
   std::uint64_t presentCommandOrdinal = 0u;
   std::uint64_t previousCompletion = 0u;
   std::uint64_t expectedPayloadEnd = 0u;
@@ -932,6 +944,36 @@ validateRenderTape(std::span<const std::byte> blob,
            (expectation->recordedBytes != expectation->expectedBytes ||
             expectation->recordedCount != expectation->expectedCount);
   };
+
+  const auto isPresentOutputDefinition =
+      [&](const D9CWireObjectIdentity& identity) {
+        const auto* definition =
+            findDefinition(scratch.objectDefinitions, identity);
+        if (!definition ||
+            definition->descriptorKind != static_cast<std::uint32_t>(
+                                              RenderTapeDescriptorKind::Surface)) {
+          return false;
+        }
+        const auto definitionEvent = candidate.event(definition->eventIndex);
+        RenderTapeObjectDefineHeader define{};
+        RenderTapeSurfaceDescriptorV2 surface{};
+        if (!load(definitionEvent.payload, 0u, define) ||
+            !load(definitionEvent.payload, sizeof(define), surface) ||
+            surface.storage != static_cast<std::uint32_t>(
+                                   RenderTapeSurfaceStorage::
+                                       SwapchainBackbuffer)) {
+          return false;
+        }
+        const auto disposition =
+            static_cast<RenderTapeInitialContentDisposition>(
+                surface.initialContentDisposition);
+        return disposition ==
+                   RenderTapeInitialContentDisposition::ProducedPresentOutput ||
+               (disposition ==
+                    RenderTapeInitialContentDisposition::CompleteSeed &&
+                renderTapeArmColorSnapshotSwapchainSurfaceSupported(
+                    surface.surface));
+      };
 
   const auto validateProducedPassChunk = [&](std::uint32_t currentEventIndex,
                                              const ImportedChunkView& chunk) {
@@ -1188,8 +1230,33 @@ validateRenderTape(std::span<const std::byte> blob,
           }
         }
       }
-      if (walk != overlays.size()) {
+      if (fixed.gammaRampBytes != 0u &&
+          fixed.gammaRampBytes != kRenderTapeGammaRampBytes) {
+        return failure(RenderTapeValidationStatus::InvalidBootstrap, i);
+      }
+      const auto gammaBytes = overlays.size() - walk;
+      if (gammaBytes != fixed.gammaRampBytes ||
+          (fixed.gammaRampBytes == 0u &&
+           (!zeroDigest(fixed.gammaRampDigest) || fixed.gammaRampIsIdentity != 0u)) ||
+          (fixed.gammaRampBytes != 0u &&
+           (fixed.gammaRampIsIdentity > 1u ||
+           RenderTapeCaptureSession::sha256(overlays.subspan(walk)) !=
+                fixed.gammaRampDigest))) {
         return failure(RenderTapeValidationStatus::InvalidBootstrapChunk, i);
+      }
+      if (fixed.gammaRampBytes != 0u) {
+        bool identity = true;
+        for (std::size_t index = 0u; index < 768u; ++index) {
+          std::uint16_t value = 0u;
+          std::memcpy(&value, overlays.data() + walk + index * 2u, 2u);
+          if (value != static_cast<std::uint16_t>((index % 256u) << 8u)) {
+            identity = false;
+            break;
+          }
+        }
+        if (fixed.gammaRampIsIdentity != (identity ? 1u : 0u)) {
+          return failure(RenderTapeValidationStatus::InvalidBootstrapChunk, i);
+        }
       }
       break;
     }
@@ -1523,13 +1590,37 @@ validateRenderTape(std::span<const std::byte> blob,
               identity, eventHeader.type);
         }
       }
-      for (const auto& record : chunk.records) {
-        if (record.type == D9C_COMMAND_RECORD_PRESENT) {
+      for (std::size_t recordIndex = 0u;
+           recordIndex < chunk.records.size(); ++recordIndex) {
+        const auto record = chunk.record(recordIndex);
+        if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {
           if (sawChunkPresent) {
+            return failure(RenderTapeValidationStatus::InvalidCommandChunk, i);
+          }
+          D9CCommandChunkWirePresent present{};
+          if (!load(record.payload, 0u, present)) {
             return failure(RenderTapeValidationStatus::InvalidCommandChunk, i);
           }
           sawChunkPresent = true;
           presentCommandOrdinal = eventHeader.ordinal;
+          presentSourceMapped = record.header.handleCount == 1u;
+          presentSourceIdentity = {};
+          if (presentSourceMapped) {
+            if (present.sourceHandleIndex >= chunk.handles.size()) {
+              return failure(RenderTapeValidationStatus::InvalidCommandChunk,
+                             i);
+            }
+            const auto& source = chunk.handles[present.sourceHandleIndex];
+            presentSourceIdentity = D9CWireObjectIdentity{
+                .kind = source.kind,
+                .generation = source.generation,
+                .objectId = source.objectId,
+            };
+            if (!isPresentOutputDefinition(presentSourceIdentity)) {
+              return failure(RenderTapeValidationStatus::InvalidCommandChunk,
+                             i);
+            }
+          }
         }
       }
       break;
@@ -1552,6 +1643,10 @@ validateRenderTape(std::span<const std::byte> blob,
       const auto controlKind = static_cast<RenderTapeControlKind>(fixed.kind);
       const auto disposition =
           static_cast<RenderTapeControlDisposition>(fixed.disposition);
+      if (controlKind == RenderTapeControlKind::GammaRampSet &&
+          sawChunkPresent) {
+        return failure(RenderTapeValidationStatus::InvalidControlKind, i);
+      }
       if (!validControlDisposition(controlKind, disposition)) {
         return failure(RenderTapeValidationStatus::InvalidControlKind, i);
       }
@@ -1574,6 +1669,10 @@ validateRenderTape(std::span<const std::byte> blob,
               RenderTapeIncompleteFrameReason::ControlSeedIncomplete,
               fixed.identity);
         }
+      } else if (controlKind == RenderTapeControlKind::GammaRampSet) {
+        if (!nullIdentity(fixed.identity)) {
+          return failure(RenderTapeValidationStatus::InvalidControlKind, i);
+        }
       } else if (!nullIdentity(fixed.identity)) {
         return failure(RenderTapeValidationStatus::InvalidControlKind, i);
       }
@@ -1593,6 +1692,9 @@ validateRenderTape(std::span<const std::byte> blob,
         break;
       case RenderTapeControlKind::DeviceLost:
         expectedTail = sizeof(RenderTapeDeviceLostControl);
+        break;
+      case RenderTapeControlKind::GammaRampSet:
+        expectedTail = kRenderTapeGammaRampBytes;
         break;
       }
       if (fixed.controlBytes != expectedTail ||
@@ -1690,6 +1792,7 @@ validateRenderTape(std::span<const std::byte> blob,
           event.payload.size() != sizeof(fixed) + fixed.oracleBytes) {
         return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
       }
+      bool mappedSourceAttached = !presentSourceMapped;
       for (std::uint32_t a = 0u; a < fixed.oracleCount; ++a) {
         RenderTapeOracleAttachment attachment{};
         if (!load(event.payload, sizeof(fixed) +
@@ -1707,10 +1810,18 @@ validateRenderTape(std::span<const std::byte> blob,
             live->descriptorKind != attachment.descriptorKind) {
           return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
         }
+        mappedSourceAttached = mappedSourceAttached ||
+                               sameIdentity(attachment.identity,
+                                            presentSourceIdentity);
+      }
+      if (!mappedSourceAttached) {
+        return failure(RenderTapeValidationStatus::InvalidPresentComplete, i);
       }
       ++presentCompleteCount;
       previousCompletion = fixed.completionOrdinal;
       sawChunkPresent = false;
+      presentSourceMapped = false;
+      presentSourceIdentity = {};
       presentCommandOrdinal = 0u;
       break;
     }
@@ -2289,7 +2400,11 @@ RenderTapeReductionResult reduceRenderTape(
 }
 
 void RenderTapeBuilder::appendBootstrapState(
-    std::span<const std::byte> overlayChunks) {
+    std::span<const std::byte> overlayChunks,
+    std::span<const std::byte> gammaRamp) {
+  if (!gammaRamp.empty() && gammaRamp.size() != kRenderTapeGammaRampBytes) {
+    throw std::invalid_argument("bootstrap gamma ramp must be exactly 1536 bytes");
+  }
   std::uint32_t overlayCount = 0u;
   std::uint64_t walk = 0u;
   while (walk < overlayChunks.size()) {
@@ -2303,15 +2418,34 @@ void RenderTapeBuilder::appendBootstrapState(
   if (overlayCount == 0u) {
     throw std::invalid_argument("bootstrap requires at least one overlay");
   }
-  append(
-      RenderTapeEventType::BootstrapState,
-      payloadWithTail(
-          RenderTapeBootstrapHeader{
-              .baselineProfileVersion = kRenderTapeBaselineProfileVersion,
-              .stateCategoryCount = kRenderTapeStateCategoryCount,
-              .overlayCount = overlayCount,
-          },
-          overlayChunks));
+  std::vector<std::byte> tail;
+  tail.reserve(overlayChunks.size() + gammaRamp.size());
+  tail.insert(tail.end(), overlayChunks.begin(), overlayChunks.end());
+  tail.insert(tail.end(), gammaRamp.begin(), gammaRamp.end());
+  RenderTapeBootstrapHeader fixed{
+      .baselineProfileVersion = kRenderTapeBaselineProfileVersion,
+      .stateCategoryCount = kRenderTapeStateCategoryCount,
+      .overlayCount = overlayCount,
+      .gammaRampBytes = static_cast<std::uint32_t>(gammaRamp.size()),
+      .gammaRampIsIdentity = 0u,
+      .gammaRampDigest = gammaRamp.empty()
+          ? RenderTapeDigest{}
+          : RenderTapeCaptureSession::sha256(gammaRamp),
+  };
+  if (!gammaRamp.empty()) {
+    bool identity = true;
+    for (std::size_t i = 0; i < gammaRamp.size() / 2u; ++i) {
+      std::uint16_t value = 0u;
+      std::memcpy(&value, gammaRamp.data() + i * sizeof(value), sizeof(value));
+      const auto expected = static_cast<std::uint16_t>((i % 256u) << 8u);
+      if (value != expected) {
+        identity = false;
+        break;
+      }
+    }
+    fixed.gammaRampIsIdentity = identity ? 1u : 0u;
+  }
+  append(RenderTapeEventType::BootstrapState, payloadWithTail(fixed, tail));
 }
 
 void RenderTapeBuilder::appendObjectDefine(const D9CWireObjectIdentity& identity,

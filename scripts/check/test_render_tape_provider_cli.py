@@ -54,10 +54,13 @@ def main() -> int:
         )
         assert result["status"] == "complete"
         assert result["provider_exit_code"] == 0
+        assert result["archive_policy"] == "disabled"
         assert result["coverage"]["event_count"] == 4
         assert result["validity"]["output_readback"] is True
         assert result["validity"]["expected_digest_captured"] is True
         assert result["validity"]["expected_digest_matched"] is True
+        assert result["validity"]["output_oracle_matched"] is True
+        assert result["validity"]["oracle_mode"] == "strict"
         assert result["oracle_accepted"] is True
         assert result["deterministic"] is True
         assert result["replay_policy"] == {
@@ -260,6 +263,7 @@ def main() -> int:
             ).stdout
         )
         assert sequence["profile"] == "sequence-tape"
+        assert sequence["archive_policy"] == "disabled"
         assert sequence["oracle_accepted"] is True
         assert sequence["deterministic"] is True
         assert sequence["coverage"]["present_records"] == 2

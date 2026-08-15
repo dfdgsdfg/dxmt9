@@ -45,10 +45,10 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  // 159 after Task 10 stage D removed the two unused direct fat-packet ops and
-  // Render Tape added reserve / finish / cancel for its capture-only Present
-  // output oracle.
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 159u,
+  // 161 after Task 10 stage D removed the two unused direct fat-packet ops and
+  // Render Tape added its capture-only Present output oracle plus typed color
+  // and depth snapshot operations.
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 161u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,

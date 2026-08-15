@@ -138,7 +138,9 @@ void testOutputRootTruthTable(const std::filesystem::path& root) {
 }
 
 void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
-  const auto value = bundle();
+  auto value = bundle();
+  value.outputOracle = {
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0xff}};
   check(dxmt9PePublishRenderTapeBundle(value, root.string(), "frame-test"),
         "publisher commits a complete bundle");
   const auto frame = root / "frame-test";
@@ -146,6 +148,8 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
         "publisher commits events.bin");
   check(std::filesystem::is_regular_file(frame / "manifest.json"),
         "publisher commits manifest");
+  check(std::filesystem::is_regular_file(frame / "output.rgba"),
+        "publisher commits the authoritative output sidecar");
   check(std::filesystem::is_directory(frame / "blobs"),
         "publisher commits blob directory");
   std::size_t blobFiles = 0u;
@@ -160,14 +164,23 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
   const auto eventDigest = digestText(RenderTapeCaptureSession::sha256(
       std::span<const std::byte>(value.events)));
   const auto blobDigest = digestText(value.blobs[0].digest);
+  const auto outputDigest = digestText(
+      RenderTapeCaptureSession::sha256(value.outputOracle));
   check(readBytes(frame / "events.bin") == value.events &&
             readBytes(frame / "blobs" / (blobDigest + ".bin")) ==
-                value.blobs[0].bytes,
-        "publisher preserves event and blob bytes");
+                value.blobs[0].bytes &&
+            readBytes(frame / "output.rgba") == value.outputOracle,
+        "publisher preserves event, blob, and output bytes");
   check(manifest.find("dxmt9.render_tape.bundle.v2") != std::string::npos &&
             manifest.find("\"production_capture\":true") !=
                 std::string::npos && manifest.find(eventDigest) !=
                 std::string::npos &&
+            manifest.find("\"production_provider_replay\":false") !=
+                std::string::npos &&
+            manifest.find("\"output_oracle\":true") !=
+                std::string::npos &&
+            manifest.find("output.rgba") != std::string::npos &&
+            manifest.find(outputDigest) != std::string::npos &&
             manifest.find("blobs/" + blobDigest + ".bin") !=
                 std::string::npos,
         "publisher manifest carries digests, paths, and scope");

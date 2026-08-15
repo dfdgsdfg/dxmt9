@@ -83,6 +83,14 @@ bool drawRunGroupByGenerationLaneEnabled() {
   return enabled;
 }
 
+bool renderTapeCaptureEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_RENDER_TAPE_CAPTURE");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
 bool encodeSlotPsoPrefetchDisabled() {
   static const bool disabled = [] {
     const char* env = std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH");
@@ -334,6 +342,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
       shaderArchive_(archive_prewarm::resolveMode() == archive_prewarm::Mode::Full
                          ? shaders::Archive()
                          : shaders::Archive(device, resolveShaderCachePath(device))) {
+  setRenderTapeExactAttachmentPreservation(renderTapeCaptureEnabled());
   if (!device_) {
     return;
   }

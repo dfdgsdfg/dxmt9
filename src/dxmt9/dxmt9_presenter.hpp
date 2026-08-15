@@ -30,10 +30,34 @@ namespace dxmt9 {
 
 class Device;
 
+// Render-pass initialization policy for a non-drawable present target.
+//
+// CAMetalLayer drawables retain the production fast path: their present pass
+// starts with DontCare because every normal compositor-facing present is
+// expected to cover the drawable.  Cold offscreen targets (the replay output
+// and the capture mirror) are different: a full-screen triangle can leave a
+// one-pixel rasterization fringe untouched, and DontCare makes that fringe
+// undefined across fresh Metal processes.  Such targets therefore opt into a
+// deterministic zero clear before the textured present blit.
+enum class PresentOutputLoadPolicy : std::uint8_t {
+  DeterministicClear = 0,
+  DontCare = 1,
+};
+
+constexpr WMTLoadAction resolvePresentLoadAction(
+    bool hasOffscreenOutput, PresentOutputLoadPolicy policy) noexcept {
+  return hasOffscreenOutput &&
+                 policy == PresentOutputLoadPolicy::DeterministicClear
+             ? WMTLoadActionClear
+             : WMTLoadActionDontCare;
+}
+
 struct PresentOutputTarget {
   WMT::Texture texture{};
   std::uint64_t width = 0u;
   std::uint64_t height = 0u;
+  PresentOutputLoadPolicy loadPolicy =
+      PresentOutputLoadPolicy::DeterministicClear;
 };
 
 class PresentMirrorTicket {
@@ -73,7 +97,10 @@ class OffscreenPresentOutput final : public PresentOutput {
  public:
   OffscreenPresentOutput(WMT::Texture texture, std::uint64_t width,
                          std::uint64_t height) noexcept
-      : target_{.texture = texture, .width = width, .height = height} {}
+      : target_{.texture = texture,
+                .width = width,
+                .height = height,
+                .loadPolicy = PresentOutputLoadPolicy::DeterministicClear} {}
 
   PresentOutputTarget acquire(std::uint64_t seqId) noexcept override;
   void schedule(WMT::CommandBuffer& commandBuffer,

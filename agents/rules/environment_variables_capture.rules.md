@@ -28,6 +28,8 @@ documented otherwise. See the index for global notes.
 | `DXMT_CAPTURE_RANGE` | Inclusive internal backbuffer capture range `start:end:interval` | unset | core / experiment runner |
 | `DXMT_EXPERIMENT_CAPTURE_PATH` | Single-frame experiment-harness capture path | unset | experiment runner |
 | `DXMT_EXPERIMENT_CAPTURE_DIR` | Multi-frame internal capture output directory (`frameNNNNNN.bmp`) | unset | core / experiment runner |
+| `DXMT9_RENDER_TAPE_CAPTURE` | Enable the production Render Tape producer. The unix renderer also selects the tape-exact attachment policy for this diagnostic process: captured first-use attachment seeds are loaded and live-out attachments are stored so capture and fresh-provider replay share deterministic action semantics. Normal rendering remains unchanged when unset | `0` | `d3d9_pe_device.cpp`, `dxmt9_command_queue.cpp` |
+| `DXMT9_RENDER_TAPE_SKIP_PRESENTS` | Skip this many successful idle Present boundaries before arming the one-interval Render Tape capture. This is a capture-boundary selector only; it does not change command recording or production batching | `0` | `d3d9_pe_device.cpp` |
 | `DXMT_LEAK_STATEBLOCKS` | Skip stateblock destruction (leak-check triage) | unset | d3d9 |
 
 ## Mini-replay / payload capture

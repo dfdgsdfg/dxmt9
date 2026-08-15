@@ -320,11 +320,11 @@ void testNonDrawProducerMatrix() {
       .flags = 2u,
       .hasSrc = 1u,
       .hasDst = 0u,
-      .reserved0 = 99u,
+      .sourceHandleIndex = 99u,
       .src = D9CRect{0, 0, 640, 480},
   };
-  check(dxmt9::d3d9::pe::appendPresent(builder, present),
-        "Present canonical producer canonicalizes reserved bytes");
+  check(dxmt9::d3d9::pe::appendPresent(builder, present, srcSurfaceRef),
+        "Present canonical producer maps the generation-qualified source");
 
   D9CCommandChunkWireStretchRect stretch{
       .hasSrcRect = 1u,
@@ -379,6 +379,24 @@ void testNonDrawProducerMatrix() {
             imported.records.back().type ==
                 D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
         "complete fixed non-draw producer output passes unix preflight");
+  const auto presentRecord = std::find_if(
+      imported.records.begin(), imported.records.end(), [](const auto& record) {
+        return record.type == D9C_COMMAND_RECORD_PRESENT;
+      });
+  check(presentRecord != imported.records.end(),
+        "non-draw producer matrix contains Present");
+  const auto presentIndex = static_cast<std::size_t>(
+      std::distance(imported.records.begin(), presentRecord));
+  const auto presentView = imported.record(presentIndex);
+  D9CCommandChunkWirePresent recordedPresent{};
+  std::memcpy(&recordedPresent, presentView.payload.data(),
+              sizeof(recordedPresent));
+  const auto& presentSource = imported.handles[recordedPresent.sourceHandleIndex];
+  check(presentView.header.handleCount == 1u &&
+            presentSource.kind == srcSurfaceRef.identity.kind &&
+            presentSource.generation == srcSurfaceRef.identity.generation &&
+            presentSource.objectId == srcSurfaceRef.identity.objectId,
+        "Present preserves its exact generation-qualified source identity");
   check(srcTexture.refs == 2u && dstTexture.refs == 2u &&
             srcSurface.refs == 2u && dstSurface.refs == 2u &&
             query.refs == 2u,

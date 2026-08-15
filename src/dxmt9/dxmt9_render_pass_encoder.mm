@@ -585,14 +585,13 @@ bool prepareRenderPassWithStoreProofLookahead(
     const bool clearAttachment =
         clearMatchesColorAttachment(clear, i, hot.colorAttachments[i].handle);
     // R-BACK-15.4: first-use of a color RT (handle not yet in the
-    // queue-local touched set) may DontCare-load. Precedence:
-    // Clear > post-present DontCare > first-use DontCare > Load.
-    const bool firstUseAttachment = !clearAttachment && !discardAttachment &&
-                                    !ctx.queue.isColorHandleTouched(hot.colorAttachments[i].handle);
-    attachment.load_action = clearAttachment      ? WMTLoadActionClear
-                             : discardAttachment  ? WMTLoadActionDontCare
-                             : firstUseAttachment ? WMTLoadActionDontCare
-                                                  : WMTLoadActionLoad;
+    // queue-local touched set) may DontCare-load. Render Tape exact mode
+    // preserves its captured seed instead. Precedence:
+    // Clear > post-present DontCare > tape Load > first-use DontCare > Load.
+    attachment.load_action = resolveColorAttachmentLoadAction(
+        clearAttachment, discardAttachment,
+        ctx.queue.isColorHandleTouched(hot.colorAttachments[i].handle),
+        ctx.queue.renderTapeExactAttachmentPreservation());
     perf::RenderPassNoLookaheadCause colorNoLookaheadCause =
         perf::RenderPassNoLookaheadCause::Empty;
     auto colorStoreProof =
@@ -611,8 +610,9 @@ bool prepareRenderPassWithStoreProofLookahead(
       perf::countRenderPassNoLookaheadCause(colorNoLookaheadCause);
     }
     const bool colorDontCareStore =
-        colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
-        colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent;
+        !ctx.queue.renderTapeExactAttachmentPreservation() &&
+        (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
+         colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent);
     const bool colorLateStoreEligible = lateRenderPassStoreEligible(
         colorStoreProof == perf::RenderPassColorStoreProof::BlockNoLookahead, colorNoLookaheadCause,
         activePass.lookaheadMayHaveFutureSources, static_cast<bool>(surface->resolveTexture),
@@ -705,8 +705,10 @@ bool prepareRenderPassWithStoreProofLookahead(
       perf::countRenderPassNoLookaheadCause(legacyNoLookaheadCause);
     }
     const auto allowsDontCare = [&](perf::RenderPassDepthStoreProof proof) {
-      return !hasResolveTarget && (proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
-                                   proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
+      return !ctx.queue.renderTapeExactAttachmentPreservation() &&
+             !hasResolveTarget &&
+             (proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+              proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
     };
     const auto allowsLateStore = [&](perf::RenderPassDepthStoreProof proof,
                                      perf::RenderPassNoLookaheadCause cause) {

@@ -120,10 +120,18 @@ bool appendClear(CommandChunkBuilder& builder,
 }
 
 bool appendPresent(CommandChunkBuilder& builder,
-                     const D9CCommandChunkWirePresent& input) noexcept {
-  auto fixed = input;
-  fixed.reserved0 = 0u;
-  return appendFixed(builder, D9C_COMMAND_RECORD_PRESENT, fixed);
+                     D9CCommandChunkWirePresent fixed,
+                     const PeWireObjectRef& source) noexcept {
+  if (!builder.beginRecord(D9C_COMMAND_RECORD_PRESENT)) {
+    return false;
+  }
+  if (!builder.appendHandle(source, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            fixed.sourceHandleIndex) ||
+      !builder.appendPayloadValue(fixed) || !builder.commitRecord()) {
+    builder.rollbackRecord();
+    return false;
+  }
+  return true;
 }
 
 bool appendStretchRect(CommandChunkBuilder& builder,

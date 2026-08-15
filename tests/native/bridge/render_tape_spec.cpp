@@ -161,6 +161,36 @@ std::vector<std::byte> makePresentChunk() {
                                std::as_bytes(std::span(&present, 1u)));
 }
 
+std::vector<std::byte> makeMappedPresentChunk(
+    D9CWireObjectIdentity sourceIdentity) {
+  const D9CCommandChunkWirePresent present{
+      .sourceHandleIndex = 0u,
+  };
+  const D9CCommandChunkWireHandleEntry source{
+      .kind = sourceIdentity.kind,
+      .generation = sourceIdentity.generation,
+      .objectId = sourceIdentity.objectId,
+  };
+  return makeSingleRecordChunk(
+      D9C_COMMAND_RECORD_PRESENT,
+      std::as_bytes(std::span(&present, 1u)),
+      std::span<const D9CCommandChunkWireHandleEntry>(&source, 1u));
+}
+
+std::vector<std::byte> makeUnboundDrawChunk() {
+  auto chunk = makeApplyStateChunk();
+  auto* wire = reinterpret_cast<D9CCommandChunkWireHeader*>(chunk.data());
+  auto* record = reinterpret_cast<D9CCommandChunkWireRecordHeader*>(
+      chunk.data() + wire->recordTableOffset);
+  auto* draw = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(
+      chunk.data() + wire->payloadArenaOffset);
+  record->type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  draw->flags = 0u;
+  draw->primitiveType = 4u;
+  draw->primitiveCount = 1u;
+  return chunk;
+}
+
 std::vector<std::byte> makeDrawChunk(
     D9CWireObjectIdentity textureIdentity) {
   auto chunk = makeApplyStateChunk(true, textureIdentity);
@@ -274,9 +304,10 @@ std::vector<std::byte> makeCompleteTape(
     std::uint64_t controlCompletion = 10u,
     std::uint64_t presentCompletion = 10u,
     RenderTapeDigestValidity digestValidity =
-        RenderTapeDigestValidity::NotCaptured) {
+        RenderTapeDigestValidity::NotCaptured,
+    bool includeGammaRamp = false) {
   const auto bootstrap = makeApplyStateChunk();
-  const auto present = makePresentChunk();
+  const auto present = makeMappedPresentChunk(kSurface);
   const auto descriptor = outputSurfaceDescriptor();
   const auto resourceDigest = mutationDigest();
   const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
@@ -293,7 +324,17 @@ std::vector<std::byte> makeCompleteTape(
   };
 
   RenderTapeBuilder builder;
-  builder.appendBootstrapState(bootstrap);
+  std::array<std::byte, kRenderTapeGammaRampBytes> gammaRamp{};
+  if (includeGammaRamp) {
+    for (std::size_t i = 0u; i < gammaRamp.size() / sizeof(std::uint16_t);
+         ++i) {
+      const auto value = static_cast<std::uint16_t>((i % 256u) << 8u);
+      std::memcpy(gammaRamp.data() + i * sizeof(value), &value, sizeof(value));
+    }
+  }
+  builder.appendBootstrapState(
+      bootstrap, includeGammaRamp ? std::span<const std::byte>(gammaRamp)
+                                  : std::span<const std::byte>{});
   builder.appendObjectDefine(
       kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
       std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
@@ -301,11 +342,21 @@ std::vector<std::byte> makeCompleteTape(
                                  RenderTapeMutationKind::CpuUnlock, 0u,
                                  mutationOffset, mutationBytes,
                                  resourceDigest);
+  if (includeGammaRamp) {
+    const RenderTapeOrderedControlHeader gammaControl{
+        .kind = static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet),
+        .disposition = static_cast<std::uint32_t>(
+            RenderTapeControlDisposition::Completed),
+        .controlBytes = kRenderTapeGammaRampBytes,
+        .completionOrdinal = controlCompletion,
+    };
+    builder.appendOrderedControl(gammaControl, gammaRamp);
+  }
   builder.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present);
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, present);
   builder.appendOrderedControl(control, std::as_bytes(std::span(&wait, 1u)));
   builder.appendPresentComplete(
-      4u, presentCompletion, digestValidity,
+      includeGammaRamp ? 5u : 4u, presentCompletion, digestValidity,
       digestValidity == RenderTapeDigestValidity::Sha256
           ? digest(std::byte{0x40})
           : RenderTapeDigest{},
@@ -314,12 +365,101 @@ std::vector<std::byte> makeCompleteTape(
 }
 
 RenderTapeBlobCatalogue completeCatalogue(std::uint64_t bytes = 4u,
-                                          bool verified = true) {
+                                          bool verified = true);
+
+template <typename T>
+T* eventPayload(std::vector<std::byte>& tape, std::size_t eventIndex);
+
+void gammaRampBootstrapAndOrderedMutationAreTyped() {
+  const auto tape = makeCompleteTape(
+      kSurface, 0u, 4u, sizeof(RenderTapeFlushWaitControl), 10u, 12u,
+      RenderTapeDigestValidity::NotCaptured, true);
+  const auto catalogue = completeCatalogue();
+  const auto valid = validateRenderTape(tape, catalogue);
+  check(valid.valid(), "gamma bootstrap and ordered mutation must validate");
+
+  auto bad = tape;
+  auto *bootstrap = eventPayload<RenderTapeBootstrapHeader>(bad, 0u);
+  bootstrap->gammaRampDigest[0] ^= std::byte{1u};
+  check(validateRenderTape(bad, catalogue).status ==
+            RenderTapeValidationStatus::InvalidBootstrapChunk,
+        "gamma digest mismatch must fail closed");
+}
+
+RenderTapeBlobCatalogue completeCatalogue(std::uint64_t bytes,
+                                          bool verified) {
   return RenderTapeBlobCatalogue{.blobs = {{
                                       .digest = mutationDigest(),
                                       .size = bytes,
                                       .verified = verified ? 1u : 0u,
                                   }}};
+}
+
+void clearDrawPresentSourceMappingMatchesOracleExactly() {
+  constexpr D9CWireObjectIdentity alternateOutput{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 9u,
+      .objectId = 18u,
+  };
+  const auto bootstrap = makeApplyStateChunk();
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const auto clearChunk = makeSingleRecordChunk(
+      D9C_COMMAND_RECORD_CLEAR, std::as_bytes(std::span(&clear, 1u)));
+  const auto drawChunk = makeUnboundDrawChunk();
+  const auto presentChunk = makeMappedPresentChunk(kSurface);
+  const auto descriptor = outputSurfaceDescriptor();
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = kSurfaceDescriptorKind,
+  };
+
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(bootstrap);
+  builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+                             std::as_bytes(std::span(&descriptor, 1u)), 0u,
+                             {});
+  builder.appendObjectDefine(alternateOutput, kSurfaceDescriptorKind,
+                             std::as_bytes(std::span(&descriptor, 1u)), 0u,
+                             {});
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, clearChunk);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, drawChunk);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, presentChunk);
+  builder.appendPresentComplete(
+      6u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto tape = builder.seal();
+  check(validateRenderTape(tape, {}).valid(),
+        "typed Clear-Draw-Present source mapping matches its oracle");
+
+  RenderTapeBuilder mismatch;
+  mismatch.appendBootstrapState(bootstrap);
+  mismatch.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+                              std::as_bytes(std::span(&descriptor, 1u)), 0u,
+                              {});
+  mismatch.appendObjectDefine(alternateOutput, kSurfaceDescriptorKind,
+                              std::as_bytes(std::span(&descriptor, 1u)), 0u,
+                              {});
+  mismatch.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, clearChunk);
+  mismatch.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, drawChunk);
+  const auto wrongPresent = makeMappedPresentChunk(alternateOutput);
+  mismatch.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, wrongPresent);
+  mismatch.appendPresentComplete(
+      6u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto rejected = validateRenderTape(mismatch.seal(), {});
+  check(rejected.status == RenderTapeValidationStatus::InvalidPresentComplete,
+        "generation-qualified Present source mismatch rejects oracle promotion");
 }
 
 template <typename T>
@@ -2229,6 +2369,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     check(argc == 1, "usage: render_tape_spec [--write-fixture path]");
+    clearDrawPresentSourceMappingMatchesOracleExactly();
     validTapeReplaysExactlyOnce();
     immutableObjectsAndRetirementFailClosed();
     descriptorKindIdentityMismatchFailsClosed();
@@ -2239,6 +2380,7 @@ int main(int argc, char** argv) {
     textureAliasLogicalSlotsUseParentSubresources();
     textureSurfaceAliasesCoverCanonical2DAndStandaloneSurfaces();
     textureSurfaceWrapperLifetimeIsIdempotent();
+    gammaRampBootstrapAndOrderedMutationAreTyped();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();
     wholeEventReductionIsCanonicalAndFailClosed();

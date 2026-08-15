@@ -592,7 +592,9 @@ typedef struct D9CCommandChunkWirePresent {
     uint32_t flags;
     uint32_t hasSrc;
     uint32_t hasDst;
-    uint32_t reserved0;
+    /* Absolute index of the generation-qualified swapchain source surface in
+     * this record's handle slice. Legacy records carry no handles and zero. */
+    uint32_t sourceHandleIndex;
     D9CRect src;
     D9CRect dst;
 } D9CCommandChunkWirePresent;
@@ -839,8 +841,9 @@ typedef struct D9CCommandChunk {
 /* Capture-only PresentComplete output result. This fixed, pointer-free POD
  * crosses the PE/unix boundary only after the captured PRESENT chunk has
  * drained. `sha256` hashes tightly packed canonical logical Present output
- * rows at the captured descriptor extent; only fixed POD is returned, and no
- * variable payload or caller memory is retained or referenced after return. */
+ * rows at the captured descriptor extent. The finish call copies those same
+ * bytes into an exact-capacity top-level bridge buffer and retains no caller
+ * memory after return. */
 typedef enum D9CRenderTapePresentCaptureStatus {
     D9C_RENDER_TAPE_PRESENT_CAPTURE_NONE = 0,
     D9C_RENDER_TAPE_PRESENT_CAPTURE_COMPLETE = 1,
@@ -1069,7 +1072,8 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
-    D9CDevice*, D9CRenderTapePresentCaptureResult* out);
+    D9CDevice*, D9CRenderTapePresentCaptureResult* out, void* bytes,
+    uint64_t capacity);
 void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,

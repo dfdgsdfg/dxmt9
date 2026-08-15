@@ -436,6 +436,20 @@ Unknown kinds/dispositions, stale generations, missing or unverified blobs,
 range overflow, completion regression, or duplicate representation are hard
 validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and R-HARN-7.5.
 
+The v2 state contract additionally treats the 3-channel, 256-entry gamma
+ramp as explicit state. `BootstrapState` carries the initial ramp as exactly
+1536 owned bytes with a verified SHA-256 digest and recomputed identity flag;
+an in-interval `SetGammaRamp` is represented by `OrderedControl::GammaRampSet`
+with the same exact payload and monotone completion ordinal. A gamma mutation
+must precede the interval's Present-bearing chunk; the provider applies both
+forms before subsequent command work. The compact replay path is not allowed
+to silently drop these events and therefore falls through to the general
+typed provider when either form is present. Mismatched size, digest, identity,
+ordering, or unsupported control kinds fail closed.
+The gamma-bearing 64-byte bootstrap header is baseline profile version 2.
+Pre-gamma profile-1 artifacts are Retired and fail closed; they are not
+reinterpreted as profile 2 or used as production replay evidence.
+
 For `frame-tape`, `PresentComplete` is unique and last. For `sequence-tape`,
 one `PresentComplete` closes each interval and only the final completion is
 last. Every completion names the ordinal of its interval's one Present-bearing
@@ -639,8 +653,11 @@ multiple matching aliases, multi-mip/cube/volume textures, and any ambiguous
 or out-of-order definition fail closed. Independently owned render-target,
 depth, and offscreen surfaces are `Standalone` plus `CompleteSeed`; ordinary
 texture views are `TextureSubresource` plus `Unavailable` and name the exact
-generation-qualified parent/subresource; the oracle target is
-`SwapchainBackbuffer` plus `ProducedPresentOutput`. The unversioned
+generation-qualified parent/subresource. The oracle target is
+`SwapchainBackbuffer` plus `CompleteSeed` when its post-arm contents are
+observable, and retains `ProducedPresentOutput` only for a structurally proven
+output-only interval that does not read or preserve prior backbuffer contents.
+The unversioned
 texture level-0/count payload and raw
 `D9CSurfaceDesc` Surface payload are Retired and must be rejected by capture
 registration, bootstrap/JIT materialization, validation, inspection,
@@ -670,8 +687,13 @@ by the existing window `Presenter` with the same present PSO, source, sampler,
 and gamma parameters in the same command buffer as the normal drawable present.
 The PE owner reserves that mirror only immediately before committing the
 captured canonical `PRESENT` chunk, then uses a typed capture-only bridge
-finish to drain, read back, validate `(width,height,format,byteCount)`, and
-copy its fixed-POD result. Before publishing the one-shot reservation, the
+finish to drain, read back, validate `(width,height,format,byteCount)`, copy
+its fixed-POD result, and copy the same tight bytes into an exact-capacity
+top-level bridge buffer. The publisher writes those bytes as `output.rgba`
+beside `events.bin`, records its size and SHA-256 in the atomic bundle
+manifest, and marks the capture-side output-oracle scope. The sidecar is
+authoritative comparison evidence but never a replay input or a member of the
+immutable resource-blob catalogue. Before publishing the one-shot reservation, the
 bridge drains deferred replay and flushes the renderer queue; after the
 captured chunk is accepted, finish drains that replay and flushes the renderer
 queue before accepting the ticket as encoded. Therefore neither an older nor a
@@ -680,7 +702,21 @@ cancellation, failure, a missing or mismatched result, and cleanup abort only
 the tape: they preserve the D3D9 `Present` HRESULT and publish no artifact. The
 feature is default-off and must add neither allocation nor bridge work while
 capture is inactive. This requirement does not widen the accepted grammar,
-support `PresentEx`, or support prior-output loads.
+support `PresentEx`.
+
+**R-HARN-REPLAY-7.15** A frame-tape arm boundary snapshots the exact current
+swapchain backbuffer after the arm Present has drained and before any command
+of the selected interval is admitted. This is backend-state identity for the
+current dxmt9 implementation, not a claim that `D3DSWAPEFFECT_DISCARD`
+preserves contents in the D3D9 abstract semantics. The capture names the same
+generation-qualified surface used by the later mapped Present, defines it as
+`SwapchainBackbuffer/CompleteSeed`, and journals exactly one full tight-pixel
+upload before the first command chunk. Replay uploads those bytes into the
+real replay backbuffer, restores the queue's touched-color state, and only then
+applies bootstrap state or command work. Missing, stale, partial, unsupported,
+or late seeds fail closed. A fresh-process exact-output comparison is required
+to promote this lane; clearing or substituting a newly allocated output is not
+equivalent evidence when the captured interval preserves prior pixels.
 
 **R-HARN-REPLAY-7.14** Deterministic provider repetition must construct a fresh
 device for every warm-up and measured run, validate before effects, cap both
@@ -727,3 +763,36 @@ GT2 replay. Render Tape v2 does not carry authoritative frame ID, application
 source/sequence ID, or logical-pass identity, so the command must not invent or
 label those fields as verified; the canonical event ordinal plus record index is
 the admitted locator until a separately captured mapping exists.
+
+**R-HARN-REPLAY-7.18** Production capture and production-provider replay use
+one tape-exact attachment-action policy. While either operation is active, an
+attachment restored by bootstrap or resource mutation must load its preserved
+contents on first binding unless an explicit Clear or post-Present discard has
+higher precedence, and a later serialized command event must not observe a
+DontCare store selected only because capture and replay expose different
+lookahead windows. The capture process enables this policy from renderer queue
+construction so its pre-arm history and selected interval use the same
+semantics; a dedicated replay device enables it before applying any event and
+restores its prior value only after queued work drains. The policy is
+diagnostic-only and inactive when Render Tape capture or provider replay is
+not selected. Deterministic equality between two fresh replay processes is a
+required intermediate gate, but promotion still requires equality with the
+captured `PresentComplete` digest.
+
+**R-HARN-REPLAY-7.19** Provider replay keeps exact SHA-256 equality as the
+primary output result. A frame-tape bundle that also carries the
+digest-authenticated `output.rgba` sidecar from R-HARN-REPLAY-7.13 may use a
+second, fail-closed 8-bit pixel envelope only after exact digest comparison
+fails: dimensions, format, byte count, and sidecar SHA-256 must match the tape;
+alpha must be byte-identical; every RGB channel delta must be at most 2; no
+more than one pixel per 12,288 output pixels (with a minimum allowance of one
+and an absolute maximum of 64) may differ; and total absolute RGB delta must be
+no greater than twice that pixel allowance. The result must report exact-digest equality, sidecar
+comparison, differing pixels, maximum and total RGB delta, and alpha
+differences independently. An envelope match may complete only a one-interval
+`frame-tape`; it must not relax structural validation, resource-blob digests,
+object/completion conservation, non-degeneracy, a `sequence-tape`, or
+fresh-process determinism. An envelope result requires at least two isolated
+provider processes whose output SHA-256 values and full evidence records are
+identical. Missing, altered, or unauthenticated sidecar bytes retain the
+original output-mismatch result.

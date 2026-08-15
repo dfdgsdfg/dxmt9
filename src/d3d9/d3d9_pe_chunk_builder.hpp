@@ -212,7 +212,8 @@ bool appendClear(CommandChunkBuilder& builder,
                    D9CCommandChunkWireClear fixed,
                    std::span<const D9CRect> rects) noexcept;
 bool appendPresent(CommandChunkBuilder& builder,
-                     const D9CCommandChunkWirePresent& fixed) noexcept;
+                     D9CCommandChunkWirePresent fixed,
+                     const PeWireObjectRef& source) noexcept;
 bool appendStretchRect(CommandChunkBuilder& builder,
                          D9CCommandChunkWireStretchRect fixed,
                          const PeWireObjectRef& src,

@@ -2,6 +2,7 @@
 #include "device_c_render_tape_projection.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -54,22 +55,43 @@ public:
   }
   bool objectDefine(const RenderTapeObjectDefineHeader& fixed,
                     std::span<const std::byte> descriptor) override {
+    if (fixed.descriptorKind < descriptorKinds.size()) {
+      ++descriptorKinds[fixed.descriptorKind];
+    }
     if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
       RenderTapeTextureDescriptorV2 texture{};
       if (!renderTapeLoadTextureDescriptorV2(descriptor, texture)) {
         return false;
       }
       ++textureDescriptorsV2;
+      if (texture.dimension < textureDimensions.size()) {
+        ++textureDimensions[texture.dimension];
+      }
+      if (texture.initialContentDisposition < contentDispositions.size()) {
+        ++contentDispositions[texture.initialContentDisposition];
+      }
     } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
       RenderTapeSurfaceDescriptorV2 surface{};
       if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface)) return false;
       ++surfaceDescriptorsV2;
+      if (surface.storage < surfaceStorages.size()) {
+        ++surfaceStorages[surface.storage];
+      }
+      if (surface.initialContentDisposition < contentDispositions.size()) {
+        ++contentDispositions[surface.initialContentDisposition];
+      }
     }
     ++defines;
     ++events;
     return true;
   }
   bool resourceMutation(const RenderTapeResourceMutationHeader& mutation) override {
+    if (mutation.kind < mutationKinds.size()) {
+      ++mutationKinds[mutation.kind];
+    }
+    if (mutation.identity.kind < mutationObjectKinds.size()) {
+      ++mutationObjectKinds[mutation.identity.kind];
+    }
     ++mutations;
     mutationBytes += mutation.byteSize;
     ++events;
@@ -82,16 +104,34 @@ public:
     ++chunks;
     records += chunk.records.size();
     handles += chunk.handles.size();
+    for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size();
+         ++recordIndex) {
+      const auto record = chunk.record(recordIndex);
+      if (record.header.type < recordTypes.size()) {
+        ++recordTypes[record.header.type];
+      }
+      for (const auto& section : record.sections) {
+        if (section.kind < sectionKinds.size()) {
+          ++sectionKinds[section.kind];
+        }
+      }
+    }
     ++events;
     return true;
   }
-  bool objectDestroy(const RenderTapeObjectDestroyHeader&) override {
+  bool objectDestroy(const RenderTapeObjectDestroyHeader& fixed) override {
+    if (fixed.identity.kind < destroyObjectKinds.size()) {
+      ++destroyObjectKinds[fixed.identity.kind];
+    }
     ++destroys;
     ++events;
     return true;
   }
-  bool orderedControl(const RenderTapeOrderedControlHeader&,
+  bool orderedControl(const RenderTapeOrderedControlHeader& fixed,
                       std::span<const std::byte>) override {
+    if (fixed.kind < controlKinds.size()) {
+      ++controlKinds[fixed.kind];
+    }
     ++controls;
     ++events;
     return true;
@@ -118,7 +158,72 @@ public:
   std::uint64_t controls = 0u;
   std::uint64_t completions = 0u;
   std::uint64_t lastPresentOrdinal = 0u;
+  std::array<std::uint64_t, 7u> descriptorKinds{};
+  std::array<std::uint64_t, 4u> textureDimensions{};
+  std::array<std::uint64_t, 6u> contentDispositions{};
+  std::array<std::uint64_t, 4u> surfaceStorages{};
+  std::array<std::uint64_t, 5u> mutationKinds{};
+  std::array<std::uint64_t, 6u> mutationObjectKinds{};
+  std::array<std::uint64_t, 6u> destroyObjectKinds{};
+  std::array<std::uint64_t, 6u> controlKinds{};
+  std::array<std::uint64_t, 30u> recordTypes{};
+  std::array<std::uint64_t, D9C_COMMAND_CHUNK_SECTION_COUNT + 1u>
+      sectionKinds{};
 };
+
+template <std::size_t N>
+void writeTypedCounts(std::ostream& output,
+                      const std::array<std::uint64_t, N>& counts,
+                      const std::array<const char*, N>& names) {
+  output << '{';
+  bool first = true;
+  for (std::size_t i = 0u; i < counts.size(); ++i) {
+    if (counts[i] == 0u || names[i] == nullptr) continue;
+    if (!first) output << ',';
+    first = false;
+    output << '"' << names[i] << "\":" << counts[i];
+  }
+  output << '}';
+}
+
+constexpr std::array<const char*, 7u> kDescriptorKindNames{
+    nullptr, "texture", "surface", "buffer", "shader",
+    "vertex_declaration", "query"};
+constexpr std::array<const char*, 4u> kTextureDimensionNames{
+    nullptr, "texture_2d", "cube", "volume"};
+constexpr std::array<const char*, 6u> kContentDispositionNames{
+    nullptr, "complete_seed", "unavailable", "produced_present_output",
+    "produced_by_captured_pass", "complete_depth_float32_v1"};
+constexpr std::array<const char*, 4u> kSurfaceStorageNames{
+    nullptr, "standalone", "texture_subresource", "swapchain_backbuffer"};
+constexpr std::array<const char*, 5u> kMutationKindNames{
+    nullptr, "cpu_unlock", "upload", "palette", "mipmap_class"};
+constexpr std::array<const char*, 6u> kObjectKindNames{
+    "texture", "surface", "buffer", "shader", "vertex_declaration",
+    "query"};
+constexpr std::array<const char*, 6u> kControlKindNames{
+    nullptr, "query_get_data", "cpu_read", "flush_wait", "reset",
+    "device_lost"};
+constexpr std::array<const char*, 30u> kRecordTypeNames{
+    nullptr,
+    "draw_primitive", "draw_indexed_primitive", "draw_primitive_up",
+    "draw_indexed_primitive_up",
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+    nullptr,
+    "set_vs_const_f", "set_vs_const_i", "set_vs_const_b",
+    "set_ps_const_f", "set_ps_const_i", "set_ps_const_b",
+    "clear", "present", "stretch_rect", "color_fill", "update_texture",
+    "update_surface", "query_issue", "readback", "apply_state",
+    "resz_depth_resolve"};
+constexpr std::array<const char*, D9C_COMMAND_CHUNK_SECTION_COUNT + 1u>
+    kSectionKindNames{
+        nullptr,
+        "render_state", "texture", "stream", "shader", "vertex_input",
+        "index_buffer", "render_target", "depth_stencil", "viewport",
+        "scissor", "material", "clip_plane", "texture_stage_state",
+        "sampler_state", "transform", "light", "light_enable",
+        "vs_const_f", "vs_const_i", "vs_const_b", "ps_const_f",
+        "ps_const_i", "ps_const_b", "up_index_data", "up_vertex_data"};
 
 void usage() {
   std::cerr << "usage: dxmt9-render-tape <validate|inspect> <tape.bin> "
@@ -524,7 +629,29 @@ int main(int argc, char** argv) {
     } else {
       std::cout << presentCommandEvents.back();
     }
-    std::cout << "}\n";
+    std::cout << ",\"grammar\":{\"descriptor_kinds\":";
+    writeTypedCounts(std::cout, sink.descriptorKinds, kDescriptorKindNames);
+    std::cout << ",\"texture_dimensions\":";
+    writeTypedCounts(std::cout, sink.textureDimensions,
+                     kTextureDimensionNames);
+    std::cout << ",\"content_dispositions\":";
+    writeTypedCounts(std::cout, sink.contentDispositions,
+                     kContentDispositionNames);
+    std::cout << ",\"surface_storages\":";
+    writeTypedCounts(std::cout, sink.surfaceStorages, kSurfaceStorageNames);
+    std::cout << ",\"mutation_kinds\":";
+    writeTypedCounts(std::cout, sink.mutationKinds, kMutationKindNames);
+    std::cout << ",\"mutation_object_kinds\":";
+    writeTypedCounts(std::cout, sink.mutationObjectKinds, kObjectKindNames);
+    std::cout << ",\"destroy_object_kinds\":";
+    writeTypedCounts(std::cout, sink.destroyObjectKinds, kObjectKindNames);
+    std::cout << ",\"control_kinds\":";
+    writeTypedCounts(std::cout, sink.controlKinds, kControlKindNames);
+    std::cout << ",\"record_types\":";
+    writeTypedCounts(std::cout, sink.recordTypes, kRecordTypeNames);
+    std::cout << ",\"section_kinds\":";
+    writeTypedCounts(std::cout, sink.sectionKinds, kSectionKindNames);
+    std::cout << "}}\n";
   } catch (const std::exception& error) {
     std::cerr << "dxmt9-render-tape: " << error.what() << '\n';
     return 1;

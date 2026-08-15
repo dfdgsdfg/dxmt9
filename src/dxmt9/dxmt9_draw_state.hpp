@@ -22,6 +22,10 @@ using u32 = std::uint32_t;
 using i32 = std::int32_t;
 using f32 = float;
 
+// Metal constant-address buffer bindings require a 16-byte byte offset even
+// though the C++ mirror structs naturally have only 4-byte alignment.
+inline constexpr std::size_t kConstantBufferOffsetAlignment = 16u;
+
 // Per-frequency draw uniforms split by stage and update cadence (see
 // specs/backend/draw-uniforms). VS-only constants. Sized so MSL
 // `float4`/`int4`/`uint` arrays match the host layout byte-for-byte.

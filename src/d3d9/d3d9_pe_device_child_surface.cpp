@@ -140,6 +140,20 @@ static D9CRect toR(const D3DBOX &b) {
   return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
 }
 
+// User-memory locks have no D9C unlock call to provide the ordering barrier.
+// When capture tracking is active, publish the CPU mutation only after the
+// current PE command chunk has been materialized. Capture-off keeps the
+// caller-owned-memory path free of recorder work.
+[[nodiscard]] static HRESULT flushUserMemoryMutationOrdering(
+    D3D9PeRecorderFlush *recorder, bool linearLock, DWORD lockFlags) {
+  if (!recorder || !linearLock || (lockFlags & D3DLOCK_READONLY) != 0u ||
+      !dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
+          recorder->IsRenderTapeCaptureTrackingEnabledForChild())) {
+    return S_OK;
+  }
+  return flushChildRecorder(recorder);
+}
+
 [[nodiscard]] static HRESULT textureLevelDesc(D9CTexture *texture, UINT level,
                                 D9CSurfaceDesc *desc) {
   if (!texture || !desc)
@@ -1039,6 +1053,10 @@ public:
         if (dxmt9::d3d9::copyRenderTapeLinearRows(
                 lockBits_, linearLockLayout_, mutationCopy,
                 linearBitsOrigin_)) {
+          const HRESULT flushHr = flushUserMemoryMutationOrdering(
+              recorder_, linearLock_, lockFlags_);
+          if (FAILED(flushHr))
+            return flushHr;
           recorder_->NotifyRenderTapeLinearMutationForChild(
               mutationObject_, mutationSubresource_, linearLockLayout_,
               mutationCopy);
@@ -1796,6 +1814,10 @@ public:
               // `fullLayout` is deliberately full and zero-offset, so the
               // existing mutation reducer publishes these exact rows as a
               // complete seed rather than overlaying the partial write.
+              const HRESULT flushHr = flushUserMemoryMutationOrdering(
+                  recorder_, linearLock_, lockFlags_);
+              if (FAILED(flushHr))
+                return flushHr;
               recorder_->NotifyRenderTapeLinearMutationForChild(
                   wireObject_, level, fullLayout, fullCopy);
             }
@@ -1803,6 +1825,10 @@ public:
                      dxmt9::d3d9::RenderTapeUserMemorySeedRoute::PartialOnly) {
             // A complete seed already exists, so preserve the ordinary
             // partial mutation event and its descriptor-relative overlay.
+            const HRESULT flushHr = flushUserMemoryMutationOrdering(
+                recorder_, linearLock_, lockFlags_);
+            if (FAILED(flushHr))
+              return flushHr;
             recorder_->NotifyRenderTapeLinearMutationForChild(
                 wireObject_, level, linearLockLayout_, mutationCopy);
           } else {
@@ -1814,6 +1840,10 @@ public:
                 mutationCopy.size());
           }
         } else {
+          const HRESULT flushHr = flushUserMemoryMutationOrdering(
+              recorder_, linearLock_, lockFlags_);
+          if (FAILED(flushHr))
+            return flushHr;
           recorder_->NotifyRenderTapeLinearMutationForChild(
               wireObject_, level, linearLockLayout_, mutationCopy);
         }

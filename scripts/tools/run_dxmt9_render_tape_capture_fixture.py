@@ -73,16 +73,16 @@ def main() -> int:
         if validated.get("valid") is not True or validated.get("presents") != 1:
             raise SystemExit("fixture validation did not close exactly one Present")
         expected = {
-            "events": 6,
+            "events": 7,
             "bootstraps": 1,
-            "defines": 1,
+            "defines": 2,
             "mutations": 1,
             "mutation_bytes": 4,
             "chunks": 1,
             "records": 1,
             "controls": 1,
             "present_completions": 1,
-            "last_present_ordinal": 4,
+            "last_present_ordinal": 5,
         }
         if any(inspected.get(key) != value for key, value in expected.items()):
             raise SystemExit(f"fixture inspect counts are not deterministic: {inspected}")

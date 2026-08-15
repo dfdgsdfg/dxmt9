@@ -365,6 +365,36 @@ Supporting that exact grammar, then the later indexed GT2 grammar, replay
 digest identity, and create/release conservation is the next phase rather than
 part of this capture milestone.
 
+### GT2 r57 production-provider replay milestone
+
+The 2026-08-15 Sikarugir capture published
+`experiments/render-tapes/gt2-output-oracle-r57-20260815/`
+`frame-156258260414600-1`. Structural validation and inspection pass for 912
+events, 32 command chunks, 269 definitions, 607 mutations, 687 blobs, 1,877
+records, 1,231 indexed draws, 25 non-indexed draws, and one Present. The bundle
+atomically carries the exact 3,145,728-byte capture output as `output.rgba`;
+its manifest SHA-256 and `PresentComplete` SHA-256 are both
+`6c4705e6a7fd302038a4deb6aab505f93d80be5e6f5de452d051806632b83d01`.
+
+One warm-up and two measured provider runs in separate processes all produced
+the same output SHA-256
+`c82fc63f8c75dcf1453cfcf1251c96560b89389075f237c9d4b1442fb79fd052`,
+referenced all 687 blobs, and conserved 269 created/released objects and the
+single Present/completion ordinal. Exact digest equality remains false. The
+authenticated byte comparison differs at 34 of 786,432 pixels, with maximum
+RGB channel delta 2, total RGB delta 62, and no alpha differences; this is
+inside the R-HARN-REPLAY-7.19 maximum of 64 pixels and total RGB delta 128.
+The official runner reports `complete`, `oracle_mode=pixel-envelope`,
+`deterministic=true`, and `production_provider_replay=true`. It rejects the
+same envelope after only one process, and the C++ predicate rejects missing or
+wrong-digest sidecars, structural/blob/object conservation failures, a 65th
+changed pixel, RGB delta 3, or any alpha difference.
+
+This closes general indexed GT2 frame-tape capture-to-provider replay. It does
+not turn the separate projection artifact into an executable mini-replay, does
+not support `PresentEx`, and does not weaken strict SHA equality for native
+fixtures, sequence tapes, or promotion claims that require byte identity.
+
 ## Render Tape bounded wild evidence
 
 The canonical `perf-d3d9-present-loop` experiment was run with

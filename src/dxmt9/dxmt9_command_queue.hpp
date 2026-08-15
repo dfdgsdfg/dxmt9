@@ -754,6 +754,19 @@ class CommandQueue {
   void invalidateColorHandle(core::Handle handle);
   void clearAllTouchedColorHandles();
 
+  // Render Tape capture and provider replay must use the same deterministic
+  // attachment policy. Their event/chunk boundaries are serialization
+  // boundaries, not D3D discard points, so preserve first-use contents and
+  // every live-out store while exact tape mode is active.
+  void setRenderTapeExactAttachmentPreservation(bool enabled) noexcept {
+    renderTapeExactAttachmentPreservation_.store(enabled,
+                                                  std::memory_order_release);
+  }
+  bool renderTapeExactAttachmentPreservation() const noexcept {
+    return renderTapeExactAttachmentPreservation_.load(
+        std::memory_order_acquire);
+  }
+
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so CommandQueue's constructor can wire its own runtime loops.
   // External callers should not use these.
@@ -868,6 +881,7 @@ class CommandQueue {
   // writer is the encoder thread, so no separate mutex is needed (mirrors
   // currentBackBuffer_ access pattern).
   std::unordered_set<std::uint64_t> touchedColorHandles_{};
+  std::atomic<bool> renderTapeExactAttachmentPreservation_{false};
   // Phase 14: see setSkipDrawResourceMarking() doc.
   bool skipDrawResourceMarking_ = false;
   // If a diagnostic record-side split fires while chunk replay has disabled

@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Optional
 
 
 SCHEMA = "dxmt9.render_tape.bundle.v2"
@@ -54,10 +54,13 @@ def run_provider_replay(
     provider: pathlib.Path,
     events: pathlib.Path,
     blob_paths: list[pathlib.Path],
+    expected_output: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     arguments = [str(provider), "replay", str(events)]
     for path in blob_paths:
         arguments.extend(("--blob", str(path)))
+    if expected_output is not None:
+        arguments.extend(("--expected-rgba", str(expected_output)))
     completed = subprocess.run(
         arguments,
         check=False,
@@ -80,7 +83,9 @@ def run_provider_replay(
     return result
 
 
-def provider_oracle_accepts(result: dict[str, Any]) -> bool:
+def provider_oracle_accepts(
+    result: dict[str, Any], require_non_degenerate: bool = False
+) -> bool:
     validity = result.get("validity")
     coverage = result.get("coverage")
     conservation = result.get("conservation")
@@ -105,7 +110,11 @@ def provider_oracle_accepts(result: dict[str, Any]) -> bool:
             and isinstance(interval.get("validity"), dict)
             and interval["validity"].get("output_readback") is True
             and interval["validity"].get("expected_digest_captured") is True
-            and interval["validity"].get("expected_digest_matched") is True
+            and interval["validity"].get("output_oracle_matched") is True
+            and (
+                not require_non_degenerate
+                or interval["validity"].get("output_non_degenerate") is True
+            )
             and isinstance(interval["validity"].get("output_sha256"), str)
             and len(interval["validity"]["output_sha256"]) == 64
             for interval in intervals
@@ -141,6 +150,8 @@ def provider_oracle_accepts(result: dict[str, Any]) -> bool:
     coverage_valid = bool(
         isinstance(coverage.get("present_records"), int)
         and coverage.get("present_records") == expected_intervals
+        and isinstance(coverage.get("present_source_mappings"), int)
+        and coverage.get("present_source_mappings") == expected_intervals
         and isinstance(coverage.get("present_outputs"), int)
         and coverage.get("present_outputs") == expected_intervals
         and (
@@ -159,7 +170,11 @@ def provider_oracle_accepts(result: dict[str, Any]) -> bool:
         and validity.get("digests_valid") is True
         and validity.get("output_readback") is True
         and validity.get("expected_digest_captured") is True
-        and validity.get("expected_digest_matched") is True
+        and validity.get("output_oracle_matched") is True
+        and (
+            not require_non_degenerate
+            or validity.get("output_non_degenerate") is True
+        )
         and isinstance(validity.get("output_sha256"), str)
         and len(validity["output_sha256"]) == 64
         and conservation_valid
@@ -190,6 +205,8 @@ def replay_with_policy(
     blob_paths: list[pathlib.Path],
     warmup: int,
     repeat: int,
+    require_non_degenerate: bool = False,
+    expected_output: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     if warmup < 0 or repeat < 1 or warmup + repeat > MAX_REPLAY_RUNS:
         raise SystemExit(
@@ -197,8 +214,10 @@ def replay_with_policy(
         )
     warmup_results = []
     for _ in range(warmup):
-        result = run_provider_replay(provider, events, blob_paths)
-        if not provider_oracle_accepts(result):
+        result = run_provider_replay(
+            provider, events, blob_paths, expected_output
+        )
+        if not provider_oracle_accepts(result, require_non_degenerate):
             result["oracle_accepted"] = False
             result["failed_phase"] = "warmup"
             result["replay_policy"] = {
@@ -213,8 +232,10 @@ def replay_with_policy(
     runs = []
     last_result: dict[str, Any] = {}
     for _ in range(repeat):
-        last_result = run_provider_replay(provider, events, blob_paths)
-        if not provider_oracle_accepts(last_result):
+        last_result = run_provider_replay(
+            provider, events, blob_paths, expected_output
+        )
+        if not provider_oracle_accepts(last_result, require_non_degenerate):
             last_result["oracle_accepted"] = False
             last_result["replay_policy"] = {
                 "reset": "fresh-process-device",
@@ -238,6 +259,13 @@ def replay_with_policy(
     }
     result["warmup_runs"] = warmup_results
     result["runs"] = runs
+    envelope_used = any(
+        run.get("validity", {}).get("oracle_mode") == "pixel-envelope"
+        for run in all_runs
+    )
+    if envelope_used and len(all_runs) < 2:
+        result["status"] = "insufficient-envelope-repeats"
+        result["oracle_accepted"] = False
     if not deterministic:
         result["status"] = "nondeterministic"
         result["oracle_accepted"] = False
@@ -422,6 +450,36 @@ def load_bundle(
             )
     elif declared_blob_names:
         raise SystemExit("render tape blobs directory is missing")
+    output_oracle = manifest.get("components", {}).get("output_oracle")
+    if output_oracle is not None:
+        if not isinstance(output_oracle, dict):
+            raise SystemExit("render tape components.output_oracle must be an object")
+        if output_oracle.get("path") != "output.rgba":
+            raise SystemExit(
+                "render tape output oracle path must be canonical: output.rgba"
+            )
+        claimed_digest = output_oracle.get("sha256")
+        if (
+            not isinstance(claimed_digest, str)
+            or len(claimed_digest) != 64
+            or any(value not in "0123456789abcdef" for value in claimed_digest)
+        ):
+            raise SystemExit("render tape output oracle digest must be lowercase SHA-256")
+        output_path = manifest_path.parent / "output.rgba"
+        if not output_path.is_file():
+            raise SystemExit(f"render tape output oracle is missing: {output_path}")
+        actual_bytes = output_path.stat().st_size
+        if output_oracle.get("bytes") != actual_bytes:
+            raise SystemExit(
+                "render tape output oracle size mismatch: "
+                f"manifest={output_oracle.get('bytes')} actual={actual_bytes}"
+            )
+        actual_digest = digest(output_path)
+        if claimed_digest != actual_digest:
+            raise SystemExit(
+                "render tape output oracle digest mismatch: "
+                f"manifest={claimed_digest} actual={actual_digest}"
+            )
     return manifest, events, blob_refs, blob_paths
 
 
@@ -570,15 +628,24 @@ def validate_or_inspect(args: argparse.Namespace) -> int:
 
 def provider_replay(args: argparse.Namespace) -> int:
     manifest, events, _, blob_paths = load_bundle(args.bundle)
+    expected_output = None
+    if isinstance(manifest.get("components", {}).get("output_oracle"), dict):
+        expected_output = events.parent / "output.rgba"
     result = replay_with_policy(
-        args.provider, events, blob_paths, args.warmup, args.repeat
+        args.provider,
+        events,
+        blob_paths,
+        args.warmup,
+        args.repeat,
+        manifest.get("scope", {}).get("production_capture") is True,
+        expected_output,
     )
     validity = result.get("validity", {})
     output_oracle = bool(
         result.get("oracle_accepted") is True
         and validity.get("output_readback")
         and validity.get("expected_digest_captured")
-        and validity.get("expected_digest_matched")
+        and validity.get("output_oracle_matched")
     )
     scope = dict(manifest.get("scope", {}))
     scope["production_provider_replay"] = result.get("oracle_accepted") is True

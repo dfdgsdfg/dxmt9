@@ -170,7 +170,8 @@ RenderTapeDigest RenderTapeCaptureSession::sha256(
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     std::span<const std::byte> bootstrapOverlay,
-    std::span<const RenderTapeBlob> blobs) {
+    std::span<const RenderTapeBlob> blobs,
+    std::span<const std::byte> gammaRamp) {
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
@@ -178,7 +179,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
       state_ != RenderTapeCaptureState::Aborted) {
     return RenderTapeCaptureStatus::InvalidState;
   }
-  if (bootstrapOverlay.empty() || blobs.size() > limits_.maxBlobEntries) {
+  if (bootstrapOverlay.empty() || blobs.size() > limits_.maxBlobEntries ||
+      (!gammaRamp.empty() && gammaRamp.size() != kRenderTapeGammaRampBytes)) {
     return RenderTapeCaptureStatus::InvalidInput;
   }
   if (builder_.profile() != kRenderTapeProfileFrame &&
@@ -201,14 +203,15 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     validationResult_ = RenderTapeValidationResult{
         .status = RenderTapeValidationStatus::Valid};
     builder_ = RenderTapeBuilder(builder_.profile());
-    const auto status = reserveEvent(
-        sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size());
+    const auto status = reserveEvent(sizeof(RenderTapeBootstrapHeader) +
+                                     bootstrapOverlay.size() + gammaRamp.size());
     if (status != RenderTapeCaptureStatus::Accepted) {
       return status;
     }
-    builder_.appendBootstrapState(bootstrapOverlay);
+    builder_.appendBootstrapState(bootstrapOverlay, gammaRamp);
     ++eventCount_;
-    eventBytes_ += sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size();
+    eventBytes_ += sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size() +
+                   gammaRamp.size();
     state_ = RenderTapeCaptureState::Armed;
     return RenderTapeCaptureStatus::Accepted;
   } catch (...) {
@@ -219,7 +222,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     std::span<const std::byte> bootstrapOverlay,
-    std::span<const RenderTapeCaptureBlob> blobs) {
+    std::span<const RenderTapeCaptureBlob> blobs,
+    std::span<const std::byte> gammaRamp) {
   std::uint64_t totalBlobBytes = 0u;
   std::vector<RenderTapeBlob> catalogue;
   std::vector<RenderTapePublishedBlob> owned;
@@ -255,7 +259,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
   } catch (...) {
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
-  const auto status = arm(bootstrapOverlay, catalogue);
+  const auto status = arm(bootstrapOverlay, catalogue, gammaRamp);
   if (status == RenderTapeCaptureStatus::Accepted) {
     publishedBlobs_ = std::move(owned);
     blobBytes_ = totalBlobBytes;
@@ -637,7 +641,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::orderedControl(
   const auto kind = static_cast<RenderTapeControlKind>(fixed.kind);
   if (fixed.kind <
           static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData) ||
-      fixed.kind > static_cast<std::uint32_t>(RenderTapeControlKind::DeviceLost)) {
+      fixed.kind > static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet)) {
     return RenderTapeCaptureStatus::InvalidInput;
   }
   const bool terminal =
@@ -672,13 +676,17 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::orderedControl(
 RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     std::uint64_t presentOrdinal, std::uint64_t completionOrdinal,
     RenderTapeDigestValidity digestValidity, RenderTapeDigest expectedDigest,
-    std::span<const std::byte> oracleAttachments) {
+    std::span<const std::byte> oracleAttachments,
+    std::span<const std::byte> outputOracle) {
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
     return status;
   }
   if (!presentChunkSeen_ || oracleAttachments.size() %
-                                sizeof(RenderTapeOracleAttachment) != 0u) {
+                                sizeof(RenderTapeOracleAttachment) != 0u ||
+      (!outputOracle.empty() &&
+       (digestValidity != RenderTapeDigestValidity::Sha256 ||
+        sha256(outputOracle) != expectedDigest))) {
     abortInternal();
     return RenderTapeCaptureStatus::InvalidInput;
   }
@@ -724,6 +732,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     sealedArtifact_ = candidate;
     publicationBundle_.events = sealedArtifact_;
     publicationBundle_.blobs = publishedBlobs_;
+    publicationBundle_.outputOracle.assign(outputOracle.begin(),
+                                            outputOracle.end());
     state_ = RenderTapeCaptureState::Sealed;
     return RenderTapeCaptureStatus::Complete;
   } catch (...) {

@@ -695,7 +695,15 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   auto drawableTex = output_ ? outputTarget.texture : drawable.texture();
   WMTRenderPassInfo passInfo{};
   passInfo.colors[0].texture = drawableTex.handle;
-  passInfo.colors[0].load_action = WMTLoadActionDontCare;
+  passInfo.colors[0].load_action = resolvePresentLoadAction(
+      static_cast<bool>(output_),
+      output_ ? outputTarget.loadPolicy : PresentOutputLoadPolicy::DontCare);
+  if (passInfo.colors[0].load_action == WMTLoadActionClear) {
+    // Keep the output oracle independent of allocator/driver residue at the
+    // rasterization fringe.  The shader overwrites the covered pixels; the
+    // zero clear only defines pixels a full-screen triangle does not touch.
+    passInfo.colors[0].clear_color = WMTClearColor{0.0, 0.0, 0.0, 0.0};
+  }
   passInfo.colors[0].store_action = WMTStoreActionStore;
   attachCounterSampleBuffers(passInfo, params.sampleBufferAttachments);
 
@@ -740,7 +748,11 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   if (takePresentMirror(mirrorTarget, mirrorTicket)) {
     WMTRenderPassInfo mirrorPass{};
     mirrorPass.colors[0].texture = mirrorTarget.texture.handle;
-    mirrorPass.colors[0].load_action = WMTLoadActionDontCare;
+    mirrorPass.colors[0].load_action = resolvePresentLoadAction(
+        true, mirrorTarget.loadPolicy);
+    if (mirrorPass.colors[0].load_action == WMTLoadActionClear) {
+      mirrorPass.colors[0].clear_color = WMTClearColor{0.0, 0.0, 0.0, 0.0};
+    }
     mirrorPass.colors[0].store_action = WMTStoreActionStore;
     auto mirrorEncoder = commandBuffer.renderCommandEncoder(mirrorPass);
     if (!mirrorEncoder) {

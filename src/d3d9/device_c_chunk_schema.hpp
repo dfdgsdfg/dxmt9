@@ -74,7 +74,8 @@ inline constexpr std::array<RecordRule, 20> kRecordRules = {{
      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
      RecordRuleVariableTail | RecordRuleOrderingBoundary},
     {D9C_COMMAND_RECORD_PRESENT, sizeof(D9CCommandChunkWirePresent), 8u,
-     D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, RecordRuleOrderingBoundary},
+     D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+     RecordRuleOrderingBoundary | RecordRuleHandleRefs},
     {D9C_COMMAND_RECORD_STRETCH_RECT,
      sizeof(D9CCommandChunkWireStretchRect), 4u,
      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
@@ -138,8 +139,11 @@ struct RecordHandleFieldRule {
   bool nullable;
 };
 
-inline constexpr std::array<RecordHandleFieldRule, 12>
+inline constexpr std::array<RecordHandleFieldRule, 13>
     kRecordHandleFieldRules = {{
+        {D9C_COMMAND_RECORD_PRESENT,
+         offsetof(D9CCommandChunkWirePresent, sourceHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
         {D9C_COMMAND_RECORD_STRETCH_RECT,
          offsetof(D9CCommandChunkWireStretchRect, srcHandleIndex),
          D9C_CHUNK_HANDLE_KIND_SURFACE, false},

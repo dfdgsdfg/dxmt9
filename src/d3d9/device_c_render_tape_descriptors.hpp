@@ -76,6 +76,14 @@ inline constexpr bool renderTapeArmColorSnapshotStandaloneSurfaceSupported(
          surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
 }
 
+// The swap-chain backbuffer uses the same canonical X8R8G8B8 tight-pixel
+// representation as a standalone color snapshot. Keeping this predicate
+// separate makes the storage-role distinction explicit at the wire boundary.
+inline constexpr bool renderTapeArmColorSnapshotSwapchainSurfaceSupported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return renderTapeArmColorSnapshotStandaloneSurfaceSupported(surface);
+}
+
 enum class RenderTapeSurfaceStorage : std::uint32_t {
   Standalone = 1u,
   TextureSubresource = 2u,
@@ -307,8 +315,11 @@ inline bool renderTapeLoadSurfaceDescriptorV2(
            out.parentTexture.generation != 0u &&
            out.parentTexture.objectId != 0u;
   case RenderTapeSurfaceStorage::SwapchainBackbuffer:
-    return disposition ==
-               RenderTapeInitialContentDisposition::ProducedPresentOutput &&
+    return (disposition ==
+                RenderTapeInitialContentDisposition::ProducedPresentOutput ||
+            (disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+             renderTapeArmColorSnapshotSwapchainSurfaceSupported(
+                 out.surface))) &&
            out.subresource == 0u && renderTapeZeroIdentity(out.parentTexture);
   }
   return false;

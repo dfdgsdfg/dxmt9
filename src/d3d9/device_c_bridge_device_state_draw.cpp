@@ -299,9 +299,11 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
 }
 
 extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
-    D9CDevice* arg0, D9CRenderTapePresentCaptureResult* out) {
+    D9CDevice* arg0, D9CRenderTapePresentCaptureResult* out, void* bytes,
+    uint64_t capacity) {
   DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_finish_render_tape_present_capture");
-  return dxmt9p_device_finish_render_tape_present_capture(arg0, out);
+  return dxmt9p_device_finish_render_tape_present_capture(
+      arg0, out, bytes, capacity);
 }
 
 extern "C" void dxmt9c_device_cancel_render_tape_present_capture(

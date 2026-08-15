@@ -418,6 +418,18 @@ dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::uint8_t colorAttachmentIndex = 0,
     dxmt9::perf::RenderPassNoLookaheadCause* noLookaheadCause = nullptr);
 
+// Shared color load-action policy. Render Tape exact mode preserves the
+// bootstrap/mutation image on first binding, while explicit Clear and the D3D
+// post-Present discard retain their normal precedence.
+inline constexpr WMTLoadAction resolveColorAttachmentLoadAction(
+    bool clearAttachment, bool discardAfterPresent, bool handleTouched,
+    bool renderTapeExactAttachmentPreservation) noexcept {
+  if (clearAttachment) return WMTLoadActionClear;
+  if (discardAfterPresent) return WMTLoadActionDontCare;
+  if (renderTapeExactAttachmentPreservation) return WMTLoadActionLoad;
+  return handleTouched ? WMTLoadActionLoad : WMTLoadActionDontCare;
+}
+
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is
 // unit-testable without a Metal device / ObjC++ encoder (the begin path

@@ -291,6 +291,15 @@ RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
         (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer &&
          disposition == RenderTapeInitialContentDisposition::ProducedPresentOutput))
       return {};
+    if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer &&
+        disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
+      auto content = expectedContentForSurface(surface.surface);
+      if (content.status != RenderTapeExpectedContentStatus::Accepted)
+        return content;
+      if (!subresourceBytes.empty()) subresourceBytes[0] = content.bytes;
+      content.count = 1u;
+      return content;
+    }
     if (storage == RenderTapeSurfaceStorage::Standalone &&
         disposition ==
             RenderTapeInitialContentDisposition::ProducedByCapturedPass &&

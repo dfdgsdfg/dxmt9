@@ -969,7 +969,7 @@ render-tape/
 ├── manifest.json       schema/profile/ABI/provenance/component digests
 ├── events.bin          bootstrap/object/mutation/command/control/completion journal
 ├── blobs/              digest-named resource, shader, declaration payloads
-└── oracle/             capture-time attachment metadata and optional hashes
+└── output.rgba         optional digest-authenticated Present output bytes
 ```
 
 The physical container may later become one packed file, but these logical
@@ -999,6 +999,25 @@ validates the bundle, passes the actual digest-named blob files to
 `build/tools/dxmt9-render-tape-provider`, and reports machine-readable validity,
 coverage, conservation, and output-oracle scope without rewriting the source
 manifest.
+
+The 2026-08-15 GT2 r57 bundle at
+`experiments/render-tapes/gt2-output-oracle-r57-20260815/`
+`frame-156258260414600-1` closes the full-tape production-provider milestone.
+It contains 912 events, 32 command chunks, 269 object definitions, 607
+mutations, 687 immutable blobs, 1,877 command records, and 1,256 draws. The
+atomic bundle includes a 3,145,728-byte `output.rgba` whose SHA-256
+`6c4705e6a7fd302038a4deb6aab505f93d80be5e6f5de452d051806632b83d01`
+matches the captured `PresentComplete` oracle. Three isolated provider
+processes (one warm-up plus two measured runs) replay all 687 blobs and
+conserve 269 created/released objects. Their output SHA-256 is identically
+`c82fc63f8c75dcf1453cfcf1251c96560b89389075f237c9d4b1442fb79fd052`.
+Exact digest equality remains false and is reported as such; authenticated
+pixel comparison finds 34 of 786,432 pixels different, maximum RGB delta 2,
+total RGB delta 62, and zero alpha differences, which satisfies the bounded
+R-HARN-REPLAY-7.19 envelope. The official runner therefore reports
+`status=complete`, `oracle_mode=pixel-envelope`, `deterministic=true`, and
+`production_provider_replay=true`. A single-process envelope run is rejected
+as `insufficient-envelope-repeats`.
 
 The journal distinguishes at least:
 
@@ -1190,12 +1209,13 @@ generation, and seed cases. `dxmt9-render-tape-projection-cli-spec` pins the JSO
 schema/source digest, negative no-output behavior, and absence of unsupported
 selector identities.
 
-This foundation deliberately does not change
-`device_c_render_tape_provider.*` admission grammar. Actual GT2 projection and
-replay remain blocked by capture closure for indexed draws, vertex/index-buffer
-bytes, shader/declaration payloads, render/depth attachment state and contents,
-plus an actual captured GT2 `events.bin`. Until those exist, the artifact is a
-structural readiness plan, not an executable or pixel-equivalence claim.
+This projection transform deliberately does not change
+`device_c_render_tape_provider.*` admission grammar. The projection artifact
+remains a structural readiness plan rather than a standalone executable
+mini-replay. The separate full-tape production provider now admits and replays
+the indexed GT2 r57 bundle with the evidence described in §8.2; that result
+does not by itself make a projected Draw slice executable or prove that a
+projection preserves the full frame oracle.
 
 ### 8.5 Profile relationship and migration
 

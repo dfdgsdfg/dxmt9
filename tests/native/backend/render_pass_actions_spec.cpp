@@ -222,13 +222,13 @@ struct ColorPolicyInputs {
   bool postPresentBackbuffer = false;
   bool handleInTouchedSet = false;
   bool hasResolveTexture = false;
+  bool renderTapeExactAttachmentPreservation = false;
 };
 
 WMTLoadAction applyColorLoadPolicy(const ColorPolicyInputs& in) {
-  if (in.clearMatchesAttachment) return WMTLoadActionClear;          // 15.3
-  if (in.postPresentBackbuffer) return WMTLoadActionDontCare;        // 6.3
-  if (!in.handleInTouchedSet) return WMTLoadActionDontCare;          // 15.4
-  return WMTLoadActionLoad;                                          // 15.1
+  return dxmt9::encoders::resolveColorAttachmentLoadAction(
+      in.clearMatchesAttachment, in.postPresentBackbuffer,
+      in.handleInTouchedSet, in.renderTapeExactAttachmentPreservation);
 }
 
 WMTStoreAction applyColorStorePolicy(const ColorPolicyInputs& in) {
@@ -247,6 +247,14 @@ void testDefaultsLoadAndStore() {
           "R-BACK-15.1 default color load is Load");
   checkEq(applyColorStorePolicy(in), WMTStoreActionStore,
           "R-BACK-15.2 default color store is Store");
+
+  in.handleInTouchedSet = false;
+  in.renderTapeExactAttachmentPreservation = true;
+  checkEq(applyColorLoadPolicy(in), WMTLoadActionLoad,
+          "Render Tape exact mode preserves a seeded first-use attachment");
+  in.postPresentBackbuffer = true;
+  checkEq(applyColorLoadPolicy(in), WMTLoadActionDontCare,
+          "post-Present discard precedes Render Tape exact preservation");
 
   // Depth side: with no further records on the depth handle and no
   // Present in the rest of the chunk, the H1 end-of-chunk fall-through

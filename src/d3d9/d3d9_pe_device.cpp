@@ -143,6 +143,15 @@ static std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
     return profile;
 }
 
+static std::uint32_t dxmt9PeRenderTapeCaptureSkipPresents() {
+    if (!dxmt9PeRenderTapeCaptureEnabled()) {
+        return 0u;
+    }
+    static const std::uint32_t skip =
+        dxmt9::util::getenvU32("DXMT9_RENDER_TAPE_SKIP_PRESENTS").value_or(0u);
+    return skip;
+}
+
 static dxmt9::d3d9::RenderTapeCaptureLimits
 dxmt9PeRenderTapeCaptureLimits(bool captureEnabled) {
     dxmt9::d3d9::RenderTapeCaptureLimits limits{};
@@ -1225,10 +1234,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
         renderTapeCaptureOracle_{};
     std::optional<dxmt9::d3d9::RenderTapeDigest> renderTapeExpectedDigest_{};
+    std::vector<std::byte> renderTapeExpectedPixels_{};
     std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
     dxmt9::d3d9::RenderTapeArmBoundaryPhase renderTapeArmBoundaryPhase_ =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
     std::uint64_t renderTapeArmSnapshotOrdinal_ = 0u;
+    // Capture-only boundary selector. It is initialized once per device and
+    // decremented only while the session is idle, so it cannot change command
+    // recording, batching, or the selected interval after arming.
+    std::uint32_t renderTapeArmPresentSkipRemaining_ = 0u;
     // Owned capture-interval overlay. It is generation- and arm-qualified,
     // never mutates the durable registry, and remains available to cold JIT
     // materialization until abort/retry/completion clears it.
@@ -6983,6 +6997,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
         renderTapeArmSnapshots_.clear();
         renderTapeExpectedDigest_.reset();
+        renderTapeExpectedPixels_.clear();
         renderTapeOutputDesc_.reset();
     }
 
@@ -7840,11 +7855,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                       Ordinary);
                 staleArmSnapshot |= armOverlay.source == dxmt9::d3d9::
                     RenderTapeArmSnapshotOverlaySource::StaleArm;
-                const bool complete = object->lifetime.textureAlias ||
-                    (object->contentCount == armOverlay.content.size() &&
-                     std::all_of(armOverlay.content.begin(),
-                                 armOverlay.content.end(),
-                                 [](const auto &bytes) { return !bytes.empty(); }));
+                const auto overlayPolicy =
+                    object->role == RenderTapeLiveObject::Role::PresentOutput
+                        ? dxmt9::d3d9::
+                              RenderTapeArmObjectSnapshotOverlayPolicy::
+                                  PresentOutput
+                        : dxmt9::d3d9::
+                              RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary;
+                const bool complete = dxmt9::d3d9::
+                    renderTapeArmObjectSnapshotContentComplete(
+                        object->contentCount, object->lifetime.textureAlias,
+                        overlayPolicy, armOverlay.source, armOverlay.content);
                 bool producedByCapturedPassCandidate = false;
                 if (!complete &&
                     object->identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
@@ -8253,8 +8274,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             for (std::size_t index = 0u;
                  index < renderTapeRegistry_->objects.size(); ++index) {
                 const auto &object = renderTapeRegistry_->objects[index];
-                if (object.role == RenderTapeLiveObject::Role::PresentOutput ||
-                    object.lifetime.textureAlias) {
+                if (object.lifetime.textureAlias) {
                     continue;
                 }
                 dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
@@ -8279,7 +8299,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     dxmt9::d3d9::
                         renderTapeArmColorSnapshotStandaloneSurfaceSupported(
                             surface.surface);
-                if (!standaloneD24 && !standaloneColor && !colorTexture)
+                const bool presentOutputColor =
+                    object.role == RenderTapeLiveObject::Role::PresentOutput &&
+                    object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+                    object.contentCount == 0u &&
+                    dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
+                        object.descriptor, surface) &&
+                    surface.storage == static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeSurfaceStorage::SwapchainBackbuffer) &&
+                    dxmt9::d3d9::renderTapeArmColorSnapshotSwapchainSurfaceSupported(
+                        surface.surface);
+                if (!standaloneD24 && !standaloneColor && !colorTexture &&
+                    !presentOutputColor)
                     continue;
 
                 RenderTapeArmObjectSnapshot snapshot{
@@ -8288,7 +8319,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .identity = object.identity,
                     .descriptor = object.descriptor,
                     .content = std::vector<std::vector<std::byte>>(
-                        standaloneD24 || standaloneColor
+                        standaloneD24 || standaloneColor || presentOutputColor
                             ? 1u
                             : object.contentCount),
                 };
@@ -8362,7 +8393,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 } else {
                     RenderTapeTextureDescriptorV2 texture{};
                     std::uint32_t subresourceCount = 1u;
-                    if (standaloneColor) {
+                    if (standaloneColor || presentOutputColor) {
                         surface.initialContentDisposition =
                             static_cast<std::uint32_t>(dxmt9::d3d9::
                                 RenderTapeInitialContentDisposition::
@@ -8383,7 +8414,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                          subresource < subresourceCount;
                          ++subresource) {
                         D9CSurfaceDesc desc = surface.surface;
-                        if (!standaloneColor &&
+                        if (!standaloneColor && !presentOutputColor &&
                             !renderTapeTextureSubresourceDescriptor(
                                 snapshot.descriptor, subresource, desc)) {
                             return false;
@@ -8482,6 +8513,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                  dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
             return false;
         }
+        if (renderTapeArmPresentSkipRemaining_ != 0u) {
+            --renderTapeArmPresentSkipRemaining_;
+            return false;
+        }
         // An interval that aborted after arming still holds the role; release
         // it here so a retry starts from exactly one live present output.
         releaseRenderTapePresentOutputRole(nullptr);
@@ -8490,6 +8525,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeAbortReason_ = nullptr;
         renderTapeAdmittedIdentities_.clear();
         renderTapeExpectedDigest_.reset();
+        renderTapeExpectedPixels_.clear();
         renderTapeOutputDesc_.reset();
         renderTapeFirstAccessLedger_ = {};
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
@@ -8517,6 +8553,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 RenderTapeArmBoundaryPhase::PresentFlushed)) {
             return false;
         }
+        // Admit the just-presented swap-chain backbuffer before taking the arm
+        // snapshot. The backbuffer is the only capture identity whose role is
+        // assigned lazily by the bootstrap producer; without this ordering its
+        // actual post-arm bytes cannot be captured as starting content.
+        if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture arm aborted reason=present_output_admission");
+            abortRenderTapeCapture("present_output_admission");
+            return false;
+        }
         if (!snapshotRenderTapeResourcesAtArmBoundary()) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture arm aborted reason=arm_snapshot");
@@ -8531,6 +8577,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             // shadow and live-object store at the arm Present boundary.
             produced = producer ? producer(seed)
                                 : produceRenderTapeBootstrap(seed);
+            // Gamma is PE-owned persistent state and therefore part of the
+            // bootstrap checkpoint, not an implicit host default. Keep the
+            // bytes in the seed so injected producers can override the
+            // complete snapshot in native tests.
+            if (produced && seed.gammaRamp.empty()) {
+                seed.gammaRamp.resize(dxmt9::d3d9::kRenderTapeGammaRampBytes);
+                std::memcpy(seed.gammaRamp.data(), &gammaRamp_,
+                            seed.gammaRamp.size());
+            }
         } catch (...) {
             produced = false;
         }
@@ -8538,7 +8593,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         auto intervalStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidState;
         if (produced) {
             armStatus = renderTapeCapture_->armWithBlobs(
-                seed.bootstrapOverlay, seed.blobs);
+                seed.bootstrapOverlay, seed.blobs, seed.gammaRamp);
             if (armStatus == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 intervalStatus = renderTapeCapture_->beginPresentInterval();
             }
@@ -9634,7 +9689,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             ++renderTapeCompletionOrdinal_,
             dxmt9::d3d9::RenderTapeDigestValidity::Sha256,
             *renderTapeExpectedDigest_,
-            std::as_bytes(std::span(renderTapeCaptureOracle_)));
+            std::as_bytes(std::span(renderTapeCaptureOracle_)),
+            renderTapeExpectedPixels_);
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
             status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
             dxmt9DeviceInfoLog(
@@ -9708,6 +9764,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 return;
             }
             renderTapeExpectedDigest_.reset();
+            renderTapeExpectedPixels_.clear();
             return;
         }
         auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -9727,6 +9784,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             renderTapeArmSnapshots_.clear();
         }
         renderTapeExpectedDigest_.reset();
+        renderTapeExpectedPixels_.clear();
     }
 
     HRESULT commitPendingCommandChunk(PeRecorderFlushReason commitReason,
@@ -9800,10 +9858,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     } else if (renderTapeCapture_ &&
                                renderTapeCapture_->state() ==
                                    dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
-                        D9CRenderTapePresentCaptureResult output{};
-                        const HRESULT finishHr = hr32(
-                            dxmt9c_device_finish_render_tape_present_capture(
-                                dev_, &output));
                         const auto outputBpp = renderTapeOutputDesc_
                             ? dxmt9::d3d9::renderTapeLinearBytesPerPixel(
                                   renderTapeOutputDesc_->format)
@@ -9819,6 +9873,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                   renderTapeOutputDesc_->width) *
                                   renderTapeOutputDesc_->height * outputBpp
                             : 0u;
+                        bool outputBufferReady = outputExtentFits &&
+                            outputBytes <=
+                                std::numeric_limits<std::size_t>::max();
+                        std::vector<std::byte> outputPixels;
+                        if (outputBufferReady) {
+                            try {
+                                outputPixels.resize(
+                                    static_cast<std::size_t>(outputBytes));
+                            } catch (...) {
+                                outputBufferReady = false;
+                            }
+                        }
+                        if (!outputBufferReady) {
+                            dxmt9c_device_cancel_render_tape_present_capture(dev_);
+                            abortRenderTapeCapture("present_output_buffer");
+                            return hr;
+                        }
+                        D9CRenderTapePresentCaptureResult output{};
+                        const HRESULT finishHr = hr32(
+                            dxmt9c_device_finish_render_tape_present_capture(
+                                dev_, &output, outputPixels.data(),
+                                outputPixels.size()));
                         if (SUCCEEDED(finishHr) &&
                             output.status ==
                                 D9C_RENDER_TAPE_PRESENT_CAPTURE_COMPLETE &&
@@ -9831,6 +9907,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             std::memcpy(digest.data(), output.sha256,
                                         digest.size());
                             renderTapeExpectedDigest_ = digest;
+                            renderTapeExpectedPixels_ = std::move(outputPixels);
                         } else {
                             abortRenderTapeCapture("present_output_finish");
                         }
@@ -11715,6 +11792,8 @@ public:
                                   ? std::optional<RenderTapeLiveRegistry>{
                                         std::in_place}
                                   : std::nullopt)
+        , renderTapeArmPresentSkipRemaining_(
+              dxmt9PeRenderTapeCaptureSkipPresents())
         , creationWindow_(window)
         , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
         if (factory_) factory_->AddRef();
@@ -12185,6 +12264,19 @@ public:
             return barrierHr;
         }
 
+        IDirect3DSurface9* presentSource = nullptr;
+        const HRESULT presentSourceHr = GetBackBuffer(
+            0u, 0u, D3DBACKBUFFER_TYPE_MONO, &presentSource);
+        if (FAILED(presentSourceHr) || !presentSource) {
+            return FAILED(presentSourceHr) ? presentSourceHr
+                                           : D3DERR_INVALIDCALL;
+        }
+        const auto presentSourceWire = D3D9PeWireSurface(presentSource);
+        if (!presentSourceWire.valid(D9C_CHUNK_HANDLE_KIND_SURFACE)) {
+            presentSource->Release();
+            return D3DERR_INVALIDCALL;
+        }
+
         // sizeHint stays kLegacyPresentSizeHint even though no legacy
         // record is built: it is what the capacity precheck saw before, so
         // chunk seal cadence is unchanged.
@@ -12193,7 +12285,7 @@ public:
             .flags = 0,
             .hasSrc = src ? 1u : 0u,
             .hasDst = dst ? 1u : 0u,
-            .reserved0 = 0u,
+            .sourceHandleIndex = 0u,
             .src = src ? cs : D9CRect{},
             .dst = dst ? cd : D9CRect{},
         };
@@ -12203,10 +12295,12 @@ public:
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
                 const bool ok =
-                    dxmt9::d3d9::pe::appendPresent(builder, presentWire);
+                    dxmt9::d3d9::pe::appendPresent(
+                        builder, presentWire, presentSourceWire);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
+        presentSource->Release();
         if (recordPresentTiming) {
             presentTimingAppendEnd = std::chrono::steady_clock::now();
             presentTimingFlushEnd = presentTimingAppendEnd;
@@ -12363,11 +12457,42 @@ public:
                             this, swapChain, (unsigned)flags,
                             static_cast<const void*>(ramp));
         if (!ramp) return;
+        const bool captureGamma =
+            renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
+        if (captureGamma) {
+            // A direct state mutation is an ordering boundary. Seal any
+            // pending draw/state chunk before journaling GammaRampSet so the
+            // provider cannot apply the new LUT ahead of older work.
+            const HRESULT flushHr =
+                flushPeRecorder(PeRecorderFlushReason::Barrier);
+            if (FAILED(flushHr)) {
+                abortRenderTapeCapture("gamma_ramp_barrier");
+            }
+        }
         // Byte-copy: D3DGAMMARAMP is a POD (3 * 256 * WORD). sizeof
         // is the safe shape regardless of any future struct growth.
         std::memcpy(&gammaRamp_, ramp, sizeof(D3DGAMMARAMP));
         if (dev_) {
             dxmt9c_device_set_gamma_ramp(dev_, reinterpret_cast<const uint16_t*>(ramp));
+        }
+        if (captureGamma && renderTapeCapture_ &&
+            renderTapeCapture_->state() ==
+                dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
+            const auto *bytes = reinterpret_cast<const std::byte *>(ramp);
+            NotifyRenderTapeOrderedControlForChild(
+                dxmt9::d3d9::RenderTapeOrderedControlHeader{
+                    .identity = {},
+                    .kind = static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeControlKind::GammaRampSet),
+                    .disposition = static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeControlDisposition::Completed),
+                    .resultCode = 0,
+                    .controlBytes = dxmt9::d3d9::kRenderTapeGammaRampBytes,
+                },
+                std::span<const std::byte>(
+                    bytes, dxmt9::d3d9::kRenderTapeGammaRampBytes));
         }
     }
     void    STDMETHODCALLTYPE GetGammaRamp(UINT swapChain, D3DGAMMARAMP* p) noexcept override {

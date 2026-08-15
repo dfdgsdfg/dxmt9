@@ -35,6 +35,19 @@ static_assert(offsetof(D9CRenderTapePresentCaptureResult, sha256) == 24u);
 using namespace dxmt9::d3d9;
 
 using dxmt9::d3d9::pe::CommandChunkBuilder;
+using dxmt9::d3d9::pe::PeWireObjectRef;
+
+struct RecorderSurface {
+  std::uint32_t refs = 1u;
+};
+
+extern "C" void dxmt9c_surface_addref(D9CSurface* value) {
+  ++reinterpret_cast<RecorderSurface*>(value)->refs;
+}
+
+extern "C" std::uint32_t dxmt9c_surface_release(D9CSurface* value) {
+  return --reinterpret_cast<RecorderSurface*>(value)->refs;
+}
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -1297,8 +1310,17 @@ void testProfileSelectionTruthTable() {
 
 std::vector<std::byte> recorderPresentChunk() {
   CommandChunkBuilder recorder;
+  RecorderSurface surface;
+  const PeWireObjectRef source{
+      .identity = D9CWireObjectIdentity{
+          .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+          .generation = 2u,
+          .objectId = 17u,
+      },
+      .object = &surface,
+  };
   check(dxmt9::d3d9::pe::appendPresent(
-            recorder, D9CCommandChunkWirePresent{}),
+            recorder, D9CCommandChunkWirePresent{}, source),
         "PE recorder appends Present");
   const auto sealed = recorder.seal();
   check(sealed.valid(), "PE recorder seals Present");
@@ -1338,20 +1360,32 @@ void writeProductionFixture(const std::filesystem::path& directory) {
         "production fixture arms capture owner");
   check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
         "production fixture starts one Present interval");
-  auto descriptor = standaloneSurfaceDescriptor();
+  const auto outputDescriptor = outputSurfaceDescriptor();
   check(session.objectDefine(
             kSurface,
             static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-            std::as_bytes(std::span(&descriptor, 1u)), 0u, {}, 4u, 1u) ==
+            std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {}) ==
             RenderTapeCaptureStatus::Accepted,
-        "production fixture journals ObjectDefine");
+        "production fixture journals mapped Present output");
+  constexpr D9CWireObjectIdentity seedSurface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 18u,
+  };
+  const auto seedDescriptor = standaloneSurfaceDescriptor();
+  check(session.objectDefine(
+            seedSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&seedDescriptor, 1u)), 0u, {}, 4u, 1u) ==
+            RenderTapeCaptureStatus::Accepted,
+        "production fixture journals independent seeded surface");
   check(session.resourceMutationBytes(
-            kSurface, RenderTapeMutationKind::Upload, 0u, 0u,
+            seedSurface, RenderTapeMutationKind::Upload, 0u, 0u,
             mutationBytes) == RenderTapeCaptureStatus::Accepted,
         "production fixture journals resource mutation");
   check(session.commandChunk(
             CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-                                 .recordCount = 1u, .handleCount = 0u},
+                                 .recordCount = 1u, .handleCount = 1u},
             present) == RenderTapeCaptureStatus::Accepted,
         "production fixture copies canonical PE recorder bytes once");
   const RenderTapeFlushWaitControl wait{.waitedSeqId = 9u};
@@ -1367,7 +1401,7 @@ void writeProductionFixture(const std::filesystem::path& directory) {
         "production fixture journals ordered control");
   const RenderTapeOracleAttachment attachment = oracle();
   check(session.completePresent(
-            4u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+            5u, 11u, RenderTapeDigestValidity::NotCaptured, {},
             std::as_bytes(std::span(&attachment, 1u))) ==
             RenderTapeCaptureStatus::Complete,
         "production fixture seals Present transactionally");
@@ -2006,6 +2040,52 @@ void testArmBoundaryTransitionTruthTable() {
             snapshotBContent[0] ==
                 std::vector<std::byte>(snapshotB.begin(), snapshotB.end()),
         "active PresentOutput preserves zero/zero role content and leaves its displaced arm snapshot intact");
+  const D9CSurfaceDesc backbuffer{
+      .format = 22u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+  };
+  const RenderTapeSurfaceDescriptorV2 producedOutput{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::SwapchainBackbuffer),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedPresentOutput),
+      .surface = backbuffer,
+  };
+  auto seededOutput = producedOutput;
+  seededOutput.initialContentDisposition = static_cast<std::uint32_t>(
+      RenderTapeInitialContentDisposition::CompleteSeed);
+  const std::vector<std::vector<std::byte>> seededOutputContent{
+      std::vector<std::byte>(4u * 4u * 4u, std::byte{0x5au})};
+  const auto selectedOutputSeed = renderTapeSelectArmObjectSnapshotOverlay(
+      std::as_bytes(std::span(&producedOutput, 1u)), {},
+      std::as_bytes(std::span(&seededOutput, 1u)), seededOutputContent,
+      armB.ordinal, armB.ordinal,
+      RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput);
+  check(selectedOutputSeed.source ==
+                RenderTapeArmSnapshotOverlaySource::CurrentArm &&
+            selectedOutputSeed.content.size() == 1u &&
+            selectedOutputSeed.content[0] == seededOutputContent[0],
+        "PresentOutput selects an exact current-arm CompleteSeed over its zero-content output role");
+  check(renderTapeArmObjectSnapshotContentComplete(
+            0u, false,
+            RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput,
+            selectedOutputSeed.source, selectedOutputSeed.content) &&
+            !renderTapeArmObjectSnapshotContentComplete(
+                0u, false,
+                RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput,
+                RenderTapeArmSnapshotOverlaySource::DurableBase,
+                selectedOutputSeed.content) &&
+            renderTapeArmObjectSnapshotContentComplete(
+                7u, true,
+                RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary,
+                RenderTapeArmSnapshotOverlaySource::Missing, {}),
+        "current-arm PresentOutput CompleteSeed overrides its durable zero-content count while fallback and aliases stay exact");
   const auto overflow = renderTapeNextArmSnapshotEpoch(
       std::numeric_limits<std::uint64_t>::max());
   check(!overflow.valid && overflow.ordinal == 0u,
@@ -2949,6 +3029,30 @@ void testPendingChunkLifetimeTruthTable() {
             parentRetiresWhilePending.disposition ==
                 RenderTapeSurfaceAliasLifetime::Disposition::Retired,
         "pending alias command retires after an already-retired parent");
+}
+
+void testGammaRampOrderedControlIsCaptured() {
+  RenderTapeCaptureSession session(true);
+  check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted,
+        "gamma capture fixture arms");
+  check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "gamma capture fixture starts one interval");
+  std::array<std::uint16_t, kRenderTapeGammaRampBytes / sizeof(std::uint16_t)>
+      ramp{};
+  for (std::size_t index = 0u; index < ramp.size(); ++index) {
+    ramp[index] = static_cast<std::uint16_t>((index % 256u) << 8u);
+    if (index == 17u) ramp[index] ^= 0x0100u;
+  }
+  const RenderTapeOrderedControlHeader header{
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet),
+      .disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Completed),
+      .controlBytes = kRenderTapeGammaRampBytes,
+      .completionOrdinal = 1u,
+  };
+  check(session.orderedControl(header, std::as_bytes(std::span(ramp))) ==
+            RenderTapeCaptureStatus::Accepted,
+        "GammaRampSet is admitted as an ordered capture control");
 }
 
 // R-RT-CAP-9.4: the PresentOutput role is capture-owned and single-holder.
@@ -4135,6 +4239,7 @@ int main(int argc, char** argv) {
     testProductionBlobDefaultIsCaptureBounded();
     testObjectLifetimeAndTerminalControls();
     testPendingChunkLifetimeTruthTable();
+    testGammaRampOrderedControlIsCaptured();
     testPresentOutputRoleOwnershipTruthTable();
     testStandaloneSurfaceIdentityClosureTruthTable();
     testSurfaceAliasGenerationReplacementTransition();

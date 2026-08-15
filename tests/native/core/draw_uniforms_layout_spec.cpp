@@ -23,6 +23,9 @@ using dxmt9::state::FfpVsConsts;
 using dxmt9::state::PsConsts;
 using dxmt9::state::VsConsts;
 
+static_assert(dxmt9::state::kConstantBufferOffsetAlignment == 16u,
+              "Metal constant buffer offsets stay 16-byte aligned");
+
 // --- R-BACK-12.18: static struct sizes --------------------------------------
 
 static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude parity");

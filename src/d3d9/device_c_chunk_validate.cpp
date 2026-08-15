@@ -237,8 +237,14 @@ CommandChunkValidationResult validateFixedRecord(
         return failure(CommandChunkValidationStatus::InvalidPayloadSize, recordIndex);
       }
       if (!isBoolean(fixed.hasSrc) || !isBoolean(fixed.hasDst) ||
-          fixed.reserved0 != 0u) {
+          record.handleCount > 1u) {
         return failure(CommandChunkValidationStatus::NonZeroReserved, recordIndex);
+      }
+      if (record.handleCount == 0u) {
+        if (fixed.sourceHandleIndex != 0u) {
+          return failure(CommandChunkValidationStatus::InvalidHandleReference,
+                         recordIndex);
+        }
       }
       break;
     }
@@ -284,6 +290,9 @@ CommandChunkValidationResult validateFixedRecord(
 
   for (const auto& field : kRecordHandleFieldRules) {
     if (field.recordType != type) {
+      continue;
+    }
+    if (type == D9C_COMMAND_RECORD_PRESENT && record.handleCount == 0u) {
       continue;
     }
     std::uint32_t index = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;

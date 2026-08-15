@@ -214,7 +214,8 @@ bool writeText(const std::filesystem::path& path,
 
 std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view eventDigest,
-                        std::span<const std::string> blobDigests) {
+                        std::span<const std::string> blobDigests,
+                        std::string_view outputOracleDigest) {
   const auto profile = sealedProfile(bundle.events);
   std::ostringstream manifest;
   manifest << "{\n"
@@ -239,10 +240,17 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
              << ".bin\",\"bytes\":" << bundle.blobs[i].bytes.size()
              << ",\"sha256\":\"" << blobDigests[i] << "\"}";
   }
-  manifest << "]\n  },\n"
+  manifest << ']';
+  if (!bundle.outputOracle.empty()) {
+    manifest << ",\n    \"output_oracle\":{\"path\":\"output.rgba\",\"bytes\":"
+             << bundle.outputOracle.size() << ",\"sha256\":\""
+             << outputOracleDigest << "\"}";
+  }
+  manifest << "\n  },\n"
            << "  \"scope\":{\"production_capture\":true,"
               "\"production_provider_replay\":false,"
-              "\"output_oracle\":false}\n"
+              "\"output_oracle\":"
+           << (!bundle.outputOracle.empty() ? "true" : "false") << "}\n"
            << "}\n";
   return manifest.str();
 }
@@ -316,6 +324,9 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     }
     const auto eventDigest =
         hexDigest(RenderTapeCaptureSession::sha256(bundle.events));
+    const auto outputOracleDigest = bundle.outputOracle.empty()
+        ? std::string{}
+        : hexDigest(RenderTapeCaptureSession::sha256(bundle.outputOracle));
 
     const auto finalPath = root / std::filesystem::path(std::string(frameName));
     if (!existingPathIsSafeDirectory(finalPath)) {
@@ -351,7 +362,12 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
         return fail("blob_write_or_sync");
       }
     }
-    const auto manifest = manifestFor(bundle, eventDigest, blobDigests);
+    if (!bundle.outputOracle.empty() &&
+        !writeBytes(stagingPath / "output.rgba", bundle.outputOracle)) {
+      return fail("output_oracle_write_or_sync");
+    }
+    const auto manifest = manifestFor(
+        bundle, eventDigest, blobDigests, outputOracleDigest);
     if (!writeText(stagingPath / "manifest.json", manifest)) {
       return fail("manifest_write_or_sync");
     }

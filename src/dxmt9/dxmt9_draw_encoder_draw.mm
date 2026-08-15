@@ -3514,7 +3514,9 @@ bool encodeDraw(EncodeContext& ctx,
     // / fogMode from here; without this the kernel would read zeroes and
     // leave the base colour unfogged.
     FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
-    auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
+    auto slice = uploadTransientBuffer(
+        &ffpPs, sizeof(FfpPsConsts),
+        state::kConstantBufferOffsetAlignment);
     if (slice) {
       encoder.setTileBuffer(slice.buffer, slice.offset, 3);
     }
@@ -3980,7 +3982,8 @@ bool encodeDraw(EncodeContext& ctx,
       const auto plan =
           uniform::makeVsConstantUploadPlan(*dirtyPtr, shaderUsage.vertexConstantUsage);
       const auto bytes = static_cast<std::size_t>(uniform::vsConstantUploadBytes(plan));
-      auto slice = uploadTransientBuffer(&vs, bytes, alignof(VsConsts));
+      auto slice = uploadTransientBuffer(
+          &vs, bytes, state::kConstantBufferOffsetAlignment);
       if (slice) {
         if (setVertexBufferCached(slice.buffer, slice.offset, 0)) {
           countUniformBufferBinds(1);
@@ -3994,7 +3997,8 @@ bool encodeDraw(EncodeContext& ctx,
       const auto plan =
           uniform::makePsConstantUploadPlan(*dirtyPtr, shaderUsage.pixelConstantUsage);
       const auto bytes = static_cast<std::size_t>(uniform::psConstantUploadBytes(plan));
-      auto slice = uploadTransientBuffer(&ps, bytes, alignof(PsConsts));
+      auto slice = uploadTransientBuffer(
+          &ps, bytes, state::kConstantBufferOffsetAlignment);
       if (slice) {
         if (!suppressRecordedMetalCalls(ctx)) {
           encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
@@ -4006,7 +4010,9 @@ bool encodeDraw(EncodeContext& ctx,
     }
     if (directCbufBindings && uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
       FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
-      auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
+      auto slice = uploadTransientBuffer(
+          &ffpPs, sizeof(FfpPsConsts),
+          state::kConstantBufferOffsetAlignment);
       if (slice) {
         if (!suppressRecordedMetalCalls(ctx)) {
           encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
@@ -4044,7 +4050,8 @@ bool encodeDraw(EncodeContext& ctx,
       ffpVsBound = true;
       return;
     }
-    auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
+    auto slice = uploadTransientBuffer(
+        host, sizeof(FfpVsConsts), state::kConstantBufferOffsetAlignment);
     if (slice) {
       if (argbufTableMode) {
         dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
@@ -5302,7 +5309,8 @@ bool encodeDraw(EncodeContext& ctx,
       PerfScope lodBiasScope(perf::countEncodeDrawTextureSamplerLodBiasCpuTime);
       perf::countEncodeDrawTextureSamplerLodBiasCalls(1u);
       SamplerLodBias lodBias = buildSamplerLodBias(drawState);
-      auto slice = uploadTransientBuffer(&lodBias, sizeof(lodBias), alignof(SamplerLodBias));
+      auto slice = uploadTransientBuffer(
+          &lodBias, sizeof(lodBias), state::kConstantBufferOffsetAlignment);
       if (slice && !suppressRecordedMetalCalls(ctx)) {
         encoder.setFragmentBuffer(slice.buffer, slice.offset, 4);
         countUniformBufferBinds(1);

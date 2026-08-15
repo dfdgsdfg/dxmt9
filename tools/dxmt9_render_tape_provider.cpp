@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <span>
@@ -16,6 +17,21 @@
 namespace {
 
 using namespace dxmt9::d3d9;
+
+// A provider replay is an isolated evidence run.  It must not observe or
+// mutate the user's shared shader archive: loading it can change the first
+// frame, and serializing a newly compiled archive during teardown can race
+// the short-lived replay process.  Set both knobs before factory creation so
+// device initialization cannot resolve an archive path.
+bool forceHermeticReplayEnvironment() noexcept {
+#if defined(_WIN32)
+  return _putenv_s("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE", "1") == 0 &&
+         _putenv_s("DXMT9_PREWARM", "disabled") == 0;
+#else
+  return ::setenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE", "1", 1) == 0 &&
+         ::setenv("DXMT9_PREWARM", "disabled", 1) == 0;
+#endif
+}
 
 std::vector<std::byte> readFile(const std::string& path) {
   std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -53,6 +69,7 @@ void printResult(const FrameTapeReplayResult& result) {
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
   std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v1\",";
+  std::cout << "\"archive_policy\":\"disabled\",";
   std::cout << "\"profile\":\"" << renderTapeProfileName(result.profile)
             << "\",\"status\":\""
             << frameTapeReplayStatusName(result.status) << "\",";
@@ -72,9 +89,30 @@ void printResult(const FrameTapeReplayResult& result) {
             << (validity.expectedDigestCaptured ? "true" : "false") << ',';
   std::cout << "\"expected_digest_matched\":"
             << (validity.expectedDigestMatched ? "true" : "false") << ',';
+  std::cout << "\"expected_pixels_compared\":"
+            << (validity.expectedPixelsCompared ? "true" : "false") << ',';
+  std::cout << "\"pixel_envelope_matched\":"
+            << (validity.pixelEnvelopeMatched ? "true" : "false") << ',';
+  std::cout << "\"output_oracle_matched\":"
+            << (validity.expectedDigestMatched || validity.pixelEnvelopeMatched
+                    ? "true" : "false")
+            << ',';
+  std::cout << "\"oracle_mode\":\""
+            << (validity.expectedDigestMatched
+                    ? "strict"
+                    : validity.pixelEnvelopeMatched ? "pixel-envelope"
+                                                     : "rejected")
+            << "\",";
   std::cout << "\"output_non_degenerate\":"
             << (validity.outputNonDegenerate ? "true" : "false") << ',';
   std::cout << "\"output_bytes\":" << validity.outputBytes << ',';
+  std::cout << "\"allowed_differing_pixels\":"
+            << validity.allowedDifferingPixels << ',';
+  std::cout << "\"differing_pixels\":" << validity.differingPixels << ',';
+  std::cout << "\"max_rgb_delta\":" << validity.maxRgbDelta << ',';
+  std::cout << "\"total_rgb_delta\":" << validity.totalRgbDelta << ',';
+  std::cout << "\"differing_alpha_pixels\":"
+            << validity.differingAlphaPixels << ',';
   std::cout << "\"output_sha256\":\""
             << digestHex(validity.outputDigest) << "\"},";
   std::cout << "\"coverage\":{";
@@ -85,10 +123,21 @@ void printResult(const FrameTapeReplayResult& result) {
   std::cout << "\"command_chunks\":" << coverage.commandChunks << ',';
   std::cout << "\"command_records\":" << coverage.commandRecords << ',';
   std::cout << "\"clear_records\":" << coverage.clearRecords << ',';
+  std::cout << "\"draw_primitive_records\":"
+            << coverage.drawPrimitiveRecords << ',';
+  std::cout << "\"draw_indexed_primitive_records\":"
+            << coverage.drawIndexedPrimitiveRecords << ',';
   std::cout << "\"draw_primitive_up_records\":"
             << coverage.drawPrimitiveUpRecords << ',';
+  std::cout << "\"state_constant_records\":"
+            << coverage.stateConstantRecords << ',';
+  std::cout << "\"apply_state_records\":"
+            << coverage.applyStateRecords << ',';
   std::cout << "\"present_records\":" << coverage.presentRecords << ',';
-  std::cout << "\"present_outputs\":" << coverage.presentOutputs << "},";
+  std::cout << "\"present_source_mappings\":"
+            << coverage.presentSourceMappings << ',';
+  std::cout << "\"present_outputs\":" << coverage.presentOutputs << ',';
+  std::cout << "\"object_destroys\":" << coverage.objectDestroys << "},";
   std::cout << "\"conservation\":{";
   std::cout << "\"input_blobs\":" << conservation.inputBlobs << ',';
   std::cout << "\"referenced_blobs\":" << conservation.referencedBlobs << ',';
@@ -111,6 +160,24 @@ void printResult(const FrameTapeReplayResult& result) {
     std::cout << "\"expected_digest_matched\":"
               << (interval.validity.expectedDigestMatched ? "true" : "false")
               << ',';
+    std::cout << "\"expected_pixels_compared\":"
+              << (interval.validity.expectedPixelsCompared ? "true" : "false")
+              << ',';
+    std::cout << "\"pixel_envelope_matched\":"
+              << (interval.validity.pixelEnvelopeMatched ? "true" : "false")
+              << ',';
+    std::cout << "\"output_oracle_matched\":"
+              << (interval.validity.expectedDigestMatched ||
+                          interval.validity.pixelEnvelopeMatched
+                      ? "true" : "false")
+              << ',';
+    std::cout << "\"oracle_mode\":\""
+              << (interval.validity.expectedDigestMatched
+                      ? "strict"
+                      : interval.validity.pixelEnvelopeMatched
+                            ? "pixel-envelope"
+                            : "rejected")
+              << "\",";
     std::cout << "\"output_non_degenerate\":"
               << (interval.validity.outputNonDegenerate ? "true" : "false")
               << ',';
@@ -124,7 +191,8 @@ void printResult(const FrameTapeReplayResult& result) {
 
 void usage() {
   std::cerr << "usage: dxmt9-render-tape-provider replay <events.bin>"
-               " [--blob <path>]...\n";
+               " [--blob <path>]... [--expected-rgba <path>]"
+               " [--output-rgba <path>]\n";
 }
 
 } // namespace
@@ -137,12 +205,24 @@ int main(int argc, char** argv) {
 
   try {
     std::vector<std::string> blobPaths;
+    std::string expectedPath;
+    std::string outputPath;
     for (int index = 3; index < argc; ++index) {
-      if (std::string_view(argv[index]) != "--blob" || index + 1 >= argc) {
+      const std::string_view option = argv[index];
+      if (index + 1 >= argc) {
         usage();
         return 2;
       }
-      blobPaths.emplace_back(argv[++index]);
+      if (option == "--blob") {
+        blobPaths.emplace_back(argv[++index]);
+      } else if (option == "--expected-rgba" && expectedPath.empty()) {
+        expectedPath = argv[++index];
+      } else if (option == "--output-rgba" && outputPath.empty()) {
+        outputPath = argv[++index];
+      } else {
+        usage();
+        return 2;
+      }
     }
 
     const auto tape = readFile(argv[2]);
@@ -163,6 +243,11 @@ int main(int argc, char** argv) {
     if (!preflight.complete()) {
       printResult(preflight);
       return 1;
+    }
+
+    if (!forceHermeticReplayEnvironment()) {
+      throw std::runtime_error(
+          "cannot establish hermetic shader-archive environment");
     }
 
     auto* factory = dxmt9c_factory_create();
@@ -190,9 +275,21 @@ int main(int argc, char** argv) {
       printResult(failure);
       return 1;
     }
-    const auto result = replayRenderTapeIdentity(device, tape, blobs);
+    auto result = replayRenderTapeIdentity(device, tape, blobs);
     dxmt9c_device_release(device);
     dxmt9c_factory_release(factory);
+    if (!expectedPath.empty()) {
+      const auto expectedPixels = readFile(expectedPath);
+      (void)applyRenderTapePixelOracleEnvelope(result, expectedPixels);
+    }
+    if (!outputPath.empty() && !result.outputPixels.empty()) {
+      std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+      if (!output ||
+          !output.write(reinterpret_cast<const char*>(result.outputPixels.data()),
+                        static_cast<std::streamsize>(result.outputPixels.size()))) {
+        throw std::runtime_error("cannot write replay output: " + outputPath);
+      }
+    }
     printResult(result);
     return result.complete() ? 0 : 1;
   } catch (const std::exception& error) {

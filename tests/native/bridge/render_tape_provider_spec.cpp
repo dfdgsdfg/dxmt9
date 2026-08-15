@@ -319,6 +319,26 @@ constexpr D9CWireObjectIdentity kSnapshotColorSurface{
     .generation = 3u,
     .objectId = 48u,
 };
+constexpr D9CWireObjectIdentity kGeneralVertexBuffer{
+    .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+    .generation = 4u,
+    .objectId = 49u,
+};
+constexpr D9CWireObjectIdentity kGeneralIndexBuffer{
+    .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+    .generation = 4u,
+    .objectId = 50u,
+};
+constexpr D9CWireObjectIdentity kGeneralVertexShader{
+    .kind = D9C_CHUNK_HANDLE_KIND_SHADER,
+    .generation = 4u,
+    .objectId = 51u,
+};
+constexpr D9CWireObjectIdentity kGeneralVertexDeclaration{
+    .kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+    .generation = 4u,
+    .objectId = 52u,
+};
 
 std::vector<std::byte> sparsePayload(
     D9CCommandChunkWireDrawHeader draw,
@@ -419,6 +439,249 @@ struct TexturedVertex {
 };
 static_assert(sizeof(TexturedVertex) == 28u);
 
+std::vector<std::byte> generalBootstrapChunk(
+    const D9CWireObjectIdentity& vertexBuffer,
+    const D9CWireObjectIdentity& indexBuffer,
+    const D9CWireObjectIdentity& vertexShader,
+    const D9CWireObjectIdentity& vertexDeclaration,
+    const D9CWireObjectIdentity& output) {
+  std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
+      textures{};
+  for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
+    textures[slot] = {.slot = slot,
+                      .valid = 1u,
+                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  }
+  std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
+      streams{};
+  for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
+    streams[slot] = {
+        .slot = slot,
+        .valid = 1u,
+        .handleIndex = slot == 0u ? 0u : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+    };
+  }
+  const std::array shaders{
+      D9CCommandChunkWireShaderBinding{
+          .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
+          .valid = 1u,
+          .handleIndex = 1u,
+      },
+  };
+  const D9CCommandChunkWireVertexInput input{
+      .valid = 1u,
+      .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION,
+      .value = 0u,
+      .handleIndex = 2u,
+  };
+  const D9CCommandChunkWireIndexBinding index{
+      .valid = 1u,
+      .handleIndex = 3u,
+  };
+  const std::array renderTargets{D9CCommandChunkWireRenderTargetBinding{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = 4u,
+  }};
+  const std::array sections{
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_TEXTURE),
+                spanBytes(textures)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_STREAM),
+                spanBytes(streams)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_SHADER),
+                spanBytes(shaders)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT),
+                spanBytes(input)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER),
+                spanBytes(index)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET),
+                spanBytes(renderTargets)},
+  };
+  const auto payload = sparsePayload(
+      D9CCommandChunkWireDrawHeader{
+          .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT},
+      sections);
+  return makeChunk(std::array{Record{
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = payload,
+      .handles = {
+          {vertexBuffer.kind, vertexBuffer.generation, vertexBuffer.objectId},
+          {vertexShader.kind, vertexShader.generation, vertexShader.objectId},
+          {vertexDeclaration.kind, vertexDeclaration.generation,
+           vertexDeclaration.objectId},
+          {indexBuffer.kind, indexBuffer.generation, indexBuffer.objectId},
+          {output.kind, output.generation, output.objectId},
+      },
+  }});
+}
+
+std::vector<std::byte> generalIndexedDrawChunk() {
+  const D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = 4u,
+      .minVertex = 0u,
+      .numVertices = 3u,
+      .startIndex = 0u,
+      .primitiveCount = 1u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader),
+  };
+  return makeChunk(std::array{Record{
+      .type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+      .payload = bytesOf(draw),
+  }});
+}
+
+struct GeneralIndexedFixture {
+  std::vector<std::byte> vertexBytes{};
+  std::vector<std::byte> indexBytes{};
+  std::vector<std::byte> shaderBytes{};
+  std::vector<std::byte> declarationBytes{};
+  std::vector<std::byte> outputSeed{};
+  std::vector<RenderTapeProviderBlob> blobsValue{};
+  std::vector<std::byte> tape{};
+
+  GeneralIndexedFixture() {
+    const std::array vertices{
+        TexturedVertex{-0.5f, -0.5f, 0.0f, 1.0f, 0xffff0000u, 0.0f, 0.0f},
+        TexturedVertex{0.5f, -0.5f, 0.0f, 1.0f, 0xff00ff00u, 1.0f, 0.0f},
+        TexturedVertex{0.0f, 0.5f, 0.0f, 1.0f, 0xff0000ffu, 0.5f, 1.0f},
+    };
+    vertexBytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
+                       reinterpret_cast<const std::byte*>(vertices.data()) +
+                           sizeof(vertices));
+    const std::array<std::uint16_t, 3u> indices{0u, 1u, 2u};
+    indexBytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
+                      reinterpret_cast<const std::byte*>(indices.data()) +
+                          sizeof(indices));
+    const std::array<std::uint32_t, 8u> shaderWords{
+        0xfffe0300u, 0x0200001fu, 0x80000000u, 0xc00f0000u,
+        0x02000001u, 0xc00f0000u, 0xa0e40000u, 0x0000ffffu,
+    };
+    shaderBytes.assign(reinterpret_cast<const std::byte*>(shaderWords.data()),
+                       reinterpret_cast<const std::byte*>(shaderWords.data()) +
+                           sizeof(shaderWords));
+    const std::array declaration{
+        D9CVertexElement{0u, 0u, 3u, 0u, 9u, 0u},
+        D9CVertexElement{0u, 16u, 4u, 0u, 10u, 0u},
+        D9CVertexElement{0u, 20u, 1u, 0u, 5u, 0u},
+        D9CVertexElement{0xffu, 0u, 17u, 0u, 0u, 0u},
+    };
+    declarationBytes.assign(reinterpret_cast<const std::byte*>(declaration.data()),
+                            reinterpret_cast<const std::byte*>(declaration.data()) +
+                                sizeof(declaration));
+
+    const auto vertexDigest = RenderTapeCaptureSession::sha256(vertexBytes);
+    const auto indexDigest = RenderTapeCaptureSession::sha256(indexBytes);
+    const auto shaderDigest = RenderTapeCaptureSession::sha256(shaderBytes);
+    const auto declarationDigest =
+        RenderTapeCaptureSession::sha256(declarationBytes);
+    outputSeed.assign(16u * 16u * 4u, std::byte{0x3cu});
+    const auto outputSeedDigest =
+        RenderTapeCaptureSession::sha256(outputSeed);
+    blobsValue = {
+        {.digest = vertexDigest, .bytes = vertexBytes},
+        {.digest = indexDigest, .bytes = indexBytes},
+        {.digest = shaderDigest, .bytes = shaderBytes},
+        {.digest = declarationDigest, .bytes = declarationBytes},
+        {.digest = outputSeedDigest, .bytes = outputSeed},
+    };
+
+    const D9CSurfaceDesc outputSurface{
+        .format = 22u,
+        .resourceType = 1u,
+        .usage = 1u,
+        .pool = 0u,
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+    };
+    auto output = outputDescriptor(outputSurface);
+    output.initialContentDisposition = static_cast<std::uint32_t>(
+        RenderTapeInitialContentDisposition::CompleteSeed);
+    const D9CBufferDesc vertexBuffer{
+        .size = static_cast<std::uint32_t>(vertexBytes.size()),
+    };
+    const D9CBufferDesc indexBuffer{
+        .size = static_cast<std::uint32_t>(indexBytes.size()),
+        .format = 101u,
+    };
+    const RenderTapeShaderDescriptor shader{
+        .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
+        .bytecodeBytes = static_cast<std::uint32_t>(shaderBytes.size()),
+    };
+    const RenderTapeVertexDeclDescriptor vertexDeclaration{
+        .elementCount = 4u,
+        .elementBytes = static_cast<std::uint32_t>(declarationBytes.size()),
+    };
+    const RenderTapeOracleAttachment oracle{
+        .identity = kOutput,
+        .descriptorKind = static_cast<std::uint32_t>(
+            RenderTapeDescriptorKind::Surface),
+    };
+    const auto clear = bytesOf(D9CCommandChunkWireClear{
+        .flags = 1u,
+        .colorARGB = 0xff102030u,
+        .z = 1.0f,
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    });
+    const auto present = makeChunk(std::array{Record{
+        .type = D9C_COMMAND_RECORD_PRESENT,
+        .payload = bytesOf(D9CCommandChunkWirePresent{
+            .sourceHandleIndex = 0u,
+        }),
+        .handles = {{kOutput.kind, kOutput.generation, kOutput.objectId}},
+    }});
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(generalBootstrapChunk(
+        kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
+        kGeneralVertexDeclaration, kOutput));
+    builder.appendObjectDefine(
+        kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&output, 1u)), 0u, {}, outputSeed.size(), 1u);
+    builder.appendObjectDefine(
+        kGeneralVertexBuffer,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+        std::as_bytes(std::span(&vertexBuffer, 1u)), 0u, {}, vertexBytes.size(),
+        1u);
+    builder.appendObjectDefine(
+        kGeneralIndexBuffer,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+        std::as_bytes(std::span(&indexBuffer, 1u)), 0u, {}, indexBytes.size(),
+        1u);
+    builder.appendObjectDefine(
+        kGeneralVertexShader,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
+        std::as_bytes(std::span(&shader, 1u)), shaderBytes.size(), shaderDigest);
+    builder.appendObjectDefine(
+        kGeneralVertexDeclaration,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::VertexDeclaration),
+        std::as_bytes(std::span(&vertexDeclaration, 1u)),
+        declarationBytes.size(), declarationDigest);
+    builder.appendResourceMutation(
+        kGeneralVertexBuffer, RenderTapeMutationKind::Upload, 0u, 0u,
+        vertexBytes.size(), vertexDigest);
+    builder.appendResourceMutation(
+        kGeneralIndexBuffer, RenderTapeMutationKind::Upload, 0u, 0u,
+        indexBytes.size(), indexDigest);
+    builder.appendResourceMutation(
+        kOutput, RenderTapeMutationKind::Upload, 0u, 0u,
+        outputSeed.size(), outputSeedDigest);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u}, makeChunk(std::array{Record{
+            .type = D9C_COMMAND_RECORD_CLEAR,
+            .payload = clear,
+        }}));
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u}, generalIndexedDrawChunk());
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, present);
+    builder.appendPresentComplete(
+        12u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    tape = builder.seal();
+  }
+};
+
 std::vector<std::byte> texturedDrawChunk(std::uint16_t extraSection = 0u) {
   const std::array vertices{
       TexturedVertex{-0.5f, -0.5f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
@@ -477,7 +740,11 @@ struct ProductionFixture {
     const std::array frameRecords{
         Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
         Record{.type = D9C_COMMAND_RECORD_PRESENT,
-               .payload = bytesOf(D9CCommandChunkWirePresent{})},
+               .payload = bytesOf(D9CCommandChunkWirePresent{
+                   .sourceHandleIndex = 0u,
+               }),
+               .handles = {{kOutput.kind, kOutput.generation,
+                            kOutput.objectId}}},
     };
     const auto frame = makeChunk(frameRecords);
     const D9CSurfaceDesc outputDesc{
@@ -550,7 +817,7 @@ struct ProductionFixture {
           depthSeed.size(), depthSeedDigest);
     }
     builder.appendCommandChunk(
-        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
+        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, frame);
     builder.appendPresentComplete(
         withDepthSeed ? 5u : 3u, 1u,
         RenderTapeDigestValidity::Sha256, expected,
@@ -586,7 +853,11 @@ struct Fixture {
     const std::array frameRecords{
         Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = std::move(clearBytes)},
         Record{.type = D9C_COMMAND_RECORD_PRESENT,
-               .payload = bytesOf(D9CCommandChunkWirePresent{})},
+               .payload = bytesOf(D9CCommandChunkWirePresent{
+                   .sourceHandleIndex = 0u,
+               }),
+               .handles = {{kOutput.kind, kOutput.generation,
+                            kOutput.objectId}}},
     };
     const auto frame = makeChunk(frameRecords);
     const D9CSurfaceDesc outputDesc{
@@ -619,7 +890,7 @@ struct Fixture {
     builder.appendResourceMutation(kSeedBuffer, RenderTapeMutationKind::Upload,
                                    0u, 0u, seed.size(), seedDigest);
     builder.appendCommandChunk(
-        CommandChunkEnvelope{.recordCount = 2u}, frame);
+        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, frame);
     builder.appendPresentComplete(
         5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&oracle, 1u)));
@@ -1064,7 +1335,11 @@ struct SequenceFixture {
                .payload = std::vector<std::byte>(drawRecord.payload.begin(),
                                                  drawRecord.payload.end())},
         Record{.type = D9C_COMMAND_RECORD_PRESENT,
-               .payload = bytesOf(D9CCommandChunkWirePresent{})},
+               .payload = bytesOf(D9CCommandChunkWirePresent{
+                   .sourceHandleIndex = 0u,
+               }),
+               .handles = {{kOutput.kind, kOutput.generation,
+                            kOutput.objectId}}},
     };
     const auto frame = makeChunk(frameRecords);
     const RenderTapeDigest firstExpected{
@@ -1100,7 +1375,8 @@ struct SequenceFixture {
         textureDesc, 0u, {}, firstSeed.size(), 1u);
     builder.appendResourceMutation(kTexture, RenderTapeMutationKind::CpuUnlock,
                                    0u, 0u, firstSeed.size(), firstDigest);
-    builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 3u}, frame);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 3u, .handleCount = 1u}, frame);
     builder.appendPresentComplete(
         5u, 1u, RenderTapeDigestValidity::Sha256, firstExpected,
         std::as_bytes(std::span(&oracle, 1u)));
@@ -1108,7 +1384,8 @@ struct SequenceFixture {
       builder.appendResourceMutation(kTexture, RenderTapeMutationKind::CpuUnlock,
                                      0u, 0u, secondSeed.size(), secondDigest);
     }
-    builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 3u}, frame);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 3u, .handleCount = 1u}, frame);
     builder.appendPresentComplete(
         8u, 2u, RenderTapeDigestValidity::Sha256, secondExpected,
         std::as_bytes(std::span(&oracle, 1u)));
@@ -1404,6 +1681,18 @@ std::vector<std::byte> readbackTight(dxmt9::Device& device,
 }
 
 void productionPresenterMirrorGpuOracle() {
+  check(dxmt9::resolvePresentLoadAction(
+            true, dxmt9::PresentOutputLoadPolicy::DeterministicClear) ==
+            WMTLoadActionClear,
+        "cold offscreen present targets use a deterministic clear");
+  check(dxmt9::resolvePresentLoadAction(
+            true, dxmt9::PresentOutputLoadPolicy::DontCare) ==
+            WMTLoadActionDontCare,
+        "explicit offscreen DontCare remains available for specialized callers");
+  check(dxmt9::resolvePresentLoadAction(
+            false, dxmt9::PresentOutputLoadPolicy::DeterministicClear) ==
+            WMTLoadActionDontCare,
+        "drawable presents retain the production DontCare fast path");
   constexpr std::uint32_t width = 16u;
   constexpr std::uint32_t height = 16u;
   auto devices = WMT::CopyAllDevices();
@@ -1601,6 +1890,58 @@ void nativeMetalTexturedUpDigestRepeats() {
             production.conservation.objectsCreated == 3u &&
             production.conservation.objectsReleased == 3u,
         "repeat replay conserves output, texture, and declaration wrappers independently");
+}
+
+void generalIndexedReplayConservesAllObjects() {
+  GeneralIndexedFixture fixture;
+  RenderTapeBlobCatalogue catalogue;
+  for (const auto& blob : fixture.blobsValue) {
+    catalogue.blobs.push_back({.digest = blob.digest,
+                               .size = blob.bytes.size(),
+                               .verified = 1u});
+  }
+  const auto structural = validateRenderTape(fixture.tape, catalogue);
+  check(structural.valid(),
+        std::string("general fixture structural validation failed: ") +
+            renderTapeValidationStatusName(structural.status) + " event=" +
+            std::to_string(structural.failedEventIndex));
+  const auto preflight = preflightRenderTapeIdentity(
+      fixture.tape, fixture.blobsValue);
+  check(preflight.complete(), frameTapeReplayStatusName(preflight.status));
+  check(preflight.coverage.objectDefinitions == 5u &&
+            preflight.coverage.seedMutations == 3u &&
+            preflight.coverage.drawIndexedPrimitiveRecords == 1u &&
+            preflight.coverage.presentRecords == 1u &&
+            preflight.coverage.presentSourceMappings == 1u &&
+            preflight.conservation.inputBlobs == 5u &&
+            preflight.conservation.referencedBlobs == 5u,
+        "indexed shader/VB/IB tape must report the general grammar evidence");
+
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 22u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "general indexed factory must be available");
+  auto* device =
+      dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "general indexed replay device must construct");
+  const auto replay = replayRenderTapeIdentity(
+      device, fixture.tape, fixture.blobsValue);
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(replay.complete(), frameTapeReplayStatusName(replay.status));
+  check(replay.coverage.drawIndexedPrimitiveRecords == 1u &&
+            replay.coverage.objectDefinitions == 5u &&
+            replay.conservation.objectsCreated == 5u &&
+            replay.conservation.objectsReleased == 5u &&
+            replay.conservation.referencedBlobs == 5u,
+        "general indexed replay must conserve output, VB, IB, shader, and declaration");
 }
 
 void boundedSequenceMutationIsVisibleAtSecondPresent() {
@@ -1812,6 +2153,108 @@ void productionShapeReportsWrongExpectedDigest() {
   check(result.conservation.objectsCreated == 1u &&
             result.conservation.objectsReleased == 1u,
         "output mismatch must still clean up replay-owned objects");
+}
+
+void pixelOracleEnvelopeIsNarrowAndDigestAuthenticated() {
+  constexpr std::uint32_t width = 1024u;
+  constexpr std::uint32_t height = 768u;
+  std::vector<std::byte> expected(
+      static_cast<std::size_t>(width) * height * 4u,
+                                  std::byte{0x40});
+  for (std::size_t offset = 3u; offset < expected.size(); offset += 4u) {
+    expected[offset] = std::byte{0xff};
+  }
+  const auto expectedDigest = RenderTapeCaptureSession::sha256(expected);
+  const auto mismatch = [&](std::span<const std::byte> actual) {
+    FrameTapeReplayResult result{};
+    result.status = FrameTapeReplayStatus::OutputMismatch;
+    result.profile = kRenderTapeProfileFrame;
+    result.intervalCount = 1u;
+    result.failedEventIndex = 7u;
+    result.requirements = {
+        .outputWidth = width,
+        .outputHeight = height,
+        .outputFormat = 22u,
+    };
+    result.validity.structurallyValid = true;
+    result.validity.digestsValid = true;
+    result.validity.outputReadback = true;
+    result.validity.expectedDigestCaptured = true;
+    result.validity.outputBytes = actual.size();
+    result.validity.expectedOutputDigest = expectedDigest;
+    result.validity.outputDigest = RenderTapeCaptureSession::sha256(actual);
+    result.outputPixels.assign(actual.begin(), actual.end());
+    result.intervals[0].validity = result.validity;
+    result.coverage.commandChunks = 1u;
+    result.coverage.commandRecords = 1u;
+    result.coverage.presentRecords = 1u;
+    result.coverage.presentSourceMappings = 1u;
+    result.coverage.presentOutputs = 1u;
+    result.conservation.inputBlobs = 1u;
+    result.conservation.referencedBlobs = 1u;
+    result.conservation.objectsCreated = 1u;
+    result.conservation.objectsReleased = 1u;
+    result.conservation.presentOrdinal = 1u;
+    result.conservation.completionOrdinal = 1u;
+    return result;
+  };
+
+  auto adjacent = expected;
+  adjacent[0] = std::byte{0x42};
+  auto accepted = mismatch(adjacent);
+  check(applyRenderTapePixelOracleEnvelope(accepted, expected) &&
+            accepted.complete() &&
+            !accepted.validity.expectedDigestMatched &&
+            accepted.validity.expectedPixelsCompared &&
+            accepted.validity.pixelEnvelopeMatched &&
+            accepted.validity.allowedDifferingPixels == 64u &&
+            accepted.validity.differingPixels == 1u &&
+            accepted.validity.maxRgbDelta == 2u &&
+            accepted.validity.totalRgbDelta == 2u &&
+            accepted.validity.differingAlphaPixels == 0u,
+        "one adjacent RGB quantization pixel is accepted with exact evidence");
+
+  auto tooMany = adjacent;
+  for (std::size_t pixel = 0u; pixel < 65u; ++pixel) {
+    tooMany[pixel * 4u] = std::byte{0x41};
+  }
+  auto rejectedCount = mismatch(tooMany);
+  check(!applyRenderTapePixelOracleEnvelope(rejectedCount, expected) &&
+            rejectedCount.status == FrameTapeReplayStatus::OutputMismatch &&
+            rejectedCount.validity.differingPixels == 65u,
+        "pixel envelope rejects the 65th differing pixel");
+
+  auto deltaThree = expected;
+  deltaThree[0] = std::byte{0x43};
+  auto rejectedDelta = mismatch(deltaThree);
+  check(!applyRenderTapePixelOracleEnvelope(rejectedDelta, expected) &&
+            rejectedDelta.validity.maxRgbDelta == 3u,
+        "pixel envelope rejects RGB delta three");
+
+  auto alpha = expected;
+  alpha[3] = std::byte{0xfe};
+  auto rejectedAlpha = mismatch(alpha);
+  check(!applyRenderTapePixelOracleEnvelope(rejectedAlpha, expected) &&
+            rejectedAlpha.validity.differingAlphaPixels == 1u,
+        "pixel envelope rejects any alpha difference");
+
+  auto wrongSidecar = mismatch(adjacent);
+  auto unauthenticated = expected;
+  unauthenticated[8] = std::byte{0x41};
+  check(!applyRenderTapePixelOracleEnvelope(wrongSidecar, unauthenticated) &&
+            !wrongSidecar.validity.expectedPixelsCompared,
+        "pixel envelope rejects a sidecar that does not match the tape digest");
+
+  auto invalidEvidence = mismatch(adjacent);
+  invalidEvidence.validity.structurallyValid = false;
+  check(!applyRenderTapePixelOracleEnvelope(invalidEvidence, expected) &&
+            !invalidEvidence.validity.expectedPixelsCompared,
+        "pixel envelope cannot rescue invalid structural evidence");
+  auto brokenConservation = mismatch(adjacent);
+  ++brokenConservation.conservation.objectsCreated;
+  check(!applyRenderTapePixelOracleEnvelope(brokenConservation, expected) &&
+            !brokenConservation.validity.expectedPixelsCompared,
+        "pixel envelope cannot rescue object conservation mismatch");
 }
 
 void standaloneD24X8SeedIsCreatedBeforeReplayAndConserved() {
@@ -2255,10 +2698,28 @@ void writeSequenceFixture(const std::filesystem::path& directory) {
   check(first.good() && second.good(), "sequence fixture must write both blobs");
 }
 
+void eventLevelMutationDrainOrderingIsPinned() {
+  check(!renderTapeProviderEventRequiresDrain(
+            false, RenderTapeEventType::ResourceMutation) &&
+            !renderTapeProviderEventRequiresDrain(
+                true, RenderTapeEventType::CommandChunk) &&
+            !renderTapeProviderEventRequiresDrain(
+                true, RenderTapeEventType::ObjectDefine) &&
+            renderTapeProviderEventRequiresDrain(
+                true, RenderTapeEventType::ResourceMutation) &&
+            renderTapeProviderEventRequiresDrain(
+                true, RenderTapeEventType::ObjectDestroy),
+        "mutation and retirement after submitted command work require a drain");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--test-event-ordering") {
+      eventLevelMutationDrainOrderingIsPinned();
+      return 0;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--write-production-fixture") {
       writeProductionFixture(argv[2]);
       return 0;
@@ -2269,7 +2730,9 @@ int main(int argc, char** argv) {
     }
     check(argc == 1,
           "usage: render_tape_provider_spec "
-          "[--write-production-fixture dir|--write-sequence-fixture dir]");
+          "[--test-event-ordering|--write-production-fixture dir|"
+          "--write-sequence-fixture dir]");
+    eventLevelMutationDrainOrderingIsPinned();
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
     colorSnapshotCapturesExact2DAndAllCubeFaces();
     colorCompleteSeedsReplayAllSubresourcesAndConserve();
@@ -2281,9 +2744,11 @@ int main(int argc, char** argv) {
     productionPresenterMirrorGpuOracle();
     nativeMetalOffscreenIdentityReplay();
     nativeMetalTexturedUpDigestRepeats();
+    generalIndexedReplayConservesAllObjects();
     boundedSequenceMutationIsVisibleAtSecondPresent();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
     productionShapeReportsWrongExpectedDigest();
+    pixelOracleEnvelopeIsNarrowAndDigestAuthenticated();
   } catch (const TestFailure& error) {
     std::cerr << "render_tape_provider_spec failed: " << error.what() << '\n';
     return 1;

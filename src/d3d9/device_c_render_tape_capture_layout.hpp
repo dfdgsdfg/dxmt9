@@ -2,6 +2,7 @@
 
 #include "device_c_render_tape_descriptors.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -56,13 +57,24 @@ renderTapeSelectArmObjectSnapshotOverlay(
     std::uint64_t activeOrdinal,
     RenderTapeArmObjectSnapshotOverlayPolicy policy =
         RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary) noexcept {
-  // The arm snapshot is taken before PresentOutput admission and therefore
-  // describes the ordinary standalone role.  Once the same identity holds
-  // PresentOutput, its active descriptor/content contract must remain the
-  // capture-owned SwapchainBackbuffer/ProducedPresentOutput zero/zero view.
-  // The displaced ordinary state remains owned by the role transition and is
-  // restored when that role is released.
+  // PresentOutput admission normally keeps the zero-content output view, but
+  // a frame capture may carry an explicit arm-boundary backbuffer seed. That
+  // seed is the authoritative starting content for the same identity and
+  // must survive the role promotion; the displaced ordinary state remains
+  // owned by the role transition and is restored when that role is released.
   if (policy == RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput) {
+    if (!candidateDescriptor.empty() && !candidateContent.empty()) {
+      RenderTapeSurfaceDescriptorV2 candidate{};
+      if (renderTapeLoadSurfaceDescriptorV2(candidateDescriptor, candidate) &&
+          candidate.storage == static_cast<std::uint32_t>(
+              RenderTapeSurfaceStorage::SwapchainBackbuffer) &&
+          candidate.initialContentDisposition == static_cast<std::uint32_t>(
+              RenderTapeInitialContentDisposition::CompleteSeed)) {
+        return {.source = RenderTapeArmSnapshotOverlaySource::CurrentArm,
+                .descriptor = candidateDescriptor,
+                .content = candidateContent};
+      }
+    }
     if (!durableDescriptor.empty() || !durableContent.empty()) {
       return {.source = RenderTapeArmSnapshotOverlaySource::DurableBase,
               .descriptor = durableDescriptor,
@@ -84,6 +96,22 @@ renderTapeSelectArmObjectSnapshotOverlay(
             .content = durableContent};
   }
   return {};
+}
+
+inline bool renderTapeArmObjectSnapshotContentComplete(
+    std::uint32_t durableContentCount, bool textureAlias,
+    RenderTapeArmObjectSnapshotOverlayPolicy policy,
+    RenderTapeArmSnapshotOverlaySource source,
+    std::span<const std::vector<std::byte>> content) noexcept {
+  if (textureAlias) return true;
+  const std::size_t expectedCount =
+      policy == RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput &&
+              source == RenderTapeArmSnapshotOverlaySource::CurrentArm
+          ? 1u
+          : durableContentCount;
+  return content.size() == expectedCount &&
+         std::all_of(content.begin(), content.end(),
+                     [](const auto &bytes) { return !bytes.empty(); });
 }
 
 enum class RenderTapeArmSnapshotCompletionAction : std::uint8_t {

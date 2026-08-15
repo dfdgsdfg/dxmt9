@@ -141,6 +141,21 @@ texture_lock_shadow_spec = executable(
 
 test('dxmt9-texture-lock-shadow-spec', texture_lock_shadow_spec)
 
+# The provider spec creates and retires several native Metal devices in one
+# process.  Metal's shader-binary archive can race teardown of those short-lived
+# devices on macOS (including an objc_retain fault in Metal.DeviceArray), which
+# otherwise presents as an unbounded native-test hang.  Provider replay is
+# intentionally hermetic, so disable archive persistence for this test lane.
+render_tape_provider_test_env = environment()
+render_tape_provider_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
+render_tape_provider_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
+if host_machine.system() == 'darwin'
+  if dxmt9_wine_install_path != ''
+    render_tape_provider_test_env.set(
+      'DYLD_LIBRARY_PATH', dxmt9_wine_unix_runtime_path)
+  endif
+endif
+
 # R-BACK-2.54 / R-BACK-2.55 command-chunk canonical ABI scaffolds. A1 pins the
 # layout/schema; later plan waves replace the focused behavior-test bodies.
 foreach spec : [
@@ -172,7 +187,7 @@ foreach spec : [
   )
   if spec[0] == 'render-tape-provider'
     test('dxmt9-' + spec[0] + '-spec', target,
-         env: dxmt9_native_test_env,
+         env: render_tape_provider_test_env,
          timeout: 60)
   else
     test('dxmt9-' + spec[0] + '-spec', target,
@@ -256,7 +271,7 @@ test('dxmt9-render-tape-provider-cli-spec', python3,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
      ],
-     env: dxmt9_native_test_env,
+     env: render_tape_provider_test_env,
      timeout: 120)
 
 render_tape_publisher_spec = executable(

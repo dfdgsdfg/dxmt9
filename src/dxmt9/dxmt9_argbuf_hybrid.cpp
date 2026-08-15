@@ -19,7 +19,8 @@ constexpr u32 kArgumentAccessReadOnly = 0u;
 // 16 B keeps the constant-block alignment large enough for the Tier-2
 // GPU-pointer slot and float4-leading host structs (VsConsts /
 // PsConsts) without over-aligning the smaller FFP scalars.
-constexpr u32 kConstantBlockAlignment = 16u;
+constexpr u32 kConstantBlockAlignment =
+    static_cast<u32>(state::kConstantBufferOffsetAlignment);
 
 class PerfScope {
  public:
@@ -595,7 +596,8 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          const ConstantBufferUploadObserver* uploadObserver = nullptr,
                          bool countDirtyPhase = false) {
   return uploadAndPointEntryBytes(
-      queue, encoderResource, &host, byteCount, alignof(HostStruct),
+      queue, encoderResource, &host, byteCount,
+      state::kConstantBufferOffsetAlignment,
       sizeof(HostStruct), argbufIdx, seqId, recorder, residencyEncoder,
       writtenBindings, uploadObserver, countDirtyPhase);
 }
@@ -695,7 +697,8 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     // R-ARCH-7.4 / R-ARCH-7.5: build the dirty VS constants directly into the
     // shared transient slab instead of a stack buffer plus copy.
     const auto written = buildAndPointEntryBytes(
-        queue, encoderResource, byteCount, alignof(state::VsConsts),
+        queue, encoderResource, byteCount,
+        state::kConstantBufferOffsetAlignment,
         sizeof(state::VsConsts), kVsConstsArgbufIdx, seqId, recorder,
         residencyEncoder, writtenBindings, uploadObserver,
         /*countDirtyPhase=*/true,
@@ -742,7 +745,8 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     // R-ARCH-7.4 / R-ARCH-7.5: build the dirty PS constants directly into the
     // shared transient slab instead of a stack buffer plus copy.
     const auto written = buildAndPointEntryBytes(
-        queue, encoderResource, byteCount, alignof(state::PsConsts),
+        queue, encoderResource, byteCount,
+        state::kConstantBufferOffsetAlignment,
         sizeof(state::PsConsts), kPsConstsArgbufIdx, seqId, recorder,
         residencyEncoder, writtenBindings, uploadObserver,
         /*countDirtyPhase=*/true,
@@ -761,7 +765,7 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     PerfScope blockScope(perf::countEncodeDrawArgbufCbufUpdateFfpPsCpuTime);
     const auto written = buildAndPointEntryBytes(
         queue, encoderResource, sizeof(state::FfpPsConsts),
-        alignof(state::FfpPsConsts), sizeof(state::FfpPsConsts),
+        state::kConstantBufferOffsetAlignment, sizeof(state::FfpPsConsts),
         kFfpPsArgbufIdx, seqId, recorder, residencyEncoder, writtenBindings,
         uploadObserver, /*countDirtyPhase=*/true,
         [&](std::span<std::byte> dst) {

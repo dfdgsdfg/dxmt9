@@ -186,8 +186,9 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
 }
 
 extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
-    D9CDevice* device, D9CRenderTapePresentCaptureResult* out) {
-  if (!out) {
+    D9CDevice* device, D9CRenderTapePresentCaptureResult* out, void* bytes,
+    std::uint64_t capacity) {
+  if (!out || !bytes || capacity == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   *out = {};
@@ -226,7 +227,8 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
             dxmt9::core::ReadbackDesc{.source = lease.mirror->handle()},
             pixels) ||
         !copyTightPixels(pixels, lease.width, lease.height, lease.coreFormat,
-                         tight)) {
+                         tight) ||
+        tight.size() != capacity) {
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     const auto digest = dxmt9::d3d9::RenderTapeCaptureSession::sha256(tight);
@@ -236,6 +238,7 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
     out->format = lease.d3dFormat;
     out->byteCount = tight.size();
     std::memcpy(out->sha256, digest.data(), digest.size());
+    std::memcpy(bytes, tight.data(), tight.size());
     return dxmt9::core::D3D_OK;
   } catch (...) {
     cancelPresentCapture(device);
