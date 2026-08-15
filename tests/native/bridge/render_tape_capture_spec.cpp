@@ -713,6 +713,48 @@ void testProducedByCapturedPassCaptureEndToEnd() {
   const auto positive = capture(producedFullClearChunk(), textureDescriptorBytes);
   check(positive.first == RenderTapeCaptureStatus::Complete && !positive.second,
         "capture publishes Produced texture, alias, and the same full-clear chunk");
+  RenderTapeCaptureSession later2d(true);
+  check(later2d.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
+            later2d.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted &&
+            later2d.objectDefine(
+                kProducedOutput,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                std::as_bytes(std::span(&outputDescriptorBytes, 1u)), 0u,
+                {}) == RenderTapeCaptureStatus::Accepted &&
+            later2d.objectDefine(
+                kProducedTexture,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+                textureDescriptorBytes, 0u, {}, 0u, 0u) ==
+                RenderTapeCaptureStatus::Accepted &&
+            later2d.objectDefine(
+                kProducedAlias,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                aliasDescriptorBytes, 0u, {}, 0u, 0u) ==
+                RenderTapeCaptureStatus::Accepted,
+        "later-access 2D fixture defines the exact one-subresource closure");
+  const auto first2d = producedFullClearChunk(
+      false, false, false, false, kProducedAlias, false, kProducedDepth, true);
+  const auto laterParent2d = producedFullClearChunk(
+      false, false, false, false, kProducedAlias, false, kProducedDepth, false,
+      true);
+  check(later2d.commandChunk(
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                 .recordCount = 2u, .handleCount = 1u},
+            first2d) == RenderTapeCaptureStatus::Accepted &&
+            later2d.commandChunk(
+                CommandChunkEnvelope{
+                    .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                    .recordCount = 3u, .handleCount = 2u},
+                laterParent2d) == RenderTapeCaptureStatus::Accepted &&
+            later2d.orderedControl(
+                flush, std::as_bytes(std::span(&wait, 1u))) ==
+                RenderTapeCaptureStatus::Accepted &&
+            later2d.completePresent(
+                6u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+                std::as_bytes(std::span(&outputOracle, 1u))) ==
+                RenderTapeCaptureStatus::Complete,
+        "a fully-produced 2D subresource permits later direct parent sampling");
   RenderTapeValidationResult multiValidation{};
   const auto multiObligation = capture(
       producedFullClearChunk(false, false, false, false, kProducedAlias, true),

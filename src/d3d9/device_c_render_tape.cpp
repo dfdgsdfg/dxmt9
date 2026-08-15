@@ -999,6 +999,16 @@ validateRenderTape(std::span<const std::byte> blob,
           producedFailureIdentity = obligation.identity;
           return false;
         }
+      if (obligation.resolved &&
+          texture.dimension == static_cast<std::uint32_t>(
+                                   RenderTapeTextureDimension::Texture2D) &&
+          texture.mipLevelCount == 1u && texture.subresourceCount == 1u) {
+        // The exact 2D shape is wholly initialized when subresource zero is
+        // proved, so later direct texture sampling is sound.  A one-mip cube
+        // is only face-qualified and must continue through the tape-wide
+        // sibling/direct-parent checks below.
+        continue;
+      }
       const auto textureDescriptor = event.payload.subspan(sizeof(fixed));
       std::uint32_t referencedSubresources = 0u;
       std::uint32_t provedSubresources = 0u;
