@@ -729,9 +729,7 @@ bool captureCanonicalD24X8Depth(CommandQueue& queue,
   if (!device || desc.format != core::Format::D24X8 || !desc.depthStencil ||
       desc.renderTarget || desc.multiSampleType != core::MultiSampleType::None ||
       sourceTexture.pixelFormat() != physicalFormat ||
-      (physicalFormat != WMTPixelFormatDepth24Unorm_Stencil8 &&
-       physicalFormat != WMTPixelFormatDepth32Float_Stencil8 &&
-       physicalFormat != WMTPixelFormatDepth32Float)) {
+      !canonicalD24X8PhysicalFormatSupported(physicalFormat)) {
     return false;
   }
   std::uint32_t pitch = 0u;
@@ -815,7 +813,7 @@ bool seedCanonicalD24X8Depth(CommandQueue& queue,
       destinationTexture.pixelFormat() != physicalFormat ||
       depth.version != core::kCanonicalD24X8DepthVersion1 ||
       depth.width != desc.width || depth.height != desc.height ||
-      depth.physicalFormat != static_cast<std::uint32_t>(physicalFormat) ||
+      !canonicalD24X8PhysicalFormatSupported(physicalFormat) ||
       !checkedD24X8Layout(desc.width, desc.height, pitch, byteCount) ||
       depth.pitch != pitch || depth.bytes.size() != byteCount) {
     return false;

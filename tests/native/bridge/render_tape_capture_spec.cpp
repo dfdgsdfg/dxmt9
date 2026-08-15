@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1633,6 +1634,40 @@ void testArmBoundaryTransitionTruthTable() {
             "Present flush -> snapshot -> arm -> first-chunk truth table");
     }
   }
+
+  const auto armA = renderTapeNextArmSnapshotEpoch(0u);
+  const std::array<std::byte, 4u> durableBase{
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x3f}};
+  const std::array<std::byte, 4u> snapshotA{
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x80}, std::byte{0x3e}};
+  const auto armB = renderTapeNextArmSnapshotEpoch(armA.ordinal);
+  const std::array<std::byte, 4u> snapshotB{
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x40}, std::byte{0x3f}};
+  const auto staleA = renderTapeSelectArmSnapshotOverlay(
+      durableBase, snapshotA, armA.ordinal, armB.ordinal);
+  const auto currentB = renderTapeSelectArmSnapshotOverlay(
+      durableBase, snapshotB, armB.ordinal, armB.ordinal);
+  const auto baseOnly = renderTapeSelectArmSnapshotOverlay(
+      durableBase, {}, 0u, armB.ordinal);
+  check(armA.valid && armB.valid && snapshotA != snapshotB &&
+            staleA.source == RenderTapeArmSnapshotOverlaySource::StaleArm &&
+            staleA.bytes.empty() &&
+            currentB.source ==
+                RenderTapeArmSnapshotOverlaySource::CurrentArm &&
+            std::equal(currentB.bytes.begin(), currentB.bytes.end(),
+                       snapshotB.begin(), snapshotB.end()) &&
+            baseOnly.source ==
+                RenderTapeArmSnapshotOverlaySource::DurableBase &&
+            std::equal(baseOnly.bytes.begin(), baseOnly.bytes.end(),
+                       durableBase.begin(), durableBase.end()) &&
+            durableBase == std::array<std::byte, 4u>{
+                std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+                std::byte{0x3f}},
+        "arm B selects B, rejects stale A, and leaves the durable base unchanged");
+  const auto overflow = renderTapeNextArmSnapshotEpoch(
+      std::numeric_limits<std::uint64_t>::max());
+  check(!overflow.valid && overflow.ordinal == 0u,
+        "arm snapshot epoch overflow fails closed");
 }
 
 void testExpectedContentContractDerivation() {

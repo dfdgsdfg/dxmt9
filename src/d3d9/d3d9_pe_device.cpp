@@ -725,6 +725,16 @@ struct RenderTapeLiveObject {
     Role role = Role::Ordinary;
 };
 
+struct RenderTapeArmDepthSnapshot {
+    std::size_t objectIndex = 0u;
+    std::uint64_t armOrdinal = 0u;
+    D9CWireObjectIdentity identity{};
+    dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 descriptor{};
+    std::vector<std::byte> bytes{};
+    std::uint32_t pitch = 0u;
+    std::uint32_t physicalFormat = 0u;
+};
+
 enum class RenderTapeObjectRegistration : std::uint8_t {
     Rejected,
     Existing,
@@ -784,7 +794,7 @@ static bool renderTapeTextureSubresourceDescriptor(
 static bool renderTapeValidateExpectedContent(
     const D9CWireObjectIdentity &identity,
     std::span<const std::byte> descriptor,
-    const std::vector<std::vector<std::byte>> &content,
+    std::span<const std::vector<std::byte>> content,
     dxmt9::d3d9::RenderTapeExpectedContentContract &contract) noexcept {
     try {
         std::vector<std::uint64_t> expected(content.size());
@@ -1217,6 +1227,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
     dxmt9::d3d9::RenderTapeArmBoundaryPhase renderTapeArmBoundaryPhase_ =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
+    std::uint64_t renderTapeDepthSnapshotArmOrdinal_ = 0u;
     // Exact identities admitted to the current tape. Pre-arm live objects
     // outside the bootstrap closure are materialized only on first reference.
     std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities_{};
@@ -7661,7 +7672,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool produceRenderTapeBootstrap(
-        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
+        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed,
+        std::span<const RenderTapeArmDepthSnapshot> depthSnapshots,
+        std::uint64_t depthSnapshotArmOrdinal) noexcept {
         if (!renderTapeRegistry_) {
             dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
             return false;
@@ -7690,6 +7703,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
             return false;
         }
+        const auto findDepthSnapshot = [&](const auto &identity) {
+            return std::find_if(
+                depthSnapshots.begin(), depthSnapshots.end(),
+                [&](const auto &snapshot) {
+                    return renderTapeSameIdentity(snapshot.identity, identity);
+                });
+        };
         try {
             dxmt9::d3d9::pe::CommandChunkBuilder builder({
                 .records = 1u,
@@ -7785,12 +7805,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             closureObjects.reserve(objects.size());
             D9CWireObjectIdentity presentOutput{};
             std::size_t presentOutputCount = 0u;
+            bool staleArmDepthSnapshot = false;
             for (const auto *object : objects) {
                 if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
                     presentOutput = object->identity;
                     ++presentOutputCount;
                 }
-                const bool complete = object->lifetime.textureAlias ||
+                const auto depthSnapshot = findDepthSnapshot(object->identity);
+                const std::span<const std::byte> durableBase =
+                    object->content.size() == 1u
+                    ? std::span<const std::byte>(object->content[0])
+                    : std::span<const std::byte>{};
+                const auto depthOverlay =
+                    depthSnapshot != depthSnapshots.end()
+                    ? dxmt9::d3d9::renderTapeSelectArmSnapshotOverlay(
+                          durableBase, depthSnapshot->bytes,
+                          depthSnapshot->armOrdinal,
+                          depthSnapshotArmOrdinal)
+                    : dxmt9::d3d9::RenderTapeArmSnapshotOverlaySelection{};
+                staleArmDepthSnapshot |=
+                    depthOverlay.source == dxmt9::d3d9::
+                        RenderTapeArmSnapshotOverlaySource::StaleArm;
+                const bool armDepthComplete =
+                    depthOverlay.source == dxmt9::d3d9::
+                        RenderTapeArmSnapshotOverlaySource::CurrentArm;
+                const bool complete = armDepthComplete ||
+                    object->lifetime.textureAlias ||
                     (object->contentCount == object->content.size() &&
                      std::all_of(object->content.begin(), object->content.end(),
                                  [](const auto &bytes) { return !bytes.empty(); }));
@@ -7830,6 +7870,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .hasDescriptorDependency = object->lifetime.textureAlias,
                     .descriptorDependency = object->aliasParentTexture,
                 });
+            }
+            if (staleArmDepthSnapshot) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=stale_arm_depth_snapshot");
+                return false;
             }
             if (presentOutputCount != 1u) {
                 dxmt9DeviceInfoLog(
@@ -7962,10 +8007,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 objectSeed.descriptorKind = static_cast<std::uint32_t>(
                     dxmt9::d3d9::renderTapeDescriptorKindForObject(
                         object->identity.kind));
-                objectSeed.descriptor = object->descriptor;
+                const auto depthSnapshot = findDepthSnapshot(object->identity);
+                const std::span<const std::byte> durableBase =
+                    object->content.size() == 1u
+                    ? std::span<const std::byte>(object->content[0])
+                    : std::span<const std::byte>{};
+                const auto depthOverlay =
+                    depthSnapshot != depthSnapshots.end()
+                    ? dxmt9::d3d9::renderTapeSelectArmSnapshotOverlay(
+                          durableBase, depthSnapshot->bytes,
+                          depthSnapshot->armOrdinal,
+                          depthSnapshotArmOrdinal)
+                    : dxmt9::d3d9::RenderTapeArmSnapshotOverlaySelection{};
+                const bool useArmDepth =
+                    depthOverlay.source == dxmt9::d3d9::
+                        RenderTapeArmSnapshotOverlaySource::CurrentArm;
+                if (depthSnapshot != depthSnapshots.end() && !useArmDepth) {
+                    return false;
+                }
+                const std::span<const std::byte> effectiveDescriptor =
+                    useArmDepth
+                    ? std::as_bytes(std::span(&depthSnapshot->descriptor, 1u))
+                    : std::span<const std::byte>(object->descriptor);
+                const std::span<const std::vector<std::byte>> effectiveContent =
+                    useArmDepth
+                    ? std::span<const std::vector<std::byte>>(
+                          &depthSnapshot->bytes, 1u)
+                    : std::span<const std::vector<std::byte>>(object->content);
+                objectSeed.descriptor.assign(effectiveDescriptor.begin(),
+                                             effectiveDescriptor.end());
                 dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
                 if (!renderTapeValidateExpectedContent(
-                        object->identity, object->descriptor, object->content,
+                        object->identity, effectiveDescriptor,
+                        effectiveContent,
                         contentContract)) {
                     dxmt9DeviceInfoLog(
                         "render_tape_capture producer aborted reason=expected_content_contract "
@@ -7976,7 +8050,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         object->identity.kind, object->identity.generation,
                         static_cast<unsigned long long>(object->identity.objectId),
                         static_cast<unsigned long long>(contentContract.bytes),
-                        contentContract.count, object->content.size());
+                        contentContract.count, effectiveContent.size());
                     RejectRenderTapeCaptureForChild(
                         dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                             ExpectedContentContract,
@@ -7994,10 +8068,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             object->immutablePayload);
                     seed.blobs.push_back({.bytes = object->immutablePayload});
                 }
-                if (object->contentCount != 0u) {
+                if (!effectiveContent.empty()) {
                     for (std::uint32_t subresource = 0u;
-                         subresource < object->content.size(); ++subresource) {
-                        const auto &bytes = object->content[subresource];
+                         subresource < effectiveContent.size(); ++subresource) {
+                        const auto &bytes = effectiveContent[subresource];
                         if (bytes.empty()) {
                             if (object->identity.kind ==
                                 D9C_CHUNK_HANDLE_KIND_TEXTURE) {
@@ -8152,18 +8226,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    bool snapshotRenderTapeD24X8AtArmBoundary() noexcept {
+    bool snapshotRenderTapeD24X8AtArmBoundary(
+        std::vector<RenderTapeArmDepthSnapshot> &pending,
+        std::uint64_t &armOrdinal) noexcept {
         if (!renderTapeRegistry_ || renderTapeRegistry_->invalid)
             return false;
-        struct PendingSnapshot {
-            std::size_t objectIndex = 0u;
-            dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 descriptor{};
-            std::vector<std::byte> bytes{};
-            std::uint32_t pitch = 0u;
-            std::uint32_t physicalFormat = 0u;
-        };
         try {
-            std::vector<PendingSnapshot> pending;
+            pending.clear();
+            const auto epoch = dxmt9::d3d9::renderTapeNextArmSnapshotEpoch(
+                renderTapeDepthSnapshotArmOrdinal_);
+            if (!epoch.valid) {
+                return false;
+            }
+            renderTapeDepthSnapshotArmOrdinal_ = epoch.ordinal;
+            armOrdinal = epoch.ordinal;
             for (std::size_t index = 0u;
                  index < renderTapeRegistry_->objects.size(); ++index) {
                 const auto &object = renderTapeRegistry_->objects[index];
@@ -8201,8 +8277,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     byteCount > std::numeric_limits<std::size_t>::max()) {
                     return false;
                 }
-                PendingSnapshot snapshot{
+                RenderTapeArmDepthSnapshot snapshot{
                     .objectIndex = index,
+                    .armOrdinal = armOrdinal,
+                    .identity = object.identity,
                     .descriptor = surface,
                     .bytes = std::vector<std::byte>(
                         static_cast<std::size_t>(byteCount)),
@@ -8249,29 +8327,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 pending.push_back(std::move(snapshot));
             }
 
-            // Commit only after every generation-qualified provider readback
-            // succeeded. A later failure leaves the PE registry untouched.
+            // Keep the snapshot arm-local. The durable live registry continues
+            // to describe mutable application state, so a retry must perform a
+            // new generation-qualified GPU readback rather than reuse this arm.
             for (auto &snapshot : pending) {
-                auto &object =
-                    renderTapeRegistry_->objects[snapshot.objectIndex];
                 snapshot.descriptor.initialContentDisposition =
                     static_cast<std::uint32_t>(dxmt9::d3d9::
                         RenderTapeInitialContentDisposition::
                             CompleteDepthFloat32V1);
-                object.descriptor.assign(
-                    reinterpret_cast<const std::byte *>(&snapshot.descriptor),
-                    reinterpret_cast<const std::byte *>(&snapshot.descriptor) +
-                        sizeof(snapshot.descriptor));
-                object.content[0] = std::move(snapshot.bytes);
                 dxmt9DeviceInfoLog(
                     "render_tape_capture d24x8_snapshot complete kind=%u "
                     "generation=%u object_id=%llu encoding=1 width=%u height=%u "
                     "pitch=%u bytes=%zu physical_format=%u",
-                    object.identity.kind, object.identity.generation,
-                    static_cast<unsigned long long>(object.identity.objectId),
+                    snapshot.identity.kind, snapshot.identity.generation,
+                    static_cast<unsigned long long>(snapshot.identity.objectId),
                     snapshot.descriptor.surface.width,
                     snapshot.descriptor.surface.height, snapshot.pitch,
-                    object.content[0].size(), snapshot.physicalFormat);
+                    snapshot.bytes.size(), snapshot.physicalFormat);
             }
             return advanceRenderTapeArmBoundary(dxmt9::d3d9::
                 RenderTapeArmBoundaryPhase::SnapshotComplete);
@@ -8338,7 +8410,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 RenderTapeArmBoundaryPhase::PresentFlushed)) {
             return false;
         }
-        if (!snapshotRenderTapeD24X8AtArmBoundary()) {
+        std::vector<RenderTapeArmDepthSnapshot> depthSnapshots;
+        std::uint64_t depthSnapshotArmOrdinal = 0u;
+        if (!snapshotRenderTapeD24X8AtArmBoundary(
+                depthSnapshots, depthSnapshotArmOrdinal)) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture arm aborted reason=d24x8_snapshot");
             abortRenderTapeCapture("d24x8_snapshot");
@@ -8351,7 +8426,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             // production path always snapshots this device's value-owned PE
             // shadow and live-object store at the arm Present boundary.
             produced = producer ? producer(seed)
-                                : produceRenderTapeBootstrap(seed);
+                                : produceRenderTapeBootstrap(seed,
+                                                             depthSnapshots,
+                                                             depthSnapshotArmOrdinal);
         } catch (...) {
             produced = false;
         }

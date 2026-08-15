@@ -4,10 +4,60 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
 namespace dxmt9::d3d9 {
+
+struct RenderTapeArmSnapshotEpoch {
+  std::uint64_t ordinal = 0u;
+  bool valid = false;
+};
+
+constexpr RenderTapeArmSnapshotEpoch renderTapeNextArmSnapshotEpoch(
+    std::uint64_t previous) noexcept {
+  return previous == std::numeric_limits<std::uint64_t>::max()
+      ? RenderTapeArmSnapshotEpoch{}
+      : RenderTapeArmSnapshotEpoch{.ordinal = previous + 1u, .valid = true};
+}
+
+constexpr bool renderTapeArmSnapshotEpochMatches(
+    std::uint64_t snapshotOrdinal, std::uint64_t activeOrdinal) noexcept {
+  return snapshotOrdinal != 0u && snapshotOrdinal == activeOrdinal;
+}
+
+enum class RenderTapeArmSnapshotOverlaySource : std::uint8_t {
+  Missing,
+  DurableBase,
+  CurrentArm,
+  StaleArm,
+};
+
+struct RenderTapeArmSnapshotOverlaySelection {
+  RenderTapeArmSnapshotOverlaySource source =
+      RenderTapeArmSnapshotOverlaySource::Missing;
+  std::span<const std::byte> bytes{};
+};
+
+inline RenderTapeArmSnapshotOverlaySelection renderTapeSelectArmSnapshotOverlay(
+    std::span<const std::byte> durableBase,
+    std::span<const std::byte> candidate,
+    std::uint64_t candidateOrdinal,
+    std::uint64_t activeOrdinal) noexcept {
+  if (!candidate.empty()) {
+    if (!renderTapeArmSnapshotEpochMatches(candidateOrdinal, activeOrdinal)) {
+      return {.source = RenderTapeArmSnapshotOverlaySource::StaleArm};
+    }
+    return {.source = RenderTapeArmSnapshotOverlaySource::CurrentArm,
+            .bytes = candidate};
+  }
+  if (!durableBase.empty()) {
+    return {.source = RenderTapeArmSnapshotOverlaySource::DurableBase,
+            .bytes = durableBase};
+  }
+  return {};
+}
 
 // Public D3DFORMAT values from d3d9types.h. The host-native capture/layout
 // tests cannot include the Windows header, so the wire-neutral helper pins the

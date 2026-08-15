@@ -6,6 +6,8 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include "dxmt9/dxmt9_blit_encoders.hpp"
+
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
@@ -345,6 +347,16 @@ int main() {
         device.depth24Stencil8PixelFormatSupported
             ? MTLPixelFormatDepth24Unorm_Stencil8
             : MTLPixelFormatDepth32Float_Stencil8;
+    check(dxmt9::encoders::canonicalD24X8ReplayPhysicalFormatsCompatible(
+              WMTPixelFormatDepth24Unorm_Stencil8,
+              WMTPixelFormatDepth32Float_Stencil8) &&
+              dxmt9::encoders::canonicalD24X8ReplayPhysicalFormatsCompatible(
+                  WMTPixelFormatDepth32Float_Stencil8,
+                  WMTPixelFormatDepth32Float) &&
+              !dxmt9::encoders::canonicalD24X8ReplayPhysicalFormatsCompatible(
+                  WMTPixelFormatDepth16Unorm,
+                  WMTPixelFormatDepth32Float_Stencil8),
+          "float32 v1 replays across supported physical mappings only");
     testRejectionMatrix(physicalFormat);
 
     id<MTLLibrary> library = makeLibrary(device);

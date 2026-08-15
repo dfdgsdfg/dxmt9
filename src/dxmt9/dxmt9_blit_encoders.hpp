@@ -18,6 +18,19 @@ namespace dxmt9::encoders {
 
 using u32 = std::uint32_t;
 
+constexpr bool canonicalD24X8PhysicalFormatSupported(
+    WMTPixelFormat format) noexcept {
+  return format == WMTPixelFormatDepth24Unorm_Stencil8 ||
+         format == WMTPixelFormatDepth32Float_Stencil8 ||
+         format == WMTPixelFormatDepth32Float;
+}
+
+constexpr bool canonicalD24X8ReplayPhysicalFormatsCompatible(
+    WMTPixelFormat captured, WMTPixelFormat replayed) noexcept {
+  return canonicalD24X8PhysicalFormatSupported(captured) &&
+         canonicalD24X8PhysicalFormatSupported(replayed);
+}
+
 // Record a GPU→GPU texture copy for a CopyResource-style readback. The
 // source's resolve texture is used when present (MSAA resolve path).
 void encodeReadback(WMT::CommandBuffer& commandBuffer,
