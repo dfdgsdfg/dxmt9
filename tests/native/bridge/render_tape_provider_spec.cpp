@@ -693,34 +693,38 @@ void testProducedByCapturedPassTape() {
       Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = clear},
       Record{.type = D9C_COMMAND_RECORD_PRESENT, .payload = present},
   };
-  RenderTapeBuilder builder;
-  builder.appendBootstrapState(implicitBootstrapChunk());
   const auto outputDescriptorV2 = outputDescriptor(D9CSurfaceDesc{
       .format = 21u, .resourceType = 1u, .usage = 1u, .pool = 0u,
       .width = 4u, .height = 4u, .depth = 1u});
-  builder.appendObjectDefine(
-      output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
-  builder.appendObjectDefine(
-      texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
-      producedTexture, 0u, {}, 0u, 0u);
-  builder.appendObjectDefine(
-      alias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
-      std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {}, 0u, 0u);
-  builder.appendCommandChunk(
-      CommandChunkEnvelope{.recordCount = 3u,
-                           .handleCount = static_cast<std::uint32_t>(
-                               bootstrap.handles.size())},
-      makeChunk(frameRecords));
   const RenderTapeOracleAttachment oracle{
       .identity = output,
       .descriptorKind = static_cast<std::uint32_t>(
           RenderTapeDescriptorKind::Surface),
   };
-  builder.appendPresentComplete(
-      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
-      std::as_bytes(std::span(&oracle, 1u)));
-  const auto tape = builder.seal();
+  const auto buildProducedTape = [&](std::span<const std::byte> textureBytes,
+                                     const auto& surfaceAlias) {
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(implicitBootstrapChunk());
+    builder.appendObjectDefine(
+        output, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
+    builder.appendObjectDefine(
+        texture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        textureBytes, 0u, {}, 0u, 0u);
+    builder.appendObjectDefine(
+        alias, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&surfaceAlias, 1u)), 0u, {}, 0u, 0u);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 3u,
+                             .handleCount = static_cast<std::uint32_t>(
+                                 bootstrap.handles.size())},
+        makeChunk(frameRecords));
+    builder.appendPresentComplete(
+        5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    return builder.seal();
+  };
+  const auto tape = buildProducedTape(producedTexture, aliasDescriptor);
   const RenderTapeBlobCatalogue catalogue;
   const auto validation = validateRenderTape(tape, catalogue);
   check(validation.valid(),
@@ -760,6 +764,59 @@ void testProducedByCapturedPassTape() {
   check(multiMipDetail.subreason ==
             RenderTapeObjectDefineValidationSubreason::TextureDescriptorDisposition,
         "produced multi-mip texture remains fail-closed");
+
+  RenderTapeTextureDescriptorV2 cubeHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(
+          RenderTapeTextureDimension::Cube),
+      .mipLevelCount = 1u,
+      .subresourceCount = 6u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedByCapturedPass),
+  };
+  auto cubeFace = level;
+  cubeFace.format = 114u;
+  cubeFace.resourceType = 5u;
+  std::vector<std::byte> cubeDescriptor(
+      sizeof(cubeHeader) + 6u * sizeof(cubeFace));
+  std::memcpy(cubeDescriptor.data(), &cubeHeader, sizeof(cubeHeader));
+  for (std::uint32_t face = 0u; face < 6u; ++face) {
+    std::memcpy(cubeDescriptor.data() + sizeof(cubeHeader) +
+                    face * sizeof(cubeFace),
+                &cubeFace, sizeof(cubeFace));
+  }
+  auto cubeAliasDescriptor = aliasDescriptor;
+  cubeAliasDescriptor.surface.format = 114u;
+  const auto cubeTape = buildProducedTape(cubeDescriptor,
+                                          cubeAliasDescriptor);
+  const auto cubeValidation = validateRenderTape(cubeTape, catalogue);
+  const auto cubePreflight = preflightFrameTapeIdentity(cubeTape, {});
+  check(cubeValidation.valid() && cubePreflight.complete(),
+        std::string("provider preflight admits one-mip cube face-zero Produced proof: ") +
+            renderTapeValidationStatusName(cubeValidation.status) + "/" +
+            frameTapeReplayStatusName(cubePreflight.status));
+
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "cube Produced provider creates native factory");
+  const D9CPresentParams params{
+      .backBufferWidth = 4u,
+      .backBufferHeight = 4u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
+                                               nullptr);
+  check(device != nullptr, "cube Produced provider creates native device");
+  const auto cubeReplay = replayFrameTapeIdentity(device, cubeTape, {});
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(cubeReplay.complete() &&
+            cubeReplay.conservation.objectsCreated == 3u &&
+            cubeReplay.conservation.objectsReleased == 3u,
+        "provider creates/releases cube parent, face alias, and output");
 }
 
 struct TexturedFixture {

@@ -399,47 +399,58 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
                                const RenderTapeTextureDescriptorV2& texture,
                                D9CSurfaceDesc& level0) {
   RenderTapeTextureDescriptorV2 canonical{};
+  const auto dimension =
+      static_cast<RenderTapeTextureDimension>(texture.dimension);
+  const bool texture2d = dimension == RenderTapeTextureDimension::Texture2D;
+  const bool cube = dimension == RenderTapeTextureDimension::Cube;
+  const bool completeSeed =
+      texture.initialContentDisposition == static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed);
+  const bool produced =
+      texture.initialContentDisposition == static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+  const bool acceptedShape =
+      (completeSeed && texture2d && texture.mipLevelCount != 0u &&
+       texture.subresourceCount == texture.mipLevelCount) ||
+      (produced && renderTapeProducedTextureShapeSupported(texture));
   if (!renderTapeLoadTextureDescriptorV2(descriptor, canonical) ||
       canonical.dimension != texture.dimension ||
       canonical.mipLevelCount != texture.mipLevelCount ||
       canonical.subresourceCount != texture.subresourceCount ||
       canonical.initialContentDisposition !=
           texture.initialContentDisposition ||
-      texture.dimension !=
-          static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
-      texture.mipLevelCount == 0u ||
-      texture.subresourceCount != texture.mipLevelCount ||
-      (texture.initialContentDisposition != static_cast<std::uint32_t>(
-           RenderTapeInitialContentDisposition::CompleteSeed) &&
-       texture.initialContentDisposition != static_cast<std::uint32_t>(
-           RenderTapeInitialContentDisposition::ProducedByCapturedPass)) ||
+      !acceptedShape ||
       texture.reserved0 != 0u ||
       descriptor.size() !=
           sizeof(texture) +
               static_cast<std::size_t>(texture.subresourceCount) *
                   sizeof(D9CSurfaceDesc) ||
       !load(descriptor, sizeof(texture), level0) ||
-      level0.resourceType != 3u || level0.width == 0u ||
+      level0.resourceType != (cube ? 5u : 3u) || level0.width == 0u ||
       level0.height == 0u || level0.depth != 1u || level0.pool != 0u ||
       level0.multiSampleType != 0u || level0.multiSampleQuality != 0u ||
-      ((texture.initialContentDisposition == static_cast<std::uint32_t>(
-            RenderTapeInitialContentDisposition::CompleteSeed) &&
-        (level0.usage & 3u) != 0u) ||
-       (texture.initialContentDisposition == static_cast<std::uint32_t>(
-            RenderTapeInitialContentDisposition::ProducedByCapturedPass) &&
-        (level0.usage & 1u) == 0u))) return false;
+      ((completeSeed && (level0.usage & 3u) != 0u) ||
+       (produced && (level0.usage & 1u) == 0u))) return false;
   const auto format = devicec::fmtFromD3D(level0.format);
   if (format == core::Format::Unknown || core::isCompressedFormat(format))
     return false;
-  for (std::uint32_t level = 1u; level < texture.mipLevelCount; ++level) {
+  for (std::uint32_t subresource = 1u;
+       subresource < texture.subresourceCount; ++subresource) {
     D9CSurfaceDesc desc{};
     if (!load(descriptor, sizeof(texture) +
-                              level * sizeof(D9CSurfaceDesc), desc) ||
-        desc.format != level0.format || desc.resourceType != 3u ||
+                              subresource * sizeof(D9CSurfaceDesc), desc) ||
+        desc.format != level0.format ||
+        desc.resourceType != (cube ? 5u : 3u) ||
         desc.usage != level0.usage || desc.pool != level0.pool ||
         desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
-        desc.width != mipExtent(level0.width, level) ||
-        desc.height != mipExtent(level0.height, level) ||
+        desc.width != mipExtent(
+                          level0.width,
+                          cube ? subresource % texture.mipLevelCount
+                               : subresource) ||
+        desc.height != mipExtent(
+                           level0.height,
+                           cube ? subresource % texture.mipLevelCount
+                                : subresource) ||
         desc.depth != 1u) return false;
   }
   return true;
@@ -889,7 +900,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         ((!candidate.textureProducedByCapturedPass &&
           candidate.textureLevel0.format != 21u) ||
          (candidate.textureProducedByCapturedPass &&
-          candidate.textureLevel0.format != 22u)) ||
+          candidate.textureLevel0.format != 22u &&
+          candidate.textureLevel0.format != 114u)) ||
         (!candidate.textureProducedByCapturedPass &&
          (textureDefinition->fixed.expectedContentBytes < tightTextureBytes ||
           textureDefinition->fixed.expectedContentBytes %
@@ -1119,9 +1131,14 @@ FrameTapeReplayResult replayRenderTapeIdentity(
       D9CSurfaceDesc level0{};
       load(definition.descriptor, 0u, desc);
       load(definition.descriptor, sizeof(desc), level0);
-      value = dxmt9c_device_create_texture(
-          device, level0.width, level0.height, desc.mipLevelCount,
-          level0.usage, level0.format, level0.pool);
+      value = desc.dimension == static_cast<std::uint32_t>(
+                                    RenderTapeTextureDimension::Cube)
+          ? static_cast<void*>(dxmt9c_device_create_cube_texture(
+                device, level0.width, desc.mipLevelCount, level0.usage,
+                level0.format, level0.pool))
+          : static_cast<void*>(dxmt9c_device_create_texture(
+                device, level0.width, level0.height, desc.mipLevelCount,
+                level0.usage, level0.format, level0.pool));
     } else if (definition.fixed.identity.kind ==
                D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
       const auto* blob = findBlob(blobs, definition.fixed.immutablePayloadDigest);

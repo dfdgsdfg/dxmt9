@@ -137,6 +137,18 @@ struct RenderTapeTextureDescriptorV2 {
   std::uint32_t reserved0 = 0u;
 };
 
+inline constexpr bool renderTapeProducedTextureShapeSupported(
+    const RenderTapeTextureDescriptorV2 &texture) noexcept {
+  if (texture.mipLevelCount != 1u)
+    return false;
+  const auto dimension =
+      static_cast<RenderTapeTextureDimension>(texture.dimension);
+  return (dimension == RenderTapeTextureDimension::Texture2D &&
+          texture.subresourceCount == 1u) ||
+         (dimension == RenderTapeTextureDimension::Cube &&
+          texture.subresourceCount == 6u);
+}
+
 // A surface view can name the exact generation-qualified texture storage it
 // aliases. Unavailable means that this view supplies no independent seed; the
 // parent's matching subresource owns the captured bytes.
@@ -651,6 +663,37 @@ inline bool renderTapeLoadTextureDescriptorV2(
     }
   }
   return true;
+}
+
+// A Produced texture is admitted through one exact surface alias.  The alias
+// has D3DRTYPE_SURFACE while its parent descriptor has D3DRTYPE_TEXTURE, so
+// compare the physical subresource shape field-by-field and keep the expected
+// resource-type difference explicit.
+inline bool renderTapeSurfaceAliasMatchesTextureSubresource(
+    std::span<const std::byte> textureDescriptor,
+    const D9CWireObjectIdentity &textureIdentity,
+    const RenderTapeSurfaceDescriptorV2 &alias) noexcept {
+  RenderTapeTextureDescriptorV2 texture{};
+  D9CSurfaceDesc subresource{};
+  return renderTapeLoadTextureDescriptorV2(textureDescriptor, texture) &&
+         alias.schemaVersion == kRenderTapeSurfaceDescriptorVersion2 &&
+         alias.storage == static_cast<std::uint32_t>(
+                              RenderTapeSurfaceStorage::TextureSubresource) &&
+         alias.initialContentDisposition == static_cast<std::uint32_t>(
+             RenderTapeInitialContentDisposition::Unavailable) &&
+         renderTapeSameWireObject(alias.parentTexture, textureIdentity) &&
+         alias.subresource < texture.subresourceCount &&
+         renderTapeTextureSubresourceDescriptor(
+             textureDescriptor, alias.subresource, subresource) &&
+         alias.surface.resourceType == 1u &&
+         alias.surface.format == subresource.format &&
+         alias.surface.usage == subresource.usage &&
+         alias.surface.pool == subresource.pool &&
+         alias.surface.multiSampleType == subresource.multiSampleType &&
+         alias.surface.multiSampleQuality == subresource.multiSampleQuality &&
+         alias.surface.width == subresource.width &&
+         alias.surface.height == subresource.height &&
+         alias.surface.depth == subresource.depth;
 }
 
 struct RenderTapeVertexDeclDescriptor {

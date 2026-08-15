@@ -8674,17 +8674,38 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             object->contentCount != object->content.size() ||
             std::any_of(object->content.begin(), object->content.end(),
                         [](const auto &bytes) { return bytes.empty(); });
+        const auto firstMissing = std::find_if(
+            object->content.begin(), object->content.end(),
+            [](const auto &bytes) { return bytes.empty(); });
+        const auto firstMissingSubresource = static_cast<std::uint32_t>(
+            firstMissing - object->content.begin());
         bool producedByCapturedPass = false;
         if (incomplete && object->lifetime.textureAlias) {
             // A texture-derived surface owns no independent seed. Its parent
             // was resolved above; preserve the alias descriptor as Unavailable.
         } else if (incomplete && currentChunk && originLocator) {
             RenderTapeTextureDescriptorV2 texture{};
+            dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 alias{};
+            const auto aliasObject = std::find_if(
+                renderTapeRegistry_->objects.begin(),
+                renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+                    return renderTapeSameIdentity(
+                        candidate.identity, originLocator->originIdentity);
+                });
             const bool exactTexture =
                 renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
-                texture.dimension == static_cast<std::uint32_t>(
-                    RenderTapeTextureDimension::Texture2D) &&
-                texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
+                dxmt9::d3d9::renderTapeProducedTextureShapeSupported(texture) &&
+                aliasObject != renderTapeRegistry_->objects.end() &&
+                aliasObject->lifetime.textureAlias &&
+                renderTapeSameIdentity(aliasObject->aliasParentTexture,
+                                       object->identity) &&
+                renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
+                                                   alias) &&
+                dxmt9::d3d9::renderTapeSurfaceAliasMatchesTextureSubresource(
+                    object->descriptor, object->identity, alias) &&
+                alias.subresource == firstMissingSubresource &&
+                alias.subresource == 0u &&
+                alias.subresource < texture.subresourceCount;
             dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
             const bool exactStandaloneSurface =
                 renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
@@ -8703,13 +8724,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                          *currentChunk, object->identity, surface.surface)
                          .accepted());
         } else if (incomplete) {
-            const auto missing = std::find_if(
-                object->content.begin(), object->content.end(),
-                [](const auto &bytes) { return bytes.empty(); });
             // Keep the diagnostic index identical to the existing rejection
             // below: a count mismatch with no empty slot reports content.size().
             const auto missingSubresource = static_cast<std::uint32_t>(
-                missing - object->content.begin());
+                firstMissing - object->content.begin());
             dxmt9::d3d9::RenderTapeOriginLocator locator{};
             locator.originIdentity = identity;
             locator.resolvedIdentity = identity;
@@ -8788,7 +8806,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return reject(
                 dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                     IncompleteSubresourceSeed,
-                static_cast<std::uint32_t>(missing - object->content.begin()));
+                firstMissingSubresource);
         }
         dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
         if (!producedByCapturedPass && !object->lifetime.textureAlias &&
@@ -9040,11 +9058,27 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                  .recordType = originLocator.recordType});
             RenderTapeTextureDescriptorV2 texture{};
             dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+            dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 alias{};
+            const auto aliasObject = std::find_if(
+                renderTapeRegistry_->objects.begin(),
+                renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+                    return renderTapeSameIdentity(
+                        candidate.identity, originLocator.originIdentity);
+                });
             const bool producedTexture =
                 renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
-                texture.dimension == static_cast<std::uint32_t>(
-                    RenderTapeTextureDimension::Texture2D) &&
-                texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
+                dxmt9::d3d9::renderTapeProducedTextureShapeSupported(texture) &&
+                aliasObject != renderTapeRegistry_->objects.end() &&
+                aliasObject->lifetime.textureAlias &&
+                renderTapeSameIdentity(aliasObject->aliasParentTexture,
+                                       object->identity) &&
+                renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
+                                                   alias) &&
+                dxmt9::d3d9::renderTapeSurfaceAliasMatchesTextureSubresource(
+                    object->descriptor, object->identity, alias) &&
+                alias.subresource == missingSubresource &&
+                alias.subresource == 0u &&
+                alias.subresource < texture.subresourceCount;
             const bool producedStandaloneSurface =
                 renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
                 surface.storage == static_cast<std::uint32_t>(
