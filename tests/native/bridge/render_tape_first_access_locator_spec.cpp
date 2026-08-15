@@ -272,6 +272,37 @@ void testMismatchMalformedAndPresentHandle() {
         "malformed validated-view input fails closed");
 }
 
+void testStandaloneDepthFullClearObservation() {
+  const auto depth =
+      identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 4294967545ull);
+  RenderTapeFirstAccessLedger ledger{};
+  arm(ledger, depth, depth);
+  const std::array<SectionSpec, 1> binding{{
+      {D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, depth);
+  const auto bound = renderTapeFirstAccessObserve(ledger, apply.view());
+  check(bound.status == RenderTapeFirstAccessStatus::Observing &&
+            bound.classification == RenderTapeFirstAccessClass::BindingOnly,
+        "standalone D24X8 binding is observation-only");
+  const D9CCommandChunkWireClear clear{
+      .flags = 2u,
+      .z = 1.0f,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const auto clearFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &clear,
+                                  sizeof(clear));
+  const auto observation =
+      renderTapeFirstAccessObserve(ledger, clearFixture.view());
+  check(observation.status == RenderTapeFirstAccessStatus::Terminal &&
+            observation.classification ==
+                RenderTapeFirstAccessClass::FullClearWrite &&
+            !observation.aliasOrigin &&
+            observation.observedIdentity.kind ==
+                D9C_CHUNK_HANDLE_KIND_SURFACE &&
+            observation.observedIdentity.objectId == depth.objectId,
+        "standalone depth full clear is observed without widening Produced proof");
+}
+
 void testProducedByCapturedPassProof() {
   const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 28u, 7527u);
   const auto resolved = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14u, 7525u);
@@ -367,6 +398,7 @@ int main() {
     testCrossChunkDrawAndExactlyOnce();
     testReadWriteConflictAndClear();
     testMismatchMalformedAndPresentHandle();
+    testStandaloneDepthFullClearObservation();
     testProducedByCapturedPassProof();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

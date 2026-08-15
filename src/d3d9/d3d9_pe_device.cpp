@@ -7853,6 +7853,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         : "bootstrap_referenced_object_missing";
                 const auto &offending = closureResult.offendingIdentity;
                 const auto &dependency = closureResult.dependencyIdentity;
+                const auto offendingObject = std::find_if(
+                    objects.begin(), objects.end(), [&](const auto *candidate) {
+                        return closureResult.hasOffendingIdentity &&
+                            renderTapeSameIdentity(candidate->identity, offending);
+                    });
+                const auto missingSubresource =
+                    offendingObject != objects.end()
+                    ? static_cast<std::uint32_t>(std::find_if(
+                          (*offendingObject)->content.begin(),
+                          (*offendingObject)->content.end(),
+                          [](const auto &bytes) { return bytes.empty(); }) -
+                      (*offendingObject)->content.begin())
+                    : 0u;
+                const auto missing = offendingObject != objects.end()
+                    ? dxmt9::d3d9::renderTapeDescribeMissingSeed(
+                          offending, (*offendingObject)->descriptor,
+                          missingSubresource,
+                          {.handleIndex =
+                               std::numeric_limits<std::uint32_t>::max(),
+                           .recordIndex = 0u,
+                           .recordType = D9C_COMMAND_RECORD_APPLY_STATE})
+                    : dxmt9::d3d9::RenderTapeMissingSeedDescriptor{};
                 dxmt9DeviceInfoLog(
                     "render_tape_capture producer aborted reason=%s "
                     "closure_status=%u offending_present=%d "
@@ -7860,7 +7882,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     "offending_object_id=%llu dependency_present=%d "
                     "dependency_kind=%u dependency_generation=%u "
                     "dependency_object_id=%llu bootstrap_handles=%zu "
-                    "live_objects=%zu",
+                    "live_objects=%zu descriptor_status=%s expected_status=%s "
+                    "missing_subresource=%u format=%u width=%u height=%u depth=%u "
+                    "multisample_type=%u usage=%u resource_type=%u pool=%u "
+                    "expected_tight_bytes=%llu expected_tight_bytes_valid=%d",
                     reason, static_cast<unsigned>(closureStatus),
                     closureResult.hasOffendingIdentity ? 1 : 0,
                     offending.kind, offending.generation,
@@ -7868,7 +7893,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     closureResult.hasDependencyIdentity ? 1 : 0,
                     dependency.kind, dependency.generation,
                     static_cast<unsigned long long>(dependency.objectId),
-                    bootstrapHandles.size(), objects.size());
+                    bootstrapHandles.size(), objects.size(),
+                    dxmt9::d3d9::renderTapeMissingSeedDescriptorStatusName(
+                        missing.descriptorStatus),
+                    dxmt9::d3d9::renderTapeExpectedContentStatusName(
+                        missing.expectedContentStatus),
+                    missing.missingSubresource, missing.missingSurface.format,
+                    missing.missingSurface.width, missing.missingSurface.height,
+                    missing.missingSurface.depth,
+                    missing.missingSurface.multiSampleType,
+                    missing.missingSurface.usage,
+                    missing.missingSurface.resourceType,
+                    missing.missingSurface.pool,
+                    static_cast<unsigned long long>(missing.expectedTightBytes),
+                    missing.expectedTightBytesValid ? 1 : 0);
                 return false;
             }
             for (const auto *object : objects) {
@@ -8598,6 +8636,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::RenderTapeCommandAdmissionResult admission{};
             dxmt9::d3d9::RenderTapeOriginLocator locator{};
             dxmt9::d3d9::RenderTapeProducedProofResult producedProof{};
+            dxmt9::d3d9::RenderTapeFirstAccessObservation firstAccess{};
             dxmt9::d3d9::RenderTapeMissingSeedDescriptor missingSeed{};
             D9CWireObjectIdentity resolvedIdentity{};
             D9CWireObjectIdentity dependencyIdentity{};
@@ -8725,6 +8764,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 attribution.producedProof = dxmt9::d3d9::
                     renderTapeClassifyProducedByCapturedPass(
                         imported, originLocator.originIdentity, identity);
+                attribution.firstAccess =
+                    attribution.producedProof.observation;
+            } else {
+                // Diagnostic-only generic observation: unlike the production
+                // ProducedByCapturedPass grammar, this deliberately permits a
+                // direct standalone surface identity so r29 can prove whether
+                // the D24X8 binding is overwritten before any read.
+                dxmt9::d3d9::RenderTapeFirstAccessLedger ledger{};
+                dxmt9::d3d9::renderTapeFirstAccessArm(
+                    ledger, originLocator.originIdentity, identity);
+                attribution.firstAccess =
+                    dxmt9::d3d9::renderTapeFirstAccessObserve(ledger, imported);
             }
             const bool producedIdentityConflict =
                 producedIdentity &&
@@ -8763,7 +8814,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (!attribution.admission.accepted()) {
                 const auto &locator = attribution.locator;
                 const auto &missing = attribution.missingSeed;
-                const auto &observation = attribution.producedProof.observation;
+                const auto &observation = attribution.firstAccess;
                 dxmt9DeviceInfoLog(
                     "render_tape_capture command_chunk_preflight "
                     "status=%s handle_index=%u record_index=%u record_type=%u "
