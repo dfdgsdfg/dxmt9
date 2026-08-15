@@ -928,39 +928,6 @@ validateRenderTape(std::span<const std::byte> blob,
       if (obligation.resolved &&
           obligation.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE)
         continue;
-      if (obligation.resolved) {
-        // A texture-level Produced disposition is only a compact encoding for
-        // the one alias subresource whose first terminal access is the proved
-        // full clear.  The remaining mip levels have no seed, so neither the
-        // parent texture nor a different alias may occur anywhere later in
-        // the tape.
-        for (const auto& handle : chunk.handles) {
-          const D9CWireObjectIdentity identity{
-              handle.kind, handle.generation, handle.objectId};
-          if (renderTapePresentOutputIdentityMatchesCommand(
-                  identity, obligation.identity))
-            return false;
-          if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
-            continue;
-          const auto definition = findDefinition(
-              scratch.objectDefinitions, identity);
-          if (!definition)
-            continue;
-          const auto event = candidate.event(definition->eventIndex);
-          RenderTapeObjectDefineHeader fixed{};
-          RenderTapeSurfaceDescriptorV2 surface{};
-          if (load(event.payload, 0u, fixed) &&
-              load(event.payload, sizeof(fixed), surface) &&
-              surface.storage == static_cast<std::uint32_t>(
-                  RenderTapeSurfaceStorage::TextureSubresource) &&
-              renderTapePresentOutputIdentityMatchesCommand(
-                  surface.parentTexture, obligation.identity) &&
-              !renderTapePresentOutputIdentityMatchesCommand(
-                  identity, obligation.producingAlias))
-            return false;
-        }
-        continue;
-      }
       // Definitions are pre-indexed so forward references can be validated,
       // but a ProducedByCapturedPass proof is temporal: neither the texture
       // nor its exact alias may be used to resolve a command chunk that
@@ -1003,101 +970,45 @@ validateRenderTape(std::span<const std::byte> blob,
               RenderTapeInitialContentDisposition::ProducedByCapturedPass))
         return false;
       const auto textureDescriptor = event.payload.subspan(sizeof(fixed));
-
-      std::uint32_t matchingAliasDefinitions = 0u;
-      D9CWireObjectIdentity matchingAlias{};
-      for (const auto& candidateDefinition : scratch.objectDefinitions) {
-        if (candidateDefinition.identity.kind !=
-            D9C_CHUNK_HANDLE_KIND_SURFACE)
+      std::uint32_t referencedSubresources = 0u;
+      std::uint32_t provedSubresources = 0u;
+      for (const auto& handle : chunk.handles) {
+        const D9CWireObjectIdentity identity{
+            handle.kind, handle.generation, handle.objectId};
+        if (renderTapePresentOutputIdentityMatchesCommand(
+                identity, obligation.identity))
+          return false;
+        if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
           continue;
-        const auto surfaceEvent = candidate.event(candidateDefinition.eventIndex);
-        RenderTapeObjectDefineHeader surfaceFixed{};
-        RenderTapeSurfaceDescriptorV2 surface{};
-        if (load(surfaceEvent.payload, 0u, surfaceFixed) &&
-            load(surfaceEvent.payload, sizeof(surfaceFixed), surface) &&
-            surface.storage == static_cast<std::uint32_t>(
-                RenderTapeSurfaceStorage::TextureSubresource) &&
-            surface.subresource == 0u &&
-            renderTapeSurfaceAliasMatchesTextureSubresource(
-                textureDescriptor, obligation.identity, surface)) {
-          ++matchingAliasDefinitions;
-          matchingAlias = candidateDefinition.identity;
-        }
-      }
-      if (matchingAliasDefinitions != 1u)
-        return false;
-
-      D9CWireObjectIdentity origin{};
-      std::uint32_t originCount = 0u;
-      for (const auto& candidateDefinition : scratch.objectDefinitions) {
-        if (candidateDefinition.identity.kind !=
-            D9C_CHUNK_HANDLE_KIND_SURFACE)
+        const auto definition = findDefinition(
+            scratch.objectDefinitions, identity);
+        if (!definition || definition->eventIndex >= currentEventIndex)
           continue;
-        if (candidateDefinition.eventIndex >= currentEventIndex)
-          continue;
-        const auto surfaceEvent = candidate.event(candidateDefinition.eventIndex);
+        const auto surfaceEvent = candidate.event(definition->eventIndex);
         RenderTapeObjectDefineHeader surfaceFixed{};
         RenderTapeSurfaceDescriptorV2 surface{};
         if (!load(surfaceEvent.payload, 0u, surfaceFixed) ||
-            !load(surfaceEvent.payload, sizeof(surfaceFixed), surface) ||
-            surface.storage != static_cast<std::uint32_t>(
-                RenderTapeSurfaceStorage::TextureSubresource) ||
-            surface.subresource != 0u ||
-            !renderTapeSurfaceAliasMatchesTextureSubresource(
-                textureDescriptor, obligation.identity, surface))
+            !load(surfaceEvent.payload, sizeof(surfaceFixed), surface))
+          return false;
+        if (!renderTapePresentOutputIdentityMatchesCommand(
+                surface.parentTexture, obligation.identity))
           continue;
-        const bool referenced = std::any_of(
-            chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
-              return handle.kind == candidateDefinition.identity.kind &&
-                     handle.generation == candidateDefinition.identity.generation &&
-                     handle.objectId == candidateDefinition.identity.objectId;
-            });
-        if (referenced) {
-          origin = candidateDefinition.identity;
-          ++originCount;
-        }
+        if (!renderTapeSurfaceAliasMatchesTextureSubresource(
+                textureDescriptor, obligation.identity, surface) ||
+            surface.subresource >= 32u)
+          return false;
+        const auto bit = 1u << surface.subresource;
+        referencedSubresources |= bit;
+        if ((obligation.producedSubresourceMask & bit) != 0u ||
+            renderTapeProveProducedByCapturedPass(
+                chunk, identity, obligation.identity))
+          provedSubresources |= bit;
       }
-      const bool directReference = std::any_of(
-          chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
-            return handle.kind == obligation.identity.kind &&
-                   handle.generation == obligation.identity.generation &&
-                   handle.objectId == obligation.identity.objectId;
-          });
-      const bool foreignAliasReference = std::any_of(
-          chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
-            const D9CWireObjectIdentity identity{
-                handle.kind, handle.generation, handle.objectId};
-            if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
-                renderTapePresentOutputIdentityMatchesCommand(identity,
-                                                               matchingAlias))
-              return false;
-            const auto definition = findDefinition(
-                scratch.objectDefinitions, identity);
-            if (!definition)
-              return false;
-            const auto event = candidate.event(definition->eventIndex);
-            RenderTapeObjectDefineHeader fixed{};
-            RenderTapeSurfaceDescriptorV2 surface{};
-            return load(event.payload, 0u, fixed) &&
-                   load(event.payload, sizeof(fixed), surface) &&
-                   surface.storage == static_cast<std::uint32_t>(
-                       RenderTapeSurfaceStorage::TextureSubresource) &&
-                   renderTapePresentOutputIdentityMatchesCommand(
-                       surface.parentTexture, obligation.identity);
-          });
-      if (directReference || foreignAliasReference || originCount > 1u) {
+      if ((referencedSubresources &
+           ~(obligation.producedSubresourceMask | provedSubresources)) != 0u)
         return false;
-      }
-      if (originCount == 0u)
-        continue;
-      if (!renderTapeProveProducedByCapturedPass(chunk, origin,
-                                                  obligation.identity))
-        return false;
-      if (!renderTapePresentOutputIdentityMatchesCommand(origin,
-                                                         matchingAlias))
-        return false;
-      obligation.producingAlias = origin;
-      obligation.resolved = true;
+      obligation.producedSubresourceMask |= provedSubresources;
+      obligation.resolved = obligation.producedSubresourceMask != 0u;
     }
     return true;
   };

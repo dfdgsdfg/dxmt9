@@ -465,8 +465,8 @@ struct RenderTapeValidationScratch {
 
   struct ProducedPassObligation {
     D9CWireObjectIdentity identity{};
-    D9CWireObjectIdentity producingAlias{};
     std::uint32_t definitionEventIndex = 0xffffffffu;
+    std::uint32_t producedSubresourceMask = 0u;
     bool resolved = false;
   };
 

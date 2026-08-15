@@ -8703,9 +8703,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                    alias) &&
                 dxmt9::d3d9::renderTapeSurfaceAliasMatchesTextureSubresource(
                     object->descriptor, object->identity, alias) &&
-                alias.subresource == firstMissingSubresource &&
-                alias.subresource == 0u &&
-                alias.subresource < texture.subresourceCount;
+                alias.subresource < object->content.size() &&
+                object->content[alias.subresource].empty() &&
+                ((texture.dimension == static_cast<std::uint32_t>(
+                      RenderTapeTextureDimension::Texture2D) &&
+                  alias.subresource == firstMissingSubresource &&
+                  alias.subresource == 0u) ||
+                 (texture.dimension == static_cast<std::uint32_t>(
+                      RenderTapeTextureDimension::Cube) &&
+                  alias.subresource < 6u));
             dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
             const bool exactStandaloneSurface =
                 renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
@@ -9097,9 +9103,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                        object->identity) &&
                 attribution.producedAliasDescriptorAccepted &&
                 attribution.producedAliasShapeMatched &&
-                alias.subresource == missingSubresource &&
-                alias.subresource == 0u &&
-                alias.subresource < texture.subresourceCount;
+                alias.subresource < object->content.size() &&
+                object->content[alias.subresource].empty() &&
+                ((texture.dimension == static_cast<std::uint32_t>(
+                      RenderTapeTextureDimension::Texture2D) &&
+                  alias.subresource == missingSubresource &&
+                  alias.subresource == 0u) ||
+                 (texture.dimension == static_cast<std::uint32_t>(
+                      RenderTapeTextureDimension::Cube) &&
+                  alias.subresource < 6u));
             const bool producedStandaloneSurface =
                 renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
                 surface.storage == static_cast<std::uint32_t>(

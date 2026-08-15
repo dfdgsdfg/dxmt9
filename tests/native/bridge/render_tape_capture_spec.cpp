@@ -401,7 +401,8 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
                                               D9CWireObjectIdentity depthIdentity =
                                                   kProducedDepth,
                                               bool omitPresent = false,
-                                              bool bindParentTexture = false) {
+                                              bool bindParentTexture = false,
+                                              bool clearDepthAspect = true) {
   const bool bindAlias = !omitAlias;
   const auto target = wrongIdentity
       ? D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -488,7 +489,7 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
   std::memcpy(applyPayload.data() + depthStencilOffset, &depthStencil,
               sizeof(depthStencil));
   const D9CCommandChunkWireClear clear{
-      .flags = includeDepth ? 3u : 1u,
+      .flags = includeDepth && clearDepthAspect ? 3u : 1u,
       .colorARGB = 0xff204060u,
       .z = 1.0f,
       .rectCount = partial ? 1u : 0u,
@@ -612,7 +613,8 @@ void testProducedByCapturedPassCaptureEndToEnd() {
                      bool standaloneDepth = false,
                      RenderTapeValidationResult* validationOut = nullptr,
                      std::uint32_t secondAliasSubresource = 0u,
-                     std::span<const std::byte> primaryAliasDescriptor = {}) {
+                     std::span<const std::byte> primaryAliasDescriptor = {},
+                     std::uint32_t chunkRecordCount = 3u) {
     const auto selectedAliasDescriptor = primaryAliasDescriptor.empty()
         ? std::span<const std::byte>(aliasDescriptorBytes)
         : primaryAliasDescriptor;
@@ -684,14 +686,14 @@ void testProducedByCapturedPassCaptureEndToEnd() {
       ImportedChunkView imported;
       const auto chunkValidation = validateCommandChunk(
           chunk, CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-                                      .recordCount = 3u,
+                                      .recordCount = chunkRecordCount,
                                       .handleCount = chunkHandleCount},
           &imported);
       check(chunkValidation.valid(),
             "ProducedByCapturedPass fixture chunk is canonically encoded");
       check(session.commandChunk(
                 CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-                                     .recordCount = 3u,
+                                     .recordCount = chunkRecordCount,
                                      .handleCount = chunkHandleCount},
                 chunk) == RenderTapeCaptureStatus::Accepted,
             "ProducedByCapturedPass capture retains the command chunk");
@@ -700,7 +702,7 @@ void testProducedByCapturedPassCaptureEndToEnd() {
               RenderTapeCaptureStatus::Accepted,
           "ProducedByCapturedPass capture records completion fence");
     const auto status = session.completePresent(
-        standaloneDepth ? 6u : 5u, 11u,
+        standaloneDepth || secondAlias || secondProduced ? 6u : 5u, 11u,
         RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&outputOracle, 1u)));
     if (validationOut)
@@ -744,7 +746,7 @@ void testProducedByCapturedPassCaptureEndToEnd() {
             multipleAlias.second &&
             multipleProduced.first != RenderTapeCaptureStatus::Complete &&
             multipleProduced.second,
-        "multiple aliases and multiple Produced textures abort before publication");
+        "duplicate aliases and multiple Produced parents both reject");
 
   RenderTapeTextureDescriptorV2 cubeHeader{
       .schemaVersion = kRenderTapeTextureDescriptorVersion2,
@@ -772,6 +774,70 @@ void testProducedByCapturedPassCaptureEndToEnd() {
   std::memcpy(&cubeAlias, cubeAliasDescriptor.data(), sizeof(cubeAlias));
   cubeAlias.surface.format = 114u;
   std::memcpy(cubeAliasDescriptor.data(), &cubeAlias, sizeof(cubeAlias));
+  const auto twoFaceClearChunk = [&] {
+    const auto face0 = producedFullClearChunk(
+        false, false, false, false, kProducedAlias, false, kProducedDepth,
+        true);
+    const auto face1 = producedFullClearChunk(
+        false, false, false, false,
+        D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                              .generation = 7u, .objectId = 42u});
+    ImportedChunkView first{};
+    ImportedChunkView second{};
+    check(importPrevalidatedCommandChunk(
+              face0,
+              CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                                   .recordCount = 2u, .handleCount = 1u},
+              first) &&
+              importPrevalidatedCommandChunk(
+                  face1,
+                  CommandChunkEnvelope{
+                      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                      .recordCount = 3u, .handleCount = 1u},
+                  second),
+          "two-face Produced fixture imports both source chunks");
+    std::vector<ProducedRecord> records;
+    const auto append = [&](const ImportedChunkView& source,
+                            std::uint32_t handleOffset) {
+      for (std::size_t index = 0u; index < source.records.size(); ++index) {
+        const auto record = source.record(index);
+        ProducedRecord out{
+            .type = record.header.type,
+            .payload = std::vector<std::byte>(record.payload.begin(),
+                                              record.payload.end()),
+            .handles = std::vector<D9CCommandChunkWireHandleEntry>(
+                source.handles.begin() + record.header.firstHandle,
+                source.handles.begin() + record.header.firstHandle +
+                    record.header.handleCount),
+        };
+        if (handleOffset != 0u && record.sparseState()) {
+          D9CCommandChunkWireDrawHeader draw{};
+          std::memcpy(&draw, out.payload.data(), sizeof(draw));
+          for (std::uint32_t sectionIndex = 0u;
+               sectionIndex < draw.sectionCount; ++sectionIndex) {
+            D9CCommandChunkWireSectionDesc section{};
+            std::memcpy(&section,
+                        out.payload.data() + draw.sectionTableOffset +
+                            sectionIndex * sizeof(section),
+                        sizeof(section));
+            if (section.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET)
+              continue;
+            D9CCommandChunkWireRenderTargetBinding binding{};
+            std::memcpy(&binding, out.payload.data() + section.payloadOffset,
+                        sizeof(binding));
+            if (binding.valid != 0u)
+              binding.handleIndex += handleOffset;
+            std::memcpy(out.payload.data() + section.payloadOffset, &binding,
+                        sizeof(binding));
+          }
+        }
+        records.push_back(std::move(out));
+      }
+    };
+    append(first, 0u);
+    append(second, 1u);
+    return makeProducedChunk(records);
+  }();
   RenderTapeValidationResult cubeValidation{};
   const auto cubeFace0 = capture(producedFullClearChunk(), cubeDescriptor,
                                  false, false, 1u, false, &cubeValidation, 0u,
@@ -806,16 +872,18 @@ void testProducedByCapturedPassCaptureEndToEnd() {
       .generation = 7u,
       .objectId = 42u,
   };
+  RenderTapeValidationResult siblingValidation{};
   const auto siblingFace = capture(
-      producedFullClearChunk(false, false, false, false, kProducedAlias, true,
-                             siblingAlias),
-      cubeDescriptor, true, false, 2u, false, nullptr, 1u,
-      cubeAliasDescriptor);
-  check(siblingFace.first != RenderTapeCaptureStatus::Complete &&
-            siblingFace.second,
-        "same-chunk sibling-face access rejects the compact Produced proof");
+      twoFaceClearChunk,
+      cubeDescriptor, true, false, 2u, false, &siblingValidation, 1u,
+      cubeAliasDescriptor, 5u);
+  check(siblingFace.first == RenderTapeCaptureStatus::Complete &&
+            !siblingFace.second,
+        std::string("same-chunk sibling face is admitted only by its independent full clear: ") +
+            renderTapeValidationStatusName(siblingValidation.status));
 
-  const auto laterAccess = [&](bool sibling) {
+  const auto laterAccess = [&](bool sibling, bool proveSibling,
+                               RenderTapeValidationResult* validation) {
     RenderTapeCaptureSession session(true);
     check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
               session.beginPresentInterval() ==
@@ -853,8 +921,8 @@ void testProducedByCapturedPassCaptureEndToEnd() {
         false, false, false, false, kProducedAlias, false, kProducedDepth,
         true);
     const auto second = sibling
-        ? producedFullClearChunk(false, false, false, false, kProducedAlias,
-                                 true, siblingAlias)
+        ? producedFullClearChunk(false, !proveSibling, false, false,
+                                 siblingAlias)
         : producedFullClearChunk(false, false, false, false, kProducedAlias,
                                  false, kProducedDepth, false, true);
     check(session.commandChunk(
@@ -864,24 +932,38 @@ void testProducedByCapturedPassCaptureEndToEnd() {
               session.commandChunk(
                   CommandChunkEnvelope{
                       .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-                      .recordCount = 3u, .handleCount = 2u},
+                      .recordCount = 3u,
+                      .handleCount = sibling ? 1u : 2u},
                   second) == RenderTapeCaptureStatus::Accepted &&
               session.orderedControl(
                   flush, std::as_bytes(std::span(&wait, 1u))) ==
                   RenderTapeCaptureStatus::Accepted,
           "later-access cube fixture records proof then forbidden access");
     const auto status = session.completePresent(
-        5u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+        sibling ? 7u : 6u, 11u, RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&outputOracle, 1u)));
+    if (validation)
+      *validation = session.validationResult();
     return std::pair{status, session.sealedArtifact().empty()};
   };
-  const auto laterSibling = laterAccess(true);
-  const auto laterParent = laterAccess(false);
-  check(laterSibling.first != RenderTapeCaptureStatus::Complete &&
-            laterSibling.second &&
+  RenderTapeValidationResult laterSiblingValidation{};
+  RenderTapeValidationResult laterUnprovedValidation{};
+  RenderTapeValidationResult laterParentValidation{};
+  const auto laterSibling = laterAccess(true, true, &laterSiblingValidation);
+  const auto laterUnprovedSibling =
+      laterAccess(true, false, &laterUnprovedValidation);
+  const auto laterParent = laterAccess(false, true, &laterParentValidation);
+  check(laterSibling.first == RenderTapeCaptureStatus::Complete &&
+            !laterSibling.second &&
+            laterUnprovedSibling.first != RenderTapeCaptureStatus::Complete &&
+            laterUnprovedSibling.second &&
             laterParent.first != RenderTapeCaptureStatus::Complete &&
             laterParent.second,
-        "later sibling-face and direct-parent access both abort publication");
+        std::string("later face requires its own full clear and direct-parent access always rejects: ") +
+            renderTapeValidationStatusName(laterSiblingValidation.status) +
+            "," + renderTapeValidationStatusName(
+                        laterUnprovedValidation.status) +
+            "," + renderTapeValidationStatusName(laterParentValidation.status));
 
   auto mismatchedAlias = cubeAliasDescriptor;
   RenderTapeSurfaceDescriptorV2 mismatchedAliasValue{};
@@ -992,8 +1074,8 @@ void testProducedDefinitionTemporalOrderAndAliasJournal() {
   duplicateAlias.appendPresentComplete(
       7u, 11u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&outputOracle, 1u)));
-  check(!validateRenderTape(duplicateAlias.seal(), {}).valid(),
-        "two journaled matching aliases fail the single-alias obligation");
+  check(validateRenderTape(duplicateAlias.seal(), {}).valid(),
+        "a retired alias wrapper does not make its live replacement ambiguous");
 }
 
 RenderTapeSurfaceDescriptorV2 outputSurfaceDescriptor() {
