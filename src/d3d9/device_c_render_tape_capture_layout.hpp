@@ -59,6 +59,18 @@ inline RenderTapeArmSnapshotOverlaySelection renderTapeSelectArmSnapshotOverlay(
   return {};
 }
 
+enum class RenderTapeArmSnapshotCompletionAction : std::uint8_t {
+  RetainForNextInterval,
+  Clear,
+};
+
+constexpr RenderTapeArmSnapshotCompletionAction
+renderTapeArmSnapshotCompletionAction(bool finalTapeComplete) noexcept {
+  return finalTapeComplete
+      ? RenderTapeArmSnapshotCompletionAction::Clear
+      : RenderTapeArmSnapshotCompletionAction::RetainForNextInterval;
+}
+
 // Public D3DFORMAT values from d3d9types.h. The host-native capture/layout
 // tests cannot include the Windows header, so the wire-neutral helper pins the
 // values here and the PE translation unit static_asserts them against the
@@ -81,6 +93,7 @@ inline constexpr std::uint32_t L8 = 50u;
 inline constexpr std::uint32_t A8L8 = 51u;
 inline constexpr std::uint32_t V8U8 = 60u;
 inline constexpr std::uint32_t L16 = 81u;
+inline constexpr std::uint32_t R32F = 114u;
 inline constexpr std::uint32_t D24S8 = 75u;
 inline constexpr std::uint32_t D24X8 = 77u;
 inline constexpr std::uint32_t DXT1 = 0x31545844u;

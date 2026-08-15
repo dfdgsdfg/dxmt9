@@ -9,6 +9,7 @@
 // pre-effect failure, independent evidence, and native Metal output readback.
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -302,6 +303,16 @@ constexpr D9CWireObjectIdentity kSnapshotDepth{
     .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
     .generation = 5u,
     .objectId = 45u,
+};
+constexpr D9CWireObjectIdentity kSnapshotTexture2D{
+    .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+    .generation = 6u,
+    .objectId = 46u,
+};
+constexpr D9CWireObjectIdentity kSnapshotCube{
+    .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+    .generation = 8u,
+    .objectId = 47u,
 };
 
 std::vector<std::byte> sparsePayload(
@@ -1841,6 +1852,289 @@ void standaloneD24X8SeedIsCreatedBeforeReplayAndConserved() {
         "D24X8 provider replay conserves output and standalone depth wrappers");
 }
 
+void colorSnapshotCapturesExact2DAndAllCubeFaces() {
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "color snapshot factory must be available");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
+                                                nullptr);
+  check(device != nullptr, "color snapshot device must construct");
+
+  const auto exercise = [&](D9CTexture* texture, std::uint32_t format,
+                            std::uint32_t resourceType,
+                            std::uint32_t subresourceCount) {
+    check(texture != nullptr, "snapshot texture must construct");
+    D9CWireObjectIdentity identity{};
+    check(dxmt9c_texture_get_wire_identity(texture, &identity) ==
+              dxmt9::core::D3D_OK,
+          "snapshot texture must expose exact wire identity");
+    const D9CSurfaceDesc surface{
+        .format = format,
+        .resourceType = resourceType,
+        .usage = 1u,
+        .pool = 0u,
+        .multiSampleType = 0u,
+        .multiSampleQuality = 0u,
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+    };
+    std::vector<std::vector<std::byte>> expected(
+        subresourceCount, std::vector<std::byte>(16u * 16u * 4u));
+    for (std::uint32_t subresource = 0u; subresource < subresourceCount;
+         ++subresource) {
+      const std::uint32_t red = 0x20u + subresource * 0x10u;
+      const std::uint32_t color =
+          0xff000000u | (red << 16u) | 0x00004060u;
+      for (std::size_t offset = 0u; offset < expected[subresource].size();
+           offset += 4u) {
+        const std::uint32_t word = format == 114u
+            ? std::bit_cast<std::uint32_t>(
+                  static_cast<float>(red) / 255.0f)
+            : color;
+        std::memcpy(expected[subresource].data() + offset, &word,
+                    sizeof(word));
+      }
+      auto* face = dxmt9c_texture_get_surface_level(texture, subresource);
+      check(face != nullptr &&
+                dxmt9c_device_color_fill(device, face, nullptr, color) ==
+                    dxmt9::core::D3D_OK,
+            "snapshot source face must receive a nontrivial GPU fill");
+      dxmt9c_surface_release(face);
+
+      std::vector<std::byte> captured(expected[subresource].size());
+      const D9CRenderTapeColorSnapshotRequest request{
+          .identity = identity,
+          .surface = surface,
+          .subresource = subresource,
+          .encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+      };
+      D9CRenderTapeColorSnapshotResult result{};
+      const auto snapshotHr = dxmt9c_device_capture_render_tape_color_snapshot(
+          device, &request, &result, captured.data(), captured.size());
+      const auto mismatch = std::mismatch(
+          captured.begin(), captured.end(), expected[subresource].begin());
+      const auto mismatchOffset = static_cast<std::size_t>(
+          mismatch.first - captured.begin());
+      check(snapshotHr == dxmt9::core::D3D_OK &&
+                result.status == D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE &&
+                result.subresource == subresource && result.format == format &&
+                result.pitch == 16u * 4u &&
+                result.byteCount == captured.size() &&
+                captured == expected[subresource],
+            "snapshot readback mismatch format=" + std::to_string(format) +
+                " subresource=" + std::to_string(subresource) +
+                " hr=" + std::to_string(snapshotHr) +
+                " status=" + std::to_string(result.status) +
+                " offset=" + std::to_string(mismatchOffset) +
+                " actual=" +
+                std::to_string(mismatchOffset < captured.size()
+                    ? std::to_integer<unsigned>(captured[mismatchOffset]) : 0u) +
+                " expected=" +
+                std::to_string(mismatchOffset < expected[subresource].size()
+                    ? std::to_integer<unsigned>(
+                          expected[subresource][mismatchOffset]) : 0u));
+    }
+
+    auto face6Request = D9CRenderTapeColorSnapshotRequest{
+        .identity = identity,
+        .surface = surface,
+        .subresource = subresourceCount,
+        .encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+    };
+    std::vector<std::byte> rejectedBytes(16u * 16u * 4u);
+    D9CRenderTapeColorSnapshotResult rejected{};
+    check(dxmt9c_device_capture_render_tape_color_snapshot(
+              device, &face6Request, &rejected, rejectedBytes.data(),
+              rejectedBytes.size()) != dxmt9::core::D3D_OK &&
+              rejected.status != D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE,
+          "first out-of-range face rejects before readback");
+    ++face6Request.identity.generation;
+    face6Request.subresource = 0u;
+    rejected = {};
+    check(dxmt9c_device_capture_render_tape_color_snapshot(
+              device, &face6Request, &rejected, rejectedBytes.data(),
+              rejectedBytes.size()) != dxmt9::core::D3D_OK &&
+              rejected.status ==
+                  D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION,
+          "stale generation rejects before texture access");
+  };
+
+  auto* texture2d = dxmt9c_device_create_texture(
+      device, 16u, 16u, 1u, 1u, 22u, 0u);
+  exercise(texture2d, 22u, 3u, 1u);
+  dxmt9c_texture_release(texture2d);
+  auto* cube = dxmt9c_device_create_cube_texture(
+      device, 16u, 1u, 1u, 114u, 0u);
+  exercise(cube, 114u, 5u, 6u);
+  dxmt9c_texture_release(cube);
+
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+}
+
+void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
+  const auto descriptor = [](RenderTapeTextureDimension dimension,
+                             std::uint32_t format) {
+    const std::uint32_t count =
+        dimension == RenderTapeTextureDimension::Cube ? 6u : 1u;
+    const RenderTapeTextureDescriptorV2 header{
+        .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+        .dimension = static_cast<std::uint32_t>(dimension),
+        .mipLevelCount = 1u,
+        .subresourceCount = count,
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed),
+    };
+    std::vector<std::byte> bytes(sizeof(header) +
+                                 count * sizeof(D9CSurfaceDesc));
+    std::memcpy(bytes.data(), &header, sizeof(header));
+    for (std::uint32_t face = 0u; face < count; ++face) {
+      const D9CSurfaceDesc surface{
+          .format = format,
+          .resourceType = dimension == RenderTapeTextureDimension::Cube ? 5u
+                                                                         : 3u,
+          .usage = 1u,
+          .pool = 0u,
+          .width = 16u,
+          .height = 16u,
+          .depth = 1u,
+      };
+      std::memcpy(bytes.data() + sizeof(header) + face * sizeof(surface),
+                  &surface, sizeof(surface));
+    }
+    return bytes;
+  };
+  const auto texture2dDescriptor = descriptor(
+      RenderTapeTextureDimension::Texture2D, 22u);
+  const auto cubeDescriptor = descriptor(RenderTapeTextureDimension::Cube,
+                                         114u);
+  std::vector<std::vector<std::byte>> seeds;
+  seeds.reserve(7u);
+  for (std::uint32_t subresource = 0u; subresource < 7u; ++subresource) {
+    seeds.emplace_back(16u * 16u * 4u,
+                       static_cast<std::byte>(0x10u + subresource));
+  }
+  std::vector<RenderTapeProviderBlob> blobs;
+  blobs.reserve(seeds.size());
+  for (const auto& seed : seeds) {
+    blobs.push_back({.digest = RenderTapeCaptureSession::sha256(seed),
+                     .bytes = seed});
+  }
+
+  const D9CSurfaceDesc outputSurface{
+      .format = 21u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 16u,
+      .height = 16u,
+      .depth = 1u,
+  };
+  const auto output = outputDescriptor(outputSurface);
+  const RenderTapeOracleAttachment oracle{
+      .identity = kOutput,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+  };
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const std::array records{
+      Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
+      Record{.type = D9C_COMMAND_RECORD_PRESENT,
+             .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  const auto frame = makeChunk(records);
+  const RenderTapeDigest expectedDigest{
+      std::byte{0x5f}, std::byte{0x73}, std::byte{0x22}, std::byte{0xd0},
+      std::byte{0x5f}, std::byte{0x8b}, std::byte{0xa9}, std::byte{0x74},
+      std::byte{0x08}, std::byte{0x93}, std::byte{0xa4}, std::byte{0x70},
+      std::byte{0x42}, std::byte{0x3e}, std::byte{0x69}, std::byte{0x2f},
+      std::byte{0x05}, std::byte{0x7c}, std::byte{0x05}, std::byte{0x4f},
+      std::byte{0xd0}, std::byte{0xbd}, std::byte{0x92}, std::byte{0xaa},
+      std::byte{0x60}, std::byte{0x6c}, std::byte{0x44}, std::byte{0x40},
+      std::byte{0x10}, std::byte{0x9d}, std::byte{0xca}, std::byte{0x61},
+  };
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(implicitBootstrapChunk());
+  builder.appendObjectDefine(
+      kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&output, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      kSnapshotTexture2D,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      texture2dDescriptor, 0u, {}, seeds[0].size(), 1u);
+  builder.appendObjectDefine(
+      kSnapshotCube,
+      static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      cubeDescriptor, 0u, {}, seeds[0].size() * 6u, 6u);
+  builder.appendResourceMutation(
+      kSnapshotTexture2D, RenderTapeMutationKind::Upload, 0u, 0u,
+      seeds[0].size(), blobs[0].digest);
+  for (std::uint32_t face = 0u; face < 6u; ++face) {
+    builder.appendResourceMutation(
+        kSnapshotCube, RenderTapeMutationKind::Upload, face, 0u,
+        seeds[face + 1u].size(), blobs[face + 1u].digest);
+  }
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
+  builder.appendPresentComplete(
+      12u, 1u, RenderTapeDigestValidity::Sha256, expectedDigest,
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto tape = builder.seal();
+  const auto preflight = preflightFrameTapeIdentity(tape, blobs);
+  check(preflight.complete() && preflight.coverage.objectDefinitions == 3u &&
+            preflight.coverage.seedMutations == 7u &&
+            preflight.conservation.referencedBlobs == 7u,
+        "provider preflight color seeds status=" +
+            std::string(frameTapeReplayStatusName(preflight.status)) +
+            " failed_event=" + std::to_string(preflight.failedEventIndex) +
+            " definitions=" +
+            std::to_string(preflight.coverage.objectDefinitions) +
+            " mutations=" +
+            std::to_string(preflight.coverage.seedMutations) +
+            " blobs=" +
+            std::to_string(preflight.conservation.referencedBlobs));
+
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "color seed replay factory must be available");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
+                                                nullptr);
+  check(device != nullptr, "color seed replay device must construct");
+  const auto result = replayFrameTapeIdentity(device, tape, blobs);
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.complete(), frameTapeReplayStatusName(result.status));
+  check(result.validity.outputReadback &&
+            result.validity.expectedDigestCaptured &&
+            result.validity.expectedDigestMatched,
+        "color seed replay preserves the deterministic output oracle");
+  check(result.conservation.objectsCreated == 3u &&
+            result.conservation.objectsReleased == 3u,
+        "color seed replay conserves output, 2D, and cube objects");
+}
+
 void writeProductionFixture(const std::filesystem::path& directory) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
@@ -1888,6 +2182,8 @@ int main(int argc, char** argv) {
           "usage: render_tape_provider_spec "
           "[--write-production-fixture dir|--write-sequence-fixture dir]");
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
+    colorSnapshotCapturesExact2DAndAllCubeFaces();
+    colorCompleteSeedsReplayAllSubresourcesAndConserve();
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     canonicalUnsupportedDimensionsReturnTypedGrammar();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();

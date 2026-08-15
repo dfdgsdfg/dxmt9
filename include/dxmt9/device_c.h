@@ -892,6 +892,43 @@ typedef struct D9CRenderTapeD24X8SnapshotResult {
     uint64_t byteCount;
 } D9CRenderTapeD24X8SnapshotResult;
 
+/* Capture-only, synchronous color texture-subresource snapshot. Version 1 is
+ * the tightly packed logical four-byte pixel representation for the exact
+ * supported D3D format (X8R8G8B8 or R32F). The destination is a validated
+ * top-level bridge buffer; no nested pointer crosses the PE/unix boundary. */
+enum {
+    D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 = 1u,
+};
+
+typedef enum D9CRenderTapeColorSnapshotStatus {
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_NONE = 0,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE = 1,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION = 2,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH = 3,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED = 4,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH = 5,
+    D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED = 6,
+} D9CRenderTapeColorSnapshotStatus;
+
+typedef struct D9CRenderTapeColorSnapshotRequest {
+    D9CWireObjectIdentity identity;
+    D9CSurfaceDesc surface;
+    uint32_t subresource;
+    uint32_t encodingVersion;
+} D9CRenderTapeColorSnapshotRequest;
+
+typedef struct D9CRenderTapeColorSnapshotResult {
+    uint32_t status;
+    uint32_t encodingVersion;
+    uint32_t subresource;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t format;
+    uint32_t reserved0;
+    uint64_t byteCount;
+} D9CRenderTapeColorSnapshotResult;
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 DXMT9_NODISCARD D9CFactory* dxmt9c_factory_create(void);
@@ -1035,6 +1072,9 @@ void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,
     D9CRenderTapeD24X8SnapshotResult* out, void* bytes, uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_color_snapshot(
+    D9CDevice*, const D9CRenderTapeColorSnapshotRequest* request,
+    D9CRenderTapeColorSnapshotResult* out, void* bytes, uint64_t capacity);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,

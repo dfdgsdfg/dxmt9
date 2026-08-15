@@ -359,6 +359,7 @@ std::uint32_t renderTapeLinearBytesPerPixel(std::uint32_t format) noexcept {
   case render_tape_d3d_format::X8R8G8B8:
   case render_tape_d3d_format::A8B8G8R8:
   case render_tape_d3d_format::X8B8G8R8:
+  case render_tape_d3d_format::R32F:
     return 4u;
   case render_tape_d3d_format::R8G8B8:
     return 3u;

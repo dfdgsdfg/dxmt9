@@ -332,6 +332,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24x8_snapshot:
+  case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:
   case BridgeOpcode::dxmt9c_swapchain_present:
   case BridgeOpcode::dxmt9c_device_get_swap_chain:
   case BridgeOpcode::dxmt9c_device_get_swap_chain_count:
@@ -471,6 +472,7 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24x8_snapshot:
+  case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:
     detail = BridgeDetail::RenderTapePresentCapture;
     return true;
   case BridgeOpcode::dxmt9c_swapchain_present:

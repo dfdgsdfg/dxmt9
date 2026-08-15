@@ -1936,6 +1936,84 @@ void testArmBoundaryTransitionTruthTable() {
       std::numeric_limits<std::uint64_t>::max());
   check(!overflow.valid && overflow.ordinal == 0u,
         "arm snapshot epoch overflow fails closed");
+  check(renderTapeArmSnapshotCompletionAction(false) ==
+                RenderTapeArmSnapshotCompletionAction::RetainForNextInterval &&
+            renderTapeArmSnapshotCompletionAction(true) ==
+                RenderTapeArmSnapshotCompletionAction::Clear,
+        "sequence Accepted retains the arm overlay and final Complete clears it");
+}
+
+void testArmColorSnapshotDescriptorTruthTable() {
+  const auto make = [](RenderTapeTextureDimension dimension,
+                       std::uint32_t format) {
+    const std::uint32_t count =
+        dimension == RenderTapeTextureDimension::Cube ? 6u : 1u;
+    const RenderTapeTextureDescriptorV2 header{
+        .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+        .dimension = static_cast<std::uint32_t>(dimension),
+        .mipLevelCount = 1u,
+        .subresourceCount = count,
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteSeed),
+    };
+    std::vector<std::byte> descriptor(
+        sizeof(header) + count * sizeof(D9CSurfaceDesc));
+    std::memcpy(descriptor.data(), &header, sizeof(header));
+    for (std::uint32_t face = 0u; face < count; ++face) {
+      const D9CSurfaceDesc surface{
+          .format = format,
+          .resourceType = dimension == RenderTapeTextureDimension::Cube ? 5u
+                                                                         : 3u,
+          .usage = 1u,
+          .pool = 0u,
+          .multiSampleType = 0u,
+          .multiSampleQuality = 0u,
+          .width = 32u,
+          .height = 32u,
+          .depth = 1u,
+      };
+      std::memcpy(descriptor.data() + sizeof(header) +
+                      face * sizeof(surface),
+                  &surface, sizeof(surface));
+    }
+    return descriptor;
+  };
+  const auto texture2d = make(RenderTapeTextureDimension::Texture2D, 22u);
+  const auto cube = make(RenderTapeTextureDimension::Cube, 114u);
+  check(renderTapeArmColorSnapshotTextureSupported(texture2d) &&
+            renderTapeArmColorSnapshotTextureSupported(cube),
+        "arm snapshots accept exact X8R8G8B8 2D and all-face R32F cube shapes");
+
+  auto badFace = cube;
+  D9CSurfaceDesc face5{};
+  std::memcpy(&face5,
+              badFace.data() + sizeof(RenderTapeTextureDescriptorV2) +
+                  5u * sizeof(face5),
+              sizeof(face5));
+  face5.format = 22u;
+  std::memcpy(badFace.data() + sizeof(RenderTapeTextureDescriptorV2) +
+                  5u * sizeof(face5),
+              &face5, sizeof(face5));
+  check(!renderTapeArmColorSnapshotTextureSupported(badFace),
+        "one mismatched cube face rejects the complete snapshot shape");
+
+  auto msaa = texture2d;
+  D9CSurfaceDesc level{};
+  std::memcpy(&level, msaa.data() + sizeof(RenderTapeTextureDescriptorV2),
+              sizeof(level));
+  level.multiSampleType = 2u;
+  std::memcpy(msaa.data() + sizeof(RenderTapeTextureDescriptorV2), &level,
+              sizeof(level));
+  check(!renderTapeArmColorSnapshotTextureSupported(msaa),
+        "MSAA color snapshots remain fail-closed");
+
+  auto wrongShape = cube;
+  RenderTapeTextureDescriptorV2 header{};
+  std::memcpy(&header, wrongShape.data(), sizeof(header));
+  header.mipLevelCount = 2u;
+  std::memcpy(wrongShape.data(), &header, sizeof(header));
+  check(!renderTapeArmColorSnapshotTextureSupported(wrongShape),
+        "multi-mip cube snapshots remain fail-closed");
 }
 
 void testExpectedContentContractDerivation() {
@@ -1961,6 +2039,21 @@ void testExpectedContentContractDerivation() {
                                                  wrongCubeExtents) ==
             RenderTapeExpectedContentStatus::InvalidExtent,
         "wrong per-subresource distribution is rejected despite matching total");
+
+  const auto r32fCube = versionedTextureDescriptor(
+      RenderTapeTextureDimension::Cube, 1u,
+      render_tape_d3d_format::R32F, 512u, 512u);
+  std::array<std::uint64_t, 6u> r32fCubeExtents{};
+  contract = renderTapeDeriveExpectedContentContract(
+      texture, r32fCube, r32fCubeExtents);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 6u * 512u * 512u * 4u &&
+            contract.count == 6u &&
+            std::all_of(r32fCubeExtents.begin(), r32fCubeExtents.end(),
+                        [](std::uint64_t bytes) {
+                          return bytes == 512u * 512u * 4u;
+                        }),
+        "GT2 R32F cube derives six exact tight float32 face extents");
 
   const auto dxt2d = versionedTextureDescriptor(
       RenderTapeTextureDimension::Texture2D, 1u,
@@ -3468,10 +3561,13 @@ void testLinearLockCaptureLayouts() {
         "X4R4G4B4 pins the authoritative public D3DFORMAT value");
   check(render_tape_d3d_format::L16 == 81u,
         "L16 pins the authoritative public D3DFORMAT value");
+  check(render_tape_d3d_format::R32F == 114u,
+        "R32F pins the authoritative public D3DFORMAT value");
   constexpr std::array supportedFormats{
       std::pair{render_tape_d3d_format::R8G8B8, 3u},
       std::pair{render_tape_d3d_format::A8R8G8B8, 4u},
       std::pair{render_tape_d3d_format::X8R8G8B8, 4u},
+      std::pair{render_tape_d3d_format::R32F, 4u},
       std::pair{render_tape_d3d_format::R5G6B5, 2u},
       std::pair{render_tape_d3d_format::X1R5G5B5, 2u},
       std::pair{render_tape_d3d_format::A1R5G5B5, 2u},
@@ -3962,6 +4058,7 @@ int main(int argc, char** argv) {
     testObjectExpectedContentContractTruthTable();
     testMissingSeedDescriptorAndProvenanceTruthTable();
     testArmBoundaryTransitionTruthTable();
+    testArmColorSnapshotDescriptorTruthTable();
     testExpectedContentContractDerivation();
     testUpdateTextureClosureTruthTable();
     testExpectedContentValidatorOrdering();

@@ -120,6 +120,7 @@ struct PreflightPlan {
   RenderTapeTextureDescriptorV2 textureDesc{};
   D9CSurfaceDesc textureLevel0{};
   bool textureProducedByCapturedPass = false;
+  std::vector<D9CWireObjectIdentity> seededArmColorTextures{};
   std::vector<std::pair<D9CWireObjectIdentity, D9CSurfaceDesc>>
       producedStandaloneSurfaces{};
   std::vector<std::pair<D9CWireObjectIdentity, D9CSurfaceDesc>>
@@ -409,9 +410,13 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
   const bool produced =
       texture.initialContentDisposition == static_cast<std::uint32_t>(
           RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+  const bool armSnapshotCompleteSeed =
+      completeSeed && renderTapeArmColorSnapshotTextureSupported(descriptor);
   const bool acceptedShape =
-      (completeSeed && texture2d && texture.mipLevelCount != 0u &&
-       texture.subresourceCount == texture.mipLevelCount) ||
+      (completeSeed &&
+       ((texture2d && texture.mipLevelCount != 0u &&
+         texture.subresourceCount == texture.mipLevelCount) ||
+        armSnapshotCompleteSeed)) ||
       (produced && renderTapeProducedTextureShapeSupported(texture));
   if (!renderTapeLoadTextureDescriptorV2(descriptor, canonical) ||
       canonical.dimension != texture.dimension ||
@@ -429,7 +434,8 @@ bool acceptedTextureDescriptor(std::span<const std::byte> descriptor,
       level0.resourceType != (cube ? 5u : 3u) || level0.width == 0u ||
       level0.height == 0u || level0.depth != 1u || level0.pool != 0u ||
       level0.multiSampleType != 0u || level0.multiSampleQuality != 0u ||
-      ((completeSeed && (level0.usage & 3u) != 0u) ||
+      ((completeSeed && !armSnapshotCompleteSeed &&
+        (level0.usage & 3u) != 0u) ||
        (produced && (level0.usage & 1u) == 0u))) return false;
   const auto format = devicec::fmtFromD3D(level0.format);
   if (format == core::Format::Unknown || core::isCompressedFormat(format))
@@ -608,12 +614,17 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                   fixed.expectedContentCount == 0u
             : fixed.expectedContentBytes != 0u &&
                   fixed.expectedContentCount == texture.subresourceCount;
-        if (!expectedContentShape ||
-            candidate.textureIdentity.objectId != 0u) goto unsupported;
-        candidate.textureIdentity = fixed.identity;
-        candidate.textureDesc = texture;
-        candidate.textureLevel0 = level0;
-        candidate.textureProducedByCapturedPass = producedByCapturedPass;
+        if (!expectedContentShape) goto unsupported;
+        if (!producedByCapturedPass &&
+            renderTapeArmColorSnapshotTextureSupported(descriptor)) {
+          candidate.seededArmColorTextures.push_back(fixed.identity);
+        } else {
+          if (candidate.textureIdentity.objectId != 0u) goto unsupported;
+          candidate.textureIdentity = fixed.identity;
+          candidate.textureDesc = texture;
+          candidate.textureLevel0 = level0;
+          candidate.textureProducedByCapturedPass = producedByCapturedPass;
+        }
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
         const Definition definition{.fixed = fixed, .descriptor = descriptor};
         if (candidate.vertexDeclarationIdentity.objectId != 0u ||
@@ -1182,8 +1193,14 @@ FrameTapeReplayResult replayRenderTapeIdentity(
         D9CSurfaceDesc levelDesc{};
         D9CLockedRect locked{};
         auto* texture = static_cast<D9CTexture*>(object);
-        ok = dxmt9c_texture_get_level_desc(texture, mutation.subresource,
-                                           &levelDesc) == core::D3D_OK &&
+        const auto definition = std::find_if(
+            plan.definitions.begin(), plan.definitions.end(),
+            [&](const auto& value) {
+              return sameIdentity(value.fixed.identity, mutation.identity);
+            });
+        ok = definition != plan.definitions.end() &&
+             renderTapeTextureSubresourceDescriptor(
+                 definition->descriptor, mutation.subresource, levelDesc) &&
              dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,
                                       nullptr, 0u) == core::D3D_OK &&
              locked.bits;

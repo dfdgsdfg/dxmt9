@@ -665,6 +665,44 @@ inline bool renderTapeLoadTextureDescriptorV2(
   return true;
 }
 
+// Arm-boundary GPU snapshots deliberately support only the two exact shapes
+// observed in GT2. Both are single-sample DEFAULT-pool render targets with a
+// four-byte uncompressed logical pixel. This policy is shared by PE capture,
+// unix readback, validation, and provider replay so CompleteSeed cannot widen
+// accidentally to arbitrary render-target textures.
+inline bool renderTapeArmColorSnapshotTextureSupported(
+    std::span<const std::byte> descriptor) noexcept {
+  RenderTapeTextureDescriptorV2 texture{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+      texture.initialContentDisposition != static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed)) {
+    return false;
+  }
+  const auto dimension =
+      static_cast<RenderTapeTextureDimension>(texture.dimension);
+  const bool texture2d = dimension == RenderTapeTextureDimension::Texture2D &&
+                         texture.mipLevelCount == 1u &&
+                         texture.subresourceCount == 1u;
+  const bool cube = dimension == RenderTapeTextureDimension::Cube &&
+                    texture.mipLevelCount == 1u &&
+                    texture.subresourceCount == 6u;
+  if (!texture2d && !cube) return false;
+  for (std::uint32_t subresource = 0u;
+       subresource < texture.subresourceCount; ++subresource) {
+    D9CSurfaceDesc surface{};
+    if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource,
+                                                surface) ||
+        surface.resourceType != (cube ? 5u : 3u) || surface.width == 0u ||
+        surface.height == 0u || surface.depth != 1u || surface.pool != 0u ||
+        surface.usage != 1u || surface.multiSampleType != 0u ||
+        surface.multiSampleQuality != 0u ||
+        surface.format != (cube ? 114u : 22u)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // A Produced texture is admitted through one exact surface alias.  The alias
 // has D3DRTYPE_SURFACE while its parent descriptor has D3DRTYPE_TEXTURE, so
 // compare the physical subresource shape field-by-field and keep the expected

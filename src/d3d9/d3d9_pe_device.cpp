@@ -676,6 +676,9 @@ static uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
 static_assert(
     dxmt9::d3d9::render_tape_d3d_format::X4R4G4B4 ==
     static_cast<std::uint32_t>(D3DFMT_X4R4G4B4));
+static_assert(
+    dxmt9::d3d9::render_tape_d3d_format::R32F ==
+    static_cast<std::uint32_t>(D3DFMT_R32F));
 
 /* =========================================================================
  * Shader bytecode + vertex declaration validators.
@@ -725,14 +728,12 @@ struct RenderTapeLiveObject {
     Role role = Role::Ordinary;
 };
 
-struct RenderTapeArmDepthSnapshot {
+struct RenderTapeArmObjectSnapshot {
     std::size_t objectIndex = 0u;
     std::uint64_t armOrdinal = 0u;
     D9CWireObjectIdentity identity{};
-    dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 descriptor{};
-    std::vector<std::byte> bytes{};
-    std::uint32_t pitch = 0u;
-    std::uint32_t physicalFormat = 0u;
+    std::vector<std::byte> descriptor{};
+    std::vector<std::vector<std::byte>> content{};
 };
 
 enum class RenderTapeObjectRegistration : std::uint8_t {
@@ -1227,7 +1228,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
     dxmt9::d3d9::RenderTapeArmBoundaryPhase renderTapeArmBoundaryPhase_ =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
-    std::uint64_t renderTapeDepthSnapshotArmOrdinal_ = 0u;
+    std::uint64_t renderTapeArmSnapshotOrdinal_ = 0u;
+    // Owned capture-interval overlay. It is generation- and arm-qualified,
+    // never mutates the durable registry, and remains available to cold JIT
+    // materialization until abort/retry/completion clears it.
+    std::vector<RenderTapeArmObjectSnapshot> renderTapeArmSnapshots_{};
     // Exact identities admitted to the current tape. Pre-arm live objects
     // outside the bootstrap closure are materialized only on first reference.
     std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities_{};
@@ -6976,6 +6981,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeCapture_->abort();
         renderTapeArmBoundaryPhase_ =
             dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
+        renderTapeArmSnapshots_.clear();
         renderTapeExpectedDigest_.reset();
         renderTapeOutputDesc_.reset();
     }
@@ -7672,9 +7678,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool produceRenderTapeBootstrap(
-        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed,
-        std::span<const RenderTapeArmDepthSnapshot> depthSnapshots,
-        std::uint64_t depthSnapshotArmOrdinal) noexcept {
+        dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
         if (!renderTapeRegistry_) {
             dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
             return false;
@@ -7703,9 +7707,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
             return false;
         }
-        const auto findDepthSnapshot = [&](const auto &identity) {
+        const auto findArmSnapshot = [&](const auto &identity) {
             return std::find_if(
-                depthSnapshots.begin(), depthSnapshots.end(),
+                renderTapeArmSnapshots_.begin(), renderTapeArmSnapshots_.end(),
                 [&](const auto &snapshot) {
                     return renderTapeSameIdentity(snapshot.identity, identity);
                 });
@@ -7805,31 +7809,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             closureObjects.reserve(objects.size());
             D9CWireObjectIdentity presentOutput{};
             std::size_t presentOutputCount = 0u;
-            bool staleArmDepthSnapshot = false;
+            bool staleArmSnapshot = false;
             for (const auto *object : objects) {
                 if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
                     presentOutput = object->identity;
                     ++presentOutputCount;
                 }
-                const auto depthSnapshot = findDepthSnapshot(object->identity);
-                const std::span<const std::byte> durableBase =
-                    object->content.size() == 1u
-                    ? std::span<const std::byte>(object->content[0])
-                    : std::span<const std::byte>{};
-                const auto depthOverlay =
-                    depthSnapshot != depthSnapshots.end()
-                    ? dxmt9::d3d9::renderTapeSelectArmSnapshotOverlay(
-                          durableBase, depthSnapshot->bytes,
-                          depthSnapshot->armOrdinal,
-                          depthSnapshotArmOrdinal)
-                    : dxmt9::d3d9::RenderTapeArmSnapshotOverlaySelection{};
-                staleArmDepthSnapshot |=
-                    depthOverlay.source == dxmt9::d3d9::
-                        RenderTapeArmSnapshotOverlaySource::StaleArm;
-                const bool armDepthComplete =
-                    depthOverlay.source == dxmt9::d3d9::
-                        RenderTapeArmSnapshotOverlaySource::CurrentArm;
-                const bool complete = armDepthComplete ||
+                const auto armSnapshot = findArmSnapshot(object->identity);
+                const bool snapshotPresent =
+                    armSnapshot != renderTapeArmSnapshots_.end();
+                const bool snapshotCurrent = snapshotPresent &&
+                    dxmt9::d3d9::renderTapeArmSnapshotEpochMatches(
+                        armSnapshot->armOrdinal, renderTapeArmSnapshotOrdinal_);
+                staleArmSnapshot |= snapshotPresent && !snapshotCurrent;
+                const bool complete = snapshotCurrent ||
                     object->lifetime.textureAlias ||
                     (object->contentCount == object->content.size() &&
                      std::all_of(object->content.begin(), object->content.end(),
@@ -7871,9 +7864,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .descriptorDependency = object->aliasParentTexture,
                 });
             }
-            if (staleArmDepthSnapshot) {
+            if (staleArmSnapshot) {
                 dxmt9DeviceInfoLog(
-                    "render_tape_capture producer aborted reason=stale_arm_depth_snapshot");
+                    "render_tape_capture producer aborted reason=stale_arm_snapshot");
                 return false;
             }
             if (presentOutputCount != 1u) {
@@ -8007,32 +8000,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 objectSeed.descriptorKind = static_cast<std::uint32_t>(
                     dxmt9::d3d9::renderTapeDescriptorKindForObject(
                         object->identity.kind));
-                const auto depthSnapshot = findDepthSnapshot(object->identity);
-                const std::span<const std::byte> durableBase =
-                    object->content.size() == 1u
-                    ? std::span<const std::byte>(object->content[0])
-                    : std::span<const std::byte>{};
-                const auto depthOverlay =
-                    depthSnapshot != depthSnapshots.end()
-                    ? dxmt9::d3d9::renderTapeSelectArmSnapshotOverlay(
-                          durableBase, depthSnapshot->bytes,
-                          depthSnapshot->armOrdinal,
-                          depthSnapshotArmOrdinal)
-                    : dxmt9::d3d9::RenderTapeArmSnapshotOverlaySelection{};
-                const bool useArmDepth =
-                    depthOverlay.source == dxmt9::d3d9::
-                        RenderTapeArmSnapshotOverlaySource::CurrentArm;
-                if (depthSnapshot != depthSnapshots.end() && !useArmDepth) {
+                const auto armSnapshot = findArmSnapshot(object->identity);
+                const bool useArmSnapshot =
+                    armSnapshot != renderTapeArmSnapshots_.end() &&
+                    dxmt9::d3d9::renderTapeArmSnapshotEpochMatches(
+                        armSnapshot->armOrdinal, renderTapeArmSnapshotOrdinal_);
+                if (armSnapshot != renderTapeArmSnapshots_.end() &&
+                    !useArmSnapshot) {
                     return false;
                 }
                 const std::span<const std::byte> effectiveDescriptor =
-                    useArmDepth
-                    ? std::as_bytes(std::span(&depthSnapshot->descriptor, 1u))
+                    useArmSnapshot
+                    ? std::span<const std::byte>(armSnapshot->descriptor)
                     : std::span<const std::byte>(object->descriptor);
                 const std::span<const std::vector<std::byte>> effectiveContent =
-                    useArmDepth
+                    useArmSnapshot
                     ? std::span<const std::vector<std::byte>>(
-                          &depthSnapshot->bytes, 1u)
+                          armSnapshot->content)
                     : std::span<const std::vector<std::byte>>(object->content);
                 objectSeed.descriptor.assign(effectiveDescriptor.begin(),
                                              effectiveDescriptor.end());
@@ -8226,130 +8210,199 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    bool snapshotRenderTapeD24X8AtArmBoundary(
-        std::vector<RenderTapeArmDepthSnapshot> &pending,
-        std::uint64_t &armOrdinal) noexcept {
+    bool snapshotRenderTapeResourcesAtArmBoundary() noexcept {
         if (!renderTapeRegistry_ || renderTapeRegistry_->invalid)
             return false;
         try {
-            pending.clear();
+            renderTapeArmSnapshots_.clear();
             const auto epoch = dxmt9::d3d9::renderTapeNextArmSnapshotEpoch(
-                renderTapeDepthSnapshotArmOrdinal_);
+                renderTapeArmSnapshotOrdinal_);
             if (!epoch.valid) {
                 return false;
             }
-            renderTapeDepthSnapshotArmOrdinal_ = epoch.ordinal;
-            armOrdinal = epoch.ordinal;
+            renderTapeArmSnapshotOrdinal_ = epoch.ordinal;
             for (std::size_t index = 0u;
                  index < renderTapeRegistry_->objects.size(); ++index) {
                 const auto &object = renderTapeRegistry_->objects[index];
-                if (object.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
-                    object.role == RenderTapeLiveObject::Role::PresentOutput ||
-                    object.lifetime.textureAlias || object.contentCount != 1u ||
-                    object.content.size() != 1u || !object.content[0].empty()) {
+                if (object.role == RenderTapeLiveObject::Role::PresentOutput ||
+                    object.lifetime.textureAlias) {
                     continue;
                 }
                 dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
-                if (!dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
-                        object.descriptor, surface) ||
-                    surface.storage != static_cast<std::uint32_t>(
-                        dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) ||
-                    !dxmt9::d3d9::renderTapeSnapshotStandaloneD24X8Supported(
-                        surface.surface)) {
-                    continue;
-                }
-                std::uint64_t byteCount = 0u;
-                if (surface.surface.width >
-                        std::numeric_limits<std::uint32_t>::max() / 4u ||
-                    surface.surface.height >
-                        std::numeric_limits<std::uint64_t>::max() /
-                            (surface.surface.width * 4u)) {
-                    dxmt9DeviceInfoLog(
-                        "render_tape_capture d24x8_snapshot rejected "
-                        "reason=layout_overflow generation=%u object_id=%llu",
-                        object.identity.generation,
-                        static_cast<unsigned long long>(object.identity.objectId));
-                    return false;
-                }
-                byteCount = static_cast<std::uint64_t>(surface.surface.width) *
-                            surface.surface.height * 4u;
-                if (byteCount == 0u ||
-                    byteCount > std::numeric_limits<std::size_t>::max()) {
-                    return false;
-                }
-                RenderTapeArmDepthSnapshot snapshot{
-                    .objectIndex = index,
-                    .armOrdinal = armOrdinal,
-                    .identity = object.identity,
-                    .descriptor = surface,
-                    .bytes = std::vector<std::byte>(
-                        static_cast<std::size_t>(byteCount)),
-                };
-                const D9CRenderTapeD24X8SnapshotRequest request{
-                    .identity = object.identity,
-                    .surface = surface.surface,
-                    .encodingVersion =
-                        D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1,
-                    .reserved0 = 0u,
-                };
-                D9CRenderTapeD24X8SnapshotResult result{};
-                const HRESULT hr = hr32(
-                    dxmt9c_device_capture_render_tape_d24x8_snapshot(
-                        dev_, &request, &result, snapshot.bytes.data(),
-                        snapshot.bytes.size()));
-                const std::uint32_t expectedPitch = surface.surface.width * 4u;
-                if (FAILED(hr) ||
-                    result.status !=
-                        D9C_RENDER_TAPE_D24X8_SNAPSHOT_COMPLETE ||
-                    result.encodingVersion !=
-                        D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1 ||
-                    result.width != surface.surface.width ||
-                    result.height != surface.surface.height ||
-                    result.pitch != expectedPitch ||
-                    result.byteCount != snapshot.bytes.size() ||
-                    result.physicalFormat == 0u) {
-                    dxmt9DeviceInfoLog(
-                        "render_tape_capture d24x8_snapshot rejected "
-                        "reason=provider_result hr=0x%08x status=%u kind=%u "
-                        "generation=%u object_id=%llu width=%u/%u height=%u/%u "
-                        "pitch=%u/%u bytes=%llu/%zu physical_format=%u",
-                        static_cast<unsigned>(hr), result.status,
-                        object.identity.kind, object.identity.generation,
-                        static_cast<unsigned long long>(object.identity.objectId),
-                        result.width, surface.surface.width, result.height,
-                        surface.surface.height, result.pitch, expectedPitch,
-                        static_cast<unsigned long long>(result.byteCount),
-                        snapshot.bytes.size(), result.physicalFormat);
-                    return false;
-                }
-                snapshot.pitch = result.pitch;
-                snapshot.physicalFormat = result.physicalFormat;
-                pending.push_back(std::move(snapshot));
-            }
+                const bool standaloneD24 =
+                    object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+                    object.contentCount == 1u && object.content.size() == 1u &&
+                    dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
+                        object.descriptor, surface) &&
+                    surface.storage == static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
+                    dxmt9::d3d9::renderTapeSnapshotStandaloneD24X8Supported(
+                        surface.surface);
+                const bool colorTexture =
+                    object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+                    dxmt9::d3d9::renderTapeArmColorSnapshotTextureSupported(
+                        object.descriptor);
+                if (!standaloneD24 && !colorTexture) continue;
 
-            // Keep the snapshot arm-local. The durable live registry continues
-            // to describe mutable application state, so a retry must perform a
-            // new generation-qualified GPU readback rather than reuse this arm.
-            for (auto &snapshot : pending) {
-                snapshot.descriptor.initialContentDisposition =
-                    static_cast<std::uint32_t>(dxmt9::d3d9::
-                        RenderTapeInitialContentDisposition::
-                            CompleteDepthFloat32V1);
-                dxmt9DeviceInfoLog(
-                    "render_tape_capture d24x8_snapshot complete kind=%u "
-                    "generation=%u object_id=%llu encoding=1 width=%u height=%u "
-                    "pitch=%u bytes=%zu physical_format=%u",
-                    snapshot.identity.kind, snapshot.identity.generation,
-                    static_cast<unsigned long long>(snapshot.identity.objectId),
-                    snapshot.descriptor.surface.width,
-                    snapshot.descriptor.surface.height, snapshot.pitch,
-                    snapshot.bytes.size(), snapshot.physicalFormat);
+                RenderTapeArmObjectSnapshot snapshot{
+                    .objectIndex = index,
+                    .armOrdinal = epoch.ordinal,
+                    .identity = object.identity,
+                    .descriptor = object.descriptor,
+                    .content = std::vector<std::vector<std::byte>>(
+                        standaloneD24 ? 1u : object.contentCount),
+                };
+                if (standaloneD24) {
+                    if (surface.surface.width >
+                            std::numeric_limits<std::uint32_t>::max() / 4u ||
+                        surface.surface.height >
+                            std::numeric_limits<std::uint64_t>::max() /
+                                (surface.surface.width * 4u)) {
+                        return false;
+                    }
+                    const std::uint64_t byteCount =
+                        static_cast<std::uint64_t>(surface.surface.width) *
+                        surface.surface.height * 4u;
+                    if (byteCount == 0u ||
+                        byteCount > std::numeric_limits<std::size_t>::max()) {
+                        return false;
+                    }
+                    snapshot.content[0].resize(
+                        static_cast<std::size_t>(byteCount));
+                    const D9CRenderTapeD24X8SnapshotRequest request{
+                        .identity = object.identity,
+                        .surface = surface.surface,
+                        .encodingVersion =
+                            D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1,
+                        .reserved0 = 0u,
+                    };
+                    D9CRenderTapeD24X8SnapshotResult result{};
+                    const HRESULT hr = hr32(
+                        dxmt9c_device_capture_render_tape_d24x8_snapshot(
+                            dev_, &request, &result,
+                            snapshot.content[0].data(),
+                            snapshot.content[0].size()));
+                    const std::uint32_t expectedPitch =
+                        surface.surface.width * 4u;
+                    if (FAILED(hr) || result.status !=
+                            D9C_RENDER_TAPE_D24X8_SNAPSHOT_COMPLETE ||
+                        result.encodingVersion !=
+                            D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1 ||
+                        result.width != surface.surface.width ||
+                        result.height != surface.surface.height ||
+                        result.pitch != expectedPitch ||
+                        result.byteCount != snapshot.content[0].size() ||
+                        result.physicalFormat == 0u) {
+                        dxmt9DeviceInfoLog(
+                            "render_tape_capture d24x8_snapshot rejected "
+                            "reason=provider_result hr=0x%08x status=%u "
+                            "generation=%u object_id=%llu",
+                            static_cast<unsigned>(hr), result.status,
+                            object.identity.generation,
+                            static_cast<unsigned long long>(
+                                object.identity.objectId));
+                        return false;
+                    }
+                    surface.initialContentDisposition =
+                        static_cast<std::uint32_t>(dxmt9::d3d9::
+                            RenderTapeInitialContentDisposition::
+                                CompleteDepthFloat32V1);
+                    snapshot.descriptor.assign(
+                        std::as_bytes(std::span(&surface, 1u)).begin(),
+                        std::as_bytes(std::span(&surface, 1u)).end());
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture d24x8_snapshot complete kind=%u "
+                        "generation=%u object_id=%llu encoding=1 width=%u "
+                        "height=%u pitch=%u bytes=%zu physical_format=%u",
+                        snapshot.identity.kind, snapshot.identity.generation,
+                        static_cast<unsigned long long>(snapshot.identity.objectId),
+                        surface.surface.width, surface.surface.height,
+                        result.pitch, snapshot.content[0].size(),
+                        result.physicalFormat);
+                } else {
+                    RenderTapeTextureDescriptorV2 texture{};
+                    if (!renderTapeLoadTextureDescriptorV2(
+                            snapshot.descriptor, texture) ||
+                        texture.subresourceCount != snapshot.content.size()) {
+                        return false;
+                    }
+                    for (std::uint32_t subresource = 0u;
+                         subresource < texture.subresourceCount;
+                         ++subresource) {
+                        D9CSurfaceDesc desc{};
+                        if (!renderTapeTextureSubresourceDescriptor(
+                                snapshot.descriptor, subresource, desc)) {
+                            return false;
+                        }
+                        const auto expected = dxmt9::d3d9::
+                            renderTapeDeriveExpectedSurfaceContent(desc);
+                        if (expected.status != dxmt9::d3d9::
+                                RenderTapeExpectedContentStatus::Accepted ||
+                            expected.bytes == 0u ||
+                            expected.bytes >
+                                std::numeric_limits<std::size_t>::max()) {
+                            return false;
+                        }
+                        snapshot.content[subresource].resize(
+                            static_cast<std::size_t>(expected.bytes));
+                        const D9CRenderTapeColorSnapshotRequest request{
+                            .identity = object.identity,
+                            .surface = desc,
+                            .subresource = subresource,
+                            .encodingVersion =
+                                D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+                        };
+                        D9CRenderTapeColorSnapshotResult result{};
+                        const HRESULT hr = hr32(
+                            dxmt9c_device_capture_render_tape_color_snapshot(
+                                dev_, &request, &result,
+                                snapshot.content[subresource].data(),
+                                snapshot.content[subresource].size()));
+                        const std::uint32_t expectedPitch = desc.width * 4u;
+                        if (FAILED(hr) || result.status !=
+                                D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE ||
+                            result.encodingVersion !=
+                                D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 ||
+                            result.subresource != subresource ||
+                            result.width != desc.width ||
+                            result.height != desc.height ||
+                            result.pitch != expectedPitch ||
+                            result.format != desc.format ||
+                            result.reserved0 != 0u ||
+                            result.byteCount !=
+                                snapshot.content[subresource].size()) {
+                            dxmt9DeviceInfoLog(
+                                "render_tape_capture color_snapshot rejected "
+                                "reason=provider_result hr=0x%08x status=%u "
+                                "generation=%u object_id=%llu subresource=%u",
+                                static_cast<unsigned>(hr), result.status,
+                                object.identity.generation,
+                                static_cast<unsigned long long>(
+                                    object.identity.objectId),
+                                subresource);
+                            return false;
+                        }
+                        dxmt9DeviceInfoLog(
+                            "render_tape_capture color_snapshot complete kind=%u "
+                            "generation=%u object_id=%llu subresource=%u "
+                            "encoding=1 format=%u width=%u height=%u pitch=%u "
+                            "bytes=%zu",
+                            snapshot.identity.kind,
+                            snapshot.identity.generation,
+                            static_cast<unsigned long long>(
+                                snapshot.identity.objectId),
+                            subresource, desc.format, desc.width, desc.height,
+                            result.pitch,
+                            snapshot.content[subresource].size());
+                    }
+                }
+                renderTapeArmSnapshots_.push_back(std::move(snapshot));
             }
             return advanceRenderTapeArmBoundary(dxmt9::d3d9::
                 RenderTapeArmBoundaryPhase::SnapshotComplete);
         } catch (...) {
             dxmt9DeviceInfoLog(
-                "render_tape_capture d24x8_snapshot rejected reason=exception");
+                "render_tape_capture arm_snapshot rejected reason=exception");
             return false;
         }
     }
@@ -8410,13 +8463,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 RenderTapeArmBoundaryPhase::PresentFlushed)) {
             return false;
         }
-        std::vector<RenderTapeArmDepthSnapshot> depthSnapshots;
-        std::uint64_t depthSnapshotArmOrdinal = 0u;
-        if (!snapshotRenderTapeD24X8AtArmBoundary(
-                depthSnapshots, depthSnapshotArmOrdinal)) {
+        if (!snapshotRenderTapeResourcesAtArmBoundary()) {
             dxmt9DeviceInfoLog(
-                "render_tape_capture arm aborted reason=d24x8_snapshot");
-            abortRenderTapeCapture("d24x8_snapshot");
+                "render_tape_capture arm aborted reason=arm_snapshot");
+            abortRenderTapeCapture("arm_snapshot");
             return false;
         }
         dxmt9::d3d9::RenderTapeCaptureBootstrapSeed seed{};
@@ -8426,9 +8476,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             // production path always snapshots this device's value-owned PE
             // shadow and live-object store at the arm Present boundary.
             produced = producer ? producer(seed)
-                                : produceRenderTapeBootstrap(seed,
-                                                             depthSnapshots,
-                                                             depthSnapshotArmOrdinal);
+                                : produceRenderTapeBootstrap(seed);
         } catch (...) {
             produced = false;
         }
@@ -8664,6 +8712,27 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                               UnmaterializedPreArmObject);
         }
+        const auto armSnapshot = std::find_if(
+            renderTapeArmSnapshots_.begin(), renderTapeArmSnapshots_.end(),
+            [&](const auto &candidate) {
+                return renderTapeSameIdentity(candidate.identity, identity);
+            });
+        if (armSnapshot != renderTapeArmSnapshots_.end() &&
+            !dxmt9::d3d9::renderTapeArmSnapshotEpochMatches(
+                armSnapshot->armOrdinal, renderTapeArmSnapshotOrdinal_)) {
+            abortRenderTapeCapture("jit_stale_arm_snapshot");
+            return false;
+        }
+        const bool useArmSnapshot =
+            armSnapshot != renderTapeArmSnapshots_.end();
+        const std::span<const std::byte> effectiveDescriptor =
+            useArmSnapshot
+            ? std::span<const std::byte>(armSnapshot->descriptor)
+            : std::span<const std::byte>(object->descriptor);
+        const std::span<const std::vector<std::byte>> effectiveContent =
+            useArmSnapshot
+            ? std::span<const std::vector<std::byte>>(armSnapshot->content)
+            : std::span<const std::vector<std::byte>>(object->content);
         if (object->lifetime.textureAlias &&
             !materializeRenderTapeObjectForReference(
                 object->aliasParentTexture, handleIndex, recordIndex,
@@ -8671,14 +8740,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return false;
         }
         const bool incomplete =
-            object->contentCount != object->content.size() ||
-            std::any_of(object->content.begin(), object->content.end(),
+            object->contentCount != effectiveContent.size() ||
+            std::any_of(effectiveContent.begin(), effectiveContent.end(),
                         [](const auto &bytes) { return bytes.empty(); });
         const auto firstMissing = std::find_if(
-            object->content.begin(), object->content.end(),
+            effectiveContent.begin(), effectiveContent.end(),
             [](const auto &bytes) { return bytes.empty(); });
         const auto firstMissingSubresource = static_cast<std::uint32_t>(
-            firstMissing - object->content.begin());
+            firstMissing - effectiveContent.begin());
         bool producedByCapturedPass = false;
         if (incomplete && object->lifetime.textureAlias) {
             // A texture-derived surface owns no independent seed. Its parent
@@ -8693,7 +8762,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         candidate.identity, originLocator->originIdentity);
                 });
             const bool exactTexture =
-                renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
+                renderTapeLoadTextureDescriptorV2(effectiveDescriptor, texture) &&
                 dxmt9::d3d9::renderTapeProducedTextureShapeSupported(texture) &&
                 aliasObject != renderTapeRegistry_->objects.end() &&
                 aliasObject->lifetime.textureAlias &&
@@ -8702,9 +8771,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
                                                    alias) &&
                 dxmt9::d3d9::renderTapeSurfaceAliasMatchesTextureSubresource(
-                    object->descriptor, object->identity, alias) &&
-                alias.subresource < object->content.size() &&
-                object->content[alias.subresource].empty() &&
+                    effectiveDescriptor, object->identity, alias) &&
+                alias.subresource < effectiveContent.size() &&
+                effectiveContent[alias.subresource].empty() &&
                 ((texture.dimension == static_cast<std::uint32_t>(
                       RenderTapeTextureDimension::Texture2D) &&
                   alias.subresource == firstMissingSubresource &&
@@ -8714,7 +8783,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                   alias.subresource < 6u));
             dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
             const bool exactStandaloneSurface =
-                renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
+                renderTapeLoadSurfaceDescriptorV2(effectiveDescriptor, surface) &&
                 surface.storage == static_cast<std::uint32_t>(
                     dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
                 dxmt9::d3d9::renderTapeProducedStandaloneSurfaceSupported(
@@ -8748,7 +8817,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         locator.originIdentity, identity);
             }
             const auto missingSeed = dxmt9::d3d9::renderTapeDescribeMissingSeed(
-                object->identity, object->descriptor, missingSubresource,
+                object->identity, effectiveDescriptor, missingSubresource,
                 dxmt9::d3d9::RenderTapeReferenceProvenance{
                     .handleIndex = locator.handleIndex,
                     .recordIndex = locator.recordIndex,
@@ -8817,7 +8886,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
         if (!producedByCapturedPass && !object->lifetime.textureAlias &&
             !renderTapeValidateExpectedContent(
-                object->identity, object->descriptor, object->content,
+                object->identity, effectiveDescriptor, effectiveContent,
                 contentContract)) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture materialize rejected reason=expected_content_contract "
@@ -8828,7 +8897,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 object->identity.kind, object->identity.generation,
                 static_cast<unsigned long long>(object->identity.objectId),
                 static_cast<unsigned long long>(contentContract.bytes),
-                contentContract.count, object->content.size());
+                contentContract.count, effectiveContent.size());
             return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                               ExpectedContentContract);
         }
@@ -8845,7 +8914,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto descriptorKind = static_cast<std::uint32_t>(
             dxmt9::d3d9::renderTapeDescriptorKindForObject(identity.kind));
-        std::vector<std::byte> descriptor = object->descriptor;
+        std::vector<std::byte> descriptor(effectiveDescriptor.begin(),
+                                          effectiveDescriptor.end());
         if (producedByCapturedPass) {
             if (identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
                 RenderTapeTextureDescriptorV2 texture{};
@@ -8897,10 +8967,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return true;
         }
         for (std::uint32_t subresource = 0u;
-             subresource < object->content.size(); ++subresource) {
+             subresource < effectiveContent.size(); ++subresource) {
             if (renderTapeCapture_->resourceMutationBytes(
                     identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
-                    subresource, 0u, object->content[subresource]) !=
+                    subresource, 0u, effectiveContent[subresource]) !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 abortRenderTapeCapture("jit_resource_mutation");
                 return false;
@@ -9510,6 +9580,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // publication is deliberately deferred until the second Present has
         // passed final validation.
         if (status == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            if (dxmt9::d3d9::renderTapeArmSnapshotCompletionAction(false) !=
+                dxmt9::d3d9::RenderTapeArmSnapshotCompletionAction::
+                    RetainForNextInterval) {
+                abortRenderTapeCapture("snapshot_completion_policy");
+                return;
+            }
             renderTapeExpectedDigest_.reset();
             return;
         }
@@ -9524,6 +9600,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                            published ? 1 : 0);
         if (!published) {
             abortRenderTapeCapture("publication");
+        }
+        if (dxmt9::d3d9::renderTapeArmSnapshotCompletionAction(true) ==
+            dxmt9::d3d9::RenderTapeArmSnapshotCompletionAction::Clear) {
+            renderTapeArmSnapshots_.clear();
         }
         renderTapeExpectedDigest_.reset();
     }

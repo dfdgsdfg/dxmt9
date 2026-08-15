@@ -64,6 +64,8 @@ bool copyTightPixels(const dxmt9::core::ReadbackPixels& pixels,
 void retainSnapshotSurface(std::uint32_t kind, void* object) noexcept {
   if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE && object) {
     dxmt9c_surface_addref(static_cast<D9CSurface*>(object));
+  } else if (kind == D9C_CHUNK_HANDLE_KIND_TEXTURE && object) {
+    dxmt9c_texture_addref(static_cast<D9CTexture*>(object));
   }
 }
 
@@ -83,6 +85,25 @@ bool expectedD24X8Bytes(const D9CSurfaceDesc& desc,
       desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
       desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.resourceType != 1u ||
+      desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
+    return false;
+  }
+  pitch = desc.width * 4u;
+  if (desc.height > std::numeric_limits<std::uint64_t>::max() / pitch) {
+    return false;
+  }
+  bytes = static_cast<std::uint64_t>(pitch) * desc.height;
+  return bytes != 0u;
+}
+
+bool expectedColorSnapshotBytes(const D9CSurfaceDesc& desc,
+                                std::uint32_t& pitch,
+                                std::uint64_t& bytes) noexcept {
+  const bool texture2d = desc.resourceType == 3u && desc.format == 22u;
+  const bool cube = desc.resourceType == 5u && desc.format == 114u;
+  if ((!texture2d && !cube) || desc.usage != 1u || desc.pool != 0u ||
+      desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
+      desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
     return false;
   }
@@ -320,6 +341,138 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
   } catch (...) {
     release();
     out->status = D9C_RENDER_TAPE_D24X8_SNAPSHOT_READBACK_FAILED;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
+    D9CDevice* device, const D9CRenderTapeColorSnapshotRequest* request,
+    D9CRenderTapeColorSnapshotResult* out, void* bytes,
+    std::uint64_t capacity) {
+  if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
+  *out = {};
+  out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED;
+  if (!device || !request || !bytes ||
+      request->encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 ||
+      request->identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+      request->identity.generation == 0u || request->identity.objectId == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  std::uint32_t expectedPitch = 0u;
+  std::uint64_t expectedBytes = 0u;
+  if (!expectedColorSnapshotBytes(request->surface, expectedPitch,
+                                  expectedBytes)) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+  const std::uint32_t expectedSubresources =
+      request->surface.resourceType == 5u ? 6u : 1u;
+  if (request->subresource >= expectedSubresources ||
+      capacity != expectedBytes ||
+      capacity > std::numeric_limits<std::size_t>::max()) {
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
+      dxmt9::d3d9::wireHandleEntry(request->identity)}};
+  std::array<void*, 1u> resolved{};
+  if (!device->wireObjects.resolveAndRetain(entries, resolved,
+                                            retainSnapshotSurface)) {
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto* texture = static_cast<D9CTexture*>(resolved[0]);
+  bool textureReleased = false;
+  const auto releaseTexture = [&] {
+    if (texture && !textureReleased) {
+      dxmt9c_texture_release(texture);
+      textureReleased = true;
+    }
+  };
+  if (!texture || texture->device != device || !texture->obj) {
+    releaseTexture();
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto& textureDesc = texture->obj->desc();
+  const bool cube = request->surface.resourceType == 5u;
+  const auto expectedCoreFormat =
+      dxmt9::d3d9::devicec::fmtFromD3D(request->surface.format);
+  if (textureDesc.type != (cube ? dxmt9::core::TextureType::Cube
+                               : dxmt9::core::TextureType::TwoD) ||
+      textureDesc.levels != 1u || textureDesc.width != request->surface.width ||
+      textureDesc.height != request->surface.height || textureDesc.depth != 1u ||
+      textureDesc.format != expectedCoreFormat ||
+      textureDesc.pool != dxmt9::core::Pool::Default ||
+      textureDesc.usage != dxmt9::core::UsageRenderTarget ||
+      texture->d3dFormat != request->surface.format) {
+    releaseTexture();
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const D9CSurfaceDesc actual = request->surface;
+  D9CSurface* surface = dxmt9c_texture_get_surface_level(
+      texture, request->subresource);
+  if (!surface || surface->device != device || surface->ownerTex != texture ||
+      !surface->obj) {
+    if (surface) dxmt9c_surface_release(surface);
+    releaseTexture();
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  try {
+    if (!dxmt9::d3d9::drainDeferredReplay(
+            device, "render-tape-color-snapshot")) {
+      dxmt9c_surface_release(surface);
+      releaseTexture();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    auto upper = device->dev().upperDevice();
+    if (!upper) {
+      dxmt9c_surface_release(surface);
+      releaseTexture();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    upper->flush();
+    dxmt9::core::ReadbackPixels pixels;
+    std::vector<std::byte> tight;
+    const auto coreFormat = dxmt9::d3d9::devicec::fmtFromD3D(actual.format);
+    const bool captured = coreFormat != dxmt9::core::Format::Unknown &&
+        upper->readbackSurface(
+            dxmt9::core::ReadbackDesc{.source = surface->obj->handle()},
+            pixels) &&
+        copyTightPixels(pixels, actual.width, actual.height,
+                        static_cast<std::uint32_t>(coreFormat), tight);
+    dxmt9c_surface_release(surface);
+    releaseTexture();
+    if (!captured || tight.size() != expectedBytes) {
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    if (actual.format == 22u) {
+      // D3DFMT_X8R8G8B8's high byte is logically unused and Metal is free to
+      // discard it. Canonical version 1 normalizes it to one so replayed
+      // sampling and byte digests do not depend on physical X-channel bits.
+      for (std::size_t offset = 3u; offset < tight.size(); offset += 4u) {
+        tight[offset] = std::byte{0xffu};
+      }
+    }
+    std::memcpy(bytes, tight.data(), tight.size());
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE;
+    out->encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1;
+    out->subresource = request->subresource;
+    out->width = actual.width;
+    out->height = actual.height;
+    out->pitch = expectedPitch;
+    out->format = actual.format;
+    out->byteCount = tight.size();
+    return dxmt9::core::D3D_OK;
+  } catch (...) {
+    dxmt9c_surface_release(surface);
+    releaseTexture();
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
     return dxmt9::core::D3DERR_NOTAVAILABLE;
   }
 }

@@ -595,6 +595,16 @@ void testCommandChunkGeneratedArgumentLayouts() {
             std::is_trivially_copyable_v<dxmt9::bridge::
                 Args32_dxmt9c_device_capture_render_tape_d24x8_snapshot>,
         "wow64 D24X8 snapshot arguments are pointer-token POD");
+  check(std::is_standard_layout_v<dxmt9::bridge::
+            Args_dxmt9c_device_capture_render_tape_color_snapshot> &&
+            std::is_trivially_copyable_v<dxmt9::bridge::
+                Args_dxmt9c_device_capture_render_tape_color_snapshot>,
+        "native color snapshot arguments are pointer-only POD");
+  check(std::is_standard_layout_v<dxmt9::bridge::
+            Args32_dxmt9c_device_capture_render_tape_color_snapshot> &&
+            std::is_trivially_copyable_v<dxmt9::bridge::
+                Args32_dxmt9c_device_capture_render_tape_color_snapshot>,
+        "wow64 color snapshot arguments are pointer-token POD");
 
   D9CCommandChunkNegotiation negotiation{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT,
@@ -632,6 +642,24 @@ void testCommandChunkGeneratedArgumentLayouts() {
                "wow64 D24X8 snapshot decodes top-level byte buffer pointer");
   checkEq(snapshot.capacity, 0x0000000100001000ull,
           "wow64 D24X8 snapshot preserves 64-bit capacity");
+
+  dxmt9::bridge::Args32_dxmt9c_device_capture_render_tape_color_snapshot
+      color{};
+  color.arg0 = 0x11110000u;
+  color.request = 0x22220000u;
+  color.out = 0x33330000u;
+  color.bytes = 0x44440000u;
+  color.capacity = 0x0000000200002000ull;
+  checkSamePtr(dxmt9::util::marshal::wow64::decodePtr<
+                   const D9CRenderTapeColorSnapshotRequest*>(color.request),
+               reinterpret_cast<const D9CRenderTapeColorSnapshotRequest*>(
+                   std::uintptr_t{0x22220000u}),
+               "wow64 color snapshot decodes top-level request pointer");
+  checkSamePtr(dxmt9::util::marshal::wow64::decodePtr<void*>(color.bytes),
+               reinterpret_cast<void*>(std::uintptr_t{0x44440000u}),
+               "wow64 color snapshot decodes top-level byte buffer pointer");
+  checkEq(color.capacity, 0x0000000200002000ull,
+          "wow64 color snapshot preserves 64-bit capacity");
 }
 
 }  // namespace
