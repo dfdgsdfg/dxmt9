@@ -798,15 +798,17 @@ has a 2992-byte `events.bin` with SHA-256
 `ed6bb63659a72c60066c0653d4934669dd7f7081e7389f6a110f13a94eb5c7be`.
 Its four events are one object definition, one bootstrap, one `Clear` +
 `Present` command chunk, and one `PresentComplete`, with zero blobs or
-mutations. Structural `validate` and `inspect` pass; `provider-replay` returns
-`complete` (exit 0), with `production_capture=true`,
-`production_provider_replay=true`, and `output_oracle=true`. The capture-time
+mutations. Structural `validate` and `inspect` pass. The bundle remains useful
+as a structurally valid capture fixture, but the strict production
+`provider-replay`/parallel promotion gate rejects its uniform output because
+`production_capture=true`; generic replay fixtures may retain the exact
+byte-equivalence check. The capture-time
 and replay 256×256 format-21, 262144-byte outputs have the same SHA-256
 `49843e277c6ce8246d199c69c77aba0e7791c50522ab16c6a926f1528bd7474c`, so
 `expected_digest_captured=true` and `expected_digest_matched=true`; object
 conservation is 1/1. The uniform clear makes `output_non_degenerate=false`,
-which limits scene coverage but does not weaken the exact byte-equivalence
-claim for this accepted interval.
+which limits scene coverage and prevents promotion as production parallel
+evidence, while the captured bytes remain useful for exact-equivalence tests.
 
 The first digest-bearing wild run usefully failed this oracle: capture recorded
 SHA-256 `7f2d0d283f559405932df39c2322375c60a577e9e6d462136661dea1a21b7b6a`
@@ -1109,10 +1111,25 @@ pixel artifact. It validates the input closure once, starts at least two fresh
 identity and two fresh ExplicitParallel provider processes, requires strict
 production-oracle completion and exact replay-identity equality within each
 mode and across modes, and then applies typed non-vacuity, fallback, worker,
-and zero-GPU-error gates to every parallel run. Timing counters are
-diagnostic only. The bounded implementation join is complete; the documented
-GT2 capture recipe has not been executed, so non-vacuous GT2 wild evidence and
-any default-promotion claim remain open.
+and zero-GPU-error gates to every parallel run. Strict production-oracle
+completion over a production-capture or output-oracle bundle includes
+`validity.output_non_degenerate=true`; a structurally valid uniform or black
+bundle may still be retained for generic `provider-replay`, parallel fixture,
+and conservation evidence, but cannot be promoted as production parallel
+evidence. Timing counters are diagnostic only. The bounded implementation join
+is complete. The 2026-08-16 supervised GT2 execution separates two failed
+evidence classes. The r67 production bundle is structurally valid and executes
+one 215-draw pass as three ExplicitParallel children, but its output is uniform
+black; the verifier now rejects it at the named non-degeneracy gate. The
+skip-200 r71 production bundle is non-degenerate (90,866 distinct RGBA values)
+and executes one 345-draw pass as five children in both fresh ExplicitParallel
+runs, with five worker tasks, peak activity five, zero pre-effect fallback, and
+zero GPU command-buffer errors. Both identity runs and both parallel runs
+produce the same SHA-256 `2c00f0cb4367f85c724b0fe8f8a9096a7ad787320ee506256088e92a9cd73761`,
+but that result differs from the capture-time oracle at 323 pixels. The strict
+production oracle therefore rejects r71 before promotion. This closes the
+execution-recipe debt but leaves capture-to-provider strict pixel identity and
+any default-promotion claim open.
 
 The 2026-08-15 GT2 r57 bundle at
 `experiments/render-tapes/gt2-output-oracle-r57-20260815/`

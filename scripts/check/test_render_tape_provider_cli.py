@@ -2,6 +2,7 @@
 
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,7 @@ def main() -> int:
         assert result["validity"]["expected_digest_captured"] is True
         assert result["validity"]["expected_digest_matched"] is True
         assert result["validity"]["output_oracle_matched"] is True
+        assert result["validity"]["output_non_degenerate"] is False
         assert result["validity"]["oracle_mode"] == "strict"
         assert result["oracle_accepted"] is True
         assert result["deterministic"] is True
@@ -120,6 +122,13 @@ def main() -> int:
             run["partition_mode"] == {"requested": "parallel", "resolved": "parallel"}
             for run in parallel["parallel_runs"]
         )
+        # This bounded child-economics fixture intentionally clips every
+        # alternate draw and is therefore degenerate.  It remains a generic
+        # structural/parallel fixture, not promotion evidence.
+        assert all(
+            run["validity"]["output_non_degenerate"] is False
+            for run in parallel["identity_runs"] + parallel["parallel_runs"]
+        )
         assert parallel["identity_replay"] == parallel["parallel_replay"]
         assert parallel["identity_partition_mode"] == {
             "requested": "identity",
@@ -151,6 +160,48 @@ def main() -> int:
                 type(value) is int and value >= 0
                 for value in run_counters.values()
             )
+
+        degenerate_provider = root_path / "degenerate-provider.py"
+        degenerate_provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import subprocess\n"
+            "import sys\n"
+            f"real = {str(provider.resolve())!r}\n"
+            "completed = subprocess.run([real, *sys.argv[1:]], check=False, "
+            "text=True, capture_output=True)\n"
+            "result = json.loads(completed.stdout)\n"
+            "result['validity']['output_non_degenerate'] = False\n"
+            "print(json.dumps(result))\n"
+            "sys.stderr.write(completed.stderr)\n"
+            "raise SystemExit(completed.returncode)\n",
+            encoding="utf-8",
+        )
+        degenerate_provider.chmod(0o755)
+        production_parallel_bundle = root_path / "production-parallel-bundle"
+        shutil.copytree(parallel_bundle, production_parallel_bundle)
+        production_manifest = production_parallel_bundle / "manifest.json"
+        production_manifest_data = json.loads(production_manifest.read_text())
+        production_manifest_data["scope"]["production_capture"] = True
+        production_manifest.write_text(
+            json.dumps(production_manifest_data, sort_keys=True), encoding="utf-8"
+        )
+        degenerate = run(
+            sys.executable,
+            str(runner),
+            "parallel-verify",
+            str(production_parallel_bundle),
+            "--provider",
+            str(degenerate_provider),
+            "--validator",
+            str(validator),
+            check=False,
+        )
+        assert degenerate.returncode != 0
+        degenerate_result = json.loads(degenerate.stdout)
+        assert degenerate_result["oracle_accepted"] is False
+        assert "output_non_degenerate=true" in degenerate_result["failed_gate"]
+
         replay_fields = (
             "profile",
             "status",

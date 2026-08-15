@@ -286,6 +286,19 @@ def provider_oracle_accepts(
     )
 
 
+def bundle_requires_non_degenerate(manifest: dict[str, Any]) -> bool:
+    """Identify bundles whose output is promotion evidence rather than a fixture."""
+    scope = manifest.get("scope")
+    components = manifest.get("components")
+    return bool(
+        isinstance(scope, dict)
+        and scope.get("production_capture") is True
+    ) or bool(
+        isinstance(components, dict)
+        and isinstance(components.get("output_oracle"), dict)
+    )
+
+
 def replay_identity(result: dict[str, Any]) -> dict[str, Any]:
     return {
         key: result.get(key)
@@ -830,23 +843,43 @@ def provider_replay(args: argparse.Namespace) -> int:
     return 0 if result.get("oracle_accepted") else 1
 
 
-def strict_production_oracle_accepts(result: dict[str, Any]) -> bool:
+def strict_production_oracle_accepts(
+    result: dict[str, Any], require_non_degenerate: bool = False
+) -> bool:
     """Require the provider's authenticated, strict output oracle.
 
     ``provider_oracle_accepts`` intentionally also permits the bounded pixel
     envelope used by non-production reduction candidates.  Parallel join
     evidence is a production comparison, so an envelope or a hand-written
-    result is not sufficient here.
+    result is not sufficient here.  Promotion bundles additionally require a
+    non-degenerate output; generic ``provider-replay`` fixtures continue to use
+    the less restrictive oracle.
     """
     validity = result.get("validity")
     return bool(
         result.get("schema") == PROVIDER_SCHEMA
         and result.get("archive_policy") == "disabled"
-        and provider_oracle_accepts(result)
+        and provider_oracle_accepts(result, require_non_degenerate)
         and isinstance(validity, dict)
         and validity.get("oracle_mode") == "strict"
         and validity.get("expected_digest_matched") is True
     )
+
+
+def strict_production_oracle_failure(
+    result: dict[str, Any], require_non_degenerate: bool = False
+) -> str:
+    """Return a stable diagnostic for a rejected parallel production result."""
+    validity = result.get("validity")
+    if not isinstance(validity, dict):
+        return "strict production oracle requires validity evidence"
+    if require_non_degenerate and validity.get("output_non_degenerate") is not True:
+        return "strict production oracle requires output_non_degenerate=true"
+    if validity.get("oracle_mode") != "strict":
+        return "strict production oracle requires oracle_mode=strict"
+    if validity.get("expected_digest_matched") is not True:
+        return "strict production oracle requires expected_digest_matched=true"
+    return "strict production oracle rejected result"
 
 
 def _typed_nonnegative_counter(value: Any) -> bool:
@@ -906,6 +939,7 @@ def parallel_verify(args: argparse.Namespace) -> int:
 
     identity_runs: list[dict[str, Any]] = []
     parallel_runs: list[dict[str, Any]] = []
+    require_non_degenerate = bundle_requires_non_degenerate(manifest)
     try:
         for _ in range(PARALLEL_VERIFY_RUNS):
             identity_runs.append(
@@ -941,15 +975,21 @@ def parallel_verify(args: argparse.Namespace) -> int:
 
     try:
         for index, result in enumerate(identity_runs, start=1):
-            if not strict_production_oracle_accepts(result):
+            if not strict_production_oracle_accepts(
+                result, require_non_degenerate
+            ):
                 raise ValueError(
-                    f"identity provider production oracle rejected run {index}"
+                    "identity provider production oracle rejected run "
+                    f"{index}: {strict_production_oracle_failure(result, require_non_degenerate)}"
                 )
             _partition_mode(result, "identity")
         for index, result in enumerate(parallel_runs, start=1):
-            if not strict_production_oracle_accepts(result):
+            if not strict_production_oracle_accepts(
+                result, require_non_degenerate
+            ):
                 raise ValueError(
-                    f"parallel provider production oracle rejected run {index}"
+                    "parallel provider production oracle rejected run "
+                    f"{index}: {strict_production_oracle_failure(result, require_non_degenerate)}"
                 )
             _partition_mode(result, "parallel")
 

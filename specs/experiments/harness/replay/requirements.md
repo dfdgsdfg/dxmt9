@@ -927,6 +927,15 @@ provider failure, oracle failure, equality mismatch, vacuous selection, or GPU
 error rejects the joined result. The operation produces one machine-readable
 result only after all child processes finish and writes no replay artifact.
 
+Every run in the official parallel verifier over a production-capture or
+output-oracle bundle must also report `validity.output_non_degenerate=true`. A
+structurally valid uniform or black bundle remains useful for schema,
+conservation, and generic fixture `provider-replay`/parallel tests, but it is
+not promotion evidence for the parallel production join.
+The generic `provider-replay` command retains its existing policy for
+non-production fixtures and may accept such a bundle when its declared oracle
+is exact.
+
 The deterministic native/CLI acceptance fixture must contain a coordinator
 Clear, a canonical `FULL_SNAPSHOT` anchor, one DrawRun whose production
 partition has at least two non-empty children and satisfies the unchanged

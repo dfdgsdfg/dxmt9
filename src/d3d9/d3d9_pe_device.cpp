@@ -9148,6 +9148,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::RenderTapeMissingSeedDescriptor missingSeed{};
             D9CWireObjectIdentity resolvedIdentity{};
             D9CWireObjectIdentity dependencyIdentity{};
+            dxmt9::d3d9::RenderTapeCommandAdmissionStatus
+                dependencyAdmissionStatus =
+                    dxmt9::d3d9::RenderTapeCommandAdmissionStatus::OriginRejected;
+            dxmt9::d3d9::RenderTapeProducedProofStatus
+                dependencyProducedProofStatus =
+                    dxmt9::d3d9::RenderTapeProducedProofStatus::NoTerminalAccess;
+            dxmt9::d3d9::RenderTapeFirstAccessStatus
+                dependencyFirstAccessStatus =
+                    dxmt9::d3d9::RenderTapeFirstAccessStatus::Idle;
             bool hasDependency = false;
             bool registryPresent = false;
             bool admitted = false;
@@ -9274,6 +9283,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 if (!dependency.admission.accepted()) {
                     dependency.hasDependency = true;
                     dependency.dependencyIdentity = object->aliasParentTexture;
+                    dependency.dependencyAdmissionStatus =
+                        dependency.admission.status;
+                    dependency.dependencyProducedProofStatus =
+                        dependency.producedProof.status;
+                    dependency.dependencyFirstAccessStatus =
+                        dependency.firstAccess.status;
                     dependency.admission =
                         dxmt9::d3d9::renderTapeClassifyCommandAdmission({
                             .originAccepted = originLocator.status ==
@@ -9444,6 +9459,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     "produced_alias_usage=%u "
                     "dependency_present=%d dependency_kind=%u "
                     "dependency_generation=%u dependency_object_id=%llu "
+                    "dependency_status=%s dependency_produced_proof=%s "
+                    "dependency_first_access_status=%s "
                     "produced_candidate_present=%d produced_candidate_kind=%u "
                     "produced_candidate_generation=%u "
                     "produced_candidate_object_id=%llu",
@@ -9505,6 +9522,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     attribution.dependencyIdentity.generation,
                     static_cast<unsigned long long>(
                         attribution.dependencyIdentity.objectId),
+                    dxmt9::d3d9::renderTapeCommandAdmissionStatusName(
+                        attribution.dependencyAdmissionStatus),
+                    dxmt9::d3d9::renderTapeProducedProofStatusName(
+                        attribution.dependencyProducedProofStatus),
+                    dxmt9::d3d9::renderTapeFirstAccessStatusName(
+                        attribution.dependencyFirstAccessStatus),
                     producedIdentity ? 1 : 0,
                     producedIdentity ? producedIdentity->kind : 0u,
                     producedIdentity ? producedIdentity->generation : 0u,
