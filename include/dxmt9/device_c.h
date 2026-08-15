@@ -892,10 +892,12 @@ typedef struct D9CRenderTapeD24X8SnapshotResult {
     uint64_t byteCount;
 } D9CRenderTapeD24X8SnapshotResult;
 
-/* Capture-only, synchronous color texture-subresource snapshot. Version 1 is
- * the tightly packed logical four-byte pixel representation for the exact
- * supported D3D format (X8R8G8B8 or R32F). The destination is a validated
- * top-level bridge buffer; no nested pointer crosses the PE/unix boundary. */
+/* Capture-only, synchronous color resource snapshot. The identity names an
+ * exact generation-qualified standalone X8R8G8B8 surface or a supported
+ * texture subresource (X8R8G8B8 2D or R32F cube face). Version 1 is the
+ * tightly packed logical four-byte pixel representation. The destination is
+ * a validated top-level bridge buffer; no nested pointer crosses the PE/unix
+ * boundary. */
 enum {
     D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 = 1u,
 };

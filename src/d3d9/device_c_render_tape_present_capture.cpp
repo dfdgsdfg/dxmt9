@@ -101,7 +101,9 @@ bool expectedColorSnapshotBytes(const D9CSurfaceDesc& desc,
                                 std::uint64_t& bytes) noexcept {
   const bool texture2d = desc.resourceType == 3u && desc.format == 22u;
   const bool cube = desc.resourceType == 5u && desc.format == 114u;
-  if ((!texture2d && !cube) || desc.usage != 1u || desc.pool != 0u ||
+  const bool standalone =
+      dxmt9::d3d9::renderTapeArmColorSnapshotStandaloneSurfaceSupported(desc);
+  if ((!standalone && !texture2d && !cube) || desc.usage != 1u || desc.pool != 0u ||
       desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
       desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
@@ -352,9 +354,13 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
   *out = {};
   out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED;
+  const bool textureIdentity = request &&
+      request->identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE;
+  const bool surfaceIdentity = request &&
+      request->identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE;
   if (!device || !request || !bytes ||
       request->encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 ||
-      request->identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+      (!textureIdentity && !surfaceIdentity) ||
       request->identity.generation == 0u || request->identity.objectId == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
@@ -381,57 +387,88 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION;
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  auto* texture = static_cast<D9CTexture*>(resolved[0]);
-  bool textureReleased = false;
-  const auto releaseTexture = [&] {
-    if (texture && !textureReleased) {
+  D9CTexture* texture = nullptr;
+  D9CSurface* surface = nullptr;
+  const auto releaseResolved = [&] {
+    if (surface) {
+      dxmt9c_surface_release(surface);
+      surface = nullptr;
+    }
+    if (texture) {
       dxmt9c_texture_release(texture);
-      textureReleased = true;
+      texture = nullptr;
     }
   };
-  if (!texture || texture->device != device || !texture->obj) {
-    releaseTexture();
-    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
-    return dxmt9::core::D3DERR_INVALIDCALL;
-  }
-  const auto& textureDesc = texture->obj->desc();
-  const bool cube = request->surface.resourceType == 5u;
   const auto expectedCoreFormat =
       dxmt9::d3d9::devicec::fmtFromD3D(request->surface.format);
-  if (textureDesc.type != (cube ? dxmt9::core::TextureType::Cube
-                               : dxmt9::core::TextureType::TwoD) ||
-      textureDesc.levels != 1u || textureDesc.width != request->surface.width ||
-      textureDesc.height != request->surface.height || textureDesc.depth != 1u ||
-      textureDesc.format != expectedCoreFormat ||
-      textureDesc.pool != dxmt9::core::Pool::Default ||
-      textureDesc.usage != dxmt9::core::UsageRenderTarget ||
-      texture->d3dFormat != request->surface.format) {
-    releaseTexture();
-    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
-    return dxmt9::core::D3DERR_INVALIDCALL;
-  }
   const D9CSurfaceDesc actual = request->surface;
-  D9CSurface* surface = dxmt9c_texture_get_surface_level(
-      texture, request->subresource);
-  if (!surface || surface->device != device || surface->ownerTex != texture ||
-      !surface->obj) {
-    if (surface) dxmt9c_surface_release(surface);
-    releaseTexture();
+  if (textureIdentity) {
+    texture = static_cast<D9CTexture*>(resolved[0]);
+    if (!texture || texture->device != device || !texture->obj) {
+      releaseResolved();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    const auto& textureDesc = texture->obj->desc();
+    const bool cube = request->surface.resourceType == 5u;
+    if (request->surface.resourceType != (cube ? 5u : 3u) ||
+        textureDesc.type != (cube ? dxmt9::core::TextureType::Cube
+                                 : dxmt9::core::TextureType::TwoD) ||
+        textureDesc.levels != 1u ||
+        textureDesc.width != request->surface.width ||
+        textureDesc.height != request->surface.height ||
+        textureDesc.depth != 1u || textureDesc.format != expectedCoreFormat ||
+        textureDesc.pool != dxmt9::core::Pool::Default ||
+        textureDesc.usage != dxmt9::core::UsageRenderTarget ||
+        texture->d3dFormat != request->surface.format) {
+      releaseResolved();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    surface = dxmt9c_texture_get_surface_level(texture, request->subresource);
+    if (!surface || surface->device != device || surface->ownerTex != texture ||
+        !surface->obj) {
+      releaseResolved();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  } else {
+    surface = static_cast<D9CSurface*>(resolved[0]);
+    if (!surface || surface->device != device || surface->ownerTex ||
+        !surface->obj || request->subresource != 0u ||
+        !dxmt9::d3d9::renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+            request->surface)) {
+      releaseResolved();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    const auto& surfaceDesc = surface->obj->desc();
+    if (surfaceDesc.width != request->surface.width ||
+        surfaceDesc.height != request->surface.height ||
+        surfaceDesc.format != expectedCoreFormat ||
+        surfaceDesc.pool != dxmt9::core::Pool::Default ||
+        !surfaceDesc.renderTarget || surfaceDesc.depthStencil ||
+        surfaceDesc.multiSampleType != dxmt9::core::MultiSampleType::None) {
+      releaseResolved();
+      out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  }
+  if (!surface || !surface->obj) {
+    releaseResolved();
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   try {
     if (!dxmt9::d3d9::drainDeferredReplay(
             device, "render-tape-color-snapshot")) {
-      dxmt9c_surface_release(surface);
-      releaseTexture();
+      releaseResolved();
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_INVALIDCALL;
     }
     auto upper = device->dev().upperDevice();
     if (!upper) {
-      dxmt9c_surface_release(surface);
-      releaseTexture();
+      releaseResolved();
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
@@ -445,8 +482,7 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
             pixels) &&
         copyTightPixels(pixels, actual.width, actual.height,
                         static_cast<std::uint32_t>(coreFormat), tight);
-    dxmt9c_surface_release(surface);
-    releaseTexture();
+    releaseResolved();
     if (!captured || tight.size() != expectedBytes) {
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_NOTAVAILABLE;
@@ -470,8 +506,7 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     out->byteCount = tight.size();
     return dxmt9::core::D3D_OK;
   } catch (...) {
-    dxmt9c_surface_release(surface);
-    releaseTexture();
+    releaseResolved();
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
     return dxmt9::core::D3DERR_NOTAVAILABLE;
   }

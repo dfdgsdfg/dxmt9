@@ -8257,7 +8257,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
                     dxmt9::d3d9::renderTapeArmColorSnapshotTextureSupported(
                         object.descriptor);
-                if (!standaloneD24 && !colorTexture) continue;
+                const bool standaloneColor =
+                    object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+                    object.contentCount == 1u && object.content.size() == 1u &&
+                    surface.storage == static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
+                    dxmt9::d3d9::
+                        renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+                            surface.surface);
+                if (!standaloneD24 && !standaloneColor && !colorTexture)
+                    continue;
 
                 RenderTapeArmObjectSnapshot snapshot{
                     .objectIndex = index,
@@ -8265,7 +8274,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     .identity = object.identity,
                     .descriptor = object.descriptor,
                     .content = std::vector<std::vector<std::byte>>(
-                        standaloneD24 ? 1u : object.contentCount),
+                        standaloneD24 || standaloneColor
+                            ? 1u
+                            : object.contentCount),
                 };
                 if (standaloneD24) {
                     if (surface.surface.width >
@@ -8336,16 +8347,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         result.physicalFormat);
                 } else {
                     RenderTapeTextureDescriptorV2 texture{};
-                    if (!renderTapeLoadTextureDescriptorV2(
-                            snapshot.descriptor, texture) ||
-                        texture.subresourceCount != snapshot.content.size()) {
-                        return false;
+                    std::uint32_t subresourceCount = 1u;
+                    if (standaloneColor) {
+                        surface.initialContentDisposition =
+                            static_cast<std::uint32_t>(dxmt9::d3d9::
+                                RenderTapeInitialContentDisposition::
+                                    CompleteSeed);
+                        snapshot.descriptor.assign(
+                            std::as_bytes(std::span(&surface, 1u)).begin(),
+                            std::as_bytes(std::span(&surface, 1u)).end());
+                    } else {
+                        if (!renderTapeLoadTextureDescriptorV2(
+                                snapshot.descriptor, texture) ||
+                            texture.subresourceCount !=
+                                snapshot.content.size()) {
+                            return false;
+                        }
+                        subresourceCount = texture.subresourceCount;
                     }
                     for (std::uint32_t subresource = 0u;
-                         subresource < texture.subresourceCount;
+                         subresource < subresourceCount;
                          ++subresource) {
-                        D9CSurfaceDesc desc{};
-                        if (!renderTapeTextureSubresourceDescriptor(
+                        D9CSurfaceDesc desc = surface.surface;
+                        if (!standaloneColor &&
+                            !renderTapeTextureSubresourceDescriptor(
                                 snapshot.descriptor, subresource, desc)) {
                             return false;
                         }

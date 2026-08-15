@@ -1997,6 +1997,24 @@ void testArmColorSnapshotDescriptorTruthTable() {
   check(renderTapeArmColorSnapshotTextureSupported(texture2d) &&
             renderTapeArmColorSnapshotTextureSupported(cube),
         "arm snapshots accept exact X8R8G8B8 2D and all-face R32F cube shapes");
+  D9CSurfaceDesc standalone{
+      .format = 22u,
+      .resourceType = 1u,
+      .usage = 1u,
+      .pool = 0u,
+      .width = 32u,
+      .height = 32u,
+      .depth = 1u,
+  };
+  check(renderTapeArmColorSnapshotStandaloneSurfaceSupported(standalone),
+        "arm snapshots accept exact standalone X8R8G8B8 render targets");
+  standalone.format = 21u;
+  check(!renderTapeArmColorSnapshotStandaloneSurfaceSupported(standalone),
+        "standalone color snapshots reject formats outside exact GT2 shape");
+  standalone.format = 22u;
+  standalone.multiSampleType = 2u;
+  check(!renderTapeArmColorSnapshotStandaloneSurfaceSupported(standalone),
+        "standalone multisampled color snapshots remain fail-closed");
 
   auto badFace = cube;
   D9CSurfaceDesc face5{};

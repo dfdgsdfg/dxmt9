@@ -125,6 +125,9 @@ struct PreflightPlan {
       producedStandaloneSurfaces{};
   std::vector<std::pair<D9CWireObjectIdentity, D9CSurfaceDesc>>
       seededStandaloneDepthSurfaces{};
+  std::vector<std::pair<D9CWireObjectIdentity, D9CSurfaceDesc>>
+      seededStandaloneColorSurfaces{};
+  std::vector<D9CWireObjectIdentity> drawTextureIdentities{};
   D9CWireObjectIdentity vertexDeclarationIdentity{};
 };
 
@@ -552,7 +555,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                        RenderTapeSurfaceStorage::TextureSubresource)) {
           if (surface.initialContentDisposition != static_cast<std::uint32_t>(
                   RenderTapeInitialContentDisposition::Unavailable) ||
-              surface.subresource != 0u || fixed.expectedContentBytes != 0u ||
+              fixed.expectedContentBytes != 0u ||
               fixed.expectedContentCount != 0u ||
               surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
               surface.parentTexture.generation == 0u ||
@@ -567,6 +570,12 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
               checkedMul(surface.surface.width, surface.surface.height,
                          depthBytes) && checkedMul(depthBytes, 4u, depthBytes);
+          std::uint64_t colorBytes = 0u;
+          const bool colorLayout =
+              renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+                  surface.surface) &&
+              checkedMul(surface.surface.width, surface.surface.height,
+                         colorBytes) && checkedMul(colorBytes, 4u, colorBytes);
           const bool produced =
               disposition ==
                   RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
@@ -578,14 +587,22 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                                  CompleteDepthFloat32V1 &&
               depthLayout && fixed.expectedContentBytes == depthBytes &&
               fixed.expectedContentCount == 1u;
+          const bool seededColor =
+              disposition ==
+                  RenderTapeInitialContentDisposition::CompleteSeed &&
+              colorLayout && fixed.expectedContentBytes == colorBytes &&
+              fixed.expectedContentCount == 1u;
           if (surface.subresource != 0u ||
               !renderTapeZeroIdentity(surface.parentTexture) ||
-              (!produced && !seededDepth)) goto unsupported;
+              (!produced && !seededDepth && !seededColor)) goto unsupported;
           if (produced) {
             candidate.producedStandaloneSurfaces.push_back(
                 {fixed.identity, surface.surface});
-          } else {
+          } else if (seededDepth) {
             candidate.seededStandaloneDepthSurfaces.push_back(
+                {fixed.identity, surface.surface});
+          } else {
+            candidate.seededStandaloneColorSurfaces.push_back(
                 {fixed.identity, surface.surface});
           }
         } else {
@@ -792,6 +809,14 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
                                     candidate.vertexDeclarationIdentity)) {
             goto unsupported;
           }
+          const auto existing = std::find_if(
+              candidate.drawTextureIdentities.begin(),
+              candidate.drawTextureIdentities.end(), [&](const auto& value) {
+                return sameIdentity(value, drawState.texture);
+              });
+          if (existing == candidate.drawTextureIdentities.end()) {
+            candidate.drawTextureIdentities.push_back(drawState.texture);
+          }
         } else if (record.sparseState() &&
                    !applyBoundedBindings(chunk, record, drawState)) {
           goto unsupported;
@@ -808,6 +833,43 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       candidate.intervals.begin(),
       candidate.intervals.begin() + candidate.intervalCount,
       [](const auto& interval) { return interval.sawTexturedDraw; });
+  if (anyTexturedDraw) {
+    if (candidate.drawTextureIdentities.size() != 1u) goto unsupported;
+    const auto& drawTexture = candidate.drawTextureIdentities.front();
+    if (candidate.textureIdentity.objectId == 0u) {
+      const auto seeded = std::find_if(
+          candidate.seededArmColorTextures.begin(),
+          candidate.seededArmColorTextures.end(), [&](const auto& value) {
+            return sameIdentity(value, drawTexture);
+          });
+      const auto duplicate = seeded == candidate.seededArmColorTextures.end()
+          ? seeded
+          : std::find_if(std::next(seeded),
+                         candidate.seededArmColorTextures.end(),
+                         [&](const auto& value) {
+                           return sameIdentity(value, drawTexture);
+                         });
+      const auto definition = std::find_if(
+          candidate.definitions.begin(), candidate.definitions.end(),
+          [&](const auto& value) {
+            return sameIdentity(value.fixed.identity, drawTexture);
+          });
+      if (seeded == candidate.seededArmColorTextures.end() ||
+          duplicate != candidate.seededArmColorTextures.end() ||
+          definition == candidate.definitions.end() ||
+          !load(definition->descriptor, 0u, candidate.textureDesc) ||
+          !load(definition->descriptor, sizeof(candidate.textureDesc),
+                candidate.textureLevel0) ||
+          !renderTapeArmColorSnapshotTextureSupported(
+              definition->descriptor)) {
+        goto unsupported;
+      }
+      candidate.textureIdentity = drawTexture;
+      candidate.textureProducedByCapturedPass = false;
+    } else if (!sameIdentity(candidate.textureIdentity, drawTexture)) {
+      goto unsupported;
+    }
+  }
   if (!anyTexturedDraw && !candidate.textureProducedByCapturedPass &&
       (candidate.textureIdentity.objectId != 0u ||
        candidate.vertexDeclarationIdentity.objectId != 0u))
@@ -826,12 +888,20 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
           return sameIdentity(definition.fixed.identity,
                               candidate.textureIdentity);
         });
+    const bool selectedArmSnapshot = std::any_of(
+        candidate.seededArmColorTextures.begin(),
+        candidate.seededArmColorTextures.end(), [&](const auto& value) {
+          return sameIdentity(value, candidate.textureIdentity);
+        });
     const bool productionDeclaration =
         candidate.vertexDeclarationIdentity.objectId != 0u;
     const std::size_t expectedDefinitions =
         (productionDeclaration ? 3u : 2u) +
+        candidate.seededArmColorTextures.size() -
+        (selectedArmSnapshot ? 1u : 0u) +
         candidate.producedStandaloneSurfaces.size() +
-        candidate.seededStandaloneDepthSurfaces.size();
+        candidate.seededStandaloneDepthSurfaces.size() +
+        candidate.seededStandaloneColorSurfaces.size();
     const std::size_t expectedSurfaceAliases = std::count_if(
         candidate.definitions.begin(), candidate.definitions.end(),
         [&](const auto& definition) {
@@ -854,13 +924,26 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               surface.storage != static_cast<std::uint32_t>(
                   RenderTapeSurfaceStorage::TextureSubresource))
             return true;
-          return sameIdentity(surface.parentTexture,
-                              candidate.textureIdentity);
+          const bool parentAllowed =
+              sameIdentity(surface.parentTexture,
+                           candidate.textureIdentity) ||
+              std::any_of(candidate.seededArmColorTextures.begin(),
+                          candidate.seededArmColorTextures.end(),
+                          [&](const auto& value) {
+                            return sameIdentity(value,
+                                                surface.parentTexture);
+                          });
+          const auto parent = std::find_if(
+              candidate.definitions.begin(), candidate.definitions.end(),
+              [&](const auto& value) {
+                return sameIdentity(value.fixed.identity,
+                                    surface.parentTexture);
+              });
+          return parentAllowed && parent != candidate.definitions.end() &&
+                 renderTapeSurfaceAliasMatchesTextureSubresource(
+                     parent->descriptor, parent->fixed.identity, surface);
         });
     const bool sequence = tape.header.profile == kRenderTapeProfileSequence;
-    const std::size_t expectedBlobs =
-        (productionDeclaration ? 2u : 1u) + (sequence ? 1u : 0u) +
-        candidate.seededStandaloneDepthSurfaces.size();
     const auto mutationShapeMatches = [&](const auto& mutation) {
       return textureDefinition != candidate.definitions.end() &&
              sameIdentity(mutation.identity, candidate.textureIdentity) &&
@@ -886,12 +969,76 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       return definition != candidate.definitions.end() &&
              mutation.byteSize == definition->fixed.expectedContentBytes;
     };
+    const auto colorSurfaceMutationShapeMatches = [&](const auto& mutation) {
+      const auto seeded = std::find_if(
+          candidate.seededStandaloneColorSurfaces.begin(),
+          candidate.seededStandaloneColorSurfaces.end(),
+          [&](const auto& value) {
+            return sameIdentity(value.first, mutation.identity);
+          });
+      if (seeded == candidate.seededStandaloneColorSurfaces.end() ||
+          mutation.subresource != 0u || mutation.byteOffset != 0u) {
+        return false;
+      }
+      const auto definition = std::find_if(
+          candidate.definitions.begin(), candidate.definitions.end(),
+          [&](const auto& value) {
+            return sameIdentity(value.fixed.identity, mutation.identity);
+          });
+      return definition != candidate.definitions.end() &&
+             mutation.byteSize == definition->fixed.expectedContentBytes;
+    };
+    std::size_t armTextureMutationCount = 0u;
+    bool armTextureMutationSetMatches = true;
+    for (const auto& identity : candidate.seededArmColorTextures) {
+      const auto definition = std::find_if(
+          candidate.definitions.begin(), candidate.definitions.end(),
+          [&](const auto& value) {
+            return sameIdentity(value.fixed.identity, identity);
+          });
+      RenderTapeTextureDescriptorV2 descriptor{};
+      if (definition == candidate.definitions.end() ||
+          !load(definition->descriptor, 0u, descriptor) ||
+          !renderTapeArmColorSnapshotTextureSupported(
+              definition->descriptor)) {
+        armTextureMutationSetMatches = false;
+        break;
+      }
+      armTextureMutationCount += descriptor.subresourceCount;
+      for (std::uint32_t subresource = 0u;
+           subresource < descriptor.subresourceCount; ++subresource) {
+        D9CSurfaceDesc surface{};
+        const auto expected = renderTapeTextureSubresourceDescriptor(
+                                  definition->descriptor, subresource,
+                                  surface)
+            ? renderTapeDeriveExpectedSurfaceContent(surface)
+            : RenderTapeExpectedContentContract{};
+        const auto matches = std::count_if(
+            candidate.initialMutations.begin(),
+            candidate.initialMutations.end(), [&](const auto& mutation) {
+              return sameIdentity(mutation.identity, identity) &&
+                     mutation.kind == static_cast<std::uint32_t>(
+                         RenderTapeMutationKind::Upload) &&
+                     mutation.subresource == subresource &&
+                     mutation.byteOffset == 0u &&
+                     expected.status ==
+                         RenderTapeExpectedContentStatus::Accepted &&
+                     mutation.byteSize == expected.bytes;
+            });
+        if (matches != 1) armTextureMutationSetMatches = false;
+      }
+    }
     const std::size_t textureMutationCount =
-        candidate.textureProducedByCapturedPass ? 0u : 1u;
+        candidate.textureProducedByCapturedPass || selectedArmSnapshot
+            ? 0u
+            : 1u;
     const bool initialMutationSetMatches =
         candidate.initialMutations.size() ==
             textureMutationCount +
-                candidate.seededStandaloneDepthSurfaces.size() &&
+                armTextureMutationCount +
+                candidate.seededStandaloneDepthSurfaces.size() +
+                candidate.seededStandaloneColorSurfaces.size() &&
+        armTextureMutationSetMatches &&
         static_cast<std::size_t>(std::count_if(
             candidate.initialMutations.begin(),
             candidate.initialMutations.end(), mutationShapeMatches)) ==
@@ -899,7 +1046,12 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         static_cast<std::size_t>(std::count_if(
             candidate.initialMutations.begin(),
             candidate.initialMutations.end(), depthMutationShapeMatches)) ==
-            candidate.seededStandaloneDepthSurfaces.size();
+            candidate.seededStandaloneDepthSurfaces.size() &&
+        static_cast<std::size_t>(std::count_if(
+            candidate.initialMutations.begin(),
+            candidate.initialMutations.end(),
+            colorSurfaceMutationShapeMatches)) ==
+            candidate.seededStandaloneColorSurfaces.size();
     if (candidate.definitions.size() !=
             expectedDefinitions + expectedSurfaceAliases ||
         candidate.textureIdentity.objectId == 0u ||
@@ -908,8 +1060,12 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         (!candidate.textureProducedByCapturedPass &&
          !sameIdentity(drawState.texture, candidate.textureIdentity)) ||
         candidate.textureDesc.mipLevelCount != 1u ||
-        ((!candidate.textureProducedByCapturedPass &&
+        (sequence && selectedArmSnapshot) ||
+        ((!candidate.textureProducedByCapturedPass && !selectedArmSnapshot &&
           candidate.textureLevel0.format != 21u) ||
+         (selectedArmSnapshot &&
+          !renderTapeArmColorSnapshotTextureSupported(
+              textureDefinition->descriptor)) ||
          (candidate.textureProducedByCapturedPass &&
           candidate.textureLevel0.format != 22u &&
           candidate.textureLevel0.format != 114u)) ||
@@ -918,13 +1074,12 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
           textureDefinition->fixed.expectedContentBytes %
                   candidate.textureLevel0.height != 0u ||
           !initialMutationSetMatches ||
-          blobs.size() != expectedBlobs ||
-          textureDefinition->fixed.expectedContentCount != 1u)) ||
+          textureDefinition->fixed.expectedContentCount !=
+              (selectedArmSnapshot
+                   ? candidate.textureDesc.subresourceCount
+                   : 1u))) ||
         (candidate.textureProducedByCapturedPass &&
          (!initialMutationSetMatches ||
-          blobs.size() != (productionDeclaration ? 1u : 0u) +
-                              (sequence ? 1u : 0u) +
-                              candidate.seededStandaloneDepthSurfaces.size() ||
           textureDefinition->fixed.expectedContentCount != 0u))) {
       goto unsupported;
     }
@@ -1118,7 +1273,11 @@ FrameTapeReplayResult replayRenderTapeIdentity(
                   surface.initialContentDisposition ==
                       static_cast<std::uint32_t>(
                           RenderTapeInitialContentDisposition::
-                              CompleteDepthFloat32V1))) {
+                              CompleteDepthFloat32V1) ||
+                  surface.initialContentDisposition ==
+                      static_cast<std::uint32_t>(
+                          RenderTapeInitialContentDisposition::
+                              CompleteSeed))) {
         value = surface.surface.usage == 1u
             ? static_cast<void*>(dxmt9c_device_create_render_target(
                   device, surface.surface.width, surface.surface.height,
@@ -1233,18 +1392,24 @@ FrameTapeReplayResult replayRenderTapeIdentity(
              load(definition->descriptor, 0u, surface) &&
              surface.storage == static_cast<std::uint32_t>(
                  RenderTapeSurfaceStorage::Standalone) &&
-             surface.initialContentDisposition ==
-                 static_cast<std::uint32_t>(
-                     RenderTapeInitialContentDisposition::
-                         CompleteDepthFloat32V1) &&
-             renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
              mutation.subresource == 0u && mutation.byteOffset == 0u &&
              checkedMul(surface.surface.width, surface.surface.height,
                         pixelCount) &&
              checkedMul(pixelCount, 4u, tightBytes) &&
-             blob->bytes.size() == tightBytes && upper && wrapped &&
-             wrapped->obj;
-        if (ok) {
+             blob->bytes.size() == tightBytes && wrapped && wrapped->obj;
+        const bool depthSnapshot = ok &&
+            surface.initialContentDisposition ==
+                static_cast<std::uint32_t>(
+                    RenderTapeInitialContentDisposition::
+                        CompleteDepthFloat32V1) &&
+            renderTapeSnapshotStandaloneD24X8Supported(surface.surface);
+        const bool colorSnapshot = ok &&
+            surface.initialContentDisposition ==
+                static_cast<std::uint32_t>(
+                    RenderTapeInitialContentDisposition::CompleteSeed) &&
+            renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+                surface.surface);
+        if (depthSnapshot && upper) {
           core::CanonicalD24X8Depth canonical{
               .bytes = std::vector<core::u8>(blob->bytes.size()),
               .version = core::kCanonicalD24X8DepthVersion1,
@@ -1258,6 +1423,25 @@ FrameTapeReplayResult replayRenderTapeIdentity(
                       blob->bytes.size());
           ok = upper->seedCanonicalD24X8Depth(wrapped->obj->handle(),
                                                canonical);
+        } else if (colorSnapshot) {
+          D9CLockedRect locked{};
+          ok = dxmt9c_surface_lock_rect(wrapped, &locked, nullptr, 0u) ==
+                   core::D3D_OK &&
+               locked.bits;
+          RenderTapeLinearLockLayout layout{};
+          if (ok &&
+              (renderTapeLinearLockLayout(surface.surface, locked.pitch,
+                                          nullptr, layout) !=
+                   RenderTapeLinearLayoutStatus::Accepted ||
+               blob->bytes.size() != layout.tightBytes ||
+               !writeRenderTapeLinearRows(blob->bytes, locked.bits, layout))) {
+            (void)dxmt9c_surface_unlock_rect(wrapped);
+            ok = false;
+          } else if (ok) {
+            ok = dxmt9c_surface_unlock_rect(wrapped) == core::D3D_OK;
+          }
+        } else {
+          ok = false;
         }
       } else {
         ok = false;

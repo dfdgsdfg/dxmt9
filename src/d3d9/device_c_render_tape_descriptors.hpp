@@ -68,6 +68,14 @@ inline constexpr bool renderTapeSnapshotStandaloneD24X8Supported(
          surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
 }
 
+inline constexpr bool renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return surface.resourceType == 1u && surface.width != 0u &&
+         surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
+         surface.usage == 1u && surface.format == 22u &&
+         surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
+
 enum class RenderTapeSurfaceStorage : std::uint32_t {
   Standalone = 1u,
   TextureSubresource = 2u,
