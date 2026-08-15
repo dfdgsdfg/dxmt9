@@ -1880,8 +1880,24 @@ void boundedCaptureReplayRefinementIsExhaustive() {
         } else if (staleOracle) {
           expected = RenderTapeValidationStatus::InvalidPresentComplete;
         }
-        expectStatus(builder.seal(), expected, "bounded frame trace", 1u, 1u,
-                     1u, initialDigest);
+        const auto tape = builder.seal();
+        if (seedCase == SeedCase::Missing && !staleDraw && !staleOracle) {
+          const auto detail = validateRenderTape(tape, catalogue);
+          check(detail.status == RenderTapeValidationStatus::IncompleteFrame &&
+                    detail.incompleteFrameReason ==
+                        RenderTapeIncompleteFrameReason::
+                            ReferencedSeedIncomplete &&
+                    detail.failedEventType == static_cast<std::uint32_t>(
+                        RenderTapeEventType::CommandChunk) &&
+                    detail.hasOffendingIdentity &&
+                    detail.offendingIdentity.kind == kTexture.kind &&
+                    detail.offendingIdentity.generation ==
+                        kTexture.generation &&
+                    detail.offendingIdentity.objectId == kTexture.objectId,
+                "IncompleteFrame attributes the exact command event and missing seed identity");
+        }
+        expectStatus(tape, expected, "bounded frame trace", 1u, 1u, 1u,
+                     initialDigest);
       }
     }
   }

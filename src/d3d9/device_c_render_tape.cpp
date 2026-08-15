@@ -253,12 +253,20 @@ RenderTapeValidationResult
 failure(RenderTapeValidationStatus status, std::uint32_t eventIndex = kNoIndex,
         CommandChunkValidationStatus chunkStatus =
             CommandChunkValidationStatus::Valid,
-        RenderTapeObjectDefineValidationDetail objectDefine = {}) noexcept {
+        RenderTapeObjectDefineValidationDetail objectDefine = {},
+        RenderTapeIncompleteFrameReason incompleteFrameReason =
+            RenderTapeIncompleteFrameReason::None,
+        D9CWireObjectIdentity offendingIdentity = {},
+        std::uint32_t failedEventType = 0u) noexcept {
   return RenderTapeValidationResult{
       .status = status,
       .failedEventIndex = eventIndex,
       .chunkStatus = chunkStatus,
       .objectDefine = objectDefine,
+      .incompleteFrameReason = incompleteFrameReason,
+      .failedEventType = failedEventType,
+      .hasOffendingIdentity = validIdentity(offendingIdentity),
+      .offendingIdentity = offendingIdentity,
   };
 }
 
@@ -913,6 +921,9 @@ validateRenderTape(std::span<const std::byte> blob,
   std::uint64_t presentCommandOrdinal = 0u;
   std::uint64_t previousCompletion = 0u;
   std::uint64_t expectedPayloadEnd = 0u;
+  RenderTapeIncompleteFrameReason producedFailureReason =
+      RenderTapeIncompleteFrameReason::None;
+  D9CWireObjectIdentity producedFailureIdentity{};
 
   const auto hasIncompleteSeed = [&](const D9CWireObjectIdentity& identity) {
     const auto expectation = findSeedContentExpectation(
@@ -936,8 +947,12 @@ validateRenderTape(std::span<const std::byte> blob,
         continue;
       const auto event = candidate.event(obligation.definitionEventIndex);
       RenderTapeObjectDefineHeader fixed{};
-      if (!load(event.payload, 0u, fixed))
+      if (!load(event.payload, 0u, fixed)) {
+        producedFailureReason =
+            RenderTapeIncompleteFrameReason::ProducedProofRejected;
+        producedFailureIdentity = obligation.identity;
         return false;
+      }
 
       if (obligation.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
         RenderTapeSurfaceDescriptorV2 surface{};
@@ -946,7 +961,12 @@ validateRenderTape(std::span<const std::byte> blob,
                                    RenderTapeSurfaceStorage::Standalone) ||
             surface.initialContentDisposition != static_cast<std::uint32_t>(
                 RenderTapeInitialContentDisposition::ProducedByCapturedPass))
-          return false;
+          {
+            producedFailureReason =
+                RenderTapeIncompleteFrameReason::ProducedProofRejected;
+            producedFailureIdentity = obligation.identity;
+            return false;
+          }
         const bool referenced = std::any_of(
             chunk.handles.begin(), chunk.handles.end(), [&](const auto& handle) {
               return handle.kind == obligation.identity.kind &&
@@ -958,7 +978,12 @@ validateRenderTape(std::span<const std::byte> blob,
         if (!renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
                  chunk, obligation.identity, surface.surface)
                  .accepted())
-          return false;
+          {
+            producedFailureReason =
+                RenderTapeIncompleteFrameReason::ProducedProofRejected;
+            producedFailureIdentity = obligation.identity;
+            return false;
+          }
         obligation.resolved = true;
         continue;
       }
@@ -968,7 +993,12 @@ validateRenderTape(std::span<const std::byte> blob,
           !load(event.payload, sizeof(fixed), texture) ||
           texture.initialContentDisposition != static_cast<std::uint32_t>(
               RenderTapeInitialContentDisposition::ProducedByCapturedPass))
-        return false;
+        {
+          producedFailureReason =
+              RenderTapeIncompleteFrameReason::ProducedProofRejected;
+          producedFailureIdentity = obligation.identity;
+          return false;
+        }
       const auto textureDescriptor = event.payload.subspan(sizeof(fixed));
       std::uint32_t referencedSubresources = 0u;
       std::uint32_t provedSubresources = 0u;
@@ -977,7 +1007,12 @@ validateRenderTape(std::span<const std::byte> blob,
             handle.kind, handle.generation, handle.objectId};
         if (renderTapePresentOutputIdentityMatchesCommand(
                 identity, obligation.identity))
-          return false;
+          {
+            producedFailureReason =
+                RenderTapeIncompleteFrameReason::ProducedProofRejected;
+            producedFailureIdentity = obligation.identity;
+            return false;
+          }
         if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
           continue;
         const auto definition = findDefinition(
@@ -989,14 +1024,24 @@ validateRenderTape(std::span<const std::byte> blob,
         RenderTapeSurfaceDescriptorV2 surface{};
         if (!load(surfaceEvent.payload, 0u, surfaceFixed) ||
             !load(surfaceEvent.payload, sizeof(surfaceFixed), surface))
-          return false;
+          {
+            producedFailureReason =
+                RenderTapeIncompleteFrameReason::ProducedProofRejected;
+            producedFailureIdentity = obligation.identity;
+            return false;
+          }
         if (!renderTapePresentOutputIdentityMatchesCommand(
                 surface.parentTexture, obligation.identity))
           continue;
         if (!renderTapeSurfaceAliasMatchesTextureSubresource(
                 textureDescriptor, obligation.identity, surface) ||
             surface.subresource >= 32u)
-          return false;
+          {
+            producedFailureReason =
+                RenderTapeIncompleteFrameReason::ProducedProofRejected;
+            producedFailureIdentity = identity;
+            return false;
+          }
         const auto bit = 1u << surface.subresource;
         referencedSubresources |= bit;
         if ((obligation.producedSubresourceMask & bit) != 0u ||
@@ -1006,7 +1051,12 @@ validateRenderTape(std::span<const std::byte> blob,
       }
       if ((referencedSubresources &
            ~(obligation.producedSubresourceMask | provedSubresources)) != 0u)
-        return false;
+        {
+          producedFailureReason =
+              RenderTapeIncompleteFrameReason::ProducedProofRejected;
+          producedFailureIdentity = obligation.identity;
+          return false;
+        }
       obligation.producedSubresourceMask |= provedSubresources;
       obligation.resolved = obligation.producedSubresourceMask != 0u;
     }
@@ -1135,7 +1185,10 @@ validateRenderTape(std::span<const std::byte> blob,
     }
     case RenderTapeEventType::ObjectDefine: {
       if (!sawBootstrap || presentCompleteCount != 0u) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(
+            RenderTapeValidationStatus::IncompleteFrame, i,
+            CommandChunkValidationStatus::Valid, {},
+            RenderTapeIncompleteFrameReason::EventAfterPresentComplete);
       }
       RenderTapeObjectDefineHeader fixed{};
       if (!load(event.payload, 0u, fixed)) {
@@ -1289,7 +1342,10 @@ validateRenderTape(std::span<const std::byte> blob,
     }
     case RenderTapeEventType::ObjectDestroy: {
       if (!sawBootstrap || presentCompleteCount != 0u) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(
+            RenderTapeValidationStatus::IncompleteFrame, i,
+            CommandChunkValidationStatus::Valid, {},
+            RenderTapeIncompleteFrameReason::EventAfterPresentComplete);
       }
       RenderTapeObjectDestroyHeader fixed{};
       if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
@@ -1301,7 +1357,11 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::UnknownIdentity, i);
       }
       if (hasIncompleteSeed(fixed.identity)) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(
+            RenderTapeValidationStatus::IncompleteFrame, i,
+            CommandChunkValidationStatus::Valid, {},
+            RenderTapeIncompleteFrameReason::SeedDestroyedIncomplete,
+            fixed.identity);
       }
       live->retired = true;
       break;
@@ -1312,7 +1372,9 @@ validateRenderTape(std::span<const std::byte> blob,
           presentCompleteCount >= 2u ||
           (presentCompleteCount == 1u &&
            (sawBetweenPresentMutation || secondIntervalStarted))) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i,
+                       CommandChunkValidationStatus::Valid, {},
+                       RenderTapeIncompleteFrameReason::MutationOrdering);
       }
       RenderTapeResourceMutationHeader fixed{};
       if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
@@ -1398,7 +1460,9 @@ validateRenderTape(std::span<const std::byte> blob,
           (!sequenceProfile && presentCompleteCount != 0u) ||
           presentCompleteCount >= 2u ||
           (presentCompleteCount == 1u && !sawBetweenPresentMutation)) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i,
+                       CommandChunkValidationStatus::Valid, {},
+                       RenderTapeIncompleteFrameReason::CommandOrdering);
       }
       if (sequenceProfile && presentCompleteCount == 1u) {
         secondIntervalStarted = true;
@@ -1424,7 +1488,10 @@ validateRenderTape(std::span<const std::byte> blob,
                        chunkResult.status);
       }
       if (!validateProducedPassChunk(i, chunk)) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i,
+                       CommandChunkValidationStatus::Valid, {},
+                       producedFailureReason, producedFailureIdentity,
+                       eventHeader.type);
       }
       // Every handle referenced by the chunk must name a live object.
       for (const auto& handle : chunk.handles) {
@@ -1439,7 +1506,11 @@ validateRenderTape(std::span<const std::byte> blob,
           return failure(RenderTapeValidationStatus::UnknownIdentity, i);
         }
         if (hasIncompleteSeed(identity)) {
-          return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+          return failure(
+              RenderTapeValidationStatus::IncompleteFrame, i,
+              CommandChunkValidationStatus::Valid, {},
+              RenderTapeIncompleteFrameReason::ReferencedSeedIncomplete,
+              identity, eventHeader.type);
         }
       }
       for (const auto& record : chunk.records) {
@@ -1455,7 +1526,9 @@ validateRenderTape(std::span<const std::byte> blob,
     }
     case RenderTapeEventType::OrderedControl: {
       if (!sawBootstrap || presentCompleteCount != 0u) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        return failure(RenderTapeValidationStatus::IncompleteFrame, i,
+                       CommandChunkValidationStatus::Valid, {},
+                       RenderTapeIncompleteFrameReason::ControlOrdering);
       }
       if (sawReset) {
         return failure(RenderTapeValidationStatus::ResetNotTerminal, i);
@@ -1485,7 +1558,11 @@ validateRenderTape(std::span<const std::byte> blob,
           return failure(RenderTapeValidationStatus::UnknownIdentity, i);
         }
         if (hasIncompleteSeed(fixed.identity)) {
-          return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+          return failure(
+              RenderTapeValidationStatus::IncompleteFrame, i,
+              CommandChunkValidationStatus::Valid, {},
+              RenderTapeIncompleteFrameReason::ControlSeedIncomplete,
+              fixed.identity);
         }
       } else if (!nullIdentity(fixed.identity)) {
         return failure(RenderTapeValidationStatus::InvalidControlKind, i);
@@ -1560,7 +1637,18 @@ validateRenderTape(std::span<const std::byte> blob,
                       [](const auto& obligation) {
                         return !obligation.resolved;
                       })) {
-        return failure(RenderTapeValidationStatus::IncompleteFrame, i);
+        const auto unresolved = std::find_if(
+            scratch.producedPassObligations.begin(),
+            scratch.producedPassObligations.end(),
+            [](const auto& obligation) { return !obligation.resolved; });
+        return failure(
+            RenderTapeValidationStatus::IncompleteFrame, i,
+            CommandChunkValidationStatus::Valid, {},
+            RenderTapeIncompleteFrameReason::ProducedProofUnresolvedAtPresent,
+            unresolved != scratch.producedPassObligations.end()
+                ? unresolved->identity
+                : D9CWireObjectIdentity{},
+            eventHeader.type);
       }
       RenderTapePresentCompleteHeader fixed{};
       if (!sawBootstrap || sawReset || !sawChunkPresent ||
@@ -1624,10 +1712,24 @@ validateRenderTape(std::span<const std::byte> blob,
   }
   const auto expectedPresentCount = sequenceProfile ? 2u : 1u;
   if (presentCompleteCount != expectedPresentCount) {
-    return failure(RenderTapeValidationStatus::IncompleteFrame);
+    return failure(RenderTapeValidationStatus::IncompleteFrame, kNoIndex,
+                   CommandChunkValidationStatus::Valid, {},
+                   RenderTapeIncompleteFrameReason::PresentCount);
   }
   if (!seedContentComplete(scratch.seedContentExpectations)) {
-    return failure(RenderTapeValidationStatus::IncompleteFrame);
+    const auto incompleteSeed = std::find_if(
+        scratch.seedContentExpectations.begin(),
+        scratch.seedContentExpectations.end(), [](const auto& expectation) {
+          return expectation.recordedBytes != expectation.expectedBytes ||
+                 expectation.recordedCount != expectation.expectedCount;
+        });
+    return failure(
+        RenderTapeValidationStatus::IncompleteFrame, kNoIndex,
+        CommandChunkValidationStatus::Valid, {},
+        RenderTapeIncompleteFrameReason::SeedSetIncomplete,
+        incompleteSeed != scratch.seedContentExpectations.end()
+            ? incompleteSeed->identity
+            : D9CWireObjectIdentity{});
   }
   if (header.presentCount != expectedPresentCount) {
     return failure(RenderTapeValidationStatus::InvalidPresentComplete);
@@ -2392,6 +2494,38 @@ const char* renderTapeProfileName(std::uint32_t profile) noexcept {
   default:
     return "unknown";
   }
+}
+
+const char*
+renderTapeIncompleteFrameReasonName(
+    RenderTapeIncompleteFrameReason reason) noexcept {
+  switch (reason) {
+  case RenderTapeIncompleteFrameReason::None:
+    return "none";
+  case RenderTapeIncompleteFrameReason::EventAfterPresentComplete:
+    return "event-after-present-complete";
+  case RenderTapeIncompleteFrameReason::SeedDestroyedIncomplete:
+    return "seed-destroyed-incomplete";
+  case RenderTapeIncompleteFrameReason::MutationOrdering:
+    return "mutation-ordering";
+  case RenderTapeIncompleteFrameReason::CommandOrdering:
+    return "command-ordering";
+  case RenderTapeIncompleteFrameReason::ProducedProofRejected:
+    return "produced-proof-rejected";
+  case RenderTapeIncompleteFrameReason::ReferencedSeedIncomplete:
+    return "referenced-seed-incomplete";
+  case RenderTapeIncompleteFrameReason::ControlOrdering:
+    return "control-ordering";
+  case RenderTapeIncompleteFrameReason::ControlSeedIncomplete:
+    return "control-seed-incomplete";
+  case RenderTapeIncompleteFrameReason::ProducedProofUnresolvedAtPresent:
+    return "produced-proof-unresolved-at-present";
+  case RenderTapeIncompleteFrameReason::PresentCount:
+    return "present-count";
+  case RenderTapeIncompleteFrameReason::SeedSetIncomplete:
+    return "seed-set-incomplete";
+  }
+  return "unknown";
 }
 
 const char*

@@ -380,12 +380,35 @@ enum class RenderTapeValidationStatus : std::uint8_t {
   ScratchAllocationFailed,
 };
 
+enum class RenderTapeIncompleteFrameReason : std::uint8_t {
+  None,
+  EventAfterPresentComplete,
+  SeedDestroyedIncomplete,
+  MutationOrdering,
+  CommandOrdering,
+  ProducedProofRejected,
+  ReferencedSeedIncomplete,
+  ControlOrdering,
+  ControlSeedIncomplete,
+  ProducedProofUnresolvedAtPresent,
+  PresentCount,
+  SeedSetIncomplete,
+};
+
+const char* renderTapeIncompleteFrameReasonName(
+    RenderTapeIncompleteFrameReason reason) noexcept;
+
 struct RenderTapeValidationResult {
   RenderTapeValidationStatus status = RenderTapeValidationStatus::MissingHeader;
   std::uint32_t failedEventIndex = 0xffffffffu;
   CommandChunkValidationStatus chunkStatus =
       CommandChunkValidationStatus::Valid;
   RenderTapeObjectDefineValidationDetail objectDefine{};
+  RenderTapeIncompleteFrameReason incompleteFrameReason =
+      RenderTapeIncompleteFrameReason::None;
+  std::uint32_t failedEventType = 0u;
+  bool hasOffendingIdentity = false;
+  D9CWireObjectIdentity offendingIdentity{};
 
   bool valid() const noexcept {
     return status == RenderTapeValidationStatus::Valid;

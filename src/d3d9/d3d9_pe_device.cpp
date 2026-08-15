@@ -9648,11 +9648,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const auto &validation = renderTapeCapture_->validationResult();
             dxmt9DeviceInfoLog(
                 "render_tape_capture validation_failure status=%u name=%s "
-                "failed_event_index=%u chunk_status=%u",
+                "failed_event_index=%u failed_event_type=%u chunk_status=%u "
+                "incomplete_reason=%s offending_present=%d offending_kind=%u "
+                "offending_generation=%u offending_object_id=%llu",
                 static_cast<unsigned>(validation.status),
                 dxmt9::d3d9::renderTapeValidationStatusName(validation.status),
-                validation.failedEventIndex,
-                static_cast<unsigned>(validation.chunkStatus));
+                validation.failedEventIndex, validation.failedEventType,
+                static_cast<unsigned>(validation.chunkStatus),
+                dxmt9::d3d9::renderTapeIncompleteFrameReasonName(
+                    validation.incompleteFrameReason),
+                validation.hasOffendingIdentity ? 1 : 0,
+                validation.offendingIdentity.kind,
+                validation.offendingIdentity.generation,
+                static_cast<unsigned long long>(
+                    validation.offendingIdentity.objectId));
             if (validation.objectDefine.valid()) {
                 const auto &detail = validation.objectDefine;
                 dxmt9DeviceInfoLog(
