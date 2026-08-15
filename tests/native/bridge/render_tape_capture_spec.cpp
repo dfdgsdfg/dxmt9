@@ -1927,6 +1927,10 @@ void testArmBoundaryTransitionTruthTable() {
       armB.ordinal, armB.ordinal);
   const auto baseOnly = renderTapeSelectArmObjectSnapshotOverlay(
       durableDescriptor, durableContent, {}, {}, 0u, armB.ordinal);
+  const auto activePresentOutput = renderTapeSelectArmObjectSnapshotOverlay(
+      durableDescriptor, {}, snapshotDescriptor, snapshotBContent,
+      armB.ordinal, armB.ordinal,
+      RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput);
   check(armA.valid && armB.valid && snapshotA != snapshotB &&
             staleA.source == RenderTapeArmSnapshotOverlaySource::StaleArm &&
             staleA.descriptor.empty() && staleA.content.empty() &&
@@ -1942,10 +1946,24 @@ void testArmBoundaryTransitionTruthTable() {
             baseOnly.content.size() == 1u &&
             std::equal(baseOnly.content[0].begin(), baseOnly.content[0].end(),
                        durableBase.begin(), durableBase.end()) &&
+            activePresentOutput.source ==
+                RenderTapeArmSnapshotOverlaySource::DurableBase &&
+            activePresentOutput.descriptor.size() == durableDescriptor.size() &&
+            activePresentOutput.content.empty() &&
+            activePresentOutput.descriptor[0] == durableDescriptor[0] &&
+            snapshotBContent.size() == 1u &&
+            std::equal(snapshotBContent[0].begin(), snapshotBContent[0].end(),
+                       snapshotB.begin(), snapshotB.end()) &&
             durableBase == std::array<std::byte, 4u>{
                 std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
                 std::byte{0x3f}},
         "production arm overlay selects B, rejects stale A, and leaves the durable base unchanged");
+  check(activePresentOutput.source ==
+                RenderTapeArmSnapshotOverlaySource::DurableBase &&
+            activePresentOutput.content.empty() &&
+            snapshotBContent[0] ==
+                std::vector<std::byte>(snapshotB.begin(), snapshotB.end()),
+        "active PresentOutput preserves zero/zero role content and leaves its displaced arm snapshot intact");
   const auto overflow = renderTapeNextArmSnapshotEpoch(
       std::numeric_limits<std::uint64_t>::max());
   check(!overflow.valid && overflow.ordinal == 0u,

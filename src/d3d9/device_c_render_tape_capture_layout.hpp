@@ -41,6 +41,11 @@ struct RenderTapeArmObjectSnapshotOverlaySelection {
   std::span<const std::vector<std::byte>> content{};
 };
 
+enum class RenderTapeArmObjectSnapshotOverlayPolicy : std::uint8_t {
+  Ordinary,
+  PresentOutput,
+};
+
 inline RenderTapeArmObjectSnapshotOverlaySelection
 renderTapeSelectArmObjectSnapshotOverlay(
     std::span<const std::byte> durableDescriptor,
@@ -48,7 +53,23 @@ renderTapeSelectArmObjectSnapshotOverlay(
     std::span<const std::byte> candidateDescriptor,
     std::span<const std::vector<std::byte>> candidateContent,
     std::uint64_t candidateOrdinal,
-    std::uint64_t activeOrdinal) noexcept {
+    std::uint64_t activeOrdinal,
+    RenderTapeArmObjectSnapshotOverlayPolicy policy =
+        RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary) noexcept {
+  // The arm snapshot is taken before PresentOutput admission and therefore
+  // describes the ordinary standalone role.  Once the same identity holds
+  // PresentOutput, its active descriptor/content contract must remain the
+  // capture-owned SwapchainBackbuffer/ProducedPresentOutput zero/zero view.
+  // The displaced ordinary state remains owned by the role transition and is
+  // restored when that role is released.
+  if (policy == RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput) {
+    if (!durableDescriptor.empty() || !durableContent.empty()) {
+      return {.source = RenderTapeArmSnapshotOverlaySource::DurableBase,
+              .descriptor = durableDescriptor,
+              .content = durableContent};
+    }
+    return {};
+  }
   if (!candidateDescriptor.empty() || !candidateContent.empty()) {
     if (!renderTapeArmSnapshotEpochMatches(candidateOrdinal, activeOrdinal)) {
       return {.source = RenderTapeArmSnapshotOverlaySource::StaleArm};

@@ -7830,7 +7830,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         armSnapshot != renderTapeArmSnapshots_.end()
                             ? armSnapshot->armOrdinal
                             : 0u,
-                        renderTapeArmSnapshotOrdinal_);
+                        renderTapeArmSnapshotOrdinal_,
+                        object->role == RenderTapeLiveObject::Role::PresentOutput
+                            ? dxmt9::d3d9::
+                                  RenderTapeArmObjectSnapshotOverlayPolicy::
+                                      PresentOutput
+                            : dxmt9::d3d9::
+                                  RenderTapeArmObjectSnapshotOverlayPolicy::
+                                      Ordinary);
                 staleArmSnapshot |= armOverlay.source == dxmt9::d3d9::
                     RenderTapeArmSnapshotOverlaySource::StaleArm;
                 const bool complete = object->lifetime.textureAlias ||
@@ -8026,7 +8033,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         armSnapshot != renderTapeArmSnapshots_.end()
                             ? armSnapshot->armOrdinal
                             : 0u,
-                        renderTapeArmSnapshotOrdinal_);
+                        renderTapeArmSnapshotOrdinal_,
+                        object->role == RenderTapeLiveObject::Role::PresentOutput
+                            ? dxmt9::d3d9::
+                                  RenderTapeArmObjectSnapshotOverlayPolicy::
+                                      PresentOutput
+                            : dxmt9::d3d9::
+                                  RenderTapeArmObjectSnapshotOverlayPolicy::
+                                      Ordinary);
                 if (armOverlay.source == dxmt9::d3d9::
                         RenderTapeArmSnapshotOverlaySource::StaleArm) {
                     return false;
@@ -8770,7 +8784,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 armSnapshot != renderTapeArmSnapshots_.end()
                     ? armSnapshot->armOrdinal
                     : 0u,
-                renderTapeArmSnapshotOrdinal_);
+                renderTapeArmSnapshotOrdinal_,
+                object->role == RenderTapeLiveObject::Role::PresentOutput
+                    ? dxmt9::d3d9::
+                          RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput
+                    : dxmt9::d3d9::
+                          RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary);
         if (armOverlay.source == dxmt9::d3d9::
                 RenderTapeArmSnapshotOverlaySource::StaleArm) {
             abortRenderTapeCapture("jit_stale_arm_snapshot");
@@ -9157,7 +9176,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     attribution.armSnapshotPresent
                         ? armSnapshot->armOrdinal
                         : 0u,
-                    renderTapeArmSnapshotOrdinal_);
+                    renderTapeArmSnapshotOrdinal_,
+                    object->role == RenderTapeLiveObject::Role::PresentOutput
+                        ? dxmt9::d3d9::
+                              RenderTapeArmObjectSnapshotOverlayPolicy::
+                                  PresentOutput
+                        : dxmt9::d3d9::
+                              RenderTapeArmObjectSnapshotOverlayPolicy::
+                                  Ordinary);
             attribution.armSnapshotCurrent = armOverlay.source == dxmt9::d3d9::
                 RenderTapeArmSnapshotOverlaySource::CurrentArm;
             attribution.descriptorBytes = armOverlay.descriptor.size();
