@@ -8950,6 +8950,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             bool contentComplete = false;
             bool textureAlias = false;
             bool producedDescriptorSupported = false;
+            bool producedAliasPresent = false;
+            bool producedAliasDescriptorAccepted = false;
+            bool producedAliasParentMatched = false;
+            bool producedAliasShapeMatched = false;
+            std::uint32_t producedAliasSubresource =
+                std::numeric_limits<std::uint32_t>::max();
+            D9CSurfaceDesc producedAliasSurface{};
             std::size_t descriptorBytes = 0u;
             std::uint32_t expectedContentCount = 0u;
             std::size_t actualContentCount = 0u;
@@ -9065,17 +9072,31 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     return renderTapeSameIdentity(
                         candidate.identity, originLocator.originIdentity);
                 });
+            attribution.producedAliasPresent =
+                aliasObject != renderTapeRegistry_->objects.end();
+            attribution.producedAliasDescriptorAccepted =
+                attribution.producedAliasPresent &&
+                renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
+                                                   alias);
+            if (attribution.producedAliasDescriptorAccepted) {
+                attribution.producedAliasSubresource = alias.subresource;
+                attribution.producedAliasSurface = alias.surface;
+                attribution.producedAliasParentMatched =
+                    renderTapeSameIdentity(alias.parentTexture,
+                                           object->identity);
+                attribution.producedAliasShapeMatched = dxmt9::d3d9::
+                    renderTapeSurfaceAliasMatchesTextureSubresource(
+                        object->descriptor, object->identity, alias);
+            }
             const bool producedTexture =
                 renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
                 dxmt9::d3d9::renderTapeProducedTextureShapeSupported(texture) &&
-                aliasObject != renderTapeRegistry_->objects.end() &&
+                attribution.producedAliasPresent &&
                 aliasObject->lifetime.textureAlias &&
                 renderTapeSameIdentity(aliasObject->aliasParentTexture,
                                        object->identity) &&
-                renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
-                                                   alias) &&
-                dxmt9::d3d9::renderTapeSurfaceAliasMatchesTextureSubresource(
-                    object->descriptor, object->identity, alias) &&
+                attribution.producedAliasDescriptorAccepted &&
+                attribution.producedAliasShapeMatched &&
                 alias.subresource == missingSubresource &&
                 alias.subresource == 0u &&
                 alias.subresource < texture.subresourceCount;
@@ -9158,6 +9179,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     "width=%u height=%u multisample_type=%u usage=%u "
                     "produced_descriptor=%d produced_proof=%s "
                     "first_access_status=%s first_access_class=%s "
+                    "produced_alias_present=%d produced_alias_descriptor=%d "
+                    "produced_alias_parent=%d produced_alias_shape=%d "
+                    "produced_alias_subresource=%u produced_alias_format=%u "
+                    "produced_alias_width=%u produced_alias_height=%u "
+                    "produced_alias_usage=%u "
                     "dependency_present=%d dependency_kind=%u "
                     "dependency_generation=%u dependency_object_id=%llu "
                     "produced_candidate_present=%d produced_candidate_kind=%u "
@@ -9205,6 +9231,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         observation.status),
                     dxmt9::d3d9::renderTapeFirstAccessClassName(
                         observation.classification),
+                    attribution.producedAliasPresent ? 1 : 0,
+                    attribution.producedAliasDescriptorAccepted ? 1 : 0,
+                    attribution.producedAliasParentMatched ? 1 : 0,
+                    attribution.producedAliasShapeMatched ? 1 : 0,
+                    attribution.producedAliasSubresource,
+                    attribution.producedAliasSurface.format,
+                    attribution.producedAliasSurface.width,
+                    attribution.producedAliasSurface.height,
+                    attribution.producedAliasSurface.usage,
                     attribution.hasDependency ? 1 : 0,
                     attribution.dependencyIdentity.kind,
                     attribution.dependencyIdentity.generation,
