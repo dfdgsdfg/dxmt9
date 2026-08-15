@@ -34,27 +34,33 @@ enum class RenderTapeArmSnapshotOverlaySource : std::uint8_t {
   StaleArm,
 };
 
-struct RenderTapeArmSnapshotOverlaySelection {
+struct RenderTapeArmObjectSnapshotOverlaySelection {
   RenderTapeArmSnapshotOverlaySource source =
       RenderTapeArmSnapshotOverlaySource::Missing;
-  std::span<const std::byte> bytes{};
+  std::span<const std::byte> descriptor{};
+  std::span<const std::vector<std::byte>> content{};
 };
 
-inline RenderTapeArmSnapshotOverlaySelection renderTapeSelectArmSnapshotOverlay(
-    std::span<const std::byte> durableBase,
-    std::span<const std::byte> candidate,
+inline RenderTapeArmObjectSnapshotOverlaySelection
+renderTapeSelectArmObjectSnapshotOverlay(
+    std::span<const std::byte> durableDescriptor,
+    std::span<const std::vector<std::byte>> durableContent,
+    std::span<const std::byte> candidateDescriptor,
+    std::span<const std::vector<std::byte>> candidateContent,
     std::uint64_t candidateOrdinal,
     std::uint64_t activeOrdinal) noexcept {
-  if (!candidate.empty()) {
+  if (!candidateDescriptor.empty() || !candidateContent.empty()) {
     if (!renderTapeArmSnapshotEpochMatches(candidateOrdinal, activeOrdinal)) {
       return {.source = RenderTapeArmSnapshotOverlaySource::StaleArm};
     }
     return {.source = RenderTapeArmSnapshotOverlaySource::CurrentArm,
-            .bytes = candidate};
+            .descriptor = candidateDescriptor,
+            .content = candidateContent};
   }
-  if (!durableBase.empty()) {
+  if (!durableDescriptor.empty() || !durableContent.empty()) {
     return {.source = RenderTapeArmSnapshotOverlaySource::DurableBase,
-            .bytes = durableBase};
+            .descriptor = durableDescriptor,
+            .content = durableContent};
   }
   return {};
 }

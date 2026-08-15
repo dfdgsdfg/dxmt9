@@ -1911,27 +1911,41 @@ void testArmBoundaryTransitionTruthTable() {
   const auto armB = renderTapeNextArmSnapshotEpoch(armA.ordinal);
   const std::array<std::byte, 4u> snapshotB{
       std::byte{0x00}, std::byte{0x00}, std::byte{0x40}, std::byte{0x3f}};
-  const auto staleA = renderTapeSelectArmSnapshotOverlay(
-      durableBase, snapshotA, armA.ordinal, armB.ordinal);
-  const auto currentB = renderTapeSelectArmSnapshotOverlay(
-      durableBase, snapshotB, armB.ordinal, armB.ordinal);
-  const auto baseOnly = renderTapeSelectArmSnapshotOverlay(
-      durableBase, {}, 0u, armB.ordinal);
+  const std::array<std::byte, 1u> durableDescriptor{std::byte{0x01}};
+  const std::array<std::byte, 1u> snapshotDescriptor{std::byte{0x02}};
+  const std::vector<std::vector<std::byte>> durableContent{
+      std::vector<std::byte>(durableBase.begin(), durableBase.end())};
+  const std::vector<std::vector<std::byte>> snapshotAContent{
+      std::vector<std::byte>(snapshotA.begin(), snapshotA.end())};
+  const std::vector<std::vector<std::byte>> snapshotBContent{
+      std::vector<std::byte>(snapshotB.begin(), snapshotB.end())};
+  const auto staleA = renderTapeSelectArmObjectSnapshotOverlay(
+      durableDescriptor, durableContent, snapshotDescriptor, snapshotAContent,
+      armA.ordinal, armB.ordinal);
+  const auto currentB = renderTapeSelectArmObjectSnapshotOverlay(
+      durableDescriptor, durableContent, snapshotDescriptor, snapshotBContent,
+      armB.ordinal, armB.ordinal);
+  const auto baseOnly = renderTapeSelectArmObjectSnapshotOverlay(
+      durableDescriptor, durableContent, {}, {}, 0u, armB.ordinal);
   check(armA.valid && armB.valid && snapshotA != snapshotB &&
             staleA.source == RenderTapeArmSnapshotOverlaySource::StaleArm &&
-            staleA.bytes.empty() &&
+            staleA.descriptor.empty() && staleA.content.empty() &&
             currentB.source ==
                 RenderTapeArmSnapshotOverlaySource::CurrentArm &&
-            std::equal(currentB.bytes.begin(), currentB.bytes.end(),
+            currentB.descriptor.size() == snapshotDescriptor.size() &&
+            currentB.content.size() == 1u &&
+            std::equal(currentB.content[0].begin(), currentB.content[0].end(),
                        snapshotB.begin(), snapshotB.end()) &&
             baseOnly.source ==
                 RenderTapeArmSnapshotOverlaySource::DurableBase &&
-            std::equal(baseOnly.bytes.begin(), baseOnly.bytes.end(),
+            baseOnly.descriptor.size() == durableDescriptor.size() &&
+            baseOnly.content.size() == 1u &&
+            std::equal(baseOnly.content[0].begin(), baseOnly.content[0].end(),
                        durableBase.begin(), durableBase.end()) &&
             durableBase == std::array<std::byte, 4u>{
                 std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
                 std::byte{0x3f}},
-        "arm B selects B, rejects stale A, and leaves the durable base unchanged");
+        "production arm overlay selects B, rejects stale A, and leaves the durable base unchanged");
   const auto overflow = renderTapeNextArmSnapshotEpoch(
       std::numeric_limits<std::uint64_t>::max());
   check(!overflow.valid && overflow.ordinal == 0u,
