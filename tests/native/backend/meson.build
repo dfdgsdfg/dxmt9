@@ -347,6 +347,25 @@ test('dxmt9-parallel-draw-binding-metal-spec',
      is_parallel: false,
      timeout: 30)
 
+# Concrete Render Tape D24X8 capability fixture. The roundtrip deliberately
+# converts through shaders so no physical depth/stencil byte layout is assumed.
+render_tape_d24x8_snapshot_metal_spec = executable(
+  'dxmt9-render-tape-d24x8-snapshot-metal-spec',
+  'render_tape_d24x8_snapshot_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-d24x8-snapshot-metal-spec',
+     render_tape_d24x8_snapshot_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 encode_session_lifecycle_spec = executable(
   'dxmt9-encode-session-lifecycle-spec',
   'encode_session_lifecycle_spec.cpp',
