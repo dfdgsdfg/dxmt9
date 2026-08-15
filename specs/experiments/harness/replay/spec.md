@@ -999,12 +999,15 @@ ordinal. No slot index, pointer, borrowed payload span, or registry address is
 serialized. Projection treats the sidecar as a capability: absence or mismatch
 fails before it creates a staging directory or invokes a provider.
 
-The production capture-side join remains a typed open gap in this revision.
+The production capture-side identity join is implemented and remains bounded.
 The schema and validator accept provider-emitted identity only when it is
 explicitly scoped to the exact replay process that observed the production
 metadata. Neither the projector nor the bundle loader synthesizes
 `sourceOrdinal`, `seqId`, or pass identity from event order, and such a mapping
 must never be described as authoritative evidence for the original capture.
+The separate R-HARN-REPLAY-7.23 identity/ExplicitParallel provider join is also
+implemented; it consumes an already authenticated bundle and does not broaden
+or replace capture-authority identity.
 
 #### Generated artifact and output policy
 
@@ -1079,6 +1082,7 @@ python3 scripts/tools/run_dxmt9_render_tape.py pack \
   --events frame.tape --blob mutation.bin --output-dir frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py provider-replay frame-tape-bundle
+python3 scripts/tools/run_dxmt9_render_tape.py parallel-verify frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py executable-project frame-tape-bundle \
   --command-event-ordinal N --first-record N --record-count N \
   --output-dir projected-bundle
@@ -1099,6 +1103,16 @@ the native materializer, obtains matching projected bytes from two fresh
 provider processes, rewrites only `PresentComplete` with that projected digest,
 then requires two further strict-SHA fresh-process passes before atomic rename.
 The output manifest records that source full-frame pixels were not copied.
+
+`parallel-verify` implements R-HARN-REPLAY-7.23 without creating a bundle or
+pixel artifact. It validates the input closure once, starts at least two fresh
+identity and two fresh ExplicitParallel provider processes, requires strict
+production-oracle completion and exact replay-identity equality within each
+mode and across modes, and then applies typed non-vacuity, fallback, worker,
+and zero-GPU-error gates to every parallel run. Timing counters are
+diagnostic only. The bounded implementation join is complete; the documented
+GT2 capture recipe has not been executed, so non-vacuous GT2 wild evidence and
+any default-promotion claim remain open.
 
 The 2026-08-15 GT2 r57 bundle at
 `experiments/render-tapes/gt2-output-oracle-r57-20260815/`
@@ -1245,6 +1259,7 @@ The structural/replay tools have these modes:
 |---|---|---|
 | `validate` / `inspect` | schema/resource/order validation and structural conservation; no provider execution | none |
 | `provider-replay` | production-provider execution with declared fresh-process reset, warm-up, repetition, and exact run identity | identity only; no performance sampling |
+| `parallel-verify` | atomic fresh-process identity/ExplicitParallel equality plus typed non-vacuity and zero-GPU-error gates | bounded refinement identity only; no performance or wild claim |
 | `reduce` / `bisect` | deterministic whole-command frame reduction with closure validation and explicit provider oracle | none |
 | `project` | pure one-command-event contiguous Draw-range readiness projection; no provider execution or wire rewrite | none |
 | future `benchmark` | repeated execution with a declared sampling policy beyond identity checks | explicit and profile-bound |

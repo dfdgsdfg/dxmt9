@@ -1,6 +1,9 @@
 #include "device_c_render_tape_provider.hpp"
 #include "device_c_render_tape_capture.hpp"
 
+#include "dxmt9_perf_counters.hpp"
+#include "dxmt9_render_scheduling.hpp"
+
 #include "dxmt9/device_c.h"
 
 #include <cstddef>
@@ -23,13 +26,17 @@ using namespace dxmt9::d3d9;
 // frame, and serializing a newly compiled archive during teardown can race
 // the short-lived replay process.  Set both knobs before factory creation so
 // device initialization cannot resolve an archive path.
-bool forceHermeticReplayEnvironment() noexcept {
+bool forceHermeticReplayEnvironment(const std::string& partitionMode) noexcept {
 #if defined(_WIN32)
   return _putenv_s("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE", "1") == 0 &&
-         _putenv_s("DXMT9_PREWARM", "disabled") == 0;
+         _putenv_s("DXMT9_PREWARM", "disabled") == 0 &&
+         _putenv_s("DXMT9_RENDER_PARTITION_MODE", partitionMode.c_str()) == 0 &&
+         _putenv_s("DXMT_PERF_COUNTERS", "1") == 0;
 #else
   return ::setenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE", "1", 1) == 0 &&
-         ::setenv("DXMT9_PREWARM", "disabled", 1) == 0;
+         ::setenv("DXMT9_PREWARM", "disabled", 1) == 0 &&
+         ::setenv("DXMT9_RENDER_PARTITION_MODE", partitionMode.c_str(), 1) == 0 &&
+         ::setenv("DXMT_PERF_COUNTERS", "1", 1) == 0;
 #endif
 }
 
@@ -64,12 +71,31 @@ std::string digestHex(const RenderTapeDigest& digest) {
   return result;
 }
 
-void printResult(const FrameTapeReplayResult& result) {
+void printResult(const FrameTapeReplayResult& result,
+                 std::string_view requestedPartitionMode,
+                 std::string_view resolvedPartitionMode,
+                 const dxmt9::perf::RenderTapeParallelJoinSnapshot& counters) {
   const auto& validity = result.validity;
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
   std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v1\",";
   std::cout << "\"archive_policy\":\"disabled\",";
+  std::cout << "\"partition_mode\":{\"requested\":\""
+            << requestedPartitionMode << "\",\"resolved\":\""
+            << resolvedPartitionMode << "\"},";
+  std::cout << "\"parallel_counters\":{";
+  std::cout << "\"selected\":" << counters.selected << ',';
+  std::cout << "\"children\":" << counters.children << ',';
+  std::cout << "\"draws\":" << counters.draws << ',';
+  std::cout << "\"worker_batches\":" << counters.workerBatches << ',';
+  std::cout << "\"worker_tasks\":" << counters.workerTasks << ',';
+  std::cout << "\"worker_cpu_ns\":" << counters.workerCpuNs << ',';
+  std::cout << "\"worker_wall_ns\":" << counters.workerWallNs << ',';
+  std::cout << "\"worker_active_peak\":" << counters.workerActivePeak << ',';
+  std::cout << "\"pre_effect_fallbacks\":"
+            << counters.preEffectFallbacks << ',';
+  std::cout << "\"gpu_command_buffer_errors\":"
+            << counters.gpuCommandBufferErrors << "},";
   std::cout << "\"profile\":\"" << renderTapeProfileName(result.profile)
             << "\",\"status\":\""
             << frameTapeReplayStatusName(result.status) << "\",";
@@ -192,7 +218,8 @@ void printResult(const FrameTapeReplayResult& result) {
 void usage() {
   std::cerr << "usage: dxmt9-render-tape-provider replay <events.bin>"
                " [--blob <path>]... [--expected-rgba <path>]"
-               " [--output-rgba <path>]\n";
+               " [--output-rgba <path>]"
+               " [--partition-mode identity|serial|parallel]\n";
 }
 
 } // namespace
@@ -207,17 +234,39 @@ int main(int argc, char** argv) {
     std::vector<std::string> blobPaths;
     std::string expectedPath;
     std::string outputPath;
+    std::string partitionMode = "identity";
+    bool partitionModeSpecified = false;
     for (int index = 3; index < argc; ++index) {
       const std::string_view option = argv[index];
-      if (index + 1 >= argc) {
-        usage();
-        return 2;
-      }
-      if (option == "--blob") {
+      if (option == "--partition-mode") {
+        if (partitionModeSpecified || index + 1 >= argc) {
+          usage();
+          return 2;
+        }
+        partitionMode = argv[++index];
+        if (partitionMode != "identity" && partitionMode != "serial" &&
+            partitionMode != "parallel") {
+          usage();
+          return 2;
+        }
+        partitionModeSpecified = true;
+      } else if (option == "--blob") {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
         blobPaths.emplace_back(argv[++index]);
       } else if (option == "--expected-rgba" && expectedPath.empty()) {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
         expectedPath = argv[++index];
       } else if (option == "--output-rgba" && outputPath.empty()) {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
         outputPath = argv[++index];
       } else {
         usage();
@@ -240,12 +289,17 @@ int main(int argc, char** argv) {
     }
 
     const auto preflight = preflightRenderTapeIdentity(tape, blobs);
+    const auto partitionConfig =
+        dxmt9::render::resolveRenderPartitionConfig(partitionMode.c_str());
+    const std::string_view resolvedPartitionMode =
+        dxmt9::render::partitionModeName(partitionConfig.resolved);
     if (!preflight.complete()) {
-      printResult(preflight);
+      printResult(preflight, partitionMode, resolvedPartitionMode,
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
       return 1;
     }
 
-    if (!forceHermeticReplayEnvironment()) {
+    if (!forceHermeticReplayEnvironment(partitionMode)) {
       throw std::runtime_error(
           "cannot establish hermetic shader-archive environment");
     }
@@ -254,7 +308,8 @@ int main(int argc, char** argv) {
     if (!factory) {
       auto failure = preflight;
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
-      printResult(failure);
+      printResult(failure, partitionMode, resolvedPartitionMode,
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
       return 1;
     }
     const D9CPresentParams params{
@@ -272,12 +327,14 @@ int main(int argc, char** argv) {
       dxmt9c_factory_release(factory);
       auto failure = preflight;
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
-      printResult(failure);
+      printResult(failure, partitionMode, resolvedPartitionMode,
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
       return 1;
     }
     auto result = replayRenderTapeIdentity(device, tape, blobs);
     dxmt9c_device_release(device);
     dxmt9c_factory_release(factory);
+    const auto parallelCounters = dxmt9::perf::snapshotRenderTapeParallelJoin();
     if (!expectedPath.empty()) {
       const auto expectedPixels = readFile(expectedPath);
       (void)applyRenderTapePixelOracleEnvelope(result, expectedPixels);
@@ -290,7 +347,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("cannot write replay output: " + outputPath);
       }
     }
-    printResult(result);
+    printResult(result, partitionMode, resolvedPartitionMode, parallelCounters);
     return result.complete() ? 0 : 1;
   } catch (const std::exception& error) {
     std::cerr << "dxmt9-render-tape-provider: " << error.what() << '\n';

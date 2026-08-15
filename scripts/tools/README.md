@@ -14,7 +14,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   and bounded two-interval sequence-tape bundles, authenticate optional
   `identity.bin`, replay through fresh production-provider devices, reduce or
   bisect whole command events, and opt in to an executable identity-proven
-  Draw-range projection bundle. Generated bundles stay under ignored
+  Draw-range projection bundle; `parallel-verify` joins fresh identity and
+  ExplicitParallel provider runs twice per mode without producing artifacts,
+  joining deterministic run evidence. Generated bundles stay under ignored
   `experiments/render-tapes/`; curated fixtures use
   `experiments/render-tapes/curated/` and explicit `git add -f` review.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank

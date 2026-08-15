@@ -14,6 +14,7 @@ dxmt9_render_tape_provider_tool = executable(
   'dxmt9_render_tape_provider.cpp',
   include_directories: [
     dxmt9_inc,
+    include_directories('../src/dxmt9'),
     include_directories('../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],

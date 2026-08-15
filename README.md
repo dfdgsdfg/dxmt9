@@ -26,7 +26,7 @@ unix side replays them into Metal command buffers and presents through
   D3D9 → Vulkan → Metal.
 - **Formally verified concurrency.** The concurrency-sensitive
   subsystems — command queue, resource lifetime, encoder lifecycle,
-  present pacing, bridge wire protocol — are modeled in 17 TLA+ specs
+  present pacing, bridge wire protocol — are modeled in 20 TLA+ specs
   checked with TLC on every test run. Debug builds assert the same
   invariants at runtime.
 - **Data-oriented hot paths.** Draw/state/bridge paths use flat records
@@ -104,12 +104,12 @@ build from source, see [docs/build.md](docs/build.md).
 
 ## Formal verification
 
-The concurrency-sensitive parts of the backend are specified in 17 TLA+
+The concurrency-sensitive parts of the backend are specified in 20 TLA+
 modules under [`specs/verification/tla/`](specs/verification/tla/):
 
 | Area | Specs |
 |---|---|
-| Command queue & encoding | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals`, `CpuReadySessionProgress`, `SessionCapacityLease`, `PostEncodePayloadRetirement` |
+| Command queue & encoding | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals`, `CpuReadySessionProgress`, `SessionCapacityLease`, `PostEncodePayloadRetirement`, `EncodeSchedulingProgress`, `ParallelDrawBinding`, `RenderTapeParallelJoin` |
 | Resource & buffer lifetime | `ResourceLifetime`, `BufferBackingVersioning` |
 | Present pacing | `PresentFrameLatency`, `DrawableToken`, `PresentIdAba` |
 | Query resolution | `QuerySeqId` |
@@ -128,7 +128,7 @@ bash scripts/check/verify_tla.sh
 |---|---|
 | Core (D3D9 COM surface, device state, draw calls) | Complete |
 | Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
-| Formal verification (TLC, 14 specs) | Complete |
+| Formal verification (TLC, 20 specs) | Complete |
 | Bridge ABI + PE forwarding (`d3d9.dll` / `winemetal.dll` / `winemetal.so`) | Complete |
 | WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`) | Complete |
 

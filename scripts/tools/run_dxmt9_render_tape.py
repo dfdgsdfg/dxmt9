@@ -18,6 +18,29 @@ EVENTS_NAME = "events.bin"
 IDENTITY_NAME = "identity.bin"
 IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v1"
 MAX_REPLAY_RUNS = 64
+PARALLEL_VERIFY_RUNS = 2
+PROVIDER_SCHEMA = "dxmt9.render_tape.provider_replay.v1"
+PARALLEL_COUNTER_FIELDS = (
+    "selected",
+    "children",
+    "draws",
+    "pre_effect_fallbacks",
+    "gpu_command_buffer_errors",
+    "worker_batches",
+    "worker_tasks",
+    "worker_cpu_ns",
+    "worker_wall_ns",
+    "worker_active_peak",
+)
+PARALLEL_DETERMINISTIC_COUNTER_FIELDS = (
+    "selected",
+    "children",
+    "draws",
+    "pre_effect_fallbacks",
+    "gpu_command_buffer_errors",
+    "worker_batches",
+    "worker_tasks",
+)
 
 
 def digest(path: pathlib.Path) -> str:
@@ -130,6 +153,7 @@ def run_provider_replay(
     blob_paths: list[pathlib.Path],
     expected_output: Optional[pathlib.Path] = None,
     output_path: Optional[pathlib.Path] = None,
+    partition_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     arguments = [str(provider), "replay", str(events)]
     for path in blob_paths:
@@ -138,6 +162,8 @@ def run_provider_replay(
         arguments.extend(("--expected-rgba", str(expected_output)))
     if output_path is not None:
         arguments.extend(("--output-rgba", str(output_path)))
+    if partition_mode is not None:
+        arguments.extend(("--partition-mode", partition_mode))
     completed = subprocess.run(
         arguments,
         check=False,
@@ -284,6 +310,7 @@ def replay_with_policy(
     repeat: int,
     require_non_degenerate: bool = False,
     expected_output: Optional[pathlib.Path] = None,
+    partition_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     if warmup < 0 or repeat < 1 or warmup + repeat > MAX_REPLAY_RUNS:
         raise SystemExit(
@@ -292,7 +319,8 @@ def replay_with_policy(
     warmup_results = []
     for _ in range(warmup):
         result = run_provider_replay(
-            provider, events, blob_paths, expected_output
+            provider, events, blob_paths, expected_output,
+            partition_mode=partition_mode,
         )
         if not provider_oracle_accepts(result, require_non_degenerate):
             result["oracle_accepted"] = False
@@ -310,7 +338,8 @@ def replay_with_policy(
     last_result: dict[str, Any] = {}
     for _ in range(repeat):
         last_result = run_provider_replay(
-            provider, events, blob_paths, expected_output
+            provider, events, blob_paths, expected_output,
+            partition_mode=partition_mode,
         )
         if not provider_oracle_accepts(last_result, require_non_degenerate):
             last_result["oracle_accepted"] = False
@@ -782,6 +811,7 @@ def provider_replay(args: argparse.Namespace) -> int:
         args.repeat,
         manifest.get("scope", {}).get("production_capture") is True,
         expected_output,
+        args.partition_mode,
     )
     validity = result.get("validity", {})
     output_oracle = bool(
@@ -798,6 +828,228 @@ def provider_replay(args: argparse.Namespace) -> int:
     result["scope"] = scope
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("oracle_accepted") else 1
+
+
+def strict_production_oracle_accepts(result: dict[str, Any]) -> bool:
+    """Require the provider's authenticated, strict output oracle.
+
+    ``provider_oracle_accepts`` intentionally also permits the bounded pixel
+    envelope used by non-production reduction candidates.  Parallel join
+    evidence is a production comparison, so an envelope or a hand-written
+    result is not sufficient here.
+    """
+    validity = result.get("validity")
+    return bool(
+        result.get("schema") == PROVIDER_SCHEMA
+        and result.get("archive_policy") == "disabled"
+        and provider_oracle_accepts(result)
+        and isinstance(validity, dict)
+        and validity.get("oracle_mode") == "strict"
+        and validity.get("expected_digest_matched") is True
+    )
+
+
+def _typed_nonnegative_counter(value: Any) -> bool:
+    # bool is an int subclass, but it is not a counter value in the provider
+    # ABI.  Keep this check strict so malformed JSON cannot pass a cold gate.
+    return type(value) is int and value >= 0
+
+
+def parallel_counters(result: dict[str, Any]) -> dict[str, int]:
+    counters = result.get("parallel_counters")
+    if not isinstance(counters, dict):
+        raise ValueError("provider omitted typed parallel_counters")
+    values: dict[str, int] = {}
+    for field in PARALLEL_COUNTER_FIELDS:
+        value = counters.get(field)
+        if not _typed_nonnegative_counter(value):
+            raise ValueError(
+                f"provider parallel_counters.{field} must be a nonnegative integer"
+            )
+        values[field] = value
+    return values
+
+
+def _partition_mode(result: dict[str, Any], requested: str) -> dict[str, str]:
+    value = result.get("partition_mode")
+    if not isinstance(value, dict):
+        raise ValueError("provider omitted partition_mode")
+    actual_requested = value.get("requested")
+    actual_resolved = value.get("resolved")
+    if actual_requested != requested or actual_resolved != requested:
+        raise ValueError(
+            "provider partition mode mismatch: "
+            f"requested={actual_requested!r} resolved={actual_resolved!r} "
+            f"expected={requested!r}"
+        )
+    return {"requested": requested, "resolved": requested}
+
+
+def parallel_verify(args: argparse.Namespace) -> int:
+    """Join identity and ExplicitParallel provider evidence atomically.
+
+    Every provider invocation is a separate subprocess.  No replay output is
+    printed until all repetitions have completed and all gates have passed,
+    keeping stdout a single machine-readable result and avoiding any output
+    artifact mutation.
+    """
+    manifest, events, blob_refs, blob_paths, identity = load_bundle(args.bundle)
+    # Validate the complete bundle before either fresh provider process can
+    # create a device or touch Metal.  This keeps the join pre-effect and
+    # gives both branches the same authenticated input closure.
+    run_validator(args.validator, "validate", events, blob_refs)
+    if identity is not None:
+        run_identity_validator(args.validator, events, identity, blob_refs)
+    expected_output = None
+    if isinstance(manifest.get("components", {}).get("output_oracle"), dict):
+        expected_output = events.parent / "output.rgba"
+
+    identity_runs: list[dict[str, Any]] = []
+    parallel_runs: list[dict[str, Any]] = []
+    try:
+        for _ in range(PARALLEL_VERIFY_RUNS):
+            identity_runs.append(
+                run_provider_replay(
+                    args.provider,
+                    events,
+                    blob_paths,
+                    expected_output=expected_output,
+                    partition_mode="identity",
+                )
+            )
+        for _ in range(PARALLEL_VERIFY_RUNS):
+            parallel_runs.append(
+                run_provider_replay(
+                    args.provider,
+                    events,
+                    blob_paths,
+                    expected_output=expected_output,
+                    partition_mode="parallel",
+                )
+            )
+    except SystemExit as error:
+        rejected = {
+            "bundle_schema": manifest["schema"],
+            "events_sha256": manifest["components"]["events"]["sha256"],
+            "oracle_accepted": False,
+            "failed_gate": str(error),
+            "identity_runs": identity_runs,
+            "parallel_runs": parallel_runs,
+        }
+        print(json.dumps(rejected, sort_keys=True))
+        return 1
+
+    try:
+        for index, result in enumerate(identity_runs, start=1):
+            if not strict_production_oracle_accepts(result):
+                raise ValueError(
+                    f"identity provider production oracle rejected run {index}"
+                )
+            _partition_mode(result, "identity")
+        for index, result in enumerate(parallel_runs, start=1):
+            if not strict_production_oracle_accepts(result):
+                raise ValueError(
+                    f"parallel provider production oracle rejected run {index}"
+                )
+            _partition_mode(result, "parallel")
+
+        identity_replays = [replay_identity(result) for result in identity_runs]
+        parallel_replays = [replay_identity(result) for result in parallel_runs]
+        if any(replay != identity_replays[0] for replay in identity_replays[1:]):
+            raise ValueError("identity replay runs are nondeterministic")
+        if any(replay != parallel_replays[0] for replay in parallel_replays[1:]):
+            raise ValueError("ExplicitParallel replay runs are nondeterministic")
+        if identity_replays[0] != parallel_replays[0]:
+            raise ValueError("identity and ExplicitParallel replay identities differ")
+
+        counter_runs = [parallel_counters(result) for result in parallel_runs]
+        for field in PARALLEL_DETERMINISTIC_COUNTER_FIELDS:
+            if any(
+                counters[field] != counter_runs[0][field]
+                for counters in counter_runs[1:]
+            ):
+                raise ValueError(
+                    "ExplicitParallel counter evidence is nondeterministic: "
+                    f"{field}"
+                )
+        for index, counters in enumerate(counter_runs, start=1):
+            if counters["selected"] <= 0:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: selected == 0"
+                )
+            if counters["children"] < 2:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: children < 2"
+                )
+            if counters["draws"] <= 0:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: draws == 0"
+                )
+            if counters["worker_batches"] <= 0:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: "
+                    "worker_batches == 0"
+                )
+            if counters["worker_tasks"] <= 0:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: "
+                    "worker_tasks == 0"
+                )
+            if counters["worker_active_peak"] <= 0:
+                raise ValueError(
+                    f"parallel verification is vacuous in run {index}: "
+                    "worker_active_peak == 0"
+                )
+            if counters["gpu_command_buffer_errors"] != 0:
+                raise ValueError(
+                    f"parallel verification rejected GPU command-buffer errors "
+                    f"in run {index}"
+                )
+    except ValueError as error:
+        # Keep the command's result atomic even for an authenticated but
+        # rejected provider response.  The provider itself has no output path
+        # here, so this branch cannot leave a replay artifact behind.
+        rejected = {
+            "bundle_schema": manifest["schema"],
+            "events_sha256": manifest["components"]["events"]["sha256"],
+            "oracle_accepted": False,
+            "failed_gate": str(error),
+            "identity_runs": identity_runs,
+            "parallel_runs": parallel_runs,
+        }
+        print(json.dumps(rejected, sort_keys=True))
+        return 1
+
+    result = {
+        "schema": "dxmt9.render_tape.parallel_verify.v1",
+        "bundle_schema": manifest["schema"],
+        "events_sha256": manifest["components"]["events"]["sha256"],
+        "oracle_accepted": True,
+        "strict_identity_equal": True,
+        "non_vacuous": True,
+        "partition_mode": _partition_mode(parallel_runs[0], "parallel"),
+        "identity_partition_mode": _partition_mode(identity_runs[0], "identity"),
+        "parallel_counters": counter_runs[0],
+        "parallel_counters_runs": counter_runs,
+        "identity_runs": identity_runs,
+        "parallel_runs": parallel_runs,
+        # Compatibility aliases for consumers that only need the final run;
+        # the ordered run arrays above are the canonical evidence surface.
+        "identity_result": identity_runs[-1],
+        "parallel_result": parallel_runs[-1],
+        "identity_replay": identity_replays[0],
+        "parallel_replay": parallel_replays[0],
+        "scope": {
+            "production_capture": manifest.get("scope", {}).get(
+                "production_capture", False
+            ),
+            "production_provider_replay": True,
+            "parallel_verify": True,
+            "output_oracle": True,
+        },
+    }
+    print(json.dumps(result, sort_keys=True))
+    return 0
 
 
 def run_native_materialize(
@@ -1261,7 +1513,24 @@ def parser() -> argparse.ArgumentParser:
     )
     provider_parser.add_argument("--warmup", type=int, default=0)
     provider_parser.add_argument("--repeat", type=int, default=1)
+    provider_parser.add_argument(
+        "--partition-mode", choices=("identity", "serial", "parallel")
+    )
     provider_parser.set_defaults(function=provider_replay)
+    parallel_parser = subparsers.add_parser(
+        "parallel-verify",
+        help="compare fresh identity and ExplicitParallel production replays",
+    )
+    parallel_parser.add_argument("bundle", type=pathlib.Path)
+    parallel_parser.add_argument(
+        "--provider", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape-provider"),
+    )
+    parallel_parser.add_argument(
+        "--validator", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape"),
+    )
+    parallel_parser.set_defaults(function=parallel_verify)
     project_parser = subparsers.add_parser(
         "executable-project",
         help="materialize and replay one identity-proven Draw range",

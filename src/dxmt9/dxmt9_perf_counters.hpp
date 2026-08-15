@@ -261,6 +261,26 @@ void countParallelPassWorkerBatch(std::uint32_t tasks);
 void countParallelPassWorkerTaskBegin();
 void countParallelPassWorkerTaskEnd(std::uint64_t cpuNs);
 void countParallelPassWorkerWallTime(std::uint64_t wallNs);
+
+// Cold, typed evidence seam for the Render Tape parallel-join worker.  This
+// deliberately reads the existing raw counters instead of extending the
+// canonical shutdown-report schema; production provider tools can therefore
+// emit a bounded JSON sidecar without scraping stderr.
+struct RenderTapeParallelJoinSnapshot {
+  std::uint64_t selected = 0;
+  std::uint64_t children = 0;
+  std::uint64_t draws = 0;
+  std::uint64_t workerBatches = 0;
+  std::uint64_t workerTasks = 0;
+  std::uint64_t workerCpuNs = 0;
+  std::uint64_t workerWallNs = 0;
+  std::uint64_t workerActivePeak = 0;
+  std::uint64_t preEffectFallbacks = 0;
+  std::uint64_t gpuCommandBufferErrors = 0;
+};
+
+RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept;
+
 void countParallelPassBindingReject(
     encoders::ParallelPassBindingRejectReason reason);
 void countParallelPassBindingSelected(

@@ -40,5 +40,7 @@ under `tests/meson.build`.
   identity, the strict production output-oracle predicate, deterministic
   closure-aware whole-command reduction/bisection, content-addressed reduced
   bundles, bounded two-interval mutation visibility with distinct per-Present
-  digests, and fail-before-output rejection
+  digests, two fresh-process identity/ExplicitParallel runs per mode with
+  strict within/across-mode equality and non-vacuous worker counters, and
+  fail-before-output rejection
   (`dxmt9-render-tape-provider-cli-spec`).

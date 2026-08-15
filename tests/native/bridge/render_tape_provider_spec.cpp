@@ -12,6 +12,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -340,6 +341,17 @@ constexpr D9CWireObjectIdentity kGeneralVertexDeclaration{
     .objectId = 52u,
 };
 
+constexpr RenderTapeDigest kGeneralExpectedDigest{
+    std::byte{0x44}, std::byte{0x3b}, std::byte{0x93}, std::byte{0x18},
+    std::byte{0xda}, std::byte{0x95}, std::byte{0x54}, std::byte{0xcf},
+    std::byte{0x19}, std::byte{0x26}, std::byte{0xc3}, std::byte{0x01},
+    std::byte{0x43}, std::byte{0xed}, std::byte{0x63}, std::byte{0xb4},
+    std::byte{0xac}, std::byte{0x1b}, std::byte{0x61}, std::byte{0xfe},
+    std::byte{0x83}, std::byte{0x3c}, std::byte{0x89}, std::byte{0xa7},
+    std::byte{0xd7}, std::byte{0x50}, std::byte{0xda}, std::byte{0x2e},
+    std::byte{0xb7}, std::byte{0xf3}, std::byte{0xf9}, std::byte{0x9c},
+};
+
 std::vector<std::byte> sparsePayload(
     D9CCommandChunkWireDrawHeader draw,
     std::span<const std::pair<std::uint16_t, std::span<const std::byte>>> inputs) {
@@ -531,6 +543,77 @@ std::vector<std::byte> generalIndexedDrawChunk() {
   }});
 }
 
+// Keep the production-parallel fixture in one canonical command chunk.  The
+// first record is the same FULL_SNAPSHOT state anchor used by the production
+// indexed path; the remainder is two indivisible indexed DrawRuns.  64 A
+// draws use the baseline PSO/uniform identity.  64 B draws use a color-write
+// topology/render-state transition and a pixel-inert VS constant range: the
+// production economics identities change while the degenerate pixels do not.
+std::vector<std::byte> indexedDrawPayload(std::uint32_t primitiveType,
+                                          bool alternateUniform) {
+  const D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = primitiveType,
+      .minVertex = 0u,
+      .numVertices = 3u,
+      .startIndex = 0u,
+      .primitiveCount = 1u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader),
+  };
+  if (!alternateUniform) return bytesOf(draw);
+  const D9CCommandChunkWireConstantRange range{
+      .startRegister = 0u,
+      .registerCount = 1u,
+  };
+  // The fixture shader moves c0 to oPos. Keeping w=0 makes every B draw
+  // clipped/degenerate like A while changing the production uniform identity.
+  const std::array<float, 4u> values{1.0f, 1.0f, 1.0f, 0.0f};
+  std::vector<std::byte> constants(sizeof(range) + sizeof(values));
+  std::memcpy(constants.data(), &range, sizeof(range));
+  std::memcpy(constants.data() + sizeof(range), values.data(), sizeof(values));
+  const auto renderState = bytesOf(D9CCommandChunkWireRenderState{
+      .state = 168u, // D3DRS_COLORWRITEENABLE
+      .value = 0u,
+  });
+  const std::array sections{
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE),
+                std::span<const std::byte>(renderState)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F),
+                std::span<const std::byte>(constants)},
+  };
+  return sparsePayload(draw, sections);
+}
+
+std::vector<std::byte> generalIndexedDrawRunChunk(std::uint32_t drawCount) {
+  check(drawCount >= 128u, "parallel fixture must retain two 64-draw children");
+  const auto bootstrap = generalBootstrapChunk(
+      kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
+      kGeneralVertexDeclaration, kOutput);
+  ImportedChunkView bootstrapView;
+  check(importPrevalidatedCommandChunk(
+            bootstrap,
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 5u},
+            bootstrapView),
+        "parallel fixture imports its FULL_SNAPSHOT anchor");
+  const auto anchor = bootstrapView.record(0u);
+  std::vector<Record> records;
+  records.reserve(static_cast<std::size_t>(drawCount) + 1u);
+  records.push_back(Record{
+      .type = anchor.header.type,
+      .payload = std::vector<std::byte>(anchor.payload.begin(),
+                                        anchor.payload.end()),
+      .handles = std::vector<D9CCommandChunkWireHandleEntry>(
+          bootstrapView.handles.begin(), bootstrapView.handles.end()),
+  });
+  for (std::uint32_t index = 0u; index < drawCount; ++index) {
+    records.push_back(Record{
+        .type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+        .payload = indexedDrawPayload(index < 64u ? 4u : 5u, index >= 64u),
+    });
+  }
+  return makeChunk(records);
+}
+
 struct GeneralIndexedFixture {
   std::vector<std::byte> vertexBytes{};
   std::vector<std::byte> indexBytes{};
@@ -540,7 +623,8 @@ struct GeneralIndexedFixture {
   std::vector<RenderTapeProviderBlob> blobsValue{};
   std::vector<std::byte> tape{};
 
-  GeneralIndexedFixture() {
+  explicit GeneralIndexedFixture(std::uint32_t drawCount = 1u,
+                                 bool strictDigest = false) {
     const std::array vertices{
         TexturedVertex{-0.5f, -0.5f, 0.0f, 1.0f, 0xffff0000u, 0.0f, 0.0f},
         TexturedVertex{0.5f, -0.5f, 0.0f, 1.0f, 0xff00ff00u, 1.0f, 0.0f},
@@ -672,14 +756,25 @@ struct GeneralIndexedFixture {
             .payload = clear,
         }}));
     builder.appendCommandChunk(
-        CommandChunkEnvelope{.recordCount = 1u}, generalIndexedDrawChunk());
+        CommandChunkEnvelope{.recordCount = drawCount == 1u ? 1u
+                                                             : drawCount + 1u,
+                             .handleCount = drawCount == 1u ? 0u : 5u},
+        drawCount == 1u ? generalIndexedDrawChunk()
+                        : generalIndexedDrawRunChunk(drawCount));
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, present);
     builder.appendPresentComplete(
-        12u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        12u, 1u,
+        strictDigest ? RenderTapeDigestValidity::Sha256
+                     : RenderTapeDigestValidity::NotCaptured,
+        strictDigest ? kGeneralExpectedDigest : RenderTapeDigest{},
         std::as_bytes(std::span(&oracle, 1u)));
     tape = builder.seal();
   }
+};
+
+struct ParallelIndexedFixture : GeneralIndexedFixture {
+  ParallelIndexedFixture() : GeneralIndexedFixture(128u, true) {}
 };
 
 std::vector<std::byte> texturedDrawChunk(std::uint16_t extraSection = 0u) {
@@ -1944,6 +2039,158 @@ void generalIndexedReplayConservesAllObjects() {
         "general indexed replay must conserve output, VB, IB, shader, and declaration");
 }
 
+void productionParallelIndexedFixtureHasTwoChildren() {
+  ParallelIndexedFixture fixture;
+  RenderTapeBlobCatalogue catalogue;
+  for (const auto& blob : fixture.blobsValue) {
+    catalogue.blobs.push_back({.digest = blob.digest,
+                               .size = blob.bytes.size(),
+                               .verified = 1u});
+  }
+  const auto structural = validateRenderTape(fixture.tape, catalogue);
+  check(structural.valid(),
+        std::string("parallel indexed fixture is structurally valid: ") +
+            renderTapeValidationStatusName(structural.status) +
+            " event=" + std::to_string(structural.failedEventIndex) +
+            " chunk=" +
+            std::to_string(static_cast<unsigned>(structural.chunkStatus)));
+  const auto preflight = preflightRenderTapeIdentity(fixture.tape,
+                                                      fixture.blobsValue);
+  check(preflight.complete(), frameTapeReplayStatusName(preflight.status));
+  check(preflight.coverage.clearRecords == 1u &&
+            preflight.coverage.applyStateRecords == 1u &&
+            preflight.coverage.drawIndexedPrimitiveRecords == 128u &&
+            preflight.coverage.presentRecords == 1u &&
+            preflight.coverage.commandRecords == 131u,
+        std::string("parallel fixture is Clear + FULL_SNAPSHOT + 128 indexed draws + Present: ") +
+            std::to_string(preflight.coverage.clearRecords) + "," +
+            std::to_string(preflight.coverage.applyStateRecords) + "," +
+            std::to_string(preflight.coverage.drawIndexedPrimitiveRecords) + "," +
+            std::to_string(preflight.coverage.stateConstantRecords) + "," +
+            std::to_string(preflight.coverage.presentRecords) + "," +
+            std::to_string(preflight.coverage.commandRecords));
+
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 22u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  const auto replayFresh = [&](const char* partitionMode) {
+    check(::setenv("DXMT9_RENDER_PARTITION_MODE", partitionMode, 1) == 0,
+          "parallel fixture sets its partition mode before device creation");
+    check(::setenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE", "1", 1) == 0 &&
+              ::setenv("DXMT9_PREWARM", "disabled", 1) == 0,
+          "parallel fixture establishes hermetic replay environment");
+    auto* factory = dxmt9c_factory_create();
+    check(factory != nullptr, "parallel fixture factory must be available");
+    auto* device =
+        dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+    check(device != nullptr, "parallel fixture replay device must construct");
+    const auto result = replayRenderTapeIdentity(
+        device, fixture.tape, fixture.blobsValue);
+    dxmt9c_device_release(device);
+    dxmt9c_factory_release(factory);
+    return result;
+  };
+  const auto identity = replayFresh("identity");
+  const auto explicitParallel = replayFresh("parallel");
+  check(identity.complete() && explicitParallel.complete(),
+        std::string("parallel fixture identity and explicit replays complete: ") +
+            frameTapeReplayStatusName(identity.status) + ", " +
+            frameTapeReplayStatusName(explicitParallel.status));
+  check(identity.validity.outputReadback &&
+            identity.validity.expectedDigestCaptured &&
+            identity.validity.expectedDigestMatched &&
+            explicitParallel.validity.expectedDigestCaptured &&
+            explicitParallel.validity.expectedDigestMatched &&
+            identity.validity.outputDigest == explicitParallel.validity.outputDigest &&
+            identity.validity.outputDigest != RenderTapeDigest{},
+        "parallel fixture produces one deterministic non-empty digest");
+  check(identity.coverage.eventCount == explicitParallel.coverage.eventCount &&
+            identity.coverage.commandRecords == explicitParallel.coverage.commandRecords &&
+            identity.conservation.objectsCreated ==
+                explicitParallel.conservation.objectsCreated &&
+            identity.conservation.objectsReleased ==
+                explicitParallel.conservation.objectsReleased,
+        "identity and explicit parallel replay evidence is conserved");
+  const auto sameValidity = [](const FrameTapeValidityEvidence& left,
+                               const FrameTapeValidityEvidence& right) {
+    return left.structurallyValid == right.structurallyValid &&
+           left.digestsValid == right.digestsValid &&
+           left.outputReadback == right.outputReadback &&
+           left.expectedDigestCaptured == right.expectedDigestCaptured &&
+           left.expectedDigestMatched == right.expectedDigestMatched &&
+           left.expectedPixelsCompared == right.expectedPixelsCompared &&
+           left.pixelEnvelopeMatched == right.pixelEnvelopeMatched &&
+           left.outputNonDegenerate == right.outputNonDegenerate &&
+           left.outputBytes == right.outputBytes &&
+           left.allowedDifferingPixels == right.allowedDifferingPixels &&
+           left.differingPixels == right.differingPixels &&
+           left.totalRgbDelta == right.totalRgbDelta &&
+           left.differingAlphaPixels == right.differingAlphaPixels &&
+           left.maxRgbDelta == right.maxRgbDelta &&
+           left.expectedOutputDigest == right.expectedOutputDigest &&
+           left.outputDigest == right.outputDigest;
+  };
+  check(sameValidity(identity.validity, explicitParallel.validity),
+        "identity and explicit parallel validity evidence is exactly equal");
+  check(identity.status == explicitParallel.status &&
+            identity.failedEventIndex == explicitParallel.failedEventIndex &&
+            identity.profile == explicitParallel.profile &&
+            identity.requirements.outputWidth ==
+                explicitParallel.requirements.outputWidth &&
+            identity.requirements.outputHeight ==
+                explicitParallel.requirements.outputHeight &&
+            identity.requirements.outputFormat ==
+                explicitParallel.requirements.outputFormat,
+        "identity and explicit parallel replay status is exactly equal");
+  const auto sameCoverage = [](const FrameTapeCoverageEvidence& left,
+                               const FrameTapeCoverageEvidence& right) {
+    return left.eventCount == right.eventCount &&
+           left.objectDefinitions == right.objectDefinitions &&
+           left.seedMutations == right.seedMutations &&
+           left.bootstrapChunks == right.bootstrapChunks &&
+           left.commandChunks == right.commandChunks &&
+           left.commandRecords == right.commandRecords &&
+           left.clearRecords == right.clearRecords &&
+           left.drawPrimitiveRecords == right.drawPrimitiveRecords &&
+           left.drawIndexedPrimitiveRecords == right.drawIndexedPrimitiveRecords &&
+           left.drawPrimitiveUpRecords == right.drawPrimitiveUpRecords &&
+           left.stateConstantRecords == right.stateConstantRecords &&
+           left.applyStateRecords == right.applyStateRecords &&
+           left.presentRecords == right.presentRecords &&
+           left.presentSourceMappings == right.presentSourceMappings &&
+           left.presentOutputs == right.presentOutputs &&
+           left.objectDestroys == right.objectDestroys;
+  };
+  check(sameCoverage(identity.coverage, explicitParallel.coverage),
+        "identity and explicit parallel coverage evidence is exactly equal");
+  check(identity.conservation.inputBlobs == explicitParallel.conservation.inputBlobs &&
+            identity.conservation.referencedBlobs ==
+                explicitParallel.conservation.referencedBlobs &&
+            identity.conservation.objectsCreated ==
+                explicitParallel.conservation.objectsCreated &&
+            identity.conservation.objectsReleased ==
+                explicitParallel.conservation.objectsReleased &&
+            identity.conservation.presentOrdinal ==
+                explicitParallel.conservation.presentOrdinal &&
+            identity.conservation.completionOrdinal ==
+                explicitParallel.conservation.completionOrdinal,
+        "identity and explicit parallel conservation evidence is exactly equal");
+  check(identity.intervalCount == explicitParallel.intervalCount &&
+            sameValidity(identity.intervals[0].validity,
+                         explicitParallel.intervals[0].validity) &&
+            identity.intervals[0].presentOrdinal ==
+                explicitParallel.intervals[0].presentOrdinal &&
+            identity.intervals[0].completionOrdinal ==
+                explicitParallel.intervals[0].completionOrdinal,
+        "identity and explicit parallel interval output identity is exact");
+}
+
 void boundedSequenceMutationIsVisibleAtSecondPresent() {
   SequenceFixture fixture;
   const auto blobs = fixture.blobs();
@@ -2698,6 +2945,32 @@ void writeSequenceFixture(const std::filesystem::path& directory) {
   check(first.good() && second.good(), "sequence fixture must write both blobs");
 }
 
+void writeParallelFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "parallel fixture directory must be created");
+  const ParallelIndexedFixture fixture;
+  std::ofstream events(directory / "events.bin", std::ios::binary);
+  check(events.good(), "parallel fixture must open events.bin");
+  events.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  check(events.good(), "parallel fixture must write events.bin");
+  constexpr std::array names{
+      std::string_view{"vertex.bin"}, std::string_view{"index.bin"},
+      std::string_view{"shader.bin"}, std::string_view{"declaration.bin"},
+      std::string_view{"output.bin"},
+  };
+  check(fixture.blobsValue.size() == names.size(),
+        "parallel fixture blob count is pinned");
+  for (std::size_t index = 0u; index < names.size(); ++index) {
+    std::ofstream blob(directory / std::string(names[index]), std::ios::binary);
+    check(blob.good(), "parallel fixture must open a blob file");
+    blob.write(reinterpret_cast<const char*>(fixture.blobsValue[index].bytes.data()),
+               static_cast<std::streamsize>(fixture.blobsValue[index].bytes.size()));
+    check(blob.good(), "parallel fixture must write every blob file");
+  }
+}
+
 void eventLevelMutationDrainOrderingIsPinned() {
   check(!renderTapeProviderEventRequiresDrain(
             false, RenderTapeEventType::ResourceMutation) &&
@@ -2728,10 +3001,14 @@ int main(int argc, char** argv) {
       writeSequenceFixture(argv[2]);
       return 0;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-parallel-fixture") {
+      writeParallelFixture(argv[2]);
+      return 0;
+    }
     check(argc == 1,
           "usage: render_tape_provider_spec "
           "[--test-event-ordering|--write-production-fixture dir|"
-          "--write-sequence-fixture dir]");
+          "--write-sequence-fixture dir|--write-parallel-fixture dir]");
     eventLevelMutationDrainOrderingIsPinned();
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
     colorSnapshotCapturesExact2DAndAllCubeFaces();
@@ -2745,6 +3022,7 @@ int main(int argc, char** argv) {
     nativeMetalOffscreenIdentityReplay();
     nativeMetalTexturedUpDigestRepeats();
     generalIndexedReplayConservesAllObjects();
+    productionParallelIndexedFixtureHasTwoChildren();
     boundedSequenceMutationIsVisibleAtSecondPresent();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
     productionShapeReportsWrongExpectedDigest();

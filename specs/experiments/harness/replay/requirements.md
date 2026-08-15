@@ -896,3 +896,42 @@ R-HARN-REPLAY-7.19 may be considered only when separately authenticated
 capture-side pixels have identical projected semantics. Any sidecar,
 materialization, conservation, output, determinism, or final-provider failure
 removes staging and leaves no destination.
+
+**R-HARN-REPLAY-7.23** The production Render Tape parallel-refinement join is
+a cold, fail-closed provider operation over an unchanged authenticated bundle.
+The provider must expose a typed partition request with distinct `identity`,
+`serial`, and `parallel` values, resolve it through the production partition
+configuration, and report the requested and resolved values. Its result must
+also report typed unsigned evidence for selected parallel passes, accepted
+children and Draws, worker batches/tasks/active peak, pre-effect fallbacks, and
+GPU command-buffer errors. Worker CPU/wall time may be reported for diagnosis
+but is not proof of work because clock resolution may produce zero.
+
+The official parallel verifier must first validate the complete bundle and
+then invoke at least two separate fresh provider processes per mode over that
+exact input: identity and ExplicitParallel. Every run must complete the strict
+production output oracle. Replay identity—including status, requirements,
+validity/output digest, grammar coverage, conservation, and interval
+evidence—must be exactly equal within the identity repetitions, within the
+ExplicitParallel repetitions, and across both modes. Acceptance additionally
+requires the non-timing parallel evidence (`selected`, children, Draws,
+pre-effect fallbacks, GPU errors, and worker batches/tasks) to be equal across
+the ExplicitParallel repetitions; worker timing and active peak remain
+scheduling diagnostics and are gated only as stated below. Acceptance also
+requires every ExplicitParallel run to report `selected > 0`, at
+least two accepted children, `draws > 0`, worker batches/tasks/active peak all
+greater than zero, and zero GPU command-buffer errors. A pre-effect fallback
+count remains typed diagnostic evidence; a fallback that prevents these gates
+cannot be accepted as parallel evidence. Any malformed counter, mode mismatch,
+provider failure, oracle failure, equality mismatch, vacuous selection, or GPU
+error rejects the joined result. The operation produces one machine-readable
+result only after all child processes finish and writes no replay artifact.
+
+The deterministic native/CLI acceptance fixture must contain a coordinator
+Clear, a canonical `FULL_SNAPSHOT` anchor, one DrawRun whose production
+partition has at least two non-empty children and satisfies the unchanged
+child-boundary economics policy, and a coordinator Present. This requirement
+closes the bounded implementation join; it does not claim a GT2 capture,
+performance result, default promotion, or wild correctness evidence. A
+non-vacuous GT2 capture/ExplicitParallel replay remains a separate evidence
+gate.

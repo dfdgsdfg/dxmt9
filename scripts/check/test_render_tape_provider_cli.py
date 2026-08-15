@@ -77,6 +77,188 @@ def main() -> int:
             "production_provider_replay": True,
         }
 
+        parallel_source = root_path / "parallel-source"
+        parallel_bundle = root_path / "parallel-bundle"
+        run(str(fixture), "--write-parallel-fixture", str(parallel_source))
+        parallel_pack = [
+            sys.executable,
+            str(bundle_tool),
+            "pack",
+            "--events",
+            str(parallel_source / "events.bin"),
+            "--output-dir",
+            str(parallel_bundle),
+            "--validator",
+            str(validator),
+        ]
+        for blob in sorted(parallel_source.glob("*.bin")):
+            if blob.name != "events.bin":
+                parallel_pack.extend(("--blob", str(blob)))
+        run(*parallel_pack)
+        parallel = json.loads(
+            run(
+                sys.executable,
+                str(runner),
+                "parallel-verify",
+                str(parallel_bundle),
+                "--provider",
+                str(provider),
+                "--validator",
+                str(validator),
+            ).stdout
+        )
+        assert parallel["oracle_accepted"] is True
+        assert parallel["strict_identity_equal"] is True
+        assert parallel["non_vacuous"] is True
+        assert len(parallel["identity_runs"]) == 2
+        assert len(parallel["parallel_runs"]) == 2
+        assert all(
+            run["partition_mode"] == {"requested": "identity", "resolved": "identity"}
+            for run in parallel["identity_runs"]
+        )
+        assert all(
+            run["partition_mode"] == {"requested": "parallel", "resolved": "parallel"}
+            for run in parallel["parallel_runs"]
+        )
+        assert parallel["identity_replay"] == parallel["parallel_replay"]
+        assert parallel["identity_partition_mode"] == {
+            "requested": "identity",
+            "resolved": "identity",
+        }
+        assert parallel["partition_mode"] == {
+            "requested": "parallel",
+            "resolved": "parallel",
+        }
+        counters = parallel["parallel_counters"]
+        assert counters["selected"] > 0
+        assert counters["children"] >= 2
+        assert counters["draws"] > 0
+        assert counters["worker_batches"] > 0
+        assert counters["worker_tasks"] > 0
+        assert counters["worker_active_peak"] > 0
+        assert counters["gpu_command_buffer_errors"] == 0
+        assert all(type(value) is int and value >= 0 for value in counters.values())
+        assert len(parallel["parallel_counters_runs"]) == 2
+        for run_counters in parallel["parallel_counters_runs"]:
+            assert run_counters["selected"] > 0
+            assert run_counters["children"] >= 2
+            assert run_counters["draws"] > 0
+            assert run_counters["worker_batches"] > 0
+            assert run_counters["worker_tasks"] > 0
+            assert run_counters["worker_active_peak"] > 0
+            assert run_counters["gpu_command_buffer_errors"] == 0
+            assert all(
+                type(value) is int and value >= 0
+                for value in run_counters.values()
+            )
+        replay_fields = (
+            "profile",
+            "status",
+            "failed_event",
+            "requirements",
+            "validity",
+            "coverage",
+            "conservation",
+            "intervals",
+        )
+        assert all(
+            parallel["identity_replay"] == {
+                key: run.get(key)
+                for key in replay_fields
+            }
+            for run in parallel["identity_runs"]
+        )
+        assert all(
+            parallel["parallel_replay"] == {
+                key: run.get(key)
+                for key in replay_fields
+            }
+            for run in parallel["parallel_runs"]
+        )
+
+        mutating_provider = root_path / "mutating-provider.py"
+        mutation_state = root_path / "mutating-provider.count"
+        mutating_provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import pathlib\n"
+            "import subprocess\n"
+            "import sys\n"
+            f"real = {str(provider.resolve())!r}\n"
+            f"state = pathlib.Path({str(mutation_state)!r})\n"
+            "count = int(state.read_text()) if state.exists() else 0\n"
+            "state.write_text(str(count + 1), encoding='utf-8')\n"
+            "completed = subprocess.run([real, *sys.argv[1:]], check=False, "
+            "text=True, capture_output=True)\n"
+            "result = json.loads(completed.stdout)\n"
+            "if count == 3:\n"
+            "    result['validity']['output_sha256'] = 'f' * 64\n"
+            "print(json.dumps(result))\n"
+            "sys.stderr.write(completed.stderr)\n"
+            "raise SystemExit(completed.returncode)\n",
+            encoding="utf-8",
+        )
+        mutating_provider.chmod(0o755)
+        nondeterministic = run(
+            sys.executable,
+            str(runner),
+            "parallel-verify",
+            str(parallel_bundle),
+            "--provider",
+            str(mutating_provider),
+            "--validator",
+            str(validator),
+            check=False,
+        )
+        assert nondeterministic.returncode != 0
+        nondeterministic_result = json.loads(nondeterministic.stdout)
+        assert nondeterministic_result["oracle_accepted"] is False
+        assert "nondeterministic" in nondeterministic_result["failed_gate"]
+        assert len(nondeterministic_result["identity_runs"]) == 2
+        assert len(nondeterministic_result["parallel_runs"]) == 2
+
+        mutation_state.unlink()
+        mutating_provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import pathlib\n"
+            "import subprocess\n"
+            "import sys\n"
+            f"real = {str(provider.resolve())!r}\n"
+            f"state = pathlib.Path({str(mutation_state)!r})\n"
+            "count = int(state.read_text()) if state.exists() else 0\n"
+            "state.write_text(str(count + 1), encoding='utf-8')\n"
+            "completed = subprocess.run([real, *sys.argv[1:]], check=False, "
+            "text=True, capture_output=True)\n"
+            "result = json.loads(completed.stdout)\n"
+            "if count == 3:\n"
+            "    result['parallel_counters']['selected'] += 1\n"
+            "print(json.dumps(result))\n"
+            "sys.stderr.write(completed.stderr)\n"
+            "raise SystemExit(completed.returncode)\n",
+            encoding="utf-8",
+        )
+        nondeterministic_counter = run(
+            sys.executable,
+            str(runner),
+            "parallel-verify",
+            str(parallel_bundle),
+            "--provider",
+            str(mutating_provider),
+            "--validator",
+            str(validator),
+            check=False,
+        )
+        assert nondeterministic_counter.returncode != 0
+        nondeterministic_counter_result = json.loads(
+            nondeterministic_counter.stdout
+        )
+        assert nondeterministic_counter_result["oracle_accepted"] is False
+        assert (
+            nondeterministic_counter_result["failed_gate"]
+            == "ExplicitParallel counter evidence is nondeterministic: selected"
+        )
+
         inspected = json.loads(
             run(
                 sys.executable,

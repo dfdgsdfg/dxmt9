@@ -677,6 +677,26 @@ void countParallelPassWorkerWallTime(std::uint64_t wallNs) {
   add(counters().parallelPassWorkerWallNs, wallNs);
 }
 
+RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept {
+  const Counters& c = counters();
+  return RenderTapeParallelJoinSnapshot{
+      .selected = load(c.parallelPassSelected),
+      .children = load(c.parallelPassEconomicsAcceptedChildren),
+      .draws = load(c.parallelPassEconomicsAcceptedDraws),
+      .workerBatches = load(c.parallelPassWorkerBatches),
+      .workerTasks = load(c.parallelPassWorkerTasks),
+      .workerCpuNs = load(c.parallelPassWorkerCpuNs),
+      .workerWallNs = load(c.parallelPassWorkerWallNs),
+      .workerActivePeak = load(c.parallelPassWorkerActivePeak),
+      // parallelPassFallbackPreEffect is the canonical aggregate for all
+      // pre-effect ParallelPassFallbackReason values, including binding
+      // rejects. Do not add the per-reason binding counters here: they are
+      // diagnostic sub-buckets of the same fallback event.
+      .preEffectFallbacks = load(c.parallelPassFallbackPreEffect),
+      .gpuCommandBufferErrors = load(c.gpuCommandBufferErrors),
+  };
+}
+
 void countParallelPassBindingReject(
     encoders::ParallelPassBindingRejectReason reason) {
   using Reason = encoders::ParallelPassBindingRejectReason;
