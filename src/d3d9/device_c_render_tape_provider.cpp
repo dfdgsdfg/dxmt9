@@ -119,6 +119,8 @@ struct PreflightPlan {
   RenderTapeTextureDescriptorV2 textureDesc{};
   D9CSurfaceDesc textureLevel0{};
   bool textureProducedByCapturedPass = false;
+  std::vector<std::pair<D9CWireObjectIdentity, D9CSurfaceDesc>>
+      producedStandaloneSurfaces{};
   D9CWireObjectIdentity vertexDeclarationIdentity{};
 };
 
@@ -377,7 +379,7 @@ bool parseChunks(std::span<const std::byte> bytes, std::uint32_t count,
   return offset == bytes.size();
 }
 
-bool acceptedSurface(const D9CSurfaceDesc& desc) {
+bool acceptedOutputSurface(const D9CSurfaceDesc& desc) {
   if (desc.resourceType != 1u || desc.width == 0u || desc.height == 0u ||
       desc.depth != 1u || desc.pool != 0u || desc.multiSampleType != 0u ||
       desc.multiSampleQuality != 0u || (desc.usage & 1u) == 0u ||
@@ -512,8 +514,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         RenderTapeSurfaceDescriptorV2 surface{};
         if (!noImmutablePayload || descriptor.size() != sizeof(surface) ||
             !load(descriptor, 0u, surface) ||
-            surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2 ||
-            !acceptedSurface(surface.surface)) goto unsupported;
+            surface.schemaVersion != kRenderTapeSurfaceDescriptorVersion2)
+          goto unsupported;
         if (surface.storage == static_cast<std::uint32_t>(
                 RenderTapeSurfaceStorage::SwapchainBackbuffer)) {
           if (surface.initialContentDisposition != static_cast<std::uint32_t>(
@@ -522,7 +524,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               !renderTapeZeroIdentity(surface.parentTexture) ||
               fixed.expectedContentBytes != 0u ||
               fixed.expectedContentCount != 0u ||
-              candidate.outputIdentity.objectId != 0u) goto unsupported;
+              candidate.outputIdentity.objectId != 0u ||
+              !acceptedOutputSurface(surface.surface)) goto unsupported;
           candidate.outputIdentity = fixed.identity;
           candidate.outputDesc = surface.surface;
         } else if (surface.storage == static_cast<std::uint32_t>(
@@ -534,6 +537,18 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               surface.parentTexture.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
               surface.parentTexture.generation == 0u ||
               surface.parentTexture.objectId == 0u) goto unsupported;
+        } else if (surface.storage == static_cast<std::uint32_t>(
+                       RenderTapeSurfaceStorage::Standalone)) {
+          if (surface.initialContentDisposition != static_cast<std::uint32_t>(
+                  RenderTapeInitialContentDisposition::ProducedByCapturedPass) ||
+              surface.subresource != 0u ||
+              !renderTapeZeroIdentity(surface.parentTexture) ||
+              fixed.expectedContentBytes != 0u ||
+              fixed.expectedContentCount != 0u ||
+              !renderTapeProducedStandaloneSurfaceSupported(surface.surface))
+            goto unsupported;
+          candidate.producedStandaloneSurfaces.push_back(
+              {fixed.identity, surface.surface});
         } else {
           goto unsupported;
         }
@@ -629,7 +644,8 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         } else if (recordState == FrameRecordState::ExpectClear &&
             record.header.type == D9C_COMMAND_RECORD_CLEAR) {
           D9CCommandChunkWireClear clear{};
-          if (!load(record.payload, 0u, clear) || clear.flags != 1u ||
+          if (!load(record.payload, 0u, clear) || clear.flags == 0u ||
+              (clear.flags & ~7u) != 0u ||
               clear.rectCount != 0u) goto unsupported;
           ++result.coverage.clearRecords;
           recordState = FrameRecordState::ExpectDrawOrPresent;
@@ -768,7 +784,9 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
         });
     const bool productionDeclaration =
         candidate.vertexDeclarationIdentity.objectId != 0u;
-    const std::size_t expectedDefinitions = productionDeclaration ? 3u : 2u;
+    const std::size_t expectedDefinitions =
+        (productionDeclaration ? 3u : 2u) +
+        candidate.producedStandaloneSurfaces.size();
     const std::size_t expectedSurfaceAliases = std::count_if(
         candidate.definitions.begin(), candidate.definitions.end(),
         [&](const auto& definition) {
@@ -999,12 +1017,28 @@ FrameTapeReplayResult replayRenderTapeIdentity(
           value = dxmt9c_texture_get_surface_level(
               static_cast<D9CTexture*>(parent), surface.subresource);
         }
-      } else {
+      } else if (surface.storage == static_cast<std::uint32_t>(
+                     RenderTapeSurfaceStorage::SwapchainBackbuffer)) {
         auto* swap = device->iface->GetSwapChain(0u);
         if (swap) {
           value = new D9CSurface{swap->backBuffer(), nullptr, 0u, device};
           swap->Release();
         }
+      } else if (surface.storage == static_cast<std::uint32_t>(
+                     RenderTapeSurfaceStorage::Standalone) &&
+                 surface.initialContentDisposition ==
+                     static_cast<std::uint32_t>(
+                         RenderTapeInitialContentDisposition::
+                             ProducedByCapturedPass)) {
+        value = surface.surface.usage == 1u
+            ? static_cast<void*>(dxmt9c_device_create_render_target(
+                  device, surface.surface.width, surface.surface.height,
+                  surface.surface.format, surface.surface.multiSampleType,
+                  surface.surface.multiSampleQuality, 0u, nullptr))
+            : static_cast<void*>(dxmt9c_device_create_depth_stencil(
+                  device, surface.surface.width, surface.surface.height,
+                  surface.surface.format, surface.surface.multiSampleType,
+                  surface.surface.multiSampleQuality, 0u, nullptr));
       }
     } else if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
       D9CBufferDesc desc{};

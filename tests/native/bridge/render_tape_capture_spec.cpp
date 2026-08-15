@@ -264,6 +264,25 @@ constexpr D9CWireObjectIdentity kProducedOutput{
     .generation = 7u,
     .objectId = 40u,
 };
+constexpr D9CWireObjectIdentity kProducedDepth{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 7u,
+    .objectId = 45u,
+};
+
+RenderTapeSurfaceDescriptorV2 producedDepthDescriptor() {
+  return {
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedByCapturedPass),
+      .surface = D9CSurfaceDesc{
+          .format = 77u, .resourceType = 1u, .usage = 2u, .pool = 0u,
+          .width = 4u, .height = 4u, .depth = 1u,
+      },
+  };
+}
 
 std::vector<std::byte> producedTextureDescriptor() {
   RenderTapeTextureDescriptorV2 header{
@@ -376,7 +395,8 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
                                               bool wrongIdentity = false,
                                               bool omitAlias = false,
                                               D9CWireObjectIdentity aliasIdentity =
-                                                  kProducedAlias) {
+                                                  kProducedAlias,
+                                              bool includeDepth = false) {
   const bool bindAlias = !omitAlias;
   const auto target = wrongIdentity
       ? D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -387,6 +407,11 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
       .slot = 0u,
       .valid = bindAlias ? 1u : 0u,
       .handleIndex = bindAlias ? 0u : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+  const D9CCommandChunkWireDepthStencilBinding depthStencil{
+      .valid = includeDepth ? 1u : 0u,
+      .handleIndex = includeDepth ? 1u
+                                  : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+  };
   std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
@@ -399,7 +424,7 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
     streams[slot] = {.slot = slot, .valid = 1u,
                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
   }
-  constexpr std::uint32_t sectionCount = 3u;
+  constexpr std::uint32_t sectionCount = 4u;
   const D9CCommandChunkWireDrawHeader apply{
       .flags = 0u,
       .sectionCount = sectionCount,
@@ -411,6 +436,7 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
   };
   const auto streamOffset = apply.sectionPayloadOffset + sizeof(textures);
   const auto renderTargetOffset = streamOffset + sizeof(streams);
+  const auto depthStencilOffset = renderTargetOffset + sizeof(renderTarget);
   const std::array sections{
       D9CCommandChunkWireSectionDesc{
           .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
@@ -433,9 +459,16 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
           .payloadOffset = static_cast<std::uint32_t>(renderTargetOffset),
           .byteSize = sizeof(renderTarget),
       },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+          .elementSize = sizeof(depthStencil),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(depthStencilOffset),
+          .byteSize = sizeof(depthStencil),
+      },
   };
   std::vector<std::byte> applyPayload(
-      renderTargetOffset + sizeof(renderTarget));
+      depthStencilOffset + sizeof(depthStencil));
   std::memcpy(applyPayload.data(), &apply, sizeof(apply));
   std::memcpy(applyPayload.data() + apply.sectionTableOffset, sections.data(),
               sizeof(sections));
@@ -445,8 +478,10 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
               sizeof(streams));
   std::memcpy(applyPayload.data() + renderTargetOffset, &renderTarget,
               sizeof(renderTarget));
+  std::memcpy(applyPayload.data() + depthStencilOffset, &depthStencil,
+              sizeof(depthStencil));
   const D9CCommandChunkWireClear clear{
-      .flags = 1u,
+      .flags = includeDepth ? 3u : 1u,
       .colorARGB = 0xff204060u,
       .z = 1.0f,
       .rectCount = partial ? 1u : 0u,
@@ -468,8 +503,16 @@ std::vector<std::byte> producedFullClearChunk(bool partial = false,
       ProducedRecord{.type = D9C_COMMAND_RECORD_APPLY_STATE,
                      .payload = applyPayload,
                      .handles = bindAlias
-                         ? std::vector<D9CCommandChunkWireHandleEntry>{
-                               {target.kind, target.generation, target.objectId}}
+                         ? includeDepth
+                               ? std::vector<D9CCommandChunkWireHandleEntry>{
+                                     {target.kind, target.generation,
+                                      target.objectId},
+                                     {kProducedDepth.kind,
+                                      kProducedDepth.generation,
+                                      kProducedDepth.objectId}}
+                               : std::vector<D9CCommandChunkWireHandleEntry>{
+                                     {target.kind, target.generation,
+                                      target.objectId}}
                          : std::vector<D9CCommandChunkWireHandleEntry>{}},
       ProducedRecord{.type = D9C_COMMAND_RECORD_CLEAR,
                      .payload = clearPayload},
@@ -545,7 +588,9 @@ void testProducedByCapturedPassCaptureEndToEnd() {
                      std::span<const std::byte> textureDescriptor,
                      bool secondAlias = false,
                      bool secondProduced = false,
-                     std::uint32_t chunkHandleCount = 1u) {
+                     std::uint32_t chunkHandleCount = 1u,
+                     bool standaloneDepth = false,
+                     RenderTapeValidationResult* validationOut = nullptr) {
     RenderTapeCaptureSession session(true);
     check(session.arm(bootstrapChunk()) == RenderTapeCaptureStatus::Accepted &&
               session.beginPresentInterval() ==
@@ -598,6 +643,15 @@ void testProducedByCapturedPassCaptureEndToEnd() {
                 RenderTapeCaptureStatus::Accepted,
             "multiple Produced fixture defines the second texture");
     }
+    if (standaloneDepth) {
+      const auto depth = producedDepthDescriptor();
+      check(session.objectDefine(
+                kProducedDepth,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+                std::as_bytes(std::span(&depth, 1u)), 0u, {}, 0u, 0u) ==
+                RenderTapeCaptureStatus::Accepted,
+            "multiple Produced fixture defines standalone D24X8");
+    }
     if (!chunk.empty()) {
       ImportedChunkView imported;
       const auto chunkValidation = validateCommandChunk(
@@ -618,14 +672,25 @@ void testProducedByCapturedPassCaptureEndToEnd() {
               RenderTapeCaptureStatus::Accepted,
           "ProducedByCapturedPass capture records completion fence");
     const auto status = session.completePresent(
-        5u, 11u, RenderTapeDigestValidity::NotCaptured, {},
+        standaloneDepth ? 6u : 5u, 11u,
+        RenderTapeDigestValidity::NotCaptured, {},
         std::as_bytes(std::span(&outputOracle, 1u)));
+    if (validationOut)
+      *validationOut = session.validationResult();
     return std::pair{status, session.sealedArtifact().empty()};
   };
 
   const auto positive = capture(producedFullClearChunk(), textureDescriptorBytes);
   check(positive.first == RenderTapeCaptureStatus::Complete && !positive.second,
         "capture publishes Produced texture, alias, and the same full-clear chunk");
+  RenderTapeValidationResult multiValidation{};
+  const auto multiObligation = capture(
+      producedFullClearChunk(false, false, false, false, kProducedAlias, true),
+      textureDescriptorBytes, false, false, 2u, true, &multiValidation);
+  check(multiObligation.first == RenderTapeCaptureStatus::Complete &&
+            !multiObligation.second,
+        std::string("one clear resolves texture color and standalone D24X8 obligations: ") +
+            renderTapeValidationStatusName(multiValidation.status));
 
   auto partial = capture(producedFullClearChunk(true), textureDescriptorBytes);
   auto drawFirst = capture(producedFullClearChunk(false, true),
@@ -3402,6 +3467,12 @@ void testBootstrapClosureTruthTable() {
             incompleteRoot.offendingIdentity.objectId == texture.objectId &&
             !incompleteRoot.hasDependencyIdentity,
         "referenced incomplete seed names its exact root");
+  incomplete[0].producedByCapturedPassCandidate = true;
+  check(renderTapeBuildBootstrapClosure(textureRoot, output, incomplete,
+                                        closure) ==
+            RenderTapeBootstrapClosureStatus::Accepted &&
+            renderTapeBootstrapClosureContains(closure, texture),
+        "descriptor-qualified incomplete bootstrap root remains a temporal obligation");
   incomplete = complete;
   incomplete[1].complete = false;
   check(renderTapeBuildBootstrapClosure(roots, output, incomplete, closure) ==
@@ -3475,12 +3546,6 @@ void testCommandAdmissionTruthTable() {
       Row{{.originAccepted = true, .registryPresent = true,
            .liveObject = true, .producedDescriptorSupported = true},
           RenderTapeCommandAdmissionStatus::ProducedProofRejected, true},
-      Row{{.originAccepted = true, .registryPresent = true,
-           .liveObject = true, .producedDescriptorSupported = true,
-           .producedProofAccepted = true,
-           .producedIdentityConflict = true},
-          RenderTapeCommandAdmissionStatus::MultipleProducedCandidates, true,
-          true},
       Row{{.originAccepted = true, .registryPresent = true,
            .liveObject = true, .producedDescriptorSupported = true,
            .producedProofAccepted = true},

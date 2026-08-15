@@ -94,9 +94,11 @@ enum class RenderTapeProducedProofStatus : std::uint32_t {
   InvalidOriginKind,
   InvalidResolvedKind,
   DirectTextureAmbiguity,
+  UnsupportedStandaloneDescriptor,
   NoTerminalAccess,
   Malformed,
   NotFullClearWrite,
+  MissingRequiredClearAspect,
   AliasOriginMismatch,
   OriginIdentityMismatch,
   ResolvedIdentityMismatch,
@@ -117,6 +119,15 @@ RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
     const ImportedChunkView& chunk,
     const D9CWireObjectIdentity& originIdentity,
     const D9CWireObjectIdentity& resolvedIdentity) noexcept;
+
+// Exact direct-surface counterpart used for a bounded standalone attachment
+// obligation.  The descriptor restricts the proof to supported RT/D24X8
+// shapes and determines the Clear aspect that must be present.
+RenderTapeProducedProofResult
+renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& identity,
+    const D9CSurfaceDesc& descriptor) noexcept;
 
 const char* renderTapeProducedProofStatusName(
     RenderTapeProducedProofStatus status) noexcept;

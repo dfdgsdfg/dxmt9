@@ -7806,6 +7806,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                 object->descriptor, 0u, desc) &&
                             (desc.usage & 1u) != 0u;
                     }
+                } else if (!complete &&
+                           object->identity.kind ==
+                               D9C_CHUNK_HANDLE_KIND_SURFACE) {
+                    dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+                    producedByCapturedPassCandidate =
+                        renderTapeLoadSurfaceDescriptorV2(object->descriptor,
+                                                          surface) &&
+                        surface.storage == static_cast<std::uint32_t>(
+                            dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
+                        dxmt9::d3d9::renderTapeProducedStandaloneSurfaceSupported(
+                            surface.surface);
                 }
                 closureObjects.push_back({
                     .identity = object->identity,
@@ -8429,11 +8440,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 texture.dimension == static_cast<std::uint32_t>(
                     RenderTapeTextureDimension::Texture2D) &&
                 texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
+            dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+            const bool exactStandaloneSurface =
+                renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
+                surface.storage == static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
+                dxmt9::d3d9::renderTapeProducedStandaloneSurfaceSupported(
+                    surface.surface);
             producedByCapturedPass =
-                exactTexture &&
-                dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
-                    *currentChunk, originLocator->originIdentity,
-                    object->identity);
+                (exactTexture &&
+                 dxmt9::d3d9::renderTapeProveProducedByCapturedPass(
+                     *currentChunk, originLocator->originIdentity,
+                     object->identity)) ||
+                (exactStandaloneSurface &&
+                 dxmt9::d3d9::
+                     renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+                         *currentChunk, object->identity, surface.surface)
+                         .accepted());
         } else if (incomplete) {
             const auto missing = std::find_if(
                 object->content.begin(), object->content.end(),
@@ -8555,16 +8578,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::renderTapeDescriptorKindForObject(identity.kind));
         std::vector<std::byte> descriptor = object->descriptor;
         if (producedByCapturedPass) {
-            RenderTapeTextureDescriptorV2 texture{};
-            if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
-                texture.initialContentDisposition != static_cast<std::uint32_t>(
-                    RenderTapeInitialContentDisposition::CompleteSeed)) {
-                return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
-                                   DescriptorMismatch);
+            if (identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+                RenderTapeTextureDescriptorV2 texture{};
+                if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+                    texture.initialContentDisposition !=
+                        static_cast<std::uint32_t>(
+                            RenderTapeInitialContentDisposition::CompleteSeed)) {
+                    return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                                       DescriptorMismatch);
+                }
+                texture.initialContentDisposition = static_cast<std::uint32_t>(
+                    RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+                std::memcpy(descriptor.data(), &texture, sizeof(texture));
+            } else {
+                dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+                if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface) ||
+                    surface.storage != static_cast<std::uint32_t>(
+                        dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) ||
+                    !dxmt9::d3d9::renderTapeProducedStandaloneSurfaceSupported(
+                        surface.surface)) {
+                    return reject(dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+                                       DescriptorMismatch);
+                }
+                surface.initialContentDisposition = static_cast<std::uint32_t>(
+                    RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+                std::memcpy(descriptor.data(), &surface, sizeof(surface));
             }
-            texture.initialContentDisposition = static_cast<std::uint32_t>(
-                RenderTapeInitialContentDisposition::ProducedByCapturedPass);
-            std::memcpy(descriptor.data(), &texture, sizeof(texture));
         }
         if (renderTapeCapture_->objectDefine(
                 identity, descriptorKind, descriptor, immutableBytes,
@@ -8755,17 +8794,31 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                  .recordIndex = originLocator.recordIndex,
                  .recordType = originLocator.recordType});
             RenderTapeTextureDescriptorV2 texture{};
-            attribution.producedDescriptorSupported =
+            dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+            const bool producedTexture =
                 renderTapeLoadTextureDescriptorV2(object->descriptor, texture) &&
                 texture.dimension == static_cast<std::uint32_t>(
                     RenderTapeTextureDimension::Texture2D) &&
                 texture.mipLevelCount == 1u && texture.subresourceCount == 1u;
-            if (attribution.producedDescriptorSupported) {
+            const bool producedStandaloneSurface =
+                renderTapeLoadSurfaceDescriptorV2(object->descriptor, surface) &&
+                surface.storage == static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeSurfaceStorage::Standalone) &&
+                dxmt9::d3d9::renderTapeProducedStandaloneSurfaceSupported(
+                    surface.surface);
+            attribution.producedDescriptorSupported =
+                producedTexture || producedStandaloneSurface;
+            if (producedTexture) {
                 attribution.producedProof = dxmt9::d3d9::
                     renderTapeClassifyProducedByCapturedPass(
                         imported, originLocator.originIdentity, identity);
                 attribution.firstAccess =
                     attribution.producedProof.observation;
+            } else if (producedStandaloneSurface) {
+                attribution.producedProof = dxmt9::d3d9::
+                    renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+                        imported, identity, surface.surface);
+                attribution.firstAccess = attribution.producedProof.observation;
             } else {
                 // Diagnostic-only generic observation: unlike the production
                 // ProducedByCapturedPass grammar, this deliberately permits a
@@ -8777,9 +8830,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 attribution.firstAccess =
                     dxmt9::d3d9::renderTapeFirstAccessObserve(ledger, imported);
             }
-            const bool producedIdentityConflict =
-                producedIdentity &&
-                !renderTapeSameIdentity(*producedIdentity, identity);
             attribution.admission =
                 dxmt9::d3d9::renderTapeClassifyCommandAdmission({
                     .originAccepted = originLocator.status ==
@@ -8793,7 +8843,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         attribution.producedDescriptorSupported,
                     .producedProofAccepted =
                         attribution.producedProof.accepted(),
-                    .producedIdentityConflict = producedIdentityConflict,
                 });
             if (attribution.admission.accepted())
                 producedIdentity = identity;

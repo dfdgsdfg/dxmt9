@@ -233,7 +233,6 @@ enum class RenderTapeCommandAdmissionStatus : std::uint32_t {
   AliasDependencyRejected,
   UnsupportedProducedDescriptor,
   ProducedProofRejected,
-  MultipleProducedCandidates,
   IncompleteSeed,
 };
 
@@ -248,7 +247,6 @@ struct RenderTapeCommandAdmissionFacts {
   bool textureAlias = false;
   bool producedDescriptorSupported = false;
   bool producedProofAccepted = false;
-  bool producedIdentityConflict = false;
 };
 
 struct RenderTapeCommandAdmissionResult {

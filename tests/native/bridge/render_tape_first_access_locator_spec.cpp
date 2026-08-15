@@ -300,7 +300,52 @@ void testStandaloneDepthFullClearObservation() {
             observation.observedIdentity.kind ==
                 D9C_CHUNK_HANDLE_KIND_SURFACE &&
             observation.observedIdentity.objectId == depth.objectId,
-        "standalone depth full clear is observed without widening Produced proof");
+        "standalone depth full clear is observed exactly");
+
+  std::array<D9CCommandChunkWireRecordHeader, 2> records{
+      apply.record, clearFixture.record};
+  records[1].payloadOffset = static_cast<std::uint32_t>(apply.payload.size());
+  std::vector<std::byte> payload = apply.payload;
+  payload.insert(payload.end(), clearFixture.payload.begin(),
+                 clearFixture.payload.end());
+  const ImportedChunkView view{
+      .records = records,
+      .handles = apply.handles,
+      .payloadArena = payload,
+  };
+  const D9CSurfaceDesc d24x8{
+      .format = 77u, .resourceType = 1u, .usage = 2u, .pool = 0u,
+      .width = 2048u, .height = 2048u, .depth = 1u,
+  };
+  check(renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+            view, depth, d24x8).accepted(),
+        "standalone D24X8 is admitted after an unrestricted depth clear");
+
+  auto d24s8 = d24x8;
+  d24s8.format = 75u;
+  check(renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+            view, depth, d24s8).status ==
+            RenderTapeProducedProofStatus::UnsupportedStandaloneDescriptor,
+        "stencil-bearing depth remains fail-closed");
+
+  auto stencilOnly = clear;
+  stencilOnly.flags = 4u;
+  const auto stencilFixture = fixed(D9C_COMMAND_RECORD_CLEAR, &stencilOnly,
+                                    sizeof(stencilOnly));
+  records[1] = stencilFixture.record;
+  records[1].payloadOffset = static_cast<std::uint32_t>(apply.payload.size());
+  payload = apply.payload;
+  payload.insert(payload.end(), stencilFixture.payload.begin(),
+                 stencilFixture.payload.end());
+  const ImportedChunkView stencilView{
+      .records = records,
+      .handles = apply.handles,
+      .payloadArena = payload,
+  };
+  check(renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+            stencilView, depth, d24x8).status ==
+            RenderTapeProducedProofStatus::MissingRequiredClearAspect,
+        "D24X8 rejects a stencil-only clear");
 }
 
 void testProducedByCapturedPassProof() {

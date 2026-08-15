@@ -1,5 +1,7 @@
 #include "device_c_render_tape_first_access_locator.hpp"
 
+#include "device_c_render_tape_descriptors.hpp"
+
 #include <cstring>
 
 namespace dxmt9::d3d9 {
@@ -512,6 +514,52 @@ RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
           .observation = observation};
 }
 
+RenderTapeProducedProofResult
+renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& identity,
+    const D9CSurfaceDesc& descriptor) noexcept {
+  if (identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)
+    return {.status = RenderTapeProducedProofStatus::InvalidOriginKind};
+  if (!renderTapeProducedStandaloneSurfaceSupported(descriptor))
+    return {
+        .status = RenderTapeProducedProofStatus::UnsupportedStandaloneDescriptor};
+  RenderTapeFirstAccessLedger ledger{};
+  renderTapeFirstAccessArm(ledger, identity, identity);
+  const auto observation = renderTapeFirstAccessObserve(ledger, chunk);
+  if (observation.status == RenderTapeFirstAccessStatus::Malformed)
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = observation};
+  if (observation.status != RenderTapeFirstAccessStatus::Terminal)
+    return {.status = RenderTapeProducedProofStatus::NoTerminalAccess,
+            .observation = observation};
+  if (observation.classification != RenderTapeFirstAccessClass::FullClearWrite)
+    return {.status = RenderTapeProducedProofStatus::NotFullClearWrite,
+            .observation = observation};
+  if (observation.recordIndex >= chunk.records.size())
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = observation};
+  const auto record = chunk.record(observation.recordIndex);
+  D9CCommandChunkWireClear clear{};
+  if (record.header.type != D9C_COMMAND_RECORD_CLEAR ||
+      !load(record.payload, 0u, clear))
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = observation};
+  const auto requiredAspect = descriptor.usage == 1u ? kD3DClearTarget
+                                                     : kD3DClearZBuffer;
+  if ((clear.flags & requiredAspect) == 0u)
+    return {.status = RenderTapeProducedProofStatus::MissingRequiredClearAspect,
+            .observation = observation};
+  if (observation.aliasOrigin ||
+      !sameIdentity(observation.originIdentity, identity) ||
+      !sameIdentity(observation.resolvedIdentity, identity) ||
+      !sameIdentity(observation.observedIdentity, identity))
+    return {.status = RenderTapeProducedProofStatus::ObservedIdentityMismatch,
+            .observation = observation};
+  return {.status = RenderTapeProducedProofStatus::Accepted,
+          .observation = observation};
+}
+
 const char* renderTapeProducedProofStatusName(
     RenderTapeProducedProofStatus status) noexcept {
   switch (status) {
@@ -523,12 +571,16 @@ const char* renderTapeProducedProofStatusName(
     return "invalid_resolved_kind";
   case RenderTapeProducedProofStatus::DirectTextureAmbiguity:
     return "direct_texture_ambiguity";
+  case RenderTapeProducedProofStatus::UnsupportedStandaloneDescriptor:
+    return "unsupported_standalone_descriptor";
   case RenderTapeProducedProofStatus::NoTerminalAccess:
     return "no_terminal_access";
   case RenderTapeProducedProofStatus::Malformed:
     return "malformed";
   case RenderTapeProducedProofStatus::NotFullClearWrite:
     return "not_full_clear_write";
+  case RenderTapeProducedProofStatus::MissingRequiredClearAspect:
+    return "missing_required_clear_aspect";
   case RenderTapeProducedProofStatus::AliasOriginMismatch:
     return "alias_origin_mismatch";
   case RenderTapeProducedProofStatus::OriginIdentityMismatch:

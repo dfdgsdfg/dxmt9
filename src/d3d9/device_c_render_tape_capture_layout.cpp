@@ -276,6 +276,11 @@ RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
         (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer &&
          disposition == RenderTapeInitialContentDisposition::ProducedPresentOutput))
       return {};
+    if (storage == RenderTapeSurfaceStorage::Standalone &&
+        disposition ==
+            RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
+        renderTapeProducedStandaloneSurfaceSupported(surface.surface))
+      return {};
     if (storage != RenderTapeSurfaceStorage::Standalone ||
         disposition != RenderTapeInitialContentDisposition::CompleteSeed)
       return expectedContentFailure(
@@ -423,11 +428,6 @@ RenderTapeCommandAdmissionResult renderTapeClassifyCommandAdmission(
     return {.status =
                 RenderTapeCommandAdmissionStatus::ProducedProofRejected,
             .requiresMaterialization = true};
-  if (facts.producedIdentityConflict)
-    return {.status =
-                RenderTapeCommandAdmissionStatus::MultipleProducedCandidates,
-            .requiresMaterialization = true,
-            .usesProducedProof = true};
   return {.status = RenderTapeCommandAdmissionStatus::Accepted,
           .requiresMaterialization = true,
           .usesProducedProof = true};
@@ -452,8 +452,6 @@ const char* renderTapeCommandAdmissionStatusName(
     return "unsupported_produced_descriptor";
   case RenderTapeCommandAdmissionStatus::ProducedProofRejected:
     return "produced_proof_rejected";
-  case RenderTapeCommandAdmissionStatus::MultipleProducedCandidates:
-    return "multiple_produced_candidates";
   case RenderTapeCommandAdmissionStatus::IncompleteSeed:
     return "incomplete_seed";
   }

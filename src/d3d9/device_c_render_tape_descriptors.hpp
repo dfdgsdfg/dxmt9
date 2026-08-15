@@ -37,6 +37,23 @@ enum class RenderTapeSurfaceRegistrationRoute : std::uint8_t {
   TextureParentAlias,
 };
 
+// Produced standalone surfaces are deliberately narrower than the general
+// D3D9 surface descriptor grammar.  They must be single-sample DEFAULT-pool
+// attachments whose complete logical contents can be established by one
+// unrestricted Clear.  D24X8 has no stencil aspect; stencil-bearing and all
+// other depth formats remain fail-closed until an aspect-complete proof is
+// carried by the tape grammar.
+inline constexpr bool renderTapeProducedStandaloneSurfaceSupported(
+    const D9CSurfaceDesc &surface) noexcept {
+  if (surface.resourceType != 1u || surface.width == 0u ||
+      surface.height == 0u || surface.depth != 1u || surface.pool != 0u ||
+      surface.multiSampleType != 0u || surface.multiSampleQuality != 0u)
+    return false;
+  if (surface.usage == 1u)
+    return surface.format == 21u || surface.format == 22u;
+  return surface.usage == 2u && surface.format == 77u;
+}
+
 inline constexpr RenderTapeSurfaceRegistrationRoute
 renderTapeSurfaceRegistrationRoute(bool hasParentTexture) noexcept {
   return hasParentTexture
@@ -214,7 +231,10 @@ inline bool renderTapeLoadSurfaceDescriptorV2(
       out.initialContentDisposition);
   switch (storage) {
   case RenderTapeSurfaceStorage::Standalone:
-    return disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
+    return (disposition == RenderTapeInitialContentDisposition::CompleteSeed ||
+            (disposition ==
+                 RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
+             renderTapeProducedStandaloneSurfaceSupported(out.surface))) &&
            out.subresource == 0u && renderTapeZeroIdentity(out.parentTexture);
   case RenderTapeSurfaceStorage::TextureSubresource:
     return disposition == RenderTapeInitialContentDisposition::Unavailable &&
