@@ -856,6 +856,42 @@ typedef struct D9CRenderTapePresentCaptureResult {
     uint8_t sha256[32];
 } D9CRenderTapePresentCaptureResult;
 
+/* Capture-only, synchronous D24X8 arm-boundary snapshot. The output pointer
+ * is a top-level bridge argument (never nested inside D9CWireHandle) and the
+ * unix provider validates capacity before copying. Encoding version 1 is
+ * tightly packed little-endian float32 depth produced by a Metal shader; the
+ * physical depth/stencil allocation layout is never exposed on the wire. */
+enum {
+    D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1 = 1u,
+};
+
+typedef enum D9CRenderTapeD24X8SnapshotStatus {
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_NONE = 0,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_COMPLETE = 1,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_STALE_GENERATION = 2,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_DESCRIPTOR_MISMATCH = 3,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_UNSUPPORTED = 4,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_CAPACITY_MISMATCH = 5,
+    D9C_RENDER_TAPE_D24X8_SNAPSHOT_READBACK_FAILED = 6,
+} D9CRenderTapeD24X8SnapshotStatus;
+
+typedef struct D9CRenderTapeD24X8SnapshotRequest {
+    D9CWireObjectIdentity identity;
+    D9CSurfaceDesc surface;
+    uint32_t encodingVersion;
+    uint32_t reserved0;
+} D9CRenderTapeD24X8SnapshotRequest;
+
+typedef struct D9CRenderTapeD24X8SnapshotResult {
+    uint32_t status;
+    uint32_t encodingVersion;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t physicalFormat;
+    uint64_t byteCount;
+} D9CRenderTapeD24X8SnapshotResult;
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 DXMT9_NODISCARD D9CFactory* dxmt9c_factory_create(void);
@@ -996,6 +1032,9 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDe
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
     D9CDevice*, D9CRenderTapePresentCaptureResult* out);
 void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
+DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
+    D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,
+    D9CRenderTapeD24X8SnapshotResult* out, void* bytes, uint64_t capacity);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,

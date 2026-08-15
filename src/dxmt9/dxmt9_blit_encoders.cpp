@@ -616,4 +616,243 @@ bool readbackSurface(CommandQueue& queue,
   return true;
 }
 
+namespace {
+
+struct D24X8ConversionPipelines {
+  WMT::Reference<WMT::Library> library;
+  WMT::Reference<WMT::RenderPipelineState> read;
+  WMT::Reference<WMT::RenderPipelineState> write;
+  WMT::Reference<WMT::DepthStencilState> depthState;
+};
+
+D24X8ConversionPipelines makeD24X8ConversionPipelines(
+    WMT::Reference<WMT::Device> device, WMTPixelFormat physicalFormat) {
+  static constexpr char kSource[] = R"msl(
+#include <metal_stdlib>
+using namespace metal;
+struct VertexOut { float4 position [[position]]; };
+vertex VertexOut dxmt9_d24x8_snapshot_vs(uint vertexId [[vertex_id]]) {
+  const float2 p[3] = {
+    float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0),
+  };
+  return VertexOut{float4(p[vertexId], 0.0, 1.0)};
+}
+fragment float dxmt9_d24x8_capture_fs(
+    VertexOut in [[stage_in]], depth2d<float> source [[texture(0)]]) {
+  return source.read(uint2(in.position.xy));
+}
+struct DepthOut { float depth [[depth(any)]]; };
+fragment DepthOut dxmt9_d24x8_seed_fs(
+    VertexOut in [[stage_in]], texture2d<float> source [[texture(0)]]) {
+  return DepthOut{source.read(uint2(in.position.xy)).r};
+}
+)msl";
+  D24X8ConversionPipelines result;
+  WMT::Error error{};
+  result.library = device.newLibraryFromSource(kSource, error);
+  if (!result.library) return {};
+  auto vertex = result.library.newFunction("dxmt9_d24x8_snapshot_vs");
+  auto capture = result.library.newFunction("dxmt9_d24x8_capture_fs");
+  auto seed = result.library.newFunction("dxmt9_d24x8_seed_fs");
+  if (!vertex || !capture || !seed) return {};
+
+  WMTRenderPipelineInfo readInfo{};
+  readInfo.vertex_function = vertex.handle;
+  readInfo.fragment_function = capture.handle;
+  readInfo.colors[0].pixel_format = WMTPixelFormatR32Float;
+  readInfo.colors[0].write_mask = WMTColorWriteMaskAll;
+  readInfo.rasterization_enabled = true;
+  readInfo.raster_sample_count = 1;
+  readInfo.max_tessellation_factor = 1;
+  result.read = device.newRenderPipelineState(readInfo, error);
+
+  WMTRenderPipelineInfo writeInfo{};
+  writeInfo.vertex_function = vertex.handle;
+  writeInfo.fragment_function = seed.handle;
+  writeInfo.depth_pixel_format = physicalFormat;
+  writeInfo.rasterization_enabled = true;
+  writeInfo.raster_sample_count = 1;
+  writeInfo.max_tessellation_factor = 1;
+  result.write = device.newRenderPipelineState(writeInfo, error);
+
+  WMTDepthStencilInfo depthInfo{};
+  depthInfo.depth_compare_function = WMTCompareFunctionAlways;
+  depthInfo.depth_write_enabled = true;
+  result.depthState = device.newDepthStencilState(depthInfo);
+  return result;
+}
+
+bool checkedD24X8Layout(std::uint32_t width, std::uint32_t height,
+                        std::uint32_t& pitch, std::size_t& bytes) {
+  if (width == 0u || height == 0u ||
+      width > std::numeric_limits<std::uint32_t>::max() / sizeof(float)) {
+    return false;
+  }
+  pitch = width * sizeof(float);
+  if (height > std::numeric_limits<std::size_t>::max() / pitch) {
+    return false;
+  }
+  bytes = static_cast<std::size_t>(pitch) * height;
+  return bytes != 0u;
+}
+
+bool commandBufferCompleted(WMT::Reference<WMT::CommandBuffer>& commandBuffer) {
+  if (!commandBuffer) return false;
+  commandBuffer.commit();
+  const auto started = std::chrono::steady_clock::now();
+  commandBuffer.waitUntilCompleted();
+  perf::countSyncWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - started).count()));
+  return commandBuffer.status() == WMTCommandBufferStatusCompleted;
+}
+
+}  // namespace
+
+bool captureCanonicalD24X8Depth(CommandQueue& queue,
+                                resources::Pool& pool,
+                                WMT::Reference<WMT::Device> device,
+                                const core::BackendLimits& limits,
+                                core::SurfaceHandle source,
+                                core::CanonicalD24X8Depth& depth) {
+  depth = {};
+  WMT::Reference<WMT::Texture> sourceTexture;
+  core::SurfaceDesc desc{};
+  {
+    std::lock_guard lock(queue.mutex_);
+    const auto* record = pool.findSurface(source.value);
+    if (!record || !record->texture || record->resolveTexture) return false;
+    desc = record->desc;
+    sourceTexture = record->texture;
+  }
+  const auto physicalFormat = convert::toPixelFormat(core::Format::D24X8, limits);
+  if (!device || desc.format != core::Format::D24X8 || !desc.depthStencil ||
+      desc.renderTarget || desc.multiSampleType != core::MultiSampleType::None ||
+      sourceTexture.pixelFormat() != physicalFormat ||
+      (physicalFormat != WMTPixelFormatDepth24Unorm_Stencil8 &&
+       physicalFormat != WMTPixelFormatDepth32Float_Stencil8 &&
+       physicalFormat != WMTPixelFormatDepth32Float)) {
+    return false;
+  }
+  std::uint32_t pitch = 0u;
+  std::size_t byteCount = 0u;
+  if (!checkedD24X8Layout(desc.width, desc.height, pitch, byteCount)) return false;
+  auto pipelines = makeD24X8ConversionPipelines(device, physicalFormat);
+  if (!pipelines.read) return false;
+
+  WMTTextureInfo canonicalInfo{};
+  canonicalInfo.type = WMTTextureType2D;
+  canonicalInfo.pixel_format = WMTPixelFormatR32Float;
+  canonicalInfo.width = desc.width;
+  canonicalInfo.height = desc.height;
+  canonicalInfo.depth = 1u;
+  canonicalInfo.mipmap_level_count = 1u;
+  canonicalInfo.sample_count = 1u;
+  canonicalInfo.array_length = 1u;
+  canonicalInfo.options = WMTResourceStorageModePrivate;
+  canonicalInfo.usage = WMTTextureUsageRenderTarget;
+  auto canonical = device.newTexture(canonicalInfo);
+  WMTBufferInfo bufferInfo{};
+  bufferInfo.length = byteCount;
+  bufferInfo.options = WMTResourceStorageModeShared;
+  auto buffer = device.newBuffer(bufferInfo);
+  if (!canonical || !buffer || !bufferInfo.memory.ptr) return false;
+
+  auto commandBuffer = queue.newCommandBuffer();
+  if (!commandBuffer) return false;
+  WMTRenderPassInfo pass{};
+  pass.colors[0].texture = canonical.handle;
+  pass.colors[0].load_action = WMTLoadActionDontCare;
+  pass.colors[0].store_action = WMTStoreActionStore;
+  auto encoder = commandBuffer.renderCommandEncoder(pass);
+  if (!encoder) return false;
+  encoder.setRenderPipelineState(pipelines.read);
+  encoder.setFragmentTexture(sourceTexture, 0u);
+  encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0u, 3u);
+  encoder.endEncoding();
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) return false;
+  blit.copyFromTextureToBuffer(
+      canonical, 0u, 0u, WMTOrigin{0u, 0u, 0u},
+      WMTSize{desc.width, desc.height, 1u}, buffer, 0u, pitch, byteCount);
+  blit.endEncoding();
+  if (!commandBufferCompleted(commandBuffer)) return false;
+
+  try {
+    depth.bytes.resize(byteCount);
+  } catch (...) {
+    return false;
+  }
+  std::memcpy(depth.bytes.data(), bufferInfo.memory.ptr, byteCount);
+  depth.version = core::kCanonicalD24X8DepthVersion1;
+  depth.width = desc.width;
+  depth.height = desc.height;
+  depth.pitch = pitch;
+  depth.physicalFormat = static_cast<std::uint32_t>(physicalFormat);
+  return true;
+}
+
+bool seedCanonicalD24X8Depth(CommandQueue& queue,
+                             resources::Pool& pool,
+                             WMT::Reference<WMT::Device> device,
+                             const core::BackendLimits& limits,
+                             core::SurfaceHandle destination,
+                             const core::CanonicalD24X8Depth& depth) {
+  WMT::Reference<WMT::Texture> destinationTexture;
+  core::SurfaceDesc desc{};
+  {
+    std::lock_guard lock(queue.mutex_);
+    const auto* record = pool.findSurface(destination.value);
+    if (!record || !record->texture || record->resolveTexture) return false;
+    desc = record->desc;
+    destinationTexture = record->texture;
+  }
+  const auto physicalFormat = convert::toPixelFormat(core::Format::D24X8, limits);
+  std::uint32_t pitch = 0u;
+  std::size_t byteCount = 0u;
+  if (!device || desc.format != core::Format::D24X8 || !desc.depthStencil ||
+      desc.renderTarget || desc.multiSampleType != core::MultiSampleType::None ||
+      destinationTexture.pixelFormat() != physicalFormat ||
+      depth.version != core::kCanonicalD24X8DepthVersion1 ||
+      depth.width != desc.width || depth.height != desc.height ||
+      depth.physicalFormat != static_cast<std::uint32_t>(physicalFormat) ||
+      !checkedD24X8Layout(desc.width, desc.height, pitch, byteCount) ||
+      depth.pitch != pitch || depth.bytes.size() != byteCount) {
+    return false;
+  }
+  auto pipelines = makeD24X8ConversionPipelines(device, physicalFormat);
+  if (!pipelines.write || !pipelines.depthState) return false;
+  WMTTextureInfo uploadInfo{};
+  uploadInfo.type = WMTTextureType2D;
+  uploadInfo.pixel_format = WMTPixelFormatR32Float;
+  uploadInfo.width = desc.width;
+  uploadInfo.height = desc.height;
+  uploadInfo.depth = 1u;
+  uploadInfo.mipmap_level_count = 1u;
+  uploadInfo.sample_count = 1u;
+  uploadInfo.array_length = 1u;
+  uploadInfo.options = WMTResourceStorageModeShared;
+  uploadInfo.usage = WMTTextureUsageShaderRead;
+  auto upload = device.newTexture(uploadInfo);
+  if (!upload) return false;
+  upload.replaceRegion(WMTOrigin{0u, 0u, 0u},
+                       WMTSize{desc.width, desc.height, 1u}, 0u, 0u,
+                       depth.bytes.data(), pitch, byteCount);
+
+  auto commandBuffer = queue.newCommandBuffer();
+  if (!commandBuffer) return false;
+  WMTRenderPassInfo pass{};
+  pass.depth.texture = destinationTexture.handle;
+  pass.depth.load_action = WMTLoadActionDontCare;
+  pass.depth.store_action = WMTStoreActionStore;
+  auto encoder = commandBuffer.renderCommandEncoder(pass);
+  if (!encoder) return false;
+  encoder.setRenderPipelineState(pipelines.write);
+  encoder.setDepthStencilState(pipelines.depthState);
+  encoder.setFragmentTexture(upload, 0u);
+  encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0u, 3u);
+  encoder.endEncoding();
+  return commandBufferCompleted(commandBuffer);
+}
+
 }  // namespace dxmt9::encoders

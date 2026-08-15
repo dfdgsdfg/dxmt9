@@ -1618,6 +1618,23 @@ void testMissingSeedDescriptorAndProvenanceTruthTable() {
         "missing-seed descriptor status names are stable");
 }
 
+void testArmBoundaryTransitionTruthTable() {
+  using Phase = RenderTapeArmBoundaryPhase;
+  constexpr std::array phases{
+      Phase::Disabled, Phase::PresentFlushed, Phase::SnapshotComplete,
+      Phase::Armed, Phase::FirstCapturedChunk};
+  for (std::size_t from = 0u; from < phases.size(); ++from) {
+    for (std::size_t to = 0u; to < phases.size(); ++to) {
+      const auto transition = renderTapeAdvanceArmBoundary(
+          phases[from], phases[to]);
+      const bool expected = to == from + 1u;
+      check(transition.accepted == expected &&
+                transition.next == (expected ? phases[to] : phases[from]),
+            "Present flush -> snapshot -> arm -> first-chunk truth table");
+    }
+  }
+}
+
 void testExpectedContentContractDerivation() {
   constexpr auto texture = D9C_CHUNK_HANDLE_KIND_TEXTURE;
   constexpr auto surface = D9C_CHUNK_HANDLE_KIND_SURFACE;
@@ -1669,6 +1686,42 @@ void testExpectedContentContractDerivation() {
   check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
             contract.bytes == 32u && contract.count == 1u,
         "V2 standalone surface derives its tight uncompressed extent");
+
+  RenderTapeSurfaceDescriptorV2 snapshotDepth{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteDepthFloat32V1),
+      .surface = D9CSurfaceDesc{
+          .format = render_tape_d3d_format::D24X8,
+          .resourceType = 1u,
+          .usage = 2u,
+          .pool = 0u,
+          .multiSampleType = 0u,
+          .multiSampleQuality = 0u,
+          .width = 4u,
+          .height = 2u,
+          .depth = 1u,
+      },
+  };
+  contract = renderTapeDeriveExpectedContentContract(
+      surface, std::as_bytes(std::span(&snapshotDepth, 1u)));
+  check(renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface) &&
+            contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 32u && contract.count == 1u,
+        "standalone D24X8 snapshot derives exact float32-v1 bytes");
+  snapshotDepth.surface.format = render_tape_d3d_format::D24S8;
+  check(!renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface),
+        "D24S8 remains explicitly fail-closed");
+  snapshotDepth.surface.format = render_tape_d3d_format::D24X8;
+  snapshotDepth.surface.multiSampleType = 4u;
+  check(!renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface),
+        "multisampled D24X8 remains fail-closed");
+  snapshotDepth.surface.multiSampleType = 0u;
+  snapshotDepth.surface.usage = 3u;
+  check(!renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface),
+        "ambiguous D24X8 usage remains fail-closed");
 
   const D9CBufferDesc vb{.size = 257u};
   contract = renderTapeDeriveExpectedContentContract(
@@ -3605,6 +3658,7 @@ int main(int argc, char** argv) {
     testCommandAdmissionTruthTable();
     testObjectExpectedContentContractTruthTable();
     testMissingSeedDescriptorAndProvenanceTruthTable();
+    testArmBoundaryTransitionTruthTable();
     testExpectedContentContractDerivation();
     testUpdateTextureClosureTruthTable();
     testExpectedContentValidatorOrdering();

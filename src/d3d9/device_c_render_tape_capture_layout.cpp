@@ -224,6 +224,21 @@ RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
     }
     result.descriptorStatus = RenderTapeMissingSeedDescriptorStatus::Accepted;
     result.missingSurface = surface.surface;
+    if (renderTapeSnapshotStandaloneD24X8Supported(result.missingSurface)) {
+      std::uint64_t rowBytes = 0u;
+      std::uint64_t totalBytes = 0u;
+      result.expectedContentStatus =
+          checkedMul(result.missingSurface.width, sizeof(float), rowBytes) &&
+                  checkedMul(rowBytes, result.missingSurface.height,
+                             totalBytes) && totalBytes != 0u
+              ? RenderTapeExpectedContentStatus::Accepted
+              : RenderTapeExpectedContentStatus::Overflow;
+      result.expectedTightBytes = totalBytes;
+      result.expectedTightBytesValid =
+          result.expectedContentStatus ==
+          RenderTapeExpectedContentStatus::Accepted;
+      return result;
+    }
     const auto expected =
         renderTapeDeriveExpectedSurfaceContent(result.missingSurface);
     result.expectedContentStatus = expected.status;
@@ -281,6 +296,23 @@ RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
             RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
         renderTapeProducedStandaloneSurfaceSupported(surface.surface))
       return {};
+    if (storage == RenderTapeSurfaceStorage::Standalone &&
+        disposition ==
+            RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
+        renderTapeSnapshotStandaloneD24X8Supported(surface.surface)) {
+      std::uint64_t rowBytes = 0u;
+      std::uint64_t totalBytes = 0u;
+      if (!checkedMul(surface.surface.width, sizeof(float), rowBytes) ||
+          !checkedMul(rowBytes, surface.surface.height, totalBytes) ||
+          totalBytes == 0u) {
+        return expectedContentFailure(
+            RenderTapeExpectedContentStatus::Overflow);
+      }
+      if (!subresourceBytes.empty()) subresourceBytes[0] = totalBytes;
+      return {.status = RenderTapeExpectedContentStatus::Accepted,
+              .bytes = totalBytes,
+              .count = 1u};
+    }
     if (storage != RenderTapeSurfaceStorage::Standalone ||
         disposition != RenderTapeInitialContentDisposition::CompleteSeed)
       return expectedContentFailure(

@@ -24,7 +24,49 @@ enum class RenderTapeInitialContentDisposition : std::uint32_t {
   Unavailable = 2u,
   ProducedPresentOutput = 3u,
   ProducedByCapturedPass = 4u,
+  // Standalone D24X8 only. Canonical bytes are tightly packed little-endian
+  // float32 depth, encoding version 1; they are not physical Metal bytes.
+  CompleteDepthFloat32V1 = 5u,
 };
+
+// Capture-only model/code pin for the hard Present boundary. The PE owner
+// advances this value at the exact production call sites; it is never touched
+// while capture is disabled.
+enum class RenderTapeArmBoundaryPhase : std::uint8_t {
+  Disabled,
+  PresentFlushed,
+  SnapshotComplete,
+  Armed,
+  FirstCapturedChunk,
+};
+
+struct RenderTapeArmBoundaryTransition {
+  RenderTapeArmBoundaryPhase next = RenderTapeArmBoundaryPhase::Disabled;
+  bool accepted = false;
+};
+
+constexpr RenderTapeArmBoundaryTransition renderTapeAdvanceArmBoundary(
+    RenderTapeArmBoundaryPhase current,
+    RenderTapeArmBoundaryPhase requested) noexcept {
+  const bool accepted =
+      (current == RenderTapeArmBoundaryPhase::Disabled &&
+       requested == RenderTapeArmBoundaryPhase::PresentFlushed) ||
+      (current == RenderTapeArmBoundaryPhase::PresentFlushed &&
+       requested == RenderTapeArmBoundaryPhase::SnapshotComplete) ||
+      (current == RenderTapeArmBoundaryPhase::SnapshotComplete &&
+       requested == RenderTapeArmBoundaryPhase::Armed) ||
+      (current == RenderTapeArmBoundaryPhase::Armed &&
+       requested == RenderTapeArmBoundaryPhase::FirstCapturedChunk);
+  return {.next = accepted ? requested : current, .accepted = accepted};
+}
+
+inline constexpr bool renderTapeSnapshotStandaloneD24X8Supported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return surface.resourceType == 1u && surface.width != 0u &&
+         surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
+         surface.usage == 2u && surface.format == 77u &&
+         surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
 
 enum class RenderTapeSurfaceStorage : std::uint32_t {
   Standalone = 1u,
@@ -232,6 +274,9 @@ inline bool renderTapeLoadSurfaceDescriptorV2(
   switch (storage) {
   case RenderTapeSurfaceStorage::Standalone:
     return (disposition == RenderTapeInitialContentDisposition::CompleteSeed ||
+            (disposition == RenderTapeInitialContentDisposition::
+                                CompleteDepthFloat32V1 &&
+             renderTapeSnapshotStandaloneD24X8Supported(out.surface)) ||
             (disposition ==
                  RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
              renderTapeProducedStandaloneSurfaceSupported(out.surface))) &&

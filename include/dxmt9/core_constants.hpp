@@ -1324,6 +1324,20 @@ struct ReadbackPixels {
   u32 pitch = 0;
 };
 
+// Capture-only canonical D24X8 payload. Version 1 is tightly packed
+// little-endian float32 depth, produced and consumed by Metal shaders rather
+// than by interpreting the physical depth/stencil texture layout.
+inline constexpr u32 kCanonicalD24X8DepthVersion1 = 1u;
+
+struct CanonicalD24X8Depth {
+  std::vector<u8> bytes;
+  u32 version = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 pitch = 0;
+  u32 physicalFormat = 0;
+};
+
 struct ColorFillDesc {
   Handle destination{};
   Rect rect{};

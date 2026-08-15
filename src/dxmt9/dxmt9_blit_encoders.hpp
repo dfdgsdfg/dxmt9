@@ -106,4 +106,20 @@ bool readbackSurface(CommandQueue& queue,
                       const core::ReadbackDesc& desc,
                       core::ReadbackPixels& pixels);
 
+// Capture-only D24X8 conversion. Both directions use an explicit shader
+// conversion to/from canonical float32 depth and validate the exact physical
+// texture format selected from BackendLimits.
+bool captureCanonicalD24X8Depth(CommandQueue& queue,
+                                resources::Pool& pool,
+                                WMT::Reference<WMT::Device> device,
+                                const core::BackendLimits& limits,
+                                core::SurfaceHandle source,
+                                core::CanonicalD24X8Depth& depth);
+bool seedCanonicalD24X8Depth(CommandQueue& queue,
+                             resources::Pool& pool,
+                             WMT::Reference<WMT::Device> device,
+                             const core::BackendLimits& limits,
+                             core::SurfaceHandle destination,
+                             const core::CanonicalD24X8Depth& depth);
+
 }  // namespace dxmt9::encoders

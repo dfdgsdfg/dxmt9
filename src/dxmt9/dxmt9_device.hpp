@@ -128,6 +128,10 @@ class Device {
                                     std::uint32_t /*depth*/, std::uint32_t /*pitch*/,
                                     std::uint32_t /*slicePitch*/,
                                     std::span<const std::uint8_t> /*bytes*/) {}
+  virtual bool captureCanonicalD24X8Depth(
+      core::SurfaceHandle, core::CanonicalD24X8Depth&) { return false; }
+  virtual bool seedCanonicalD24X8Depth(
+      core::SurfaceHandle, const core::CanonicalD24X8Depth&) { return false; }
   virtual core::HResult generateTextureMipSublevels(core::TextureHandle) {
     return core::D3D_OK;
   }

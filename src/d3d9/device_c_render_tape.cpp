@@ -113,6 +113,11 @@ bool validDescriptorContentDisposition(
     const bool completeSeed =
         disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
         fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+    const bool completeDepthV1 =
+        disposition ==
+            RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
+        renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
+        fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
     const bool produced =
         disposition ==
             RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
@@ -121,7 +126,7 @@ bool validDescriptorContentDisposition(
     return storage == RenderTapeSurfaceStorage::Standalone &&
            surface.subresource == 0u &&
            renderTapeZeroIdentity(surface.parentTexture) &&
-           (completeSeed || produced);
+           (completeSeed || completeDepthV1 || produced);
   }
   return true;
 }
@@ -563,6 +568,11 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
       const bool completeSeed =
           disposition == RenderTapeInitialContentDisposition::CompleteSeed &&
           fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+      const bool completeDepthV1 =
+          disposition ==
+              RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
+          renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
+          fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
       const bool produced =
           disposition ==
               RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
@@ -570,7 +580,7 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
           fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
       if (surface.subresource != 0u ||
           !renderTapeZeroIdentity(surface.parentTexture) ||
-          (!completeSeed && !produced)) {
+          (!completeSeed && !completeDepthV1 && !produced)) {
         return reject(RenderTapeObjectDefineValidationSubreason::
                           SurfaceDescriptorDisposition);
       }

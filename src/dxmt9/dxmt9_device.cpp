@@ -1,6 +1,7 @@
 #include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_archive_prewarm.hpp"
+#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_scheduling.hpp"
 #include "util/log/log.hpp"
@@ -347,6 +348,18 @@ class DeviceImpl final : public Device {
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
     return queue_.readbackSurface(desc, pixels);
+  }
+  bool captureCanonicalD24X8Depth(
+      core::SurfaceHandle source,
+      core::CanonicalD24X8Depth& depth) override {
+    return encoders::captureCanonicalD24X8Depth(
+        queue_, queue_.pool(), wmt_device_, limits_, source, depth);
+  }
+  bool seedCanonicalD24X8Depth(
+      core::SurfaceHandle destination,
+      const core::CanonicalD24X8Depth& depth) override {
+    return encoders::seedCanonicalD24X8Depth(
+        queue_, queue_.pool(), wmt_device_, limits_, destination, depth);
   }
   bool supportsGpuReadback() const override { return true; }
 

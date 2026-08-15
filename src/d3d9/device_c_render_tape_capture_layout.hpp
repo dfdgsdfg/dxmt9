@@ -32,6 +32,7 @@ inline constexpr std::uint32_t A8L8 = 51u;
 inline constexpr std::uint32_t V8U8 = 60u;
 inline constexpr std::uint32_t L16 = 81u;
 inline constexpr std::uint32_t D24S8 = 75u;
+inline constexpr std::uint32_t D24X8 = 77u;
 inline constexpr std::uint32_t DXT1 = 0x31545844u;
 inline constexpr std::uint32_t DXT2 = 0x32545844u;
 inline constexpr std::uint32_t DXT3 = 0x33545844u;

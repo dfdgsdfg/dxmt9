@@ -1,4 +1,5 @@
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_provider.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
@@ -297,6 +298,11 @@ constexpr D9CWireObjectIdentity kTexturedVertexDeclaration{
     .generation = 2u,
     .objectId = 44u,
 };
+constexpr D9CWireObjectIdentity kSnapshotDepth{
+    .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+    .generation = 5u,
+    .objectId = 45u,
+};
 
 std::vector<std::byte> sparsePayload(
     D9CCommandChunkWireDrawHeader draw,
@@ -440,8 +446,11 @@ std::vector<std::byte> texturedDrawChunk(std::uint16_t extraSection = 0u) {
 
 struct ProductionFixture {
   std::vector<std::byte> tape{};
+  std::vector<std::byte> depthSeed{};
+  RenderTapeDigest depthSeedDigest{};
 
-  explicit ProductionFixture(bool wrongExpectedDigest = false) {
+  explicit ProductionFixture(bool wrongExpectedDigest = false,
+                             bool withDepthSeed = false) {
     const D9CCommandChunkWireClear clear{
         .flags = 1u,
         .colorARGB = 0xff204060u,
@@ -472,6 +481,24 @@ struct ProductionFixture {
             RenderTapeDescriptorKind::Surface),
     };
     const auto outputDescriptorV2 = outputDescriptor(outputDesc);
+    const RenderTapeSurfaceDescriptorV2 depthDescriptor{
+        .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+        .storage = static_cast<std::uint32_t>(
+            RenderTapeSurfaceStorage::Standalone),
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteDepthFloat32V1),
+        .surface = D9CSurfaceDesc{
+            .format = render_tape_d3d_format::D24X8,
+            .resourceType = 1u,
+            .usage = 2u,
+            .pool = 0u,
+            .multiSampleType = 0u,
+            .multiSampleQuality = 0u,
+            .width = 16u,
+            .height = 16u,
+            .depth = 1u,
+        },
+    };
     const RenderTapeDigest expectedDigest{
         std::byte{0x5f}, std::byte{0x73}, std::byte{0x22}, std::byte{0xd0},
         std::byte{0x5f}, std::byte{0x8b}, std::byte{0xa9}, std::byte{0x74},
@@ -489,10 +516,28 @@ struct ProductionFixture {
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
         std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
+    if (withDepthSeed) {
+      depthSeed.resize(16u * 16u * sizeof(float));
+      const float depth = 0.375f;
+      for (std::size_t offset = 0u; offset < depthSeed.size();
+           offset += sizeof(depth)) {
+        std::memcpy(depthSeed.data() + offset, &depth, sizeof(depth));
+      }
+      depthSeedDigest = RenderTapeCaptureSession::sha256(depthSeed);
+      builder.appendObjectDefine(
+          kSnapshotDepth,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+          std::as_bytes(std::span(&depthDescriptor, 1u)), 0u, {},
+          depthSeed.size(), 1u);
+      builder.appendResourceMutation(
+          kSnapshotDepth, RenderTapeMutationKind::Upload, 0u, 0u,
+          depthSeed.size(), depthSeedDigest);
+    }
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u}, frame);
     builder.appendPresentComplete(
-        3u, 1u, RenderTapeDigestValidity::Sha256, expected,
+        withDepthSeed ? 5u : 3u, 1u,
+        RenderTapeDigestValidity::Sha256, expected,
         std::as_bytes(std::span(&oracle, 1u)));
     tape = builder.seal();
   }
@@ -503,13 +548,14 @@ struct Fixture {
   RenderTapeDigest seedDigest{};
   std::vector<std::byte> tape{};
 
-  explicit Fixture(std::uint32_t clearRectCount = 0u) {
+  explicit Fixture(std::uint32_t clearRectCount = 0u,
+                   std::uint32_t clearFlags = 1u) {
     for (std::size_t i = 0u; i < seed.size(); ++i)
       seed[i] = static_cast<std::byte>(i + 1u);
     seedDigest = RenderTapeCaptureSession::sha256(seed);
 
     D9CCommandChunkWireClear clear{
-        .flags = 1u,
+        .flags = clearFlags,
         .colorARGB = 0xff204060u,
         .z = 1.0f,
         .rectCount = clearRectCount,
@@ -1227,6 +1273,13 @@ void canonicalUnsupportedDimensionsReturnTypedGrammar() {
 }
 
 void failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs() {
+  Fixture depthOnlyClear(0u, 2u);
+  const auto depthOnlyBlob = depthOnlyClear.blob();
+  check(preflightFrameTapeIdentity(depthOnlyClear.tape,
+                                   std::span(&depthOnlyBlob, 1u)).status ==
+            FrameTapeReplayStatus::UnsupportedGrammar,
+        "depth-only Clear must fail the production TARGET grammar");
+
   Fixture partialClear(1u);
   const auto partialBlob = partialClear.blob();
   check(preflightFrameTapeIdentity(partialClear.tape,
@@ -1688,6 +1741,49 @@ void productionShapeReportsWrongExpectedDigest() {
         "output mismatch must still clean up replay-owned objects");
 }
 
+void standaloneD24X8SeedIsCreatedBeforeReplayAndConserved() {
+  ProductionFixture fixture(false, true);
+  const RenderTapeProviderBlob depthBlob{
+      .digest = fixture.depthSeedDigest,
+      .bytes = fixture.depthSeed,
+  };
+  const auto validation = preflightFrameTapeIdentity(
+      fixture.tape, std::span(&depthBlob, 1u));
+  check(validation.complete(),
+        std::string(frameTapeReplayStatusName(validation.status)) +
+            " failed_event=" + std::to_string(validation.failedEventIndex));
+  check(validation.coverage.objectDefinitions == 2u &&
+            validation.coverage.seedMutations == 1u &&
+            validation.conservation.referencedBlobs == 1u,
+        "D24X8 provider fixture preflights one exact canonical depth seed");
+  const D9CPresentParams params{
+      .backBufferWidth = validation.requirements.outputWidth,
+      .backBufferHeight = validation.requirements.outputHeight,
+      .backBufferFormat = validation.requirements.outputFormat,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "D24X8 seed fixture factory must be available");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
+                                                nullptr);
+  check(device != nullptr, "D24X8 seed fixture device must construct");
+  const auto result = replayFrameTapeIdentity(
+      device, fixture.tape, std::span(&depthBlob, 1u));
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.complete(), frameTapeReplayStatusName(result.status));
+  check(result.validity.outputReadback &&
+            result.validity.expectedDigestCaptured &&
+            result.validity.expectedDigestMatched,
+        "D24X8 seeded provider replay preserves the deterministic output oracle");
+  check(result.conservation.objectsCreated == 2u &&
+            result.conservation.objectsReleased == 2u,
+        "D24X8 provider replay conserves output and standalone depth wrappers");
+}
+
 void writeProductionFixture(const std::filesystem::path& directory) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
@@ -1734,6 +1830,7 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_provider_spec "
           "[--write-production-fixture dir|--write-sequence-fixture dir]");
+    standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
     acceptsBoundedIdentityGrammarAndReportsEvidence();
     canonicalUnsupportedDimensionsReturnTypedGrammar();
     failsClosedBeforeEffectsOnUnsupportedAndCorruptInputs();

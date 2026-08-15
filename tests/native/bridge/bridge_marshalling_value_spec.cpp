@@ -585,6 +585,16 @@ void testCommandChunkGeneratedArgumentLayouts() {
   checkPodArgShape<
       dxmt9::bridge::Args32_dxmt9c_texture_get_wire_identity>(
       "wow64 canonical texture identity args", 12u, 4u);
+  check(std::is_standard_layout_v<dxmt9::bridge::
+            Args_dxmt9c_device_capture_render_tape_d24x8_snapshot> &&
+            std::is_trivially_copyable_v<dxmt9::bridge::
+                Args_dxmt9c_device_capture_render_tape_d24x8_snapshot>,
+        "native D24X8 snapshot arguments are pointer-only POD");
+  check(std::is_standard_layout_v<dxmt9::bridge::
+            Args32_dxmt9c_device_capture_render_tape_d24x8_snapshot> &&
+            std::is_trivially_copyable_v<dxmt9::bridge::
+                Args32_dxmt9c_device_capture_render_tape_d24x8_snapshot>,
+        "wow64 D24X8 snapshot arguments are pointer-token POD");
 
   D9CCommandChunkNegotiation negotiation{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT,
@@ -604,6 +614,24 @@ void testCommandChunkGeneratedArgumentLayouts() {
                reinterpret_cast<D9CWireObjectIdentity*>(
                    std::uintptr_t{0x00abc000u}),
                "wow64 canonical identity decodes output pointer value");
+
+  dxmt9::bridge::Args32_dxmt9c_device_capture_render_tape_d24x8_snapshot
+      snapshot{};
+  snapshot.arg0 = 0x11110000u;
+  snapshot.request = 0x22220000u;
+  snapshot.out = 0x33330000u;
+  snapshot.bytes = 0x44440000u;
+  snapshot.capacity = 0x0000000100001000ull;
+  checkSamePtr(dxmt9::util::marshal::wow64::decodePtr<
+                   const D9CRenderTapeD24X8SnapshotRequest*>(snapshot.request),
+               reinterpret_cast<const D9CRenderTapeD24X8SnapshotRequest*>(
+                   std::uintptr_t{0x22220000u}),
+               "wow64 D24X8 snapshot decodes top-level request pointer");
+  checkSamePtr(dxmt9::util::marshal::wow64::decodePtr<void*>(snapshot.bytes),
+               reinterpret_cast<void*>(std::uintptr_t{0x44440000u}),
+               "wow64 D24X8 snapshot decodes top-level byte buffer pointer");
+  checkEq(snapshot.capacity, 0x0000000100001000ull,
+          "wow64 D24X8 snapshot preserves 64-bit capacity");
 }
 
 }  // namespace
