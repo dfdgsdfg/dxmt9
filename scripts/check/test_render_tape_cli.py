@@ -58,7 +58,7 @@ def main() -> int:
         assert inspected["mutation_bytes"] == 4
         assert inspected["chunks"] == 1
         assert inspected["records"] == 1
-        assert inspected["handles"] == 0
+        assert inspected["handles"] == 1
         assert inspected["present_completions"] == 1
         assert inspected["last_present_ordinal"] == 4
 

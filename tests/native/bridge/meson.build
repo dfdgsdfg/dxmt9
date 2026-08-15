@@ -258,6 +258,8 @@ test('dxmt9-render-tape-projection-cli-spec', python3,
                   'scripts/check/test_render_tape_projection_cli.py'),
        render_tape_projection_fixture_spec,
        dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
      ],
      env: dxmt9_native_test_env)
 

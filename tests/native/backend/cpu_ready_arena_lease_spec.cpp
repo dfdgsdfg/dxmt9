@@ -741,6 +741,86 @@ void testActivePresentPublishesFinalSourceAndDefersFlush() {
         "backbuffer");
 }
 
+void testCaptureIdentityUsesExactRawRangesAndPreReorderPasses() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 2;
+  capacity.clearRecords = 1;
+  capacity.presentRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(12, layout);
+  check(begin.has_value(), "capture identity fixture admission succeeds");
+  check(begin->beginCaptureIdentity(5u),
+        "capture identity fixes the complete raw-record extent");
+
+  check(begin->captureNextCommandRecord(1u),
+        "leading state is followed by the exact Clear anchor");
+  ClearDesc clear{};
+  clear.clearColor = true;
+  queue.submitClear(clear);
+
+  check(begin->captureNextCommandRecord(3u),
+        "interstitial state is followed by the exact Present anchor");
+  SwapDesc present{};
+  present.pacedByPresentOrdinal = true;
+  check(queue.submitPresent(present) == begin->seqId(),
+        "capture identity fixture appends Present to the same source");
+
+  CommandQueue::CpuReadyCaptureIdentity identity{};
+  const auto ticket = begin->ticket();
+  check(begin->publish({}, &identity),
+        "capture identity is copied before Ready visibility");
+  check(identity.valid() && identity.sourceOrdinal == ticket.sourceOrdinal &&
+            identity.seqId == ticket.seqId && identity.recordCount == 5u,
+        "capture identity preserves exact publication metadata");
+  check(identity.ranges.size() == 2u &&
+            identity.ranges[0].firstRecord == 0u &&
+            identity.ranges[0].recordCount == 2u &&
+            identity.ranges[1].firstRecord == 2u &&
+            identity.ranges[1].recordCount == 3u,
+        "leading/interstitial/trailing state follows the structural raw-range "
+        "ownership policy without gaps");
+  check(identity.ranges[0].dagPassIndex !=
+            identity.ranges[1].dagPassIndex &&
+            identity.ranges[0].passKind != identity.ranges[1].passKind,
+        "Clear and Present retain distinct pre-reorder DAG pass identities");
+}
+
+void testIncompleteCaptureIdentityDoesNotRejectArenaPublication() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(13, layout);
+  check(begin.has_value() && begin->beginCaptureIdentity(5u),
+        "observer-failure fixture starts bounded identity capture");
+  check(begin->captureNextCommandRecord(1u),
+        "the first raw command anchor is accepted");
+  ClearDesc clear{};
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  check(begin->captureNextCommandRecord(4u),
+        "an unmatched trailing anchor remains pending at publication");
+
+  CommandQueue::CpuReadyCaptureIdentity identity{};
+  const auto ticket = begin->ticket();
+  check(begin->publish({}, &identity),
+        "incomplete diagnostic identity must not reject renderer publication");
+  check(!identity.valid(),
+        "incomplete diagnostic identity is returned fail-closed");
+  const auto* arena =
+      CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket);
+  check(arena != nullptr && SourcePayloadView(*arena).commandCount() == 1u,
+        "the observed Clear source remains published exactly once");
+}
+
 void testPresentAppendAbortRemovesStashedTokenOnce() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -781,6 +861,8 @@ int main() {
     testArenaClearMarksCommonViewResourcesAtExactSeq();
     testArenaPublishToReclaimLifecycle();
     testActivePresentPublishesFinalSourceAndDefersFlush();
+    testCaptureIdentityUsesExactRawRangesAndPreReorderPasses();
+    testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';

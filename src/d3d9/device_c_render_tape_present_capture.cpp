@@ -246,6 +246,30 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
   }
 }
 
+extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture(
+    D9CDevice* device, std::uint64_t captureToken,
+    D9CRenderTapeIdentityCaptureResult* out, void* bytes,
+    std::uint64_t capacity) {
+  if (!device || !out || captureToken == 0u ||
+      (capacity != 0u && !bytes) ||
+      capacity > std::numeric_limits<std::size_t>::max()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (!dxmt9::d3d9::drainDeferredReplay(
+          device, "render-tape-identity-capture-finish")) {
+    *out = {};
+    out->status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto output = capacity == 0u
+      ? std::span<std::byte>{}
+      : std::span(static_cast<std::byte*>(bytes),
+                  static_cast<std::size_t>(capacity));
+  return device->renderTapeIdentityCapture.copy(captureToken, *out, output)
+      ? dxmt9::core::D3D_OK
+      : dxmt9::core::D3DERR_INVALIDCALL;
+}
+
 extern "C" void dxmt9c_device_cancel_render_tape_present_capture(
     D9CDevice* device) {
   cancelPresentCapture(device);

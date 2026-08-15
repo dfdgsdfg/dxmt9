@@ -45,8 +45,17 @@ bool shouldInitializeTextureWithZero(const core::TextureDesc& desc) {
 bool cpuReadyTapeDirectReplayEnabled() noexcept {
   static const bool enabled = [] {
     return resolveCpuReadyTapeDirectReplayEnabled(
-        std::getenv("DXMT9_CPU_READY_TAPE"));
+        std::getenv("DXMT9_CPU_READY_TAPE"),
+        std::getenv("DXMT9_RENDER_TAPE_CAPTURE"),
+        std::getenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT"));
   }();
+  return enabled;
+}
+
+bool renderTapePublisherCaptureEnabled() noexcept {
+  static const bool enabled = resolveRenderTapePublisherCaptureEnabled(
+      std::getenv("DXMT9_RENDER_TAPE_CAPTURE"),
+      std::getenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT"));
   return enabled;
 }
 
@@ -133,10 +142,12 @@ class DeviceImpl final : public Device {
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
         capabilities_(probeCapabilities(wmt_device_)),
+        renderTapePublisherCaptureEnabled_(
+            renderTapePublisherCaptureEnabled()),
         cpuReadyTapeDirectReplayEnabled_(cpuReadyTapeDirectReplayEnabled()),
         renderPartitionConfig_(renderPartitionConfig()),
         queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_,
-               renderPartitionConfig_) {
+               renderTapePublisherCaptureEnabled_, renderPartitionConfig_) {
     const auto level = renderPartitionConfig_.fallback ==
             render::PartitionModeFallback::None
         ? util::LogLevel::Info
@@ -376,6 +387,7 @@ class DeviceImpl final : public Device {
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
+  bool renderTapePublisherCaptureEnabled_ = false;
   bool cpuReadyTapeDirectReplayEnabled_ = false;
   render::RenderPartitionConfig renderPartitionConfig_{};
   CommandQueue queue_;

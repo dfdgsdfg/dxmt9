@@ -1,5 +1,6 @@
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
+#include "device_c_render_tape_identity.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "dxmt9/device_c.h"
@@ -31,6 +32,12 @@ static_assert(offsetof(D9CRenderTapePresentCaptureResult, height) == 8u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, format) == 12u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, byteCount) == 16u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, sha256) == 24u);
+static_assert(sizeof(D9CRenderTapeIdentityCaptureResult) == 32u);
+static_assert(sizeof(D9CRenderTapeIdentitySourceEntry) == 48u);
+static_assert(sizeof(D9CRenderTapeIdentityRangeEntry) == 48u);
+static_assert(std::is_standard_layout_v<D9CRenderTapeIdentityCaptureResult>);
+static_assert(std::is_standard_layout_v<D9CRenderTapeIdentitySourceEntry>);
+static_assert(std::is_standard_layout_v<D9CRenderTapeIdentityRangeEntry>);
 
 using namespace dxmt9::d3d9;
 
@@ -1482,12 +1489,41 @@ void testCompletePresentPublishesExactlyOneTape() {
         "PresentComplete validates and publishes");
   check(session.state() == RenderTapeCaptureState::Sealed,
         "successful Present seals the owner");
+  const RenderTapeIdentitySource identitySource{
+      .eventOrdinal = 4u,
+      .sourceOrdinal = 1u,
+      .seqId = 1u,
+      .captureToken = 7u,
+      .recordCount = 1u,
+      .firstRange = 0u,
+      .rangeCount = 1u,
+  };
+  const RenderTapeIdentityRange identityRange{
+      .eventOrdinal = 4u,
+      .sourceOrdinal = 1u,
+      .seqId = 1u,
+      .logicalPassId = 1u,
+      .firstRecord = 0u,
+      .recordCount = 1u,
+      .dagPassIndex = 0u,
+      .passKind = 4u,
+  };
+  check(session.attachCaptureIdentity(
+            7u, 4u, std::span(&identitySource, 1u),
+            std::span(&identityRange, 1u)) ==
+            RenderTapeCaptureStatus::Complete &&
+            !session.publicationBundle().identity.empty(),
+        "sealed capture attaches one validated authoritative identity sidecar");
   check(!session.sealedArtifact().empty(), "sealed artifact is published");
   ImportedRenderTapeView imported;
   const RenderTapeBlobCatalogue catalogue{.blobs = {resource}};
   check(validateRenderTape(session.sealedArtifact(), catalogue, &imported)
             .valid(),
         "active-created identity fixture remains canonical");
+  check(validateRenderTapeIdentity(
+            session.sealedArtifact(), catalogue,
+            session.publicationBundle().identity).valid(),
+        "attached capture identity validates against the sealed events digest");
   RenderTapeObjectDefineHeader define{};
   const auto defineEvent = imported.event(1u);
   std::memcpy(&define, defineEvent.payload.data(), sizeof(define));
@@ -3609,6 +3645,61 @@ void testPresentCaptureResultAbiAndOneShotCancellation() {
         "encoded mirror ticket is consumed exactly once and is not cancelled");
 }
 
+void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
+  RenderTapeProductionIdentityLedger ledger;
+  const std::array ranges{
+      RenderTapeProductionPassRange{
+          .firstRecord = 0u, .recordCount = 2u,
+          .dagPassIndex = 0u, .passKind = 1u},
+      RenderTapeProductionPassRange{
+          .firstRecord = 2u, .recordCount = 3u,
+          .dagPassIndex = 1u, .passKind = 4u},
+  };
+  check(ledger.append(7u, 11u, 21u, 31u, 5u, ranges),
+        "identity ledger accepts one exact source coverage");
+
+  D9CRenderTapeIdentityCaptureResult query{};
+  check(ledger.copy(7u, query, {}) &&
+            query.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+            query.sourceCount == 1u && query.rangeCount == 2u &&
+            query.captureToken == 7u &&
+            query.byteCount == sizeof(D9CRenderTapeIdentitySourceEntry) +
+                                   2u * sizeof(D9CRenderTapeIdentityRangeEntry),
+        "zero-capacity query reports the exact immutable table extent");
+  std::vector<std::byte> bytes(query.byteCount);
+  D9CRenderTapeIdentityCaptureResult copied{};
+  check(ledger.copy(7u, copied, bytes) && copied.byteCount == bytes.size(),
+        "exact-capacity copy succeeds without consuming the ledger");
+  D9CRenderTapeIdentitySourceEntry source{};
+  std::array<D9CRenderTapeIdentityRangeEntry, 2> copiedRanges{};
+  std::memcpy(&source, bytes.data(), sizeof(source));
+  std::memcpy(copiedRanges.data(), bytes.data() + sizeof(source),
+              sizeof(copiedRanges));
+  check(source.eventOrdinal == 11u && source.sourceOrdinal == 21u &&
+            source.seqId == 31u && source.captureToken == 7u &&
+            source.recordCount == 5u && source.firstRange == 0u &&
+            source.rangeCount == 2u,
+        "copied source keeps the production event/source/seq join");
+  check(copiedRanges[0].logicalPassId != 0u &&
+            copiedRanges[1].logicalPassId != 0u &&
+            copiedRanges[0].logicalPassId != copiedRanges[1].logicalPassId &&
+            copiedRanges[0].firstRecord == 0u &&
+            copiedRanges[1].firstRecord == 2u,
+        "ledger assigns non-zero pass identities while preserving DAG ranges");
+
+  std::array<std::byte, 1> tooSmall{};
+  D9CRenderTapeIdentityCaptureResult rejected{};
+  check(!ledger.copy(7u, rejected, tooSmall) &&
+            rejected.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED,
+        "non-exact output capacity fails without a partial copy");
+  ledger.fail(7u);
+  check(!ledger.copy(7u, rejected, {}),
+        "a failed join cannot be mistaken for an authoritative sidecar");
+  check(ledger.append(8u, 12u, 22u, 32u, 5u, ranges) &&
+            ledger.copy(8u, query, {}),
+        "a newer capture token resets stale failed state deterministically");
+}
+
 void testBlockCompressedLockCaptureLayouts() {
   constexpr std::uint32_t dxt1 = render_tape_d3d_format::DXT1;
   constexpr std::uint32_t dxt3 = render_tape_d3d_format::DXT3;
@@ -4245,6 +4336,7 @@ int main(int argc, char** argv) {
     testSurfaceAliasGenerationReplacementTransition();
     testPendingAliasFlushBeforeReplacementSequence();
     testPresentCaptureResultAbiAndOneShotCancellation();
+    testProductionIdentityLedgerIsTokenBoundAndNoClobber();
     testBlockCompressedLockCaptureLayouts();
     testBlockCompressedSubrectMipAndOddExtentLayouts();
     testBlockCompressedCaptureRejectsInvalidLayouts();

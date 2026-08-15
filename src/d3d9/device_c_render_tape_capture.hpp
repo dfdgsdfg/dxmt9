@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_identity.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,9 @@
 #include <vector>
 
 namespace dxmt9::d3d9 {
+
+struct RenderTapeIdentitySource;
+struct RenderTapeIdentityRange;
 
 inline constexpr std::uint64_t kRenderTapeDefaultMaxBlobBytes =
     256u * 1024u * 1024u;
@@ -80,6 +84,9 @@ struct RenderTapePublishedBlob {
 struct RenderTapePublicationBundle {
   std::vector<std::byte> events{};
   std::vector<RenderTapePublishedBlob> blobs{};
+  // Optional authoritative scheduling/pass identity. Capture currently leaves
+  // this empty until the bounded production metadata join is available.
+  std::vector<std::byte> identity{};
   // Captured presentation output is an authoritative comparison sidecar, not
   // a replay input and therefore not part of the immutable blob catalogue.
   std::vector<std::byte> outputOracle{};
@@ -182,6 +189,15 @@ public:
       std::span<const std::byte> oracleAttachments = {},
       std::span<const std::byte> outputOracle = {});
 
+  RenderTapeCaptureStatus attachCaptureIdentity(
+      std::uint64_t captureToken, std::uint64_t presentOrdinal,
+      std::span<const RenderTapeIdentitySource> sources,
+      std::span<const RenderTapeIdentityRange> ranges);
+  const RenderTapeIdentityValidationResult& identityValidationResult() const
+      noexcept {
+    return identityValidationResult_;
+  }
+
   void abort() noexcept;
 
   RenderTapeCaptureState state() const noexcept { return state_; }
@@ -256,6 +272,7 @@ private:
       RenderTapeValidationStatus::Valid;
   RenderTapeValidationResult validationResult_{
       .status = RenderTapeValidationStatus::Valid};
+  RenderTapeIdentityValidationResult identityValidationResult_{};
   RenderTapeBlobCatalogue catalogue_{};
   std::vector<RenderTapePublishedBlob> publishedBlobs_{};
   std::vector<ObjectSlot> objects_{};

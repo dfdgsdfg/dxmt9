@@ -86,6 +86,7 @@ def main() -> int:
             "destroys": 0,
             "events": 7,
             "events_sha256": inspected["events_sha256"],
+            "expected_output_sha256": None,
             "grammar": {
                 "content_dispositions": {
                     "complete_seed": 1,

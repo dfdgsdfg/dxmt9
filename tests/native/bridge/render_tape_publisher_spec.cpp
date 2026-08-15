@@ -236,6 +236,14 @@ void testRejectsInvalidInputsAndSymlinkComponents(
         "publisher rejects digest mismatch before staging");
   check(!std::filesystem::exists(root / "bad-digest"),
         "digest rejection leaves no final bundle");
+  auto invalidIdentity = value;
+  invalidIdentity.identity = {std::byte{0x01}, std::byte{0x02}};
+  check(!dxmt9PePublishRenderTapeBundle(invalidIdentity, root.string(),
+                                        "bad-identity"),
+        "publisher rejects malformed identity before publication");
+  check(!std::filesystem::exists(root / "bad-identity") &&
+            !std::filesystem::exists(root / ".bad-identity.staging"),
+        "identity rejection cleans staging and leaves no final bundle");
   auto invalidHeader = value;
   invalidHeader.events.resize(3u);
   check(!dxmt9PePublishRenderTapeBundle(invalidHeader, root.string(),

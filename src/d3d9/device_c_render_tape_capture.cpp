@@ -1,4 +1,5 @@
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_identity.hpp"
 
 #include "device_c_render_tape_descriptors.hpp"
 
@@ -735,6 +736,33 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     publicationBundle_.outputOracle.assign(outputOracle.begin(),
                                             outputOracle.end());
     state_ = RenderTapeCaptureState::Sealed;
+    return RenderTapeCaptureStatus::Complete;
+  } catch (...) {
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  }
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
+    std::uint64_t captureToken, std::uint64_t presentOrdinal,
+    std::span<const RenderTapeIdentitySource> sources,
+    std::span<const RenderTapeIdentityRange> ranges) {
+  identityValidationResult_ = {};
+  if (state_ != RenderTapeCaptureState::Sealed || captureToken == 0u ||
+      presentOrdinal == 0u || sources.empty() || ranges.empty() ||
+      !publicationBundle_.identity.empty()) {
+    return RenderTapeCaptureStatus::InvalidState;
+  }
+  try {
+    auto identity = buildRenderTapeIdentity(
+        sealedArtifact_, catalogue_, captureToken, presentOrdinal,
+        captureToken, RenderTapeIdentityAuthority::Capture, sources, ranges,
+        &identityValidationResult_);
+    if (identity.empty()) {
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
+    publicationBundle_.identity = std::move(identity);
     return RenderTapeCaptureStatus::Complete;
   } catch (...) {
     abortInternal();

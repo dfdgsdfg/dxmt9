@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import tempfile
@@ -13,6 +15,8 @@ from typing import Any, Optional
 
 SCHEMA = "dxmt9.render_tape.bundle.v2"
 EVENTS_NAME = "events.bin"
+IDENTITY_NAME = "identity.bin"
+IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v1"
 MAX_REPLAY_RUNS = 64
 
 
@@ -22,6 +26,57 @@ def digest(path: pathlib.Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
+
+def copy_flushed(source: pathlib.Path, destination: pathlib.Path) -> None:
+    with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+        shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+
+
+def write_flushed(path: pathlib.Path, data: bytes) -> None:
+    with path.open("xb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def sync_directory(path: pathlib.Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+@contextlib.contextmanager
+def bundle_transaction(output: pathlib.Path):
+    output = output.absolute()
+    ensure_empty_output(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = pathlib.Path(
+        tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent)
+    )
+    try:
+        yield staging
+        for directory, _, filenames in os.walk(staging, topdown=False):
+            directory_path = pathlib.Path(directory)
+            for filename in filenames:
+                path = directory_path / filename
+                with path.open("rb") as stream:
+                    os.fsync(stream.fileno())
+            sync_directory(directory_path)
+        os.replace(staging, output)
+        try:
+            sync_directory(output.parent)
+        except OSError:
+            # The destination is already complete and atomically claimable.
+            # Do not report a post-rename failure that cannot be rolled back.
+            pass
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def run_validator(
@@ -50,17 +105,39 @@ def run_validator(
         ) from error
 
 
+def run_identity_validator(
+    validator: pathlib.Path,
+    events: pathlib.Path,
+    identity: pathlib.Path,
+    blob_refs: list[str],
+) -> dict[str, Any]:
+    arguments = [str(validator), "identity", str(events), str(identity)]
+    for reference in blob_refs:
+        arguments.extend(("--verified-blob", reference))
+    completed = subprocess.run(arguments, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise SystemExit(f"render tape identity validation failed: {detail}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit("render tape identity validator emitted invalid JSON") from error
+
+
 def run_provider_replay(
     provider: pathlib.Path,
     events: pathlib.Path,
     blob_paths: list[pathlib.Path],
     expected_output: Optional[pathlib.Path] = None,
+    output_path: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     arguments = [str(provider), "replay", str(events)]
     for path in blob_paths:
         arguments.extend(("--blob", str(path)))
     if expected_output is not None:
         arguments.extend(("--expected-rgba", str(expected_output)))
+    if output_path is not None:
+        arguments.extend(("--output-rgba", str(output_path)))
     completed = subprocess.run(
         arguments,
         check=False,
@@ -285,6 +362,8 @@ def producer_revision() -> str:
 
 def pack(args: argparse.Namespace) -> int:
     events = args.events.resolve()
+    identity_source = args.identity.resolve() if args.identity else None
+    output_source = args.output_rgba.resolve() if args.output_rgba else None
     blob_sources = [path.resolve() for path in args.blob]
     blobs_by_digest: dict[str, tuple[pathlib.Path, int]] = {}
     for path in blob_sources:
@@ -301,31 +380,37 @@ def pack(args: argparse.Namespace) -> int:
     profile = validator_result.get("profile")
     if profile not in ("frame-tape", "sequence-tape"):
         raise SystemExit(f"validator returned unsupported render tape profile: {profile}")
-    output = args.output_dir.resolve()
-    if output.exists():
-        if not output.is_dir():
-            raise SystemExit(f"output path is not a directory: {output}")
-        if any(output.iterdir()):
-            raise SystemExit(f"output directory is not empty: {output}")
-    output.mkdir(parents=True, exist_ok=True)
-    destination = output / EVENTS_NAME
-    shutil.copyfile(events, destination)
-    event_digest = digest(destination)
-    blob_components = []
-    blobs_directory = output / "blobs"
-    if blobs_by_digest:
-        blobs_directory.mkdir()
-    for sha256, (source, size) in blobs_by_digest.items():
-        blob_name = f"{sha256}.bin"
-        shutil.copyfile(source, blobs_directory / blob_name)
-        blob_components.append(
-            {
-                "path": f"blobs/{blob_name}",
-                "bytes": size,
-                "sha256": sha256,
-            }
-        )
-    manifest = {
+    if identity_source is not None:
+        run_identity_validator(args.validator, events, identity_source, blob_refs)
+    if output_source is not None:
+        inspected = run_validator(args.validator, "inspect", events, blob_refs)
+        if (
+            profile != "frame-tape"
+            or inspected.get("expected_output_sha256") != digest(output_source)
+        ):
+            raise SystemExit(
+                "render tape output sidecar does not match the captured Present digest"
+            )
+    output = args.output_dir.absolute()
+    with bundle_transaction(output) as staging:
+        destination = staging / EVENTS_NAME
+        copy_flushed(events, destination)
+        event_digest = digest(destination)
+        blob_components = []
+        blobs_directory = staging / "blobs"
+        if blobs_by_digest:
+            blobs_directory.mkdir()
+        for sha256, (source, size) in blobs_by_digest.items():
+            blob_name = f"{sha256}.bin"
+            copy_flushed(source, blobs_directory / blob_name)
+            blob_components.append(
+                {
+                    "path": f"blobs/{blob_name}",
+                    "bytes": size,
+                    "sha256": sha256,
+                }
+            )
+        manifest = {
         "schema": SCHEMA,
         "profile": profile,
         "producer": {
@@ -352,21 +437,40 @@ def pack(args: argparse.Namespace) -> int:
         "scope": {
             "production_capture": False,
             "production_provider_replay": False,
-            "output_oracle": False,
+            "output_oracle": output_source is not None,
         },
-    }
+        }
+        if identity_source is not None:
+            identity_target = staging / IDENTITY_NAME
+            copy_flushed(identity_source, identity_target)
+            manifest["components"]["identity"] = {
+                "path": IDENTITY_NAME,
+                "schema": IDENTITY_SCHEMA,
+                "bytes": identity_target.stat().st_size,
+                "sha256": digest(identity_target),
+            }
+        if output_source is not None:
+            output_target = staging / "output.rgba"
+            copy_flushed(output_source, output_target)
+            manifest["components"]["output_oracle"] = {
+                "path": "output.rgba",
+                "bytes": output_target.stat().st_size,
+                "sha256": digest(output_target),
+            }
+        write_flushed(
+            staging / "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+        )
     manifest_path = output / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
     print(json.dumps({"bundle": str(output), "manifest": str(manifest_path)}))
     return 0
 
 
 def load_bundle(
     bundle: pathlib.Path,
-) -> tuple[dict[str, Any], pathlib.Path, list[str], list[pathlib.Path]]:
+) -> tuple[
+    dict[str, Any], pathlib.Path, list[str], list[pathlib.Path], Optional[pathlib.Path]
+]:
     manifest_path = bundle.resolve() / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -480,15 +584,49 @@ def load_bundle(
                 "render tape output oracle digest mismatch: "
                 f"manifest={claimed_digest} actual={actual_digest}"
             )
-    return manifest, events, blob_refs, blob_paths
+    identity_path = None
+    identity = manifest.get("components", {}).get("identity")
+    if identity is not None:
+        if not isinstance(identity, dict):
+            raise SystemExit("render tape components.identity must be an object")
+        if identity.get("path") != IDENTITY_NAME:
+            raise SystemExit("render tape identity path must be canonical: identity.bin")
+        if identity.get("schema") != IDENTITY_SCHEMA:
+            raise SystemExit("render tape identity schema is unsupported")
+        claimed_digest = identity.get("sha256")
+        if (
+            not isinstance(claimed_digest, str)
+            or len(claimed_digest) != 64
+            or any(value not in "0123456789abcdef" for value in claimed_digest)
+        ):
+            raise SystemExit("render tape identity digest must be lowercase SHA-256")
+        identity_path = manifest_path.parent / IDENTITY_NAME
+        if not identity_path.is_file():
+            raise SystemExit(f"render tape identity component is missing: {identity_path}")
+        actual_bytes = identity_path.stat().st_size
+        if identity.get("bytes") != actual_bytes:
+            raise SystemExit("render tape identity size mismatch")
+        if digest(identity_path) != claimed_digest:
+            raise SystemExit("render tape identity digest mismatch")
+    allowed = {"manifest.json", EVENTS_NAME}
+    if blobs_directory.exists():
+        allowed.add("blobs")
+    if output_oracle is not None:
+        allowed.add("output.rgba")
+    if identity_path is not None:
+        allowed.add(IDENTITY_NAME)
+    actual = {path.name for path in manifest_path.parent.iterdir()}
+    if actual != allowed:
+        raise SystemExit(
+            "render tape bundle contains unlisted top-level components: "
+            f"{sorted(actual - allowed)}"
+        )
+    return manifest, events, blob_refs, blob_paths, identity_path
 
 
 def ensure_empty_output(output: pathlib.Path) -> None:
-    if output.exists():
-        if not output.is_dir():
-            raise SystemExit(f"output path is not a directory: {output}")
-        if any(output.iterdir()):
-            raise SystemExit(f"output directory is not empty: {output}")
+    if os.path.lexists(output):
+        raise SystemExit(f"output path already exists: {output}")
 
 
 def write_reduced_bundle(
@@ -506,24 +644,24 @@ def write_reduced_bundle(
     missing = [value for value in referenced_digests if value not in source_by_digest]
     if missing:
         raise SystemExit(f"reducer returned unknown referenced blob digest: {missing[0]}")
-    output.mkdir(parents=True, exist_ok=True)
-    destination = output / EVENTS_NAME
-    shutil.copyfile(events, destination)
-    blob_components = []
-    if referenced_digests:
-        (output / "blobs").mkdir()
-    for sha256 in referenced_digests:
-        source = source_by_digest[sha256]
-        target = output / "blobs" / f"{sha256}.bin"
-        shutil.copyfile(source, target)
-        blob_components.append(
-            {
-                "path": f"blobs/{sha256}.bin",
-                "bytes": target.stat().st_size,
-                "sha256": sha256,
-            }
-        )
-    manifest = {
+    with bundle_transaction(output) as staging:
+        destination = staging / EVENTS_NAME
+        copy_flushed(events, destination)
+        blob_components = []
+        if referenced_digests:
+            (staging / "blobs").mkdir()
+        for sha256 in referenced_digests:
+            source = source_by_digest[sha256]
+            target = staging / "blobs" / f"{sha256}.bin"
+            copy_flushed(source, target)
+            blob_components.append(
+                {
+                    "path": f"blobs/{sha256}.bin",
+                    "bytes": target.stat().st_size,
+                    "sha256": sha256,
+                }
+            )
+        manifest = {
         "schema": SCHEMA,
         "profile": "frame-tape",
         "producer": {
@@ -555,16 +693,15 @@ def write_reduced_bundle(
         "scope": {
             "production_capture": False,
             "production_provider_replay": True,
-            "output_oracle": True,
+            "output_oracle": False,
         },
         "reducer": reducer,
-    }
-    manifest_path = output / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return manifest_path
+        }
+        write_flushed(
+            staging / "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+        )
+    return output / "manifest.json"
 
 
 def run_native_reduce(
@@ -617,7 +754,9 @@ def inspect_bundle_commands(
 
 
 def validate_or_inspect(args: argparse.Namespace) -> int:
-    manifest, events, blob_refs, _ = load_bundle(args.bundle)
+    manifest, events, blob_refs, _, identity = load_bundle(args.bundle)
+    if identity is not None:
+        run_identity_validator(args.validator, events, identity, blob_refs)
     result = run_validator(args.validator, args.command, events, blob_refs)
     result["bundle_schema"] = manifest["schema"]
     result["events_sha256"] = manifest["components"]["events"]["sha256"]
@@ -627,7 +766,11 @@ def validate_or_inspect(args: argparse.Namespace) -> int:
 
 
 def provider_replay(args: argparse.Namespace) -> int:
-    manifest, events, _, blob_paths = load_bundle(args.bundle)
+    manifest, events, _, blob_paths, identity = load_bundle(args.bundle)
+    if identity is not None:
+        run_identity_validator(args.validator, events, identity, [
+            f"{digest(path)}:{path.stat().st_size}" for path in blob_paths
+        ])
     expected_output = None
     if isinstance(manifest.get("components", {}).get("output_oracle"), dict):
         expected_output = events.parent / "output.rgba"
@@ -655,6 +798,233 @@ def provider_replay(args: argparse.Namespace) -> int:
     result["scope"] = scope
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("oracle_accepted") else 1
+
+
+def run_native_materialize(
+    validator: pathlib.Path,
+    events: pathlib.Path,
+    identity: pathlib.Path,
+    output: pathlib.Path,
+    blob_refs: list[str],
+    command_event_ordinal: int,
+    first_record: int,
+    record_count: int,
+    output_sha256: Optional[str] = None,
+) -> dict[str, Any]:
+    arguments = [
+        str(validator), "materialize", str(events), str(identity), str(output),
+        "--command-event-ordinal", str(command_event_ordinal),
+        "--first-record", str(first_record),
+        "--record-count", str(record_count),
+    ]
+    if output_sha256 is not None:
+        arguments.extend(("--output-sha256", output_sha256))
+    for reference in blob_refs:
+        arguments.extend(("--verified-blob", reference))
+    completed = subprocess.run(arguments, check=False, text=True, capture_output=True)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(detail or "native projection materializer failed")
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("native projection materializer emitted invalid JSON") from error
+    if not output.is_file():
+        raise RuntimeError("native projection materializer emitted no tape")
+    return result
+
+
+def projection_provider_run(
+    provider: pathlib.Path,
+    events: pathlib.Path,
+    blob_paths: list[pathlib.Path],
+    output: pathlib.Path,
+    expected: Optional[pathlib.Path] = None,
+) -> dict[str, Any]:
+    result = run_provider_replay(provider, events, blob_paths, expected, output)
+    validity = result.get("validity", {})
+    if (
+        result.get("provider_exit_code") != 0
+        or result.get("schema") != "dxmt9.render_tape.provider_replay.v1"
+        or result.get("archive_policy") != "disabled"
+        or result.get("status") != "complete"
+        or validity.get("structurally_valid") is not True
+        or validity.get("digests_valid") is not True
+        or validity.get("output_readback") is not True
+        or not output.is_file()
+        or validity.get("output_bytes") != output.stat().st_size
+        or validity.get("output_sha256") != digest(output)
+    ):
+        raise RuntimeError("projection provider did not produce authenticated output")
+    if expected is None and (
+        validity.get("expected_digest_captured") is True
+        or validity.get("expected_digest_matched") is True
+        or validity.get("expected_pixels_compared") is True
+        or validity.get("pixel_envelope_matched") is True
+        or validity.get("output_oracle_matched") is True
+        or validity.get("oracle_mode") != "rejected"
+    ):
+        raise RuntimeError("projection candidate made an oracle claim before sealing")
+    if expected is not None and (
+        not provider_oracle_accepts(result)
+        or validity.get("oracle_mode") != "strict"
+        or validity.get("expected_digest_matched") is not True
+        or validity.get("pixel_envelope_matched") is True
+    ):
+        raise RuntimeError("projection provider rejected the strict projected oracle")
+    return result
+
+
+def executable_project(args: argparse.Namespace) -> int:
+    manifest, events, blob_refs, blob_paths, identity = load_bundle(args.bundle)
+    if manifest["profile"] != "frame-tape":
+        raise SystemExit("executable projection supports frame-tape bundles only")
+    if identity is None:
+        raise SystemExit("executable projection requires authenticated identity.bin")
+    identity_result = run_identity_validator(
+        args.validator, events, identity, blob_refs
+    )
+    output = args.output_dir.absolute()
+    try:
+        with bundle_transaction(output) as staging:
+            candidate = staging / "candidate.events.bin"
+            native = run_native_materialize(
+                args.validator, events, identity, candidate, blob_refs,
+                args.command_event_ordinal, args.first_record, args.record_count,
+            )
+            referenced = native.get("referenced_blobs")
+            if not isinstance(referenced, list) or any(
+                not isinstance(value, str) for value in referenced
+            ):
+                raise RuntimeError("materializer omitted exact blob closure")
+            source_by_digest = {digest(path): path for path in blob_paths}
+            try:
+                projected_blobs = [source_by_digest[value] for value in referenced]
+            except KeyError as error:
+                raise RuntimeError(
+                    f"materializer referenced unknown blob {error.args[0]}"
+                ) from error
+            projected_refs = [
+                f"{value}:{source_by_digest[value].stat().st_size}"
+                for value in referenced
+            ]
+            run_validator(args.validator, "validate", candidate, projected_refs)
+
+            first_output = staging / "candidate-1.rgba"
+            second_output = staging / "candidate-2.rgba"
+            first = projection_provider_run(
+                args.provider, candidate, projected_blobs, first_output
+            )
+            second = projection_provider_run(
+                args.provider, candidate, projected_blobs, second_output
+            )
+            if (first_output.read_bytes() != second_output.read_bytes() or
+                    replay_identity(first) != replay_identity(second)):
+                raise RuntimeError("projected provider output is nondeterministic")
+            projected_digest = digest(first_output)
+
+            final_events = staging / EVENTS_NAME
+            final_native = run_native_materialize(
+                args.validator, events, identity, final_events, blob_refs,
+                args.command_event_ordinal, args.first_record, args.record_count,
+                projected_digest,
+            )
+            if final_native.get("referenced_blobs") != referenced:
+                raise RuntimeError("final oracle rewrite changed projection closure")
+            run_validator(args.validator, "validate", final_events, projected_refs)
+            output_oracle = staging / "output.rgba"
+            os.replace(first_output, output_oracle)
+            second_output.unlink()
+            candidate.unlink()
+            final_runs = []
+            for index in range(2):
+                repeated = staging / f"final-{index}.rgba"
+                result = projection_provider_run(
+                    args.provider, final_events, projected_blobs, repeated,
+                    output_oracle,
+                )
+                if repeated.read_bytes() != output_oracle.read_bytes():
+                    raise RuntimeError("strict projected provider repeat changed bytes")
+                repeated.unlink()
+                final_runs.append(replay_identity(result))
+            if final_runs[0] != final_runs[1]:
+                raise RuntimeError("strict projected provider evidence is nondeterministic")
+
+            blob_components = []
+            if referenced:
+                (staging / "blobs").mkdir()
+            for sha256 in referenced:
+                target = staging / "blobs" / f"{sha256}.bin"
+                copy_flushed(source_by_digest[sha256], target)
+                blob_components.append({
+                    "path": f"blobs/{sha256}.bin",
+                    "bytes": target.stat().st_size,
+                    "sha256": sha256,
+                })
+            projected_manifest = {
+                "schema": SCHEMA,
+                "profile": "frame-tape",
+                "producer": {
+                    "path": "scripts/tools/run_dxmt9_render_tape.py",
+                    "git_revision": producer_revision(),
+                },
+                "stage": "executable-projection",
+                "domain": "replay",
+                "inputs": [{
+                    "schema": manifest["schema"],
+                    "events_sha256": manifest["components"]["events"]["sha256"],
+                    "identity_sha256": manifest["components"]["identity"]["sha256"],
+                }],
+                "validity": {
+                    "structural": True,
+                    "provider_replay": True,
+                    "strict_projected_oracle": True,
+                    "fresh_process_repeats": 2,
+                },
+                "components": {
+                    "events": {
+                        "path": EVENTS_NAME,
+                        "bytes": final_events.stat().st_size,
+                        "sha256": digest(final_events),
+                    },
+                    "blobs": blob_components,
+                    "output_oracle": {
+                        "path": "output.rgba",
+                        "bytes": output_oracle.stat().st_size,
+                        "sha256": projected_digest,
+                    },
+                },
+                "scope": {
+                    "production_capture": False,
+                    "production_provider_replay": True,
+                    "output_oracle": True,
+                    "executable_projection": True,
+                    "source_full_frame_oracle_copied": False,
+                },
+                "projection": {
+                    "command_event_ordinal": args.command_event_ordinal,
+                    "first_record": args.first_record,
+                    "record_count": args.record_count,
+                    "logical_pass_id": native.get("logical_pass_id"),
+                    "identity": identity_result,
+                    "oracle_mode": "strict",
+                    "provider_runs": final_runs,
+                },
+            }
+            write_flushed(
+                staging / "manifest.json",
+                (json.dumps(projected_manifest, indent=2, sort_keys=True) + "\n").encode(),
+            )
+    except RuntimeError as error:
+        raise SystemExit(f"render tape executable projection failed: {error}") from error
+    print(json.dumps({
+        "bundle": str(output),
+        "manifest": str(output / "manifest.json"),
+        "events_sha256": digest(output / EVENTS_NAME),
+        "output_sha256": digest(output / "output.rgba"),
+        "oracle_accepted": True,
+    }, sort_keys=True))
+    return 0
 
 
 def reduced_candidate(
@@ -695,10 +1065,10 @@ def reduced_candidate(
 
 
 def reduce_bundle(args: argparse.Namespace) -> int:
-    manifest, events, blob_refs, blob_paths = load_bundle(args.bundle)
+    manifest, events, blob_refs, blob_paths, _ = load_bundle(args.bundle)
     if manifest["profile"] != "frame-tape":
         raise SystemExit("render tape reduction supports frame-tape bundles only")
-    ensure_empty_output(args.output_dir.resolve())
+    ensure_empty_output(args.output_dir.absolute())
     selections = sorted(args.select_command_event)
     if len(selections) != len(set(selections)):
         raise SystemExit("duplicate --select-command-event value")
@@ -717,7 +1087,7 @@ def reduce_bundle(args: argparse.Namespace) -> int:
             )
             referenced = native["referenced_blobs"]
             manifest_path = write_reduced_bundle(
-                args.output_dir.resolve(),
+                args.output_dir.absolute(),
                 candidate_events,
                 manifest,
                 blob_paths,
@@ -735,10 +1105,10 @@ def reduce_bundle(args: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
-                "bundle": str(args.output_dir.resolve()),
+                "bundle": str(args.output_dir.absolute()),
                 "manifest": str(manifest_path),
                 "selected_command_events": selections,
-                "events_sha256": digest(args.output_dir.resolve() / EVENTS_NAME),
+                "events_sha256": digest(args.output_dir.absolute() / EVENTS_NAME),
                 "oracle_accepted": True,
             },
             sort_keys=True,
@@ -752,10 +1122,10 @@ def partition(values: list[int], count: int) -> list[list[int]]:
 
 
 def bisect_bundle(args: argparse.Namespace) -> int:
-    manifest, events, blob_refs, blob_paths = load_bundle(args.bundle)
+    manifest, events, blob_refs, blob_paths, _ = load_bundle(args.bundle)
     if manifest["profile"] != "frame-tape":
         raise SystemExit("render tape bisection supports frame-tape bundles only")
-    ensure_empty_output(args.output_dir.resolve())
+    ensure_empty_output(args.output_dir.absolute())
     commands, present = inspect_bundle_commands(args.validator, events, blob_refs)
     selected = list(commands)
     attempts = 0
@@ -819,7 +1189,7 @@ def bisect_bundle(args: argparse.Namespace) -> int:
         last_native = native
         last_replay = replay
         manifest_path = write_reduced_bundle(
-            args.output_dir.resolve(),
+            args.output_dir.absolute(),
             candidate_events,
             manifest,
             blob_paths,
@@ -840,13 +1210,13 @@ def bisect_bundle(args: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
-                "bundle": str(args.output_dir.resolve()),
+                "bundle": str(args.output_dir.absolute()),
                 "manifest": str(manifest_path),
                 "source_command_events": commands,
                 "selected_command_events": selected,
                 "attempts": attempts,
                 "accepted_candidates": accepted,
-                "events_sha256": digest(args.output_dir.resolve() / EVENTS_NAME),
+                "events_sha256": digest(args.output_dir.absolute() / EVENTS_NAME),
                 "oracle_accepted": True,
             },
             sort_keys=True,
@@ -862,6 +1232,8 @@ def parser() -> argparse.ArgumentParser:
     pack_parser.add_argument("--events", type=pathlib.Path, required=True)
     pack_parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     pack_parser.add_argument("--blob", type=pathlib.Path, action="append", default=[])
+    pack_parser.add_argument("--identity", type=pathlib.Path)
+    pack_parser.add_argument("--output-rgba", type=pathlib.Path)
     pack_parser.add_argument(
         "--validator", type=pathlib.Path,
         default=pathlib.Path("build/tools/dxmt9-render-tape"),
@@ -883,9 +1255,31 @@ def parser() -> argparse.ArgumentParser:
         "--provider", type=pathlib.Path,
         default=pathlib.Path("build/tools/dxmt9-render-tape-provider"),
     )
+    provider_parser.add_argument(
+        "--validator", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape"),
+    )
     provider_parser.add_argument("--warmup", type=int, default=0)
     provider_parser.add_argument("--repeat", type=int, default=1)
     provider_parser.set_defaults(function=provider_replay)
+    project_parser = subparsers.add_parser(
+        "executable-project",
+        help="materialize and replay one identity-proven Draw range",
+    )
+    project_parser.add_argument("bundle", type=pathlib.Path)
+    project_parser.add_argument("--output-dir", type=pathlib.Path, required=True)
+    project_parser.add_argument("--command-event-ordinal", type=int, required=True)
+    project_parser.add_argument("--first-record", type=int, required=True)
+    project_parser.add_argument("--record-count", type=int, required=True)
+    project_parser.add_argument(
+        "--validator", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape"),
+    )
+    project_parser.add_argument(
+        "--provider", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape-provider"),
+    )
+    project_parser.set_defaults(function=executable_project)
     for command, function, help_text in (
         (
             "reduce",

@@ -836,7 +836,46 @@ typedef struct D9CCommandChunk {
     D9CWireHandle records;
     uint32_t handleCount;
     D9CWireHandle handles;
+    uint64_t renderTapeCaptureToken;
+    uint64_t renderTapeEventOrdinal;
 } D9CCommandChunk;
+
+typedef enum D9CRenderTapeIdentityCaptureStatus {
+    D9C_RENDER_TAPE_IDENTITY_CAPTURE_NONE = 0,
+    D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE = 1,
+    D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED = 2,
+} D9CRenderTapeIdentityCaptureStatus;
+
+typedef struct D9CRenderTapeIdentityCaptureResult {
+    uint32_t status;
+    uint32_t sourceCount;
+    uint32_t rangeCount;
+    uint32_t reserved0;
+    uint64_t captureToken;
+    uint64_t byteCount;
+} D9CRenderTapeIdentityCaptureResult;
+
+typedef struct D9CRenderTapeIdentitySourceEntry {
+    uint64_t eventOrdinal;
+    uint64_t sourceOrdinal;
+    uint64_t seqId;
+    uint64_t captureToken;
+    uint32_t recordCount;
+    uint32_t firstRange;
+    uint32_t rangeCount;
+    uint32_t reserved0;
+} D9CRenderTapeIdentitySourceEntry;
+
+typedef struct D9CRenderTapeIdentityRangeEntry {
+    uint64_t eventOrdinal;
+    uint64_t sourceOrdinal;
+    uint64_t seqId;
+    uint64_t logicalPassId;
+    uint32_t firstRecord;
+    uint32_t recordCount;
+    uint32_t dagPassIndex;
+    uint32_t passKind;
+} D9CRenderTapeIdentityRangeEntry;
 
 /* Capture-only PresentComplete output result. This fixed, pointer-free POD
  * crosses the PE/unix boundary only after the captured PRESENT chunk has
@@ -1074,6 +1113,9 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDe
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
     D9CDevice*, D9CRenderTapePresentCaptureResult* out, void* bytes,
     uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture(
+    D9CDevice*, uint64_t captureToken,
+    D9CRenderTapeIdentityCaptureResult* out, void* bytes, uint64_t capacity);
 void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,

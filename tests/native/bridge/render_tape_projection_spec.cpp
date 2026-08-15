@@ -123,16 +123,25 @@ constexpr D9CWireObjectIdentity kShader{
     .objectId = 43u,
 };
 
-RenderTapeDigest digest(std::byte seed) {
+RenderTapeDigest digest(std::string_view text) {
+  check(text.size() == kRenderTapeDigestSize * 2u,
+        "fixture digest has canonical size");
   RenderTapeDigest value{};
   for (std::size_t i = 0u; i < value.size(); ++i) {
-    value[i] = static_cast<std::byte>(static_cast<unsigned>(seed) + i);
+    const auto nibble = [](char digit) -> unsigned {
+      if (digit >= '0' && digit <= '9') return digit - '0';
+      return digit - 'a' + 10u;
+    };
+    value[i] = static_cast<std::byte>(
+        (nibble(text[i * 2u]) << 4u) | nibble(text[i * 2u + 1u]));
   }
   return value;
 }
 
-const RenderTapeDigest kTextureDigest = digest(std::byte{0x10});
-const RenderTapeDigest kShaderDigest = digest(std::byte{0x40});
+const RenderTapeDigest kTextureDigest = digest(
+    "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297");
+const RenderTapeDigest kShaderDigest = digest(
+    "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a");
 
 std::vector<std::byte> drawPayload(bool fullSnapshot,
                                    std::uint32_t firstHandle = 0u,
@@ -480,6 +489,171 @@ RenderTapeProjectionSelector selector() {
   };
 }
 
+std::vector<std::byte> makeIdentity(
+    const std::vector<std::byte>& tape, bool splitPasses = false,
+    RenderTapeIdentityAuthority authority = RenderTapeIdentityAuthority::Capture) {
+  const RenderTapeIdentitySource source{
+      .eventOrdinal = 6u,
+      .sourceOrdinal = 101u,
+      .seqId = 501u,
+      .captureToken = 77u,
+      .recordCount = 4u,
+      .firstRange = 0u,
+      .rangeCount = splitPasses ? 2u : 1u,
+  };
+  const std::array ranges{
+      RenderTapeIdentityRange{
+          .eventOrdinal = 6u,
+          .sourceOrdinal = 101u,
+          .seqId = 501u,
+          .logicalPassId = 9001u,
+          .firstRecord = 0u,
+          .recordCount = splitPasses ? 2u : 4u,
+          .dagPassIndex = 3u,
+          .passKind = 1u,
+      },
+      RenderTapeIdentityRange{
+          .eventOrdinal = 6u,
+          .sourceOrdinal = 101u,
+          .seqId = 501u,
+          .logicalPassId = 9002u,
+          .firstRecord = 2u,
+          .recordCount = 2u,
+          .dagPassIndex = 4u,
+          .passKind = 1u,
+      },
+  };
+  return buildRenderTapeIdentity(
+      tape, catalogue(), 42u, 6u, 77u,
+      authority, std::span(&source, 1u),
+      std::span(ranges).first(splitPasses ? 2u : 1u));
+}
+
+template <typename T>
+T& sidecarAt(std::vector<std::byte>& bytes, std::size_t offset) {
+  check(offset + sizeof(T) <= bytes.size(), "sidecar mutation is in bounds");
+  return *reinterpret_cast<T*>(bytes.data() + offset);
+}
+
+void identityTruthTableAndMalformedInputs() {
+  const auto tape = makeFrameTape();
+  const auto blobs = catalogue();
+  auto identity = makeIdentity(
+      tape, false, RenderTapeIdentityAuthority::ProviderReplay);
+  RenderTapeIdentityView view;
+  const auto accepted = validateRenderTapeIdentity(tape, blobs, identity, &view);
+  check(accepted.valid() && view.sources.size() == 1u &&
+            view.ranges.size() == 1u &&
+            view.header.authority == static_cast<std::uint32_t>(
+                                         RenderTapeIdentityAuthority::ProviderReplay),
+        "identity sidecar accepts exact provider-replay value identity");
+  std::uint64_t pass = 0u;
+  check(renderTapeIdentityOwnsSelection(view, 6u, 1u, 2u, &pass) &&
+            pass == 9001u &&
+            !renderTapeIdentityOwnsSelection(view, 6u, 3u, 2u),
+        "identity sidecar owns only in-range record selections");
+
+  auto malformed = identity;
+  sidecarAt<RenderTapeIdentityHeader>(malformed, 0u).eventsDigest[0] ^=
+      std::byte{1u};
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::EventsMismatch,
+        "altered events binding fails closed");
+  malformed = identity;
+  auto& source = sidecarAt<RenderTapeIdentitySource>(
+      malformed, sizeof(RenderTapeIdentityHeader));
+  source.seqId = 0u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::NonMonotoneSource,
+        "zero/non-monotone production sequence fails closed");
+  malformed = identity;
+  sidecarAt<RenderTapeIdentitySource>(
+      malformed, sizeof(RenderTapeIdentityHeader)).captureToken = 78u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::SourceCoverageMismatch,
+        "stale bounded capture token fails closed");
+  malformed = identity;
+  auto& range = sidecarAt<RenderTapeIdentityRange>(
+      malformed, sizeof(RenderTapeIdentityHeader) +
+                     sizeof(RenderTapeIdentitySource));
+  range.recordCount = 3u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::RecordCoverageMismatch,
+        "partial record coverage fails closed");
+
+  malformed = makeIdentity(tape, true);
+  const auto rangeOffset = sizeof(RenderTapeIdentityHeader) +
+                           sizeof(RenderTapeIdentitySource);
+  auto& second = sidecarAt<RenderTapeIdentityRange>(
+      malformed, rangeOffset + sizeof(RenderTapeIdentityRange));
+  second.logicalPassId = 9001u;
+  second.passKind = 2u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::PassIdentityMismatch,
+        "inconsistent repeated logical pass identity fails closed");
+}
+
+void executableProjectionMaterializesCanonicalBundle() {
+  const auto tape = makeFrameTape();
+  const auto blobs = catalogue();
+  const auto identity = makeIdentity(tape);
+  const auto materialized = materializeRenderTapeProjectionBundle(
+      tape, blobs, identity, selector());
+  check(materialized.valid(),
+        renderTapeProjectionBundleStatusName(materialized.status));
+  const auto processLocalIdentity = makeIdentity(
+      tape, false, RenderTapeIdentityAuthority::ProviderReplay);
+  check(materializeRenderTapeProjectionBundle(
+            tape, blobs, processLocalIdentity, selector()).status ==
+            RenderTapeProjectionBundleStatus::InvalidIdentity,
+        "persisted provider-replay identity cannot authorize offline projection");
+  check(materialized.logicalPassId == 9001u &&
+            materialized.referencedBlobDigests.size() == 2u &&
+            validateRenderTape(materialized.bytes, blobs).valid(),
+        "executable projection conserves pass and exact blob closure");
+  ImportedRenderTapeView projected;
+  check(importPrevalidatedRenderTape(materialized.bytes, projected) &&
+            projected.header.profile == kRenderTapeProfileFrame,
+        "executable projection emits canonical Render Tape v2");
+  std::vector<std::uint32_t> recordTypes;
+  for (std::uint32_t eventIndex = 0u; eventIndex < projected.events.size();
+       ++eventIndex) {
+    const auto event = projected.event(eventIndex);
+    if (static_cast<RenderTapeEventType>(event.header.type) !=
+        RenderTapeEventType::CommandChunk) {
+      continue;
+    }
+    RenderTapeCommandChunkHeader fixed{};
+    std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+    ImportedChunkView chunk;
+    check(importPrevalidatedCommandChunk(
+              event.payload.subspan(sizeof(fixed), fixed.chunkBytes),
+              CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
+                                   fixed.handleCount},
+              chunk),
+          "projected command chunk imports");
+    for (const auto& record : chunk.records) recordTypes.push_back(record.type);
+  }
+  check(recordTypes == std::vector<std::uint32_t>{
+                           D9C_COMMAND_RECORD_CLEAR,
+                           D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                           D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                           D9C_COMMAND_RECORD_PRESENT},
+        "projected command executes Clear, selected Draw range, then Present");
+
+  const auto splitIdentity = makeIdentity(tape, true);
+  check(materializeRenderTapeProjectionBundle(
+            tape, blobs, splitIdentity, selector()).status ==
+            RenderTapeProjectionBundleStatus::SelectionOutsidePass,
+        "draw range crossing a frozen pass boundary fails before effects");
+  auto mismatched = identity;
+  sidecarAt<RenderTapeIdentityHeader>(mismatched, 0u).eventsBytes += 1u;
+  check(materializeRenderTapeProjectionBundle(
+            tape, blobs, mismatched, selector()).status ==
+            RenderTapeProjectionBundleStatus::InvalidIdentity,
+        "mismatched identity fails before materialization");
+}
+
 void acceptedRangeConservesCanonicalIdentity() {
   const auto tape = makeFrameTape();
   const auto blobs = catalogue();
@@ -498,19 +672,20 @@ void acceptedRangeConservesCanonicalIdentity() {
             projected.presentLocator.eventOrdinal == 6u &&
             projected.presentLocator.recordIndex == 3u,
         "same-command Clear and immediately-following Present stay outside range");
-  check(projected.objects.size() == 2u &&
-            projected.objects[0].identity.objectId == kTexture.objectId &&
-            projected.objects[0].identity.generation == kTexture.generation &&
-            projected.objects[1].identity.objectId == kShader.objectId &&
-            projected.objects[1].identity.generation == kShader.generation,
+  check(projected.objects.size() == 3u &&
+            projected.objects[0].identity.objectId == kOutput.objectId &&
+            projected.objects[1].identity.objectId == kTexture.objectId &&
+            projected.objects[1].identity.generation == kTexture.generation &&
+            projected.objects[2].identity.objectId == kShader.objectId &&
+            projected.objects[2].identity.generation == kShader.generation,
         "projection must conserve exact generation-qualified selected objects");
   check(projected.blobReferences.size() == 2u &&
             projected.blobReferences[0].digest == kShaderDigest &&
             projected.blobReferences[1].digest == kTextureDigest &&
             projected.blobReferences[1].initialContent == 1u,
         "projection must conserve source-ordered immutable and seed digests");
-  check(projected.objects[0].initialContentBytes == 4u &&
-            projected.objects[0].initialContentCount == 1u &&
+  check(projected.objects[1].initialContentBytes == 4u &&
+            projected.objects[1].initialContentCount == 1u &&
             projected.sourceRecordCount == 4u &&
             projected.selectedDrawCount == 2u &&
             projected.excludedRecordCount == 2u,
@@ -635,20 +810,31 @@ void failClosedSelectionAndClosureCases() {
 
 int main(int argc, char** argv) {
   try {
-    if (argc == 3 && std::string_view(argv[1]) == "--write-fixture") {
+    if ((argc == 3 || argc == 4) &&
+        std::string_view(argv[1]) == "--write-fixture") {
       const auto tape = makeFrameTape();
       std::ofstream output(argv[2], std::ios::binary);
       output.write(reinterpret_cast<const char*>(tape.data()),
                    static_cast<std::streamsize>(tape.size()));
       check(output.good(), "failed to write projection CLI fixture");
+      if (argc == 4) {
+        const auto identity = makeIdentity(tape);
+        std::ofstream identityOutput(argv[3], std::ios::binary);
+        identityOutput.write(
+            reinterpret_cast<const char*>(identity.data()),
+            static_cast<std::streamsize>(identity.size()));
+        check(identityOutput.good(), "failed to write identity CLI fixture");
+      }
       return 0;
     }
     check(argc == 1,
-          "usage: render_tape_projection_spec [--write-fixture path]");
+          "usage: render_tape_projection_spec [--write-fixture path [identity]]");
     acceptedRangeConservesCanonicalIdentity();
     projectionAccountsLatePerIdentitySeed();
     projectionPreservesDispositionAndAliasMetadata();
     failClosedSelectionAndClosureCases();
+    identityTruthTableAndMalformedInputs();
+    executableProjectionMaterializesCanonicalBundle();
   } catch (const std::exception& error) {
     std::cerr << "render_tape_projection_spec failed: " << error.what() << '\n';
     return 1;

@@ -17,6 +17,7 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "framegraph/fg_builder.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -321,8 +322,12 @@ class PerfScope {
 
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                            bool cpuReadySessionLaneEnabled,
+                           bool renderTapePublisherCaptureEnabled,
                            render::RenderPartitionConfig renderPartitionConfig)
-    : cpuReadyTape_(cpuReadySessionLaneEnabled
+    : cpuReadyTape_(renderTapePublisherCaptureEnabled
+                        ? core::CpuReadyTapeConfig::queueCaptureStreaming(
+                              kCommandChunkCount)
+                    : cpuReadySessionLaneEnabled
                         ? core::CpuReadyTapeConfig::queueSessionStreaming(
                               kCommandChunkCount)
                         : core::CpuReadyTapeConfig::queueCompatibility(
@@ -3299,14 +3304,15 @@ CommandQueue::CpuReadyArenaBuildLease::operator=(
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::publish(
-    std::span<const core::ChunkHandleEntry> resources) noexcept {
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentity* captureIdentity) noexcept {
   if (!queue_) {
     return false;
   }
   auto* queue = queue_;
   const auto ticket = ticket_;
   if (!queue->publishCpuReadyArenaSource(
-          ticket, controlIndex_, resources)) {
+          ticket, controlIndex_, resources, captureIdentity)) {
     queue_ = nullptr;
     ticket_ = {};
     controlIndex_ = std::numeric_limits<std::size_t>::max();
@@ -3316,6 +3322,48 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
   return true;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
+    std::uint32_t recordCount) noexcept {
+  if (!queue_ || recordCount == 0u) {
+    return false;
+  }
+  auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || context->reservation.ticket != ticket_ ||
+      context->controlIndex != controlIndex_ ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->captureEnabled() ||
+      context->failed.load(std::memory_order_acquire)) {
+    return false;
+  }
+  try {
+    context->captureCommandAnchors.reserve(recordCount);
+    context->captureNextRawRecords.reserve(recordCount);
+  } catch (...) {
+    return false;
+  }
+  context->captureRecordCount = recordCount;
+  return true;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::captureNextCommandRecord(
+    std::uint32_t recordIndex) noexcept {
+  const std::array records{recordIndex};
+  return captureNextDrawRecords(records);
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::captureNextDrawRecords(
+    std::span<const std::uint32_t> recordIndices) noexcept {
+  if (!queue_) {
+    return false;
+  }
+  auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  return context && context->reservation.ticket == ticket_ &&
+         context->controlIndex == controlIndex_ &&
+         context->ownerThread == std::this_thread::get_id() &&
+         !context->failed.load(std::memory_order_acquire) &&
+         context->setCaptureNextRawRecords(recordIndices);
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::selectSegment(
@@ -3509,6 +3557,67 @@ bool CommandQueue::selectCpuReadyArenaSegment(
   return true;
 }
 
+bool CommandQueue::ArenaBuildContext::setCaptureNextRawRecords(
+    std::span<const std::uint32_t> records) noexcept {
+  if (!captureEnabled() || records.empty() ||
+      !captureNextRawRecords.empty()) {
+    return false;
+  }
+  std::uint32_t previous = 0u;
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    if (records[i] >= captureRecordCount ||
+        (i != 0u && records[i] <= previous)) {
+      return false;
+    }
+    previous = records[i];
+  }
+  try {
+    captureNextRawRecords.assign(records.begin(), records.end());
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+bool CommandQueue::ArenaBuildContext::captureSingleCommand() noexcept {
+  if (!captureEnabled()) {
+    return true;
+  }
+  if (captureNextRawRecords.size() != 1u) {
+    return false;
+  }
+  try {
+    captureCommandAnchors.push_back(CaptureCommandAnchor{
+        .firstRecord = captureNextRawRecords.front(),
+        .lastRecord = captureNextRawRecords.front(),
+    });
+  } catch (...) {
+    return false;
+  }
+  captureNextRawRecords.clear();
+  return true;
+}
+
+bool CommandQueue::ArenaBuildContext::captureDrawCommand(
+    std::size_t first, std::size_t count) noexcept {
+  if (!captureEnabled()) {
+    return true;
+  }
+  if (count == 0u || first > captureNextRawRecords.size() ||
+      count > captureNextRawRecords.size() - first) {
+    return false;
+  }
+  try {
+    captureCommandAnchors.push_back(CaptureCommandAnchor{
+        .firstRecord = captureNextRawRecords[first],
+        .lastRecord = captureNextRawRecords[first + count - 1u],
+    });
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
 CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
     noexcept {
   if (!arenaAdmissionActive_.load(std::memory_order_acquire)) {
@@ -3556,6 +3665,9 @@ CommandQueue::appendActiveArenaDrawRunBatch(
       if (!assembler || !assembler->tryAppendDrawRunBatch(batch)) {
         return false;
       }
+      if (!context.captureDrawCommand(batchStart, batch.size())) {
+        return false;
+      }
       context.pendingBackBuffer = batch.front()
                                       .materializedState()
                                       .hot.colorAttachments[0].handle;
@@ -3563,6 +3675,9 @@ CommandQueue::appendActiveArenaDrawRunBatch(
       perf::countSubmitDrawRunBatchGroup(
           static_cast<std::uint32_t>(batch.size()));
       batchStart = batchEnd;
+    }
+    if (context.captureEnabled()) {
+      context.captureNextRawRecords.clear();
     }
     return true;
   });
@@ -3603,6 +3718,9 @@ CommandQueue::appendActiveArenaDrawRun(
             scratch.arenaSubmissions)) {
       return false;
     }
+    if (!context.captureSingleCommand()) {
+      return false;
+    }
     context.pendingBackBuffer = backBuffer;
     context.updatesBackBuffer = true;
     return true;
@@ -3614,6 +3732,9 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaClear(
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
     if (!assembler || !assembler->tryAppendClear(value)) {
+      return false;
+    }
+    if (!context.captureSingleCommand()) {
       return false;
     }
     if (value.colorAttachments[0].handle) {
@@ -3632,6 +3753,9 @@ CommandQueue::appendActiveArenaSurfaceCopy(
     if (!assembler || !assembler->tryAppendSurfaceCopy(value)) {
       return false;
     }
+    if (!context.captureSingleCommand()) {
+      return false;
+    }
     context.pendingBackBuffer = value.destination;
     context.updatesBackBuffer = true;
     return true;
@@ -3644,6 +3768,9 @@ CommandQueue::appendActiveArenaStretchRect(
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
     if (!assembler || !assembler->tryAppendStretchRect(value)) {
+      return false;
+    }
+    if (!context.captureSingleCommand()) {
       return false;
     }
     context.pendingBackBuffer = value.destination;
@@ -3659,6 +3786,9 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaColorFill(
     if (!assembler || !assembler->tryAppendColorFill(value)) {
       return false;
     }
+    if (!context.captureSingleCommand()) {
+      return false;
+    }
     context.pendingBackBuffer = value.destination;
     context.updatesBackBuffer = true;
     return true;
@@ -3670,7 +3800,8 @@ CommandQueue::appendActiveArenaDepthResolve(
     const core::DepthResolveDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    return assembler && assembler->tryAppendDepthResolve(value);
+    return assembler && assembler->tryAppendDepthResolve(value) &&
+           context.captureSingleCommand();
   });
 }
 
@@ -3701,7 +3832,7 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
     return builder->tryAppendPresentCommand(core::PresentCommandRecord{
         .present = std::move(value),
         .presentSource = sourceHandle,
-    });
+    }) && context.captureSingleCommand();
   });
 }
 
@@ -3719,7 +3850,8 @@ CommandQueue::deferActiveArenaFlush() noexcept {
 bool CommandQueue::publishCpuReadyArenaSource(
     core::CpuReadyPublicationTicket ticket,
     std::size_t controlIndex,
-    std::span<const core::ChunkHandleEntry> resources) noexcept {
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentity* captureIdentity) noexcept {
   auto* context = activeArenaBuild_.load(std::memory_order_acquire);
   if (!context || context->reservation.ticket != ticket ||
       context->ownerThread != std::this_thread::get_id() ||
@@ -3730,11 +3862,121 @@ bool CommandQueue::publishCpuReadyArenaSource(
     abortCpuReadyArenaSource(ticket, controlIndex);
     return false;
   }
+  if (captureIdentity) {
+    *captureIdentity = {};
+  }
   for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
     if (!context->builders[i] || !context->builders[i]->publish()) {
       arenaBuildPoisoned_.store(true, std::memory_order_release);
       abortCpuReadyArenaSource(ticket, controlIndex);
       return false;
+    }
+  }
+
+  // Capture attribution is built from the exact immutable blocks owned by
+  // this ticket after their builders publish, but before Ready visibility lets
+  // the encode thread reorder or reclaim them. Failure invalidates only the
+  // diagnostic sidecar; it never changes rendering or publication.
+  CpuReadyCaptureIdentity captured{};
+  bool capturedValid = captureIdentity == nullptr;
+  if (captureIdentity && context->captureEnabled() &&
+      context->captureNextRawRecords.empty()) {
+    try {
+      std::array<const core::ArenaSourcePayloadBlock*,
+                 core::kMaxArenaSourcePayloadSegments> blocks{};
+      for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+        blocks[i] = context->reservation.arenaPayloads[i];
+      }
+      core::ArenaSourcePayloadChain chain;
+      capturedValid = chain.initialize(
+          std::span(blocks).first(context->layout.segmentCount));
+      const core::SourcePayloadView payload(chain);
+      capturedValid = capturedValid && payload.valid() &&
+          payload.commandCount() == context->captureCommandAnchors.size();
+      framegraph::FrameGraph graph;
+      if (capturedValid) {
+        framegraph::buildFrameGraph(payload, ticket.sourceOrdinal, graph);
+      }
+      std::vector<std::uint32_t> commandPass;
+      if (capturedValid) {
+        commandPass.assign(payload.commandCount(),
+                           std::numeric_limits<std::uint32_t>::max());
+        for (std::size_t passIndex = 0; passIndex < graph.passes.size();
+             ++passIndex) {
+          const auto& pass = graph.passes[passIndex];
+          if (pass.commands.first > graph.commands.size() ||
+              pass.commands.count >
+                  graph.commands.size() - pass.commands.first) {
+            capturedValid = false;
+            break;
+          }
+          for (std::size_t local = 0; local < pass.commands.count; ++local) {
+            const auto commandIndex =
+                graph.commands[pass.commands.first + local].command_index;
+            if (commandIndex >= commandPass.size() ||
+                commandPass[commandIndex] !=
+                    std::numeric_limits<std::uint32_t>::max()) {
+              capturedValid = false;
+              break;
+            }
+            commandPass[commandIndex] = static_cast<std::uint32_t>(passIndex);
+          }
+          if (!capturedValid) {
+            break;
+          }
+        }
+        capturedValid = capturedValid && std::none_of(
+            commandPass.begin(), commandPass.end(), [](std::uint32_t value) {
+              return value == std::numeric_limits<std::uint32_t>::max();
+            });
+      }
+      if (capturedValid) {
+        captured.sourceOrdinal = ticket.sourceOrdinal;
+        captured.seqId = ticket.seqId;
+        captured.recordCount = context->captureRecordCount;
+        std::uint32_t nextRecord = 0u;
+        for (std::size_t commandIndex = 0;
+             commandIndex < context->captureCommandAnchors.size();
+             ++commandIndex) {
+          const auto& anchor = context->captureCommandAnchors[commandIndex];
+          const auto passIndex = commandPass[commandIndex];
+          const bool last =
+              commandIndex + 1u == context->captureCommandAnchors.size();
+          const std::uint32_t endRecord = last
+              ? context->captureRecordCount
+              : anchor.lastRecord + 1u;
+          if (anchor.firstRecord < nextRecord ||
+              anchor.lastRecord < anchor.firstRecord ||
+              endRecord <= nextRecord ||
+              endRecord > context->captureRecordCount ||
+              passIndex >= graph.passes.size()) {
+            capturedValid = false;
+            break;
+          }
+          const std::uint32_t passKind =
+              static_cast<std::uint32_t>(graph.passes[passIndex].kind) + 1u;
+          if (!captured.ranges.empty() &&
+              captured.ranges.back().dagPassIndex == passIndex &&
+              captured.ranges.back().passKind == passKind &&
+              captured.ranges.back().firstRecord +
+                      captured.ranges.back().recordCount ==
+                  nextRecord) {
+            captured.ranges.back().recordCount += endRecord - nextRecord;
+          } else {
+            captured.ranges.push_back(CpuReadyCapturePassRange{
+                .firstRecord = nextRecord,
+                .recordCount = endRecord - nextRecord,
+                .dagPassIndex = passIndex,
+                .passKind = passKind,
+            });
+          }
+          nextRecord = endRecord;
+        }
+        capturedValid = capturedValid && nextRecord == captured.recordCount &&
+                        captured.valid();
+      }
+    } catch (...) {
+      capturedValid = false;
     }
   }
 
@@ -3843,6 +4085,9 @@ bool CommandQueue::publishCpuReadyArenaSource(
   }
   if (flushAfterPublication) {
     submitFlush();
+  }
+  if (captureIdentity && capturedValid) {
+    *captureIdentity = std::move(captured);
   }
   return true;
 }

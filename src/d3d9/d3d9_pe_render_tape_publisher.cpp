@@ -1,4 +1,5 @@
 #include "d3d9_pe_render_tape_publisher.hpp"
+#include "device_c_render_tape_identity.hpp"
 
 #include "util/config/config.hpp"
 
@@ -215,6 +216,7 @@ bool writeText(const std::filesystem::path& path,
 std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view eventDigest,
                         std::span<const std::string> blobDigests,
+                        std::string_view identityDigest,
                         std::string_view outputOracleDigest) {
   const auto profile = sealedProfile(bundle.events);
   std::ostringstream manifest;
@@ -241,6 +243,12 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
              << ",\"sha256\":\"" << blobDigests[i] << "\"}";
   }
   manifest << ']';
+  if (!bundle.identity.empty()) {
+    manifest << ",\n    \"identity\":{\"path\":\"identity.bin\","
+                "\"schema\":\"dxmt9.render_tape.identity.v1\",\"bytes\":"
+             << bundle.identity.size() << ",\"sha256\":\""
+             << identityDigest << "\"}";
+  }
   if (!bundle.outputOracle.empty()) {
     manifest << ",\n    \"output_oracle\":{\"path\":\"output.rgba\",\"bytes\":"
              << bundle.outputOracle.size() << ",\"sha256\":\""
@@ -324,6 +332,9 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     }
     const auto eventDigest =
         hexDigest(RenderTapeCaptureSession::sha256(bundle.events));
+    const auto identityDigest = bundle.identity.empty()
+        ? std::string{}
+        : hexDigest(RenderTapeCaptureSession::sha256(bundle.identity));
     const auto outputOracleDigest = bundle.outputOracle.empty()
         ? std::string{}
         : hexDigest(RenderTapeCaptureSession::sha256(bundle.outputOracle));
@@ -366,8 +377,23 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
         !writeBytes(stagingPath / "output.rgba", bundle.outputOracle)) {
       return fail("output_oracle_write_or_sync");
     }
+    if (!bundle.identity.empty()) {
+      dxmt9::d3d9::RenderTapeBlobCatalogue catalogue;
+      for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
+        catalogue.blobs.push_back(dxmt9::d3d9::RenderTapeBlob{
+            .digest = bundle.blobs[i].digest,
+            .size = bundle.blobs[i].bytes.size(),
+            .verified = 1u,
+        });
+      }
+      if (!dxmt9::d3d9::validateRenderTapeIdentity(
+               bundle.events, catalogue, bundle.identity).valid() ||
+          !writeBytes(stagingPath / "identity.bin", bundle.identity)) {
+        return fail("identity_validate_write_or_sync");
+      }
+    }
     const auto manifest = manifestFor(
-        bundle, eventDigest, blobDigests, outputOracleDigest);
+        bundle, eventDigest, blobDigests, identityDigest, outputOracleDigest);
     if (!writeText(stagingPath / "manifest.json", manifest)) {
       return fail("manifest_write_or_sync");
     }

@@ -296,8 +296,10 @@ void configValidationRejectsUnsafeBounds() {
 void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
   const auto streaming = CpuReadyTapeConfig::queueSessionStreaming(32);
+  const auto capture = CpuReadyTapeConfig::queueCaptureStreaming(32);
   const auto& legacy = compatibility.values();
   const auto& session = streaming.values();
+  const auto& captureValues = capture.values();
 
   check(legacy.pageSize == 4096u && session.pageSize == legacy.pageSize,
         "production profiles share the fixed page size");
@@ -333,6 +335,17 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   check(legacy.maxPagesPerSource == 64u,
         "default-off compatibility profile preserves its 64-page source "
         "bound");
+  check(captureValues.pageCount == 2048u &&
+            captureValues.maxPagesPerSource == 512u &&
+            captureValues.highWaterPages == 2048u &&
+            captureValues.lowWaterPages == 1024u,
+        "capture streaming admits the complete eight-segment source while "
+        "retaining bounded page watermarks");
+  check(dxmt9::render::worstCaseNonWrappingReservationPages(
+            captureValues.maxPagesPerSource) == 1023u &&
+            captureValues.highWaterPages - 1023u == 1025u,
+        "capture streaming leaves a fixed session prefix after reserving one "
+        "maximum non-wrapping successor");
 
   bool overflowRejected = false;
   try {
@@ -343,6 +356,16 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   }
   check(overflowRejected,
         "session page-capacity multiplication rejects overflow");
+
+  overflowRejected = false;
+  try {
+    (void)CpuReadyTapeConfig::queueCaptureStreaming(
+        std::numeric_limits<std::size_t>::max() / 64u + 1u);
+  } catch (const std::invalid_argument&) {
+    overflowRejected = true;
+  }
+  check(overflowRejected,
+        "capture page-capacity multiplication rejects overflow");
 }
 
 void readyAdmissionDistinguishesHardHighAndLowWater() {

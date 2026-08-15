@@ -759,10 +759,11 @@ artifact bound to the unchanged source `events.bin` by its SHA-256 and byte
 count. The artifact must state that it is structural projection readiness only,
 did not rewrite v2 wire bytes, is not
 `dxmt9.3dmark05.mini_replay_manifest.v1`, and establishes neither provider nor
-GT2 replay. Render Tape v2 does not carry authoritative frame ID, application
-source/sequence ID, or logical-pass identity, so the command must not invent or
-label those fields as verified; the canonical event ordinal plus record index is
-the admitted locator until a separately captured mapping exists.
+GT2 replay. `events.bin` alone does not carry authoritative frame ID,
+production source/sequence ID, or logical-pass identity. Those values may be
+used only after separately authenticating the R-HARN-REPLAY-7.21
+`identity.bin`; without it, the canonical event ordinal plus record index is
+the only admitted locator.
 
 **R-HARN-REPLAY-7.18** Production capture and production-provider replay use
 one tape-exact attachment-action policy. While either operation is active, an
@@ -796,3 +797,102 @@ fresh-process determinism. An envelope result requires at least two isolated
 provider processes whose output SHA-256 values and full evidence records are
 identical. Missing, altered, or unauthenticated sidecar bytes retain the
 original output-mismatch result.
+
+**R-HARN-REPLAY-7.20** Generated Render Tape artifacts use a transactional,
+content-addressed output contract. A bundle producer must validate all source
+events and supplied blob digests before creating a final destination, must not
+overwrite an existing destination, and must publish only after writing and
+flushing a complete same-filesystem staging directory. A failed operation must
+leave no claimable partial bundle; the input bundle and any existing curated
+fixture remain unchanged. The final `dxmt9.render_tape.bundle.v2` manifest is
+the control plane and may claim only these canonical components: `events.bin`,
+digest-named `blobs/<sha256>.bin`, the optional `identity.bin` component
+declared as `components.identity`, and the optional `output.rgba` component
+declared as `components.output_oracle`. Every component records its canonical
+path, byte count, and lowercase SHA-256; no unlisted file is part of the bundle,
+and neither sidecar is a resource blob or a replay input.
+
+The `output.rgba` sidecar is the capture-side oracle bytes named by
+`PresentComplete`: tightly packed 8-bit RGBA rows at the recorded output
+extent. It is copied and authenticated as a sidecar, not deduplicated into the
+resource catalogue. The sidecar is optional for structural bundles, but a
+manifest must not assert `output_oracle` or an oracle result when the sidecar
+is absent or fails its byte-count/digest check. `pack`, `reduce`, and `bisect`
+may generate new bundles, but their manifests must describe the components and
+scope they actually emitted rather than inherit an oracle claim from an input.
+
+The `project` command is a different generated artifact: it emits one
+`dxmt9.render_tape.projection.v1` JSON object to stdout, bound to the unchanged
+source `events.bin` digest and byte count. It is structural readiness only and
+must state that it did not rewrite wire bytes and did not perform provider or
+GT2 replay. If a caller persists that JSON, it must use the same new-file,
+flush, and atomic-rename rule; projection rejection emits no artifact. The
+strict SHA-256 result and the R-HARN-REPLAY-7.19 envelope remain the only
+permitted output-oracle decisions; transactionality must never turn a partial,
+unhashed, or projection artifact into replay evidence.
+
+**R-HARN-REPLAY-7.21** A Render Tape identity component is the sole authority
+for mapping the canonical event journal to production scheduling and
+FrameGraph identity. The component uses the versioned, pointer-free
+`dxmt9.render_tape.identity.v1` schema at the canonical `identity.bin` path and
+is declared by `components.identity` with its schema, byte count, and lowercase
+SHA-256. Its header binds the exact `events.bin` byte count and digest, frame
+ID, Present ordinal, and one non-zero bounded capture token. Each canonical
+`CommandChunk` event has exactly one source entry naming the event ordinal,
+production `sourceOrdinal`, production `seqId`, record count, and an exact
+range of pass-membership entries. Those entries cover every record exactly
+once in record order and name the frozen pre-reorder `logicalPassId`, DAG pass
+index, and pass kind. Source ordinals and sequence IDs must be strictly
+monotone, source/pass ranges must be canonical and in bounds, event and record
+coverage must be exact, and repeated pass identity must be self-consistent.
+Any missing, altered, stale-token, non-monotone, partial, overlapping, inferred,
+or process-local identity rejects the bundle before projection or provider
+effects.
+
+The capture join must copy value identity from the actual
+`ResolvedPublishedSource` and `CpuReadySourceMetadata` plus the FrameGraph that
+owns the command before reorder. It joins that owned value to the PE event
+ordinal only through the bounded capture token; it must not retain pointers,
+borrowed spans, slot indices, or registry addresses. Capture-disabled execution
+must gate before metadata collection or allocation. The PE must finish any
+capture-only object/materialization preflight before assigning the final event
+ordinal and submitting the chunk, so later inserted journal events cannot move
+an ordinal already copied by the provider. Capture may select a larger bounded
+Arena profile sufficient for one maximum segmented source, but that profile
+must be selected only when both capture and the publisher are active and must
+not change normal renderer admission. A provider-replay sidecar may be labelled
+authoritative only for the exact replay process that emitted it; an offline
+ordinal-derived mapping is not authoritative and must not satisfy this
+requirement.
+
+**R-HARN-REPLAY-7.22** Executable projection consumes a structurally valid
+`dxmt9.render_tape.bundle.v2` bundle and an authenticated R-HARN-REPLAY-7.21
+identity component before effects. It selects one non-empty contiguous Draw
+range wholly contained in one sidecar-proven pass and anchored by a canonical
+`FULL_SNAPSHOT`. The materializer emits another atomic
+`dxmt9.render_tape.bundle.v2`, never a legacy mini-replay manifest: it derives a
+bootstrap overlay from the selected full snapshot, retains the coordinator
+Clear and Present outside the child range, conserves selected Draw order and
+payload bytes, remaps only canonical handle-table indices required by the new
+chunk layout, and includes exactly the generation-qualified definitions,
+descriptor dependencies, immutable payloads, and complete pre-effect resource
+mutations reachable from the retained records. The final candidate must pass
+the production tape and chunk validators before the existing production
+provider is invoked.
+
+An offline materializer accepts only capture-authority identity. A
+provider-replay identity is process-local and may authorize projection only
+inside the exact provider process that emitted it; serializing it into a bundle
+or passing it to a fresh process must fail before materialization.
+
+The projected output oracle is generated from the projected bundle itself. The
+producer must run at least two deterministic fresh-process provider replays,
+persist and authenticate their byte-identical tight RGBA output as the new
+bundle's `output.rgba`, write that digest into the projected
+`PresentComplete`, and then repeat strict provider validation against the final
+bundle. It must not copy the source full-frame digest or pixels as an equivalent
+projection oracle. Strict SHA-256 equality is the default and required result;
+R-HARN-REPLAY-7.19 may be considered only when separately authenticated
+capture-side pixels have identical projected semantics. Any sidecar,
+materialization, conservation, output, determinism, or final-provider failure
+removes staging and leaves no destination.

@@ -3,6 +3,7 @@
 #include "device_c_render_tape_capture.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -108,6 +109,180 @@ bool exactBlob(const RenderTapeBlobCatalogue& catalogue,
   return catalogue.lookup(
              std::span<const std::byte, kRenderTapeDigestSize>(digest), size) ==
          RenderTapeBlobLookup::Exact;
+}
+
+std::size_t alignUp(std::size_t value, std::size_t alignment) noexcept {
+  return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
+bool sameDigest(const RenderTapeDigest& left,
+                const RenderTapeDigest& right) noexcept {
+  return std::equal(left.begin(), left.end(), right.begin());
+}
+
+struct ProjectionRecordCopy {
+  std::uint32_t type = 0u;
+  std::uint32_t flags = 0u;
+  std::uint32_t oldFirstHandle = 0u;
+  std::vector<std::byte> payload{};
+  std::vector<D9CCommandChunkWireHandleEntry> handles{};
+};
+
+bool remapProjectionRecordPayload(ProjectionRecordCopy& record,
+                                  std::uint32_t newFirstHandle) noexcept {
+  const auto remap = [&](std::uint32_t& value) {
+    if (value == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) return true;
+    if (value < record.oldFirstHandle ||
+        value - record.oldFirstHandle >= record.handles.size()) {
+      return false;
+    }
+    value = newFirstHandle + (value - record.oldFirstHandle);
+    return true;
+  };
+  for (const auto& field : kRecordHandleFieldRules) {
+    if (field.recordType != record.type) continue;
+    if (record.handles.empty()) continue;
+    std::uint32_t value = 0u;
+    if (!load(record.payload, field.payloadOffset, value) || !remap(value)) {
+      return false;
+    }
+    std::memcpy(record.payload.data() + field.payloadOffset, &value,
+                sizeof(value));
+  }
+  const auto* rule = recordRule(record.type);
+  if (!rule || (rule->ruleFlags & RecordRuleSparseState) == 0u) return true;
+  D9CCommandChunkWireDrawHeader draw{};
+  if (!load(record.payload, 0u, draw)) return false;
+  for (std::uint32_t sectionIndex = 0u;
+       sectionIndex < draw.sectionCount; ++sectionIndex) {
+    D9CCommandChunkWireSectionDesc section{};
+    const auto sectionOffset = draw.sectionTableOffset +
+        sectionIndex * sizeof(D9CCommandChunkWireSectionDesc);
+    if (!load(record.payload, sectionOffset, section)) return false;
+    const auto* field = sectionHandleFieldRule(section.kind);
+    if (!field) continue;
+    for (std::uint32_t element = 0u; element < section.count; ++element) {
+      const auto offset = static_cast<std::size_t>(section.payloadOffset) +
+          static_cast<std::size_t>(element) * section.elementSize +
+          field->payloadOffset;
+      std::uint32_t value = 0u;
+      if (!load(record.payload, offset, value) || !remap(value)) return false;
+      std::memcpy(record.payload.data() + offset, &value, sizeof(value));
+    }
+  }
+  return true;
+}
+
+bool copyProjectionRecord(const ImportedRenderTapeView& tape,
+                          const RenderTapeProjectionLocator& locator,
+                          ProjectionRecordCopy& out,
+                          bool bootstrap = false) {
+  if (locator.sourceEventIndex >= tape.events.size()) return false;
+  const auto event = tape.event(locator.sourceEventIndex);
+  RenderTapeCommandChunkHeader fixed{};
+  if (!load(event.payload, 0u, fixed)) return false;
+  ImportedChunkView chunk;
+  if (!importPrevalidatedCommandChunk(
+          event.payload.subspan(sizeof(fixed), fixed.chunkBytes),
+          CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
+                               fixed.handleCount},
+          chunk) || locator.recordIndex >= chunk.records.size()) {
+    return false;
+  }
+  const auto record = chunk.record(locator.recordIndex);
+  out.type = bootstrap ? D9C_COMMAND_RECORD_APPLY_STATE : record.header.type;
+  out.flags = record.header.flags;
+  out.oldFirstHandle = record.header.firstHandle;
+  out.payload.assign(record.payload.begin(), record.payload.end());
+  out.handles.assign(record.handles.begin(), record.handles.end());
+  if (bootstrap) {
+    D9CCommandChunkWireDrawHeader draw{};
+    if (!load(out.payload, 0u, draw)) return false;
+    draw.primitiveType = 0u;
+    draw.baseVertex = 0;
+    draw.minVertex = 0u;
+    draw.numVertices = 0u;
+    draw.startVertex = 0u;
+    draw.startIndex = 0u;
+    draw.primitiveCount = 0u;
+    draw.stride = 0u;
+    draw.indexFormat = 0u;
+    std::memcpy(out.payload.data(), &draw, sizeof(draw));
+  }
+  return true;
+}
+
+bool buildProjectionChunk(std::span<ProjectionRecordCopy> copies,
+                          std::vector<std::byte>& bytes,
+                          CommandChunkEnvelope& envelope,
+                          CommandChunkValidationStatus* failedStatus = nullptr) {
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
+  std::vector<std::byte> payload;
+  records.reserve(copies.size());
+  for (auto& copy : copies) {
+    const auto* rule = recordRule(copy.type);
+    if (!rule) return false;
+    const auto firstHandle = static_cast<std::uint32_t>(handles.size());
+    if (!remapProjectionRecordPayload(copy, firstHandle)) return false;
+    payload.resize(alignUp(payload.size(), rule->payloadAlignment));
+    records.push_back(D9CCommandChunkWireRecordHeader{
+        .type = copy.type,
+        .flags = copy.flags,
+        .payloadOffset = static_cast<std::uint32_t>(payload.size()),
+        .payloadSize = static_cast<std::uint32_t>(copy.payload.size()),
+        .firstHandle = firstHandle,
+        .handleCount = static_cast<std::uint32_t>(copy.handles.size()),
+    });
+    handles.insert(handles.end(), copy.handles.begin(), copy.handles.end());
+    payload.insert(payload.end(), copy.payload.begin(), copy.payload.end());
+  }
+  const auto recordTableOffset = sizeof(D9CCommandChunkWireHeader);
+  const auto handleTableOffset = alignUp(
+      recordTableOffset + records.size() * sizeof(records[0]),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadArenaOffset = alignUp(
+      handleTableOffset + handles.size() * sizeof(handles[0]),
+      alignof(std::uint32_t));
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
+      .recordCount = static_cast<std::uint32_t>(records.size()),
+      .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
+      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
+  };
+  bytes.assign(payloadArenaOffset + payload.size(), std::byte{0});
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  if (!records.empty()) {
+    std::memcpy(bytes.data() + recordTableOffset, records.data(),
+                records.size() * sizeof(records[0]));
+  }
+  if (!handles.empty()) {
+    std::memcpy(bytes.data() + handleTableOffset, handles.data(),
+                handles.size() * sizeof(handles[0]));
+  }
+  if (!payload.empty()) {
+    std::memcpy(bytes.data() + payloadArenaOffset, payload.data(),
+                payload.size());
+  }
+  envelope = CommandChunkEnvelope{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .recordCount = static_cast<std::uint32_t>(records.size()),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
+  };
+  const auto validation = validateCommandChunk(bytes, envelope);
+  if (failedStatus) *failedStatus = validation.status;
+  return validation.valid();
+}
+
+bool identityIn(std::span<const D9CWireObjectIdentity> identities,
+                const D9CWireObjectIdentity& identity) noexcept {
+  return containsIdentity(identities, identity);
 }
 
 } // namespace
@@ -308,6 +483,84 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
     if (!foundClear || !foundPresent) {
       result.status = RenderTapeProjectionStatus::MissingFrameBoundary;
       return result;
+    }
+    const auto addBoundaryHandles = [&](const RenderTapeProjectionLocator& locator) {
+      const auto event = tape.event(locator.sourceEventIndex);
+      RenderTapeCommandChunkHeader fixed{};
+      if (!load(event.payload, 0u, fixed)) return false;
+      ImportedChunkView chunk;
+      if (!importPrevalidatedCommandChunk(
+              event.payload.subspan(sizeof(fixed), fixed.chunkBytes),
+              CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
+                                   fixed.handleCount},
+              chunk) ||
+          locator.recordIndex >= chunk.records.size()) {
+        return false;
+      }
+      for (const auto& handle : chunk.record(locator.recordIndex).handles) {
+        addIdentity(closure, D9CWireObjectIdentity{
+                                 .kind = handle.kind,
+                                 .generation = handle.generation,
+                                 .objectId = handle.objectId,
+                             });
+      }
+      return true;
+    };
+    if (!addBoundaryHandles(result.clearLocator) ||
+        !addBoundaryHandles(result.presentLocator)) {
+      result.status = RenderTapeProjectionStatus::InvalidSource;
+      return result;
+    }
+    for (std::uint32_t eventIndex = 0u; eventIndex < tape.events.size();
+         ++eventIndex) {
+      const auto event = tape.event(eventIndex);
+      if (static_cast<RenderTapeEventType>(event.header.type) !=
+          RenderTapeEventType::PresentComplete) {
+        continue;
+      }
+      RenderTapePresentCompleteHeader completion{};
+      if (!load(event.payload, 0u, completion)) {
+        result.status = RenderTapeProjectionStatus::InvalidSource;
+        result.failedEventIndex = eventIndex;
+        return result;
+      }
+      const auto attachments = event.payload.subspan(sizeof(completion));
+      for (std::uint32_t attachmentIndex = 0u;
+           attachmentIndex < completion.oracleCount; ++attachmentIndex) {
+        RenderTapeOracleAttachment attachment{};
+        if (!load(attachments,
+                  attachmentIndex * sizeof(RenderTapeOracleAttachment),
+                  attachment)) {
+          result.status = RenderTapeProjectionStatus::InvalidSource;
+          result.failedEventIndex = eventIndex;
+          return result;
+        }
+        addIdentity(closure, attachment.identity);
+      }
+    }
+    bool closureChanged = true;
+    while (closureChanged) {
+      closureChanged = false;
+      for (const auto& definition : definitions) {
+        if (!containsIdentity(closure, definition.fixed.identity) ||
+            definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE) {
+          continue;
+        }
+        const auto event = tape.event(definition.eventIndex);
+        RenderTapeSurfaceDescriptorV2 surface{};
+        if (!load(event.payload.subspan(sizeof(definition.fixed)), 0u, surface)) {
+          result.status = RenderTapeProjectionStatus::InvalidSource;
+          result.failedEventIndex = definition.eventIndex;
+          return result;
+        }
+        if (surface.storage != static_cast<std::uint32_t>(
+                                   RenderTapeSurfaceStorage::TextureSubresource) ||
+            containsIdentity(closure, surface.parentTexture)) {
+          continue;
+        }
+        addIdentity(closure, surface.parentTexture);
+        closureChanged = true;
+      }
     }
     result.excludedRecordCount =
         result.sourceRecordCount - result.selectedDrawCount;
@@ -529,6 +782,199 @@ const char* renderTapeProjectionExcludedKindName(
     return "object-destroy";
   case RenderTapeProjectionExcludedKind::PresentComplete:
     return "present-complete";
+  }
+  return "unknown";
+}
+
+RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
+    std::span<const std::byte> source,
+    const RenderTapeBlobCatalogue& verifiedCatalogue,
+    std::span<const std::byte> identitySidecar,
+    const RenderTapeProjectionSelector& selector,
+    RenderTapeDigestValidity outputDigestValidity,
+    RenderTapeDigest outputDigest) noexcept {
+  RenderTapeProjectionBundleResult result{};
+  try {
+    result.projection =
+        projectRenderTapeDrawSlice(source, verifiedCatalogue, selector);
+    if (!result.projection.valid()) {
+      result.status = RenderTapeProjectionBundleStatus::InvalidProjection;
+      return result;
+    }
+    RenderTapeIdentityView identity;
+    result.identityValidation = validateRenderTapeIdentity(
+        source, verifiedCatalogue, identitySidecar, &identity);
+    if (!result.identityValidation.valid() ||
+        identity.header.authority != static_cast<std::uint32_t>(
+                                         RenderTapeIdentityAuthority::Capture)) {
+      result.status = RenderTapeProjectionBundleStatus::InvalidIdentity;
+      return result;
+    }
+    if (!renderTapeIdentityOwnsSelection(
+            identity, selector.commandEventOrdinal, selector.firstRecordIndex,
+            selector.recordCount, &result.logicalPassId)) {
+      result.status = RenderTapeProjectionBundleStatus::SelectionOutsidePass;
+      return result;
+    }
+
+    ImportedRenderTapeView tape;
+    if (!importPrevalidatedRenderTape(source, tape)) {
+      result.status = RenderTapeProjectionBundleStatus::InvalidProjection;
+      return result;
+    }
+    ProjectionRecordCopy bootstrap;
+    if (!copyProjectionRecord(tape, result.projection.selectedLocators.front(),
+                              bootstrap, true)) {
+      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+      return result;
+    }
+    std::array bootstrapCopies{std::move(bootstrap)};
+    std::vector<std::byte> bootstrapChunk;
+    CommandChunkEnvelope bootstrapEnvelope{};
+    CommandChunkValidationStatus chunkStatus{};
+    if (!buildProjectionChunk(bootstrapCopies, bootstrapChunk,
+                              bootstrapEnvelope, &chunkStatus)) {
+      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+      result.projection.sourceValidation.chunkStatus = chunkStatus;
+      return result;
+    }
+
+    std::vector<ProjectionRecordCopy> commandCopies;
+    commandCopies.reserve(result.projection.selectedLocators.size() + 2u);
+    commandCopies.emplace_back();
+    if (!copyProjectionRecord(tape, result.projection.clearLocator,
+                              commandCopies.back())) {
+      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+      return result;
+    }
+    for (const auto& locator : result.projection.selectedLocators) {
+      commandCopies.emplace_back();
+      if (!copyProjectionRecord(tape, locator, commandCopies.back())) {
+        result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+        return result;
+      }
+    }
+    commandCopies.emplace_back();
+    if (!copyProjectionRecord(tape, result.projection.presentLocator,
+                              commandCopies.back())) {
+      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+      return result;
+    }
+    std::vector<std::byte> commandChunk;
+    CommandChunkEnvelope commandEnvelope{};
+    if (!buildProjectionChunk(commandCopies, commandChunk, commandEnvelope,
+                              &chunkStatus)) {
+      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
+      result.projection.sourceValidation.chunkStatus = chunkStatus;
+      return result;
+    }
+
+    std::vector<D9CWireObjectIdentity> retainedIdentities;
+    retainedIdentities.reserve(result.projection.objects.size());
+    for (const auto& object : result.projection.objects) {
+      retainedIdentities.push_back(object.identity);
+    }
+    std::vector<std::uint32_t> retainedMutationEvents;
+    for (const auto& reference : result.projection.blobReferences) {
+      if (reference.kind == RenderTapeProjectionBlobKind::ResourceMutation) {
+        retainedMutationEvents.push_back(reference.sourceEventIndex);
+      }
+      if (std::none_of(result.referencedBlobDigests.begin(),
+                       result.referencedBlobDigests.end(),
+                       [&](const auto& digest) {
+                         return sameDigest(digest, reference.digest);
+                       })) {
+        result.referencedBlobDigests.push_back(reference.digest);
+      }
+    }
+
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(bootstrapChunk);
+    for (std::uint32_t eventIndex = 0u; eventIndex < tape.events.size();
+         ++eventIndex) {
+      const auto event = tape.event(eventIndex);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::ObjectDefine) {
+        RenderTapeObjectDefineHeader fixed{};
+        if (!load(event.payload, 0u, fixed)) {
+          result.status = RenderTapeProjectionBundleStatus::ClosureFailure;
+          return result;
+        }
+        if (identityIn(retainedIdentities, fixed.identity)) {
+          builder.appendRawEvent(type, event.payload);
+        }
+      } else if (type == RenderTapeEventType::ResourceMutation &&
+                 std::find(retainedMutationEvents.begin(),
+                           retainedMutationEvents.end(), eventIndex) !=
+                     retainedMutationEvents.end()) {
+        builder.appendRawEvent(type, event.payload);
+      }
+    }
+    builder.appendCommandChunk(commandEnvelope, commandChunk);
+
+    RenderTapePresentCompleteHeader completion{};
+    std::span<const std::byte> attachments;
+    bool foundCompletion = false;
+    for (std::uint32_t eventIndex = 0u; eventIndex < tape.events.size();
+         ++eventIndex) {
+      const auto event = tape.event(eventIndex);
+      if (static_cast<RenderTapeEventType>(event.header.type) !=
+          RenderTapeEventType::PresentComplete) {
+        continue;
+      }
+      if (!load(event.payload, 0u, completion)) {
+        result.status = RenderTapeProjectionBundleStatus::ClosureFailure;
+        return result;
+      }
+      attachments = event.payload.subspan(sizeof(completion));
+      foundCompletion = true;
+      break;
+    }
+    if (!foundCompletion) {
+      result.status = RenderTapeProjectionBundleStatus::ClosureFailure;
+      return result;
+    }
+    builder.appendPresentComplete(
+        builder.eventCount(), 1u,
+        outputDigestValidity, outputDigest, attachments);
+    result.bytes = builder.seal();
+    const auto validation = validateRenderTape(
+        result.bytes, verifiedCatalogue);
+    if (!validation.valid()) {
+      result.status = RenderTapeProjectionBundleStatus::OutputValidationFailed;
+      result.projection.sourceValidation = validation;
+      result.bytes.clear();
+      result.referencedBlobDigests.clear();
+      return result;
+    }
+    result.status = RenderTapeProjectionBundleStatus::Valid;
+    return result;
+  } catch (...) {
+    result.status = RenderTapeProjectionBundleStatus::AllocationFailed;
+    result.bytes.clear();
+    result.referencedBlobDigests.clear();
+    return result;
+  }
+}
+
+const char* renderTapeProjectionBundleStatusName(
+    RenderTapeProjectionBundleStatus status) noexcept {
+  switch (status) {
+  case RenderTapeProjectionBundleStatus::Valid: return "valid";
+  case RenderTapeProjectionBundleStatus::InvalidProjection:
+    return "invalid-projection";
+  case RenderTapeProjectionBundleStatus::InvalidIdentity:
+    return "invalid-identity";
+  case RenderTapeProjectionBundleStatus::SelectionOutsidePass:
+    return "selection-outside-pass";
+  case RenderTapeProjectionBundleStatus::ClosureFailure:
+    return "closure-failure";
+  case RenderTapeProjectionBundleStatus::ChunkBuildFailure:
+    return "chunk-build-failure";
+  case RenderTapeProjectionBundleStatus::OutputValidationFailed:
+    return "output-validation-failed";
+  case RenderTapeProjectionBundleStatus::AllocationFailed:
+    return "allocation-failed";
   }
   return "unknown";
 }

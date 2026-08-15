@@ -330,6 +330,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_present:
   case BridgeOpcode::dxmt9c_device_reserve_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_identity_capture:
   case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24x8_snapshot:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:
@@ -470,6 +471,7 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     return true;
   case BridgeOpcode::dxmt9c_device_reserve_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_identity_capture:
   case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24x8_snapshot:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:

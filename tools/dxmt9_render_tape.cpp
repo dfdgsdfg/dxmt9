@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -14,6 +15,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace {
 
@@ -35,12 +39,52 @@ std::vector<std::byte> readFile(const char* path) {
 }
 
 void writeFile(const char* path, std::span<const std::byte> bytes) {
-  std::ofstream stream(path, std::ios::binary);
-  if (!stream ||
-      (!bytes.empty() &&
-       !stream.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size())))) {
-    throw std::runtime_error(std::string("cannot write tape: ") + path);
+  const std::filesystem::path output(path);
+  const auto parent = output.has_parent_path() ? output.parent_path()
+                                                : std::filesystem::path(".");
+  const auto staging = parent /
+      ("." + output.filename().string() + ".staging-" +
+       std::to_string(static_cast<unsigned long long>(::getpid())));
+  const int descriptor = ::open(staging.c_str(), O_WRONLY | O_CREAT | O_EXCL,
+                                S_IRUSR | S_IWUSR);
+  if (descriptor < 0) {
+    throw std::runtime_error(std::string("cannot create tape staging: ") + path);
+  }
+  bool descriptorOpen = true;
+  try {
+    std::size_t offset = 0u;
+    while (offset < bytes.size()) {
+      const auto count = ::write(
+          descriptor, bytes.data() + offset,
+          std::min<std::size_t>(bytes.size() - offset,
+                                static_cast<std::size_t>(
+                                    std::numeric_limits<ssize_t>::max())));
+      if (count <= 0) {
+        throw std::runtime_error(std::string("cannot write tape: ") + path);
+      }
+      offset += static_cast<std::size_t>(count);
+    }
+    if (::fsync(descriptor) != 0) {
+      throw std::runtime_error(std::string("cannot flush tape: ") + path);
+    }
+    const int closeStatus = ::close(descriptor);
+    descriptorOpen = false;
+    if (closeStatus != 0) {
+      throw std::runtime_error(std::string("cannot close tape: ") + path);
+    }
+    if (::link(staging.c_str(), output.c_str()) != 0) {
+      throw std::runtime_error(std::string("tape output already exists: ") + path);
+    }
+    (void)::unlink(staging.c_str());
+    const int parentDescriptor = ::open(parent.c_str(), O_RDONLY);
+    if (parentDescriptor >= 0) {
+      (void)::fsync(parentDescriptor);
+      (void)::close(parentDescriptor);
+    }
+  } catch (...) {
+    if (descriptorOpen) (void)::close(descriptor);
+    (void)::unlink(staging.c_str());
+    throw;
   }
 }
 
@@ -140,6 +184,8 @@ public:
                        std::span<const std::byte>) override {
     ++completions;
     lastPresentOrdinal = complete.presentOrdinal;
+    lastDigestValidity = complete.digestValidity;
+    lastExpectedDigest = complete.expectedDigest;
     ++events;
     return true;
   }
@@ -158,6 +204,8 @@ public:
   std::uint64_t controls = 0u;
   std::uint64_t completions = 0u;
   std::uint64_t lastPresentOrdinal = 0u;
+  std::uint32_t lastDigestValidity = 0u;
+  RenderTapeDigest lastExpectedDigest{};
   std::array<std::uint64_t, 7u> descriptorKinds{};
   std::array<std::uint64_t, 4u> textureDimensions{};
   std::array<std::uint64_t, 6u> contentDispositions{};
@@ -228,12 +276,19 @@ constexpr std::array<const char*, D9C_COMMAND_CHUNK_SECTION_COUNT + 1u>
 void usage() {
   std::cerr << "usage: dxmt9-render-tape <validate|inspect> <tape.bin> "
                "[--verified-blob <sha256>:<bytes>]...\n"
+               "       dxmt9-render-tape identity <tape.bin> <identity.bin> "
+               "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape reduce <input> <output> "
                "--select-command-event <index>... "
                "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape project <tape.bin> "
                "--command-event-ordinal <ordinal> --first-record <index> "
                "--record-count <count> "
+               "[--verified-blob <sha256>:<bytes>]...\n"
+               "       dxmt9-render-tape materialize <tape.bin> "
+               "<identity.bin> <output.bin> --command-event-ordinal <ordinal> "
+               "--first-record <index> --record-count <count> "
+               "[--output-sha256 <digest>] "
                "[--verified-blob <sha256>:<bytes>]...\n";
 }
 
@@ -420,7 +475,8 @@ int main(int argc, char** argv) {
   }
   const std::string command = argv[1];
   if (command != "validate" && command != "inspect" && command != "reduce" &&
-      command != "project") {
+      command != "project" && command != "identity" &&
+      command != "materialize") {
     usage();
     return 2;
   }
@@ -432,7 +488,10 @@ int main(int argc, char** argv) {
     bool hasProjectionOrdinal = false;
     bool hasProjectionFirst = false;
     bool hasProjectionCount = false;
+    bool hasOutputDigest = false;
+    RenderTapeDigest outputDigest{};
     const char* inputPath = argv[2];
+    const char* identityPath = nullptr;
     const char* outputPath = nullptr;
     int optionStart = 3;
     if (command == "reduce") {
@@ -442,6 +501,21 @@ int main(int argc, char** argv) {
       }
       outputPath = argv[3];
       optionStart = 4;
+    } else if (command == "identity") {
+      if (argc < 4) {
+        usage();
+        return 2;
+      }
+      identityPath = argv[3];
+      optionStart = 4;
+    } else if (command == "materialize") {
+      if (argc < 6) {
+        usage();
+        return 2;
+      }
+      identityPath = argv[3];
+      outputPath = argv[4];
+      optionStart = 5;
     }
     for (int i = optionStart; i < argc;) {
       const std::string_view option(argv[i]);
@@ -469,6 +543,28 @@ int main(int argc, char** argv) {
         projectionSelector.recordCount =
             parseU32(argv[i + 1], "record count");
         hasProjectionCount = true;
+        i += 2;
+      } else if (command == "materialize" &&
+                 option == "--command-event-ordinal" && i + 1 < argc) {
+        projectionSelector.commandEventOrdinal =
+            parseUnsigned(argv[i + 1], "command event ordinal");
+        hasProjectionOrdinal = true;
+        i += 2;
+      } else if (command == "materialize" && option == "--first-record" &&
+                 i + 1 < argc) {
+        projectionSelector.firstRecordIndex =
+            parseU32(argv[i + 1], "first record index");
+        hasProjectionFirst = true;
+        i += 2;
+      } else if (command == "materialize" && option == "--record-count" &&
+                 i + 1 < argc) {
+        projectionSelector.recordCount =
+            parseU32(argv[i + 1], "record count");
+        hasProjectionCount = true;
+        i += 2;
+      } else if (command == "materialize" && option == "--output-sha256" &&
+                 i + 1 < argc && decodeDigest(argv[i + 1], outputDigest)) {
+        hasOutputDigest = true;
         i += 2;
       } else {
         usage();
@@ -507,6 +603,70 @@ int main(int argc, char** argv) {
         if (i != 0u) std::cout << ',';
         std::cout << '\"' << encodeDigest(reduced.referencedBlobDigests[i])
                   << '\"';
+      }
+      std::cout << "]}\n";
+      return 0;
+    }
+
+    if (command == "identity") {
+      const auto bytes = readFile(inputPath);
+      const auto identity = readFile(identityPath);
+      RenderTapeIdentityView view;
+      const auto validation =
+          validateRenderTapeIdentity(bytes, catalogue, identity, &view);
+      if (!validation.valid()) {
+        std::cerr << "render tape identity failed status="
+                  << renderTapeIdentityStatusName(validation.status)
+                  << " source=" << validation.failedSource
+                  << " range=" << validation.failedRange << '\n';
+        return 1;
+      }
+      std::cout << "{\"schema\":\"" << kRenderTapeIdentitySchema
+                << "\",\"valid\":true,\"authority\":"
+                << view.header.authority << ",\"frame_id\":"
+                << view.header.frameId << ",\"present_ordinal\":"
+                << view.header.presentOrdinal << ",\"sources\":"
+                << view.sources.size() << ",\"ranges\":"
+                << view.ranges.size() << "}\n";
+      return 0;
+    }
+
+    if (command == "materialize") {
+      if (!hasProjectionOrdinal || !hasProjectionFirst ||
+          !hasProjectionCount) {
+        usage();
+        return 2;
+      }
+      const auto bytes = readFile(inputPath);
+      const auto identity = readFile(identityPath);
+      const auto projection = materializeRenderTapeProjectionBundle(
+          bytes, catalogue, identity, projectionSelector,
+          hasOutputDigest ? RenderTapeDigestValidity::Sha256
+                          : RenderTapeDigestValidity::NotCaptured,
+          outputDigest);
+      if (!projection.valid()) {
+        std::cerr << "render tape materialization failed status="
+                  << renderTapeProjectionBundleStatusName(projection.status)
+                  << " identity="
+                  << renderTapeIdentityStatusName(
+                         projection.identityValidation.status)
+                  << " chunk_status="
+                  << static_cast<std::uint32_t>(
+                         projection.projection.sourceValidation.chunkStatus)
+                  << '\n';
+        return 1;
+      }
+      writeFile(outputPath, projection.bytes);
+      std::cout << "{\"schema\":\"dxmt9.render_tape.v2\","
+                   "\"profile\":\"frame-tape\",\"status\":\"valid\","
+                   "\"logical_pass_id\":"
+                << projection.logicalPassId << ",\"bytes\":"
+                << projection.bytes.size() << ",\"referenced_blobs\":[";
+      for (std::size_t i = 0u; i < projection.referencedBlobDigests.size();
+           ++i) {
+        if (i != 0u) std::cout << ',';
+        std::cout << '\"'
+                  << encodeDigest(projection.referencedBlobDigests[i]) << '\"';
       }
       std::cout << "]}\n";
       return 0;
@@ -613,6 +773,14 @@ int main(int argc, char** argv) {
               << ",\"controls\":" << sink.controls
               << ",\"present_completions\":" << sink.completions
               << ",\"last_present_ordinal\":" << sink.lastPresentOrdinal
+              << ",\"expected_output_sha256\":";
+    if (sink.lastDigestValidity ==
+        static_cast<std::uint32_t>(RenderTapeDigestValidity::Sha256)) {
+      std::cout << '\"' << encodeDigest(sink.lastExpectedDigest) << '\"';
+    } else {
+      std::cout << "null";
+    }
+    std::cout
               << ",\"command_event_indices\":[";
     for (std::size_t i = 0u; i < commandEventIndices.size(); ++i) {
       if (i != 0u) std::cout << ',';

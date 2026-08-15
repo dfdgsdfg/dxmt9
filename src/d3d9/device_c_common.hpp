@@ -11,6 +11,7 @@
 // devicec namespace and the D9C* wrapper structs declared below.
 
 #include "device_c_chunk_registry.hpp"
+#include "device_c_render_tape_identity.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
@@ -168,6 +169,7 @@ struct D9CDevice {
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   dxmt9::d3d9::WireObjectRegistry wireObjects;
   std::optional<D9CRenderTapePresentCaptureLease> renderTapePresentCapture;
+  dxmt9::d3d9::RenderTapeProductionIdentityLedger renderTapeIdentityCapture;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}

@@ -251,6 +251,21 @@ constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
          !(value[0] == '0' && value[1] == '\0');
 }
 
+constexpr bool resolveRenderTapePublisherCaptureEnabled(
+    const char* renderTapeCapture,
+    const char* renderTapeOutputRoot) noexcept {
+  return resolveCpuReadyTapeDirectReplayEnabled(renderTapeCapture) &&
+         renderTapeOutputRoot && renderTapeOutputRoot[0] != '\0';
+}
+
+constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
+    const char* value, const char* renderTapeCapture,
+    const char* renderTapeOutputRoot) noexcept {
+  return resolveCpuReadyTapeDirectReplayEnabled(value) ||
+         resolveRenderTapePublisherCaptureEnabled(renderTapeCapture,
+                                                  renderTapeOutputRoot);
+}
+
 std::unique_ptr<Device> CreateDXMT9Device(const DEVICE_DESC& desc);
 
 }  // namespace dxmt9

@@ -915,6 +915,24 @@ bool recordCanBatchDraw(
          dxmt9::core::PrimitiveType::TriangleFan;
 }
 
+bool recordProducesArenaCommand(std::uint32_t type) noexcept {
+  switch (type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+  case D9C_COMMAND_RECORD_CLEAR:
+  case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+  case D9C_COMMAND_RECORD_STRETCH_RECT:
+  case D9C_COMMAND_RECORD_COLOR_FILL:
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+  case D9C_COMMAND_RECORD_PRESENT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 int32_t replayResolvedChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
@@ -990,14 +1008,36 @@ int32_t replayResolvedChunk(
   pendingDrawSubmissions.reserve(
       std::min<std::uint32_t>(raw.recordCount, 256u));
   replayScratch.bindingSnapshots.reserve(raw.recordCount);
+  std::vector<std::uint32_t> pendingDrawRecordIndices;
+  bool captureIdentity = arenaLease &&
+      raw.renderTapeCaptureToken != 0u;
+  if (captureIdentity) {
+    try {
+      pendingDrawRecordIndices.reserve(raw.recordCount);
+    } catch (...) {
+      captureIdentity = false;
+    }
+    if (captureIdentity &&
+        !arenaLease->beginCaptureIdentity(raw.recordCount)) {
+      captureIdentity = false;
+    }
+  }
   const auto flushPendingDrawSubmissions = [&]() {
     if (pendingDrawSubmissions.empty()) {
       return;
+    }
+    if (captureIdentity &&
+        (pendingDrawRecordIndices.size() != pendingDrawSubmissions.size() ||
+         !arenaLease->captureNextDrawRecords(pendingDrawRecordIndices))) {
+      // Identity is a capture-only observer. Losing its bounded anchor state
+      // must poison the sidecar, never suppress the Draw batch being observed.
+      captureIdentity = false;
     }
     dxmt9::perf::countCommitChunkDrawSubmissionBatch(
         static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
     device->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
     pendingDrawSubmissions.clear();
+    pendingDrawRecordIndices.clear();
   };
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
@@ -1033,6 +1073,9 @@ int32_t replayResolvedChunk(
     const auto record = resolved.record(index);
     const bool batchableDraw = recordCanBatchDraw(device, record.wire);
     sink.setBatchCurrentDraw(batchableDraw);
+    if (captureIdentity && batchableDraw) {
+      pendingDrawRecordIndices.push_back(static_cast<std::uint32_t>(index));
+    }
     if (!batchableDraw &&
         !commitChunkRecordAllowsPendingDrawBatchThrough(
             record.wire.header.type)) {
@@ -1084,6 +1127,12 @@ int32_t replayResolvedChunk(
       observeOrderedControlReplay(/*BeforeDispatch=*/3u, index,
                                   record.wire.header.type);
     }
+    if (captureIdentity && !batchableDraw &&
+        recordProducesArenaCommand(record.wire.header.type) &&
+        !arenaLease->captureNextCommandRecord(
+            static_cast<std::uint32_t>(index))) {
+      captureIdentity = false;
+    }
     const auto hr = dxmt9::d3d9::isSparseRecord(record.wire.header.type)
                         ? dxmt9::d3d9::replaySparseRecord(record, sink)
                         : dxmt9::d3d9::replayNonDrawRecord(record, sink);
@@ -1098,6 +1147,9 @@ int32_t replayResolvedChunk(
     }
   }
   flushPendingDrawSubmissions();
+  if (!pendingDrawSubmissions.empty() || !pendingDrawRecordIndices.empty()) {
+    return commitChunkFail("chunk-replay-identity-draw-flush");
+  }
   if (arenaLease && activeSegment + 1u != arenaSegments.size()) {
     return commitChunkFail("chunk-replay-segment-incomplete");
   }
@@ -1217,11 +1269,33 @@ int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
                              bool allowDirectArena) {
+  const bool captureIdentityRequested =
+      raw.renderTapeCaptureToken != 0u && raw.renderTapeEventOrdinal != 0u;
+  std::uint32_t capturePlanReason = std::numeric_limits<std::uint32_t>::max();
+  const auto failCaptureIdentity = [&](const char* reason) {
+    if (raw.renderTapeCaptureToken != 0u) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Info, "dxmt9-device",
+          "render_tape_identity_capture failed reason=%s token=%llu "
+          "event=%llu records=%u planning=%u allow_direct=%u plan_reason=%u",
+          reason,
+          static_cast<unsigned long long>(raw.renderTapeCaptureToken),
+          static_cast<unsigned long long>(raw.renderTapeEventOrdinal),
+          raw.recordCount, raw.cpuReadyTapePlanningEnabled ? 1u : 0u,
+          allowDirectArena ? 1u : 0u, capturePlanReason);
+      device->renderTapeIdentityCapture.fail(raw.renderTapeCaptureToken);
+    }
+  };
+  if ((raw.renderTapeCaptureToken == 0u) !=
+      (raw.renderTapeEventOrdinal == 0u)) {
+    failCaptureIdentity("token-event-pair");
+  }
   if (!raw.cpuReadyTapePlanningEnabled) {
     // Gate-off is the historical R-BACK-2.51(a) lane: admission already used
     // the combined mark/capture hook before handoff and replay performs no
     // planning or repeated marking.
     markLegacyResources(device, raw);
+    if (captureIdentityRequested) failCaptureIdentity("planning-disabled");
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
@@ -1248,14 +1322,17 @@ int32_t replayPlannedChunk(D9CDevice* device,
                           ? std::numeric_limits<std::uint32_t>::max()
                           : limits.maxPagesPerSource,
       });
+  capturePlanReason = static_cast<std::uint32_t>(plan.reason);
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:
+    if (captureIdentityRequested) failCaptureIdentity("planner-reject");
     dxmt9::perf::countCpuReadySessionDisposition(
         dxmt9::perf::CpuReadySessionDisposition::Invalid);
     return commitChunkFail("chunk-planned-reject");
   case dxmt9::d3d9::ReplayLane::StateOnly:
     // State-only chunks mutate the replay shadow exactly once but publish no
     // GPU source and therefore consume neither a queue seq nor resource marks.
+    if (captureIdentityRequested) failCaptureIdentity("state-only");
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   case dxmt9::d3d9::ReplayLane::Legacy:
     if (plan.reason == dxmt9::d3d9::ReplayReason::Oversize) {
@@ -1265,6 +1342,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     }
     [[fallthrough]];
   case dxmt9::d3d9::ReplayLane::Inline:
+    if (captureIdentityRequested) failCaptureIdentity("legacy-or-inline");
     markLegacyResources(device, raw);
     return replayResolvedChunk(
         device, raw, pacedByPresentOrdinal, nullptr, {},
@@ -1277,6 +1355,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // Inline execution (including synchronous Readback) still needs the
     // ordered-control plan and release hooks when the Tape gate is enabled.
     // Only Direct arena construction depends on worker-side arena admission.
+    if (captureIdentityRequested) failCaptureIdentity("direct-arena-disallowed");
     markLegacyResources(device, raw);
     return replayResolvedChunk(
         device, raw, pacedByPresentOrdinal, nullptr, {},
@@ -1286,6 +1365,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
   if (!queue || !plan.arenaLayout.has_value()) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
+    if (captureIdentityRequested) failCaptureIdentity("queue-or-layout-missing");
     markLegacyResources(device, raw);
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
@@ -1316,10 +1396,38 @@ int32_t replayPlannedChunk(D9CDevice* device,
   if (failed(hr)) {
     // Lease destruction performs the two-phase fail-stop abort. Replaying the
     // raw chunk through Legacy here would duplicate already-applied semantics.
+    if (captureIdentityRequested) failCaptureIdentity("arena-replay");
     return hr;
   }
-  if (!lease.publish(raw.resourceEntries)) {
+  dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
+  if (!lease.publish(raw.resourceEntries,
+                     captureIdentityRequested ? &captureIdentity : nullptr)) {
+    if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
+  }
+  if (captureIdentityRequested) {
+    std::vector<dxmt9::d3d9::RenderTapeProductionPassRange> ranges;
+    try {
+      ranges.reserve(captureIdentity.ranges.size());
+      for (const auto& range : captureIdentity.ranges) {
+        ranges.push_back(dxmt9::d3d9::RenderTapeProductionPassRange{
+            .firstRecord = range.firstRecord,
+            .recordCount = range.recordCount,
+            .dagPassIndex = range.dagPassIndex,
+            .passKind = range.passKind,
+        });
+      }
+    } catch (...) {
+      failCaptureIdentity("range-allocation");
+      return dxmt9::core::D3D_OK;
+    }
+    if (!captureIdentity.valid() ||
+        !device->renderTapeIdentityCapture.append(
+            raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+            captureIdentity.sourceOrdinal, captureIdentity.seqId,
+            captureIdentity.recordCount, ranges)) {
+      failCaptureIdentity("snapshot-or-ledger-append");
+    }
   }
   return dxmt9::core::D3D_OK;
 }
@@ -1483,6 +1591,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       dxmt9::perf::countCommandChunkReject();
       return commitChunkFail("chunk-admission");
     }
+    raw.renderTapeCaptureToken = chunk->renderTapeCaptureToken;
+    raw.renderTapeEventOrdinal = chunk->renderTapeEventOrdinal;
     dxmt9::d3d9::ImportedChunkView imported;
     const auto ownedBytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(raw.recordBlob.data()),

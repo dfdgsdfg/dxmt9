@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_identity.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -136,5 +137,42 @@ const char* renderTapeProjectionBlobKindName(
     RenderTapeProjectionBlobKind kind) noexcept;
 const char* renderTapeProjectionExcludedKindName(
     RenderTapeProjectionExcludedKind kind) noexcept;
+
+enum class RenderTapeProjectionBundleStatus : std::uint8_t {
+  Valid,
+  InvalidProjection,
+  InvalidIdentity,
+  SelectionOutsidePass,
+  ClosureFailure,
+  ChunkBuildFailure,
+  OutputValidationFailed,
+  AllocationFailed,
+};
+
+struct RenderTapeProjectionBundleResult {
+  RenderTapeProjectionBundleStatus status =
+      RenderTapeProjectionBundleStatus::InvalidProjection;
+  RenderTapeProjectionResult projection{};
+  RenderTapeIdentityValidationResult identityValidation{};
+  std::uint64_t logicalPassId = 0u;
+  std::vector<std::byte> bytes{};
+  std::vector<RenderTapeDigest> referencedBlobDigests{};
+
+  bool valid() const noexcept {
+    return status == RenderTapeProjectionBundleStatus::Valid;
+  }
+};
+
+RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
+    std::span<const std::byte> source,
+    const RenderTapeBlobCatalogue& verifiedCatalogue,
+    std::span<const std::byte> identitySidecar,
+    const RenderTapeProjectionSelector& selector,
+    RenderTapeDigestValidity outputDigestValidity =
+        RenderTapeDigestValidity::NotCaptured,
+    RenderTapeDigest outputDigest = {}) noexcept;
+
+const char* renderTapeProjectionBundleStatusName(
+    RenderTapeProjectionBundleStatus status) noexcept;
 
 } // namespace dxmt9::d3d9

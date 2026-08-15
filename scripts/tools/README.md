@@ -10,11 +10,13 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   distribution from PE and unix builds.
 - `cleanup_dxmt9_temp_prefixes.py` — list/prune temporary Wine prefixes
   created by experiment runs.
-- `run_dxmt9_render_tape.py` — pack and validate frame-tape and bounded
-  two-interval sequence-tape bundles, replay them through fresh production-
-  provider devices with declared warmup/repeat identity checks, and
-  reduce/bisect frame-tape whole command events through an explicit
-  digest/readback/conservation oracle.
+- `run_dxmt9_render_tape.py` — transactionally pack and validate frame-tape
+  and bounded two-interval sequence-tape bundles, authenticate optional
+  `identity.bin`, replay through fresh production-provider devices, reduce or
+  bisect whole command events, and opt in to an executable identity-proven
+  Draw-range projection bundle. Generated bundles stay under ignored
+  `experiments/render-tapes/`; curated fixtures use
+  `experiments/render-tapes/curated/` and explicit `git add -f` review.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank
   3DMark05 `traces/` and `experiments/output/` run-id cleanup candidates,
   marking run ids referenced by `docs/perfomance/**/*.md`.
@@ -229,12 +231,19 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   movement into invocation-count and bytes/invocation effects, matching
   `compare_xcode_dxmt_bottlenecks.py`, so non-reorder backend-shape candidates
   can be preflighted before another Xcode replay.
-- `run_dxmt9_render_tape.py` — pack a validated pointer-free v2 event tape and
-  digest-named payload blobs into the `dxmt9.render_tape.bundle.v2` envelope,
-  verify every component size/SHA-256 before native validation, and run
-  structural `validate` or `inspect` with a verified blob catalogue. The
-  manifest explicitly records that production capture/provider replay/output-
-  oracle coverage is still false.
+- `run_dxmt9_render_tape.py` — atomically pack a validated pointer-free v2
+  event tape and digest-named payload blobs into the
+  `dxmt9.render_tape.bundle.v2` envelope, authenticate identity/output
+  components, run structural validation/inspection/provider replay, or
+  materialize and strictly oracle an executable Draw-range projection through
+  fresh provider processes. Current production projection captures must set
+  `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` so the selected first Draw is a complete,
+  independently executable start state; default sparse-delta folding is still
+  fail-closed. Use `DXMT9_RENDER_TAPE_SKIP_PRESENTS=N` to select a later GT
+  interval, then run `executable-project` with the identity-proven command event
+  ordinal and record range. The command performs two oracle-free provider runs,
+  installs the agreed output, and requires two additional strict fresh-process
+  replays before publishing the projected bundle.
 - `analyze_alpha_backend_candidates.py` — preflight large alpha-blend indexed
   draw classes before Xcode spend. It joins indexed-probe rows with dumped MSL
   shaders and rejects blend-disable as a correctness fix unless the blend state

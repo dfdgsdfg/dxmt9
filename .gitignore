@@ -25,6 +25,10 @@ tmp
 traces/
 experiments/output/*
 !experiments/output/.gitkeep
+# Generated Render Tape bundles are large and reproducible. Curated fixtures
+# live under experiments/render-tapes/curated/ and are added deliberately with
+# `git add -f`; already tracked fixtures remain visible regardless of this rule.
+experiments/render-tapes/
 # Runtime spec — see specs/experiments/runtime/.
 experiments/apps_3rd/
 experiments/prefixs/
@@ -36,5 +40,11 @@ experiments/apps/**/*.trace.txt
 **/__pycache__
 specs/**/plan.md
 *.plan.md
+# Local uv resolver state and caches; checked-in experiment manifests are not
+# covered by these patterns.
+uv.lock
+.uv/
+.uv-cache/
+uv-cache/
 .claude/scheduled_tasks.lock
 .claude/worktrees

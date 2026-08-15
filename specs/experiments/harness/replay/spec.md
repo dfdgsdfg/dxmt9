@@ -968,6 +968,7 @@ The logical bundle is:
 render-tape/
 ├── manifest.json       schema/profile/ABI/provenance/component digests
 ├── events.bin          bootstrap/object/mutation/command/control/completion journal
+├── identity.bin        optional authoritative source/pass identity component
 ├── blobs/              digest-named resource, shader, declaration payloads
 └── output.rgba         optional digest-authenticated Present output bytes
 ```
@@ -977,6 +978,95 @@ components and their independent digests remain part of the schema. Event
 payloads reference blob digests and `(kind, objectId, generation)` identities;
 they never embed live pointers or depend on registry slot addresses from the
 capturing process.
+
+#### Authoritative identity component
+
+`identity.bin` is a cold, fixed-layout, little-endian sidecar with schema
+`dxmt9.render_tape.identity.v1`. The manifest authenticates it independently
+under `components.identity`; the sidecar header in turn authenticates the
+exact `events.bin` digest and byte count. The header also owns the non-zero
+frame ID, Present ordinal, and bounded capture token used for the only legal
+PE-to-provider join. A source table has one entry per canonical
+`CommandChunk` event and records its event ordinal, production
+`sourceOrdinal`, production `seqId`, record count, and contiguous membership
+range. The membership table partitions each source's record indices and pins
+the frozen pre-reorder logical pass ID, DAG pass index, and pass kind.
+
+Validation first authenticates both components, then checks exact command-event
+and record coverage, canonical table/range layout, strict source/sequence
+monotonicity, pass self-consistency, and agreement with the tape's Present
+ordinal. No slot index, pointer, borrowed payload span, or registry address is
+serialized. Projection treats the sidecar as a capability: absence or mismatch
+fails before it creates a staging directory or invokes a provider.
+
+The production capture-side join remains a typed open gap in this revision.
+The schema and validator accept provider-emitted identity only when it is
+explicitly scoped to the exact replay process that observed the production
+metadata. Neither the projector nor the bundle loader synthesizes
+`sourceOrdinal`, `seqId`, or pass identity from event order, and such a mapping
+must never be described as authoritative evidence for the original capture.
+
+#### Generated artifact and output policy
+
+The bundle manifest is the control plane for generated output. A
+`dxmt9.render_tape.bundle.v2` bundle contains `manifest.json`, one canonical
+`events.bin`, a `blobs/` directory whose files are named by lowercase
+SHA-256, and optionally `output.rgba` declared as
+`components.output_oracle`. Each declared component records its path, byte
+count, and SHA-256, and bundle validation rejects missing, altered, duplicate,
+or unlisted components. `output.rgba` is the tightly packed 8-bit RGBA
+capture-side oracle named by `PresentComplete`; it is not a resource blob and
+is never fed back as replay input.
+
+All producers treat the destination as a transaction. They validate source
+events and blob references before effects, require a new or empty destination,
+write to same-filesystem staging, flush and close every component plus the
+manifest, and expose the result only with one atomic directory rename. A
+failure leaves no claimable partial bundle and never overwrites a prior bundle
+or curated fixture. Offline `pack`, `reduce`, and `bisect` outputs must report
+only the components and scope they actually generated; they must not copy an
+input oracle claim without copying and re-authenticating its sidecar.
+
+Projection is not a bundle component. `dxmt9-render-tape project` emits one
+`dxmt9.render_tape.projection.v1` JSON object to stdout, bound to the unchanged
+source `events.bin` SHA-256 and byte count, and explicitly reports structural
+projection readiness only, with no wire rewrite, provider replay, or GT2 replay
+claim. A caller that saves this JSON must apply the same new-file/flush/atomic
+rename policy; a rejected projection produces no output artifact.
+
+Output-oracle selection is equally transactional but not permissive: exact
+SHA-256 equality is attempted first and remains the default result. Only after
+that comparison fails may a valid authenticated `output.rgba` sidecar invoke
+the bounded R-HARN-REPLAY-7.19 pixel envelope; the envelope's alpha, channel,
+pixel-count, total-delta, repeat, conservation, and structural checks remain
+mandatory. A staged or unhashed sidecar, a projection JSON object, or a
+partially written bundle can never become replay evidence.
+
+#### Executable projection bundle
+
+The opt-in executable path is distinct from the readiness JSON above. It loads
+and authenticates a bundle plus `identity.bin`, proves that the requested
+contiguous Draw interval is wholly owned by one frozen logical pass, and calls
+the native materializer. The materializer derives a canonical APPLY_STATE
+bootstrap from the selected `FULL_SNAPSHOT`, retains the nearest coordinator
+Clear before the child and Present after it, and rebuilds only the D9C chunk
+tables required by those records. Selected record payloads and handle identities
+remain exact; only absolute handle indices and canonical offsets change to
+describe the compact chunk. Definitions, recursive alias dependencies,
+immutable payload references, and complete mutations are retained from the
+validated source in ordinal order. The result is validated again before any
+provider process starts.
+
+Projected output is established in two phases inside same-filesystem staging.
+At least two fresh provider processes first execute an otherwise final candidate
+whose completion has no oracle claim and write their tight RGBA bytes. The
+bytes and complete provider evidence must be deterministic. Their digest is
+then installed into the projected `PresentComplete`, the bytes become the
+authenticated `components.output_oracle`, and at least two further fresh
+provider processes must pass the normal strict-SHA oracle against the final
+candidate. Only then is the `dxmt9.render_tape.bundle.v2` staging directory
+renamed into place. Source full-frame output is recorded only as provenance;
+it is never copied into the projected oracle or treated as equivalent.
 
 The implemented structural tools are invoked as:
 
@@ -989,6 +1079,9 @@ python3 scripts/tools/run_dxmt9_render_tape.py pack \
   --events frame.tape --blob mutation.bin --output-dir frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
 python3 scripts/tools/run_dxmt9_render_tape.py provider-replay frame-tape-bundle
+python3 scripts/tools/run_dxmt9_render_tape.py executable-project frame-tape-bundle \
+  --command-event-ordinal N --first-record N --record-count N \
+  --output-dir projected-bundle
 ```
 
 The first pair operates on the canonical event component. The second pair adds
@@ -999,6 +1092,13 @@ validates the bundle, passes the actual digest-named blob files to
 `build/tools/dxmt9-render-tape-provider`, and reports machine-readable validity,
 coverage, conservation, and output-oracle scope without rewriting the source
 manifest.
+
+The executable command requires an authenticated `identity.bin` before it
+creates staging or starts the provider. It emits a canonical v2 bundle through
+the native materializer, obtains matching projected bytes from two fresh
+provider processes, rewrites only `PresentComplete` with that projected digest,
+then requires two further strict-SHA fresh-process passes before atomic rename.
+The output manifest records that source full-frame pixels were not copied.
 
 The 2026-08-15 GT2 r57 bundle at
 `experiments/render-tapes/gt2-output-oracle-r57-20260815/`
@@ -1191,12 +1291,12 @@ validation. On success it writes one
   provider replay, and GT2 replay.
 
 The command writes no JSON on rejection. The artifact is not a rewritten v2
-tape and is not `dxmt9.3dmark05.mini_replay_manifest.v1`; the legacy manifest
-builder remains authoritative for executable mini-replay input. Render Tape v2
-has canonical event ordinals but no authoritative frame ID, application
-source/sequence ID, or logical-pass/DAG identity. The selector and artifact
-therefore use event ordinal plus record index and do not manufacture those
-broader identities. Adding a captured mapping is a separate gap.
+tape and is not `dxmt9.3dmark05.mini_replay_manifest.v1`. `events.bin` alone
+has canonical event ordinals but no authoritative production
+source/sequence or logical-pass/DAG identity. The separately authenticated
+`identity.bin` now supplies those values from the original capture; the
+selector continues to use event ordinal plus record index and never infers a
+mapping when the sidecar is absent.
 
 This pure selector/conservation transform neither changes replay order nor
 executes stateful rendering, so the formal scheduling layer from
@@ -1210,12 +1310,51 @@ schema/source digest, negative no-output behavior, and absence of unsupported
 selector identities.
 
 This projection transform deliberately does not change
-`device_c_render_tape_provider.*` admission grammar. The projection artifact
-remains a structural readiness plan rather than a standalone executable
-mini-replay. The separate full-tape production provider now admits and replays
-the indexed GT2 r57 bundle with the evidence described in §8.2; that result
-does not by itself make a projected Draw slice executable or prove that a
-projection preserves the full frame oracle.
+`device_c_render_tape_provider.*` admission grammar. The readiness JSON remains
+structural-only, while `executable-project` consumes capture-authority identity
+and materializes a new bounded v2 bundle for the same production provider. The
+source full-frame oracle is provenance only; the projected bundle establishes
+its own deterministic output and strict oracle.
+
+#### GT2 capture identity and executable projection evidence
+
+The 2026-08-15 Sikarugir r65 production capture at
+`experiments/render-tapes/gt2-authoritative-r65-20260815/`
+`frame-171818589995100-1` proves the default delta-record join. Its 929-event
+bundle contains 36 command sources and 51 frozen pass ranges, and the
+capture-authority sidecar validates exact command/record coverage. The final
+event ordinal is assigned only after PE object/materialization preflight, then
+copied through the bounded capture token into the Direct Arena source. The
+capture-only queue profile owns 2,048 4-KiB pages (8 MiB) and permits one
+512-page segmented source; normal capture-off and streaming selection retain
+their existing bounds.
+
+The r65 full-frame provider output is non-degenerate but is not promotion
+evidence: it differs from the captured output at 139 pixels with maximum RGB
+delta 252, so both strict SHA and the bounded pixel envelope reject it. This
+failure is retained rather than hidden by the successful identity join.
+
+The r66 capture at
+`experiments/render-tapes/gt2-authoritative-full-r66-20260815/`
+`frame-172169875798500-1` uses the existing diagnostic
+`DXMT9_PE_DRAW_FULL_SNAPSHOT=1` producer mode because the bounded projector
+requires a self-contained first Draw. Its identity sidecar validates 64
+sources and 77 pass ranges. `executable-project` selects event ordinal 1042,
+records 5 through 50, wholly inside logical pass 64, and atomically publishes
+`experiments/render-tapes/gt2-projected-r66-20260815/`. The projected bundle
+contains one `Clear`, 46 indexed Draws, one `Present`, 22 exact object
+definitions, and 58 mutations. Two oracle-free fresh processes agree on output
+SHA-256 `bb89749d35aaed292d4754dfaba047be25dbbc23492cc6f599752a950f70a244`;
+two further fresh processes pass the installed strict oracle. The final
+83-event tape SHA-256 is
+`2f3bee4ffbd73ab93bceaab9201e7f35bad61b03afb27a3849c7b39b5d215e83`.
+
+Default delta captures intentionally remain non-projectable until an offline
+state-folding transform can prove a complete child start state from the frame
+bootstrap and every preceding sparse delta. Merely setting `FULL_SNAPSHOT` in
+the projector is invalid because the command validator also requires complete
+texture and stream sections. This is a separate, model-tested extension; it is
+not required for the bounded r66 executable lane.
 
 ### 8.5 Profile relationship and migration
 
@@ -1227,21 +1366,24 @@ parent artifact envelope, and report compatible evidence blocks.
 
 The bounded tape-to-draw-slice planner now extracts one contiguous Draw range
 and its content-addressed dependency references from a validated frame tape.
-It does not yet translate that readiness artifact into standalone Metal replay
-inputs, so the current manifest builder remains authoritative for mini-replay
-inputs. Once indexed geometry, shader, and attachment capture closure is tested,
-the useful legacy transforms can consume the projection without maintaining an
-independent resource-dump format.
+`executable-project` translates that identity-proven range into a standalone v2
+bundle, synthesizes the coordinator `Clear` and `Present`, and establishes a new
+output oracle through independent production-provider processes. The r66 GT2
+evidence above closes this bounded path for indexed geometry, shaders, bindings,
+attachments, and generation-qualified resource content. The current manifest
+builder remains authoritative for the older shader-mutation and primitive-order
+mini-replay tools; migrating those transforms to consume the projected v2 bundle
+is optional consolidation, not a prerequisite for executing the projection.
 
 The completed bounded implementation order is one `frame-tape`, production-
 provider identity, deterministic output/conservation repetition, whole-command
-reducer/bisection, and an exactly two-interval `sequence-tape` with a mutation
-across the boundary, production sequence capture, and captured identity. The
-next increments are broader grammar/interval count, executable tape-to-
-`draw-slice` conversion, and benchmark corpus management. A nominal ten-second
-capture
-remains a future corpus-selection policy over complete intervals, not a claim
-provided by the current two-interval profile.
+reducer/bisection, an exactly two-interval `sequence-tape` with a mutation
+across the boundary, production sequence capture, captured identity, and one
+identity-proven executable Draw-range projection. The next increments are
+default sparse-delta start-state folding, broader grammar/interval count, and
+benchmark corpus management. A nominal ten-second capture remains a future
+corpus-selection policy over complete intervals, not a claim provided by the
+current two-interval profile.
 
 Random seek, rolling eviction, mid-interval checkpoints, and a raw D3D9 API
 trace are not part of the first version.

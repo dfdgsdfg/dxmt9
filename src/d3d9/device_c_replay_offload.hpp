@@ -157,6 +157,11 @@ struct RawCommandChunk {
   std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
   // Raw FIFO identity. For canonical planning/admission, replaySeq == rawOrdinal.
   ReplaySeq replaySeq = 0;
+  // Zero in the normal renderer. A non-zero pair binds this raw FIFO item to
+  // the exact PE Render Tape CommandChunk event that was accepted only after
+  // this bridge call returned successfully.
+  std::uint64_t renderTapeCaptureToken = 0;
+  std::uint64_t renderTapeEventOrdinal = 0;
   bool bufferSnapshotsCaptured = false;
   // Admission-time cutover decision. The worker never re-reads the runtime
   // gate: false preserves the historical synchronous combined mark/capture

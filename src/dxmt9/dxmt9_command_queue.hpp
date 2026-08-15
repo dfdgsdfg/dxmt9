@@ -53,6 +53,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <vector>
 
 namespace dxmt9 {
 
@@ -349,6 +350,7 @@ class CommandQueue {
   // gate itself. Upstream dxmt has no BackendLimits.
   CommandQueue(WMT::Device device, core::BackendLimits limits,
                bool cpuReadySessionLaneEnabled,
+               bool renderTapePublisherCaptureEnabled = false,
                render::RenderPartitionConfig renderPartitionConfig = {});
 
   // Inert queue for native encoder lifecycle specs. The supplied handle is
@@ -415,6 +417,29 @@ class CommandQueue {
                      std::span<const core::DrawParamPayloadView> payloads = {});
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
 
+  // Cold, capture-only ownership copied from the exact Direct-Arena source
+  // before it becomes visible to the encode thread.  Raw-record ranges are
+  // expressed in the PE CommandChunk coordinate space; DAG indices and pass
+  // kinds come from the source's immutable pre-reorder FrameGraph.
+  struct CpuReadyCapturePassRange {
+    std::uint32_t firstRecord = 0;
+    std::uint32_t recordCount = 0;
+    std::uint32_t dagPassIndex = 0;
+    std::uint32_t passKind = 0;
+  };
+
+  struct CpuReadyCaptureIdentity {
+    std::uint64_t sourceOrdinal = 0;
+    std::uint64_t seqId = 0;
+    std::uint32_t recordCount = 0;
+    std::vector<CpuReadyCapturePassRange> ranges{};
+
+    bool valid() const noexcept {
+      return sourceOrdinal != 0 && seqId != 0 && recordCount != 0 &&
+             !ranges.empty();
+    }
+  };
+
   // Move-only capability for one replay-thread-owned direct arena source.
   // Admission fixes and consumes raw/source/seq identities under mutex_; all
   // builder appends then run outside the queue lock. Destruction without a
@@ -435,8 +460,13 @@ class CommandQueue {
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
     std::uint64_t seqId() const noexcept { return ticket_.seqId; }
     bool selectSegment(std::size_t segmentIndex) noexcept;
+    bool beginCaptureIdentity(std::uint32_t recordCount) noexcept;
+    bool captureNextCommandRecord(std::uint32_t recordIndex) noexcept;
+    bool captureNextDrawRecords(
+        std::span<const std::uint32_t> recordIndices) noexcept;
     bool publish(
-        std::span<const core::ChunkHandleEntry> resources = {}) noexcept;
+        std::span<const core::ChunkHandleEntry> resources = {},
+        CpuReadyCaptureIdentity* captureIdentity = nullptr) noexcept;
 
    private:
     friend class CommandQueue;
@@ -992,6 +1022,20 @@ class CommandQueue {
     bool presentAppended = false;
     bool presentTokenStashed = false;
     bool flushAfterPublication = false;
+    struct CaptureCommandAnchor {
+      std::uint32_t firstRecord = 0;
+      std::uint32_t lastRecord = 0;
+    };
+    std::uint32_t captureRecordCount = 0;
+    std::vector<std::uint32_t> captureNextRawRecords{};
+    std::vector<CaptureCommandAnchor> captureCommandAnchors{};
+
+    bool captureEnabled() const noexcept { return captureRecordCount != 0; }
+    bool setCaptureNextRawRecords(
+        std::span<const std::uint32_t> records) noexcept;
+    bool captureSingleCommand() noexcept;
+    bool captureDrawCommand(std::size_t first,
+                            std::size_t count) noexcept;
   };
 
   enum class ActiveArenaAppendResult {
@@ -1048,7 +1092,8 @@ class CommandQueue {
   bool publishCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
-      std::span<const core::ChunkHandleEntry> resources) noexcept;
+      std::span<const core::ChunkHandleEntry> resources,
+      CpuReadyCaptureIdentity* captureIdentity) noexcept;
   void abortCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex) noexcept;

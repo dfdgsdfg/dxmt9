@@ -530,6 +530,15 @@ void productionGateIsExplicitAndDefaultOff() {
             dxmt9::resolveCpuReadyTapeDirectReplayEnabled("0foo"),
         "CPU-ready Tape promotion gate must be unset/zero off and explicit "
         "non-zero on");
+  check(!dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "1", nullptr) &&
+            !dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "1", "") &&
+            !dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "0", "Z:\\\\capture") &&
+            dxmt9::resolveCpuReadyTapeDirectReplayEnabled(
+                nullptr, "1", "Z:\\\\capture") &&
+            dxmt9::resolveCpuReadyTapeDirectReplayEnabled(
+                "1", nullptr, nullptr),
+        "an installed Render Tape publisher selects the production source "
+        "provider without changing capture-off or output-root-free runs");
 }
 
 void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {

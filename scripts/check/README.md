@@ -31,8 +31,10 @@ under `tests/meson.build`.
   rejection, and component digest rejection (`dxmt9-render-tape-cli-spec`).
 - `test_render_tape_projection_cli.py` — emits the bounded pointer-free
   `dxmt9.render_tape.projection.v1` readiness artifact, pins source digest and
-  canonical Draw/boundary locators plus object/blob conservation, proves the
-  source wire is unchanged, and checks fail-before-JSON rejection
+  canonical Draw/boundary locators plus object/blob conservation, validates
+  identity truth tables, materializes canonical Clear/Draw/Present v2 bytes,
+  exercises deterministic executable-bundle publication, proves the source
+  wire is unchanged, and checks fail-before-output cleanup
   (`dxmt9-render-tape-projection-cli-spec`).
 - `test_render_tape_provider_cli.py` — proves fresh-device warmup/repeat
   identity, the strict production output-oracle predicate, deterministic
