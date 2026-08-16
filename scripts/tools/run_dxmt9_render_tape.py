@@ -1193,7 +1193,9 @@ def projection_provider_run(
     output: pathlib.Path,
     expected: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
-    result = run_provider_replay(provider, events, blob_paths, expected, output)
+    result = run_provider_replay(
+        provider, events, blob_paths, expected_output=expected, output_path=output
+    )
     validity = result.get("validity", {})
     if (
         result.get("provider_exit_code") != 0

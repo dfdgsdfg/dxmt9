@@ -64,6 +64,7 @@ def main() -> int:
             "production_capture": False,
             "production_provider_replay": False,
             "output_oracle": False,
+            "source_oracle": False,
         }
 
         inspected = json.loads(
@@ -121,6 +122,7 @@ def main() -> int:
                 "production_capture": False,
                 "production_provider_replay": False,
                 "output_oracle": False,
+                "source_oracle": False,
             },
             "valid": True,
         }
