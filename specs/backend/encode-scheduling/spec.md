@@ -1311,14 +1311,37 @@ by the lexicographic source/range vector; no wallclock, worker order, GPU
 progress, allocation address, or floating-point operation participates.
 
 The proof-core API models that a coordinator may pass only a `Selected`
-certificate to parent/child or segmented Metal preparation. The current
-production coordinator does not invoke this selector or validator; production
-enforcement remains a separate open/default-off integration task. In the proof
-core, any invalid, stale, incomplete, unknown, or overflowed proof, score, or
-tie-break key returns the exact effective stream to the serial cursor before
-child creation, pass-action mutation, completion registration, or submission.
-Once the first child/segment effect occurs, a failure is a fail-stop invariant
-breach and cannot be treated as a policy rejection.
+certificate to parent/child or segmented Metal preparation. The production
+coordinator owns exactly one adapter into it,
+`runParallelPassProofCoreAdapter`, invoked from `tryEncodeParallelPass` after
+every locator, ABI, PSO, uniform, route, and resource identity has been
+re-resolved under the residency pin, and before render-pass preparation or any
+parent/child effect. The adapter supplies two owner-issued value resolvers:
+`resolveParallelPassSnapshotAuthority` re-reads the pass from the producer's
+own sealed-pass batch by exact source/sequence/interval identity and fails
+closed on a missing or ambiguous entry, and `resolveParallelPassCoverage`
+re-reads every command a child owns from the live source, checks attachment and
+route identity per command, and canonicalizes reads and writes through the same
+proof owner the producer used. `buildParallelPassCandidateCost` derives the
+checked fixed-point record from certified integers only: serial work is the
+pass draw total, the critical path is the widest child, child setup is one
+draw-equivalent per child, and imbalance is widest minus narrowest.
+
+The adapter is a gate, never a relaxation. A certificate-invalid candidate can
+never reach the selector, and an unselected candidate can never reach child
+creation. The pre-existing economics classifier is unchanged and is still
+evaluated for every candidate the coordinator considered, so its attribution
+keeps its meaning; it can only add a rejection. Execution requires the
+certificate, the classifier, and the selector to agree. The typed counters
+`parallel_pass_adapter_{considered,certificate_valid,certificate_invalid,
+selected,serial_fallback}` conserve `considered = certificate_valid +
+certificate_invalid`, `considered = selected + serial_fallback`, and
+`selected <= certificate_valid`. In the proof core, any invalid, stale,
+incomplete, unknown, or overflowed proof, score, or tie-break key returns the
+exact effective stream to the serial cursor before child creation, pass-action
+mutation, completion registration, or submission. Once the first child/segment
+effect occurs, a failure is a fail-stop invariant breach and cannot be treated
+as a policy rejection.
 
 The contract is monotone: strengthening the negative evidence with a
 coordinator command, exact hazard, attachment ambiguity, action-epoch or ABI

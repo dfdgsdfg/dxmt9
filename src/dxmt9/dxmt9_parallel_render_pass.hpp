@@ -2082,6 +2082,138 @@ inline ParallelPassCandidateSelection selectParallelPassCandidate(
   return result;
 }
 
+// Deterministic bounded cost record derived only from integers the certified
+// plan already carries, so an identical plan always scores identically
+// regardless of evaluation order or worker scheduling (`R-BACK-2.72`). Serial
+// work is every draw; the parallel critical path is the widest child; each
+// child pays one draw-equivalent first-bind reset; residual imbalance is the
+// widest child minus the narrowest. Any conversion overflow leaves the record
+// invalid, which selects serial.
+inline bool buildParallelPassCandidateCost(
+    const ParallelPassEconomicsSummary& economics,
+    ParallelPassCandidateCost& cost) noexcept {
+  cost = {};
+  cost.economics = economics;
+  if (!economics.valid || economics.overflow || economics.childCount < 2u ||
+      economics.childCount > kParallelRenderPassChildCapacity ||
+      economics.minimumChildDraws == 0u ||
+      economics.maximumChildDraws < economics.minimumChildDraws ||
+      economics.maximumChildDraws > economics.totalDraws) {
+    cost.overflow = true;
+    return false;
+  }
+  if (!parallelPassFixedPointFromUnsigned(economics.totalDraws,
+                                          cost.serialWork) ||
+      !parallelPassFixedPointFromUnsigned(economics.maximumChildDraws,
+                                          cost.criticalPath) ||
+      !parallelPassFixedPointFromUnsigned(economics.childCount,
+                                          cost.childSetup) ||
+      !parallelPassFixedPointFromUnsigned(
+          economics.maximumChildDraws - economics.minimumChildDraws,
+          cost.imbalance)) {
+    cost.overflow = true;
+    return false;
+  }
+  cost.valid = true;
+  return true;
+}
+
+enum class ParallelPassAdapterOutcome : std::uint8_t {
+  CertificateInvalid,
+  NotSelected,
+  Selected,
+};
+
+struct ParallelPassAdapterDecision {
+  ParallelPassAdapterOutcome outcome =
+      ParallelPassAdapterOutcome::CertificateInvalid;
+  ParallelPassSemanticPlanFailure certificate =
+      ParallelPassSemanticPlanFailure::MissingSnapshot;
+  ParallelPassCandidateSelectionFailure selection =
+      ParallelPassCandidateSelectionFailure::Empty;
+  std::uint32_t candidateOrdinal = UINT32_MAX;
+
+  constexpr bool certificateValid() const noexcept {
+    return outcome != ParallelPassAdapterOutcome::CertificateInvalid;
+  }
+  constexpr bool selected() const noexcept {
+    return outcome == ParallelPassAdapterOutcome::Selected;
+  }
+
+  friend constexpr bool operator==(const ParallelPassAdapterDecision&,
+                                   const ParallelPassAdapterDecision&) =
+      default;
+};
+
+struct ParallelPassAdapterAccounting {
+  std::uint64_t considered = 0;
+  std::uint64_t certificateValid = 0;
+  std::uint64_t certificateInvalid = 0;
+  std::uint64_t selected = 0;
+  std::uint64_t serialFallback = 0;
+
+  constexpr bool conserves() const noexcept {
+    return considered == certificateValid + certificateInvalid &&
+        considered == selected + serialFallback &&
+        selected <= certificateValid;
+  }
+};
+
+inline constexpr ParallelPassAdapterAccounting accountParallelPassAdapter(
+    const ParallelPassAdapterDecision& decision) noexcept {
+  ParallelPassAdapterAccounting result{.considered = 1u};
+  if (decision.certificateValid()) {
+    result.certificateValid = 1u;
+  } else {
+    result.certificateInvalid = 1u;
+  }
+  if (decision.selected()) {
+    result.selected = 1u;
+  } else {
+    result.serialFallback = 1u;
+  }
+  return result;
+}
+
+// The single production entry into the policy proof core. It runs before any
+// Metal effect: an invalid certificate can never reach the selector, and an
+// unselected candidate can never reach child creation. The certificate is
+// consumed whole — a partial result is never carried forward — and the
+// selector independently revalidates through the same owner-issued authority
+// and exact coverage resolver (`R-BACK-2.69`, `R-BACK-2.74`).
+inline ParallelPassAdapterDecision runParallelPassProofCoreAdapter(
+    const SealedParallelPassSnapshot& snapshot,
+    std::span<const ParallelPassChildPlan> children,
+    const ParallelPassCandidateCost& cost,
+    const ParallelPassSnapshotAuthority& authority,
+    const ParallelPassCoverageResolver& coverage) noexcept {
+  ParallelPassAdapterDecision result{};
+  const auto certificate = validateParallelPassSemanticPlan(
+      &snapshot, children, authority, coverage);
+  result.certificate = certificate.failure;
+  if (!certificate.accepted()) {
+    return result;
+  }
+  result.outcome = ParallelPassAdapterOutcome::NotSelected;
+  const std::array<ParallelPassCandidateInput, 1> candidates{
+      ParallelPassCandidateInput{
+          .snapshot = &snapshot,
+          .children = children,
+          .cost = cost,
+          .authority = authority,
+          .coverage = coverage,
+          .candidateOrdinal = 0u,
+      }};
+  const auto selection = selectParallelPassCandidate(candidates);
+  result.selection = selection.failure;
+  if (!selection.selected || selection.candidateOrdinal != 0u) {
+    return result;
+  }
+  result.outcome = ParallelPassAdapterOutcome::Selected;
+  result.candidateOrdinal = selection.candidateOrdinal;
+  return result;
+}
+
 // Backend is a deliberately small seam shared by deterministic native fakes
 // and the production WMT parent/child implementation. Child creation is
 // ordered and pre-effect. beginPassActions() is the effect edge;

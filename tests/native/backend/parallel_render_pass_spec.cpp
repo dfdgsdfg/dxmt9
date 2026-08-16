@@ -2732,6 +2732,212 @@ void coordinatorCommandsSegmentPassIntervals() {
         "follows it even on a carried source");
 }
 
+// Counts every backend call the executor makes. `effects` covers exactly the
+// calls at or after `beginPassActions()`, which is the Metal effect edge.
+struct AdapterEffectRecorder {
+  std::uint32_t prepared = 0;
+  std::uint32_t created = 0;
+  std::uint32_t effects = 0;
+
+  bool prepareParent() noexcept { ++prepared; return true; }
+  bool createChild(const ParallelPassChildPlan&) noexcept {
+    ++created;
+    return true;
+  }
+  void abandonPrepared() noexcept {}
+  bool beginPassActions() noexcept { ++effects; return true; }
+  bool replayLogicalCommands(
+      std::span<const ParallelPassChildPlan>) noexcept {
+    ++effects;
+    return true;
+  }
+  bool emitChild(const ParallelPassChildPlan&) noexcept {
+    ++effects;
+    return true;
+  }
+  bool endChild(std::uint32_t) noexcept { ++effects; return true; }
+  bool joinChild(std::uint32_t) noexcept { ++effects; return true; }
+  bool endPassActions() noexcept { ++effects; return true; }
+  bool endParent() noexcept { ++effects; return true; }
+  bool publishSidecars() noexcept { ++effects; return true; }
+  bool publishCompletion() noexcept { ++effects; return true; }
+  void failStop(ParallelPassFailurePhase, std::uint32_t) noexcept {}
+};
+
+struct AdapterLaneResult {
+  dxmt9::encoders::ParallelPassAdapterDecision decision{};
+  dxmt9::encoders::ParallelPassAdapterAccounting accounting{};
+  std::uint32_t preparedParents = 0;
+  std::uint32_t createdChildren = 0;
+  std::uint32_t parallelEffects = 0;
+  std::uint64_t serialDraws = 0;
+  bool executed = false;
+};
+
+// Mirrors the production ordering: certificate gate, then selection, then —
+// and only then — Metal effects. Everything else replays serially.
+AdapterLaneResult runAdapterLane(
+    const SemanticPlanFixture& fixture,
+    const dxmt9::encoders::ParallelPassCandidateCost& cost) {
+  using namespace dxmt9::encoders;
+  AdapterLaneResult out{};
+  out.decision = runParallelPassProofCoreAdapter(
+      fixture.snapshot, fixture.view(), cost, fixture.authorityResolver(),
+      fixture.coverageResolver());
+  out.accounting = accountParallelPassAdapter(out.decision);
+  if (!out.decision.selected()) {
+    for (const auto& child : fixture.view()) {
+      out.serialDraws += child.range.drawEntryCount;
+    }
+    return out;
+  }
+  AdapterEffectRecorder backend{};
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity> order{};
+  for (std::uint32_t i = 0u; i < fixture.count; ++i) {
+    order[i] = i;
+  }
+  const auto execution = executeParallelRenderPass(
+      fixture.view(),
+      std::span<const std::uint32_t>(order.data(), fixture.count), backend);
+  out.executed = execution.status == ParallelPassExecutionStatus::Completed;
+  out.preparedParents = backend.prepared;
+  out.createdChildren = backend.created;
+  out.parallelEffects = backend.effects;
+  return out;
+}
+
+// R-BACK-2.69/2.74: the production adapter is the only path from a sealed pass
+// to Metal child creation, an invalid certificate can never be partially
+// consumed, and every rejection returns to exact serial replay before effects.
+void proofCoreAdapterGatesEveryProductionCandidate() {
+  using namespace dxmt9::encoders;
+  using Outcome = ParallelPassAdapterOutcome;
+
+  SemanticPlanFixture accepted(3u);
+  ParallelPassCandidateCost cost{};
+  check(buildParallelPassCandidateCost(accepted.cost(0).economics, cost) &&
+            cost.valid && !cost.overflow &&
+            cost.serialWork.raw == 192ll * ParallelPassFixedPoint::kFraction &&
+            cost.criticalPath.raw == 64ll * ParallelPassFixedPoint::kFraction &&
+            cost.childSetup.raw == 3ll * ParallelPassFixedPoint::kFraction &&
+            cost.imbalance.raw == 0,
+        "the cost record is built from certified integers with checked "
+        "fixed-point conversion");
+
+  const auto valid = runAdapterLane(accepted, cost);
+  check(valid.decision.outcome == Outcome::Selected &&
+            valid.decision.certificate ==
+                ParallelPassSemanticPlanFailure::None &&
+            valid.decision.selection ==
+                ParallelPassCandidateSelectionFailure::None &&
+            valid.decision.candidateOrdinal == 0u && valid.executed &&
+            valid.preparedParents == 1u &&
+            valid.createdChildren == accepted.count &&
+            valid.parallelEffects != 0u && valid.serialDraws == 0u &&
+            valid.accounting.conserves() &&
+            valid.accounting.selected == 1u &&
+            valid.accounting.certificateValid == 1u,
+        "a certified, positively scored plan selects and executes exactly once");
+
+  // The authority owner still holds the unmutated snapshot, so every mutated
+  // candidate is rejected by the certificate before it can reach the selector.
+  const auto expectCertificateInvalid = [&](auto mutate,
+                                            std::string_view message) {
+    SemanticPlanFixture candidate = accepted;
+    mutate(candidate);
+    const auto lane = runAdapterLane(candidate, cost);
+    check(lane.decision.outcome == Outcome::CertificateInvalid &&
+              !lane.decision.certificateValid() && !lane.executed &&
+              lane.preparedParents == 0u && lane.createdChildren == 0u &&
+              lane.parallelEffects == 0u &&
+              lane.serialDraws == 64u * candidate.count &&
+              lane.decision.selection ==
+                  ParallelPassCandidateSelectionFailure::Empty &&
+              lane.accounting.conserves() &&
+              lane.accounting.certificateInvalid == 1u &&
+              lane.accounting.selected == 0u &&
+              lane.accounting.serialFallback == 1u,
+          message);
+  };
+  expectCertificateInvalid([](auto& f) { f.snapshot.passActionEpoch = 8u; },
+                           "action-epoch drift yields zero Metal effects and "
+                           "exact serial replay");
+  expectCertificateInvalid(
+      [](auto& f) { f.snapshot.childDrawCounts[1] = 63u; },
+      "child coverage drift yields zero Metal effects and exact serial replay");
+  expectCertificateInvalid(
+      [](auto& f) {
+        f.children[1].binding.mode =
+            ParallelPassDirectBindingMode::Stage2DirectCbuf;
+      },
+      "mixed child ABI yields zero Metal effects and exact serial replay");
+
+  // A certified plan whose economics cannot be scored is still refused before
+  // effects, and the selector — not the certificate — is what refuses it.
+  ParallelPassCandidateCost overflowed{};
+  auto hugeEconomics = accepted.cost(0).economics;
+  hugeEconomics.totalDraws = UINT64_MAX;
+  check(!buildParallelPassCandidateCost(hugeEconomics, overflowed) &&
+            !overflowed.valid && overflowed.overflow,
+        "an unrepresentable draw total leaves the cost record invalid");
+  const auto unscored = runAdapterLane(accepted, overflowed);
+  check(unscored.decision.outcome == Outcome::NotSelected &&
+            unscored.decision.certificateValid() &&
+            unscored.decision.certificate ==
+                ParallelPassSemanticPlanFailure::None &&
+            unscored.decision.selection ==
+                ParallelPassCandidateSelectionFailure::InvalidEconomics &&
+            !unscored.executed && unscored.parallelEffects == 0u &&
+            unscored.serialDraws == 192u && unscored.accounting.conserves() &&
+            unscored.accounting.certificateValid == 1u &&
+            unscored.accounting.selected == 0u,
+        "an invalid economics record fails closed at selection, after a valid "
+        "certificate, with zero Metal effects");
+
+  // A non-positive benefit is a legitimate serial selection, not an error.
+  auto nonPositive = cost;
+  nonPositive.serialWork = cost.criticalPath;
+  const auto rejected = runAdapterLane(accepted, nonPositive);
+  check(rejected.decision.outcome == Outcome::NotSelected &&
+            rejected.decision.selection ==
+                ParallelPassCandidateSelectionFailure::NonPositiveBenefit &&
+            !rejected.executed && rejected.parallelEffects == 0u &&
+            rejected.accounting.conserves(),
+        "a non-positive benefit selects serial without effects");
+
+  // Conservation over the whole observed population.
+  ParallelPassAdapterAccounting total{};
+  const auto accumulate = [&](const ParallelPassAdapterAccounting& one) {
+    total.considered += one.considered;
+    total.certificateValid += one.certificateValid;
+    total.certificateInvalid += one.certificateInvalid;
+    total.selected += one.selected;
+    total.serialFallback += one.serialFallback;
+  };
+  accumulate(valid.accounting);
+  accumulate(unscored.accounting);
+  accumulate(rejected.accounting);
+  for (std::uint32_t children = 2u;
+       children <= kParallelRenderPassChildCapacity; ++children) {
+    SemanticPlanFixture bounded(children, 20u + children, 700u + children);
+    ParallelPassCandidateCost boundedCost{};
+    check(buildParallelPassCandidateCost(bounded.cost(0).economics,
+                                         boundedCost),
+          "every bounded child count produces a representable cost record");
+    const auto lane = runAdapterLane(bounded, boundedCost);
+    check(lane.decision.selected() && lane.executed &&
+              lane.createdChildren == children && lane.accounting.conserves(),
+          "every bounded certified plan selects and executes");
+    accumulate(lane.accounting);
+  }
+  check(total.conserves() && total.considered == 3u +
+            (kParallelRenderPassChildCapacity - 1u) &&
+            total.certificateValid == total.considered &&
+            total.certificateInvalid == 0u &&
+            total.selected + total.serialFallback == total.considered,
+        "adapter outcomes conserve across the observed population");
+}
+
 }  // namespace
 
 int main() {
@@ -2755,6 +2961,7 @@ int main() {
     semanticPlanMutationAndCoverageProofsFailClosed();
     fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent();
     producerOutputFeedsSynchronousSemanticValidator();
+    proofCoreAdapterGatesEveryProductionCandidate();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
     return 1;

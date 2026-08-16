@@ -14,6 +14,7 @@ struct ParallelPassEconomicsDecision;
 struct ParallelPassEconomicsSummary;
 struct ParallelPassExecutionDecision;
 struct SealedParallelPassSnapshotBatchResult;
+struct ParallelPassAdapterDecision;
 }  // namespace dxmt9::encoders
 
 namespace dxmt9::render {
@@ -292,6 +293,8 @@ void countParallelPassEconomics(
     const encoders::ParallelPassEconomicsDecision& decision);
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result);
+void countParallelPassAdapter(
+    const encoders::ParallelPassAdapterDecision& decision);
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);

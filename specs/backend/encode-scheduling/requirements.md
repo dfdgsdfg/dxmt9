@@ -765,10 +765,21 @@ pass-wide attachment and exact-hazard facts, pass-action epoch, route/ABI
 compatibility, first-draw snapshots, and fixed capacity bounds. Every locator,
 generation, count, and arithmetic input must be checked before the first Metal
 side effect. A stale, incomplete, unknown, inconsistent, or overflowed
-certificate is invalid and cannot be partially consumed. The current
-implementation provides this algebraic proof core and native evidence only;
-production coordinator enforcement remains open and the provider stays
-default-off.
+certificate is invalid and cannot be partially consumed. The production
+coordinator must own exactly one adapter into this proof core, placed after
+complete locator/ABI/PSO/uniform re-resolution and before render-pass
+preparation or any parent/child Metal effect. The adapter must build the
+authoritative snapshot input from the owning sealed-pass batch and resolve
+exact per-child coverage from the live source while the residency pin is held.
+Only a certificate-valid candidate may enter selection, only the selected plan
+may execute, and every other outcome selects the exact serial replay. The
+adapter must not weaken any existing pre-effect rejection: the economics
+classifier must still be evaluated for every considered candidate so its
+attribution keeps its meaning, it may only add a rejection, and execution
+requires the certificate, the classifier, and the selector to agree. Typed adapter counters
+must conserve `considered = certificate_valid + certificate_invalid` and
+`considered = selected + serial_fallback`, with `selected <= certificate_valid`.
+The provider stays default-off and the adapter makes no promotion claim.
 
 **R-BACK-2.70** A certified plan must cover the effective replay stream with
 ordered, contiguous, non-overlapping source-qualified ranges. The flattened
