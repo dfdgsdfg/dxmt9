@@ -45,9 +45,9 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  // 162 after Render Tape added the production source/pass identity finish
+  // 163 after Render Tape added the source-before-Present finish
   // operation beside its output oracle and typed color/depth snapshots.
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 162u,
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 163u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
@@ -68,6 +68,9 @@ void testCommandChunkBridgeOpsAreGenerated() {
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_finish_render_tape_present_capture),
         "capture-only PresentComplete finish opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_device_finish_render_tape_present_source_capture),
+        "capture-only source-before-Present finish opcode is generated");
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_finish_render_tape_identity_capture),
         "capture-only production identity finish opcode is generated");

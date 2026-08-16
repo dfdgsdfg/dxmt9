@@ -218,12 +218,20 @@ constexpr D9CWireObjectIdentity kTexture{
     .objectId = 29u,
 };
 
+constexpr D9CWireObjectIdentity kBuffer{
+    .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+    .generation = 4u,
+    .objectId = 31u,
+};
+
 constexpr std::uint32_t kSurfaceDescriptorKind = static_cast<std::uint32_t>(
     RenderTapeDescriptorKind::Surface);
 constexpr std::uint32_t kTextureDescriptorKind = static_cast<std::uint32_t>(
     RenderTapeDescriptorKind::Texture);
 constexpr std::uint32_t kShaderDescriptorKind = static_cast<std::uint32_t>(
     RenderTapeDescriptorKind::Shader);
+constexpr std::uint32_t kBufferDescriptorKind = static_cast<std::uint32_t>(
+    RenderTapeDescriptorKind::Buffer);
 
 RenderTapeSurfaceDescriptorV2 outputSurfaceDescriptor() {
   return RenderTapeSurfaceDescriptorV2{
@@ -384,6 +392,69 @@ void gammaRampBootstrapAndOrderedMutationAreTyped() {
   check(validateRenderTape(bad, catalogue).status ==
             RenderTapeValidationStatus::InvalidBootstrapChunk,
         "gamma digest mismatch must fail closed");
+}
+
+void bufferMutationDispositionIsTypedAndBackwardCompatible() {
+  const D9CBufferDesc bufferDescriptor{.size = 4u};
+  const auto bufferDescriptorBytes =
+      std::as_bytes(std::span(&bufferDescriptor, 1u));
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface,
+      .descriptorKind = kSurfaceDescriptorKind,
+  };
+  const auto seedDigest = mutationDigest();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = seedDigest,
+      .size = 4u,
+      .verified = 1u,
+  }}};
+
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(makeApplyStateChunk());
+  const auto surfaceDescriptor = outputSurfaceDescriptor();
+  builder.appendObjectDefine(
+      kSurface, kSurfaceDescriptorKind,
+      std::as_bytes(std::span(&surfaceDescriptor, 1u)), 0u, {});
+  builder.appendObjectDefine(kBuffer, kBufferDescriptorKind,
+                             bufferDescriptorBytes, 0u, {}, 4u, 1u);
+  builder.appendResourceMutation(
+      kBuffer, RenderTapeMutationKind::CpuUnlock, 0u, 0u, 4u, seedDigest,
+      RenderTapeBufferMutationDisposition::NoOverwrite);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  builder.appendPresentComplete(
+      5u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  auto tape = builder.seal();
+  check(validateRenderTape(tape, catalogue).valid(),
+        "buffer lock disposition must validate for buffer CpuUnlock");
+  check(eventPayload<RenderTapeResourceMutationHeader>(tape, 3u)
+                ->bufferDisposition ==
+            static_cast<std::uint32_t>(
+                RenderTapeBufferMutationDisposition::NoOverwrite),
+        "buffer lock disposition must occupy the fixed reserved field");
+
+  auto oldBundle = tape;
+  eventPayload<RenderTapeResourceMutationHeader>(oldBundle, 3u)
+      ->bufferDisposition = static_cast<std::uint32_t>(
+          RenderTapeBufferMutationDisposition::Plain);
+  check(validateRenderTape(oldBundle, catalogue).valid(),
+        "zero disposition must preserve old bundle compatibility");
+
+  auto invalid = tape;
+  eventPayload<RenderTapeResourceMutationHeader>(invalid, 3u)
+      ->bufferDisposition = 99u;
+  check(validateRenderTape(invalid, catalogue).status ==
+            RenderTapeValidationStatus::InvalidMutationKind,
+        "unknown buffer disposition must fail closed");
+
+  auto nonBuffer = tape;
+  auto *mutation = eventPayload<RenderTapeResourceMutationHeader>(nonBuffer, 3u);
+  mutation->identity = kSurface;
+  check(validateRenderTape(nonBuffer, catalogue).status ==
+            RenderTapeValidationStatus::InvalidMutationKind,
+        "non-buffer mutation must reject non-Plain disposition");
 }
 
 RenderTapeBlobCatalogue completeCatalogue(std::uint64_t bytes,
@@ -2356,6 +2427,23 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
         "invalid source must fail before producing any reduced output");
 }
 
+void opaqueOracleAlphaIsCanonical() {
+  std::array pixels{
+      std::byte{1u}, std::byte{2u}, std::byte{3u}, std::byte{4u},
+      std::byte{5u}, std::byte{6u}, std::byte{7u}, std::byte{8u},
+  };
+  const auto original = pixels;
+  check(renderTapeCanonicalizeOpaqueAlpha(21u, pixels) && pixels == original,
+        "A8 oracle pixels must preserve authored alpha");
+  check(renderTapeCanonicalizeOpaqueAlpha(22u, pixels) &&
+            pixels[3] == std::byte{0xffu} &&
+            pixels[7] == std::byte{0xffu},
+        "X8 oracle pixels must canonicalize ignored alpha to opaque");
+  std::array malformed{std::byte{0u}, std::byte{0u}, std::byte{0u}};
+  check(!renderTapeCanonicalizeOpaqueAlpha(22u, malformed),
+        "malformed X8 oracle storage must fail closed");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2381,9 +2469,11 @@ int main(int argc, char** argv) {
     textureSurfaceAliasesCoverCanonical2DAndStandaloneSurfaces();
     textureSurfaceWrapperLifetimeIsIdempotent();
     gammaRampBootstrapAndOrderedMutationAreTyped();
+    bufferMutationDispositionIsTypedAndBackwardCompatible();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();
     wholeEventReductionIsCanonicalAndFailClosed();
+    opaqueOracleAlphaIsCanonical();
   } catch (const std::exception& error) {
     std::cerr << "render tape spec failed: " << error.what() << '\n';
     return 1;

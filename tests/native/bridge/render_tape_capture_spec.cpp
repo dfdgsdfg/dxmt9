@@ -1407,9 +1407,11 @@ void writeProductionFixture(const std::filesystem::path& directory) {
             RenderTapeCaptureStatus::Accepted,
         "production fixture journals ordered control");
   const RenderTapeOracleAttachment attachment = oracle();
+  const std::array<std::byte, 4u> sourceOracle{
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
   check(session.completePresent(
             5u, 11u, RenderTapeDigestValidity::NotCaptured, {},
-            std::as_bytes(std::span(&attachment, 1u))) ==
+            std::as_bytes(std::span(&attachment, 1u)), {}, sourceOracle) ==
             RenderTapeCaptureStatus::Complete,
         "production fixture seals Present transactionally");
   check(session.validationStatus() == RenderTapeValidationStatus::Valid,
@@ -1420,6 +1422,10 @@ void writeProductionFixture(const std::filesystem::path& directory) {
                         "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297.bin";
   check(session.publicationBundle().events == session.sealedArtifact(),
         "production fixture publishes the session bundle events");
+  check(session.publicationBundle().sourceOracle.size() == sourceOracle.size() &&
+            session.publicationBundle().sourceOracle ==
+                std::vector<std::byte>(sourceOracle.begin(), sourceOracle.end()),
+        "production fixture publishes source-before-Present bytes");
   check(session.publicationBundle().blobs.size() == 1u &&
             session.publicationBundle().blobs[0].bytes ==
                 std::vector<std::byte>(mutationBytes.begin(), mutationBytes.end()),
@@ -2173,6 +2179,36 @@ void testArmColorSnapshotDescriptorTruthTable() {
   check(renderTapeArmColorSnapshotTextureSupported(texture2d) &&
             renderTapeArmColorSnapshotTextureSupported(cube),
         "arm snapshots accept exact X8R8G8B8 2D and all-face R32F cube shapes");
+  auto managedTexture = texture2d;
+  RenderTapeTextureDescriptorV2 managedHeader{};
+  std::memcpy(&managedHeader, managedTexture.data(), sizeof(managedHeader));
+  managedHeader.initialContentDisposition = static_cast<std::uint32_t>(
+      RenderTapeInitialContentDisposition::CompleteSeed);
+  std::memcpy(managedTexture.data(), &managedHeader, sizeof(managedHeader));
+  D9CSurfaceDesc managedSurface{};
+  std::memcpy(&managedSurface,
+              managedTexture.data() + sizeof(managedHeader),
+              sizeof(managedSurface));
+  managedSurface.format = 21u;
+  managedSurface.pool = 1u;
+  managedSurface.usage = 0u;
+  std::memcpy(managedTexture.data() + sizeof(managedHeader), &managedSurface,
+              sizeof(managedSurface));
+  check(renderTapeArmColorSnapshotTextureSupported(managedTexture),
+        "arm snapshots admit only the exact MANAGED A8R8G8B8 atlas shape");
+  auto managedWrongFormat = managedTexture;
+  managedSurface.format = 22u;
+  std::memcpy(managedWrongFormat.data() + sizeof(managedHeader),
+              &managedSurface, sizeof(managedSurface));
+  check(!renderTapeArmColorSnapshotTextureSupported(managedWrongFormat),
+        "MANAGED arm snapshots reject the X8R8G8B8 variant");
+  auto managedWrongPool = managedTexture;
+  managedSurface.format = 21u;
+  managedSurface.pool = 0u;
+  std::memcpy(managedWrongPool.data() + sizeof(managedHeader),
+              &managedSurface, sizeof(managedSurface));
+  check(!renderTapeArmColorSnapshotTextureSupported(managedWrongPool),
+        "A8R8G8B8 arm snapshots reject a DEFAULT-pool shader texture");
   D9CSurfaceDesc standalone{
       .format = 22u,
       .resourceType = 1u,

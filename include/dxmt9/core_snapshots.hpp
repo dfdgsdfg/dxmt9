@@ -1771,6 +1771,17 @@ class BackendDevice {
     (void)handle;
     (void)bytes;
   }
+  // Upload a bounded byte range into a buffer. The complete shadow is passed
+  // so legacy backends can safely retain their full-upload behavior; the
+  // production device consumes only [offset, offset + byteCount).
+  virtual void uploadBufferDataRange(BufferHandle handle,
+                                     std::span<const u8> fullBytes,
+                                     u64 offset,
+                                     u64 byteCount) {
+    (void)offset;
+    (void)byteCount;
+    uploadBufferData(handle, fullBytes);
+  }
   virtual void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height,
                                   u32 depth, u32 pitch, u32 slicePitch,
                                   std::span<const u8> bytes) {
@@ -1939,6 +1950,9 @@ class Buffer {
   std::vector<u8> storage_;
   bool valid_ = true;
   bool locked_ = false;
+  u64 lockedOffset_ = 0;
+  u64 lockedSize_ = 0;
+  u32 lockedFlags_ = 0;
 };
 
 class Texture : public std::enable_shared_from_this<Texture> {

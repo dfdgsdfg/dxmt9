@@ -64,6 +64,8 @@ struct RenderTapeCaptureObjectSeed {
 struct RenderTapeCaptureMutationSeed {
   D9CWireObjectIdentity identity{};
   RenderTapeMutationKind kind = RenderTapeMutationKind::Upload;
+  RenderTapeBufferMutationDisposition bufferDisposition =
+      RenderTapeBufferMutationDisposition::Plain;
   std::uint32_t subresource = 0u;
   std::uint64_t byteOffset = 0u;
   std::uint64_t byteSize = 0u;
@@ -90,6 +92,10 @@ struct RenderTapePublicationBundle {
   // Captured presentation output is an authoritative comparison sidecar, not
   // a replay input and therefore not part of the immutable blob catalogue.
   std::vector<std::byte> outputOracle{};
+  // The pre-Present source attachment is an optional diagnostic sidecar. It
+  // is deliberately separate from output.rgba: a mismatch here localizes the
+  // fault to draw/resource state before Presenter composition.
+  std::vector<std::byte> sourceOracle{};
 };
 
 struct RenderTapeCaptureBootstrapSeed {
@@ -159,7 +165,9 @@ public:
   RenderTapeCaptureStatus resourceMutationBytes(
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
       std::uint32_t subresource, std::uint64_t byteOffset,
-      std::span<const std::byte> bytes);
+      std::span<const std::byte> bytes,
+      RenderTapeBufferMutationDisposition bufferDisposition =
+          RenderTapeBufferMutationDisposition::Plain);
 
   RenderTapeCaptureStatus objectDefine(
       const D9CWireObjectIdentity& identity, std::uint32_t descriptorKind,
@@ -173,7 +181,9 @@ public:
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
       std::uint32_t subresource, std::uint64_t byteOffset,
       std::uint64_t byteSize,
-      std::span<const std::byte, kRenderTapeDigestSize> digest);
+      std::span<const std::byte, kRenderTapeDigestSize> digest,
+      RenderTapeBufferMutationDisposition bufferDisposition =
+          RenderTapeBufferMutationDisposition::Plain);
   RenderTapeCaptureStatus commandChunk(const CommandChunkEnvelope& envelope,
                                        std::span<const std::byte> chunk);
   RenderTapeCaptureStatus orderedControl(
@@ -187,7 +197,8 @@ public:
       std::uint64_t presentOrdinal, std::uint64_t completionOrdinal,
       RenderTapeDigestValidity digestValidity, RenderTapeDigest expectedDigest,
       std::span<const std::byte> oracleAttachments = {},
-      std::span<const std::byte> outputOracle = {});
+      std::span<const std::byte> outputOracle = {},
+      std::span<const std::byte> sourceOracle = {});
 
   RenderTapeCaptureStatus attachCaptureIdentity(
       std::uint64_t captureToken, std::uint64_t presentOrdinal,

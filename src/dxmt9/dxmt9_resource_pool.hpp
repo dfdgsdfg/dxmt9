@@ -527,6 +527,17 @@ struct Pool {
                         std::size_t byteCount,
                         u64 completedSeqId);
 
+  // Publish only the byte range written by a DEFAULT+DYNAMIC
+  // D3DLOCK_NOOVERWRITE lock. The range is validated against the logical
+  // buffer extent before either the CPU shadow or the active Shared backing
+  // is touched. Caller holds the queue mutex.
+  bool uploadBufferDataRange(WMT::Device device,
+                             u64 handleValue,
+                             u64 offset,
+                             const std::uint8_t* bytes,
+                             std::size_t byteCount,
+                             u64 completedSeqId);
+
   // Look up or create immutable Metal index buffers containing reordered index
   // bytes derived from a stable source buffer. Entries are keyed by source
   // buffer content revision + draw span and are retained on the source

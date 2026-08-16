@@ -1236,6 +1236,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeCaptureOracle_{};
     std::optional<dxmt9::d3d9::RenderTapeDigest> renderTapeExpectedDigest_{};
     std::vector<std::byte> renderTapeExpectedPixels_{};
+    std::vector<std::byte> renderTapeExpectedSourcePixels_{};
     std::optional<D9CSurfaceDesc> renderTapeOutputDesc_{};
     dxmt9::d3d9::RenderTapeArmBoundaryPhase renderTapeArmBoundaryPhase_ =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
@@ -7001,6 +7002,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeArmSnapshots_.clear();
         renderTapeExpectedDigest_.reset();
         renderTapeExpectedPixels_.clear();
+        renderTapeExpectedSourcePixels_.clear();
         renderTapeOutputDesc_.reset();
         renderTapeActiveCaptureToken_ = 0u;
     }
@@ -8530,6 +8532,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderTapeAdmittedIdentities_.clear();
         renderTapeExpectedDigest_.reset();
         renderTapeExpectedPixels_.clear();
+        renderTapeExpectedSourcePixels_.clear();
         renderTapeOutputDesc_.reset();
         renderTapeFirstAccessLedger_ = {};
         const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
@@ -8648,8 +8651,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         for (const auto& mutation : seed.mutations) {
             const auto status = renderTapeCapture_->resourceMutation(
-                    mutation.identity, mutation.kind, mutation.subresource,
-                    mutation.byteOffset, mutation.byteSize, mutation.digest);
+                mutation.identity, mutation.kind, mutation.subresource,
+                mutation.byteOffset, mutation.byteSize, mutation.digest,
+                mutation.bufferDisposition);
             if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 dxmt9DeviceInfoLog(
                     "render_tape_capture seed_resource_mutation status=%u kind=%u "
@@ -9731,7 +9735,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             dxmt9::d3d9::RenderTapeDigestValidity::Sha256,
             *renderTapeExpectedDigest_,
             std::as_bytes(std::span(renderTapeCaptureOracle_)),
-            renderTapeExpectedPixels_);
+            renderTapeExpectedPixels_, renderTapeExpectedSourcePixels_);
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
             status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
             dxmt9DeviceInfoLog(
@@ -9806,6 +9810,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             renderTapeExpectedDigest_.reset();
             renderTapeExpectedPixels_.clear();
+            renderTapeExpectedSourcePixels_.clear();
             return;
         }
         D9CRenderTapeIdentityCaptureResult identityResult{};
@@ -9917,6 +9922,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         renderTapeExpectedDigest_.reset();
         renderTapeExpectedPixels_.clear();
+        renderTapeExpectedSourcePixels_.clear();
         renderTapeActiveCaptureToken_ = 0u;
     }
 
@@ -10049,6 +10055,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             dxmt9c_device_finish_render_tape_present_capture(
                                 dev_, &output, outputPixels.data(),
                                 outputPixels.size()));
+                        std::vector<std::byte> sourcePixels;
+                        D9CRenderTapePresentSourceCaptureResult source{};
+                        HRESULT sourceFinishHr = D3DERR_NOTAVAILABLE;
+                        if (SUCCEEDED(finishHr) && outputBufferReady) {
+                            try {
+                                sourcePixels.resize(
+                                    static_cast<std::size_t>(outputBytes));
+                                sourceFinishHr = hr32(
+                                    dxmt9c_device_finish_render_tape_present_source_capture(
+                                        dev_, &source, sourcePixels.data(),
+                                        sourcePixels.size()));
+                            } catch (...) {
+                                sourceFinishHr = D3DERR_OUTOFVIDEOMEMORY;
+                            }
+                        }
+                        bool sourceDigestMatches = false;
+                        if (SUCCEEDED(sourceFinishHr) &&
+                            source.status ==
+                                D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_COMPLETE) {
+                            dxmt9::d3d9::RenderTapeDigest sourceDigest{};
+                            std::memcpy(sourceDigest.data(), source.sha256,
+                                        sourceDigest.size());
+                            sourceDigestMatches =
+                                dxmt9::d3d9::RenderTapeCaptureSession::sha256(
+                                    sourcePixels) == sourceDigest;
+                        }
                         if (SUCCEEDED(finishHr) &&
                             output.status ==
                                 D9C_RENDER_TAPE_PRESENT_CAPTURE_COMPLETE &&
@@ -10056,14 +10088,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                             output.width == renderTapeOutputDesc_->width &&
                             output.height == renderTapeOutputDesc_->height &&
                             output.format == renderTapeOutputDesc_->format &&
-                            output.byteCount == outputBytes) {
+                            output.byteCount == outputBytes &&
+                            SUCCEEDED(sourceFinishHr) &&
+                            source.status ==
+                                D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_COMPLETE &&
+                            source.width == renderTapeOutputDesc_->width &&
+                            source.height == renderTapeOutputDesc_->height &&
+                            source.format == renderTapeOutputDesc_->format &&
+                            source.byteCount == outputBytes &&
+                            sourceDigestMatches) {
                             dxmt9::d3d9::RenderTapeDigest digest{};
                             std::memcpy(digest.data(), output.sha256,
                                         digest.size());
                             renderTapeExpectedDigest_ = digest;
                             renderTapeExpectedPixels_ = std::move(outputPixels);
+                            renderTapeExpectedSourcePixels_ =
+                                std::move(sourcePixels);
                         } else {
-                            abortRenderTapeCapture("present_output_finish");
+                            dxmt9c_device_cancel_render_tape_present_capture(dev_);
+                            abortRenderTapeCapture("present_output_or_source_finish");
                         }
                     } else {
                         dxmt9c_device_cancel_render_tape_present_capture(dev_);
@@ -11574,7 +11617,9 @@ public:
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
         std::uint64_t byteOffset,
-        std::span<const std::byte> bytes) noexcept override {
+        std::span<const std::byte> bytes,
+        dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition)
+        noexcept override {
         const bool registryAccepted =
             recordRenderTapeCpuBytes(object, subresource, byteOffset, bytes);
         if (!registryAccepted) {
@@ -11591,7 +11636,8 @@ public:
             return;
         try {
             if (renderTapeCapture_->resourceMutationBytes(
-                    object.identity, kind, subresource, byteOffset, bytes) !=
+                    object.identity, kind, subresource, byteOffset, bytes,
+                    bufferDisposition) !=
                 dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 abortRenderTapeCapture("resource_mutation");
             }

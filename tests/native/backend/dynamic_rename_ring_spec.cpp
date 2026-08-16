@@ -29,6 +29,7 @@
 // MTLStorageModeShared), already enforced at create time in
 // `Pool::createBuffer`.
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <cstdlib>
@@ -250,6 +251,50 @@ void testNonDiscardLockSkipsRotation() {
           "non-DISCARD lock must not grow the rename ring");
   checkEq(record->renameActiveIndex, 0u,
           "non-DISCARD lock must not rotate the active slot");
+}
+
+void testDynamicNoOverwriteRangeUploadPreservesSentinels() {
+  using namespace dxmt9::core;
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, dynamicBufferDesc(256u));
+  auto* record = resourcePool.findBuffer(handle.value);
+  check(record != nullptr, "dynamic range upload record exists");
+
+  std::array<std::uint8_t, 256> backing{};
+  backing.fill(0x5au);
+  record->contents = backing.data();
+  record->renameRing[0].contents = backing.data();
+  const std::array<std::uint8_t, 96> patch = [] {
+    std::array<std::uint8_t, 96> value{};
+    value.fill(0xa5u);
+    return value;
+  }();
+
+  check(resourcePool.uploadBufferDataRange(dev, handle.value, 96u,
+                                           patch.data(), patch.size(), 0u),
+        "dynamic NOOVERWRITE range upload resolves the buffer");
+  check(std::all_of(backing.begin(), backing.begin() + 96,
+                    [](std::uint8_t value) { return value == 0x5au; }),
+        "range upload preserves the prefix sentinel");
+  check(std::equal(patch.begin(), patch.end(), backing.begin() + 96),
+        "range upload writes the requested byte range");
+  check(std::all_of(backing.begin() + 192, backing.end(),
+                    [](std::uint8_t value) { return value == 0x5au; }),
+        "range upload preserves the suffix sentinel");
+  check(std::equal(patch.begin(), patch.end(), record->shadow.begin() + 96),
+        "range upload mirrors the exact range into the CPU shadow");
+
+  check(!resourcePool.uploadBufferDataRange(dev, handle.value, 255u,
+                                            patch.data(), patch.size(), 0u),
+        "range upload rejects an overflowing extent");
+  check(std::all_of(backing.begin(), backing.begin() + 96,
+                    [](std::uint8_t value) { return value == 0x5au; }),
+        "rejected range upload leaves the prefix untouched");
+  check(std::all_of(backing.begin() + 192, backing.end(),
+                    [](std::uint8_t value) { return value == 0x5au; }),
+        "rejected range upload leaves the suffix untouched");
 }
 
 void testConcreteSnapshotMarkProtectsRotatedBacking() {
@@ -675,6 +720,7 @@ int main() {
     testDiscardReusesIdleEntryAcrossRing();
     testRingNeverShrinksOnSubsequentDiscards();
     testNonDiscardLockSkipsRotation();
+    testDynamicNoOverwriteRangeUploadPreservesSentinels();
     testConcreteSnapshotMarkProtectsRotatedBacking();
     testChunkAdmissionCaptureSurvivesLaterRename();
     testRawCaptureLeasePreventsCompletedBackingReuse();

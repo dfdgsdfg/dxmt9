@@ -1924,6 +1924,62 @@ void testManagedPartialBufferLockUploadsFullCpuShadow() {
   checkEq(d3d->Release(), 0u, "MANAGED partial-lock factory release");
 }
 
+void testDynamicNoOverwriteBufferLockUploadsExactRange() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for dynamic NOOVERWRITE buffer");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for dynamic NOOVERWRITE buffer");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    // D3DUSAGE_DYNAMIC == 0x200, D3DLOCK_NOOVERWRITE == 0x1000.
+    auto* buffer = dxmt9c_device_create_vertex_buffer(&cDevice, 256, 0x200u, 0, 0u);
+    check(buffer != nullptr, "create dynamic NOOVERWRITE buffer");
+
+    void* data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 256, &data, 0), D3D_OK,
+            "initial dynamic full lock");
+    std::memset(data, 0x5a, 256);
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "initial dynamic full unlock");
+    checkEq(backend->bufferUploads.size(), size_t{1},
+            "initial dynamic lock uses full upload");
+
+    data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 96, 96, &data, 0x1000u), D3D_OK,
+            "dynamic NOOVERWRITE range lock");
+    std::memset(data, 0xa5, 96);
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "dynamic NOOVERWRITE range unlock");
+    checkEq(backend->bufferUploads.size(), size_t{1},
+            "NOOVERWRITE does not enqueue a full-shadow upload");
+    checkEq(backend->bufferRangeUploads.size(), size_t{1},
+            "NOOVERWRITE enqueues one range upload");
+    const auto& range = backend->bufferRangeUploads.back();
+    checkEq(range.offset, std::uint64_t{96},
+            "NOOVERWRITE preserves the lock offset");
+    checkEq(range.bytes.size(), size_t{96},
+            "NOOVERWRITE preserves the lock size");
+    check(std::all_of(range.bytes.begin(), range.bytes.end(),
+                      [](std::uint8_t value) { return value == 0xa5u; }),
+          "NOOVERWRITE range upload carries only the changed bytes");
+
+    checkEq(dxmt9c_buffer_release(buffer), 0u,
+            "release dynamic NOOVERWRITE buffer");
+  }
+  checkEq(device->Release(), 0u, "release dynamic NOOVERWRITE device");
+  checkEq(d3d->Release(), 0u, "release dynamic NOOVERWRITE factory");
+}
+
 void testPeBufferReadonlyCacheRangeAndGeneration() {
   D3D9PeBufferReadonlyCache cache;
   const std::array<uint8_t, 8> initial{0, 1, 2, 3, 4, 5, 6, 7};
@@ -2089,6 +2145,7 @@ int main() {
     testZeroSizeBufferLockUsesTailRange();
     testBufferLockSuccessGateClearsFailedClassification();
     testManagedPartialBufferLockUploadsFullCpuShadow();
+    testDynamicNoOverwriteBufferLockUploadsExactRange();
     testPeBufferReadonlyCacheRangeAndGeneration();
     testPeDecimatedScopeStats();
   } catch (const TestFailure& error) {

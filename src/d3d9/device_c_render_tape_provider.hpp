@@ -17,6 +17,21 @@ struct RenderTapeProviderBlob {
   std::span<const std::byte> bytes{};
 };
 
+struct RenderTapeBufferMutationReplayPlan {
+  std::uint32_t byteOffset = 0u;
+  std::uint32_t byteSize = 0u;
+  std::uint32_t lockFlags = 0u;
+};
+
+// Pure provider-side conversion used by both replay paths. It keeps the
+// Windows D3D9 lock constants out of the unix ABI while pinning exact range
+// narrowing and lock-disposition semantics for native tests.
+std::uint32_t renderTapeBufferMutationLockFlags(
+    RenderTapeBufferMutationDisposition disposition) noexcept;
+bool renderTapeBufferMutationReplayPlan(
+    const RenderTapeResourceMutationHeader& mutation,
+    RenderTapeBufferMutationReplayPlan& out) noexcept;
+
 enum class FrameTapeReplayStatus : std::uint8_t {
   Complete,
   InvalidTape,
@@ -48,6 +63,9 @@ struct FrameTapeValidityEvidence {
   std::uint32_t maxRgbDelta = 0u;
   RenderTapeDigest expectedOutputDigest{};
   RenderTapeDigest outputDigest{};
+  bool sourceReadback = false;
+  std::uint64_t sourceBytes = 0u;
+  RenderTapeDigest sourceDigest{};
 };
 
 struct FrameTapeReplayRequirements {
@@ -117,6 +135,9 @@ struct FrameTapeReplayResult {
   // offscreen Present readback. Production rendering never constructs this
   // result type, and callers that only need the digest may ignore the bytes.
   std::vector<std::byte> outputPixels{};
+  // Cold replay-harness artifact: source backbuffer bytes immediately after
+  // the Present command drained. This is never a replay input.
+  std::vector<std::byte> sourcePixels{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;
@@ -169,6 +190,15 @@ FrameTapeReplayResult replayRenderTapeIdentity(
 bool applyRenderTapePixelOracleEnvelope(
     FrameTapeReplayResult& result,
     std::span<const std::byte> expectedPixels) noexcept;
+
+// Source-oracle relaxation is permitted only when it is byte-for-byte the
+// same comparison as an already authenticated and accepted output envelope.
+bool renderTapeSourceOracleMatchesOutputEvidence(
+    std::span<const std::byte> expectedSource,
+    std::span<const std::byte> actualSource,
+    std::span<const std::byte> expectedOutput,
+    std::span<const std::byte> actualOutput,
+    bool outputPixelEnvelopeMatched) noexcept;
 
 const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept;
 

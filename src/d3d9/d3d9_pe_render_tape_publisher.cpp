@@ -217,7 +217,8 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view eventDigest,
                         std::span<const std::string> blobDigests,
                         std::string_view identityDigest,
-                        std::string_view outputOracleDigest) {
+                        std::string_view outputOracleDigest,
+                        std::string_view sourceOracleDigest) {
   const auto profile = sealedProfile(bundle.events);
   std::ostringstream manifest;
   manifest << "{\n"
@@ -254,11 +255,18 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
              << bundle.outputOracle.size() << ",\"sha256\":\""
              << outputOracleDigest << "\"}";
   }
+  if (!bundle.sourceOracle.empty()) {
+    manifest << ",\n    \"source_oracle\":{\"path\":\"source.rgba\",\"bytes\":"
+             << bundle.sourceOracle.size() << ",\"sha256\":\""
+             << sourceOracleDigest << "\"}";
+  }
   manifest << "\n  },\n"
            << "  \"scope\":{\"production_capture\":true,"
               "\"production_provider_replay\":false,"
               "\"output_oracle\":"
-           << (!bundle.outputOracle.empty() ? "true" : "false") << "}\n"
+           << (!bundle.outputOracle.empty() ? "true" : "false")
+           << ",\"source_oracle\":"
+           << (!bundle.sourceOracle.empty() ? "true" : "false") << "}\n"
            << "}\n";
   return manifest.str();
 }
@@ -338,6 +346,9 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     const auto outputOracleDigest = bundle.outputOracle.empty()
         ? std::string{}
         : hexDigest(RenderTapeCaptureSession::sha256(bundle.outputOracle));
+    const auto sourceOracleDigest = bundle.sourceOracle.empty()
+        ? std::string{}
+        : hexDigest(RenderTapeCaptureSession::sha256(bundle.sourceOracle));
 
     const auto finalPath = root / std::filesystem::path(std::string(frameName));
     if (!existingPathIsSafeDirectory(finalPath)) {
@@ -377,6 +388,10 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
         !writeBytes(stagingPath / "output.rgba", bundle.outputOracle)) {
       return fail("output_oracle_write_or_sync");
     }
+    if (!bundle.sourceOracle.empty() &&
+        !writeBytes(stagingPath / "source.rgba", bundle.sourceOracle)) {
+      return fail("source_oracle_write_or_sync");
+    }
     if (!bundle.identity.empty()) {
       dxmt9::d3d9::RenderTapeBlobCatalogue catalogue;
       for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
@@ -393,7 +408,8 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
       }
     }
     const auto manifest = manifestFor(
-        bundle, eventDigest, blobDigests, identityDigest, outputOracleDigest);
+        bundle, eventDigest, blobDigests, identityDigest, outputOracleDigest,
+        sourceOracleDigest);
     if (!writeText(stagingPath / "manifest.json", manifest)) {
       return fail("manifest_write_or_sync");
     }

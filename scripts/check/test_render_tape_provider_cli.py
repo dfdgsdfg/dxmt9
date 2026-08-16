@@ -77,6 +77,7 @@ def main() -> int:
             "output_oracle": True,
             "production_capture": False,
             "production_provider_replay": True,
+            "source_oracle": False,
         }
 
         parallel_source = root_path / "parallel-source"

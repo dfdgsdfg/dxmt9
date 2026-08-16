@@ -898,6 +898,24 @@ typedef struct D9CRenderTapePresentCaptureResult {
     uint8_t sha256[32];
 } D9CRenderTapePresentCaptureResult;
 
+/* Capture-only source-before-Present result. The source is the retained
+ * swap-chain backbuffer that fed the captured Present, read back after the
+ * Present has drained. Bytes are tightly packed at the source extent. */
+typedef enum D9CRenderTapePresentSourceCaptureStatus {
+    D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_NONE = 0,
+    D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_COMPLETE = 1,
+    D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_FAILED = 2,
+} D9CRenderTapePresentSourceCaptureStatus;
+
+typedef struct D9CRenderTapePresentSourceCaptureResult {
+    uint32_t status;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint64_t byteCount;
+    uint8_t sha256[32];
+} D9CRenderTapePresentSourceCaptureResult;
+
 /* Capture-only, synchronous D24X8 arm-boundary snapshot. The output pointer
  * is a top-level bridge argument (never nested inside D9CWireHandle) and the
  * unix provider validates capacity before copying. Encoding version 1 is
@@ -1112,6 +1130,10 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommand
 DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
     D9CDevice*, D9CRenderTapePresentCaptureResult* out, void* bytes,
+    uint64_t capacity);
+DXMT9_NODISCARD int32_t
+dxmt9c_device_finish_render_tape_present_source_capture(
+    D9CDevice*, D9CRenderTapePresentSourceCaptureResult* out, void* bytes,
     uint64_t capacity);
 DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture(
     D9CDevice*, uint64_t captureToken,

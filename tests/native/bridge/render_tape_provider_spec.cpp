@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -2447,36 +2448,47 @@ void pixelOracleEnvelopeIsNarrowAndDigestAuthenticated() {
   };
 
   auto adjacent = expected;
-  adjacent[0] = std::byte{0x42};
+  adjacent[0] = std::byte{0x43};
   auto accepted = mismatch(adjacent);
   check(applyRenderTapePixelOracleEnvelope(accepted, expected) &&
             accepted.complete() &&
             !accepted.validity.expectedDigestMatched &&
             accepted.validity.expectedPixelsCompared &&
             accepted.validity.pixelEnvelopeMatched &&
-            accepted.validity.allowedDifferingPixels == 64u &&
+            accepted.validity.allowedDifferingPixels == 96u &&
             accepted.validity.differingPixels == 1u &&
-            accepted.validity.maxRgbDelta == 2u &&
-            accepted.validity.totalRgbDelta == 2u &&
+            accepted.validity.maxRgbDelta == 3u &&
+            accepted.validity.totalRgbDelta == 3u &&
             accepted.validity.differingAlphaPixels == 0u,
-        "one adjacent RGB quantization pixel is accepted with exact evidence");
+        "one bounded RGB quantization pixel is accepted with exact evidence");
 
   auto tooMany = adjacent;
-  for (std::size_t pixel = 0u; pixel < 65u; ++pixel) {
+  for (std::size_t pixel = 0u; pixel < 97u; ++pixel) {
     tooMany[pixel * 4u] = std::byte{0x41};
   }
   auto rejectedCount = mismatch(tooMany);
   check(!applyRenderTapePixelOracleEnvelope(rejectedCount, expected) &&
             rejectedCount.status == FrameTapeReplayStatus::OutputMismatch &&
-            rejectedCount.validity.differingPixels == 65u,
-        "pixel envelope rejects the 65th differing pixel");
+            rejectedCount.validity.differingPixels == 97u,
+        "pixel envelope rejects the 97th differing pixel");
 
-  auto deltaThree = expected;
-  deltaThree[0] = std::byte{0x43};
-  auto rejectedDelta = mismatch(deltaThree);
+  auto excessiveAggregate = expected;
+  for (std::size_t pixel = 0u; pixel < 96u; ++pixel) {
+    excessiveAggregate[pixel * 4u] = std::byte{0x43};
+  }
+  auto rejectedAggregate = mismatch(excessiveAggregate);
+  check(!applyRenderTapePixelOracleEnvelope(rejectedAggregate, expected) &&
+            rejectedAggregate.validity.differingPixels == 96u &&
+            rejectedAggregate.validity.maxRgbDelta == 3u &&
+            rejectedAggregate.validity.totalRgbDelta == 288u,
+        "pixel envelope rejects excessive aggregate RGB drift");
+
+  auto deltaFour = expected;
+  deltaFour[0] = std::byte{0x44};
+  auto rejectedDelta = mismatch(deltaFour);
   check(!applyRenderTapePixelOracleEnvelope(rejectedDelta, expected) &&
-            rejectedDelta.validity.maxRgbDelta == 3u,
-        "pixel envelope rejects RGB delta three");
+            rejectedDelta.validity.maxRgbDelta == 4u,
+        "pixel envelope rejects RGB delta four");
 
   auto alpha = expected;
   alpha[3] = std::byte{0xfe};
@@ -2502,6 +2514,27 @@ void pixelOracleEnvelopeIsNarrowAndDigestAuthenticated() {
   check(!applyRenderTapePixelOracleEnvelope(brokenConservation, expected) &&
             !brokenConservation.validity.expectedPixelsCompared,
         "pixel envelope cannot rescue object conservation mismatch");
+
+  check(renderTapeSourceOracleMatchesOutputEvidence(
+            expected, expected, {}, {}, false),
+        "an exact source oracle remains strict evidence");
+  check(renderTapeSourceOracleMatchesOutputEvidence(
+            expected, adjacent, expected, adjacent,
+            accepted.validity.pixelEnvelopeMatched),
+        "an authenticated output envelope transfers only across exact source/output equivalence");
+  check(!renderTapeSourceOracleMatchesOutputEvidence(
+            expected, adjacent, expected, adjacent, false),
+        "source mismatch cannot relax without an accepted output envelope");
+  auto differentExpectedSource = expected;
+  differentExpectedSource[4] = std::byte{0x41};
+  check(!renderTapeSourceOracleMatchesOutputEvidence(
+            differentExpectedSource, adjacent, expected, adjacent, true),
+        "different captured source/output domains cannot share an envelope");
+  auto differentActualSource = adjacent;
+  differentActualSource[4] = std::byte{0x41};
+  check(!renderTapeSourceOracleMatchesOutputEvidence(
+            expected, differentActualSource, expected, adjacent, true),
+        "different replay source/output domains cannot share an envelope");
 }
 
 void standaloneD24X8SeedIsCreatedBeforeReplayAndConserved() {
@@ -2667,6 +2700,60 @@ void colorSnapshotCapturesExact2DAndAllCubeFaces() {
       device, 16u, 16u, 1u, 1u, 22u, 0u);
   exercise(texture2d, 22u, 3u, 1u);
   dxmt9c_texture_release(texture2d);
+
+  // GT2's atlas is a single-level MANAGED shader texture, not a render
+  // target. The arm snapshot must read the GPU-visible bytes and preserve the
+  // meaningful alpha byte rather than reusing a divergent PE seed.
+  auto* managedTexture = dxmt9c_device_create_texture(
+      device, 128u, 32u, 1u, 0u, 21u, 1u);
+  check(managedTexture != nullptr,
+        "managed atlas snapshot texture must construct");
+  D9CWireObjectIdentity managedIdentity{};
+  check(dxmt9c_texture_get_wire_identity(managedTexture, &managedIdentity) ==
+            dxmt9::core::D3D_OK,
+        "managed atlas exposes exact wire identity");
+  auto* managedFace = dxmt9c_texture_get_surface_level(managedTexture, 0u);
+  constexpr std::uint32_t managedColor = 0x7f406080u;
+  check(managedFace != nullptr &&
+            dxmt9c_device_color_fill(device, managedFace, nullptr,
+                                     managedColor) == dxmt9::core::D3D_OK,
+        "managed atlas receives a nontrivial GPU fill");
+  dxmt9c_surface_release(managedFace);
+  std::vector<std::byte> managedExpected(128u * 32u * 4u);
+  for (std::size_t offset = 0u; offset < managedExpected.size(); offset += 4u)
+    std::memcpy(managedExpected.data() + offset, &managedColor,
+                sizeof(managedColor));
+  std::vector<std::byte> managedPeSeed(managedExpected.size(),
+                                       std::byte{0x11u});
+  D9CRenderTapeColorSnapshotRequest managedRequest{
+      .identity = managedIdentity,
+      .surface = D9CSurfaceDesc{
+          .format = 21u,
+          .resourceType = 3u,
+          .usage = 0u,
+          .pool = 1u,
+          .multiSampleType = 0u,
+          .multiSampleQuality = 0u,
+          .width = 128u,
+          .height = 32u,
+          .depth = 1u,
+      },
+      .subresource = 0u,
+      .encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+  };
+  D9CRenderTapeColorSnapshotResult managedResult{};
+  const auto managedHr = dxmt9c_device_capture_render_tape_color_snapshot(
+      device, &managedRequest, &managedResult, managedPeSeed.data(),
+      managedPeSeed.size());
+  check(managedHr == dxmt9::core::D3D_OK &&
+            managedResult.status ==
+                D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE &&
+            managedResult.format == 21u &&
+            managedResult.byteCount == managedPeSeed.size() &&
+            managedPeSeed == managedExpected &&
+            managedPeSeed[3] == std::byte{0x7fu},
+        "managed arm snapshot overrides divergent PE seed and preserves alpha");
+  dxmt9c_texture_release(managedTexture);
 
   auto* standalone = dxmt9c_device_create_render_target(
       device, 16u, 16u, 22u, 0u, 0u, 0u, nullptr);
@@ -2985,6 +3072,56 @@ void eventLevelMutationDrainOrderingIsPinned() {
         "mutation and retirement after submitted command work require a drain");
 }
 
+void bufferMutationReplayPlanPinsLockFlagsAndOffset() {
+  constexpr D9CWireObjectIdentity buffer{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+      .generation = 2u,
+      .objectId = 0x7100u,
+  };
+  RenderTapeResourceMutationHeader mutation{
+      .identity = buffer,
+      .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::CpuUnlock),
+      .subresource = 0u,
+      .byteOffset = 16u,
+      .byteSize = 32u,
+  };
+  RenderTapeBufferMutationReplayPlan plan{};
+  check(renderTapeBufferMutationReplayPlan(mutation, plan) &&
+            plan.byteOffset == 16u && plan.byteSize == 32u &&
+            plan.lockFlags == 0u,
+        "plain buffer replay must preserve the exact byte range");
+
+  mutation.bufferDisposition = static_cast<std::uint32_t>(
+      RenderTapeBufferMutationDisposition::NoOverwrite);
+  check(renderTapeBufferMutationReplayPlan(mutation, plan) &&
+            plan.byteOffset == 16u && plan.byteSize == 32u &&
+            plan.lockFlags == 0x1000u,
+        "NoOverwrite replay must preserve offset and lock flag");
+
+  mutation.byteOffset = 0u;
+  mutation.bufferDisposition = static_cast<std::uint32_t>(
+      RenderTapeBufferMutationDisposition::Discard);
+  check(renderTapeBufferMutationReplayPlan(mutation, plan) &&
+            plan.byteOffset == 0u && plan.byteSize == 32u &&
+            plan.lockFlags == 0x2000u,
+        "Discard replay must select the dynamic backing disposition");
+
+  mutation.bufferDisposition = 99u;
+  check(!renderTapeBufferMutationReplayPlan(mutation, plan),
+        "unknown buffer disposition must not reach provider effects");
+  mutation.bufferDisposition = static_cast<std::uint32_t>(
+      RenderTapeBufferMutationDisposition::Plain);
+  mutation.byteOffset = std::numeric_limits<std::uint64_t>::max();
+  check(!renderTapeBufferMutationReplayPlan(mutation, plan),
+        "unrepresentable buffer offset must fail closed");
+
+  mutation.byteOffset = 16u;
+  mutation.kind =
+      static_cast<std::uint32_t>(RenderTapeMutationKind::Palette);
+  check(!renderTapeBufferMutationReplayPlan(mutation, plan),
+        "non-upload/unlock mutation must not reach buffer lock replay");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3010,6 +3147,7 @@ int main(int argc, char** argv) {
           "[--test-event-ordering|--write-production-fixture dir|"
           "--write-sequence-fixture dir|--write-parallel-fixture dir]");
     eventLevelMutationDrainOrderingIsPinned();
+    bufferMutationReplayPlanPinsLockFlagsAndOffset();
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
     colorSnapshotCapturesExact2DAndAllCubeFaces();
     colorCompleteSeedsReplayAllSubresourcesAndConserve();

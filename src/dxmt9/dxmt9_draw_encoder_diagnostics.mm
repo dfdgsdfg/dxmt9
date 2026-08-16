@@ -869,6 +869,7 @@ struct DrawTextureDumpConfig {
   std::optional<u64> texture0Height;
   std::optional<u64> texture0Format;
   std::optional<u64> seq;
+  std::optional<u64> seqMin;
   std::optional<u64> enc;
   std::string dir;
 };
@@ -885,6 +886,7 @@ const DrawTextureDumpConfig& drawTextureDumpConfig() {
     result.texture0Height = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE0_HEIGHT");
     result.texture0Format = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE0_FORMAT");
     result.seq = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_SEQ");
+    result.seqMin = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_SEQ_MIN");
     result.enc = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_ENC");
     result.dir = getenvStringLocal("DXMT9_DUMP_DRAW_TEXTURE_DIR");
     result.enabled = (!result.handles.empty() ||
@@ -1230,6 +1232,9 @@ bool drawTextureDumpPassMatches(u64 seq, u64 enc) {
     return false;
   }
   if (config.seq.has_value() && *config.seq != seq) {
+    return false;
+  }
+  if (config.seqMin.has_value() && seq < *config.seqMin) {
     return false;
   }
   if (config.enc.has_value() && *config.enc != enc) {

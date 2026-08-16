@@ -684,11 +684,11 @@ inline bool renderTapeLoadTextureDescriptorV2(
   return true;
 }
 
-// Arm-boundary GPU snapshots deliberately support only the two exact shapes
-// observed in GT2. Both are single-sample DEFAULT-pool render targets with a
-// four-byte uncompressed logical pixel. This policy is shared by PE capture,
+// Arm-boundary GPU snapshots deliberately support only the exact shapes
+// observed in GT2: the existing DEFAULT-pool render-target shapes plus the
+// single MANAGED shader texture atlas. This policy is shared by PE capture,
 // unix readback, validation, and provider replay so CompleteSeed cannot widen
-// accidentally to arbitrary render-target textures.
+// accidentally to arbitrary textures.
 inline bool renderTapeArmColorSnapshotTextureSupported(
     std::span<const std::byte> descriptor) noexcept {
   RenderTapeTextureDescriptorV2 texture{};
@@ -712,10 +712,19 @@ inline bool renderTapeArmColorSnapshotTextureSupported(
     if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource,
                                                 surface) ||
         surface.resourceType != (cube ? 5u : 3u) || surface.width == 0u ||
-        surface.height == 0u || surface.depth != 1u || surface.pool != 0u ||
-        surface.usage != 1u || surface.multiSampleType != 0u ||
-        surface.multiSampleQuality != 0u ||
-        surface.format != (cube ? 114u : 22u)) {
+        surface.height == 0u || surface.depth != 1u ||
+        surface.multiSampleType != 0u || surface.multiSampleQuality != 0u) {
+      return false;
+    }
+    const bool defaultRenderTarget =
+        !cube && surface.pool == 0u && surface.usage == 1u &&
+        surface.format == 22u;
+    const bool managedShaderTexture =
+        !cube && surface.pool == 1u && surface.usage == 0u &&
+        surface.format == 21u;
+    const bool cubeFace = cube && surface.pool == 0u && surface.usage == 1u &&
+                          surface.format == 114u;
+    if (!defaultRenderTarget && !managedShaderTexture && !cubeFace) {
       return false;
     }
   }

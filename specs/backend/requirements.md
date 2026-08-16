@@ -625,6 +625,18 @@ buffer retains a monotonic aggregate last-used watermark so destruction cannot
 release any version still referenced by queued or in-flight work. Read-only
 locks do not rotate or upload a backing.
 
+**R-BACK-5.12** A successful `D3DPOOL_DEFAULT | D3DUSAGE_DYNAMIC` lock carrying
+`D3DLOCK_NOOVERWRITE` must publish only its successful `(offset, size)` byte
+range at unlock. The CPU shadow remains complete, but the backend upload must
+not copy unrelated shadow bytes into the active Metal backing: those bytes may
+still be read by in-flight draws. Range arithmetic is overflow-safe and rejects
+an out-of-bounds publication before touching either shadow or Metal contents.
+`DISCARD`, plain writable locks, and `D3DPOOL_MANAGED` retain their existing
+full-shadow upload contracts. The production path is implemented by the
+`core::Buffer` lock metadata → `Device::uploadBufferDataRange` →
+`Pool::uploadBufferDataRange` seam; the bounded `NoOverwriteByteRange.tla`
+model and native range/sentinel specs are required evidence.
+
 ---
 
 ## 6. Presentation

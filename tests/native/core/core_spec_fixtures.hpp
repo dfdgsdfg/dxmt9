@@ -130,6 +130,12 @@ struct TextureUploadRecord {
   std::vector<u8> bytes;
 };
 
+struct BufferRangeUploadRecord {
+  BufferHandle handle{};
+  u64 offset = 0;
+  std::vector<u8> bytes;
+};
+
 struct TextureSurfaceRecord {
   TextureHandle texture{};
   u32 subresource = 0;
@@ -505,6 +511,18 @@ struct RecordingBackend final : BackendDevice {
     bufferUploads.push_back({handle, std::vector<u8>(bytes.begin(), bytes.end())});
   }
 
+  void uploadBufferDataRange(BufferHandle handle,
+                             std::span<const u8> fullBytes,
+                             u64 offset,
+                             u64 byteCount) override {
+    check(offset <= fullBytes.size() && byteCount <= fullBytes.size() - offset,
+          "range upload recorder receives a bounded range");
+    bufferRangeUploads.push_back(
+        {handle, offset,
+         std::vector<u8>(fullBytes.begin() + static_cast<size_t>(offset),
+                         fullBytes.begin() + static_cast<size_t>(offset + byteCount))});
+  }
+
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height,
                           u32 depth, u32 pitch, u32 slicePitch,
                           std::span<const u8> bytes) override {
@@ -612,6 +630,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<std::pair<BufferHandle, u32>> mappedBuffers;
   std::vector<BufferHandle> unmappedBuffers;
   std::vector<std::pair<BufferHandle, std::vector<u8>>> bufferUploads;
+  std::vector<BufferRangeUploadRecord> bufferRangeUploads;
   std::vector<TextureUploadRecord> textureUploads;
   std::vector<RecordedDrawRun> drawRuns;
   std::vector<RecordedDraw> draws;

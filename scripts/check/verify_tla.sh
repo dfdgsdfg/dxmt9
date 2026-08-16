@@ -38,3 +38,29 @@ for spec in "$tla_dir"/*.tla; do
   rm -rf "$metadir"
   unset metadir
 done
+
+# The NOOVERWRITE model also carries a deliberately buggy full-shadow
+# transition. Keep its counterexample executable: a future change that makes
+# the buggy configuration green means the model no longer distinguishes the
+# regression, while a production configuration failure is still handled above.
+counterexample_cfg="$tla_dir/NoOverwriteByteRange.counterexample.cfg"
+counterexample_spec="$tla_dir/NoOverwriteByteRange.tla"
+if [[ -f "$counterexample_cfg" ]]; then
+  metadir="$(mktemp -d)"
+  counterexample_log="$metadir/tlc.log"
+  set +e
+  "${tlc_cmd[@]}" -workers auto -metadir "$metadir" \
+    -config "$counterexample_cfg" "$counterexample_spec" >"$counterexample_log" 2>&1
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]] ||
+     ! grep -q "Invariant NoOverwriteReadPreserved is violated" "$counterexample_log"; then
+    cat "$counterexample_log"
+    echo "expected NoOverwriteByteRange counterexample was not observed" >&2
+    exit 1
+  fi
+  echo "=== NoOverwriteByteRange.counterexample.cfg (expected failure) ==="
+  echo "expected invariant counterexample observed"
+  rm -rf "$metadir"
+  unset metadir
+fi

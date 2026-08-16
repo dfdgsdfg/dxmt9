@@ -148,6 +148,10 @@ class PresentMirrorTicket;
 }
 
 struct D9CRenderTapePresentCaptureLease {
+  // Retained independently of the mirror: the Present mirror proves the
+  // post-compositor output, while this source is the exact backbuffer fed to
+  // Present. Both are read only after the current Present drains.
+  std::shared_ptr<dxmt9::core::Surface> source;
   std::shared_ptr<dxmt9::core::Surface> mirror;
   std::shared_ptr<dxmt9::PresentMirrorTicket> ticket;
   uint32_t width = 0u;

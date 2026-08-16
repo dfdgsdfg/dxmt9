@@ -368,6 +368,11 @@ bool knownMutationKind(std::uint32_t value) noexcept {
              static_cast<std::uint32_t>(RenderTapeMutationKind::MipmapClass);
 }
 
+bool knownBufferMutationDisposition(std::uint32_t value) noexcept {
+  return value <= static_cast<std::uint32_t>(
+                       RenderTapeBufferMutationDisposition::Discard);
+}
+
 bool mutationCapableIdentity(const D9CWireObjectIdentity& identity) noexcept {
   return identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE ||
          identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE ||
@@ -1456,7 +1461,13 @@ validateRenderTape(std::span<const std::byte> blob,
       RenderTapeResourceMutationHeader fixed{};
       if (!load(event.payload, 0u, fixed) || !validIdentity(fixed.identity) ||
           !mutationCapableIdentity(fixed.identity) ||
-          !knownMutationKind(fixed.kind) || fixed.reserved0 != 0u ||
+          !knownMutationKind(fixed.kind) ||
+          !knownBufferMutationDisposition(fixed.bufferDisposition) ||
+          (fixed.bufferDisposition != static_cast<std::uint32_t>(
+                                          RenderTapeBufferMutationDisposition::Plain) &&
+           (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER ||
+            fixed.kind != static_cast<std::uint32_t>(
+                              RenderTapeMutationKind::CpuUnlock))) ||
           event.payload.size() != sizeof(fixed)) {
         return failure(RenderTapeValidationStatus::InvalidMutationKind, i);
       }
@@ -2484,11 +2495,13 @@ void RenderTapeBuilder::appendObjectDestroy(
 void RenderTapeBuilder::appendResourceMutation(
     const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
     std::uint32_t subresource, std::uint64_t byteOffset, std::uint64_t byteSize,
-    std::span<const std::byte, kRenderTapeDigestSize> digest) {
+    std::span<const std::byte, kRenderTapeDigestSize> digest,
+    RenderTapeBufferMutationDisposition bufferDisposition) {
   RenderTapeResourceMutationHeader fixed{
       .identity = identity,
       .kind = static_cast<std::uint32_t>(kind),
       .subresource = subresource,
+      .bufferDisposition = static_cast<std::uint32_t>(bufferDisposition),
       .byteOffset = byteOffset,
       .byteSize = byteSize,
       .digest = {},
@@ -2776,6 +2789,21 @@ const char* renderTapeReductionStatusName(
     return "allocation-failed";
   }
   return "unknown";
+}
+
+bool renderTapeCanonicalizeOpaqueAlpha(
+    std::uint32_t d3dFormat, std::span<std::byte> pixels) noexcept {
+  constexpr std::uint32_t kD3dFormatX8R8G8B8 = 22u;
+  if (d3dFormat != kD3dFormatX8R8G8B8) {
+    return true;
+  }
+  if ((pixels.size() & 3u) != 0u) {
+    return false;
+  }
+  for (std::size_t index = 3u; index < pixels.size(); index += 4u) {
+    pixels[index] = std::byte{0xffu};
+  }
+  return true;
 }
 
 } // namespace dxmt9::d3d9

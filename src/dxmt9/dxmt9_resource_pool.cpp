@@ -1440,6 +1440,46 @@ bool Pool::uploadBufferData(WMT::Device device,
   });
 }
 
+bool Pool::uploadBufferDataRange(WMT::Device device,
+                                 u64 handleValue,
+                                 u64 offset,
+                                 const std::uint8_t* bytes,
+                                 std::size_t byteCount,
+                                 u64 completedSeqId) {
+  (void)device;
+  (void)completedSeqId;
+  bool accepted = false;
+  const bool found = bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    // This entry point is intentionally narrow. A range upload is valid only
+    // for the D3D9 DEFAULT+DYNAMIC ring whose NOOVERWRITE contract keeps the
+    // application-provided range disjoint from in-flight reads. DISCARD,
+    // MANAGED, and plain locks retain the full-shadow path above.
+    if (record.desc.pool != core::Pool::Default ||
+        (record.desc.usage & core::UsageDynamic) == 0u ||
+        record.desc.size > std::numeric_limits<std::size_t>::max() ||
+        offset > record.desc.size ||
+        byteCount > static_cast<std::size_t>(record.desc.size - offset) ||
+        (byteCount != 0u && bytes == nullptr)) {
+      return;
+    }
+    accepted = true;
+    const auto rangeOffset = static_cast<std::size_t>(offset);
+    ++record.contentRevision;
+    if (record.shadow.size() != static_cast<std::size_t>(record.desc.size)) {
+      record.shadow.resize(static_cast<std::size_t>(record.desc.size));
+    }
+    if (byteCount == 0u) {
+      return;
+    }
+    std::memcpy(record.shadow.data() + rangeOffset, bytes, byteCount);
+    if (record.contents) {
+      auto* contents = static_cast<std::uint8_t*>(record.contents);
+      std::memcpy(contents + rangeOffset, bytes, byteCount);
+    }
+  });
+  return found && accepted;
+}
+
 void* Pool::finalizeBufferMap(WMT::Device device,
                               core::BufferHandle handle,
                               u32 flags,

@@ -141,6 +141,8 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
   auto value = bundle();
   value.outputOracle = {
       std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0xff}};
+  value.sourceOracle = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40}};
   check(dxmt9PePublishRenderTapeBundle(value, root.string(), "frame-test"),
         "publisher commits a complete bundle");
   const auto frame = root / "frame-test";
@@ -150,6 +152,8 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
         "publisher commits manifest");
   check(std::filesystem::is_regular_file(frame / "output.rgba"),
         "publisher commits the authoritative output sidecar");
+  check(std::filesystem::is_regular_file(frame / "source.rgba"),
+        "publisher commits the source-before-Present sidecar");
   check(std::filesystem::is_directory(frame / "blobs"),
         "publisher commits blob directory");
   std::size_t blobFiles = 0u;
@@ -166,11 +170,14 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
   const auto blobDigest = digestText(value.blobs[0].digest);
   const auto outputDigest = digestText(
       RenderTapeCaptureSession::sha256(value.outputOracle));
+  const auto sourceDigest = digestText(
+      RenderTapeCaptureSession::sha256(value.sourceOracle));
   check(readBytes(frame / "events.bin") == value.events &&
             readBytes(frame / "blobs" / (blobDigest + ".bin")) ==
                 value.blobs[0].bytes &&
-            readBytes(frame / "output.rgba") == value.outputOracle,
-        "publisher preserves event, blob, and output bytes");
+            readBytes(frame / "output.rgba") == value.outputOracle &&
+            readBytes(frame / "source.rgba") == value.sourceOracle,
+        "publisher preserves event, blob, output, and source bytes");
   check(manifest.find("dxmt9.render_tape.bundle.v2") != std::string::npos &&
             manifest.find("\"production_capture\":true") !=
                 std::string::npos && manifest.find(eventDigest) !=
@@ -181,6 +188,10 @@ void testTransactionalSuccessAndCollision(const std::filesystem::path& root) {
                 std::string::npos &&
             manifest.find("output.rgba") != std::string::npos &&
             manifest.find(outputDigest) != std::string::npos &&
+            manifest.find("\"source_oracle\":true") !=
+                std::string::npos &&
+            manifest.find("source.rgba") != std::string::npos &&
+            manifest.find(sourceDigest) != std::string::npos &&
             manifest.find("blobs/" + blobDigest + ".bin") !=
                 std::string::npos,
         "publisher manifest carries digests, paths, and scope");

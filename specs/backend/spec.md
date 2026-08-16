@@ -1310,6 +1310,27 @@ flowchart LR
 The ring is per-buffer-handle, not global, to keep rename cost local.
 Capacity grows on demand and never shrinks during a session.
 
+#### 7.2.1 `NOOVERWRITE` range publication
+
+`D3DLOCK_NOOVERWRITE` is a caller-owned non-overlap promise, not permission to
+re-upload the entire CPU shadow. `core::Buffer` retains the successful lock's
+effective offset, size, and flags until `Unlock()`. For
+`D3DPOOL_DEFAULT | D3DUSAGE_DYNAMIC`, a writable NOOVERWRITE unlock calls the
+range upload seam with exactly that byte interval; `Pool` validates
+`offset <= desc.size` and `size <= desc.size - offset` before copying to the
+CPU shadow or the active Shared Metal contents. This prevents an older shadow
+prefix/suffix from overwriting bytes still read by an in-flight draw. DISCARD,
+plain writable, and MANAGED locks continue to use their full-shadow paths.
+
+The contract is deliberately small and independently checkable: the
+`NoOverwriteByteRange` TLA+ model keeps an in-flight read set disjoint from the
+application write range, while its production configuration checks exact-range
+publication. Its companion counterexample configuration includes the previous
+full-shadow transition and is expected to violate `NoOverwriteReadPreserved`.
+Native core and pool tests bind the same predicate with a `[96,192)` write,
+untouched sentinels, overflow rejection, and full-upload regressions for the
+other lock classes.
+
 ### 7.3 `MTLHeap` Small-Resource Pooling
 
 Per `R-BACK-5.9` / §14, small textures and small non-dynamic buffers allocate

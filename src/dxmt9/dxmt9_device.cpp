@@ -272,6 +272,22 @@ class DeviceImpl final : public Device {
     queue_.pool().uploadBufferData(wmt_device_, handle.value, bytes.data(),
                                    bytes.size(), queue_.completedSeqId_);
   }
+  void uploadBufferDataRange(core::BufferHandle handle,
+                             std::span<const std::uint8_t> fullBytes,
+                             std::uint64_t offset,
+                             std::uint64_t byteCount) override {
+    if (offset > fullBytes.size() ||
+        byteCount > fullBytes.size() - static_cast<std::size_t>(offset)) {
+      return;
+    }
+    std::lock_guard lock(queue_.mutex_);
+    const auto* rangeBytes =
+        byteCount == 0u ? nullptr : fullBytes.data() + offset;
+    queue_.pool().uploadBufferDataRange(wmt_device_, handle.value, offset,
+                                        rangeBytes,
+                                        static_cast<std::size_t>(byteCount),
+                                        queue_.completedSeqId_);
+  }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
     return queue_.mapBuffer(handle, flags);
   }

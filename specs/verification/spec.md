@@ -133,6 +133,7 @@ outside this checker.
 | `backend/spec.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
 | `backend/spec.md` §5 / §7 | `tla/ResourceLifetime.tla` | `src/dxmt9/dxmt9_resource_pool.*` |
 | `backend/spec.md` §5 / R-BACK-5.11 | `tla/BufferBackingVersioning.tla` | `src/dxmt9/dxmt9_resource_pool.*`, draw binding snapshots in `src/dxmt9/dxmt9_command_queue.cpp` |
+| `backend/spec.md` §7.2.1 / R-BACK-5.12 | `tla/NoOverwriteByteRange.tla` | `core::Buffer` lock metadata, `Device::uploadBufferDataRange`, `Pool::uploadBufferDataRange`; `tests/native/core/core_device_com_spec.cpp`, `tests/native/backend/dynamic_rename_ring_spec.cpp` |
 | `backend/spec.md` §8 / §8.1 | `tla/PresentFrameLatency.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` |
 | `backend/spec.md` §6.5 (pacing independence) | `tla/ConcurrentProgressSignals.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` |
 | `backend/spec.md` §8.2 (drawable token handoff) | `tla/DrawableToken.tla` | `src/dxmt9/dxmt9_presenter.*` (PresentDrawableToken), `src/dxmt9/dxmt9_command_queue.*` (stash/take) |
@@ -196,6 +197,9 @@ specs/verification/
     ├── ResourceLifetime.cfg
     ├── BufferBackingVersioning.tla  MANAGED concrete-backing reuse lifetime
     ├── BufferBackingVersioning.cfg
+    ├── NoOverwriteByteRange.tla  DEFAULT+DYNAMIC exact NOOVERWRITE range
+    ├── NoOverwriteByteRange.cfg
+    ├── NoOverwriteByteRange.counterexample.cfg  expected invariant failure
     ├── EncoderLifecycle.tla  MTLCommandEncoder state machine
     ├── EncoderLifecycle.cfg
     ├── QuerySeqId.tla     D3D9 query seq-ID fence

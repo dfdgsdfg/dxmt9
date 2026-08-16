@@ -116,6 +116,15 @@ static void rejectRenderTapeBufferSnapshot(
   }
 }
 
+static dxmt9::d3d9::RenderTapeBufferMutationDisposition
+renderTapeBufferMutationDisposition(DWORD flags) noexcept {
+  if ((flags & D3DLOCK_DISCARD) != 0u)
+    return dxmt9::d3d9::RenderTapeBufferMutationDisposition::Discard;
+  if ((flags & D3DLOCK_NOOVERWRITE) != 0u)
+    return dxmt9::d3d9::RenderTapeBufferMutationDisposition::NoOverwrite;
+  return dxmt9::d3d9::RenderTapeBufferMutationDisposition::Plain;
+}
+
 // A partial buffer write cannot establish the bytes outside the write range.
 // Once the generation-qualified registry says this exact buffer is unseeded,
 // take one capture-only read lock over the exact D9CBuffer extent after the
@@ -124,7 +133,8 @@ static void rejectRenderTapeBufferSnapshot(
 static bool captureRenderTapeFullBufferSnapshot(
     D3D9PeRecorderFlush *recorder, D9CBuffer *buffer,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
-    const D9CBufferDesc &desc) noexcept {
+    const D9CBufferDesc &desc,
+    dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition) noexcept {
   if (!recorder || !buffer || desc.size == 0u)
     return false;
 
@@ -175,7 +185,8 @@ static bool captureRenderTapeFullBufferSnapshot(
     return false;
   }
   recorder->NotifyRenderTapeResourceMutationForChild(
-      object, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u, 0u, full);
+      object, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u, 0u, full,
+      bufferDisposition);
   return true;
 }
 
@@ -414,7 +425,9 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
     if (snapshotStatus ==
         dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
       (void)captureRenderTapeFullBufferSnapshot(recorder, buffer, wireObject,
-                                                state.desc);
+                                                state.desc,
+                                                renderTapeBufferMutationDisposition(
+                                                    state.flags));
     } else if (mutationReady && !mutationCopy.empty() &&
                snapshotStatus !=
                    dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity &&
@@ -422,8 +435,8 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
                    dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
       recorder->NotifyRenderTapeResourceMutationForChild(
           wireObject, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock, 0u,
-          state.offset,
-          mutationCopy);
+          state.offset, mutationCopy,
+          renderTapeBufferMutationDisposition(state.flags));
     }
     state.locked = false;
     state.servedFromReadonlyCache = false;

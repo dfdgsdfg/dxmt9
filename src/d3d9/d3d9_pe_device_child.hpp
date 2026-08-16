@@ -86,7 +86,9 @@ struct D3D9PeRecorderFlush {
   virtual void NotifyRenderTapeResourceMutationForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &object,
       dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
-      std::uint64_t byteOffset, std::span<const std::byte> bytes) noexcept = 0;
+      std::uint64_t byteOffset, std::span<const std::byte> bytes,
+      dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition =
+          dxmt9::d3d9::RenderTapeBufferMutationDisposition::Plain) noexcept = 0;
   virtual void NotifyRenderTapeOrderedControlForChild(
       const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
       std::span<const std::byte> payload) noexcept = 0;

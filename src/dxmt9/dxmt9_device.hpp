@@ -123,6 +123,14 @@ class Device {
   virtual void* mapBuffer(core::BufferHandle, std::uint32_t /*flags*/) { return nullptr; }
   virtual void unmapBuffer(core::BufferHandle) {}
   virtual void uploadBufferData(core::BufferHandle, std::span<const std::uint8_t>) {}
+  virtual void uploadBufferDataRange(core::BufferHandle handle,
+                                     std::span<const std::uint8_t> fullBytes,
+                                     std::uint64_t offset,
+                                     std::uint64_t byteCount) {
+    (void)offset;
+    (void)byteCount;
+    uploadBufferData(handle, fullBytes);
+  }
   virtual void uploadTextureLevel(core::TextureHandle, std::uint32_t /*level*/,
                                     std::uint32_t /*width*/, std::uint32_t /*height*/,
                                     std::uint32_t /*depth*/, std::uint32_t /*pitch*/,

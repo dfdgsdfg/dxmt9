@@ -761,6 +761,23 @@ bytes, and unavailable descriptor or bytecode data fail closed with a typed
 first capture-rejection diagnostic before publication; this metadata does not
 widen provider replay claims or alter canonical D9C v2 records or the bridge ABI.
 
+The arm snapshot is a separate capture-only authority for the bounded
+GPU-resident shapes in R-HARN-REPLAY-7.24. After the arm Present drains, the PE
+owner asks the existing unix color-snapshot bridge to resolve and retain the
+exact wire generation, drain deferred replay, flush the renderer, alias the
+requested texture subresource, and read back canonical tight bytes. The first
+managed input shape is exactly one `D3DFMT_A8R8G8B8`, `D3DPOOL_MANAGED`,
+zero-usage 2D subresource at mip level zero. Its alpha is data and remains
+unchanged. The resulting value-owned arm overlay replaces a potentially
+divergent PE seed before bootstrap closure and blob hashing; it never mutates
+the durable PE registry. Existing DEFAULT/X8 2D render-target and DEFAULT/R32F
+cube snapshots retain their narrower rules. Unsupported descriptors and every
+readback or identity failure reject capture instead of falling back to the CPU
+shadow. This path changes concrete captured resource bytes, not replay order or
+concurrency, so its evidence is the shared descriptor predicate, native Metal
+readback, and a same-run texture/source oracle rather than a new temporal
+model.
+
 The V2 payloads are now the single production representation. A texture
 payload is one `RenderTapeTextureDescriptorV2` header plus an exact tail of
 `D9CSurfaceDesc` values: one complete mip chain for 2D and volume textures and
@@ -790,7 +807,12 @@ including canonical cube or volume inputs outside the bounded provider slice,
 return the typed unsupported result only after structural V2 validation.
 
 Writable buffer/surface/texture mutations are copied before provider unlock,
-and readonly buffer locks are journaled as controls. One bounded
+and readonly buffer locks are journaled as controls. Buffer `CpuUnlock`
+mutations also retain a typed `Plain`/`NoOverwrite`/`Discard` disposition in
+the fixed v2 mutation field; zero remains the old-bundle-compatible `Plain`
+value. The provider applies the corresponding D3D9 lock flag at the recorded
+byte offset in both full replay and executable projection, while non-buffer
+mutations and unknown dispositions fail closed. One bounded
 `perf-d3d9-present-loop` production capture now closes the capture-time output
 oracle through this provider. The 2026-08-13 bundle
 `experiments/output/render-tape-oracle-final.0ZFP3y/frame-95919862787500-1`
@@ -972,7 +994,8 @@ render-tape/
 ├── events.bin          bootstrap/object/mutation/command/control/completion journal
 ├── identity.bin        optional authoritative source/pass identity component
 ├── blobs/              digest-named resource, shader, declaration payloads
-└── output.rgba         optional digest-authenticated Present output bytes
+├── output.rgba         optional digest-authenticated Present output bytes
+└── source.rgba         optional digest-authenticated pre-Present source bytes
 ```
 
 The physical container may later become one packed file, but these logical
@@ -1019,9 +1042,27 @@ The bundle manifest is the control plane for generated output. A
 SHA-256, and optionally `output.rgba` declared as
 `components.output_oracle`. Each declared component records its path, byte
 count, and SHA-256, and bundle validation rejects missing, altered, duplicate,
-or unlisted components. `output.rgba` is the tightly packed 8-bit RGBA
-capture-side oracle named by `PresentComplete`; it is not a resource blob and
-is never fed back as replay input.
+or unlisted components. `output.rgba` is the tightly packed canonical 8-bit
+RGBA capture-side oracle named by `PresentComplete`; formats without
+application-visible alpha, currently `D3DFMT_X8R8G8B8`, normalize alpha to
+opaque before hashing. It is not a resource blob and is never fed back as
+replay input.
+
+`source.rgba`, when declared as `components.source_oracle`, is the retained
+primary-swapchain source backbuffer read after the captured Present drains and
+uses the same canonical opaque-alpha rule. Additional-swapchain and direct
+Present source identities remain outside the current frame grammar. It is a
+diagnostic sidecar only. Provider replay performs the analogous source
+readback and reports source digest/readback/match evidence independently, so a
+source mismatch identifies a draw/resource divergence while an output-only
+mismatch remains attributable to Presenter composition. Offline pack accepts
+the sidecar explicitly, copies it transactionally, and re-authenticates its
+byte count and digest; event-changing reductions intentionally discard it.
+If strict source equality fails, the provider may reuse an already accepted
+output pixel envelope only after proving both the captured source/output pair
+and replay source/output pair byte-identical. The JSON keeps exact match and
+accepted match separate and names this mode `pixel-envelope-equivalent`; no
+independent source threshold exists.
 
 All producers treat the destination as a transaction. They validate source
 events and blob references before effects, require a new or empty destination,
@@ -1365,6 +1406,21 @@ The r65 full-frame provider output is non-degenerate but is not promotion
 evidence: it differs from the captured output at 139 pixels with maximum RGB
 delta 252, so both strict SHA and the bounded pixel envelope reject it. This
 failure is retained rather than hidden by the successful identity join.
+
+The 2026-08-16 r83/r84 same-run GT2 captures bind the first managed-texture
+arm snapshot from R-HARN-REPLAY-7.24. In r83 the capture bundle's 128x32
+A8R8G8B8 atlas seed is byte-identical to the post-draw GPU dump; two isolated
+provider processes then produce the same full-frame SHA-256 and reduce the
+pre-fix semantic mismatch from 1,582 pixels, maximum RGB delta 252, and total
+delta 7,336 to 89 pixels, maximum delta 2, and total delta 131. A second r84
+capture leaves 13 pixels, maximum delta 3, and total delta 31. Both residuals
+have byte-identical alpha and are bounded low-amplitude raster quantization,
+while the old semantic failure remains far outside the 96-pixel, per-channel
+delta-3, total-delta-192 1024x768 envelope. These two independent captures are
+the evidence for the R-HARN-REPLAY-7.19 bound; exact SHA-256 remains primary.
+Two isolated provider processes per bundle reproduce the same output SHA-256,
+prove captured source equals captured output and replay source equals replay
+output, and complete with `source_oracle_mode=pixel-envelope-equivalent`.
 
 The r66 capture at
 `experiments/render-tapes/gt2-authoritative-full-r66-20260815/`

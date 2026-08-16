@@ -99,11 +99,16 @@ bool expectedD24X8Bytes(const D9CSurfaceDesc& desc,
 bool expectedColorSnapshotBytes(const D9CSurfaceDesc& desc,
                                 std::uint32_t& pitch,
                                 std::uint64_t& bytes) noexcept {
-  const bool texture2d = desc.resourceType == 3u && desc.format == 22u;
-  const bool cube = desc.resourceType == 5u && desc.format == 114u;
+  const bool texture2d = desc.resourceType == 3u &&
+                         ((desc.format == 22u && desc.pool == 0u &&
+                           desc.usage == 1u) ||
+                          (desc.format == 21u && desc.pool == 1u &&
+                           desc.usage == 0u));
+  const bool cube = desc.resourceType == 5u && desc.format == 114u &&
+                    desc.pool == 0u && desc.usage == 1u;
   const bool standalone =
       dxmt9::d3d9::renderTapeArmColorSnapshotStandaloneSurfaceSupported(desc);
-  if ((!standalone && !texture2d && !cube) || desc.usage != 1u || desc.pool != 0u ||
+  if ((!standalone && !texture2d && !cube) ||
       desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
       desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
@@ -168,6 +173,7 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
     try {
       device->renderTapePresentCapture.emplace(
           D9CRenderTapePresentCaptureLease{
+              .source = source,
               .mirror = std::move(mirror),
               .ticket = ticket,
               .width = mirrorDesc.width,
@@ -216,11 +222,11 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
       cancelPresentCapture(device);
       return dxmt9::core::D3DERR_INVALIDCALL;
     }
-    auto lease = std::move(*device->renderTapePresentCapture);
-    device->renderTapePresentCapture.reset();
+    auto& lease = *device->renderTapePresentCapture;
     dxmt9::core::ReadbackPixels pixels;
     std::vector<std::byte> tight;
     if (!lease.mirror || !lease.mirror->valid()) {
+      cancelPresentCapture(device);
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     if (!upper->readbackSurface(
@@ -228,7 +234,10 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
             pixels) ||
         !copyTightPixels(pixels, lease.width, lease.height, lease.coreFormat,
                          tight) ||
+        !dxmt9::d3d9::renderTapeCanonicalizeOpaqueAlpha(lease.d3dFormat,
+                                                        tight) ||
         tight.size() != capacity) {
+      cancelPresentCapture(device);
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     const auto digest = dxmt9::d3d9::RenderTapeCaptureSession::sha256(tight);
@@ -239,6 +248,70 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_present_capture(
     out->byteCount = tight.size();
     std::memcpy(out->sha256, digest.data(), digest.size());
     std::memcpy(bytes, tight.data(), tight.size());
+    return dxmt9::core::D3D_OK;
+  } catch (...) {
+    cancelPresentCapture(device);
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t
+dxmt9c_device_finish_render_tape_present_source_capture(
+    D9CDevice* device, D9CRenderTapePresentSourceCaptureResult* out,
+    void* bytes, std::uint64_t capacity) {
+  if (!out || !bytes || capacity == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  *out = {};
+  out->status = D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_FAILED;
+  if (!device || !device->renderTapePresentCapture) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  try {
+    if (!dxmt9::d3d9::drainDeferredReplay(
+            device, "render-tape-present-source-capture-finish") ||
+        !device->renderTapePresentCapture->ticket ||
+        !device->renderTapePresentCapture->source) {
+      cancelPresentCapture(device);
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    auto upper = device->dev().upperDevice();
+    if (!upper) {
+      cancelPresentCapture(device);
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    upper->flush();
+    auto& lease = *device->renderTapePresentCapture;
+    if (!lease.ticket->encoded()) {
+      cancelPresentCapture(device);
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    dxmt9::core::ReadbackPixels pixels;
+    std::vector<std::byte> tight;
+    if (!lease.source->valid() ||
+        !upper->readbackSurface(
+            dxmt9::core::ReadbackDesc{.source = lease.source->handle()},
+            pixels) ||
+        !copyTightPixels(pixels, lease.width, lease.height, lease.coreFormat,
+                         tight) ||
+        !dxmt9::d3d9::renderTapeCanonicalizeOpaqueAlpha(lease.d3dFormat,
+                                                        tight) ||
+        tight.size() != capacity) {
+      cancelPresentCapture(device);
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    const auto digest = dxmt9::d3d9::RenderTapeCaptureSession::sha256(tight);
+    out->status = D9C_RENDER_TAPE_PRESENT_SOURCE_CAPTURE_COMPLETE;
+    out->width = lease.width;
+    out->height = lease.height;
+    out->format = lease.d3dFormat;
+    out->byteCount = tight.size();
+    std::memcpy(out->sha256, digest.data(), digest.size());
+    std::memcpy(bytes, tight.data(), tight.size());
+    // The source lease is deliberately retained until this second finish
+    // call. This prevents the source from being recycled between output and
+    // source readback while keeping the existing output API intact.
+    device->renderTapePresentCapture.reset();
     return dxmt9::core::D3D_OK;
   } catch (...) {
     cancelPresentCapture(device);
@@ -438,6 +511,9 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     }
     const auto& textureDesc = texture->obj->desc();
     const bool cube = request->surface.resourceType == 5u;
+    const bool managedShaderTexture =
+        !cube && request->surface.format == 21u &&
+        request->surface.pool == 1u && request->surface.usage == 0u;
     if (request->surface.resourceType != (cube ? 5u : 3u) ||
         textureDesc.type != (cube ? dxmt9::core::TextureType::Cube
                                  : dxmt9::core::TextureType::TwoD) ||
@@ -445,8 +521,12 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
         textureDesc.width != request->surface.width ||
         textureDesc.height != request->surface.height ||
         textureDesc.depth != 1u || textureDesc.format != expectedCoreFormat ||
-        textureDesc.pool != dxmt9::core::Pool::Default ||
-        textureDesc.usage != dxmt9::core::UsageRenderTarget ||
+        textureDesc.pool != (managedShaderTexture
+                                 ? dxmt9::core::Pool::Managed
+                                 : dxmt9::core::Pool::Default) ||
+        textureDesc.usage != (managedShaderTexture
+                                  ? 0u
+                                  : dxmt9::core::UsageRenderTarget) ||
         texture->d3dFormat != request->surface.format) {
       releaseResolved();
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH;

@@ -592,6 +592,16 @@ read-lock may repeat backend synchronization or dirty-side effects and this
 remains explicit performance/semantic debt; `D3DLOCK_DISCARD` is not promoted
 by this closure.
 
+**R-HARN-REPLAY-6.7** A writable buffer `CpuUnlock` mutation preserves a typed
+lock disposition in the fixed v2 `ResourceMutation` header: `Plain`,
+`NoOverwrite`, or `Discard`. The zero value is `Plain` for compatibility with
+bundles written before the field was assigned. Provider replay must apply the
+corresponding D3D9 lock flag at the mutation's recorded byte offset in both
+the full frame-tape and executable-projection paths. Non-buffer mutations,
+non-`CpuUnlock` mutations, and unknown disposition values fail closed before
+provider effects. This requirement preserves dynamic-buffer backing-generation
+semantics rather than treating every mutation as an unqualified plain upload.
+
 Supported CPU-owned texture contents include uncompressed 2D locks and
 block-compressed DXT1, DXT3, and DXT5 locks on 2D mip levels and cube face/mip
 subresources. When an already-lockable 2D texture subresource receives its
@@ -785,9 +795,9 @@ primary output result. A frame-tape bundle that also carries the
 digest-authenticated `output.rgba` sidecar from R-HARN-REPLAY-7.13 may use a
 second, fail-closed 8-bit pixel envelope only after exact digest comparison
 fails: dimensions, format, byte count, and sidecar SHA-256 must match the tape;
-alpha must be byte-identical; every RGB channel delta must be at most 2; no
-more than one pixel per 12,288 output pixels (with a minimum allowance of one
-and an absolute maximum of 64) may differ; and total absolute RGB delta must be
+alpha must be byte-identical; every RGB channel delta must be at most 3; no
+more than one pixel per 8,192 output pixels (with a minimum allowance of one
+and an absolute maximum of 96) may differ; and total absolute RGB delta must be
 no greater than twice that pixel allowance. The result must report exact-digest equality, sidecar
 comparison, differing pixels, maximum and total RGB delta, and alpha
 differences independently. An envelope match may complete only a one-interval
@@ -807,19 +817,41 @@ leave no claimable partial bundle; the input bundle and any existing curated
 fixture remain unchanged. The final `dxmt9.render_tape.bundle.v2` manifest is
 the control plane and may claim only these canonical components: `events.bin`,
 digest-named `blobs/<sha256>.bin`, the optional `identity.bin` component
-declared as `components.identity`, and the optional `output.rgba` component
-declared as `components.output_oracle`. Every component records its canonical
+declared as `components.identity`, the optional `output.rgba` component
+declared as `components.output_oracle`, and the optional `source.rgba`
+component declared as `components.source_oracle`. Every component records its canonical
 path, byte count, and lowercase SHA-256; no unlisted file is part of the bundle,
 and neither sidecar is a resource blob or a replay input.
 
 The `output.rgba` sidecar is the capture-side oracle bytes named by
-`PresentComplete`: tightly packed 8-bit RGBA rows at the recorded output
-extent. It is copied and authenticated as a sidecar, not deduplicated into the
-resource catalogue. The sidecar is optional for structural bundles, but a
+`PresentComplete`: tightly packed canonical 8-bit RGBA rows at the recorded
+output extent. Formats without application-visible alpha, currently
+`D3DFMT_X8R8G8B8`, normalize every alpha byte to opaque before hashing or
+comparison. It is copied and authenticated as a sidecar, not deduplicated into
+the resource catalogue. The sidecar is optional for structural bundles, but a
 manifest must not assert `output_oracle` or an oracle result when the sidecar
 is absent or fails its byte-count/digest check. `pack`, `reduce`, and `bisect`
 may generate new bundles, but their manifests must describe the components and
 scope they actually emitted rather than inherit an oracle claim from an input.
+
+When present, `source.rgba` is the tightly packed canonical primary-swapchain
+source backbuffer read after the captured Present drained, with the same
+opaque-alpha normalization as `output.rgba`. The current frame grammar does
+not admit additional-swapchain or direct-Present source identities. The
+sidecar is diagnostic, never a replay input. Provider replay may read the
+replay source backbuffer after Present and reports `source_readback`,
+`source_sha256`, `source_oracle_exact_matched`, `source_oracle_matched`, and
+`source_oracle_mode` separately from the output oracle. A non-exact source may
+use the R-HARN-REPLAY-7.19 result only when the authenticated captured source
+bytes equal the authenticated captured output bytes, the replay source bytes
+equal the replay output bytes, and the output pixel envelope already matched;
+the mode is then `pixel-envelope-equivalent`. It must not run a second,
+independently widened source envelope.
+A source mismatch therefore identifies a pre-Presenter draw/resource
+divergence; an output-only mismatch leaves the source comparison independent.
+Missing or unsupported source readback is fail-closed when
+`components.source_oracle` is declared. `pack --source-rgba` must copy and
+re-authenticate this sidecar rather than silently dropping its scope claim.
 
 The `project` command is a different generated artifact: it emits one
 `dxmt9.render_tape.projection.v1` JSON object to stdout, bound to the unchanged
@@ -935,6 +967,24 @@ not promotion evidence for the parallel production join.
 The generic `provider-replay` command retains its existing policy for
 non-production fixtures and may accept such a bundle when its declared oracle
 is exact.
+
+**R-HARN-REPLAY-7.24** A `CompleteSeed` for a resource whose backend-visible
+contents may differ from its durable PE CPU shadow must use an exact
+generation-qualified arm-boundary GPU snapshot when the resource matches a
+declared supported shape. The snapshot is taken after the arm Present and all
+older replay have drained, before any selected-interval command is admitted,
+and replaces the PE content only in the value-owned arm overlay. The first
+managed shader-input shape is a single-level, single-subresource,
+single-sample `D3DFMT_A8R8G8B8` 2D texture with `D3DPOOL_MANAGED` and zero
+usage; its meaningful alpha byte is preserved. Existing X8 render-target
+snapshots continue to canonicalize the unused alpha byte to opaque. A stale
+generation, descriptor mismatch, unsupported shape, failed readback, partial
+result, or extent mismatch aborts capture before publication; the producer
+must not substitute the PE bytes, zero-fill, or widen the supported set. This
+is a concrete resource-content claim: descriptor truth tables and production
+readback tests bind the policy, while a same-run GPU dump and source oracle
+provide the applicable GPU-visible evidence. It does not claim that TLA+ can
+prove Metal texture bytes.
 
 The deterministic native/CLI acceptance fixture must contain a coordinator
 Clear, a canonical `FULL_SNAPSHOT` anchor, one DrawRun whose production

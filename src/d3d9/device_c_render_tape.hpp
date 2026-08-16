@@ -94,6 +94,15 @@ enum class RenderTapeMutationKind : std::uint32_t {
   MipmapClass = 4u,
 };
 
+// The fixed RenderTapeResourceMutationHeader field formerly named reserved0
+// carries the lock disposition for buffer CPU writes. Zero is deliberately
+// Plain so bundles written before this field was defined remain compatible.
+enum class RenderTapeBufferMutationDisposition : std::uint32_t {
+  Plain = 0u,
+  NoOverwrite = 1u,
+  Discard = 2u,
+};
+
 enum class RenderTapeControlKind : std::uint32_t {
   QueryGetData = 1u,
   CpuRead = 2u,
@@ -194,7 +203,8 @@ struct RenderTapeResourceMutationHeader {
   D9CWireObjectIdentity identity{};
   std::uint32_t kind = 0u;
   std::uint32_t subresource = 0u;
-  std::uint32_t reserved0 = 0u;
+  std::uint32_t bufferDisposition = static_cast<std::uint32_t>(
+      RenderTapeBufferMutationDisposition::Plain);
   std::uint64_t byteOffset = 0u;
   std::uint64_t byteSize = 0u;
   RenderTapeDigest digest{};
@@ -618,7 +628,10 @@ public:
                               std::uint32_t subresource,
                               std::uint64_t byteOffset, std::uint64_t byteSize,
                               std::span<const std::byte, kRenderTapeDigestSize>
-                                  digest);
+                                  digest,
+                              RenderTapeBufferMutationDisposition
+                                  bufferDisposition =
+                                      RenderTapeBufferMutationDisposition::Plain);
   void appendCommandChunk(const CommandChunkEnvelope& envelope,
                           std::span<const std::byte> chunk);
   void appendOrderedControl(const RenderTapeOrderedControlHeader& fixed,
@@ -652,6 +665,12 @@ renderTapeValidationStatusName(RenderTapeValidationStatus status) noexcept;
 
 const char* renderTapeReductionStatusName(
     RenderTapeReductionStatus status) noexcept;
+
+// Render Tape color oracles store canonical four-byte D3D pixels. X8 formats
+// do not expose alpha to the application, so normalize that storage byte
+// before hashing or comparing independently rendered source attachments.
+bool renderTapeCanonicalizeOpaqueAlpha(
+    std::uint32_t d3dFormat, std::span<std::byte> pixels) noexcept;
 
 // Reduces a validated whole-frame tape to the selected CommandChunk events.
 // Input bytes and catalogue entries are borrowed only for the duration of the

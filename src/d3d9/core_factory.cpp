@@ -118,6 +118,13 @@ public:
     if (backend_)
       backend_->uploadBufferData(handle, bytes);
   }
+  void uploadBufferDataRange(BufferHandle handle,
+                             std::span<const std::uint8_t> fullBytes,
+                             std::uint64_t offset,
+                             std::uint64_t byteCount) override {
+    if (backend_)
+      backend_->uploadBufferDataRange(handle, fullBytes, offset, byteCount);
+  }
   void uploadTextureLevel(TextureHandle handle, std::uint32_t level,
                           std::uint32_t w, std::uint32_t h,
                           std::uint32_t depth, std::uint32_t pitch,

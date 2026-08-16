@@ -363,7 +363,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
 RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationBytes(
     const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
     std::uint32_t subresource, std::uint64_t byteOffset,
-    std::span<const std::byte> bytes) {
+    std::span<const std::byte> bytes,
+    RenderTapeBufferMutationDisposition bufferDisposition) {
   RenderTapeDigest digest{};
   const auto status = registerBlobBytes(bytes, &digest);
   if (status != RenderTapeCaptureStatus::Accepted) {
@@ -371,7 +372,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationBytes(
   }
   return resourceMutation(
       identity, kind, subresource, byteOffset, bytes.size(),
-      std::span<const std::byte, kRenderTapeDigestSize>(digest));
+      std::span<const std::byte, kRenderTapeDigestSize>(digest),
+      bufferDisposition);
 }
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::reserveEvent(
@@ -577,7 +579,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutation(
     const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
     std::uint32_t subresource, std::uint64_t byteOffset,
     std::uint64_t byteSize,
-    std::span<const std::byte, kRenderTapeDigestSize> digest) {
+    std::span<const std::byte, kRenderTapeDigestSize> digest,
+    RenderTapeBufferMutationDisposition bufferDisposition) {
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
     return status;
@@ -595,7 +598,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutation(
   }
   try {
     builder_.appendResourceMutation(identity, kind, subresource, byteOffset,
-                                    byteSize, digest);
+                                    byteSize, digest, bufferDisposition);
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapeResourceMutationHeader);
     return RenderTapeCaptureStatus::Accepted;
@@ -678,7 +681,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     std::uint64_t presentOrdinal, std::uint64_t completionOrdinal,
     RenderTapeDigestValidity digestValidity, RenderTapeDigest expectedDigest,
     std::span<const std::byte> oracleAttachments,
-    std::span<const std::byte> outputOracle) {
+    std::span<const std::byte> outputOracle,
+    std::span<const std::byte> sourceOracle) {
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
     return status;
@@ -687,7 +691,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
                                 sizeof(RenderTapeOracleAttachment) != 0u ||
       (!outputOracle.empty() &&
        (digestValidity != RenderTapeDigestValidity::Sha256 ||
-        sha256(outputOracle) != expectedDigest))) {
+       sha256(outputOracle) != expectedDigest))) {
     abortInternal();
     return RenderTapeCaptureStatus::InvalidInput;
   }
@@ -735,6 +739,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
     publicationBundle_.blobs = publishedBlobs_;
     publicationBundle_.outputOracle.assign(outputOracle.begin(),
                                             outputOracle.end());
+    publicationBundle_.sourceOracle.assign(sourceOracle.begin(),
+                                           sourceOracle.end());
     state_ = RenderTapeCaptureState::Sealed;
     return RenderTapeCaptureStatus::Complete;
   } catch (...) {

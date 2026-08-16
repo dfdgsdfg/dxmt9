@@ -2,6 +2,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 namespace dxmt9::core {
@@ -25,27 +26,56 @@ LockedRegion Buffer::lock(u64 offset, u64 size, u32 flags) {
   if (!valid_) {
     return {};
   }
+  if (offset > std::numeric_limits<u64>::max() - size) {
+    return {};
+  }
+  const u64 end = offset + size;
+  if (end > std::numeric_limits<std::size_t>::max()) {
+    return {};
+  }
   if ((flags & UsageDiscard) != 0 && (desc_.usage & UsageDynamic) != 0) {
+    if (std::max<u64>(size, desc_.size) >
+        std::numeric_limits<std::size_t>::max()) {
+      return {};
+    }
     storage_.assign(static_cast<size_t>(std::max<u64>(size, desc_.size)), 0);
     offset = 0;
   } else if (storage_.size() < offset + size) {
-    storage_.resize(static_cast<size_t>(offset + size));
+    storage_.resize(static_cast<size_t>(end));
   }
   if (backend_ && handle_) {
     backend_->mapBuffer(handle_, flags);
   }
   locked_ = true;
+  lockedOffset_ = offset;
+  lockedSize_ = size;
+  lockedFlags_ = flags;
   return {storage_.data() + offset, static_cast<u32>(size)};
 }
 
 void Buffer::unlock(bool upload) {
   if (upload && backend_ && handle_) {
-    backend_->uploadBufferData(handle_, storage_);
+    const bool exactNoOverwrite =
+        locked_ && desc_.pool == Pool::Default &&
+        (desc_.usage & UsageDynamic) != 0 &&
+        (lockedFlags_ & UsageNoOverwrite) != 0 &&
+        (lockedFlags_ & UsageDiscard) == 0 &&
+        lockedOffset_ <= storage_.size() &&
+        lockedSize_ <= storage_.size() - lockedOffset_;
+    if (exactNoOverwrite) {
+      backend_->uploadBufferDataRange(
+          handle_, storage_, lockedOffset_, lockedSize_);
+    } else {
+      backend_->uploadBufferData(handle_, storage_);
+    }
   }
   if (backend_ && handle_) {
     backend_->unmapBuffer(handle_);
   }
   locked_ = false;
+  lockedOffset_ = 0;
+  lockedSize_ = 0;
+  lockedFlags_ = 0;
 }
 
 void Buffer::invalidate() {

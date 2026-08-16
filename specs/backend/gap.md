@@ -34,6 +34,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 | Argument buffer layout: `DrawUniforms` | ✅ | metal |
 | `MTLBuffer` / `MTLTexture` allocation | ✅ | metal |
 | `mapBuffer` DISCARD / NOOVERWRITE / plain | ✅ | metal |
+| `NOOVERWRITE` exact byte-range publication (`R-BACK-5.12`) | ✅ | `core::Buffer` retains successful lock offset/size/flags; DEFAULT+DYNAMIC writable unlock uses `Device::uploadBufferDataRange` and `Pool::uploadBufferDataRange` with overflow-safe bounds. Native core/pool tests pin `[96,192)` publication and untouched sentinels; `NoOverwriteByteRange.tla` checks the disjoint in-flight-read/write-range invariant. The intentional full-shadow counterexample config remains an expected-failure regression guard. |
 | Deferred destroy: `destroyPending` + `Pool::reclaimCompleted()` | ✅ | metal |
 | Back buffer `DontCare` after present | ✅ | metal |
 | `CAMetalLayer` swap chain, `nextDrawable`, blit, vsync | ✅ | metal |

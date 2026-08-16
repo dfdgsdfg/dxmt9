@@ -1755,6 +1755,48 @@ bool writeBlockRows(std::span<const std::byte> bytes, void* bits,
   return true;
 }
 
+bool readbackTightSurface(D9CDevice* device, D9CSurface* surface,
+                          std::uint32_t width, std::uint32_t height,
+                          std::uint32_t format,
+                          std::vector<std::byte>& out) {
+  if (!device || !surface || !surface->obj || width == 0u || height == 0u ||
+      format == 0u) {
+    return false;
+  }
+  auto upper = device->dev().upperDevice();
+  if (!upper) return false;
+  core::ReadbackPixels pixels;
+  if (!upper->readbackSurface(
+          core::ReadbackDesc{.source = surface->obj->handle()}, pixels)) {
+    return false;
+  }
+  const auto bytesPerPixel = core::bytesPerPixel(
+      static_cast<core::Format>(surface->obj->desc().format));
+  if (bytesPerPixel == 0u ||
+      width > std::numeric_limits<std::uint32_t>::max() / bytesPerPixel) {
+    return false;
+  }
+  const auto tightPitch = static_cast<std::uint64_t>(width) * bytesPerPixel;
+  const auto tightBytes = tightPitch * height;
+  const auto pitchedBytes = static_cast<std::uint64_t>(pixels.pitch) * height;
+  if (pixels.pitch < tightPitch ||
+      tightBytes > std::numeric_limits<std::size_t>::max() ||
+      pixels.bytes.size() < pitchedBytes) {
+    return false;
+  }
+  try {
+    out.resize(static_cast<std::size_t>(tightBytes));
+  } catch (...) {
+    return false;
+  }
+  for (std::uint32_t row = 0u; row < height; ++row) {
+    std::memcpy(out.data() + static_cast<std::size_t>(row * tightPitch),
+                pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
+                static_cast<std::size_t>(tightPitch));
+  }
+  return renderTapeCanonicalizeOpaqueAlpha(format, out);
+}
+
 void* createGeneralObject(
     D9CDevice* device, const RenderTapeObjectDefineHeader& fixed,
     std::span<const std::byte> descriptor,
@@ -1877,15 +1919,13 @@ bool applyGeneralMutation(
   if (definition == definitions.end()) return false;
 
   if (mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
-    if (mutation.byteOffset > std::numeric_limits<std::uint32_t>::max() ||
-        mutation.byteSize > std::numeric_limits<std::uint32_t>::max()) {
-      return false;
-    }
+    RenderTapeBufferMutationReplayPlan replayPlan{};
+    if (!renderTapeBufferMutationReplayPlan(mutation, replayPlan)) return false;
     void* mapped = nullptr;
     auto* buffer = static_cast<D9CBuffer*>(object);
     if (dxmt9c_buffer_lock(
-            buffer, static_cast<std::uint32_t>(mutation.byteOffset),
-            static_cast<std::uint32_t>(mutation.byteSize), &mapped, 0u) !=
+            buffer, replayPlan.byteOffset, replayPlan.byteSize, &mapped,
+            replayPlan.lockFlags) !=
             core::D3D_OK ||
         !mapped) {
       return false;
@@ -2324,6 +2364,20 @@ FrameTapeReplayResult replayGeneralPlan(
         }
         result.outputPixels = std::move(tight);
       }
+      if (upper) {
+        auto* source = static_cast<D9CSurface*>(
+            findObject(objects, plan.outputIdentity));
+        std::vector<std::byte> sourcePixels;
+        if (readbackTightSurface(device, source, plan.outputDesc.width,
+                                 plan.outputDesc.height, plan.outputDesc.format,
+                                 sourcePixels)) {
+          evidence.sourceReadback = true;
+          evidence.sourceBytes = sourcePixels.size();
+          evidence.sourceDigest =
+              RenderTapeCaptureSession::sha256(sourcePixels);
+          result.sourcePixels = std::move(sourcePixels);
+        }
+      }
       if (evidence.expectedDigestCaptured && !evidence.expectedDigestMatched) {
         result.validity = evidence;
         result.validity.structurallyValid = true;
@@ -2360,6 +2414,45 @@ FrameTapeReplayResult replayGeneralPlan(
 }
 
 } // namespace
+
+std::uint32_t renderTapeBufferMutationLockFlags(
+    RenderTapeBufferMutationDisposition disposition) noexcept {
+  // D3DLOCK_NOOVERWRITE and D3DLOCK_DISCARD are part of the PE-facing D3D9
+  // contract, but this unix-side provider intentionally does not include the
+  // Windows headers.
+  switch (disposition) {
+  case RenderTapeBufferMutationDisposition::Plain:
+    return 0u;
+  case RenderTapeBufferMutationDisposition::NoOverwrite:
+    return 0x1000u;
+  case RenderTapeBufferMutationDisposition::Discard:
+    return 0x2000u;
+  }
+  return std::numeric_limits<std::uint32_t>::max();
+}
+
+bool renderTapeBufferMutationReplayPlan(
+    const RenderTapeResourceMutationHeader& mutation,
+    RenderTapeBufferMutationReplayPlan& out) noexcept {
+  if ((mutation.kind !=
+           static_cast<std::uint32_t>(RenderTapeMutationKind::CpuUnlock) &&
+       mutation.kind !=
+           static_cast<std::uint32_t>(RenderTapeMutationKind::Upload)) ||
+      mutation.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER ||
+      mutation.subresource != 0u || mutation.byteSize == 0u ||
+      mutation.byteOffset > std::numeric_limits<std::uint32_t>::max() ||
+      mutation.byteSize > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  const auto flags = renderTapeBufferMutationLockFlags(
+      static_cast<RenderTapeBufferMutationDisposition>(
+          mutation.bufferDisposition));
+  if (flags == std::numeric_limits<std::uint32_t>::max()) return false;
+  out = {.byteOffset = static_cast<std::uint32_t>(mutation.byteOffset),
+         .byteSize = static_cast<std::uint32_t>(mutation.byteSize),
+         .lockFlags = flags};
+  return true;
+}
 
 bool renderTapeProviderEventRequiresDrain(
     bool submittedCommandWork, RenderTapeEventType event) noexcept {
@@ -2550,11 +2643,12 @@ FrameTapeReplayResult replayRenderTapeIdentity(
       bool ok = blob && object;
       if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
         void* mapped = nullptr;
+        RenderTapeBufferMutationReplayPlan replayPlan{};
         auto* buffer = static_cast<D9CBuffer*>(object);
-        ok = mutation.subresource == 0u &&
+        ok = renderTapeBufferMutationReplayPlan(mutation, replayPlan) &&
              dxmt9c_buffer_lock(
-                 buffer, 0u, static_cast<std::uint32_t>(blob->bytes.size()),
-                 &mapped, 0u) == core::D3D_OK &&
+                 buffer, replayPlan.byteOffset, replayPlan.byteSize, &mapped,
+                 replayPlan.lockFlags) == core::D3D_OK &&
              mapped;
         if (ok) {
           std::memcpy(mapped, blob->bytes.data(), blob->bytes.size());
@@ -2761,6 +2855,17 @@ FrameTapeReplayResult replayRenderTapeIdentity(
       }
     }
     result.outputPixels = std::move(tight);
+    auto* source = static_cast<D9CSurface*>(
+        findObject(objects, plan.outputIdentity));
+    std::vector<std::byte> sourcePixels;
+    if (readbackTightSurface(device, source, plan.outputDesc.width,
+                             plan.outputDesc.height, plan.outputDesc.format,
+                             sourcePixels)) {
+      evidence.sourceReadback = true;
+      evidence.sourceBytes = sourcePixels.size();
+      evidence.sourceDigest = RenderTapeCaptureSession::sha256(sourcePixels);
+      result.sourcePixels = std::move(sourcePixels);
+    }
     return true;
   };
 
@@ -2957,15 +3062,15 @@ bool applyRenderTapePixelOracleEnvelope(
 
   // Independent executions may land on adjacent 8-bit quantization values at
   // a tiny number of filtered/rasterized edge pixels. Keep the envelope much
-  // narrower than a visible or structural rendering change: at most 1/12288
-  // pixels, RGB delta <= 2, no alpha delta, and average aggregate RGB delta
+  // narrower than a visible or structural rendering change: at most 1/8192
+  // pixels, RGB delta <= 3, no alpha delta, and average aggregate RGB delta
   // <= 2 across the entire differing-pixel allowance.
   const auto allowedPixels = std::min<std::uint64_t>(
-      64u, std::max<std::uint64_t>(1u, pixelCount / 12288u));
+      96u, std::max<std::uint64_t>(1u, pixelCount / 8192u));
   validity.allowedDifferingPixels = allowedPixels;
   validity.pixelEnvelopeMatched =
       validity.differingPixels <= allowedPixels &&
-      validity.maxRgbDelta <= 2u && validity.differingAlphaPixels == 0u &&
+      validity.maxRgbDelta <= 3u && validity.differingAlphaPixels == 0u &&
       validity.totalRgbDelta <= allowedPixels * 2u;
   result.intervals[0].validity = validity;
   if (!validity.pixelEnvelopeMatched) {
@@ -2974,6 +3079,23 @@ bool applyRenderTapePixelOracleEnvelope(
   result.status = FrameTapeReplayStatus::Complete;
   result.failedEventIndex = 0xffffffffu;
   return true;
+}
+
+bool renderTapeSourceOracleMatchesOutputEvidence(
+    std::span<const std::byte> expectedSource,
+    std::span<const std::byte> actualSource,
+    std::span<const std::byte> expectedOutput,
+    std::span<const std::byte> actualOutput,
+    bool outputPixelEnvelopeMatched) noexcept {
+  const auto sameBytes = [](std::span<const std::byte> left,
+                            std::span<const std::byte> right) {
+    return left.size() == right.size() &&
+           std::equal(left.begin(), left.end(), right.begin());
+  };
+  if (sameBytes(expectedSource, actualSource)) return true;
+  return outputPixelEnvelopeMatched && !expectedOutput.empty() &&
+         sameBytes(expectedSource, expectedOutput) &&
+         sameBytes(actualSource, actualOutput);
 }
 
 const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept {

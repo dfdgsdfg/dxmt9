@@ -74,7 +74,10 @@ std::string digestHex(const RenderTapeDigest& digest) {
 void printResult(const FrameTapeReplayResult& result,
                  std::string_view requestedPartitionMode,
                  std::string_view resolvedPartitionMode,
-                 const dxmt9::perf::RenderTapeParallelJoinSnapshot& counters) {
+                 const dxmt9::perf::RenderTapeParallelJoinSnapshot& counters,
+                 bool sourceOracleRequested = false,
+                 bool sourceOracleMatched = false,
+                 bool sourceOracleExactMatched = false) {
   const auto& validity = result.validity;
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
@@ -140,7 +143,34 @@ void printResult(const FrameTapeReplayResult& result,
   std::cout << "\"differing_alpha_pixels\":"
             << validity.differingAlphaPixels << ',';
   std::cout << "\"output_sha256\":\""
-            << digestHex(validity.outputDigest) << "\"},";
+            << digestHex(validity.outputDigest) << "\",";
+  std::cout << "\"source_readback\":"
+            << (validity.sourceReadback ? "true" : "false") << ',';
+  std::cout << "\"source_bytes\":" << validity.sourceBytes << ',';
+  std::cout << "\"source_sha256\":\""
+            << digestHex(validity.sourceDigest) << "\",";
+  std::cout << "\"source_oracle_requested\":"
+            << (sourceOracleRequested ? "true" : "false") << ',';
+  std::cout << "\"source_oracle_exact_matched\":"
+            << (sourceOracleExactMatched ? "true" : "false") << ',';
+  std::cout << "\"source_oracle_matched\":"
+            << (sourceOracleMatched ? "true" : "false") << ',';
+  std::cout << "\"source_oracle_mode\":\""
+            << (!sourceOracleRequested
+                    ? "not-requested"
+                    : sourceOracleExactMatched
+                        ? "strict"
+                        : sourceOracleMatched ? "pixel-envelope-equivalent"
+                                              : "rejected")
+            << "\",";
+  std::cout << "\"oracle_failure\":\""
+            << (sourceOracleRequested && !sourceOracleMatched
+                    ? "source-mismatch"
+                    : (!validity.expectedDigestMatched &&
+                       !validity.pixelEnvelopeMatched
+                           ? "output-only-mismatch"
+                           : "none"))
+            << "\"},";
   std::cout << "\"coverage\":{";
   std::cout << "\"event_count\":" << coverage.eventCount << ',';
   std::cout << "\"object_definitions\":" << coverage.objectDefinitions << ',';
@@ -209,7 +239,12 @@ void printResult(const FrameTapeReplayResult& result,
               << ',';
     std::cout << "\"output_bytes\":" << interval.validity.outputBytes << ',';
     std::cout << "\"output_sha256\":\""
-              << digestHex(interval.validity.outputDigest) << "\"}}";
+              << digestHex(interval.validity.outputDigest) << "\",";
+    std::cout << "\"source_readback\":"
+              << (interval.validity.sourceReadback ? "true" : "false") << ',';
+    std::cout << "\"source_bytes\":" << interval.validity.sourceBytes << ',';
+    std::cout << "\"source_sha256\":\""
+              << digestHex(interval.validity.sourceDigest) << "\"}}";
   }
   std::cout << "]}\n";
   std::cout.flush();
@@ -218,7 +253,9 @@ void printResult(const FrameTapeReplayResult& result,
 void usage() {
   std::cerr << "usage: dxmt9-render-tape-provider replay <events.bin>"
                " [--blob <path>]... [--expected-rgba <path>]"
+               " [--expected-source-rgba <path>]"
                " [--output-rgba <path>]"
+               " [--output-source-rgba <path>]"
                " [--partition-mode identity|serial|parallel]\n";
 }
 
@@ -233,7 +270,9 @@ int main(int argc, char** argv) {
   try {
     std::vector<std::string> blobPaths;
     std::string expectedPath;
+    std::string expectedSourcePath;
     std::string outputPath;
+    std::string sourceOutputPath;
     std::string partitionMode = "identity";
     bool partitionModeSpecified = false;
     for (int index = 3; index < argc; ++index) {
@@ -262,12 +301,26 @@ int main(int argc, char** argv) {
           return 2;
         }
         expectedPath = argv[++index];
+      } else if (option == "--expected-source-rgba" &&
+                 expectedSourcePath.empty()) {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
+        expectedSourcePath = argv[++index];
       } else if (option == "--output-rgba" && outputPath.empty()) {
         if (index + 1 >= argc) {
           usage();
           return 2;
         }
         outputPath = argv[++index];
+      } else if (option == "--output-source-rgba" &&
+                 sourceOutputPath.empty()) {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
+        sourceOutputPath = argv[++index];
       } else {
         usage();
         return 2;
@@ -289,13 +342,15 @@ int main(int argc, char** argv) {
     }
 
     const auto preflight = preflightRenderTapeIdentity(tape, blobs);
+    const bool sourceOracleRequested = !expectedSourcePath.empty();
     const auto partitionConfig =
         dxmt9::render::resolveRenderPartitionConfig(partitionMode.c_str());
     const std::string_view resolvedPartitionMode =
         dxmt9::render::partitionModeName(partitionConfig.resolved);
     if (!preflight.complete()) {
       printResult(preflight, partitionMode, resolvedPartitionMode,
-                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{},
+                  sourceOracleRequested, false);
       return 1;
     }
 
@@ -309,7 +364,8 @@ int main(int argc, char** argv) {
       auto failure = preflight;
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
       printResult(failure, partitionMode, resolvedPartitionMode,
-                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{},
+                  sourceOracleRequested, false);
       return 1;
     }
     const D9CPresentParams params{
@@ -328,16 +384,29 @@ int main(int argc, char** argv) {
       auto failure = preflight;
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
       printResult(failure, partitionMode, resolvedPartitionMode,
-                  dxmt9::perf::RenderTapeParallelJoinSnapshot{});
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{},
+                  sourceOracleRequested, false);
       return 1;
     }
     auto result = replayRenderTapeIdentity(device, tape, blobs);
     dxmt9c_device_release(device);
     dxmt9c_factory_release(factory);
     const auto parallelCounters = dxmt9::perf::snapshotRenderTapeParallelJoin();
+    std::vector<std::byte> expectedPixels;
     if (!expectedPath.empty()) {
-      const auto expectedPixels = readFile(expectedPath);
+      expectedPixels = readFile(expectedPath);
       (void)applyRenderTapePixelOracleEnvelope(result, expectedPixels);
+    }
+    bool sourceOracleMatched = !sourceOracleRequested;
+    bool sourceOracleExactMatched = false;
+    if (sourceOracleRequested) {
+      const auto expectedSource = readFile(expectedSourcePath);
+      sourceOracleExactMatched = result.validity.sourceReadback &&
+          expectedSource == result.sourcePixels;
+      sourceOracleMatched = result.validity.sourceReadback &&
+          renderTapeSourceOracleMatchesOutputEvidence(
+              expectedSource, result.sourcePixels, expectedPixels,
+              result.outputPixels, result.validity.pixelEnvelopeMatched);
     }
     if (!outputPath.empty() && !result.outputPixels.empty()) {
       std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
@@ -347,8 +416,21 @@ int main(int argc, char** argv) {
         throw std::runtime_error("cannot write replay output: " + outputPath);
       }
     }
-    printResult(result, partitionMode, resolvedPartitionMode, parallelCounters);
-    return result.complete() ? 0 : 1;
+    if (!sourceOutputPath.empty() && !result.sourcePixels.empty()) {
+      std::ofstream output(sourceOutputPath,
+                           std::ios::binary | std::ios::trunc);
+      if (!output ||
+          !output.write(
+              reinterpret_cast<const char*>(result.sourcePixels.data()),
+              static_cast<std::streamsize>(result.sourcePixels.size()))) {
+        throw std::runtime_error("cannot write replay source: " +
+                                 sourceOutputPath);
+      }
+    }
+    printResult(result, partitionMode, resolvedPartitionMode, parallelCounters,
+                sourceOracleRequested, sourceOracleMatched,
+                sourceOracleExactMatched);
+    return result.complete() && sourceOracleMatched ? 0 : 1;
   } catch (const std::exception& error) {
     std::cerr << "dxmt9-render-tape-provider: " << error.what() << '\n';
     return 1;
