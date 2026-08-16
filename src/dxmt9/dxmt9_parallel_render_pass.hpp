@@ -432,6 +432,59 @@ struct ParallelFirstDrawSnapshot {
                                    const ParallelFirstDrawSnapshot&) = default;
 };
 
+// Total classification of every source command a sealed-pass observation can
+// meet in the final effective replay order. `CoordinatorBoundary` names the
+// non-child helper commands that own a short-lived Metal encoder of their own:
+// the coordinator must have ended the render encoder before replaying them, so
+// they terminate a pass interval at exactly the position `Clear`/`Present` do.
+// A kind that is not enumerated here is `Unsupported` and fails the whole
+// source closed, which keeps the batch-wide rejection path reachable for any
+// command kind added later.
+enum class ParallelPassCommandRole : std::uint8_t {
+  Draw,
+  ClearBoundary,
+  PresentBoundary,
+  CoordinatorBoundary,
+  Unsupported,
+};
+
+inline constexpr ParallelPassCommandRole classifyParallelPassCommandRole(
+    core::MetalCommandKind kind) noexcept {
+  switch (kind) {
+  case core::MetalCommandKind::DrawRun:
+    return ParallelPassCommandRole::Draw;
+  case core::MetalCommandKind::Clear:
+    return ParallelPassCommandRole::ClearBoundary;
+  case core::MetalCommandKind::Present:
+    return ParallelPassCommandRole::PresentBoundary;
+  case core::MetalCommandKind::SurfaceCopy:
+  case core::MetalCommandKind::StretchRect:
+  case core::MetalCommandKind::Readback:
+  case core::MetalCommandKind::ColorFill:
+  case core::MetalCommandKind::DepthResolve:
+    return ParallelPassCommandRole::CoordinatorBoundary;
+  }
+  return ParallelPassCommandRole::Unsupported;
+}
+
+// A sealed pass may end only at a coordinator-owned command that the
+// coordinator still replays serially at `replayOrdinalEnd`. Every accepted kind
+// therefore stays outside the child ranges and inside the coverage proof
+// (`R-BACK-2.70`).
+inline constexpr bool parallelPassSealingKindAccepted(
+    core::MetalCommandKind kind) noexcept {
+  switch (classifyParallelPassCommandRole(kind)) {
+  case ParallelPassCommandRole::ClearBoundary:
+  case ParallelPassCommandRole::PresentBoundary:
+  case ParallelPassCommandRole::CoordinatorBoundary:
+    return true;
+  case ParallelPassCommandRole::Draw:
+  case ParallelPassCommandRole::Unsupported:
+    return false;
+  }
+  return false;
+}
+
 enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   None,
   PlanMissing,
@@ -669,6 +722,12 @@ struct SealedParallelPassSnapshotBatchResult {
   std::uint32_t eligibleCountMax = 0;
   std::uint32_t childCountMax = 0;
   std::uint64_t drawCountMax = 0;
+  // Non-child coordinator commands met in this source. Every one of them stays
+  // at its serial position; `coordinatorSplits` is the subset that also failed
+  // a pass interval closed because the same attachment resumed immediately
+  // afterwards, so one logical pass would otherwise have been split.
+  std::uint32_t coordinatorBoundaries = 0;
+  std::uint32_t coordinatorSplits = 0;
   bool considered = false;
 
   friend constexpr bool operator==(
@@ -1417,8 +1476,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         snapshot->sealingCommand.source.seqId != snapshot->seqId ||
         snapshot->sealingCommand.replayOrdinal !=
             snapshot->replayOrdinalEnd ||
-        (snapshot->sealingCommand.kind != core::MetalCommandKind::Clear &&
-         snapshot->sealingCommand.kind != core::MetalCommandKind::Present))) ||
+        !parallelPassSealingKindAccepted(snapshot->sealingCommand.kind))) ||
       snapshot->coordinatorProof.firstPassActionEpoch !=
           snapshot->passActionEpoch) {
     return result;

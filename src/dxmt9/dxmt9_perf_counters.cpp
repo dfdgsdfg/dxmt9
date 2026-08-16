@@ -872,6 +872,9 @@ void countParallelPassShadow(
   add(c.parallelPassShadowRejectSnapshot,
       rejected(Fallback::RenderRoute) +
           rejected(Fallback::FirstDrawSnapshot));
+  add(c.parallelPassShadowCoordinatorBoundaries,
+      result.coordinatorBoundaries);
+  add(c.parallelPassShadowCoordinatorSplits, result.coordinatorSplits);
 }
 
 void countCpuReadySessionHeadAppended(bool arenaSource) {

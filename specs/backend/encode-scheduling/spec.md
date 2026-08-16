@@ -1147,14 +1147,39 @@ effects. The producer does not depend on the explicit-serial planner having
 subdivided the same pass.
 
 The producer derives pass boundaries from the effective replay order. A proven
-fresh call frontier, source-local finalization, Clear, Present, or attachment
-change may close or begin a logical span. Clear and Present are recorded only
-as source-qualified coordinator locators and never become child ranges.
-Multiple complete passes in one source are considered independently. A carried
-leading fragment and incomplete trailing fragment fail closed, but do not
-prevent a later pass beginning at an exact local boundary from being observed.
-The producer never infers a complete pass across a source, EncodeSession, or
-command-buffer boundary.
+fresh call frontier, source-local finalization, Clear, Present, a non-child
+coordinator command, or an attachment change may close or begin a logical span.
+Each of those coordinator commands is recorded only as a source-qualified
+coordinator locator and never becomes a child range. Multiple complete passes in
+one source are considered independently. A carried leading fragment and
+incomplete trailing fragment fail closed, but do not prevent a later pass
+beginning at an exact local boundary from being observed. The producer never
+infers a complete pass across a source, EncodeSession, or command-buffer
+boundary.
+
+Extraction is per interval. `classifyParallelPassCommandRole` maps every source
+command kind onto exactly one role, so `SurfaceCopy`, `StretchRect`, `Readback`,
+`ColorFill`, and `DepthResolve` segment the source instead of rejecting it. Each
+of those helpers owns its own short-lived encoder, so the coordinator has ended
+the render encoder before replaying it; the interval that ends there is sealed by
+the same rule `Clear` and `Present` use, and `parallelPassSealingKindAccepted`
+is the single predicate the producer and the semantic certificate share. The
+producer reads only the immediately following replay ordinal to decide whether
+the same attachment resumes across such a command. When it does, one logical
+pass would be split: the interrupted interval and the interval that resumes it
+both fail closed with the coordinator-command reason, and no pass is inferred
+across the helper. Only a kind the classifier cannot place is `Unsupported`, and
+that alone still rejects the whole source. The batch result separates
+`coordinatorBoundaries` (helpers met, all kept at their serial position) from
+`coordinatorSplits` (the subset that failed a pass closed), surfaced as
+`parallel_pass_shadow_coordinator_boundaries` and
+`parallel_pass_shadow_coordinator_splits`.
+
+The serial coordinator consumes the result unchanged: an accepted pass advances
+the cursor to `replayOrdinalEnd`, which is the coordinator command's own
+ordinal, so that command is then encoded by the ordinary serial path with the
+render encoder already closed. Coordinator commands therefore keep exact serial
+order, action ledger, completion, and command-buffer ownership.
 
 Query, Readback, UpdateTexture, and other helper commands cannot become
 children. Extraction alone is not eligibility: a proof-producing owner must

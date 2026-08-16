@@ -114,8 +114,27 @@ ParallelPassCommandLocator commandLocator(
   };
 }
 
-bool isAllowedCoordinatorBoundary(Kind kind) noexcept {
-  return kind == Kind::Clear || kind == Kind::Present;
+// Exact same-attachment continuation test across a non-child coordinator
+// command. It reads only the immediately following replay ordinal, so the
+// producer stays a single forward scan with no auxiliary storage.
+bool sameAttachmentResumesAfter(
+    const EncodePartitionReplayStream& stream,
+    std::size_t coordinatorOrdinal,
+    const core::RenderAttachmentKey& attachments) noexcept {
+  const std::size_t next = coordinatorOrdinal + 1u;
+  if (next >= stream.replayOrdinalCount()) {
+    return false;
+  }
+  std::uint32_t commandIndex = 0u;
+  if (!stream.commandIndexAt(next, commandIndex)) {
+    return false;
+  }
+  const auto source = stream.source.payload.commandAt(commandIndex);
+  if (source.kind() != Kind::DrawRun || !source.command.drawState.hot) {
+    return false;
+  }
+  return core::makeRenderAttachmentKey(*source.command.drawState.hot) ==
+      attachments;
 }
 
 }  // namespace
@@ -139,22 +158,12 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     return rejectBatch(Fallback::ReplayInvalid, snapshots);
   }
   // Query, UpdateTexture, and ordered controls are normally excluded before a
-  // SourcePayloadView exists. Any other helper command that does reach this
-  // stream is still a source-wide fail-closed observation input. Clear and
-  // Present are the two coordinator-owned pass boundaries this producer can
-  // reason about without executing them.
-  for (std::size_t ordinal = 0;
-       ordinal < stream.replayOrdinalCount(); ++ordinal) {
-    std::uint32_t commandIndex = 0;
-    if (!stream.commandIndexAt(ordinal, commandIndex)) {
-      return rejectBatch(Fallback::ReplayInvalid, snapshots);
-    }
-    const Kind kind = stream.source.payload.commandAt(commandIndex).kind();
-    if (kind != Kind::DrawRun && !isAllowedCoordinatorBoundary(kind)) {
-      return rejectBatch(Fallback::CoordinatorCommand, snapshots);
-    }
-  }
-
+  // SourcePayloadView exists. Clear, Present, and the non-child coordinator
+  // helpers are the coordinator-owned pass boundaries this producer can reason
+  // about without executing them; each of them segments the source into pass
+  // intervals instead of rejecting the whole batch (`R-BACK-2.70`). Only a
+  // command kind this producer cannot classify at all is a source-wide
+  // fail-closed observation, and that is decided per command below.
   SealedParallelPassSnapshotBatchResult result{
       .fallback = Fallback::None,
       .considered = true,
@@ -168,6 +177,11 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   bool active = false;
   bool startProven = input.sourceStartsPass;
   bool attachmentKnown = false;
+  // Set by a non-child coordinator command that would have split one logical
+  // pass. The interval before it is already rejected; this makes the interval
+  // that resumes the same attachment reject for the same typed reason instead
+  // of speculating that the pass may resume across the coordinator command.
+  bool pendingCoordinatorSplit = false;
   bool candidateRejected = false;
   std::array<bool, static_cast<std::size_t>(Fallback::Count)>
       candidateRejections{};
@@ -223,6 +237,10 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       current.leadingClear = pendingClear;
     }
     pendingClear = {};
+    if (pendingCoordinatorSplit) {
+      pendingCoordinatorSplit = false;
+      rejectCandidate(Fallback::CoordinatorCommand);
+    }
     if (!startProven) {
       rejectCandidate(Fallback::UnsealedStart);
     }
@@ -507,8 +525,12 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const auto source = stream.source.payload.commandAt(commandIndex);
     const Kind kind = source.kind();
     const auto locator = commandLocator(stream, ordinal, commandIndex, kind);
+    const auto role = classifyParallelPassCommandRole(kind);
 
-    if (kind == Kind::Clear) {
+    if (role == ParallelPassCommandRole::Unsupported) {
+      return rejectBatch(Fallback::CoordinatorCommand, snapshots);
+    }
+    if (role == ParallelPassCommandRole::ClearBoundary) {
       const bool endedPass = active;
       sealCandidate(static_cast<std::uint32_t>(ordinal), locator, false);
       if (!source.clear.has_value() || !locator.valid) {
@@ -524,12 +546,36 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
         pendingClear = {};
         advancePassActionEpoch();
       }
+      pendingCoordinatorSplit = false;
       startProven = true;
       continue;
     }
-    if (kind == Kind::Present) {
+    if (role == ParallelPassCommandRole::PresentBoundary) {
       sealCandidate(static_cast<std::uint32_t>(ordinal), locator, false);
       pendingClear = {};
+      pendingCoordinatorSplit = false;
+      startProven = true;
+      advancePassActionEpoch();
+      continue;
+    }
+    if (role == ParallelPassCommandRole::CoordinatorBoundary) {
+      // The helper owns its own short-lived Metal encoder, so the coordinator
+      // has ended the render encoder by the time it replays here. That makes
+      // this ordinal a real pass boundary at exactly the position Clear and
+      // Present occupy, and the helper itself is never a child range.
+      if (!locator.valid) {
+        return rejectBatch(Fallback::ReplayInvalid, snapshots);
+      }
+      const bool splitsPass = active && attachmentKnown &&
+          sameAttachmentResumesAfter(stream, ordinal, current.attachments);
+      ++result.coordinatorBoundaries;
+      if (splitsPass) {
+        ++result.coordinatorSplits;
+        rejectCandidate(Fallback::CoordinatorCommand);
+      }
+      sealCandidate(static_cast<std::uint32_t>(ordinal), locator, false);
+      pendingClear = {};
+      pendingCoordinatorSplit = splitsPass;
       startProven = true;
       advancePassActionEpoch();
       continue;

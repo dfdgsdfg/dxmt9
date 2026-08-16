@@ -229,6 +229,8 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassShadowRejectAttachment{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectHazard{0};
   std::atomic<std::uint64_t> parallelPassShadowRejectSnapshot{0};
+  std::atomic<std::uint64_t> parallelPassShadowCoordinatorBoundaries{0};
+  std::atomic<std::uint64_t> parallelPassShadowCoordinatorSplits{0};
   std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};

@@ -1113,6 +1113,34 @@ core::RenderRoute resolveParallelPassRenderRoute(
       : core::RenderRoute::Portable;
 }
 
+// A parallel pass closes at the same coordinator command the serial encoder
+// would have flushed on, so the encoder-split reason must stay the one the
+// serial lane records for that kind.
+perf::EncoderSplitReason parallelPassCloseReason(
+    const encoders::SealedParallelPassSnapshot& pass) noexcept {
+  if (pass.sealedAtSourceEnd || !pass.sealingCommand.valid) {
+    return perf::EncoderSplitReason::Final;
+  }
+  switch (pass.sealingCommand.kind) {
+  case core::MetalCommandKind::Present:
+    return perf::EncoderSplitReason::Present;
+  case core::MetalCommandKind::Clear:
+    return perf::EncoderSplitReason::ClearBarrier;
+  case core::MetalCommandKind::SurfaceCopy:
+    return perf::EncoderSplitReason::SurfaceCopy;
+  case core::MetalCommandKind::StretchRect:
+  case core::MetalCommandKind::DepthResolve:
+    return perf::EncoderSplitReason::StretchRect;
+  case core::MetalCommandKind::Readback:
+    return perf::EncoderSplitReason::Readback;
+  case core::MetalCommandKind::ColorFill:
+    return perf::EncoderSplitReason::ColorFill;
+  case core::MetalCommandKind::DrawRun:
+    break;
+  }
+  return perf::EncoderSplitReason::RenderTargetChange;
+}
+
 struct ActiveSeedMergeTicketAudit {
   ActiveSeedMergeTargetResolver resolver{};
   std::uint64_t mismatch = 0;
@@ -4010,13 +4038,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .openedWithClear = prepared.actions.color0Clear != 0u ||
             prepared.actions.depthClear != 0u ||
             prepared.actions.stencilClear != 0u,
-        .closeReason = pass.sealedAtSourceEnd
-            ? perf::EncoderSplitReason::Final
-            : pass.sealingCommand.kind == Kind::Present
-                ? perf::EncoderSplitReason::Present
-                : pass.sealingCommand.kind == Kind::Clear
-                    ? perf::EncoderSplitReason::ClearBarrier
-                : perf::EncoderSplitReason::RenderTargetChange,
+        .closeReason = parallelPassCloseReason(pass),
     };
     if (perf::enabled()) {
       production.storeProof = renderPassStoreProofSummaryForLookahead(

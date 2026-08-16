@@ -207,6 +207,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"parallel_pass_shadow_reject_attachment", CounterEntry::Kind::UnsignedCount, &Counters::parallelPassShadowRejectAttachment, nullptr, nullptr, 0.0},
     {"parallel_pass_shadow_reject_hazard", CounterEntry::Kind::UnsignedCount, &Counters::parallelPassShadowRejectHazard, nullptr, nullptr, 0.0},
     {"parallel_pass_shadow_reject_snapshot", CounterEntry::Kind::UnsignedCount, &Counters::parallelPassShadowRejectSnapshot, nullptr, nullptr, 0.0},
+    {"parallel_pass_shadow_coordinator_boundaries", CounterEntry::Kind::UnsignedCount, &Counters::parallelPassShadowCoordinatorBoundaries, nullptr, nullptr, 0.0},
+    {"parallel_pass_shadow_coordinator_splits", CounterEntry::Kind::UnsignedCount, &Counters::parallelPassShadowCoordinatorSplits, nullptr, nullptr, 0.0},
     {"cpu_ready_session_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionPendingStarted, nullptr, nullptr, 0.0},
     {"cpu_ready_session_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionHeadAppended, nullptr, nullptr, 0.0},
     {"cpu_ready_session_arena_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionArenaHeadAppended, nullptr, nullptr, 0.0},

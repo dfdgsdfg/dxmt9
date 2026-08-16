@@ -980,10 +980,15 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
   control.slot.appendReadback({});
   control.finalize(408u);
   result = control.observe(output);
-  check(result.eligibleCount == 0u && result.candidateCount == 0u &&
-            result.fallback ==
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::CoordinatorCommand,
-        "readback rejects observation before effects");
+  check(result.eligibleCount == 1u && result.candidateCount == 1u &&
+            result.sealedCount == 1u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u && output.count == 1u &&
+            output.passes[0].sealingCommand.valid &&
+            output.passes[0].sealingCommand.kind ==
+                dxmt9::core::MetalCommandKind::Readback &&
+            output.passes[0].replayOrdinalEnd == 1u,
+        "a readback terminates the pass interval at its serial position "
+        "instead of rejecting the whole source");
 
   auto productionLike = completeProofs(0u);
   productionLike.coordinator.flags = 0u;
@@ -2580,6 +2585,153 @@ void producerOutputFeedsSynchronousSemanticValidator() {
         "whole-command duplicate/partial replay span fails closed");
 }
 
+// R-BACK-2.70: a non-child coordinator command stays at its serial position and
+// segments the source into pass intervals. It never becomes a child range, it
+// never removes an unrelated interval's eligibility, and it fails a pass closed
+// whenever the same attachment would otherwise have continued across it.
+void coordinatorCommandsSegmentPassIntervals() {
+  using Kind = dxmt9::core::MetalCommandKind;
+  using Fallback = dxmt9::encoders::SealedParallelPassSnapshotFallback;
+  using Role = dxmt9::encoders::ParallelPassCommandRole;
+  const auto drawValues = draws(128u);
+  const auto drawPayloads = payloads(drawValues.size());
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+
+  check(dxmt9::encoders::classifyParallelPassCommandRole(Kind::DrawRun) ==
+                Role::Draw &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Clear) ==
+                Role::ClearBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Present) ==
+                Role::PresentBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::StretchRect) == Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::SurfaceCopy) == Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Readback) ==
+                Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::ColorFill) ==
+                Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::DepthResolve) == Role::CoordinatorBoundary,
+        "every source command kind has one total pass-interval role");
+  check(!dxmt9::encoders::parallelPassSealingKindAccepted(Kind::DrawRun) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(Kind::Clear) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(Kind::Present) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(
+                Kind::StretchRect),
+        "only coordinator-owned commands may seal a pass; a draw may not");
+
+  // SFIV shape: Clear -> DrawRuns -> StretchRect -> Present. The StretchRect
+  // used to reject the whole source before candidates, sealing, or economics.
+  PassObservationFixture sfiv;
+  sfiv.slot.appendClear({});
+  sfiv.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  sfiv.slot.appendStretchRect({});
+  sfiv.slot.appendPresent({}, {});
+  sfiv.finalize(430u);
+  auto result = sfiv.observe(output);
+  check(result.candidateCount == 1u && result.sealedCount == 1u &&
+            result.eligibleCount == 1u && result.childCount == 2u &&
+            result.drawCount == 128u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u && output.count == 1u,
+        "Clear -> DrawRun -> StretchRect -> Present seals one eligible pass");
+  const auto& sfivPass = output.passes[0];
+  check(sfivPass.leadingClear.valid &&
+            sfivPass.leadingClear.kind == Kind::Clear &&
+            sfivPass.sealingCommand.valid &&
+            sfivPass.sealingCommand.kind == Kind::StretchRect &&
+            sfivPass.sealingCommand.replayOrdinal ==
+                sfivPass.replayOrdinalEnd &&
+            sfivPass.replayOrdinalBegin == 1u &&
+            sfivPass.replayOrdinalEnd == 2u,
+        "the StretchRect is a source-qualified sealing locator at its own "
+        "serial ordinal and is excluded from the pass interval");
+  for (std::size_t i = 0; i < sfivPass.childCount; ++i) {
+    check(sfivPass.ranges[i].kind ==
+              dxmt9::encoders::EncodePartitionRangeKind::DrawRunEntries &&
+              sfivPass.ranges[i].replayOrdinalBegin ==
+                  sfivPass.replayOrdinalBegin &&
+              sfivPass.childReplayOrdinalBegins[i] <
+                  sfivPass.replayOrdinalEnd,
+          "no child range covers the coordinator command's ordinal");
+  }
+
+  // Same attachment resumes across the coordinator command: both fragments of
+  // what would otherwise be one logical pass fail closed.
+  PassObservationFixture split;
+  split.slot.appendClear({});
+  split.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  split.slot.appendStretchRect({});
+  split.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  split.slot.appendPresent({}, {});
+  split.finalize(431u);
+  result = split.observe(output);
+  check(result.candidateCount == 2u && result.eligibleCount == 0u &&
+            output.count == 0u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                Fallback::CoordinatorCommand)] == 2u,
+        "a coordinator command inside one logical pass fails both fragments "
+        "closed instead of resuming the pass across it");
+
+  // A different attachment after the coordinator command is a genuine pass
+  // change, so both intervals stay independently eligible.
+  dxmt9::core::CanonicalDrawState stateA{};
+  dxmt9::core::CanonicalDrawState stateB{};
+  stateA.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x91u};
+  stateB.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x92u};
+  PassObservationFixture distinct;
+  distinct.slot.appendDrawRun(stateA, {}, drawValues, drawPayloads);
+  distinct.slot.appendStretchRect({});
+  distinct.slot.appendDrawRun(stateB, {}, drawValues, drawPayloads);
+  distinct.slot.appendPresent({}, {});
+  distinct.finalize(432u);
+  result = distinct.observe(output);
+  check(result.candidateCount == 2u && result.eligibleCount == 2u &&
+            output.count == 2u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].sealingCommand.kind == Kind::StretchRect &&
+            output.passes[1].sealingCommand.kind == Kind::Present &&
+            output.passes[0].replayOrdinalEnd <=
+                output.passes[1].replayOrdinalBegin,
+        "distinct attachments across a coordinator command stay two "
+        "independent sealed passes");
+
+  // Regression pin: a stream with no coordinator helper behaves exactly as it
+  // did before pass-interval extraction.
+  PassObservationFixture pure;
+  pure.slot.appendClear({});
+  pure.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  pure.slot.appendClear({});
+  pure.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  pure.slot.appendPresent({}, {});
+  pure.finalize(433u);
+  result = pure.observe(output);
+  check(result.candidateCount == 2u && result.sealedCount == 2u &&
+            result.eligibleCount == 2u && result.childCount == 4u &&
+            result.drawCount == 256u && output.count == 2u &&
+            result.coordinatorBoundaries == 0u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].passActionEpoch == 7u &&
+            output.passes[1].passActionEpoch == 8u,
+        "a coordinator-free source keeps its exact pre-extraction shape");
+
+  // A coordinator command between two passes never blocks a later interval.
+  PassObservationFixture leading;
+  leading.slot.appendStretchRect({});
+  leading.slot.appendClear({});
+  leading.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  leading.slot.appendPresent({}, {});
+  leading.finalize(434u);
+  result = leading.observe(output, /*sourceStartsPass=*/false);
+  check(result.candidateCount == 1u && result.eligibleCount == 1u &&
+            output.count == 1u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].replayOrdinalBegin == 2u,
+        "a leading coordinator command proves the start of the pass that "
+        "follows it even on a carried source");
+}
+
 }  // namespace
 
 int main() {
@@ -2594,6 +2746,7 @@ int main() {
     multiPassAndAttachmentBoundariesStayIndependent();
     activeReplayOrderAndPartialClearDriveExactBoundaries();
     producerRejectsControlsFragmentsHazardsAndBounds();
+    coordinatorCommandsSegmentPassIntervals();
     childBoundsAndPerfGateFailClosed();
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();
     malformedPlansFailClosedBeforeParentPreparation();
