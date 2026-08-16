@@ -208,6 +208,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     attachmentKnown = true;
     current.source = stream.source.source;
     current.seqId = stream.source.seqId;
+    current.coordinatorProof = input.proofs.coordinator;
     const bool leadingClearMatches =
         pendingClear.valid && pendingClearAttachments == attachments;
     if (pendingClear.valid && !leadingClearMatches) {
@@ -259,6 +260,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
                          std::uint32_t replayOrdinalCount,
                          std::uint32_t drawBegin,
                          std::uint32_t drawCount,
+                         std::uint64_t logicalDrawCount,
                          bool completeCommands) {
     if (current.childCount >= kParallelRenderPassChildCapacity ||
         replayOrdinalCount == 0u || drawCount == 0u) {
@@ -335,6 +337,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     };
     current.childReplayOrdinalBegins[child] = replayOrdinalBegin;
     current.childReplayOrdinalCounts[child] = replayOrdinalCount;
+    current.childDrawCounts[child] = logicalDrawCount;
     current.childrenCoverCompleteCommands = completeCommands;
     return true;
   };
@@ -367,6 +370,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
            child < subdivision.childCount; ++child) {
         if (!appendChild(current.replayOrdinalBegin, 1u,
                          subdivision.drawBegins[child],
+                         subdivision.drawCounts[child],
                          subdivision.drawCounts[child], false)) {
           return;
         }
@@ -424,7 +428,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
           !appendChild(subdivision.replayOrdinalBegins[child],
                        subdivision.replayOrdinalCounts[child], 0u,
                        static_cast<std::uint32_t>(
-                           firstSource.command.drawParams.size()), true)) {
+                           firstSource.command.drawParams.size()),
+                       subdivision.drawCounts[child], true)) {
         return;
       }
     }

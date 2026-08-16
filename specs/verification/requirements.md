@@ -175,6 +175,58 @@ serial draw ownership, ordered child join, parent end, and completion. Metal 4
 multi-segment completion and cross-source parallel grouping remain separate
 open refinements; this bounded model must not be cited for those claims.
 
+**R-VERIF-2.16** Parallel policy verification must separate semantic safety
+from economics. A safety certificate must refine the sealed serial stream
+without consulting a cost score, and an economics record must rank only
+already-safe candidates. No score, benchmark observation, worker count, or
+Metal capability may turn an unproved candidate into an eligible one.
+
+**R-VERIF-2.17** The policy proof must establish ordered contiguous exact
+coverage: child ranges are source-qualified, non-overlapping, and complete;
+their flattened draw sequence equals the serial draw sequence exactly once;
+`DrawRun` parameter ranges have no gap or partial tail; and every coordinator
+command remains at its serial position and outside child ownership. Invalid,
+stale, duplicate, missing, or overflowed coverage is a pre-effect serial
+fallback.
+
+**R-VERIF-2.18** The policy proof must be pass-wide. It must include complete
+attachment/sample identity and exact hazards, one action epoch, one supported
+route and binding ABI, and a complete first-draw snapshot for every child.
+Fragment-local evidence is insufficient. The proof must also establish that
+the coordinator retains ownership of actions, sidecars, completion, parent
+end, and command-buffer/segment lifecycle.
+
+**R-VERIF-2.19** The economics and selection relation must use checked,
+deterministic fixed-point arithmetic over a declared finite integer domain.
+Overflow, invalid normalization, or inconsistent accounting must select the
+serial fallback. Selection must be independent of evaluation order, timing,
+worker arrival, GPU progress, allocation addresses, and floating-point
+rounding; equal safe scores must tie-break to fewer children and then a stable
+canonical range vector.
+
+**R-VERIF-2.20** The policy relation must be monotone under added negative
+evidence: adding a coordinator command, hazard, attachment ambiguity,
+action-epoch or ABI mismatch, missing first-draw fact, stale generation,
+capacity violation, or overflow may preserve or shrink the safe set but may
+not introduce a parallel candidate. The relation must be checked for both
+accepted and serial-fallback outcomes.
+
+**R-VERIF-2.21** Evidence mechanisms have distinct owners. `ParallelDrawBinding`
+and `RenderTapeParallelJoin` TLA+ models own reachable-state safety, child
+interleavings, ordered join, and temporal progress. Exhaustive native or SMT
+evidence owns finite static coverage, overflow, monotonicity, and selection
+equivalence. Render Tape owns deterministic production-import/replay identity
+and structural/output comparison. Metal readback owns concrete ABI, resource,
+shader, and pixel behavior. No mechanism may be cited for a claim owned by
+another without an explicit refinement link.
+
+**R-VERIF-2.22** The algebraic and formal results do not authorize promotion.
+The parallel policy must remain default-off, with serial fallback and existing
+serial modes reachable, until the complete layered evidence bundle in
+`R-VERIF-6.4` and the locality/performance gates in `R-BACK-2.50` pass. A
+non-vacuous Render Tape or Metal result must not be described as a default-on
+or performance-promotion claim by itself.
+
 ---
 
 ## 3. Resource Lifetime

@@ -1,4 +1,5 @@
 #include "device_c_render_tape_projection.hpp"
+#include "device_c_render_tape_policy.hpp"
 
 // R-HARN-REPLAY-7.16/7.17: pure frame-tape draw-range projection, canonical
 // locator conservation, exact object/blob closure, and pre-effect rejection.
@@ -238,7 +239,7 @@ std::vector<std::byte> drawPayload(bool fullSnapshot,
   return payload;
 }
 
-std::vector<std::byte> bootstrapChunk() {
+std::vector<std::byte> applyStatePayload() {
   auto payload = drawPayload(true);
   auto* shaderSection = reinterpret_cast<D9CCommandChunkWireSectionDesc*>(
       payload.data() + sizeof(D9CCommandChunkWireDrawHeader) +
@@ -256,6 +257,11 @@ std::vector<std::byte> bootstrapChunk() {
                            payload.data())
                            ->sectionPayloadOffset);
   texture->handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+  return payload;
+}
+
+std::vector<std::byte> bootstrapChunk() {
+  auto payload = applyStatePayload();
   return makeChunk(std::array{Record{
       .type = D9C_COMMAND_RECORD_APPLY_STATE,
       .payload = std::move(payload),
@@ -527,6 +533,210 @@ std::vector<std::byte> makeIdentity(
       tape, catalogue(), 42u, 6u, 77u,
       authority, std::span(&source, 1u),
       std::span(ranges).first(splitPasses ? 2u : 1u));
+}
+
+std::vector<std::byte> makePolicyTape() {
+  constexpr std::array<std::byte, 4u> shaderDescriptor{};
+  const auto output = outputDescriptor();
+  const auto texture = textureDescriptor();
+  const RenderTapeOracleAttachment oracle{
+      .identity = kOutput,
+      .descriptorKind =
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+  };
+  std::vector<Record> draws;
+  draws.reserve(16u);
+  for (std::uint32_t index = 0u; index < 16u; ++index) {
+    draws.push_back(Record{
+        .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+        .payload = drawPayload(index == 0u, index * 2u),
+        .handles = {
+            {kTexture.kind, kTexture.generation, kTexture.objectId},
+            {kShader.kind, kShader.generation, kShader.objectId},
+        },
+    });
+  }
+  const auto drawChunk = makeChunk(draws);
+  const auto clear = bytesOf(D9CCommandChunkWireClear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectCount = 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  });
+  const auto present = bytesOf(D9CCommandChunkWirePresent{});
+  const std::array coordinator{
+      Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = clear},
+      Record{.type = D9C_COMMAND_RECORD_PRESENT, .payload = present},
+  };
+  const auto coordinatorChunk = makeChunk(coordinator);
+  const auto nonDrawChunk = makeChunk(std::array{Record{
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = applyStatePayload(),
+  }});
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(bootstrapChunk());
+  builder.appendObjectDefine(
+      kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&output, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      texture, 0u, {}, 4u, 1u);
+  builder.appendObjectDefine(
+      kShader, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
+      shaderDescriptor, 4u, kShaderDigest);
+  builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                                 0u, 4u, kTextureDigest);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 16u, .handleCount = 32u}, drawChunk);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 2u, .handleCount = 0u},
+      coordinatorChunk);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      nonDrawChunk);
+  builder.appendPresentComplete(
+      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  return builder.seal();
+}
+
+std::vector<std::byte> makePolicyIdentity(const std::vector<std::byte>& tape) {
+  const std::array sources{
+      RenderTapeIdentitySource{.eventOrdinal = 6u,
+                               .sourceOrdinal = 101u,
+                               .seqId = 501u,
+                               .captureToken = 77u,
+                               .recordCount = 16u,
+                               .firstRange = 0u,
+                               .rangeCount = 1u},
+      RenderTapeIdentitySource{.eventOrdinal = 7u,
+                               .sourceOrdinal = 102u,
+                               .seqId = 502u,
+                               .captureToken = 77u,
+                               .recordCount = 2u,
+                               .firstRange = 1u,
+                               .rangeCount = 1u},
+      RenderTapeIdentitySource{.eventOrdinal = 8u,
+                               .sourceOrdinal = 103u,
+                               .seqId = 503u,
+                               .captureToken = 77u,
+                               .recordCount = 1u,
+                               .firstRange = 2u,
+                               .rangeCount = 1u},
+  };
+  const std::array ranges{
+      RenderTapeIdentityRange{.eventOrdinal = 6u,
+                              .sourceOrdinal = 101u,
+                              .seqId = 501u,
+                              .logicalPassId = 9001u,
+                              .firstRecord = 0u,
+                              .recordCount = 16u,
+                              .dagPassIndex = 3u,
+                              .passKind = 1u},
+      RenderTapeIdentityRange{.eventOrdinal = 7u,
+                              .sourceOrdinal = 102u,
+                              .seqId = 502u,
+                              .logicalPassId = 9002u,
+                              .firstRecord = 0u,
+                              .recordCount = 2u,
+                              .dagPassIndex = 4u,
+                              .passKind = 1u},
+      RenderTapeIdentityRange{.eventOrdinal = 8u,
+                              .sourceOrdinal = 103u,
+                              .seqId = 503u,
+                              .logicalPassId = 9003u,
+                              .firstRecord = 0u,
+                              .recordCount = 1u,
+                              .dagPassIndex = 5u,
+                              .passKind = 1u},
+  };
+  RenderTapeIdentityValidationResult validation;
+  auto result = buildRenderTapeIdentity(
+      tape, catalogue(), 42u, 7u, 77u, RenderTapeIdentityAuthority::Capture,
+      sources, ranges, &validation);
+  if (result.empty()) {
+    std::cerr << "policy fixture validation status "
+              << renderTapeIdentityStatusName(validation.status)
+              << " tape "
+              << renderTapeValidationStatusName(
+                     validation.tapeValidation.status)
+              << " event " << validation.tapeValidation.failedEventIndex
+              << " chunk "
+              << static_cast<unsigned>(validation.tapeValidation.chunkStatus)
+              << '\n';
+  }
+  return result;
+}
+
+void policyExploreTruthTable() {
+  const auto tape = makePolicyTape();
+  ImportedRenderTapeView imported;
+  const auto tapeCheck = validateRenderTape(tape, catalogue(), &imported);
+  if (!tapeCheck.valid()) {
+    std::cerr << "policy tape validation event " << tapeCheck.failedEventIndex
+              << " status " << renderTapeValidationStatusName(tapeCheck.status)
+              << " chunk " << static_cast<unsigned>(tapeCheck.chunkStatus)
+              << '\n';
+    if (tapeCheck.failedEventIndex < imported.events.size()) {
+      const auto event = imported.event(tapeCheck.failedEventIndex);
+      RenderTapeCommandChunkHeader fixed{};
+      std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+      ImportedChunkView chunk;
+      const auto detail = validateCommandChunk(
+          event.payload.subspan(sizeof(fixed), fixed.chunkBytes),
+          CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
+                               fixed.handleCount}, &chunk);
+      std::cerr << "detail record " << detail.failedRecordIndex << " section "
+                << detail.failedSectionIndex << " offset " << detail.byteOffset
+                << '\n';
+    }
+  }
+  const auto identity = makePolicyIdentity(tape);
+  check(!identity.empty(), "policy fixture identity must validate");
+  const auto result = exploreRenderTapeParallelPolicy(tape, catalogue(), identity);
+  check(result.valid() && result.authenticatedInput && result.structuralOnly &&
+            !result.proofCoreValidated,
+        "policy analyzer reports authenticated structural-only status");
+  check(result.candidates.size() == 4u,
+        "policy analyzer enumerates exactly 2/4/8/16 children");
+  check(renderTapePolicyCanonicalCandidateCount(1u) == 0u &&
+            renderTapePolicyCanonicalCandidateCount(2u) == 1u &&
+            renderTapePolicyCanonicalCandidateCount(4u) == 2u &&
+            renderTapePolicyCanonicalCandidateCount(8u) == 3u &&
+            renderTapePolicyCanonicalCandidateCount(16u) == 4u &&
+            renderTapePolicyCandidateBudgetAccepts(
+                kRenderTapePolicyMaxCandidates - 4u, 16u) &&
+            !renderTapePolicyCandidateBudgetAccepts(
+                kRenderTapePolicyMaxCandidates - 3u, 16u),
+        "canonical policy enumeration fails closed before partial output");
+  for (std::size_t index = 0u; index < result.candidates.size(); ++index) {
+    const auto& candidate = result.candidates[index];
+    check(candidate.children.size() == (2u << index) &&
+              candidate.drawTotal == 16u && candidate.primitiveTotal == 16u &&
+              candidate.firstRecord == 0u && candidate.recordCount == 16u &&
+              candidate.vertexShaderFacts == 16u &&
+              candidate.pixelShaderFacts == 0u &&
+              candidate.vertexInputFacts == 0u &&
+              candidate.uniformSectionFacts == 0u &&
+              candidate.pipelineInputSectionFacts == 16u,
+          "policy candidate has canonical bounded draw ranges");
+    check(candidate.children.front().firstRecord == 0u &&
+              candidate.children.back().firstRecord < 16u,
+          "policy children stay within source draw records");
+  }
+  check(result.rejections.size() == 2u &&
+            result.rejections[0].reason ==
+                RenderTapePolicyRejectionReason::CoordinatorRecord &&
+            result.rejections[1].reason ==
+                RenderTapePolicyRejectionReason::NonDrawRecord,
+        "coordinator and non-draw ranges remain outside children");
+  auto permuted = identity;
+  std::reverse(permuted.begin() + sizeof(RenderTapeIdentityHeader),
+               permuted.end());
+  const auto rejected = exploreRenderTapeParallelPolicy(
+      tape, catalogue(), std::span<const std::byte>(permuted));
+  check(!rejected.valid(), "malformed identity fails closed");
 }
 
 template <typename T>
@@ -810,6 +1020,21 @@ void failClosedSelectionAndClosureCases() {
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 4 &&
+        std::string_view(argv[1]) == "--write-policy-fixture") {
+      const auto tape = makePolicyTape();
+      const auto identity = makePolicyIdentity(tape);
+      std::ofstream output(argv[2], std::ios::binary);
+      output.write(reinterpret_cast<const char*>(tape.data()),
+                   static_cast<std::streamsize>(tape.size()));
+      check(output.good(), "failed to write policy CLI fixture");
+      std::ofstream identityOutput(argv[3], std::ios::binary);
+      identityOutput.write(
+          reinterpret_cast<const char*>(identity.data()),
+          static_cast<std::streamsize>(identity.size()));
+      check(identityOutput.good(), "failed to write policy identity fixture");
+      return 0;
+    }
     if ((argc == 3 || argc == 4) &&
         std::string_view(argv[1]) == "--write-fixture") {
       const auto tape = makeFrameTape();
@@ -828,12 +1053,15 @@ int main(int argc, char** argv) {
       return 0;
     }
     check(argc == 1,
-          "usage: render_tape_projection_spec [--write-fixture path [identity]]");
+          "usage: render_tape_projection_spec "
+          "[--write-fixture path [identity]] "
+          "[--write-policy-fixture tape identity]");
     acceptedRangeConservesCanonicalIdentity();
     projectionAccountsLatePerIdentitySeed();
     projectionPreservesDispositionAndAliasMetadata();
     failClosedSelectionAndClosureCases();
     identityTruthTableAndMalformedInputs();
+    policyExploreTruthTable();
     executableProjectionMaterializesCanonicalBundle();
   } catch (const std::exception& error) {
     std::cerr << "render_tape_projection_spec failed: " << error.what() << '\n';

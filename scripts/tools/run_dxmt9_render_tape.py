@@ -147,6 +147,55 @@ def run_identity_validator(
         raise SystemExit("render tape identity validator emitted invalid JSON") from error
 
 
+def run_policy_explore(
+    validator: pathlib.Path,
+    events: pathlib.Path,
+    identity: pathlib.Path,
+    blob_refs: list[str],
+) -> dict[str, Any]:
+    arguments = [str(validator), "policy-explore", str(events), str(identity)]
+    for reference in blob_refs:
+        arguments.extend(("--verified-blob", reference))
+    completed = subprocess.run(
+        arguments, check=False, text=True, capture_output=True
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise SystemExit(f"render tape policy exploration failed: {detail}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit(
+            "render tape policy explorer emitted invalid JSON"
+        ) from error
+
+
+def policy_explore(args: argparse.Namespace) -> int:
+    manifest, events, blob_refs, _, identity, _source = load_bundle(args.bundle)
+    if identity is None:
+        raise SystemExit(
+            "policy exploration requires authenticated components/identity.bin"
+        )
+    identity_result = run_identity_validator(
+        args.validator, events, identity, blob_refs
+    )
+    result = run_policy_explore(args.validator, events, identity, blob_refs)
+    if (
+        result.get("status") != "valid"
+        or result.get("authenticated_input") is not True
+        or result.get("structural_only") is not True
+        or result.get("proof_core_validated") is not False
+    ):
+        raise SystemExit(
+            "policy exploration returned an unsafe or unauthenticated status"
+        )
+    result["bundle"] = str(args.bundle.resolve())
+    result["bundle_profile"] = manifest.get("profile")
+    result["identity_validation"] = identity_result
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def run_provider_replay(
     provider: pathlib.Path,
     events: pathlib.Path,
@@ -1602,6 +1651,16 @@ def parser() -> argparse.ArgumentParser:
             default=pathlib.Path("build/tools/dxmt9-render-tape"),
         )
         command_parser.set_defaults(function=validate_or_inspect)
+    policy_parser = subparsers.add_parser(
+        "policy-explore",
+        help="enumerate authenticated structural parallel-policy candidates",
+    )
+    policy_parser.add_argument("bundle", type=pathlib.Path)
+    policy_parser.add_argument(
+        "--validator", type=pathlib.Path,
+        default=pathlib.Path("build/tools/dxmt9-render-tape"),
+    )
+    policy_parser.set_defaults(function=policy_explore)
     provider_parser = subparsers.add_parser(
         "provider-replay", help="replay a validated bundle through the production provider"
     )

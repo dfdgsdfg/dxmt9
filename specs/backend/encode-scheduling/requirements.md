@@ -728,3 +728,85 @@ their composition is live.
 The composition model runs under `dxmt9-verify-tla` with the existing
 models. This requirement adds verification obligations only; it must not
 change scheduling behavior.
+
+## 5. Parallel Policy Safety Foundation
+
+These requirements define the policy algebra separately from its economics.
+They apply to `ExplicitParallel` exploration and do not authorize a runtime
+implementation or a default change by themselves.
+
+**R-BACK-2.68** Parallel policy evaluation must produce two separate,
+immutable value results: a semantic safety certificate and an economics
+record. The safety certificate describes only facts required to refine the
+sealed serial replay stream; the economics record describes bounded cost and
+benefit estimates. An economics score must never make an unsafe or unproved
+candidate eligible, and a safe certificate must not claim a performance win.
+
+**R-BACK-2.69** The policy proof core must define that only a complete,
+generation-checked, proof-carrying parallel plan may reach Metal child or
+segment creation. The certificate must bind the sealed source/pass identity,
+ordered range vector, complete coverage proof, coordinator-command exclusion,
+pass-wide attachment and exact-hazard facts, pass-action epoch, route/ABI
+compatibility, first-draw snapshots, and fixed capacity bounds. Every locator,
+generation, count, and arithmetic input must be checked before the first Metal
+side effect. A stale, incomplete, unknown, inconsistent, or overflowed
+certificate is invalid and cannot be partially consumed. The current
+implementation provides this algebraic proof core and native evidence only;
+production coordinator enforcement remains open and the provider stays
+default-off.
+
+**R-BACK-2.70** A certified plan must cover the effective replay stream with
+ordered, contiguous, non-overlapping source-qualified ranges. The flattened
+child draw sequence must equal the serial draw sequence exactly once, with
+complete `DrawRun` parameter coverage and no gap, overlap, duplicate, partial
+tail, or cross-source jump. Clear, Present, query, readback, update, wait,
+sidecar, and every other coordinator command remain at their serial position;
+they are never represented as child ranges and never disappear from the
+coverage proof.
+
+**R-BACK-2.71** Eligibility is pass-wide, not fragment-local. The proof must
+cover the complete sealed logical pass: one attachment/sample identity and
+all exact canonical read/write hazards; one unambiguous load/store/action
+epoch; one supported render route and child-binding ABI; and a complete
+first-draw snapshot for every child. A locally valid range cannot override a
+pass-wide unknown, conflict, action mismatch, ABI mismatch, or missing
+first-draw fact. Coordinator-owned pass actions, sidecars, completion, and
+parent/segment lifecycle remain outside child ownership.
+
+**R-BACK-2.72** Economics and selection must be deterministic checked fixed-
+point value transforms. Scores may use only bounded integer inputs captured in
+the policy snapshot; they must not depend on wallclock time, worker arrival,
+GPU progress, allocation addresses, or floating-point rounding. Checked
+addition, multiplication, and conversion are mandatory. Arithmetic overflow,
+invalid normalization, empty candidate sets, or an inconsistent score record
+invalidates the selection and selects the serial plan. Among otherwise equal
+safe candidates, selection must prefer fewer children, then the canonical
+lexicographic range vector. The result must be identical for identical input
+values regardless of evaluation order or worker scheduling.
+
+**R-BACK-2.73** Safety and selection must be monotone under added negative
+evidence. If a policy snapshot is made no less conservative by adding a
+coordinator command, hazard, attachment ambiguity, action-epoch mismatch,
+ABI uncertainty, missing first-draw fact, stale generation, capacity limit, or
+overflow condition, its eligible-plan set may only stay the same or shrink;
+it must not gain a parallel plan. Removing such a fact may restore a plan only
+after the complete certificate is recomputed. Economics observations may
+change ranking among already-safe plans but must not weaken this safety
+monotonicity.
+
+**R-BACK-2.74** Any invalid or overflowed plan, proof, score, tie-break key,
+range vector, or capacity calculation must fail closed to the exact serial
+effective replay stream before child/segment creation, pass-action mutation,
+completion registration, or command-buffer submission. The serial fallback is
+not a best-effort approximation and must preserve ordered contiguous draw
+coverage, coordinator commands, logical-pass actions, completion, and
+reclaim semantics. A failure after the first Metal effect is a fail-stop
+invariant breach; it is never a recoverable policy rejection.
+
+**R-BACK-2.75** The policy remains default-off and no promotion claim may be
+made from algebraic scoring, TLC, exhaustive/SMT checking, Render Tape
+comparison, or a Metal validation run alone. Policy promotion requires the
+ordered evidence bundle in `R-BACK-2.50` and `R-VERIF-6.4`, including repeated
+GPU-visible correctness, matched locality/economics, supervised wild
+correctness, and performance evidence. Existing serial and source-local
+parallel modes remain reachable while this evidence is incomplete.
