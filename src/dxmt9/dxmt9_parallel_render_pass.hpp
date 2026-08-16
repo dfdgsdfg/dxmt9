@@ -8,7 +8,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -497,6 +499,10 @@ struct ParallelPassCoordinatorProof {
   std::uint64_t firstPassActionEpoch = 0;
   std::uint32_t flags = 0;
 
+  friend constexpr bool operator==(const ParallelPassCoordinatorProof&,
+                                   const ParallelPassCoordinatorProof&) =
+      default;
+
   constexpr bool proves(ParallelPassCoordinatorProofFlag fact) const noexcept {
     return (flags & static_cast<std::uint32_t>(fact)) != 0;
   }
@@ -582,6 +588,7 @@ struct SealedParallelPassSnapshot {
              kParallelRenderPassChildCapacity> childReplayOrdinalBegins{};
   std::array<std::uint32_t,
              kParallelRenderPassChildCapacity> childReplayOrdinalCounts{};
+  std::array<std::uint64_t, kParallelRenderPassChildCapacity> childDrawCounts{};
   core::RenderAttachmentKey attachments{};
   core::ExactResourceSet attachmentWrites{};
   core::ExactResourceSet resourceReads{};
@@ -591,6 +598,7 @@ struct SealedParallelPassSnapshot {
   ParallelPassCommandLocator sealingCommand{};
   std::uint64_t seqId = 0;
   std::uint64_t passActionEpoch = 0;
+  ParallelPassCoordinatorProof coordinatorProof{};
   std::uint64_t drawCount = 0;
   std::uint32_t replayOrdinalBegin = 0;
   std::uint32_t replayOrdinalEnd = 0;
@@ -600,6 +608,10 @@ struct SealedParallelPassSnapshot {
   bool childrenCoverCompleteCommands = false;
   bool sealedAtSourceEnd = false;
 
+  friend constexpr bool operator==(const SealedParallelPassSnapshot&,
+                                   const SealedParallelPassSnapshot&) =
+      default;
+
   void reset() noexcept { *this = {}; }
   std::span<const EncodePartitionRangeSnapshot> rangeView() const noexcept {
     return std::span<const EncodePartitionRangeSnapshot>(ranges.data(),
@@ -608,6 +620,27 @@ struct SealedParallelPassSnapshot {
   std::span<const ParallelFirstDrawSnapshot> firstDrawView() const noexcept {
     return std::span<const ParallelFirstDrawSnapshot>(firstDraws.data(),
                                                        childCount);
+  }
+};
+
+// Owner-issued authority for one synchronous snapshot lookup. The request is
+// deliberately reduced to source identity and replay interval: callers
+// cannot hand the authority a candidate sealing command, range vector, or
+// child-count aggregate to echo back. The owner must resolve the complete
+// sealed interval from its current source table and return that value-owned
+// snapshot before validation continues; no authority state is retained.
+struct ParallelPassSnapshotAuthority {
+  const void* context = nullptr;
+  bool (*resolve)(const void* context,
+                  const core::CpuReadyTape::SourceRef& source,
+                  std::uint64_t seqId,
+                  std::uint32_t replayOrdinalBegin,
+                  std::uint32_t replayOrdinalEnd,
+                  SealedParallelPassSnapshot& authoritative) noexcept =
+      nullptr;
+
+  constexpr bool valid() const noexcept {
+    return context != nullptr && resolve != nullptr;
   }
 };
 
@@ -1088,6 +1121,909 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
   return ParallelPassFallbackReason::None;
 }
 
+enum class ParallelPassSemanticPlanFailure : std::uint8_t {
+  None,
+  MissingSnapshot,
+  SourceIdentity,
+  PassIdentity,
+  CoordinatorProof,
+  AttachmentProof,
+  ResourceProof,
+  FirstDrawProof,
+  ChildCapacity,
+  ChildPlan,
+  Coverage,
+  Arithmetic,
+  Count,
+};
+
+// This is a value-owned certificate. It intentionally copies the bounded
+// snapshot and child plans so retaining the result cannot retain a payload,
+// page, callback, or other borrowed storage.
+struct ParallelPassSemanticPlanValidation;
+struct ParallelPassCoverageResolver;
+
+class ParallelPassSemanticPlanView {
+ public:
+  constexpr bool valid() const noexcept {
+    return childCount_ >= 2u &&
+        childCount_ <= kParallelRenderPassChildCapacity;
+  }
+  constexpr const SealedParallelPassSnapshot& snapshot() const noexcept {
+    return snapshot_;
+  }
+  constexpr std::span<const ParallelPassChildPlan> children() const noexcept {
+    return std::span<const ParallelPassChildPlan>(children_.data(), childCount_);
+  }
+
+ private:
+  friend struct ParallelPassSemanticPlanValidation;
+  friend ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
+      const SealedParallelPassSnapshot*,
+      std::span<const ParallelPassChildPlan>,
+      const ParallelPassSnapshotAuthority&,
+      const ParallelPassCoverageResolver&) noexcept;
+  SealedParallelPassSnapshot snapshot_{};
+  std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+      children_{};
+  std::uint32_t childCount_ = 0u;
+};
+
+struct ParallelPassSemanticPlanValidation {
+  ParallelPassSemanticPlanFailure failure =
+      ParallelPassSemanticPlanFailure::MissingSnapshot;
+  ParallelPassSemanticPlanView plan{};
+
+  constexpr bool accepted() const noexcept {
+    return failure == ParallelPassSemanticPlanFailure::None && plan.valid();
+  }
+};
+
+struct ParallelPassResolvedCoverage {
+  std::uint64_t drawCount = 0u;
+  struct Command {
+    std::uint32_t replayOrdinal = 0u;
+    std::uint32_t commandIndex = 0u;
+    std::uint32_t drawParamBegin = 0u;
+    std::uint32_t drawParamCount = 0u;
+
+    friend constexpr bool operator==(const Command&, const Command&) =
+        default;
+  };
+  std::array<Command, kParallelRenderPassChildCapacity> commands{};
+  std::uint32_t commandCount = 0u;
+  core::ExactResourceSet reads{};
+  core::ExactResourceSet writes{};
+  core::RenderAttachmentKey attachments{};
+  core::RenderRoute route = core::RenderRoute::Unknown;
+  std::uint64_t passActionEpoch = 0u;
+};
+
+// Exact coverage is owned by the current source resolver. The callback is
+// borrowed only for the synchronous validation call and re-resolves every
+// replay ordinal and DrawParam range, returning the exact child-wide facts.
+// No callback state is retained in the certificate or selector result.
+struct ParallelPassCoverageResolver {
+  const void* context = nullptr;
+  bool (*resolve)(const void* context,
+                  const SealedParallelPassSnapshot& snapshot,
+                  const ParallelPassChildPlan& child,
+                  ParallelPassResolvedCoverage& coverage) noexcept = nullptr;
+
+  constexpr bool valid() const noexcept {
+    return context != nullptr && resolve != nullptr;
+  }
+};
+
+inline bool parallelPassExactResourceSetValid(
+    const core::ExactResourceSet& resources) noexcept {
+  if (!resources.complete() || !resources.canonicalized() ||
+      resources.count > resources.handles.size()) {
+    return false;
+  }
+  for (std::uint32_t i = 0u; i < resources.count; ++i) {
+    if (resources.handles[i] == 0u) {
+      return false;
+    }
+    for (std::uint32_t j = i + 1u; j < resources.count; ++j) {
+      if (resources.handles[i] == resources.handles[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+inline bool parallelPassExactResourceSetEqual(
+    const core::ExactResourceSet& left,
+    const core::ExactResourceSet& right) noexcept {
+  if (!parallelPassExactResourceSetValid(left) ||
+      !parallelPassExactResourceSetValid(right) ||
+      left.count != right.count) {
+    return false;
+  }
+  for (std::uint32_t i = 0u; i < left.count; ++i) {
+    bool found = false;
+    for (std::uint32_t j = 0u; j < right.count; ++j) {
+      found |= left.handles[i] == right.handles[j];
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool parallelPassExactResourceSetContains(
+    const core::ExactResourceSet& container,
+    const core::ExactResourceSet& contained) noexcept {
+  if (!parallelPassExactResourceSetValid(container) ||
+      !parallelPassExactResourceSetValid(contained)) {
+    return false;
+  }
+  for (std::uint32_t i = 0u; i < contained.count; ++i) {
+    bool found = false;
+    for (std::uint32_t j = 0u; j < container.count; ++j) {
+      found |= contained.handles[i] == container.handles[j];
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool validateParallelPassSemanticPlanCoverage(
+    const SealedParallelPassSnapshot& snapshot,
+    std::span<const ParallelPassChildPlan> children,
+    std::span<const ParallelPassResolvedCoverage> resolvedCoverage) noexcept {
+  if (snapshot.replayOrdinalBegin >= snapshot.replayOrdinalEnd ||
+      snapshot.drawCount == 0u || children.size() != snapshot.childCount ||
+      resolvedCoverage.size() != children.size() || children.empty()) {
+    return false;
+  }
+  std::uint64_t coveredDraws = 0u;
+  std::uint32_t previousReplayEnd = snapshot.replayOrdinalBegin;
+  std::uint32_t previousCommand = 0u;
+  std::uint32_t previousDrawEnd = 0u;
+  for (std::size_t i = 0u; i < children.size(); ++i) {
+    const auto& child = children[i];
+    const auto& range = child.range;
+    if (child.childOrdinal != i || child.replayOrdinalBegin !=
+            snapshot.childReplayOrdinalBegins[i] ||
+        child.replayOrdinalCount != snapshot.childReplayOrdinalCounts[i] ||
+        snapshot.ranges[i] != range ||
+        snapshot.firstDraws[i] != child.firstDraw ||
+        range.entry.source.tapeSource != snapshot.source ||
+        range.entry.source.seqId != snapshot.seqId ||
+        range.replayOrdinalBegin != child.replayOrdinalBegin ||
+        range.replayOrdinalCount == 0u || child.replayOrdinalCount == 0u ||
+        child.replayOrdinalBegin >
+            UINT32_MAX - child.replayOrdinalCount ||
+        snapshot.childDrawCounts[i] == 0u) {
+      return false;
+    }
+    if (i == 0u && child.replayOrdinalBegin != snapshot.replayOrdinalBegin) {
+      return false;
+    }
+    if (snapshot.childrenCoverCompleteCommands) {
+      if (child.replayOrdinalBegin != previousReplayEnd) {
+        return false;
+      }
+      previousReplayEnd = child.replayOrdinalBegin + child.replayOrdinalCount;
+    } else {
+      if (child.replayOrdinalCount != 1u ||
+          child.replayOrdinalBegin != snapshot.replayOrdinalBegin) {
+        return false;
+      }
+      if (i != 0u &&
+          (range.entry.commandIndex != previousCommand ||
+           range.entry.drawParamIndex != previousDrawEnd)) {
+        return false;
+      }
+      if (range.drawEntryCount == 0u ||
+          range.entry.drawParamIndex >
+              UINT32_MAX - range.drawEntryCount) {
+        return false;
+      }
+      previousCommand = range.entry.commandIndex;
+      previousDrawEnd = range.entry.drawParamIndex + range.drawEntryCount;
+    }
+    const auto& coverage = resolvedCoverage[i];
+    if (coverage.drawCount == 0u || coverage.commandCount == 0u ||
+        coverage.commandCount > coverage.commands.size() ||
+        coverage.commandCount > child.replayOrdinalCount ||
+        coverage.drawCount != snapshot.childDrawCounts[i] ||
+        coverage.attachments != snapshot.attachments ||
+        coverage.route != child.firstDraw.entryRender.route ||
+        coverage.passActionEpoch != snapshot.passActionEpoch ||
+        coveredDraws > UINT64_MAX - coverage.drawCount) {
+      return false;
+    }
+    if (snapshot.childrenCoverCompleteCommands
+            ? coverage.commandCount != child.replayOrdinalCount
+            : coverage.commandCount != 1u) {
+      return false;
+    }
+    std::uint32_t previousDrawParamEnd = 0u;
+    for (std::uint32_t command = 0u;
+         command < coverage.commandCount; ++command) {
+      const auto& resolved = coverage.commands[command];
+      if (resolved.replayOrdinal != child.replayOrdinalBegin + command ||
+          resolved.drawParamCount == 0u ||
+          resolved.drawParamBegin >
+              UINT32_MAX - resolved.drawParamCount ||
+          (command == 0u &&
+           (resolved.commandIndex != range.entry.commandIndex ||
+            (snapshot.childrenCoverCompleteCommands &&
+             (resolved.drawParamBegin != range.entry.drawParamIndex ||
+              resolved.drawParamCount != range.drawEntryCount)))) ||
+          (snapshot.childrenCoverCompleteCommands && command != 0u &&
+           resolved.drawParamBegin != previousDrawParamEnd) ||
+          (command != 0u &&
+           std::any_of(coverage.commands.begin(),
+                       coverage.commands.begin() + command,
+                       [&](const auto& prior) {
+                         return prior.commandIndex == resolved.commandIndex;
+                       }))) {
+        return false;
+      }
+      previousDrawParamEnd =
+          resolved.drawParamBegin + resolved.drawParamCount;
+    }
+    coveredDraws += coverage.drawCount;
+  }
+  return coveredDraws == snapshot.drawCount &&
+      (snapshot.childrenCoverCompleteCommands
+           ? previousReplayEnd == snapshot.replayOrdinalEnd
+           : snapshot.replayOrdinalEnd == snapshot.replayOrdinalBegin + 1u);
+}
+
+inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
+    const SealedParallelPassSnapshot* snapshot,
+    std::span<const ParallelPassChildPlan> children,
+    const ParallelPassSnapshotAuthority& authority,
+    const ParallelPassCoverageResolver& resolver) noexcept {
+  ParallelPassSemanticPlanValidation result{};
+  if (snapshot == nullptr) {
+    return result;
+  }
+  SealedParallelPassSnapshot authoritative{};
+  if (!authority.valid() ||
+      !authority.resolve(authority.context, snapshot->source, snapshot->seqId,
+                         snapshot->replayOrdinalBegin,
+                         snapshot->replayOrdinalEnd, authoritative) ||
+      authoritative != *snapshot) {
+    result.failure = ParallelPassSemanticPlanFailure::SourceIdentity;
+    return result;
+  }
+  snapshot = &authoritative;
+  result.failure = ParallelPassSemanticPlanFailure::SourceIdentity;
+  if (!snapshot->source.valid() || snapshot->seqId == 0u ||
+      !snapshot->firstDraw.source.tapeSource.valid() ||
+      snapshot->firstDraw.source.tapeSource != snapshot->source ||
+      snapshot->firstDraw.source.seqId != snapshot->seqId ||
+      !snapshot->firstDraw.valid || snapshot->firstDraw.kind !=
+          core::MetalCommandKind::DrawRun) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::PassIdentity;
+  if (snapshot->passActionEpoch == 0u ||
+      snapshot->replayOrdinalBegin >= snapshot->replayOrdinalEnd ||
+      (!snapshot->sealedAtSourceEnd && !snapshot->sealingCommand.valid) ||
+      (snapshot->sealedAtSourceEnd && snapshot->sealingCommand.valid) ||
+      (snapshot->sealingCommand.valid &&
+       (snapshot->sealingCommand.source.tapeSource != snapshot->source ||
+        snapshot->sealingCommand.source.seqId != snapshot->seqId ||
+        snapshot->sealingCommand.replayOrdinal !=
+            snapshot->replayOrdinalEnd ||
+        (snapshot->sealingCommand.kind != core::MetalCommandKind::Clear &&
+         snapshot->sealingCommand.kind != core::MetalCommandKind::Present))) ||
+      snapshot->coordinatorProof.firstPassActionEpoch !=
+          snapshot->passActionEpoch) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::CoordinatorProof;
+  if ((snapshot->coordinatorProof.flags &
+       kParallelPassCoordinatorProofComplete) !=
+          kParallelPassCoordinatorProofComplete ||
+      snapshot->coordinatorProof.flags !=
+          kParallelPassCoordinatorProofComplete) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::AttachmentProof;
+  if (snapshot->attachments.sampleCount == 0u) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::ResourceProof;
+  if (!parallelPassExactResourceSetValid(snapshot->attachmentWrites) ||
+      !parallelPassExactResourceSetValid(snapshot->resourceReads)) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::ChildCapacity;
+  if (children.size() != snapshot->childCount || children.size() < 2u ||
+      children.size() > kParallelRenderPassChildCapacity ||
+      snapshot->childCount != snapshot->firstDrawView().size()) {
+    return result;
+  }
+  if (snapshot->firstDraw.replayOrdinal != snapshot->replayOrdinalBegin ||
+      snapshot->firstDraw.source.seqId != snapshot->seqId ||
+      snapshot->firstDraw.source.tapeSource != snapshot->source ||
+      snapshot->firstDraw.kind != core::MetalCommandKind::DrawRun ||
+      !snapshot->firstDraw.valid ||
+      children.front().range.entry.commandIndex !=
+          snapshot->firstDraw.commandIndex ||
+      children.front().range.entry.source != snapshot->firstDraw.source ||
+      children.front().replayOrdinalBegin != snapshot->firstDraw.replayOrdinal ||
+      children.front().firstDraw.provenance != children.front().range.entry) {
+    result.failure = ParallelPassSemanticPlanFailure::FirstDrawProof;
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::FirstDrawProof;
+  core::ExactResourceSet expectedReads{};
+  expectedReads.flags = core::ExactResourceSetComplete |
+      core::ExactResourceSetCanonicalized;
+  core::ExactResourceSet expectedWrites{};
+  expectedWrites.flags = core::ExactResourceSetComplete |
+      core::ExactResourceSetCanonicalized;
+  std::array<ParallelPassResolvedCoverage,
+             kParallelRenderPassChildCapacity>
+      resolvedCoverage{};
+  for (std::size_t i = 0u; i < children.size(); ++i) {
+    const auto& firstDraw = snapshot->firstDraws[i];
+    const auto& child = children[i];
+    if (snapshot->ranges[i] != child.range ||
+        child.childOrdinal != i ||
+        child.replayOrdinalBegin != snapshot->childReplayOrdinalBegins[i] ||
+        child.replayOrdinalCount != snapshot->childReplayOrdinalCounts[i] ||
+        child.replayOrdinalCount == 0u ||
+        child.replayOrdinalBegin >
+            UINT32_MAX - child.replayOrdinalCount ||
+        child.range.replayOrdinalBegin != child.replayOrdinalBegin ||
+        firstDraw != child.firstDraw || !firstDraw.complete ||
+        firstDraw.generation != snapshot->seqId ||
+        firstDraw.generation == 0u ||
+        child.range.entry.source.seqId != snapshot->seqId ||
+        child.firstDraw.generation != snapshot->seqId ||
+        snapshot->firstDraws[i].provenance != children[i].range.entry ||
+        snapshot->firstDraws[i].entryRender.attachments !=
+            snapshot->attachments ||
+        snapshot->firstDraws[i].entryRender.passActionEpoch !=
+            snapshot->passActionEpoch ||
+        snapshot->firstDraws[i].entryRender.route == core::RenderRoute::Unknown ||
+        !parallelPassExactResourceSetValid(
+            snapshot->firstDraws[i].entryRender.entryReads)) {
+      return result;
+    }
+    if (!resolver.valid() ||
+        !resolver.resolve(resolver.context, *snapshot, child,
+                          resolvedCoverage[i]) ||
+        resolvedCoverage[i].drawCount == 0u ||
+        resolvedCoverage[i].attachments != snapshot->attachments ||
+        resolvedCoverage[i].route != firstDraw.entryRender.route ||
+        resolvedCoverage[i].passActionEpoch != snapshot->passActionEpoch ||
+        !parallelPassExactResourceSetValid(resolvedCoverage[i].reads) ||
+        !parallelPassExactResourceSetValid(resolvedCoverage[i].writes) ||
+        resolvedCoverage[i].reads.overlaps(resolvedCoverage[i].writes) ||
+        !parallelPassExactResourceSetContains(
+            resolvedCoverage[i].reads, firstDraw.entryRender.entryReads)) {
+      return result;
+    }
+    if (resolvedCoverage[i].commandCount == 0u ||
+        resolvedCoverage[i].commandCount >
+            resolvedCoverage[i].commands.size() ||
+        resolvedCoverage[i].commandCount > child.replayOrdinalCount ||
+        (snapshot->childrenCoverCompleteCommands
+             ? resolvedCoverage[i].commandCount != child.replayOrdinalCount
+             : resolvedCoverage[i].commandCount != 1u)) {
+      return result;
+    }
+    std::uint64_t resolvedDraws = 0u;
+    std::uint32_t previousDrawParamEnd = 0u;
+    for (std::uint32_t command = 0u;
+         command < resolvedCoverage[i].commandCount; ++command) {
+      const auto& resolved = resolvedCoverage[i].commands[command];
+      if (resolved.replayOrdinal != child.replayOrdinalBegin + command ||
+          resolved.drawParamCount == 0u ||
+          resolved.drawParamBegin >
+              UINT32_MAX - resolved.drawParamCount ||
+          (command == 0u &&
+           resolved.commandIndex != child.range.entry.commandIndex) ||
+          (snapshot->childrenCoverCompleteCommands && command != 0u &&
+           resolved.drawParamBegin != previousDrawParamEnd) ||
+          (command != 0u &&
+           std::any_of(resolvedCoverage[i].commands.begin(),
+                       resolvedCoverage[i].commands.begin() + command,
+                       [&](const auto& prior) {
+                         return prior.commandIndex == resolved.commandIndex;
+                       })) ||
+          resolvedDraws > UINT64_MAX - resolved.drawParamCount) {
+        return result;
+      }
+      previousDrawParamEnd =
+          resolved.drawParamBegin + resolved.drawParamCount;
+      resolvedDraws += resolved.drawParamCount;
+    }
+    if ((snapshot->childrenCoverCompleteCommands &&
+         resolvedDraws != resolvedCoverage[i].drawCount) ||
+        (!snapshot->childrenCoverCompleteCommands &&
+         resolvedCoverage[i].drawCount != child.range.drawEntryCount)) {
+      return result;
+    }
+    if (snapshot->childrenCoverCompleteCommands) {
+      if (child.range.entry.drawParamIndex !=
+              resolvedCoverage[i].commands[0].drawParamBegin ||
+          resolvedCoverage[i].commands[0].drawParamCount !=
+              child.range.drawEntryCount) {
+        return result;
+      }
+    } else {
+      const auto& resolved = resolvedCoverage[i].commands[0];
+      if (resolved.commandIndex != child.range.entry.commandIndex ||
+          child.range.entry.drawParamIndex < resolved.drawParamBegin ||
+          child.range.entry.drawParamIndex - resolved.drawParamBegin >
+              resolved.drawParamCount ||
+          child.range.drawEntryCount >
+              resolved.drawParamCount -
+                  (child.range.entry.drawParamIndex -
+                   resolved.drawParamBegin)) {
+        return result;
+      }
+    }
+    for (std::uint32_t resource = 0u;
+         resource < resolvedCoverage[i].reads.count;
+         ++resource) {
+      if (!expectedReads.add(resolvedCoverage[i].reads.handles[resource])) {
+        return result;
+      }
+    }
+    for (std::uint32_t resource = 0u;
+         resource < resolvedCoverage[i].writes.count;
+         ++resource) {
+      if (!expectedWrites.add(resolvedCoverage[i].writes.handles[resource])) {
+        return result;
+      }
+    }
+  }
+  if (!parallelPassExactResourceSetEqual(expectedReads,
+                                         snapshot->resourceReads) ||
+      !parallelPassExactResourceSetEqual(expectedWrites,
+                                         snapshot->attachmentWrites) ||
+      expectedReads.overlaps(expectedWrites) ||
+      snapshot->resourceReads.overlaps(snapshot->attachmentWrites)) {
+    return result;
+  }
+  if (!snapshot->childrenCoverCompleteCommands) {
+    const auto& first = resolvedCoverage.front().commands[0];
+    std::uint64_t expectedDrawParam =
+        resolvedCoverage.front().commands[0].drawParamBegin;
+    for (std::size_t i = 0u; i < children.size(); ++i) {
+      const auto& child = children[i];
+      const auto& command = resolvedCoverage[i].commands[0];
+      if (command.commandIndex != first.commandIndex ||
+          child.range.entry.drawParamIndex != expectedDrawParam) {
+        return result;
+      }
+      if (expectedDrawParam > UINT32_MAX - child.range.drawEntryCount) {
+        return result;
+      }
+      expectedDrawParam += child.range.drawEntryCount;
+    }
+    if (expectedDrawParam !=
+        static_cast<std::uint64_t>(first.drawParamBegin) +
+            first.drawParamCount) {
+      return result;
+    }
+  }
+  result.failure = ParallelPassSemanticPlanFailure::ChildPlan;
+  if (validateParallelPassChildPlans(children) !=
+      ParallelPassFallbackReason::None) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::Coverage;
+  if (!validateParallelPassSemanticPlanCoverage(
+          *snapshot, children,
+          {resolvedCoverage.data(), children.size()})) {
+    return result;
+  }
+  result.failure = ParallelPassSemanticPlanFailure::None;
+  result.plan.snapshot_ = *snapshot;
+  std::copy(children.begin(), children.end(), result.plan.children_.begin());
+  result.plan.childCount_ = static_cast<std::uint32_t>(children.size());
+  return result;
+}
+
+inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
+    const SealedParallelPassSnapshot& snapshot,
+    std::span<const ParallelPassChildPlan> children,
+    const ParallelPassSnapshotAuthority& authority,
+    const ParallelPassCoverageResolver& resolver) noexcept {
+  return validateParallelPassSemanticPlan(&snapshot, children, authority,
+                                          resolver);
+}
+
+struct ParallelPassFixedPoint {
+  static constexpr std::int64_t kFraction = 1ll << 16;
+  static constexpr std::int64_t kMaxRaw = (1ll << 48) - 1ll;
+  std::int64_t raw = 0;
+  friend constexpr bool operator==(const ParallelPassFixedPoint&,
+                                   const ParallelPassFixedPoint&) = default;
+};
+
+inline bool parallelPassFixedPointFromUnsigned(
+    std::uint64_t value, ParallelPassFixedPoint& result) noexcept {
+  if (value > static_cast<std::uint64_t>(
+                  ParallelPassFixedPoint::kMaxRaw) /
+                  static_cast<std::uint64_t>(ParallelPassFixedPoint::kFraction)) {
+    return false;
+  }
+  const auto raw = static_cast<__int128>(value) *
+      ParallelPassFixedPoint::kFraction;
+  if (raw > ParallelPassFixedPoint::kMaxRaw) {
+    return false;
+  }
+  result.raw = static_cast<std::int64_t>(raw);
+  return true;
+}
+
+inline constexpr bool parallelPassFixedPointInCostDomain(
+    ParallelPassFixedPoint value) noexcept {
+  return value.raw >= 0 && value.raw <= ParallelPassFixedPoint::kMaxRaw;
+}
+
+inline bool parallelPassFixedPointAdd(ParallelPassFixedPoint left,
+                                       ParallelPassFixedPoint right,
+                                       ParallelPassFixedPoint& result) noexcept {
+  if (!parallelPassFixedPointInCostDomain(left) ||
+      !parallelPassFixedPointInCostDomain(right)) {
+    return false;
+  }
+  if ((right.raw > 0 && left.raw >
+           std::numeric_limits<std::int64_t>::max() - right.raw) ||
+      (right.raw < 0 && left.raw <
+           std::numeric_limits<std::int64_t>::min() - right.raw)) {
+    return false;
+  }
+  result.raw = left.raw + right.raw;
+  return parallelPassFixedPointInCostDomain(result);
+}
+
+inline bool parallelPassFixedPointSubtract(
+    ParallelPassFixedPoint left, ParallelPassFixedPoint right,
+    ParallelPassFixedPoint& result) noexcept {
+  if (!parallelPassFixedPointInCostDomain(left) ||
+      !parallelPassFixedPointInCostDomain(right)) {
+    return false;
+  }
+  if ((right.raw < 0 && left.raw >
+           std::numeric_limits<std::int64_t>::max() + right.raw) ||
+      (right.raw > 0 && left.raw <
+           std::numeric_limits<std::int64_t>::min() + right.raw)) {
+    return false;
+  }
+  result.raw = left.raw - right.raw;
+  return result.raw >= -ParallelPassFixedPoint::kMaxRaw &&
+      result.raw <= ParallelPassFixedPoint::kMaxRaw;
+}
+
+inline bool parallelPassFixedPointMultiply(
+    ParallelPassFixedPoint left, ParallelPassFixedPoint right,
+    ParallelPassFixedPoint& result) noexcept {
+  if (!parallelPassFixedPointInCostDomain(left) ||
+      !parallelPassFixedPointInCostDomain(right)) {
+    return false;
+  }
+  const __int128 product = static_cast<__int128>(left.raw) * right.raw;
+  const __int128 scaled = product / ParallelPassFixedPoint::kFraction;
+  if (scaled > std::numeric_limits<std::int64_t>::max() ||
+      scaled < std::numeric_limits<std::int64_t>::min()) {
+    return false;
+  }
+  result.raw = static_cast<std::int64_t>(scaled);
+  return parallelPassFixedPointInCostDomain(result);
+}
+
+struct ParallelPassCandidateCost {
+  ParallelPassEconomicsSummary economics{};
+  ParallelPassFixedPoint serialWork{};
+  ParallelPassFixedPoint criticalPath{};
+  ParallelPassFixedPoint childSetup{};
+  ParallelPassFixedPoint imbalance{};
+  bool valid = false;
+  bool overflow = false;
+};
+
+inline bool validateParallelPassStructuralEconomics(
+    const ParallelPassSemanticPlanView& plan,
+    const ParallelPassCandidateCost& cost) noexcept {
+  if (!plan.valid() || !cost.valid || cost.overflow ||
+      !parallelPassFixedPointInCostDomain(cost.serialWork) ||
+      !parallelPassFixedPointInCostDomain(cost.criticalPath) ||
+      !parallelPassFixedPointInCostDomain(cost.childSetup) ||
+      !parallelPassFixedPointInCostDomain(cost.imbalance)) {
+    return false;
+  }
+  const auto& economics = cost.economics;
+  constexpr std::uint64_t maxDraws = 1ull << 48;
+  if (!economics.valid || economics.overflow ||
+      economics.totalDraws == 0u || economics.totalDraws > maxDraws ||
+      economics.childCount != plan.children().size() ||
+      economics.childCount < 2u ||
+      economics.childCount > kParallelRenderPassChildCapacity ||
+      economics.minimumChildDraws == 0u ||
+      economics.maximumChildDraws < economics.minimumChildDraws) {
+    return false;
+  }
+  if (plan.snapshot().drawCount > maxDraws) {
+    return false;
+  }
+  const auto checkedProduct = [](std::uint64_t left, std::uint64_t right,
+                                 std::uint64_t& product) noexcept {
+    if (right != 0u && left > std::numeric_limits<std::uint64_t>::max() /
+                              right) {
+      return false;
+    }
+    product = left * right;
+    return true;
+  };
+  std::uint64_t minimumCoveredDraws = 0u;
+  std::uint64_t maximumCoveredDraws = 0u;
+  if (!checkedProduct(economics.childCount, economics.minimumChildDraws,
+                      minimumCoveredDraws) ||
+      !checkedProduct(economics.childCount, economics.maximumChildDraws,
+                      maximumCoveredDraws) ||
+      minimumCoveredDraws > maxDraws || maximumCoveredDraws > maxDraws) {
+    return false;
+  }
+  if (economics.totalDraws != plan.snapshot().drawCount ||
+      economics.totalDraws < minimumCoveredDraws ||
+      economics.totalDraws > maximumCoveredDraws ||
+      economics.stage1Draws > economics.totalDraws ||
+      economics.stage2bDraws > economics.totalDraws - economics.stage1Draws ||
+      economics.forcedStage1Draws != economics.totalDraws -
+          economics.stage1Draws - economics.stage2bDraws ||
+      economics.psoBoundaryTransitions > economics.totalDraws ||
+      economics.uniformBoundaryTransitions > economics.totalDraws) {
+    return false;
+  }
+  return true;
+}
+
+struct ParallelPassRangeTieKey {
+  std::uint32_t sourceIndex = 0;
+  std::uint64_t sourceGeneration = 0;
+  std::uint32_t firstPage = 0;
+  std::uint32_t pageCount = 0;
+  std::uint64_t storageGeneration = 0;
+  std::uint32_t retainedSourceIndex = 0;
+  std::uint32_t slotIndex = 0;
+  std::uint64_t seqId = 0;
+  std::uint32_t replayOrdinal = 0;
+  std::uint32_t replayOrdinalCount = 0;
+  std::uint32_t rangeKind = 0;
+  std::uint32_t commandIndex = 0;
+  std::uint32_t drawParamIndex = 0;
+  std::uint32_t drawEntryCount = 0;
+  std::uint32_t drawRunRecordIndex = 0;
+  std::uint32_t stateIndex = 0;
+  std::uint32_t uniformIndex = 0;
+  std::uint32_t uniformGeneration = 0;
+  std::uint64_t uniformHash = 0;
+  std::uint32_t bindingOverrideOffset = 0;
+  std::uint32_t bindingOverrideSize = 0;
+  std::uint32_t bindingSnapshotOffset = 0;
+  std::uint32_t bindingSnapshotSize = 0;
+  friend constexpr bool operator==(const ParallelPassRangeTieKey&,
+                                   const ParallelPassRangeTieKey&) = default;
+};
+
+struct ParallelPassCandidateScore {
+  ParallelPassFixedPoint benefit{};
+  std::array<ParallelPassRangeTieKey,
+             kParallelRenderPassChildCapacity> ranges{};
+  std::uint32_t rangeCount = 0;
+  std::uint32_t childCount = 0;
+  std::uint64_t totalDraws = 0;
+  std::uint32_t candidateOrdinal = UINT32_MAX;
+  bool valid = false;
+
+  friend constexpr bool operator==(const ParallelPassCandidateScore&,
+                                   const ParallelPassCandidateScore&) = default;
+};
+
+enum class ParallelPassCandidateSelectionFailure : std::uint8_t {
+  None,
+  Empty,
+  InvalidPlan,
+  InvalidEconomics,
+  NonPositiveBenefit,
+  Arithmetic,
+  InvalidCandidateOrdinal,
+  Count,
+};
+
+struct ParallelPassCandidateInput {
+  const SealedParallelPassSnapshot* snapshot = nullptr;
+  std::span<const ParallelPassChildPlan> children{};
+  ParallelPassCandidateCost cost{};
+  ParallelPassSnapshotAuthority authority{};
+  ParallelPassCoverageResolver coverage{};
+  std::uint32_t candidateOrdinal = UINT32_MAX;
+};
+
+struct ParallelPassCandidateSelection {
+  ParallelPassCandidateSelectionFailure failure =
+      ParallelPassCandidateSelectionFailure::Empty;
+  std::uint32_t candidateOrdinal = UINT32_MAX;
+  ParallelPassCandidateScore score{};
+  bool selected = false;
+};
+
+inline ParallelPassCandidateScore scoreParallelPassCandidate(
+    const ParallelPassSemanticPlanView& plan,
+    const ParallelPassCandidateCost& cost,
+    std::uint32_t candidateOrdinal) noexcept {
+  ParallelPassCandidateScore result{.candidateOrdinal = candidateOrdinal};
+  if (!validateParallelPassStructuralEconomics(plan, cost)) {
+    return result;
+  }
+  ParallelPassFixedPoint totalCost{};
+  if (!parallelPassFixedPointAdd(cost.criticalPath, cost.childSetup,
+                                 totalCost) ||
+      !parallelPassFixedPointAdd(totalCost, cost.imbalance, totalCost)) {
+    return result;
+  }
+  ParallelPassFixedPoint benefit = cost.serialWork;
+  if (!parallelPassFixedPointSubtract(benefit, totalCost, benefit)) {
+    return result;
+  }
+  result.benefit = benefit;
+  result.childCount = static_cast<std::uint32_t>(plan.children().size());
+  result.totalDraws = plan.snapshot().drawCount;
+  result.rangeCount = result.childCount;
+  for (std::size_t i = 0u; i < result.rangeCount; ++i) {
+    const auto& range = plan.children()[i].range;
+    const auto& source = range.entry.source;
+    result.ranges[i] = ParallelPassRangeTieKey{
+        .sourceIndex = source.tapeSource.id.index,
+        .sourceGeneration = source.tapeSource.id.generation,
+        .firstPage = source.tapeSource.storage.firstPage,
+        .pageCount = source.tapeSource.storage.pageCount,
+        .storageGeneration = source.tapeSource.storage.generation,
+        .retainedSourceIndex = source.retainedSourceIndex,
+        .slotIndex = source.slotIndex,
+        .seqId = source.seqId,
+        .replayOrdinal = range.replayOrdinalBegin,
+        .replayOrdinalCount = range.replayOrdinalCount,
+        .rangeKind = static_cast<std::uint32_t>(range.kind),
+        .commandIndex = range.entry.commandIndex,
+        .drawParamIndex = range.entry.drawParamIndex,
+        .drawEntryCount = range.drawEntryCount,
+        .drawRunRecordIndex = range.entry.drawRunRecordIndex,
+        .stateIndex = range.entry.stateIndex,
+        .uniformIndex = range.entry.uniformHandle.index,
+        .uniformGeneration = range.entry.uniformHandle.generation,
+        .uniformHash = range.entry.uniformHandle.hash,
+        .bindingOverrideOffset = range.entry.bindingOverrideBytes.offset,
+        .bindingOverrideSize = range.entry.bindingOverrideBytes.size,
+        .bindingSnapshotOffset = range.entry.bindingSnapshotBytes.offset,
+        .bindingSnapshotSize = range.entry.bindingSnapshotBytes.size,
+    };
+  }
+  result.valid = true;
+  return result;
+}
+
+inline constexpr bool parallelPassRangeTieKeyLess(
+    const ParallelPassRangeTieKey& left,
+    const ParallelPassRangeTieKey& right) noexcept {
+  const auto tupleLeft = std::tuple{left.sourceIndex, left.sourceGeneration,
+                                    left.firstPage, left.pageCount,
+                                    left.storageGeneration,
+                                    left.retainedSourceIndex, left.slotIndex,
+                                    left.seqId, left.replayOrdinal,
+                                    left.replayOrdinalCount, left.rangeKind,
+                                    left.commandIndex, left.drawParamIndex,
+                                    left.drawEntryCount,
+                                    left.drawRunRecordIndex, left.stateIndex,
+                                    left.uniformIndex, left.uniformGeneration,
+                                    left.uniformHash, left.bindingOverrideOffset,
+                                    left.bindingOverrideSize,
+                                    left.bindingSnapshotOffset,
+                                    left.bindingSnapshotSize};
+  const auto tupleRight = std::tuple{right.sourceIndex, right.sourceGeneration,
+                                     right.firstPage, right.pageCount,
+                                     right.storageGeneration,
+                                     right.retainedSourceIndex, right.slotIndex,
+                                     right.seqId, right.replayOrdinal,
+                                     right.replayOrdinalCount, right.rangeKind,
+                                     right.commandIndex, right.drawParamIndex,
+                                     right.drawEntryCount,
+                                     right.drawRunRecordIndex, right.stateIndex,
+                                     right.uniformIndex,
+                                     right.uniformGeneration, right.uniformHash,
+                                     right.bindingOverrideOffset,
+                                     right.bindingOverrideSize,
+                                     right.bindingSnapshotOffset,
+                                     right.bindingSnapshotSize};
+  return tupleLeft < tupleRight;
+}
+
+inline constexpr bool parallelPassCandidateScoreLess(
+    const ParallelPassCandidateScore& left,
+    const ParallelPassCandidateScore& right) noexcept {
+  if (left.benefit.raw != right.benefit.raw) {
+    return left.benefit.raw > right.benefit.raw;
+  }
+  if (left.childCount != right.childCount) {
+    return left.childCount < right.childCount;
+  }
+  for (std::size_t i = 0u; i < std::min(left.rangeCount, right.rangeCount); ++i) {
+    if (left.ranges[i] == right.ranges[i]) {
+      continue;
+    }
+    return parallelPassRangeTieKeyLess(left.ranges[i], right.ranges[i]);
+  }
+  if (left.rangeCount != right.rangeCount) {
+    return left.rangeCount < right.rangeCount;
+  }
+  return left.candidateOrdinal < right.candidateOrdinal;
+}
+
+inline ParallelPassCandidateSelection selectParallelPassCandidate(
+    std::span<const ParallelPassCandidateInput> candidates) noexcept {
+  ParallelPassCandidateSelection result{};
+  if (candidates.empty() ||
+      candidates.size() > kParallelRenderPassCandidateCapacity) {
+    return result;
+  }
+  std::array<std::uint32_t, kParallelRenderPassCandidateCapacity> ordinals{};
+  for (std::size_t i = 0u; i < candidates.size(); ++i) {
+    if (candidates[i].candidateOrdinal == UINT32_MAX ||
+        candidates[i].candidateOrdinal >=
+            kParallelRenderPassCandidateCapacity ||
+        std::find(ordinals.begin(), ordinals.begin() + i,
+                  candidates[i].candidateOrdinal) != ordinals.begin() + i) {
+      result.failure = ParallelPassCandidateSelectionFailure::InvalidCandidateOrdinal;
+      return result;
+    }
+    ordinals[i] = candidates[i].candidateOrdinal;
+  }
+  bool haveBest = false;
+  ParallelPassCandidateScore best{};
+  for (const auto& candidate : candidates) {
+    const auto validation = validateParallelPassSemanticPlan(
+        candidate.snapshot, candidate.children, candidate.authority,
+        candidate.coverage);
+    if (!validation.accepted()) {
+      result.failure = ParallelPassCandidateSelectionFailure::InvalidPlan;
+      return result;
+    }
+    const auto score = scoreParallelPassCandidate(
+        validation.plan, candidate.cost, candidate.candidateOrdinal);
+    if (!score.valid) {
+      result.failure = ParallelPassCandidateSelectionFailure::InvalidEconomics;
+      return result;
+    }
+    if (score.benefit.raw <= 0) {
+      continue;
+    }
+    if (!haveBest || parallelPassCandidateScoreLess(score, best)) {
+      best = score;
+      haveBest = true;
+    }
+  }
+  if (!haveBest) {
+    result.failure = ParallelPassCandidateSelectionFailure::NonPositiveBenefit;
+    return result;
+  }
+  result.failure = ParallelPassCandidateSelectionFailure::None;
+  result.candidateOrdinal = best.candidateOrdinal;
+  result.score = best;
+  result.selected = true;
+  return result;
+}
+
 // Backend is a deliberately small seam shared by deterministic native fakes
 // and the production WMT parent/child implementation. Child creation is
 // ordered and pre-effect. beginPassActions() is the effect edge;
@@ -1197,6 +2133,18 @@ static_assert(std::is_trivially_copyable_v<ParallelPassBindingSnapshot>);
 static_assert(std::is_standard_layout_v<ParallelPassBindingSnapshot>);
 static_assert(std::is_trivially_copyable_v<ParallelPassEconomicsSummary>);
 static_assert(std::is_standard_layout_v<ParallelPassEconomicsSummary>);
+static_assert(std::is_trivially_copyable_v<ParallelPassFixedPoint>);
+static_assert(std::is_standard_layout_v<ParallelPassFixedPoint>);
+static_assert(std::is_trivially_copyable_v<ParallelPassCandidateCost>);
+static_assert(std::is_standard_layout_v<ParallelPassCandidateCost>);
+static_assert(std::is_trivially_copyable_v<ParallelPassCandidateScore>);
+static_assert(std::is_standard_layout_v<ParallelPassCandidateScore>);
+static_assert(std::is_trivially_copyable_v<ParallelPassCandidateSelection>);
+static_assert(std::is_standard_layout_v<ParallelPassCandidateSelection>);
+static_assert(std::is_trivially_copyable_v<ParallelPassSemanticPlanView>);
+static_assert(std::is_standard_layout_v<ParallelPassSemanticPlanView>);
+static_assert(std::is_trivially_copyable_v<ParallelPassResolvedCoverage>);
+static_assert(std::is_standard_layout_v<ParallelPassResolvedCoverage>);
 static_assert(
     std::is_trivially_copyable_v<ParallelPassWholeCommandSubdivision>);
 static_assert(std::is_standard_layout_v<ParallelPassWholeCommandSubdivision>);

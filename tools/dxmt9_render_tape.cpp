@@ -1,5 +1,6 @@
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_projection.hpp"
+#include "device_c_render_tape_policy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -278,6 +279,8 @@ void usage() {
                "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape identity <tape.bin> <identity.bin> "
                "[--verified-blob <sha256>:<bytes>]...\n"
+               "       dxmt9-render-tape policy-explore <tape.bin> "
+               "<identity.bin> [--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape reduce <input> <output> "
                "--select-command-event <index>... "
                "[--verified-blob <sha256>:<bytes>]...\n"
@@ -466,6 +469,73 @@ void writeProjection(const RenderTapeProjectionResult& projection) {
   std::cout << "]}\n";
 }
 
+void writePolicyExplore(const RenderTapePolicyExploreResult& result) {
+  std::cout << "{\"schema\":\"dxmt9.render_tape.parallel_policy.v1\","
+               "\"status\":\""
+            << renderTapePolicyExploreStatusName(result.status)
+            << "\",\"authenticated_input\":"
+            << (result.authenticatedInput ? "true" : "false")
+            << ",\"structural_only\":"
+            << (result.structuralOnly ? "true" : "false")
+            << ",\"proof_core_validated\":"
+            << (result.proofCoreValidated ? "true" : "false")
+            << ",\"candidates\":[";
+  for (std::size_t index = 0u; index < result.candidates.size(); ++index) {
+    if (index != 0u) std::cout << ',';
+    const auto& candidate = result.candidates[index];
+    std::cout << "{\"event_ordinal\":" << candidate.eventOrdinal
+              << ",\"source_ordinal\":" << candidate.sourceOrdinal
+              << ",\"seq_id\":" << candidate.seqId
+              << ",\"logical_pass_id\":" << candidate.logicalPassId
+              << ",\"dag_pass_index\":" << candidate.dagPassIndex
+              << ",\"pass_kind\":" << candidate.passKind
+              << ",\"first_record\":" << candidate.firstRecord
+              << ",\"record_count\":" << candidate.recordCount
+              << ",\"child_count\":" << candidate.children.size()
+              << ",\"draw_total\":" << candidate.drawTotal
+              << ",\"primitive_total\":" << candidate.primitiveTotal
+              << ",\"min_child_draws\":" << candidate.minChildDraws
+              << ",\"max_child_draws\":" << candidate.maxChildDraws
+              << ",\"imbalance\":" << candidate.imbalance
+              << ",\"vertex_shader_facts\":" << candidate.vertexShaderFacts
+              << ",\"pixel_shader_facts\":" << candidate.pixelShaderFacts
+              << ",\"vertex_input_facts\":" << candidate.vertexInputFacts
+              << ",\"uniform_section_facts\":"
+              << candidate.uniformSectionFacts
+              << ",\"pipeline_input_section_facts\":"
+              << candidate.pipelineInputSectionFacts
+              << ",\"structural_only\":"
+              << (candidate.structuralOnly ? "true" : "false")
+              << ",\"proof_core_validated\":"
+              << (candidate.proofCoreValidated ? "true" : "false")
+              << ",\"children\":[";
+    for (std::size_t child = 0u; child < candidate.children.size(); ++child) {
+      if (child != 0u) std::cout << ',';
+      const auto& range = candidate.children[child];
+      std::cout << "{\"first_record\":" << range.firstRecord
+                << ",\"record_count\":" << range.recordCount
+                << ",\"draw_count\":" << range.drawCount
+                << ",\"primitive_total\":" << range.primitiveTotal << '}';
+    }
+    std::cout << "]}";
+  }
+  std::cout << "],\"rejections\":[";
+  for (std::size_t index = 0u; index < result.rejections.size(); ++index) {
+    if (index != 0u) std::cout << ',';
+    const auto& rejection = result.rejections[index];
+    std::cout << "{\"event_ordinal\":" << rejection.eventOrdinal
+              << ",\"source_ordinal\":" << rejection.sourceOrdinal
+              << ",\"seq_id\":" << rejection.seqId
+              << ",\"logical_pass_id\":" << rejection.logicalPassId
+              << ",\"first_record\":" << rejection.firstRecord
+              << ",\"record_count\":" << rejection.recordCount
+              << ",\"reason\":\""
+              << renderTapePolicyRejectionReasonName(rejection.reason)
+              << "\"}";
+  }
+  std::cout << "]}\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -476,7 +546,7 @@ int main(int argc, char** argv) {
   const std::string command = argv[1];
   if (command != "validate" && command != "inspect" && command != "reduce" &&
       command != "project" && command != "identity" &&
-      command != "materialize") {
+      command != "materialize" && command != "policy-explore") {
     usage();
     return 2;
   }
@@ -502,6 +572,13 @@ int main(int argc, char** argv) {
       outputPath = argv[3];
       optionStart = 4;
     } else if (command == "identity") {
+      if (argc < 4) {
+        usage();
+        return 2;
+      }
+      identityPath = argv[3];
+      optionStart = 4;
+    } else if (command == "policy-explore") {
       if (argc < 4) {
         usage();
         return 2;
@@ -692,6 +769,24 @@ int main(int argc, char** argv) {
         return 1;
       }
       writeProjection(projection);
+      return 0;
+    }
+
+    if (command == "policy-explore") {
+      const auto bytes = readFile(inputPath);
+      const auto identity = readFile(identityPath);
+      const auto exploration = exploreRenderTapeParallelPolicy(
+          bytes, catalogue, identity);
+      if (!exploration.valid()) {
+        std::cerr << "render tape policy exploration failed status="
+                  << renderTapePolicyExploreStatusName(exploration.status)
+                  << " identity="
+                  << renderTapeIdentityStatusName(
+                         exploration.identityValidation.status)
+                  << "\n";
+        return 1;
+      }
+      writePolicyExplore(exploration);
       return 0;
     }
 

@@ -1248,6 +1248,78 @@ worker CPU reached 26.91 ms/Present; all 2,670 selected passes were safe Stage
 the enforced gate and 64-draw child floor but is not a speedup or promotion
 claim. `identity` therefore remains the default.
 
+### 7.2.1 Algebraic policy contract
+
+The policy decision is a value refinement over one sealed effective replay
+stream. Let `D(S)` be the ordered sequence of all draw entries in the serial
+stream `S`, and let `K(S)` be the coordinator-command entries (Clear, Present,
+query, readback, update, wait, sidecar, and other non-child work). A candidate
+plan `P` contains a source-qualified range vector, a pass-wide proof, and an
+economics record:
+
+```text
+Coverage(P, S) :=
+  ranges(P) are ordered, contiguous, non-overlapping, and DrawRun-only
+  ∧ flatten(ranges(P)) = D(S) exactly once
+  ∧ every range has complete parameter coverage
+  ∧ K(S) remains at its serial coordinator position
+
+Safe(P, S) :=
+  sealed(S) ∧ Coverage(P, S)
+  ∧ attachmentAndSampleIdentity(P) is complete and pass-wide
+  ∧ exactHazards(P) cover the complete pass
+  ∧ actionEpoch(P) is one nonzero unambiguous epoch
+  ∧ routeAndAbi(P) are uniform across the pass
+  ∧ firstDrawSnapshot(P) is complete for every child
+  ∧ locators, generations, counts, and capacity arithmetic are valid
+
+Selected(P, S) := Safe(P, S) ∧ score(P) is maximal among Safe candidates
+```
+
+`Safe` is the semantic proof predicate. It is evaluated before any score is
+read and is independent of child cost, worker count, or expected overlap. The
+economics record is a checked fixed-point transform over bounded integer
+observations from the same snapshot. It cannot add a candidate to `Safe`.
+Checked arithmetic, deterministic normalization, and a canonical plan key are
+part of the value contract. Equal safe scores prefer fewer children, followed
+by the lexicographic source/range vector; no wallclock, worker order, GPU
+progress, allocation address, or floating-point operation participates.
+
+The proof-core API models that a coordinator may pass only a `Selected`
+certificate to parent/child or segmented Metal preparation. The current
+production coordinator does not invoke this selector or validator; production
+enforcement remains a separate open/default-off integration task. In the proof
+core, any invalid, stale, incomplete, unknown, or overflowed proof, score, or
+tie-break key returns the exact effective stream to the serial cursor before
+child creation, pass-action mutation, completion registration, or submission.
+Once the first child/segment effect occurs, a failure is a fail-stop invariant
+breach and cannot be treated as a policy rejection.
+
+The contract is monotone: strengthening the negative evidence with a
+coordinator command, exact hazard, attachment ambiguity, action-epoch or ABI
+mismatch, missing first-draw fact, stale generation, capacity violation, or
+overflow can only preserve or shrink the eligible set. It cannot create a
+parallel plan. Economics may reorder already-safe candidates, but it cannot
+weaken this safety monotonicity. This makes semantic proof and economics
+reviewable as separate artifacts even when one production preflight computes
+both values.
+
+`ParallelDrawBinding.tla` owns the source-local binding, ABI, draw ownership,
+child join, parent-end, and completion transition. `RenderTapeParallelJoin.tla`
+owns the bounded Clear → full-snapshot DrawRun → child join → Present identity
+refinement. Neither model proves driver behavior, shader/resource bytes,
+floating-point output, pixels, or performance. Exhaustive/SMT evidence owns
+the finite static coverage, overflow, monotonicity, and selection relation;
+Render Tape owns deterministic production-import/replay comparison; Metal
+readback owns concrete binding and pixel evidence. These roles must not be
+substituted for one another.
+
+The provider remains default-off. A green algebraic classifier, TLC run,
+exhaustive/SMT result, Render Tape comparison, or Metal validation run is not a
+promotion claim. Promotion still requires the ordered semantic, formal,
+model-to-code, GPU, wild, locality, and performance gates in `R-BACK-2.50`
+and `R-VERIF-6.4`; `identity` and the serial fallback remain reachable.
+
 ### 7.3 Metal 4 Suspend/Resume
 
 This optional capability lane stitches physical command-buffer segments into
