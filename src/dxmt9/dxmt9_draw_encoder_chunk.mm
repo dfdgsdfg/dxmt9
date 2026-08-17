@@ -1152,6 +1152,24 @@ struct ParallelPassCoverageContext {
   const resources::Pool* pool = nullptr;
 };
 
+// Coordinator-issued epoch witness. It returns only the classification facts
+// one replay ordinal contributes to the pass-action epoch, re-read from the
+// live source under the residency pin. The certificate folds them itself, so
+// this callback can never hand back a finished epoch to be trusted.
+bool resolveParallelPassActionEpochFact(
+    const void* context, const core::CpuReadyTape::SourceRef& source,
+    std::uint64_t seqId, std::uint32_t replayOrdinal,
+    encoders::ParallelPassActionEpochFact& fact) noexcept {
+  const auto* stream =
+      static_cast<const encoders::EncodePartitionReplayStream*>(context);
+  if (!stream || stream->source.source != source ||
+      stream->source.seqId != seqId || seqId == 0u) {
+    return false;
+  }
+  return encoders::readParallelPassActionEpochFact(*stream, replayOrdinal,
+                                                   fact);
+}
+
 // Exact per-child coverage resolved from the live source while the coordinator
 // still holds the residency pin. It re-reads every command the child owns and
 // canonicalizes its resources through the same proof owner the producer used,
@@ -2376,6 +2394,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   thread_local SealedParallelPassSnapshotBatch parallelPassShadows;
   parallelPassShadows.reset();
+  // Coordinator-owned source-wide starting epoch. It seeds the producer's fold
+  // and, independently, the certificate's re-derivation, so the seed is never
+  // taken from the snapshot under test.
+  const std::uint64_t parallelPassSeedActionEpoch =
+      options.session == nullptr ? 1u : 0u;
   if (parallelPartitionRequested) {
     // SourcePayloadView cannot represent Query, UpdateTexture, or an ordered
     // control: those dispositions are resolved by the coordinator before this
@@ -2384,7 +2407,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // which a complete immutable coordinator proof can be published.
     const auto coordinatorProof = makeParallelPassCoordinatorProofSnapshot(
         ParallelPassCoordinatorProofSnapshotInput{
-            .firstPassActionEpoch = options.session == nullptr ? 1u : 0u,
+            .firstPassActionEpoch = parallelPassSeedActionEpoch,
             .queryAbsent = true,
             .updateTextureAbsent = true,
             .captureInactive = !ctx.queue.metalCaptureEnabled() &&
@@ -4091,6 +4114,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         ParallelPassCoverageResolver{
             .context = &coverageContext,
             .resolve = resolveParallelPassCoverage,
+        },
+        ParallelPassActionEpochWitness{
+            .context = &partitionReplayStream,
+            .read = resolveParallelPassActionEpochFact,
+            .seedEpoch = parallelPassSeedActionEpoch,
+            .replayOrdinalCount = static_cast<std::uint32_t>(
+                partitionReplayStream.replayOrdinalCount()),
         });
     if (perf::enabled()) {
       perf::countParallelPassAdapter(adapterDecision);

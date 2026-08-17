@@ -77,20 +77,6 @@ bool canonicalizeResources(
   return canonical.complete();
 }
 
-core::RenderAttachmentKey attachmentKeyForClear(
-    const core::ClearCommandView& clear) noexcept {
-  core::RenderAttachmentKey key{
-      .color = clear.colorAttachments,
-      .depthStencil = clear.depthStencil,
-  };
-  for (const auto& attachment : key.color) {
-    key.sampleCount = std::max(key.sampleCount, attachment.sampleCount);
-  }
-  key.sampleCount = std::max(key.sampleCount,
-                             key.depthStencil.sampleCount);
-  return key;
-}
-
 ParallelPassCommandLocator commandLocator(
     const EncodePartitionReplayStream& stream,
     std::size_t replayOrdinal,
@@ -170,10 +156,11 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   };
   SealedParallelPassSnapshot current{};
   ParallelPassCommandLocator pendingClear{};
-  core::RenderAttachmentKey pendingClearAttachments{};
-  std::uint64_t passActionEpoch =
-      input.proofs.coordinator.firstPassActionEpoch;
-  bool passActionEpochValid = true;
+  // One shared epoch state machine (`R-BACK-2.69`). The certificate re-derives
+  // the same fold from the stream, so the rule must live in exactly one place.
+  ParallelPassActionEpochState epochState{
+      .epoch = input.proofs.coordinator.firstPassActionEpoch,
+  };
   bool active = false;
   bool startProven = input.sourceStartsPass;
   bool attachmentKnown = false;
@@ -196,16 +183,6 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       candidateRejected = true;
     }
   };
-  auto advancePassActionEpoch = [&]() {
-    if (!passActionEpochValid) {
-      return;
-    }
-    if (passActionEpoch == std::numeric_limits<std::uint64_t>::max()) {
-      passActionEpochValid = false;
-      return;
-    }
-    ++passActionEpoch;
-  };
   auto resetCandidate = [&]() {
     current.reset();
     active = false;
@@ -216,19 +193,19 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   };
   auto startCandidate = [&](std::size_t ordinal,
                             std::uint32_t commandIndex,
-                            const core::RenderAttachmentKey& attachments) {
+                            const core::RenderAttachmentKey& attachments,
+                            bool leadingClearMatches) {
     resetCandidate();
     active = true;
     attachmentKnown = true;
     current.source = stream.source.source;
     current.seqId = stream.source.seqId;
+    // The coordinator proof is issued per pass: its facts are the source-wide
+    // ones the coordinator published, but its epoch is this pass's own. A
+    // source-wide epoch stamp would admit only a source's first pass.
     current.coordinatorProof = input.proofs.coordinator;
-    const bool leadingClearMatches =
-        pendingClear.valid && pendingClearAttachments == attachments;
-    if (pendingClear.valid && !leadingClearMatches) {
-      advancePassActionEpoch();
-    }
-    current.passActionEpoch = passActionEpoch;
+    current.coordinatorProof.firstPassActionEpoch = epochState.epoch;
+    current.passActionEpoch = epochState.epoch;
     current.replayOrdinalBegin = static_cast<std::uint32_t>(ordinal);
     current.attachments = attachments;
     current.firstDraw = commandLocator(
@@ -244,7 +221,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (!startProven) {
       rejectCandidate(Fallback::UnsealedStart);
     }
-    if (!passActionEpochValid || current.passActionEpoch == 0u) {
+    if (!epochState.valid || current.passActionEpoch == 0u) {
       rejectCandidate(Fallback::PassActionEpoch);
     }
     if (!input.proofs.coordinator.proves(ParallelPassQueryAbsent)) {
@@ -527,25 +504,25 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const auto locator = commandLocator(stream, ordinal, commandIndex, kind);
     const auto role = classifyParallelPassCommandRole(kind);
 
+    // The candidate lifecycle and the shared epoch fold must observe the same
+    // pass boundaries. Divergence would silently stamp a pass with another
+    // pass's epoch, so it fails the whole source closed instead.
+    if (epochState.active != active) {
+      return rejectBatch(Fallback::PlannerInvariant, snapshots);
+    }
     if (role == ParallelPassCommandRole::Unsupported) {
       return rejectBatch(Fallback::CoordinatorCommand, snapshots);
     }
     if (role == ParallelPassCommandRole::ClearBoundary) {
-      const bool endedPass = active;
       sealCandidate(static_cast<std::uint32_t>(ordinal), locator, false);
       if (!source.clear.has_value() || !locator.valid) {
         return rejectBatch(Fallback::ReplayInvalid, snapshots);
       }
-      if (endedPass || pendingClear.valid) {
-        advancePassActionEpoch();
-      }
-      if (source.clear->rects.empty()) {
-        pendingClear = locator;
-        pendingClearAttachments = attachmentKeyForClear(*source.clear);
-      } else {
-        pendingClear = {};
-        advancePassActionEpoch();
-      }
+      epochState.onClearBoundary(
+          source.clear->rects.empty(),
+          parallelPassAttachmentKeyForClear(*source.clear));
+      pendingClear = epochState.pendingClear ? locator
+                                             : ParallelPassCommandLocator{};
       pendingCoordinatorSplit = false;
       startProven = true;
       continue;
@@ -555,7 +532,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       pendingClear = {};
       pendingCoordinatorSplit = false;
       startProven = true;
-      advancePassActionEpoch();
+      epochState.onCoordinatorBoundary();
       continue;
     }
     if (role == ParallelPassCommandRole::CoordinatorBoundary) {
@@ -577,7 +554,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       pendingClear = {};
       pendingCoordinatorSplit = splitsPass;
       startProven = true;
-      advancePassActionEpoch();
+      epochState.onCoordinatorBoundary();
       continue;
     }
     if (kind != Kind::DrawRun || !source.command.drawState.hot ||
@@ -593,10 +570,15 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (active && attachmentKnown && attachments != current.attachments) {
       sealCandidate(static_cast<std::uint32_t>(ordinal), locator, false);
       startProven = true;
-      advancePassActionEpoch();
     }
-    if (!active) {
-      startCandidate(ordinal, commandIndex, attachments);
+    const bool leadingClearMatches =
+        pendingClear.valid && epochState.leadingClearMatches(attachments);
+    const bool startsPass = epochState.onDrawRun(attachments);
+    if (startsPass != !active) {
+      return rejectBatch(Fallback::PlannerInvariant, snapshots);
+    }
+    if (startsPass) {
+      startCandidate(ordinal, commandIndex, attachments, leadingClearMatches);
     }
 
     const auto rawWrites =

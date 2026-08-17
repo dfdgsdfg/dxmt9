@@ -781,6 +781,22 @@ must conserve `considered = certificate_valid + certificate_invalid` and
 `considered = selected + serial_fallback`, with `selected <= certificate_valid`.
 The provider stays default-off and the adapter makes no promotion claim.
 
+The pass-action epoch is a per-pass fact, not a source-wide one. The producer
+must issue the coordinator proof for each sealed pass it emits and stamp that
+proof with that pass's own action epoch. The certificate must not accept a
+stored epoch as evidence of itself: it must independently re-derive the
+expected action epoch for the sealed interval by folding the shared command
+classifier over the generation-pinned effective replay stream in
+replay-ordinal order, and must reject the certificate when the re-derived
+value differs from the stamped one or when the interval does not begin at a
+pass-opening draw. The re-derivation must be a pure fold over immutable stream
+facts with no clock, floating-point value, allocation, or dependence on
+iteration order beyond the replay-ordinal sequence, and repeating it over the
+same stream must yield the same value. Source and storage generation checks
+must still fail closed before the re-derivation runs. The producer and the
+certificate must share one implementation of the epoch state machine and one
+implementation of the command classifier.
+
 **R-BACK-2.70** A certified plan must cover the effective replay stream with
 ordered, contiguous, non-overlapping source-qualified ranges. The flattened
 child draw sequence must equal the serial draw sequence exactly once, with
