@@ -1346,6 +1346,30 @@ proof owner the producer used. A third owner-issued resolver,
 classification of exactly one replay ordinal - command kind, attachment key,
 and whether a `Clear` carries rects - so the certificate can fold the epoch
 itself instead of receiving a finished number to trust.
+
+Per-child coverage is streamed, not stored. `ParallelPassCoverageFold` holds
+the first resolved command, the previous command index and DrawParam
+boundary, exact running command and draw totals, and a first-failure reason
+plus locator; its state is constant in the number of commands a child owns, so
+a child owning 26, 38, or 52 commands is an ordinary input where the previous
+16-row array was a rejection. Its accumulators are exact by construction -
+there is no hash anywhere in the type, because a colliding summary would admit
+a false accept. Order, non-emptiness, DrawParam arithmetic, non-overlap, and
+whole-command contiguity are enforced at append time against the previous
+boundary; the fold's fields are private, so a resolver can only reach a state
+its own appends produced. One predicate is deliberately stronger than the
+array form it replaces: whole-command rows must carry strictly increasing
+command indices, which implies the duplicate-freedom the old O(n) scan
+checked and additionally rejects an out-of-order row set that scan accepted.
+That direction only shrinks the accepted set. `resolveParallelPassCoverage`
+opens the fold once per child and appends each command it re-reads;
+`validateParallelPassSemanticPlan` and
+`validateParallelPassSemanticPlanCoverage` then compare the fold's totals and
+first command against the child plan's claimed replay span, command index,
+DrawParam begin, and draw count. Nothing downstream of validation reads
+coverage rows: the certificate carries only the snapshot and child plans, and
+the executor consumes child ranges.
+
 `buildParallelPassCandidateCost` derives the
 checked fixed-point record from certified integers only: serial work is the
 pass draw total, the critical path is the widest child, child setup is one

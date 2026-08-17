@@ -1193,10 +1193,14 @@ bool resolveParallelPassCoverage(
   const std::uint32_t commandCount = snapshot.childrenCoverCompleteCommands
       ? child.replayOrdinalCount
       : 1u;
-  if (commandCount == 0u || commandCount > coverage.commands.size()) {
+  if (commandCount == 0u) {
     return false;
   }
-  std::uint64_t resolvedDraws = 0u;
+  // Streaming: a child owning more commands than any fixed row array is a
+  // normal input. Each row is checked against the previous boundary at append
+  // time and then discarded.
+  coverage.commands.open(child.replayOrdinalBegin,
+                         snapshot.childrenCoverCompleteCommands);
   for (std::uint32_t offset = 0u; offset < commandCount; ++offset) {
     std::uint32_t commandIndex = 0u;
     if (!state->stream->commandIndexAt(
@@ -1243,24 +1247,22 @@ bool resolveParallelPassCoverage(
         return false;
       }
     }
-    const auto drawParamCount =
-        static_cast<std::uint32_t>(source.command.drawParams.size());
-    coverage.commands[offset] = {
-        .replayOrdinal = child.replayOrdinalBegin + offset,
-        .commandIndex = commandIndex,
-        .drawParamBegin = source.command.drawRunRecord->firstParam,
-        .drawParamCount = drawParamCount,
-    };
-    if (resolvedDraws > UINT64_MAX - drawParamCount) {
+    if (!coverage.commands.append({
+            .replayOrdinal = child.replayOrdinalBegin + offset,
+            .commandIndex = commandIndex,
+            .drawParamBegin = source.command.drawRunRecord->firstParam,
+            .drawParamCount =
+                static_cast<std::uint32_t>(source.command.drawParams.size()),
+        })) {
       return false;
     }
-    resolvedDraws += drawParamCount;
   }
-  coverage.commandCount = commandCount;
   coverage.drawCount = snapshot.childrenCoverCompleteCommands
-      ? resolvedDraws
+      ? coverage.commands.drawTotal()
       : child.range.drawEntryCount;
-  return coverage.drawCount != 0u && coverage.reads.complete() &&
+  return coverage.commands.valid() &&
+      coverage.commands.commandCount() == commandCount &&
+      coverage.drawCount != 0u && coverage.reads.complete() &&
       coverage.writes.complete();
 }
 

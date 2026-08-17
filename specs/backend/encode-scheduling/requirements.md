@@ -806,6 +806,20 @@ sidecar, and every other coordinator command remain at their serial position;
 they are never represented as child ranges and never disappear from the
 coverage proof.
 
+The coverage proof must not be bounded by a fixed per-child command-row
+capacity. A child owning more source commands than any storage array must be a
+normal input, not a rejection. The resolver must stream its resolved commands
+through an accumulator whose state is constant in the number of commands, and
+every accumulator must be exact: a hash or other lossy summary must not decide
+coverage, because a collision would admit a false accept. The accumulator must
+enforce order, contiguity, non-overlap, and non-emptiness against the previous
+command's boundary as each command is appended, must retain the exact running
+command and draw totals for comparison against the child plan's claimed
+totals, must retain the first resolved command for the plan's begin/count
+predicates, and must report the first failure with its reason and command
+locator. A resolver must not be able to construct a coverage accumulator in
+any state other than the one its own appends produced.
+
 **R-BACK-2.71** Eligibility is pass-wide, not fragment-local. The proof must
 cover the complete sealed logical pass: one attachment/sample identity and
 all exact canonical read/write hazards; one unambiguous load/store/action

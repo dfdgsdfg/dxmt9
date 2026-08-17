@@ -1799,15 +1799,22 @@ struct SemanticPlanFixture {
       return false;
     }
     coverage.drawCount = 64u;
-    coverage.commandCount = 1u;
-    coverage.commands[0] = {
-        .replayOrdinal = child.replayOrdinalBegin,
-        .commandIndex = child.range.entry.commandIndex,
-        .drawParamBegin = 0u,
-        .drawParamCount = static_cast<std::uint32_t>(fixture.snapshot.drawCount),
-    };
-    if (fixture.resolvedCommandCountOverride != 0u) {
-      coverage.commandCount = fixture.resolvedCommandCountOverride;
+    const std::uint32_t rows = fixture.resolvedCommandCountOverride != 0u
+        ? fixture.resolvedCommandCountOverride
+        : 1u;
+    coverage.commands.open(child.replayOrdinalBegin,
+                           fixture.snapshot.childrenCoverCompleteCommands);
+    for (std::uint32_t row = 0u; row < rows; ++row) {
+      if (!coverage.commands.append({
+              .replayOrdinal = child.replayOrdinalBegin + row,
+              .commandIndex = child.range.entry.commandIndex + row,
+              .drawParamBegin =
+                  static_cast<std::uint32_t>(fixture.snapshot.drawCount) * row,
+              .drawParamCount =
+                  static_cast<std::uint32_t>(fixture.snapshot.drawCount),
+          })) {
+        return false;
+      }
     }
     coverage.reads = fixture.resolvedReads;
     coverage.writes = fixture.resolvedWrites;
@@ -2094,12 +2101,14 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
                 "child ordinal mutation fails closed");
   expectInvalid([](auto& f) { f.count = 1u; f.snapshot.childCount = 1u; },
                 "capacity mutation fails closed");
-  expectInvalid([](auto& f) {
-    f.resolvedCommandCountOverride =
-        static_cast<std::uint32_t>(
-            dxmt9::encoders::ParallelPassResolvedCoverage{}.commands.size()) +
-        1u;
-  }, "coverage command count above bounded storage fails before indexing");
+  // Row storage no longer bounds a child, so an oversized resolved command
+  // count is now a claim mismatch against the child plan rather than a
+  // capacity failure. It must still fail closed.
+  expectInvalid([](auto& f) { f.resolvedCommandCountOverride = 17u; },
+                "resolved command count above the child's claim fails closed");
+  expectInvalid([](auto& f) { f.resolvedCommandCountOverride = 2u; },
+                "an extra resolved command in a draw-subrange child fails "
+                "closed");
 
   SemanticPlanFixture overlap(3u);
   overlap.snapshot.attachmentWrites.handles[0] = 0x11u;
@@ -2444,6 +2453,8 @@ bool resolveProducerCoverage(
     coverage.writes.flags = dxmt9::core::ExactResourceSetComplete |
         dxmt9::core::ExactResourceSetCanonicalized;
     bool haveAttachments = false;
+    coverage.commands.open(child.replayOrdinalBegin, true);
+    std::uint32_t firstCommandIndex = 0u;
     for (std::uint32_t offset = 0u; offset < child.replayOrdinalCount;
          ++offset) {
       std::uint32_t commandIndex = 0u;
@@ -2479,30 +2490,32 @@ bool resolveProducerCoverage(
         }
       }
       coverage.drawCount += command.command.drawParams.size();
-      if (coverage.commandCount >= coverage.commands.size()) {
-        return false;
-      }
-      coverage.commands[coverage.commandCount++] = {
+      dxmt9::encoders::ParallelPassResolvedCoverage::Command row{
           .replayOrdinal = child.replayOrdinalBegin + offset,
           .commandIndex = commandIndex,
           .drawParamBegin = command.command.drawRunRecord->firstParam,
           .drawParamCount = static_cast<std::uint32_t>(
               command.command.drawParams.size()),
       };
-    }
-    if (state.mutateNonzeroWholeRowField != 0u &&
-        coverage.commandCount >= 2u) {
-      auto& row = coverage.commands[1];
-      switch (state.mutateNonzeroWholeRowField) {
-      case 1u:
-        row.commandIndex = coverage.commands[0].commandIndex;
-        break;
-      case 2u:
-        ++row.drawParamBegin;
-        break;
-      case 3u:
-        ++row.drawParamCount;
-        break;
+      if (offset == 0u) {
+        firstCommandIndex = commandIndex;
+      } else if (offset == 1u) {
+        switch (state.mutateNonzeroWholeRowField) {
+        case 1u:
+          row.commandIndex = firstCommandIndex;
+          break;
+        case 2u:
+          ++row.drawParamBegin;
+          break;
+        case 3u:
+          ++row.drawParamCount;
+          break;
+        default:
+          break;
+        }
+      }
+      if (!coverage.commands.append(row)) {
+        return false;
       }
     }
     coverage.route = dxmt9::core::RenderRoute::Portable;
@@ -2521,14 +2534,17 @@ bool resolveProducerCoverage(
       authoritativeCommand.command.drawParams.size() > UINT32_MAX) {
     return false;
   }
-  coverage.commandCount = 1u;
-  coverage.commands[0] = {
-      .replayOrdinal = child.replayOrdinalBegin,
-      .commandIndex = child.range.entry.commandIndex,
-      .drawParamBegin = authoritativeCommand.command.drawRunRecord->firstParam,
-      .drawParamCount = static_cast<std::uint32_t>(
-          authoritativeCommand.command.drawParams.size()),
-  };
+  coverage.commands.open(child.replayOrdinalBegin, false);
+  if (!coverage.commands.append({
+          .replayOrdinal = child.replayOrdinalBegin,
+          .commandIndex = child.range.entry.commandIndex,
+          .drawParamBegin =
+              authoritativeCommand.command.drawRunRecord->firstParam,
+          .drawParamCount = static_cast<std::uint32_t>(
+              authoritativeCommand.command.drawParams.size()),
+      })) {
+    return false;
+  }
   coverage.reads = dxmt9::core::makeDrawEntryReadSet(
       resolved.partition.entry.drawState);
   coverage.writes = dxmt9::core::makeRenderAttachmentWriteSet(
@@ -2926,6 +2942,268 @@ AdapterLaneResult runAdapterLane(
   return out;
 }
 
+// R-BACK-2.70 / R-VERIF-2.17: the streaming coverage fold replaces a fixed
+// 16-row array with O(1) exact accumulators. The pin is adversarial: a
+// stored-row reference reproducing the pre-change predicate set is run beside
+// the fold over a generated domain of gap, overlap, duplicate, out-of-order,
+// empty, arithmetic, subrange, and exactly-boundary row sets, and the two
+// verdicts are compared. The fold must never accept what the reference
+// rejects; the one permitted divergence is the deliberate fail-closed
+// ordering strengthening.
+void streamingCoverageFoldMatchesStoredRowReference() {
+  using namespace dxmt9::encoders;
+  using Row = ParallelPassCoverageFold::Command;
+  using Failure = ParallelPassCoverageFoldFailure;
+
+  struct ReferenceVerdict {
+    Failure failure = Failure::NotStarted;
+    std::uint32_t failureCommand = UINT32_MAX;
+    std::uint64_t drawTotal = 0u;
+    std::uint32_t commandCount = 0u;
+    bool accepted = false;
+  };
+
+  // Stored-row reference. It keeps every row and re-checks the predicate set
+  // the array form enforced, including the O(n) duplicate scan over prior
+  // rows. The pre-change code collapsed all of these into one `||` chain and
+  // a single rejection, so evaluation order never affected its verdict; the
+  // reference uses the fold's order only so the reported reason class is
+  // comparable.
+  const auto reference = [](std::span<const Row> rows, std::uint32_t begin,
+                            bool wholeCommands) {
+    ReferenceVerdict out{};
+    if (rows.empty()) {
+      return out;
+    }
+    std::vector<Row> stored;
+    std::uint32_t previousDrawParamEnd = 0u;
+    for (std::uint32_t k = 0u; k < rows.size(); ++k) {
+      const auto& row = rows[k];
+      const auto fail = [&](Failure reason) {
+        out.failure = reason;
+        out.failureCommand = k;
+        return out;
+      };
+      if (!wholeCommands && k != 0u) {
+        return fail(Failure::SubrangeCapacity);
+      }
+      if (static_cast<std::uint64_t>(begin) + k !=
+          static_cast<std::uint64_t>(row.replayOrdinal)) {
+        return fail(Failure::CommandOrder);
+      }
+      if (row.drawParamCount == 0u) {
+        return fail(Failure::EmptyCommand);
+      }
+      if (row.drawParamBegin > UINT32_MAX - row.drawParamCount) {
+        return fail(Failure::CommandArithmetic);
+      }
+      if (k != 0u &&
+          std::any_of(stored.begin(), stored.end(), [&](const Row& prior) {
+            return prior.commandIndex == row.commandIndex;
+          })) {
+        return fail(Failure::CommandOverlap);
+      }
+      if (wholeCommands && k != 0u &&
+          row.drawParamBegin != previousDrawParamEnd) {
+        return fail(Failure::CommandContiguity);
+      }
+      if (out.drawTotal > UINT64_MAX - row.drawParamCount) {
+        return fail(Failure::DrawArithmetic);
+      }
+      stored.push_back(row);
+      previousDrawParamEnd = row.drawParamBegin + row.drawParamCount;
+      out.drawTotal += row.drawParamCount;
+      ++out.commandCount;
+    }
+    out.failure = Failure::None;
+    out.accepted = true;
+    return out;
+  };
+
+  constexpr std::uint32_t kBegin = 7u;
+  const auto baseRow = [](std::uint32_t k) {
+    return Row{
+        .replayOrdinal = kBegin + k,
+        .commandIndex = 20u + 2u * k,
+        .drawParamBegin = 100u + 5u * k,
+        .drawParamCount = 5u,
+    };
+  };
+
+  std::uint32_t compared = 0u;
+  std::uint32_t divergences = 0u;
+  std::uint32_t acceptedCases = 0u;
+  for (std::uint32_t rowCount = 1u; rowCount <= 4u; ++rowCount) {
+    for (const bool wholeCommands : {false, true}) {
+      for (std::uint32_t target = 0u; target < rowCount; ++target) {
+        for (std::uint32_t mutation = 0u; mutation <= 9u; ++mutation) {
+          std::vector<Row> rows;
+          for (std::uint32_t k = 0u; k < rowCount; ++k) {
+            Row row = baseRow(k);
+            if (k == target) {
+              switch (mutation) {
+              case 1u: ++row.replayOrdinal; break;                  // gap
+              case 2u: --row.replayOrdinal; break;                  // reorder
+              case 3u: row.commandIndex = baseRow(0u).commandIndex; break;
+              case 4u: row.commandIndex = 20u - 3u; break;          // descend
+              case 5u: ++row.drawParamBegin; break;                 // gap
+              case 6u: --row.drawParamBegin; break;                 // overlap
+              case 7u: row.drawParamCount = 0u; break;              // empty
+              case 8u:
+                row.drawParamBegin = UINT32_MAX - 1u;
+                row.drawParamCount = 5u;
+                break;                                              // overflow
+              case 9u: ++row.drawParamCount; break;                 // tail
+              default: break;
+              }
+            }
+            rows.push_back(row);
+          }
+
+          const auto expected = reference(rows, kBegin, wholeCommands);
+          ParallelPassCoverageFold fold{};
+          fold.open(kBegin, wholeCommands);
+          for (const auto& row : rows) {
+            fold.append(row);
+          }
+          ++compared;
+
+          check(!fold.valid() || expected.accepted,
+                "the streaming fold never accepts a row set the stored-row "
+                "reference rejects");
+          if (expected.accepted != fold.valid()) {
+            bool strictlyIncreasing = true;
+            for (std::size_t k = 1u; k < rows.size(); ++k) {
+              strictlyIncreasing = strictlyIncreasing &&
+                  rows[k].commandIndex > rows[k - 1u].commandIndex;
+            }
+            check(expected.accepted && !fold.valid() && !strictlyIncreasing &&
+                      fold.failure() == Failure::CommandOverlap,
+                  "the only reference/streaming divergence is the deliberate "
+                  "fail-closed command-order strengthening");
+            ++divergences;
+            continue;
+          }
+          if (fold.valid()) {
+            check(fold.drawTotal() == expected.drawTotal &&
+                      fold.commandCount() == expected.commandCount,
+                  "an accepted fold reports the reference's exact totals");
+            ++acceptedCases;
+            continue;
+          }
+          check(fold.failure() == expected.failure &&
+                    fold.failureCommand() == expected.failureCommand,
+                "a rejected fold reports the reference's failure class and "
+                "first-failure locator");
+        }
+      }
+    }
+  }
+  check(compared >= 200u && acceptedCases > 0u && divergences > 0u,
+        "the generated domain exercises accepts, rejects, and the ordering "
+        "strengthening");
+
+  // Exactly-boundary and beyond: the former 16-row storage is not a limit.
+  for (const std::uint32_t rowCount : {15u, 16u, 17u, 52u}) {
+    ParallelPassCoverageFold fold{};
+    fold.open(kBegin, true);
+    for (std::uint32_t k = 0u; k < rowCount; ++k) {
+      check(fold.append(baseRow(k)), "every whole-command row appends");
+    }
+    check(fold.valid() && fold.commandCount() == rowCount &&
+              fold.drawTotal() == static_cast<std::uint64_t>(rowCount) * 5u &&
+              fold.first() == baseRow(0u),
+          "the fold accumulates exactly beyond any fixed row capacity");
+  }
+
+  // An empty child is still not coverage, and a failure locator survives
+  // later appends.
+  ParallelPassCoverageFold empty{};
+  empty.open(kBegin, true);
+  check(!empty.valid() && empty.failure() == Failure::NotStarted,
+        "a child with no resolved command is not covered");
+  ParallelPassCoverageFold sticky{};
+  sticky.open(kBegin, true);
+  check(sticky.append(baseRow(0u)), "first row appends");
+  Row gap = baseRow(1u);
+  ++gap.drawParamBegin;
+  check(!sticky.append(gap), "a contiguity gap is rejected");
+  check(!sticky.append(baseRow(2u)) && !sticky.valid() &&
+            sticky.failure() == Failure::CommandContiguity &&
+            sticky.failureCommand() == 1u,
+        "the first failure and its locator survive later appends");
+}
+
+// R-BACK-2.70: a whole-command child owning far more commands than the former
+// 16-row coverage storage now certifies through the production validator.
+void wideWholeCommandChildrenCertify() {
+  using namespace dxmt9::encoders;
+  PassObservationFixture wide;
+  for (std::uint32_t command = 0u; command < 60u; ++command) {
+    wide.slot.appendDrawRun({}, {}, draws(3u), payloads(3u));
+  }
+  // The production partition planner reports an explicit plan only when some
+  // DrawRun is large enough to subdivide; the wide small-command run is what
+  // the coverage fold is being exercised on.
+  wide.slot.appendDrawRun({}, {}, draws(128u), payloads(128u));
+  wide.slot.appendPresent({}, {});
+  wide.finalize(640u);
+  SealedParallelPassSnapshotBatch output{};
+  const auto observed = wide.observe(output);
+  check(observed.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].childrenCoverCompleteCommands,
+        "a many-command source still produces one whole-command candidate");
+
+  const auto& snapshot = output.passes[0];
+  std::uint32_t widestChild = 0u;
+  for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+    widestChild = std::max(widestChild, snapshot.childReplayOrdinalCounts[i]);
+  }
+  check(widestChild > kParallelRenderPassChildCapacity,
+        "the fixture's widest child owns more commands than the former row "
+        "capacity");
+
+  std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+      children{};
+  for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+    children[i] = {
+        .range = snapshot.ranges[i],
+        .firstDraw = snapshot.firstDraws[i],
+        .binding = bindingSnapshot(ParallelPassDirectBindingMode::Stage1Direct,
+                                   static_cast<std::uint16_t>(i + 1u)),
+        .replayOrdinalBegin = snapshot.childReplayOrdinalBegins[i],
+        .replayOrdinalCount = snapshot.childReplayOrdinalCounts[i],
+        .childOrdinal = i,
+        .localShadowOrdinal = i + 1u,
+        .coversCompleteCommands = true,
+        .forceFullFirstDrawBinding = true,
+    };
+  }
+  ProducerCoverageContext context{.fixture = &wide};
+  const ParallelPassSnapshotAuthority authority{
+      .context = &context, .resolve = resolveProducerAuthority};
+  const ParallelPassCoverageResolver resolver{
+      .context = &context, .resolve = resolveProducerCoverage};
+  const auto witness = producerEpochWitness(context);
+  check(validateParallelPassSemanticPlan(
+            snapshot, {children.data(), snapshot.childCount}, authority,
+            resolver, witness)
+            .accepted(),
+        "a child owning more commands than the former row capacity certifies");
+
+  // The per-row predicates are still enforced at that width.
+  for (std::uint32_t field = 1u; field <= 3u; ++field) {
+    context.mutateNonzeroWholeRowField = field;
+    check(!validateParallelPassSemanticPlan(
+                snapshot, {children.data(), snapshot.childCount}, authority,
+                resolver, witness)
+               .accepted(),
+          "wide whole-command rows still fail closed on identity/range "
+          "mutation");
+  }
+  context.mutateNonzeroWholeRowField = 0u;
+}
+
 // R-BACK-2.69: the certificate never trusts a stored action epoch. The
 // producer issues the coordinator proof per pass, and the certificate
 // re-derives that pass's epoch itself by folding the shared classifier over
@@ -3244,6 +3522,8 @@ int main() {
     semanticPlanMutationAndCoverageProofsFailClosed();
     fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent();
     producerOutputFeedsSynchronousSemanticValidator();
+    streamingCoverageFoldMatchesStoredRowReference();
+    wideWholeCommandChildrenCertify();
     passLocalEpochProofIsIndependentlyReDerived();
     proofCoreAdapterGatesEveryProductionCandidate();
   } catch (const TestFailure& error) {
