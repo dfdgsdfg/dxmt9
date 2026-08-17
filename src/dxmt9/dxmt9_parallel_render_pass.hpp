@@ -59,6 +59,58 @@ ParallelPassDrawQuantumResolution resolveParallelPassDrawQuantum(
 // std::getenv on first call, caches the clamped quantum, and logs one
 // bounded warning if the parsed value needed clamping.
 std::uint32_t resolveParallelPassDrawQuantumFromEnv();
+
+// ---------------------------------------------------------------------
+// DXMT9_PARALLEL_PASS_IMBALANCE_BOUND — diagnostic/tuning env knob.
+// ---------------------------------------------------------------------
+//
+// DXMT9_PARALLEL_PASS_DRAW_QUANTUM (above) currently controls three
+// distinct roles at once inside classifyParallelPassEconomics /
+// subdivideParallelPassDraws / subdivideParallelPassWholeCommands: the
+// sealed-pass two-child eligibility floor, the ThinChild minimum, and the
+// economics classifier's UnbalancedChild imbalance bound. Conflating
+// eligibility with imbalance makes floor experiments self-defeating — a
+// wider quantum that is meant to admit smaller passes also widens how much
+// child-size imbalance is tolerated, and a narrower quantum meant to
+// tighten imbalance also raises the eligibility floor.
+//
+// This knob decouples the UnbalancedChild bound ONLY. It never changes
+// sealed-pass eligibility, subdivision, or the ThinChild floor — those keep
+// reading `drawQuantum` (DXMT9_PARALLEL_PASS_DRAW_QUANTUM) exactly as
+// before. Unset/empty/"0"/unparseable resolves to `drawQuantum` itself
+// (today's coupled behavior, byte-identical); an explicit value is clamped
+// to [kParallelPassImbalanceBoundMin, kParallelPassImbalanceBoundMax] with
+// one bounded warn on clamp. Tuning/experiment surface only — see
+// agents/rules/environment_variables_encoder.rules.md.
+inline constexpr std::uint32_t kParallelPassImbalanceBoundMin = 4u;
+inline constexpr std::uint32_t kParallelPassImbalanceBoundMax = 4096u;
+
+// Pure parse+clamp of DXMT9_PARALLEL_PASS_IMBALANCE_BOUND. `fallbackQuantum`
+// is the caller's resolved draw quantum (so tests can exercise the coupling
+// without env); a null, empty, "0", or unparseable string resolves to
+// `fallbackQuantum` with `clamped=false`. A parsed value is clamped to
+// [kParallelPassImbalanceBoundMin, kParallelPassImbalanceBoundMax];
+// `clamped` reports whether clamping changed the parsed value so the
+// env-reading wrapper can log exactly one bounded warning.
+struct ParallelPassImbalanceBoundResolution {
+  std::uint32_t bound = kProductionPartitionDrawThreshold;
+  bool clamped = false;
+
+  friend constexpr bool operator==(
+      const ParallelPassImbalanceBoundResolution&,
+      const ParallelPassImbalanceBoundResolution&) = default;
+};
+
+ParallelPassImbalanceBoundResolution resolveParallelPassImbalanceBound(
+    const char* env, std::uint32_t fallbackQuantum) noexcept;
+
+// Process-once env reader; reads DXMT9_PARALLEL_PASS_IMBALANCE_BOUND via
+// std::getenv on first call, caches the clamped bound (coupled to
+// `fallbackQuantum` when unset), and logs one bounded warning if the parsed
+// value needed clamping.
+std::uint32_t resolveParallelPassImbalanceBoundFromEnv(
+    std::uint32_t fallbackQuantum);
+
 inline constexpr std::uint32_t kParallelRenderPassNoFailedChild = UINT32_MAX;
 
 enum class ParallelPassDirectBindingMode : std::uint8_t {
@@ -353,18 +405,29 @@ subdivideParallelPassDraws(
 }
 
 // Enforced economics policy. It reuses the production planner's
-// existing 64-draw eligibility quantum, bounds actual child imbalance by that
-// quantum, and admits an extra child first bind only when the corresponding
-// child boundary already changes both PSO and uniform identity in serial order.
+// existing 64-draw eligibility quantum for the ThinChild floor, bounds
+// actual child imbalance by `imbalanceBound` (0 means "couple to
+// drawQuantum" — today's byte-identical default), and admits an extra child
+// first bind only when the corresponding child boundary already changes
+// both PSO and uniform identity in serial order.
+//
+// `imbalanceBound` is DXMT9_PARALLEL_PASS_IMBALANCE_BOUND's resolved value
+// (see the doc-comment near the top of this file): it affects ONLY the
+// UnbalancedChild check below. `drawQuantum` continues to own the
+// ThinChild floor and every eligibility/subdivision decision upstream of
+// this classifier.
 inline constexpr ParallelPassEconomicsDecision
 classifyParallelPassEconomics(
     const ParallelPassEconomicsSummary& summary,
-    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) noexcept {
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold,
+    std::uint32_t imbalanceBound = 0u) noexcept {
   ParallelPassEconomicsDecision result{.considered = true};
   if (drawQuantum == 0u) {
     result.reject = ParallelPassEconomicsRejectReason::InvalidOrOverflow;
     return result;
   }
+  const std::uint32_t effectiveImbalanceBound =
+      imbalanceBound == 0u ? drawQuantum : imbalanceBound;
   auto reject = [&](ParallelPassEconomicsRejectReason reason) {
     result.reject = reason;
     return result;
@@ -400,7 +463,8 @@ classifyParallelPassEconomics(
   if (summary.minimumChildDraws < drawQuantum) {
     return reject(ParallelPassEconomicsRejectReason::ThinChild);
   }
-  if (summary.maximumChildDraws - summary.minimumChildDraws > drawQuantum) {
+  if (summary.maximumChildDraws - summary.minimumChildDraws >
+      effectiveImbalanceBound) {
     return reject(ParallelPassEconomicsRejectReason::UnbalancedChild);
   }
   const std::uint64_t extraChildFirstBinds = summary.childCount - 1u;
@@ -449,8 +513,10 @@ ParallelPassEconomicsDecision dispatchParallelPassEconomics(
     const ParallelPassEconomicsSummary& summary,
     Accepted&& accepted,
     SerialFallback&& serialFallback,
-    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) {
-  const auto decision = classifyParallelPassEconomics(summary, drawQuantum);
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold,
+    std::uint32_t imbalanceBound = 0u) {
+  const auto decision =
+      classifyParallelPassEconomics(summary, drawQuantum, imbalanceBound);
   if (decision.accepted) {
     std::forward<Accepted>(accepted)();
   } else {
@@ -464,12 +530,14 @@ bool observeParallelPassEconomicsCountersIfEnabled(
     bool perfEnabled,
     const ParallelPassEconomicsSummary& summary,
     Observer&& observer,
-    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) {
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold,
+    std::uint32_t imbalanceBound = 0u) {
   if (!perfEnabled) {
     return false;
   }
   std::forward<Observer>(observer)(
-      summary, classifyParallelPassEconomics(summary, drawQuantum));
+      summary,
+      classifyParallelPassEconomics(summary, drawQuantum, imbalanceBound));
   return true;
 }
 

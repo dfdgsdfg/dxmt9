@@ -708,4 +708,46 @@ std::uint32_t resolveParallelPassDrawQuantumFromEnv() {
   return resolution.quantum;
 }
 
+// ---------------------------------------------------------------------
+// DXMT9_PARALLEL_PASS_IMBALANCE_BOUND — see the doc-comment in the header.
+// ---------------------------------------------------------------------
+
+ParallelPassImbalanceBoundResolution resolveParallelPassImbalanceBound(
+    const char* env, std::uint32_t fallbackQuantum) noexcept {
+  if (!env || env[0] == '\0') {
+    return {.bound = fallbackQuantum, .clamped = false};
+  }
+  char* end = nullptr;
+  errno = 0;
+  const auto parsed = std::strtoul(env, &end, 10);
+  if (end == env || errno == ERANGE || parsed == 0) {
+    return {.bound = fallbackQuantum, .clamped = false};
+  }
+  ParallelPassImbalanceBoundResolution result{};
+  const auto clamped = std::clamp<unsigned long>(
+      parsed, kParallelPassImbalanceBoundMin, kParallelPassImbalanceBoundMax);
+  result.bound = static_cast<std::uint32_t>(clamped);
+  result.clamped = clamped != parsed;
+  return result;
+}
+
+std::uint32_t resolveParallelPassImbalanceBoundFromEnv(
+    std::uint32_t fallbackQuantum) {
+  static const ParallelPassImbalanceBoundResolution resolution = [
+      fallbackQuantum] {
+    const auto resolved = resolveParallelPassImbalanceBound(
+        std::getenv("DXMT9_PARALLEL_PASS_IMBALANCE_BOUND"), fallbackQuantum);
+    if (resolved.clamped) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-parallel-pass",
+          "DXMT9_PARALLEL_PASS_IMBALANCE_BOUND clamped to %u (valid range "
+          "[%u,%u])",
+          resolved.bound, kParallelPassImbalanceBoundMin,
+          kParallelPassImbalanceBoundMax);
+    }
+    return resolved;
+  }();
+  return resolution.bound;
+}
+
 }  // namespace dxmt9::encoders
