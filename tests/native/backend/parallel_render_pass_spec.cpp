@@ -466,7 +466,9 @@ struct PassObservationFixture {
       bool sourceStartsPass = true,
       bool sourceEndsPass = true,
       dxmt9::encoders::ParallelPassStaticProofInput proofs =
-          completeProofs()) const {
+          completeProofs(),
+      std::uint32_t drawQuantum =
+          dxmt9::encoders::kProductionPartitionDrawThreshold) const {
     return dxmt9::encoders::produceSealedParallelPassSnapshots({
           .stream = &stream,
           .ranges = plan.view(),
@@ -474,6 +476,7 @@ struct PassObservationFixture {
           .planValidated = true,
           .sourceStartsPass = sourceStartsPass,
           .sourceEndsPass = sourceEndsPass,
+          .drawQuantum = drawQuantum,
         }, output);
   }
 };
@@ -542,6 +545,162 @@ void explicitParallelSubdivisionIsEvenAndBounded() {
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::
                     NoTwoChildWork)] == 1u,
         "sealed 127-draw pass takes the existing serial fallback");
+}
+
+void parallelPassDrawQuantumEnvKnobResolvesClampsAndScalesEligibility() {
+  using dxmt9::encoders::classifyParallelPassEconomics;
+  using dxmt9::encoders::kProductionPartitionDrawThreshold;
+  using dxmt9::encoders::ParallelPassEconomicsSummary;
+  using dxmt9::encoders::resolveParallelPassDrawQuantum;
+  using dxmt9::encoders::subdivideParallelPassDraws;
+
+  // (a) env parsing/clamping table.
+  const auto expect = [](const char* env, std::uint32_t quantum,
+                         bool clamped, std::string_view message) {
+    const auto resolved = resolveParallelPassDrawQuantum(env);
+    check(resolved.quantum == quantum && resolved.clamped == clamped,
+          message);
+  };
+  expect(nullptr, kProductionPartitionDrawThreshold, false,
+        "unset env resolves to the production default");
+  expect("", kProductionPartitionDrawThreshold, false,
+        "empty env resolves to the production default");
+  expect("0", kProductionPartitionDrawThreshold, false,
+        "zero env resolves to the production default");
+  expect("not-a-number", kProductionPartitionDrawThreshold, false,
+        "unparseable env resolves to the production default");
+  expect("4", 4u, false, "4 is the minimum and needs no clamping");
+  expect("2", 4u, true, "2 clamps up to the minimum of 4");
+  expect("1024", 1024u, false, "1024 is the maximum and needs no clamping");
+  expect("5000", 1024u, true, "5000 clamps down to the maximum of 1024");
+
+  // (b) a pass shape ineligible at quantum 64 becomes eligible at quantum 16
+  // with correctly scaled child sizes.
+  check(!subdivideParallelPassDraws(40u).valid,
+        "40 draws is ineligible at the default quantum of 64");
+  const auto scaled = subdivideParallelPassDraws(40u, 16u);
+  check(scaled.valid && scaled.childCount == 2u &&
+            scaled.drawCounts[0] == 20u && scaled.drawCounts[1] == 20u &&
+            scaled.drawBegins[0] == 0u && scaled.drawBegins[1] == 20u,
+        "40 draws becomes eligible at quantum 16 with two 20-draw children");
+
+  // The full producer pipeline (PassObservationFixture::finalize) requires a
+  // serial-planner-eligible DrawRun (>=64 draws, an independent axis owned
+  // by dxmt9_encode_partition.hpp/.cpp and never touched by this knob), so
+  // this end-to-end check uses 96 draws: ineligible for the parallel builder
+  // at the default quantum of 64 (96 < 128), eligible at quantum 16 with six
+  // 16-draw children (96 / 16 == 6, evenly).
+  check(!subdivideParallelPassDraws(96u).valid,
+        "96 draws is ineligible for the parallel builder at quantum 64");
+  const auto scaled96 = subdivideParallelPassDraws(96u, 16u);
+  check(scaled96.valid && scaled96.childCount == 6u,
+        "96 draws splits into six children at quantum 16");
+  for (std::uint32_t child = 0u; child < scaled96.childCount; ++child) {
+    check(scaled96.drawCounts[child] == 16u,
+          "96 draws splits evenly into six 16-draw children");
+  }
+
+  const auto below = draws(96u);
+  const auto belowPayloads = payloads(below.size());
+  PassObservationFixture fixture;
+  fixture.slot.appendDrawRun({}, {}, below, belowPayloads);
+  fixture.slot.appendPresent({}, {});
+  fixture.finalize(4170u);
+  dxmt9::encoders::SealedParallelPassSnapshotBatch defaultOutput{};
+  const auto defaultResult = fixture.observe(defaultOutput);
+  check(defaultResult.eligibleCount == 0u && defaultOutput.count == 0u,
+        "96-draw pass stays on the serial fallback at the default quantum");
+  dxmt9::encoders::SealedParallelPassSnapshotBatch scaledOutput{};
+  const auto scaledResult =
+      fixture.observe(scaledOutput, true, true, completeProofs(), 16u);
+  check(scaledResult.eligibleCount == 1u && scaledOutput.count == 1u &&
+            scaledOutput.passes[0].childCount == 6u,
+        "96-draw pass becomes eligible with six children at quantum 16");
+  for (std::uint32_t child = 0u; child < scaledOutput.passes[0].childCount;
+       ++child) {
+    check(scaledOutput.passes[0].childDrawCounts[child] == 16u,
+          "each scaled child carries exactly 16 draws");
+  }
+
+  // (c) default-quantum behavior stays byte-identical to the explicit
+  // kProductionPartitionDrawThreshold argument.
+  check(subdivideParallelPassDraws(128u) ==
+            subdivideParallelPassDraws(
+                128u, kProductionPartitionDrawThreshold),
+        "omitting the quantum argument matches the explicit default");
+  const ParallelPassEconomicsSummary summary{
+      .totalDraws = 128u,
+      .stage1Draws = 128u,
+      .psoBoundaryTransitions = 1u,
+      .uniformBoundaryTransitions = 1u,
+      .childCount = 2u,
+      .minimumChildDraws = 64u,
+      .maximumChildDraws = 64u,
+      .valid = true,
+  };
+  check(classifyParallelPassEconomics(summary).accepted ==
+            classifyParallelPassEconomics(
+                summary, kProductionPartitionDrawThreshold).accepted &&
+            classifyParallelPassEconomics(summary).reject ==
+                classifyParallelPassEconomics(
+                    summary, kProductionPartitionDrawThreshold).reject,
+        "economics classifier default quantum matches the explicit "
+        "production threshold");
+}
+
+void sealedPassDrawBucketHistogramConservesAgainstSealedCount() {
+  using Bucket = dxmt9::encoders::SealedPassDrawBucket;
+  using dxmt9::encoders::classifySealedPassDrawBucket;
+
+  check(classifySealedPassDrawBucket(0u) == Bucket::Under8 &&
+            classifySealedPassDrawBucket(7u) == Bucket::Under8 &&
+            classifySealedPassDrawBucket(8u) == Bucket::From8To15 &&
+            classifySealedPassDrawBucket(15u) == Bucket::From8To15 &&
+            classifySealedPassDrawBucket(16u) == Bucket::From16To31 &&
+            classifySealedPassDrawBucket(31u) == Bucket::From16To31 &&
+            classifySealedPassDrawBucket(32u) == Bucket::From32To63 &&
+            classifySealedPassDrawBucket(63u) == Bucket::From32To63 &&
+            classifySealedPassDrawBucket(64u) == Bucket::From64To127 &&
+            classifySealedPassDrawBucket(127u) == Bucket::From64To127 &&
+            classifySealedPassDrawBucket(128u) == Bucket::From128To255 &&
+            classifySealedPassDrawBucket(255u) == Bucket::From128To255 &&
+            classifySealedPassDrawBucket(256u) == Bucket::From256Plus &&
+            classifySealedPassDrawBucket(1000000u) == Bucket::From256Plus,
+        "bucket boundaries classify exactly as documented");
+
+  // Build a source with several sealed-but-rejected passes of different draw
+  // sizes (each < 128, so each stays on the serial fallback at the default
+  // quantum) and confirm the histogram sum equals sealedCount regardless of
+  // eligibility.
+  const std::array<std::size_t, 4> sizes{5u, 10u, 20u, 100u};
+  PassObservationFixture fixture;
+  for (const auto size : sizes) {
+    fixture.slot.appendClear({});
+    const auto rows = draws(size);
+    const auto rowPayloads = payloads(rows.size());
+    fixture.slot.appendDrawRun({}, {}, rows, rowPayloads);
+  }
+  fixture.slot.appendPresent({}, {});
+  fixture.finalize(4171u);
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+  const auto result = fixture.observe(output);
+  check(result.sealedCount == sizes.size(),
+        "every drawrun-then-clear interval seals independently");
+  std::uint32_t bucketSum = 0u;
+  for (const auto count : result.sealedDrawBuckets) {
+    bucketSum += count;
+  }
+  check(bucketSum == result.sealedCount,
+        "sealed draw-size bucket sum equals sealedCount");
+  check(result.sealedDrawBuckets[static_cast<std::size_t>(
+            Bucket::From8To15)] == 1u &&
+            result.sealedDrawBuckets[static_cast<std::size_t>(
+                Bucket::From16To31)] == 1u &&
+            result.sealedDrawBuckets[static_cast<std::size_t>(
+                Bucket::Under8)] == 1u &&
+            result.sealedDrawBuckets[static_cast<std::size_t>(
+                Bucket::From64To127)] == 1u,
+        "each fixture pass lands in its expected bucket");
 }
 
 void wholeCommandSubdivisionIsOrderedBoundedAndFailClosed() {
@@ -3507,6 +3666,8 @@ int main() {
     coordinatorProofSnapshotRequiresEveryPreEffectFact();
     wmtParentChildAdapterCreatesAndJoinsMetalEncoders();
     explicitParallelSubdivisionIsEvenAndBounded();
+    parallelPassDrawQuantumEnvKnobResolvesClampsAndScalesEligibility();
+    sealedPassDrawBucketHistogramConservesAgainstSealedCount();
     wholeCommandSubdivisionIsOrderedBoundedAndFailClosed();
     wholeCommandProducerPreservesCoverageAndFirstLocators();
     passLocalProducerFindsBoundedCompletePasses();

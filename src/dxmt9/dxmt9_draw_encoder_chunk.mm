@@ -1420,6 +1420,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   const bool parallelPartitionRequested =
       options.partitionExecutionMode ==
       render::PartitionExecutionMode::ExplicitParallel;
+  // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — diagnostic/tuning env knob for the
+  // parallel-pass economics floor (R-BACK-2.68..2.75). Read once and shared by
+  // both the shadow snapshot producer's child subdivision and the economics
+  // classifier below so the eligibility quantum and the imbalance bound stay
+  // consistent with each other. The serial partition planner
+  // (planProductionEncodePartitions, dxmt9_encode_partition.hpp/.cpp) never
+  // reads this value and keeps using kProductionPartitionDrawThreshold.
+  const std::uint32_t parallelPassDrawQuantum =
+      parallelPartitionRequested
+          ? encoders::resolveParallelPassDrawQuantumFromEnv()
+          : encoders::kProductionPartitionDrawThreshold;
   if (partitionRanges.empty() &&
       (options.partitionExecutionMode ==
            render::PartitionExecutionMode::ExplicitSerial ||
@@ -2445,6 +2456,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             .sourceStartsPass = options.session == nullptr,
             .sourceEndsPass = !(options.deferSessionFinalization &&
                                 options.session != nullptr),
+            .drawQuantum = parallelPassDrawQuantum,
         },
         parallelPassShadows);
     if (perf::enabled()) {
@@ -4134,7 +4146,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // unless the certificate, the classifier, and the selector all agree.
     bool economicsAccepted = false;
     const auto economicsDecision = dispatchParallelPassEconomics(
-        economics, [&] { economicsAccepted = true; }, [] {});
+        economics, [&] { economicsAccepted = true; }, [] {},
+        parallelPassDrawQuantum);
     if (perf::enabled()) {
       perf::countParallelPassEconomics(economics, economicsDecision);
     }

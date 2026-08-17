@@ -875,6 +875,18 @@ void countParallelPassShadow(
   add(c.parallelPassShadowCoordinatorBoundaries,
       result.coordinatorBoundaries);
   add(c.parallelPassShadowCoordinatorSplits, result.coordinatorSplits);
+  using Bucket = encoders::SealedPassDrawBucket;
+  auto bucket = [&](Bucket b) {
+    return static_cast<std::uint64_t>(
+        result.sealedDrawBuckets[static_cast<std::size_t>(b)]);
+  };
+  add(c.parallelPassShadowSealedDrawsUnder8, bucket(Bucket::Under8));
+  add(c.parallelPassShadowSealedDraws8To15, bucket(Bucket::From8To15));
+  add(c.parallelPassShadowSealedDraws16To31, bucket(Bucket::From16To31));
+  add(c.parallelPassShadowSealedDraws32To63, bucket(Bucket::From32To63));
+  add(c.parallelPassShadowSealedDraws64To127, bucket(Bucket::From64To127));
+  add(c.parallelPassShadowSealedDraws128To255, bucket(Bucket::From128To255));
+  add(c.parallelPassShadowSealedDraws256Plus, bucket(Bucket::From256Plus));
 }
 
 void countParallelPassAdapter(
