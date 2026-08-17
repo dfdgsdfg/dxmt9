@@ -1151,13 +1151,30 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
         "a readback terminates the pass interval at its serial position "
         "instead of rejecting the whole source");
 
-  auto productionLike = completeProofs(0u);
+  // A zero coordinator seed epoch is the pass-action epoch's invalid sentinel,
+  // and the certificate's epoch witness refuses it outright. The producer must
+  // therefore fail the whole source closed with the typed epoch reason rather
+  // than publish later passes whose nonzero stamps no re-derivation can
+  // reproduce (that shape was 100% of the SFIV certificate-invalid population).
+  auto zeroSeed = completeProofs(0u);
+  result = fragment.observe(output, true, true, zeroSeed);
+  check(result.considered && result.candidateCount == 0u &&
+            result.sealedCount == 0u && result.eligibleCount == 0u &&
+            output.count == 0u &&
+            result.fallback ==
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassActionEpoch &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassActionEpoch)] == 1u,
+        "a zero coordinator seed epoch fails the whole source closed before "
+        "any candidate is observed");
+
+  auto productionLike = completeProofs(17u);
   productionLike.coordinator.flags = 0u;
   result = fragment.observe(output, true, true, productionLike);
   check(result.candidateCount == 1u && result.sealedCount == 1u &&
             result.eligibleCount == 0u && output.count == 0u &&
             result.rejectionCounts[static_cast<std::size_t>(
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassActionEpoch)] == 1u &&
+                dxmt9::encoders::SealedParallelPassSnapshotFallback::PassActionEpoch)] == 0u &&
             result.rejectionCounts[static_cast<std::size_t>(
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::QueryState)] == 1u &&
             result.rejectionCounts[static_cast<std::size_t>(
@@ -2519,6 +2536,10 @@ struct ProducerCoverageContext {
   const PassObservationFixture* fixture = nullptr;
   std::uint32_t mutateNonzeroWholeRowField = 0u;
   std::uint64_t seedEpoch = 7u;
+  // The owner must re-observe with the same boundary facts the coordinator
+  // published, or a carried source would be re-derived as a fresh one.
+  bool sourceStartsPass = true;
+  bool sourceEndsPass = true;
   mutable std::uint32_t epochReads = 0u;
 };
 
@@ -2578,7 +2599,8 @@ bool resolveProducerAuthority(
   }
   dxmt9::encoders::SealedParallelPassSnapshotBatch rebuilt{};
   if (!state.fixture
-           ->observe(rebuilt, true, true, completeProofs(state.seedEpoch))
+           ->observe(rebuilt, state.sourceStartsPass, state.sourceEndsPass,
+                     completeProofs(state.seedEpoch))
            .considered) {
     return false;
   }
@@ -3528,6 +3550,227 @@ void passLocalEpochProofIsIndependentlyReDerived() {
         "a stale storage generation fails closed before any epoch fold");
 }
 
+// R-BACK-2.69: the two boundary-adjacent pass-identity shapes that a wild
+// re-measurement attributed 100% of the SFIV and 1.5% of the GT2
+// certificate-invalid population to. Both were false negatives inside the
+// `PassIdentity` checkpoint, and both are reproduced here through the real
+// producer and the real certificate.
+void boundaryAdjacentPassIdentityCertifies() {
+  using namespace dxmt9::encoders;
+  const auto drawValues = draws(128u);
+  const auto drawPayloads = payloads(drawValues.size());
+  const auto planChildren =
+      [](const SealedParallelPassSnapshot& snapshot,
+         std::array<ParallelPassChildPlan,
+                    kParallelRenderPassChildCapacity>& children) {
+        for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+          children[i] = {
+              .range = snapshot.ranges[i],
+              .firstDraw = snapshot.firstDraws[i],
+              .binding = bindingSnapshot(
+                  ParallelPassDirectBindingMode::Stage1Direct,
+                  static_cast<std::uint16_t>(i + 1u)),
+              .replayOrdinalBegin = snapshot.childReplayOrdinalBegins[i],
+              .replayOrdinalCount = snapshot.childReplayOrdinalCounts[i],
+              .childOrdinal = i,
+              .localShadowOrdinal = i + 1u,
+              .coversCompleteCommands =
+                  snapshot.childrenCoverCompleteCommands,
+              .forceFullFirstDrawBinding = true,
+          };
+        }
+        return std::span<const ParallelPassChildPlan>(children.data(),
+                                                      snapshot.childCount);
+      };
+
+  static_assert(kParallelPassSeedActionEpoch != 0u,
+                "the coordinator's published seed is the domain's first epoch, "
+                "never its invalid sentinel");
+
+  // The SFIV shape: Clear -> DrawRuns -> StretchRect -> DrawRuns -> Present,
+  // with distinct attachments across the helper so both fragments stay
+  // independent passes. One pass is sealed *by* the StretchRect and the next
+  // one *begins* after it. `carried` selects the coordinator's carried-session
+  // boundary facts; under the old session-dependent seed that configuration
+  // could not certify a single pass, which is the mechanism behind SFIV's
+  // 1,387-of-1,387 `certificate_invalid_pass_identity` residual.
+  dxmt9::core::CanonicalDrawState stateA{};
+  dxmt9::core::CanonicalDrawState stateB{};
+  stateA.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x71u};
+  stateB.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x72u};
+  const auto certifySfivShape = [&](bool carried, std::uint64_t seqId) {
+    PassObservationFixture fixture;
+    fixture.slot.appendClear({});                                     // 0
+    fixture.slot.appendDrawRun(stateA, {}, drawValues, drawPayloads);  // 1
+    fixture.slot.appendStretchRect({});                               // 2
+    fixture.slot.appendDrawRun(stateB, {}, drawValues, drawPayloads);  // 3
+    fixture.slot.appendPresent({}, {});                               // 4
+    fixture.finalize(seqId);
+    // The production coordinator seeds every source, carried or not, with the
+    // domain's first epoch; `sourceStartsPass` is what carries the carried
+    // fact. A zero seed here used to make the certificate's re-derivation
+    // structurally impossible for every pass in the source.
+    SealedParallelPassSnapshotBatch output{};
+    const auto observed = fixture.observe(
+        output, !carried, true, completeProofs(kParallelPassSeedActionEpoch));
+    check(observed.eligibleCount == 2u && output.count == 2u &&
+              output.passes[0].replayOrdinalBegin == 1u &&
+              output.passes[0].replayOrdinalEnd == 2u &&
+              output.passes[0].sealingCommand.valid &&
+              output.passes[0].sealingCommand.kind ==
+                  dxmt9::core::MetalCommandKind::StretchRect &&
+              output.passes[1].replayOrdinalBegin == 3u &&
+              output.passes[1].replayOrdinalEnd == 4u &&
+              output.passes[1].sealingCommand.kind ==
+                  dxmt9::core::MetalCommandKind::Present,
+          "the SFIV shape seals one pass at the StretchRect and opens the "
+          "next one after it");
+
+    ProducerCoverageContext context{.fixture = &fixture,
+                                    .seedEpoch = kParallelPassSeedActionEpoch,
+                                    .sourceStartsPass = !carried};
+    const ParallelPassSnapshotAuthority authority{
+        .context = &context, .resolve = resolveProducerAuthority};
+    const ParallelPassCoverageResolver resolver{
+        .context = &context, .resolve = resolveProducerCoverage};
+    const auto witness = producerEpochWitness(context);
+    check(witness.valid(),
+          "the coordinator publishes a usable epoch seed on a carried source");
+    std::array<std::array<ParallelPassChildPlan,
+                          kParallelRenderPassChildCapacity>, 2> childStorage{};
+    for (std::size_t pass = 0u; pass < output.count; ++pass) {
+      const auto& snapshot = output.passes[pass];
+      const auto children = planChildren(snapshot, childStorage[pass]);
+      const auto validation = validateParallelPassSemanticPlan(
+          snapshot, children, authority, resolver, witness);
+      const auto derived = deriveParallelPassActionEpoch(
+          snapshot.source, snapshot.seqId, snapshot.replayOrdinalBegin,
+          witness);
+      check(validation.accepted() && derived.valid &&
+                derived.epoch == snapshot.passActionEpoch,
+            "both boundary-adjacent SFIV passes certify against an "
+            "independently re-derived action epoch");
+    }
+    check(output.passes[0].passActionEpoch != output.passes[1].passActionEpoch,
+          "the two SFIV pass intervals keep distinct action epochs");
+
+    // The re-derivation still catches a stamp that belongs to the other side
+    // of the StretchRect, even with the owner echoing the forgery back and
+    // every dependent field agreeing with it.
+    const auto postBoundary = output.passes[1];
+    auto forged = postBoundary;
+    forged.passActionEpoch = output.passes[0].passActionEpoch;
+    forged.coordinatorProof.firstPassActionEpoch = forged.passActionEpoch;
+    for (std::uint32_t i = 0u; i < forged.childCount; ++i) {
+      forged.firstDraws[i].entryRender.passActionEpoch =
+          forged.passActionEpoch;
+    }
+    std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+        forgedChildren{};
+    const auto forgedPlan = planChildren(forged, forgedChildren);
+    const ParallelPassSnapshotAuthority forgedAuthority{
+        .context = &forged, .resolve = resolveEchoingAuthority};
+    const auto forgedResult = validateParallelPassSemanticPlan(
+        forged, forgedPlan, forgedAuthority, resolver, witness);
+    check(!forgedResult.accepted() &&
+              forgedResult.failure ==
+                  ParallelPassSemanticPlanFailure::PassIdentity,
+          "the pre-boundary pass's stamp cannot certify the post-boundary "
+          "pass");
+  };
+  certifySfivShape(/*carried=*/false, 640u);
+  certifySfivShape(/*carried=*/true, 641u);
+
+  // The GT2 edge shape: a pass sealed by an attachment change. No coordinator
+  // command sits at `replayOrdinalEnd`; the first draw of the next pass does,
+  // which is exactly the spelling `parallelPassCloseReason` already maps to
+  // `RenderTargetChange`. The certificate used to reject it because a draw is
+  // not a coordinator-owned sealing kind.
+  dxmt9::core::CanonicalDrawState first{};
+  dxmt9::core::CanonicalDrawState second{};
+  first.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x81u};
+  second.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x82u};
+  PassObservationFixture change;
+  change.slot.appendDrawRun(first, {}, drawValues, drawPayloads);   // 0
+  change.slot.appendDrawRun(second, {}, drawValues, drawPayloads);  // 1
+  change.slot.appendPresent({}, {});                                // 2
+  change.finalize(642u);
+  SealedParallelPassSnapshotBatch changeOutput{};
+  const auto changeObserved = change.observe(
+      changeOutput, true, true, completeProofs(kParallelPassSeedActionEpoch));
+  check(changeObserved.eligibleCount == 2u && changeOutput.count == 2u &&
+            changeOutput.passes[0].replayOrdinalBegin == 0u &&
+            changeOutput.passes[0].replayOrdinalEnd == 1u &&
+            changeOutput.passes[0].sealingCommand.valid &&
+            changeOutput.passes[0].sealingCommand.kind ==
+                dxmt9::core::MetalCommandKind::DrawRun &&
+            !parallelPassSealingKindAccepted(
+                changeOutput.passes[0].sealingCommand.kind) &&
+            parallelPassAttachmentChangeSealingKind(
+                changeOutput.passes[0].sealingCommand.kind),
+        "an attachment change seals a pass with the next pass's first draw as "
+        "its locator, which is not a coordinator-owned sealing kind");
+
+  ProducerCoverageContext changeContext{
+      .fixture = &change, .seedEpoch = kParallelPassSeedActionEpoch};
+  const ParallelPassSnapshotAuthority changeAuthority{
+      .context = &changeContext, .resolve = resolveProducerAuthority};
+  const ParallelPassCoverageResolver changeResolver{
+      .context = &changeContext, .resolve = resolveProducerCoverage};
+  const auto changeWitness = producerEpochWitness(changeContext);
+  std::array<std::array<ParallelPassChildPlan,
+                        kParallelRenderPassChildCapacity>, 2> changeChildren{};
+  for (std::size_t pass = 0u; pass < changeOutput.count; ++pass) {
+    const auto children =
+        planChildren(changeOutput.passes[pass], changeChildren[pass]);
+    check(validateParallelPassSemanticPlan(changeOutput.passes[pass], children,
+                                          changeAuthority, changeResolver,
+                                          changeWitness)
+              .accepted(),
+          "an attachment-change-sealed pass certifies once the sealing ordinal "
+          "is proven to open a different pass");
+  }
+
+  // The attachment-change seal is admitted only because that extra proof
+  // succeeds. A witness that cannot reach the sealing ordinal still derives
+  // this pass's own epoch, so only the added next-pass obligation can reject —
+  // and it must.
+  auto truncated = changeWitness;
+  truncated.replayOrdinalCount = changeOutput.passes[0].replayOrdinalEnd;
+  check(deriveParallelPassActionEpoch(
+            changeOutput.passes[0].source, changeOutput.passes[0].seqId,
+            changeOutput.passes[0].replayOrdinalBegin, truncated)
+                .epoch == changeOutput.passes[0].passActionEpoch &&
+            !deriveParallelPassActionEpoch(
+                 changeOutput.passes[0].source, changeOutput.passes[0].seqId,
+                 changeOutput.passes[0].replayOrdinalEnd, truncated)
+                 .valid,
+        "the truncated witness still derives the pass's own epoch but cannot "
+        "reach the sealing ordinal");
+  const auto truncatedChildren =
+      planChildren(changeOutput.passes[0], changeChildren[0]);
+  const auto truncatedResult = validateParallelPassSemanticPlan(
+      changeOutput.passes[0], truncatedChildren, changeAuthority,
+      changeResolver, truncated);
+  check(!truncatedResult.accepted() &&
+            truncatedResult.failure ==
+                ParallelPassSemanticPlanFailure::PassIdentity,
+        "an unproven attachment-change sealing ordinal fails pass identity");
+
+  // A coordinator-sealed pass in the same source is unaffected by the new
+  // branch: its sealing kind is accepted directly and no second fold runs.
+  changeContext.epochReads = 0u;
+  const auto presentSealed =
+      planChildren(changeOutput.passes[1], changeChildren[1]);
+  check(validateParallelPassSemanticPlan(changeOutput.passes[1], presentSealed,
+                                        changeAuthority, changeResolver,
+                                        changeWitness)
+                .accepted() &&
+            changeContext.epochReads ==
+                changeOutput.passes[1].replayOrdinalBegin + 1u,
+        "a coordinator-sealed pass folds the stream exactly once");
+}
+
 // R-BACK-2.69/2.74: the production adapter is the only path from a sealed pass
 // to Metal child creation, an invalid certificate can never be partially
 // consumed, and every rejection returns to exact serial replay before effects.
@@ -3774,6 +4017,7 @@ int main() {
     streamingCoverageFoldMatchesStoredRowReference();
     wideWholeCommandChildrenCertify();
     passLocalEpochProofIsIndependentlyReDerived();
+    boundaryAdjacentPassIdentityCertifies();
     proofCoreAdapterGatesEveryProductionCandidate();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';

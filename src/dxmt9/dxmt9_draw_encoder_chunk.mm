@@ -2409,9 +2409,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   parallelPassShadows.reset();
   // Coordinator-owned source-wide starting epoch. It seeds the producer's fold
   // and, independently, the certificate's re-derivation, so the seed is never
-  // taken from the snapshot under test.
+  // taken from the snapshot under test. It is the same on every source, carried
+  // or not: whether this source starts a pass is carried by `sourceStartsPass`
+  // below, and a session-dependent seed of zero used to make the certificate's
+  // re-derivation structurally impossible for every pass in a carried source.
+  // See `kParallelPassSeedActionEpoch`.
   const std::uint64_t parallelPassSeedActionEpoch =
-      options.session == nullptr ? 1u : 0u;
+      kParallelPassSeedActionEpoch;
   if (parallelPartitionRequested) {
     // SourcePayloadView cannot represent Query, UpdateTexture, or an ordered
     // control: those dispositions are resolved by the coordinator before this

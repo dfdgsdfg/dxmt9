@@ -1213,6 +1213,41 @@ candidate lifecycle and the epoch fold ever disagree about whether a pass is
 open. Source and storage generation checks still run first, so a stale
 snapshot is rejected before the fold is entered.
 
+The seed is one per-source constant, `kParallelPassSeedActionEpoch`, taken from
+the shared header by both `encodeChunk` and the witness it publishes. It does
+not depend on whether the source carries an open encode session. Making it
+session-dependent - `1` on a fresh source and `0` on a carried one - was the
+defect that made every eligible pass of a carried source certificate-invalid:
+`ParallelPassActionEpochWitness::valid()` refuses a zero seed, so
+`deriveParallelPassActionEpoch` returned nothing while the producer's own fold
+kept advancing from zero and stamped later passes with `1`, `2`, ... The carried
+fact belongs to `sourceStartsPass`, which already rejects the source's first
+candidate with `UnsealedStart`; the passes that open at an in-source
+Clear/Present/helper boundary have a fully determined epoch that the fold
+reproduces. `produceSealedParallelPassSnapshots` now fails a zero-seeded source
+closed with `SealedParallelPassSnapshotFallback::PassActionEpoch` before
+observing any candidate, so producer and certificate share one seed
+requirement and the shape cannot come back silently as a certificate residual.
+
+Pass ends are a three-way total. `sealedAtSourceEnd` carries no locator;
+`parallelPassSealingKindAccepted` carries a coordinator-owned command the
+coordinator still replays serially at `replayOrdinalEnd`; and
+`parallelPassAttachmentChangeSealingKind` carries the attachment-change form,
+whose locator is the first draw of the next pass. That third form is what
+`produceSealedParallelPassSnapshots` records when a DrawRun's attachment key
+differs from the open pass's, and what `parallelPassCloseReason` already maps to
+`EncoderSplitReason::RenderTargetChange`; the certificate previously rejected it
+because a draw is not a coordinator-owned sealing kind, which is the second
+false negative the pass-identity checkpoint owned.
+`validateParallelPassSemanticPlan` now admits it only after a second, separate
+`deriveParallelPassActionEpoch` call at `replayOrdinalEnd` proves that ordinal
+opens a pass of its own with a different epoch. The proof is sufficient because
+the interval is already closed from the other side: exact coverage requires the
+children to span `[replayOrdinalBegin, replayOrdinalEnd)` and requires every
+command in it to be a DrawRun whose attachment key equals the pass's, so no
+Clear, Present, helper, or foreign attachment - and therefore no third pass
+opening - can hide inside it.
+
 A statically eligible observation owns only fixed locators, attachment and
 canonical resource values, one fixed render route, pass boundaries,
 pass-action epoch, first-draw provenance, and a bounded first-draw binding

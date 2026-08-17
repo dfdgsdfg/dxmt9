@@ -797,6 +797,30 @@ must still fail closed before the re-derivation runs. The producer and the
 certificate must share one implementation of the epoch state machine and one
 implementation of the command classifier.
 
+The coordinator's published seed epoch must be the epoch domain's first value
+on every source, whether or not that source carries an open encode session. The
+epoch domain is scoped by (source, sequence id) and is never compared across
+sources, and whether a source starts a pass is carried separately by the
+source-start boundary fact. Zero is the domain's invalid sentinel and must never
+be published as a seed: the epoch witness must refuse it, so a zero-seeded
+source could only stamp candidates from a fold the certificate is unable to
+re-derive. The producer must therefore fail a zero-seeded source closed with the
+typed pass-action-epoch reason before observing any candidate, rather than
+publishing candidates that are certificate-invalid by construction.
+
+A sealed pass must end in exactly one of three ways, and the certificate must
+accept exactly those three. It may end at the source end with no sealing
+locator; at a coordinator-owned sealing command that the coordinator still
+replays serially at `replayOrdinalEnd`; or at an attachment change, in which
+case no coordinator command occupies `replayOrdinalEnd` and the sealing locator
+is the first draw of the next pass — the same spelling the coordinator's
+encoder-split attribution maps to a render-target change. The third form
+carries one additional obligation: the certificate must independently re-derive
+that the sealing ordinal itself opens a pass and that its action epoch differs
+from the sealed interval's, which is what distinguishes the next pass's first
+draw from a draw that belongs inside the interval. A draw sealing locator
+without that proof is invalid.
+
 **R-BACK-2.70** A certified plan must cover the effective replay stream with
 ordered, contiguous, non-overlapping source-qualified ranges. The flattened
 child draw sequence must equal the serial draw sequence exactly once, with
