@@ -898,6 +898,86 @@ void countParallelPassAdapter(
   add(c.parallelPassAdapterCertificateInvalid, accounting.certificateInvalid);
   add(c.parallelPassAdapterSelected, accounting.selected);
   add(c.parallelPassAdapterSerialFallback, accounting.serialFallback);
+  if (accounting.certificateInvalid == 0u) {
+    return;
+  }
+  // The typed reason is a per-checkpoint breakdown of the aggregate
+  // `certificateInvalid` count above: exactly one reason counter increments
+  // per invalid certificate, and their sum equals the aggregate
+  // (`dxmt9-parallel-render-pass-spec` pins the conservation). Each kind
+  // stays distinct rather than merged into a coarser bucket, because each
+  // one is a separate checkpoint in `validateParallelPassSemanticPlan` with
+  // a real diagnostic difference (missing input vs. identity/epoch proof vs.
+  // coordinator/attachment/resource proof vs. first-draw proof vs.
+  // capacity/plan-shape vs. exact coverage vs. the reserved arithmetic
+  // overflow checkpoint).
+  using Failure = encoders::ParallelPassSemanticPlanFailure;
+  static_assert(static_cast<std::uint8_t>(Failure::Count) == 12u);
+  switch (decision.certificate) {
+  case Failure::None:
+    break;
+  case Failure::MissingSnapshot:
+    add(c.parallelPassAdapterCertificateInvalidMissingSnapshot);
+    break;
+  case Failure::SourceIdentity:
+    add(c.parallelPassAdapterCertificateInvalidSourceIdentity);
+    break;
+  case Failure::PassIdentity:
+    add(c.parallelPassAdapterCertificateInvalidPassIdentity);
+    break;
+  case Failure::CoordinatorProof:
+    add(c.parallelPassAdapterCertificateInvalidCoordinatorProof);
+    break;
+  case Failure::AttachmentProof:
+    add(c.parallelPassAdapterCertificateInvalidAttachmentProof);
+    break;
+  case Failure::ResourceProof:
+    add(c.parallelPassAdapterCertificateInvalidResourceProof);
+    break;
+  case Failure::FirstDrawProof:
+    add(c.parallelPassAdapterCertificateInvalidFirstDrawProof);
+    break;
+  case Failure::ChildCapacity:
+    add(c.parallelPassAdapterCertificateInvalidChildCapacity);
+    break;
+  case Failure::ChildPlan:
+    add(c.parallelPassAdapterCertificateInvalidChildPlan);
+    break;
+  case Failure::Coverage:
+    add(c.parallelPassAdapterCertificateInvalidCoverage);
+    break;
+  case Failure::Arithmetic:
+    add(c.parallelPassAdapterCertificateInvalidArithmetic);
+    break;
+  case Failure::Count:
+    break;
+  }
+}
+
+ParallelPassAdapterCertificateInvalidSnapshot
+snapshotParallelPassAdapterCertificateInvalid() noexcept {
+  const Counters& c = counters();
+  return ParallelPassAdapterCertificateInvalidSnapshot{
+      .missingSnapshot =
+          load(c.parallelPassAdapterCertificateInvalidMissingSnapshot),
+      .sourceIdentity =
+          load(c.parallelPassAdapterCertificateInvalidSourceIdentity),
+      .passIdentity =
+          load(c.parallelPassAdapterCertificateInvalidPassIdentity),
+      .coordinatorProof =
+          load(c.parallelPassAdapterCertificateInvalidCoordinatorProof),
+      .attachmentProof =
+          load(c.parallelPassAdapterCertificateInvalidAttachmentProof),
+      .resourceProof =
+          load(c.parallelPassAdapterCertificateInvalidResourceProof),
+      .firstDrawProof =
+          load(c.parallelPassAdapterCertificateInvalidFirstDrawProof),
+      .childCapacity =
+          load(c.parallelPassAdapterCertificateInvalidChildCapacity),
+      .childPlan = load(c.parallelPassAdapterCertificateInvalidChildPlan),
+      .coverage = load(c.parallelPassAdapterCertificateInvalidCoverage),
+      .arithmetic = load(c.parallelPassAdapterCertificateInvalidArithmetic),
+  };
 }
 
 void countCpuReadySessionHeadAppended(bool arenaSource) {
