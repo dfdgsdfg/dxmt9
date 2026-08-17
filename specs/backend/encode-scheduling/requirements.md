@@ -781,6 +781,22 @@ must conserve `considered = certificate_valid + certificate_invalid` and
 `considered = selected + serial_fallback`, with `selected <= certificate_valid`.
 The provider stays default-off and the adapter makes no promotion claim.
 
+The pass-action epoch is a per-pass fact, not a source-wide one. The producer
+must issue the coordinator proof for each sealed pass it emits and stamp that
+proof with that pass's own action epoch. The certificate must not accept a
+stored epoch as evidence of itself: it must independently re-derive the
+expected action epoch for the sealed interval by folding the shared command
+classifier over the generation-pinned effective replay stream in
+replay-ordinal order, and must reject the certificate when the re-derived
+value differs from the stamped one or when the interval does not begin at a
+pass-opening draw. The re-derivation must be a pure fold over immutable stream
+facts with no clock, floating-point value, allocation, or dependence on
+iteration order beyond the replay-ordinal sequence, and repeating it over the
+same stream must yield the same value. Source and storage generation checks
+must still fail closed before the re-derivation runs. The producer and the
+certificate must share one implementation of the epoch state machine and one
+implementation of the command classifier.
+
 **R-BACK-2.70** A certified plan must cover the effective replay stream with
 ordered, contiguous, non-overlapping source-qualified ranges. The flattened
 child draw sequence must equal the serial draw sequence exactly once, with
@@ -789,6 +805,20 @@ tail, or cross-source jump. Clear, Present, query, readback, update, wait,
 sidecar, and every other coordinator command remain at their serial position;
 they are never represented as child ranges and never disappear from the
 coverage proof.
+
+The coverage proof must not be bounded by a fixed per-child command-row
+capacity. A child owning more source commands than any storage array must be a
+normal input, not a rejection. The resolver must stream its resolved commands
+through an accumulator whose state is constant in the number of commands, and
+every accumulator must be exact: a hash or other lossy summary must not decide
+coverage, because a collision would admit a false accept. The accumulator must
+enforce order, contiguity, non-overlap, and non-emptiness against the previous
+command's boundary as each command is appended, must retain the exact running
+command and draw totals for comparison against the child plan's claimed
+totals, must retain the first resolved command for the plan's begin/count
+predicates, and must report the first failure with its reason and command
+locator. A resolver must not be able to construct a coverage accumulator in
+any state other than the one its own appends produced.
 
 **R-BACK-2.71** Eligibility is pass-wide, not fragment-local. The proof must
 cover the complete sealed logical pass: one attachment/sample identity and

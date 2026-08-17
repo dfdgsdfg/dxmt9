@@ -485,6 +485,103 @@ inline constexpr bool parallelPassSealingKindAccepted(
   return false;
 }
 
+// The attachment identity a `Clear` publishes. It is shared by the producer
+// and by the certificate's independent epoch re-derivation so a leading-clear
+// match cannot be decided by two different rules (`R-BACK-2.69`).
+inline core::RenderAttachmentKey parallelPassAttachmentKeyForClear(
+    const core::ClearCommandView& clear) noexcept {
+  core::RenderAttachmentKey key{
+      .color = clear.colorAttachments,
+      .depthStencil = clear.depthStencil,
+  };
+  for (const auto& attachment : key.color) {
+    key.sampleCount = std::max(key.sampleCount, attachment.sampleCount);
+  }
+  key.sampleCount = std::max(key.sampleCount, key.depthStencil.sampleCount);
+  return key;
+}
+
+// The single implementation of the pass-action-epoch state machine. It is a
+// pure fold over the effective replay order: no clock, no float, no
+// allocation, and no dependence on iteration order beyond the ordinal
+// sequence it is driven with. The producer drives it while sealing passes and
+// the certificate drives it again over freshly read stream facts, so the two
+// can never disagree about what the rule *is* — only about what the stream
+// *was*, which is exactly the drift the certificate must catch.
+struct ParallelPassActionEpochState {
+  std::uint64_t epoch = 0;
+  core::RenderAttachmentKey pendingClearAttachments{};
+  core::RenderAttachmentKey activeAttachments{};
+  bool pendingClear = false;
+  bool active = false;
+  bool valid = true;
+
+  constexpr void advance() noexcept {
+    if (!valid) {
+      return;
+    }
+    if (epoch == std::numeric_limits<std::uint64_t>::max()) {
+      valid = false;
+      return;
+    }
+    ++epoch;
+  }
+
+  constexpr bool leadingClearMatches(
+      const core::RenderAttachmentKey& attachments) const noexcept {
+    return pendingClear && pendingClearAttachments == attachments;
+  }
+
+  // A `Clear` ends any open pass. A full-attachment clear with no rects can be
+  // adopted as the next pass's leading clear; a scissored clear cannot, so it
+  // consumes an epoch of its own.
+  constexpr void onClearBoundary(
+      bool rectsEmpty,
+      const core::RenderAttachmentKey& clearAttachments) noexcept {
+    const bool endedPass = active;
+    active = false;
+    if (endedPass || pendingClear) {
+      advance();
+    }
+    if (rectsEmpty) {
+      pendingClear = true;
+      pendingClearAttachments = clearAttachments;
+      return;
+    }
+    pendingClear = false;
+    advance();
+  }
+
+  // `Present` and every non-child coordinator helper own a Metal encoder of
+  // their own, so they terminate a pass interval at exactly the position
+  // `Clear` occupies.
+  constexpr void onCoordinatorBoundary() noexcept {
+    active = false;
+    pendingClear = false;
+    advance();
+  }
+
+  // Returns true when this DrawRun opens a new pass interval; `epoch` is then
+  // that pass's own action epoch.
+  constexpr bool onDrawRun(
+      const core::RenderAttachmentKey& attachments) noexcept {
+    if (active && attachments != activeAttachments) {
+      active = false;
+      advance();
+    }
+    if (active) {
+      return false;
+    }
+    if (pendingClear && !leadingClearMatches(attachments)) {
+      advance();
+    }
+    pendingClear = false;
+    active = true;
+    activeAttachments = attachments;
+    return true;
+  }
+};
+
 enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   None,
   PlanMissing,
@@ -682,6 +779,146 @@ struct SealedParallelPassSnapshot {
 // child-count aggregate to echo back. The owner must resolve the complete
 // sealed interval from its current source table and return that value-owned
 // snapshot before validation continues; no authority state is retained.
+// The epoch-relevant classification of exactly one replay ordinal. It carries
+// no payload, span, or Metal object: the certificate re-derives an epoch from
+// values only.
+struct ParallelPassActionEpochFact {
+  core::RenderAttachmentKey attachments{};
+  core::MetalCommandKind kind = core::MetalCommandKind::DrawRun;
+  bool clearRectsEmpty = false;
+};
+
+// Reads the epoch-relevant facts of exactly one replay ordinal from a
+// generation-pinned effective replay stream. Shared by the production witness
+// and by native fixtures so both fold identical inputs.
+inline bool readParallelPassActionEpochFact(
+    const EncodePartitionReplayStream& stream, std::uint32_t replayOrdinal,
+    ParallelPassActionEpochFact& fact) noexcept {
+  if (!stream.valid || replayOrdinal >= stream.replayOrdinalCount()) {
+    return false;
+  }
+  std::uint32_t commandIndex = 0u;
+  if (!stream.commandIndexAt(static_cast<std::size_t>(replayOrdinal),
+                             commandIndex)) {
+    return false;
+  }
+  const auto command = stream.source.payload.commandAt(commandIndex);
+  fact = {};
+  fact.kind = command.kind();
+  switch (classifyParallelPassCommandRole(fact.kind)) {
+  case ParallelPassCommandRole::ClearBoundary:
+    if (!command.clear.has_value()) {
+      return false;
+    }
+    fact.attachments = parallelPassAttachmentKeyForClear(*command.clear);
+    fact.clearRectsEmpty = command.clear->rects.empty();
+    return true;
+  case ParallelPassCommandRole::Draw:
+    if (!command.command.drawState.hot) {
+      return false;
+    }
+    fact.attachments =
+        core::makeRenderAttachmentKey(*command.command.drawState.hot);
+    return true;
+  case ParallelPassCommandRole::PresentBoundary:
+  case ParallelPassCommandRole::CoordinatorBoundary:
+    return true;
+  case ParallelPassCommandRole::Unsupported:
+    return false;
+  }
+  return false;
+}
+
+// Coordinator-issued reader over the generation-pinned effective replay
+// stream. `seedEpoch` is the coordinator's own source-wide starting epoch —
+// the same value it published in the source-wide coordinator proof — so the
+// certificate never takes the seed from the snapshot it is checking.
+// `replayOrdinalCount` bounds the fold; the reader is borrowed only for the
+// synchronous validation call.
+struct ParallelPassActionEpochWitness {
+  const void* context = nullptr;
+  bool (*read)(const void* context,
+               const core::CpuReadyTape::SourceRef& source,
+               std::uint64_t seqId, std::uint32_t replayOrdinal,
+               ParallelPassActionEpochFact& fact) noexcept = nullptr;
+  std::uint64_t seedEpoch = 0;
+  std::uint32_t replayOrdinalCount = 0;
+
+  constexpr bool valid() const noexcept {
+    return context != nullptr && read != nullptr && seedEpoch != 0u &&
+        replayOrdinalCount != 0u;
+  }
+};
+
+struct ParallelPassActionEpochDerivation {
+  std::uint64_t epoch = 0;
+  bool valid = false;
+
+  friend constexpr bool operator==(const ParallelPassActionEpochDerivation&,
+                                   const ParallelPassActionEpochDerivation&) =
+      default;
+};
+
+// Independent re-derivation of one pass's action epoch. It walks the
+// generation-pinned effective replay stream from ordinal zero in replay order,
+// classifies every command through the shared classifier, and folds the shared
+// epoch state machine. The result is accepted only when `replayOrdinalBegin`
+// is itself the DrawRun that opens a pass, which is what binds the derived
+// number to *this* interval rather than to some other pass of the same source.
+// The fold is pure and deterministic: repeating it over the same stream
+// produces the same value.
+inline ParallelPassActionEpochDerivation deriveParallelPassActionEpoch(
+    const core::CpuReadyTape::SourceRef& source, std::uint64_t seqId,
+    std::uint32_t replayOrdinalBegin,
+    const ParallelPassActionEpochWitness& witness) noexcept {
+  ParallelPassActionEpochDerivation result{};
+  if (!witness.valid() || !source.valid() || seqId == 0u ||
+      replayOrdinalBegin >= witness.replayOrdinalCount) {
+    return result;
+  }
+  ParallelPassActionEpochState state{.epoch = witness.seedEpoch};
+  for (std::uint32_t ordinal = 0u; ordinal <= replayOrdinalBegin; ++ordinal) {
+    ParallelPassActionEpochFact fact{};
+    if (!witness.read(witness.context, source, seqId, ordinal, fact)) {
+      return {};
+    }
+    const bool target = ordinal == replayOrdinalBegin;
+    switch (classifyParallelPassCommandRole(fact.kind)) {
+    case ParallelPassCommandRole::Unsupported:
+      return {};
+    case ParallelPassCommandRole::ClearBoundary:
+      if (target) {
+        return {};
+      }
+      state.onClearBoundary(fact.clearRectsEmpty, fact.attachments);
+      break;
+    case ParallelPassCommandRole::PresentBoundary:
+    case ParallelPassCommandRole::CoordinatorBoundary:
+      if (target) {
+        return {};
+      }
+      state.onCoordinatorBoundary();
+      break;
+    case ParallelPassCommandRole::Draw: {
+      const bool started = state.onDrawRun(fact.attachments);
+      if (!target) {
+        break;
+      }
+      if (!started || !state.valid || state.epoch == 0u) {
+        return {};
+      }
+      result.epoch = state.epoch;
+      result.valid = true;
+      return result;
+    }
+    }
+    if (!state.valid) {
+      return {};
+    }
+  }
+  return {};
+}
+
 struct ParallelPassSnapshotAuthority {
   const void* context = nullptr;
   bool (*resolve)(const void* context,
@@ -1221,7 +1458,8 @@ class ParallelPassSemanticPlanView {
       const SealedParallelPassSnapshot*,
       std::span<const ParallelPassChildPlan>,
       const ParallelPassSnapshotAuthority&,
-      const ParallelPassCoverageResolver&) noexcept;
+      const ParallelPassCoverageResolver&,
+      const ParallelPassActionEpochWitness&) noexcept;
   SealedParallelPassSnapshot snapshot_{};
   std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
       children_{};
@@ -1238,8 +1476,39 @@ struct ParallelPassSemanticPlanValidation {
   }
 };
 
-struct ParallelPassResolvedCoverage {
-  std::uint64_t drawCount = 0u;
+enum class ParallelPassCoverageFoldFailure : std::uint8_t {
+  None,
+  NotStarted,
+  CommandOrder,
+  CommandOverlap,
+  EmptyCommand,
+  CommandArithmetic,
+  CommandContiguity,
+  DrawArithmetic,
+  SubrangeCapacity,
+  Count,
+};
+
+// Streaming exact coverage accumulator (`R-BACK-2.70`). It replaces a fixed
+// row array with O(1) state, so a child owning more commands than any array
+// capacity is a normal input rather than a rejection.
+//
+// Every accumulator is exact. There is deliberately no hash summary anywhere
+// in this type: a hash can collide, and a colliding summary would admit a
+// false accept — the one failure mode a coverage proof must not have. The
+// per-row predicates are enforced at append time against the previous row's
+// boundary, which is what makes order, contiguity, and non-overlap decidable
+// without retaining the rows. Only the first row survives the walk, because
+// it is the only one the post-walk predicates read.
+//
+// One predicate is strictly stronger than the array form it replaces. The
+// stored-row version detected a repeated `commandIndex` with an O(n) scan
+// over prior rows; the fold requires whole-command rows to carry strictly
+// increasing `commandIndex`, which implies duplicate-freedom and also rejects
+// an out-of-order row set the scan accepted. That direction is fail-closed:
+// it can only shrink the accepted set.
+class ParallelPassCoverageFold {
+ public:
   struct Command {
     std::uint32_t replayOrdinal = 0u;
     std::uint32_t commandIndex = 0u;
@@ -1249,8 +1518,114 @@ struct ParallelPassResolvedCoverage {
     friend constexpr bool operator==(const Command&, const Command&) =
         default;
   };
-  std::array<Command, kParallelRenderPassChildCapacity> commands{};
-  std::uint32_t commandCount = 0u;
+
+  constexpr void open(std::uint32_t replayOrdinalBegin,
+                      bool wholeCommands) noexcept {
+    *this = {};
+    replayOrdinalBegin_ = replayOrdinalBegin;
+    wholeCommands_ = wholeCommands;
+    opened_ = true;
+  }
+
+  constexpr bool append(const Command& command) noexcept {
+    if (!opened_ ||
+        (failure_ != ParallelPassCoverageFoldFailure::None &&
+         failure_ != ParallelPassCoverageFoldFailure::NotStarted)) {
+      return recordFailure(ParallelPassCoverageFoldFailure::NotStarted);
+    }
+    if (commandCount_ == std::numeric_limits<std::uint32_t>::max()) {
+      return recordFailure(ParallelPassCoverageFoldFailure::CommandArithmetic);
+    }
+    if (!wholeCommands_ && commandCount_ != 0u) {
+      return recordFailure(ParallelPassCoverageFoldFailure::SubrangeCapacity);
+    }
+    if (static_cast<std::uint64_t>(replayOrdinalBegin_) + commandCount_ !=
+        static_cast<std::uint64_t>(command.replayOrdinal)) {
+      return recordFailure(ParallelPassCoverageFoldFailure::CommandOrder);
+    }
+    if (command.drawParamCount == 0u) {
+      return recordFailure(ParallelPassCoverageFoldFailure::EmptyCommand);
+    }
+    if (command.drawParamBegin >
+        std::numeric_limits<std::uint32_t>::max() - command.drawParamCount) {
+      return recordFailure(ParallelPassCoverageFoldFailure::CommandArithmetic);
+    }
+    if (commandCount_ != 0u &&
+        command.commandIndex <= previousCommandIndex_) {
+      return recordFailure(ParallelPassCoverageFoldFailure::CommandOverlap);
+    }
+    if (wholeCommands_ && commandCount_ != 0u &&
+        command.drawParamBegin != previousDrawParamEnd_) {
+      return recordFailure(ParallelPassCoverageFoldFailure::CommandContiguity);
+    }
+    if (drawTotal_ >
+        std::numeric_limits<std::uint64_t>::max() - command.drawParamCount) {
+      return recordFailure(ParallelPassCoverageFoldFailure::DrawArithmetic);
+    }
+    if (commandCount_ == 0u) {
+      first_ = command;
+    }
+    previousCommandIndex_ = command.commandIndex;
+    previousDrawParamEnd_ = command.drawParamBegin + command.drawParamCount;
+    drawTotal_ += command.drawParamCount;
+    ++commandCount_;
+    failure_ = ParallelPassCoverageFoldFailure::None;
+    return true;
+  }
+
+  constexpr bool valid() const noexcept {
+    return opened_ && commandCount_ != 0u &&
+        failure_ == ParallelPassCoverageFoldFailure::None;
+  }
+  constexpr const Command& first() const noexcept { return first_; }
+  constexpr std::uint64_t drawTotal() const noexcept { return drawTotal_; }
+  constexpr std::uint32_t commandCount() const noexcept {
+    return commandCount_;
+  }
+  constexpr std::uint32_t replayOrdinalBegin() const noexcept {
+    return replayOrdinalBegin_;
+  }
+  constexpr bool wholeCommands() const noexcept { return wholeCommands_; }
+  // First failure only: a later append cannot overwrite the locator that
+  // explains why the child was rejected.
+  constexpr ParallelPassCoverageFoldFailure failure() const noexcept {
+    return failure_;
+  }
+  constexpr std::uint32_t failureCommand() const noexcept {
+    return failureCommand_;
+  }
+
+  friend constexpr bool operator==(const ParallelPassCoverageFold&,
+                                   const ParallelPassCoverageFold&) = default;
+
+ private:
+  constexpr bool recordFailure(
+      ParallelPassCoverageFoldFailure reason) noexcept {
+    if (failure_ == ParallelPassCoverageFoldFailure::None ||
+        failure_ == ParallelPassCoverageFoldFailure::NotStarted) {
+      failure_ = reason;
+      failureCommand_ = commandCount_;
+    }
+    return false;
+  }
+
+  Command first_{};
+  std::uint64_t drawTotal_ = 0u;
+  std::uint32_t commandCount_ = 0u;
+  std::uint32_t previousCommandIndex_ = 0u;
+  std::uint32_t previousDrawParamEnd_ = 0u;
+  std::uint32_t replayOrdinalBegin_ = 0u;
+  std::uint32_t failureCommand_ = UINT32_MAX;
+  ParallelPassCoverageFoldFailure failure_ =
+      ParallelPassCoverageFoldFailure::NotStarted;
+  bool wholeCommands_ = false;
+  bool opened_ = false;
+};
+
+struct ParallelPassResolvedCoverage {
+  std::uint64_t drawCount = 0u;
+  using Command = ParallelPassCoverageFold::Command;
+  ParallelPassCoverageFold commands{};
   core::ExactResourceSet reads{};
   core::ExactResourceSet writes{};
   core::RenderAttachmentKey attachments{};
@@ -1389,9 +1764,11 @@ inline bool validateParallelPassSemanticPlanCoverage(
       previousDrawEnd = range.entry.drawParamIndex + range.drawEntryCount;
     }
     const auto& coverage = resolvedCoverage[i];
-    if (coverage.drawCount == 0u || coverage.commandCount == 0u ||
-        coverage.commandCount > coverage.commands.size() ||
-        coverage.commandCount > child.replayOrdinalCount ||
+    const auto& fold = coverage.commands;
+    if (coverage.drawCount == 0u || !fold.valid() ||
+        fold.wholeCommands() != snapshot.childrenCoverCompleteCommands ||
+        fold.replayOrdinalBegin() != child.replayOrdinalBegin ||
+        fold.commandCount() > child.replayOrdinalCount ||
         coverage.drawCount != snapshot.childDrawCounts[i] ||
         coverage.attachments != snapshot.attachments ||
         coverage.route != child.firstDraw.entryRender.route ||
@@ -1400,35 +1777,15 @@ inline bool validateParallelPassSemanticPlanCoverage(
       return false;
     }
     if (snapshot.childrenCoverCompleteCommands
-            ? coverage.commandCount != child.replayOrdinalCount
-            : coverage.commandCount != 1u) {
+            ? fold.commandCount() != child.replayOrdinalCount
+            : fold.commandCount() != 1u) {
       return false;
     }
-    std::uint32_t previousDrawParamEnd = 0u;
-    for (std::uint32_t command = 0u;
-         command < coverage.commandCount; ++command) {
-      const auto& resolved = coverage.commands[command];
-      if (resolved.replayOrdinal != child.replayOrdinalBegin + command ||
-          resolved.drawParamCount == 0u ||
-          resolved.drawParamBegin >
-              UINT32_MAX - resolved.drawParamCount ||
-          (command == 0u &&
-           (resolved.commandIndex != range.entry.commandIndex ||
-            (snapshot.childrenCoverCompleteCommands &&
-             (resolved.drawParamBegin != range.entry.drawParamIndex ||
-              resolved.drawParamCount != range.drawEntryCount)))) ||
-          (snapshot.childrenCoverCompleteCommands && command != 0u &&
-           resolved.drawParamBegin != previousDrawParamEnd) ||
-          (command != 0u &&
-           std::any_of(coverage.commands.begin(),
-                       coverage.commands.begin() + command,
-                       [&](const auto& prior) {
-                         return prior.commandIndex == resolved.commandIndex;
-                       }))) {
-        return false;
-      }
-      previousDrawParamEnd =
-          resolved.drawParamBegin + resolved.drawParamCount;
+    if (fold.first().commandIndex != range.entry.commandIndex ||
+        (snapshot.childrenCoverCompleteCommands &&
+         (fold.first().drawParamBegin != range.entry.drawParamIndex ||
+          fold.first().drawParamCount != range.drawEntryCount))) {
+      return false;
     }
     coveredDraws += coverage.drawCount;
   }
@@ -1442,7 +1799,8 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     const SealedParallelPassSnapshot* snapshot,
     std::span<const ParallelPassChildPlan> children,
     const ParallelPassSnapshotAuthority& authority,
-    const ParallelPassCoverageResolver& resolver) noexcept {
+    const ParallelPassCoverageResolver& resolver,
+    const ParallelPassActionEpochWitness& epochWitness) noexcept {
   ParallelPassSemanticPlanValidation result{};
   if (snapshot == nullptr) {
     return result;
@@ -1479,6 +1837,18 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         !parallelPassSealingKindAccepted(snapshot->sealingCommand.kind))) ||
       snapshot->coordinatorProof.firstPassActionEpoch !=
           snapshot->passActionEpoch) {
+    return result;
+  }
+  // The stored stamp is not evidence of itself. The certificate re-derives the
+  // epoch for this sealed interval from the generation-pinned stream and only
+  // then accepts the producer's pass-local coordinator proof. Source and
+  // storage generations have already failed closed above, so a stale source
+  // can never reach this fold.
+  const auto derivedEpoch = deriveParallelPassActionEpoch(
+      snapshot->source, snapshot->seqId, snapshot->replayOrdinalBegin,
+      epochWitness);
+  if (!derivedEpoch.valid ||
+      derivedEpoch.epoch != snapshot->passActionEpoch) {
     return result;
   }
   result.failure = ParallelPassSemanticPlanFailure::CoordinatorProof;
@@ -1567,58 +1937,31 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
             resolvedCoverage[i].reads, firstDraw.entryRender.entryReads)) {
       return result;
     }
-    if (resolvedCoverage[i].commandCount == 0u ||
-        resolvedCoverage[i].commandCount >
-            resolvedCoverage[i].commands.size() ||
-        resolvedCoverage[i].commandCount > child.replayOrdinalCount ||
+    const auto& fold = resolvedCoverage[i].commands;
+    if (!fold.valid() ||
+        fold.wholeCommands() != snapshot->childrenCoverCompleteCommands ||
+        fold.replayOrdinalBegin() != child.replayOrdinalBegin ||
+        fold.commandCount() > child.replayOrdinalCount ||
+        fold.first().commandIndex != child.range.entry.commandIndex ||
         (snapshot->childrenCoverCompleteCommands
-             ? resolvedCoverage[i].commandCount != child.replayOrdinalCount
-             : resolvedCoverage[i].commandCount != 1u)) {
+             ? fold.commandCount() != child.replayOrdinalCount
+             : fold.commandCount() != 1u)) {
       return result;
     }
-    std::uint64_t resolvedDraws = 0u;
-    std::uint32_t previousDrawParamEnd = 0u;
-    for (std::uint32_t command = 0u;
-         command < resolvedCoverage[i].commandCount; ++command) {
-      const auto& resolved = resolvedCoverage[i].commands[command];
-      if (resolved.replayOrdinal != child.replayOrdinalBegin + command ||
-          resolved.drawParamCount == 0u ||
-          resolved.drawParamBegin >
-              UINT32_MAX - resolved.drawParamCount ||
-          (command == 0u &&
-           resolved.commandIndex != child.range.entry.commandIndex) ||
-          (snapshot->childrenCoverCompleteCommands && command != 0u &&
-           resolved.drawParamBegin != previousDrawParamEnd) ||
-          (command != 0u &&
-           std::any_of(resolvedCoverage[i].commands.begin(),
-                       resolvedCoverage[i].commands.begin() + command,
-                       [&](const auto& prior) {
-                         return prior.commandIndex == resolved.commandIndex;
-                       })) ||
-          resolvedDraws > UINT64_MAX - resolved.drawParamCount) {
-        return result;
-      }
-      previousDrawParamEnd =
-          resolved.drawParamBegin + resolved.drawParamCount;
-      resolvedDraws += resolved.drawParamCount;
-    }
     if ((snapshot->childrenCoverCompleteCommands &&
-         resolvedDraws != resolvedCoverage[i].drawCount) ||
+         fold.drawTotal() != resolvedCoverage[i].drawCount) ||
         (!snapshot->childrenCoverCompleteCommands &&
          resolvedCoverage[i].drawCount != child.range.drawEntryCount)) {
       return result;
     }
     if (snapshot->childrenCoverCompleteCommands) {
-      if (child.range.entry.drawParamIndex !=
-              resolvedCoverage[i].commands[0].drawParamBegin ||
-          resolvedCoverage[i].commands[0].drawParamCount !=
-              child.range.drawEntryCount) {
+      if (child.range.entry.drawParamIndex != fold.first().drawParamBegin ||
+          fold.first().drawParamCount != child.range.drawEntryCount) {
         return result;
       }
     } else {
-      const auto& resolved = resolvedCoverage[i].commands[0];
-      if (resolved.commandIndex != child.range.entry.commandIndex ||
-          child.range.entry.drawParamIndex < resolved.drawParamBegin ||
+      const auto& resolved = fold.first();
+      if (child.range.entry.drawParamIndex < resolved.drawParamBegin ||
           child.range.entry.drawParamIndex - resolved.drawParamBegin >
               resolved.drawParamCount ||
           child.range.drawEntryCount >
@@ -1652,12 +1995,11 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     return result;
   }
   if (!snapshot->childrenCoverCompleteCommands) {
-    const auto& first = resolvedCoverage.front().commands[0];
-    std::uint64_t expectedDrawParam =
-        resolvedCoverage.front().commands[0].drawParamBegin;
+    const auto& first = resolvedCoverage.front().commands.first();
+    std::uint64_t expectedDrawParam = first.drawParamBegin;
     for (std::size_t i = 0u; i < children.size(); ++i) {
       const auto& child = children[i];
-      const auto& command = resolvedCoverage[i].commands[0];
+      const auto& command = resolvedCoverage[i].commands.first();
       if (command.commandIndex != first.commandIndex ||
           child.range.entry.drawParamIndex != expectedDrawParam) {
         return result;
@@ -1695,9 +2037,10 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     const SealedParallelPassSnapshot& snapshot,
     std::span<const ParallelPassChildPlan> children,
     const ParallelPassSnapshotAuthority& authority,
-    const ParallelPassCoverageResolver& resolver) noexcept {
+    const ParallelPassCoverageResolver& resolver,
+    const ParallelPassActionEpochWitness& epochWitness) noexcept {
   return validateParallelPassSemanticPlan(&snapshot, children, authority,
-                                          resolver);
+                                          resolver, epochWitness);
 }
 
 struct ParallelPassFixedPoint {
@@ -1906,6 +2249,7 @@ struct ParallelPassCandidateInput {
   ParallelPassCandidateCost cost{};
   ParallelPassSnapshotAuthority authority{};
   ParallelPassCoverageResolver coverage{};
+  ParallelPassActionEpochWitness epochWitness{};
   std::uint32_t candidateOrdinal = UINT32_MAX;
 };
 
@@ -2052,7 +2396,7 @@ inline ParallelPassCandidateSelection selectParallelPassCandidate(
   for (const auto& candidate : candidates) {
     const auto validation = validateParallelPassSemanticPlan(
         candidate.snapshot, candidate.children, candidate.authority,
-        candidate.coverage);
+        candidate.coverage, candidate.epochWitness);
     if (!validation.accepted()) {
       result.failure = ParallelPassCandidateSelectionFailure::InvalidPlan;
       return result;
@@ -2186,10 +2530,11 @@ inline ParallelPassAdapterDecision runParallelPassProofCoreAdapter(
     std::span<const ParallelPassChildPlan> children,
     const ParallelPassCandidateCost& cost,
     const ParallelPassSnapshotAuthority& authority,
-    const ParallelPassCoverageResolver& coverage) noexcept {
+    const ParallelPassCoverageResolver& coverage,
+    const ParallelPassActionEpochWitness& epochWitness) noexcept {
   ParallelPassAdapterDecision result{};
   const auto certificate = validateParallelPassSemanticPlan(
-      &snapshot, children, authority, coverage);
+      &snapshot, children, authority, coverage, epochWitness);
   result.certificate = certificate.failure;
   if (!certificate.accepted()) {
     return result;
@@ -2202,6 +2547,7 @@ inline ParallelPassAdapterDecision runParallelPassProofCoreAdapter(
           .cost = cost,
           .authority = authority,
           .coverage = coverage,
+          .epochWitness = epochWitness,
           .candidateOrdinal = 0u,
       }};
   const auto selection = selectParallelPassCandidate(candidates);

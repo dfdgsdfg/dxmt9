@@ -1194,6 +1194,25 @@ Attachment changes split candidates without merging their action ownership.
 Fixed pass/child capacity, stale locators, incomplete resources, alias hazards,
 and epoch ambiguity reject without altering the production plan.
 
+The pass-action epoch is issued per pass. `produceSealedParallelPassSnapshots`
+drives one shared `ParallelPassActionEpochState` while it walks the effective
+replay order and stamps each sealed pass's `coordinatorProof` with that pass's
+own epoch, keeping the source-wide coordinator facts unchanged. A source-wide
+stamp would have admitted only a source's first pass. Because the stamp is
+then producer-issued, `validateParallelPassSemanticPlan` does not treat it as
+evidence: `deriveParallelPassActionEpoch` folds the same state machine over
+the same shared `classifyParallelPassCommandRole` classifier, reading each
+ordinal through the coordinator's epoch witness from ordinal zero up to the
+sealed interval's start, and rejects the certificate unless the interval
+begins at a pass-opening draw whose derived epoch equals the stamp. The
+coordinator supplies the source-wide seed epoch to both the producer and the
+witness, so the seed never comes from the snapshot under test. The fold is
+pure - no clock, floating-point value, or allocation - and deterministic over
+one stream. The producer additionally fails the whole source closed if its own
+candidate lifecycle and the epoch fold ever disagree about whether a pass is
+open. Source and storage generation checks still run first, so a stale
+snapshot is rejected before the fold is entered.
+
 A statically eligible observation owns only fixed locators, attachment and
 canonical resource values, one fixed render route, pass boundaries,
 pass-action epoch, first-draw provenance, and a bounded first-draw binding
@@ -1322,7 +1341,36 @@ own sealed-pass batch by exact source/sequence/interval identity and fails
 closed on a missing or ambiguous entry, and `resolveParallelPassCoverage`
 re-reads every command a child owns from the live source, checks attachment and
 route identity per command, and canonicalizes reads and writes through the same
-proof owner the producer used. `buildParallelPassCandidateCost` derives the
+proof owner the producer used. A third owner-issued resolver,
+`resolveParallelPassActionEpochFact`, returns the epoch-relevant
+classification of exactly one replay ordinal - command kind, attachment key,
+and whether a `Clear` carries rects - so the certificate can fold the epoch
+itself instead of receiving a finished number to trust.
+
+Per-child coverage is streamed, not stored. `ParallelPassCoverageFold` holds
+the first resolved command, the previous command index and DrawParam
+boundary, exact running command and draw totals, and a first-failure reason
+plus locator; its state is constant in the number of commands a child owns, so
+a child owning 26, 38, or 52 commands is an ordinary input where the previous
+16-row array was a rejection. Its accumulators are exact by construction -
+there is no hash anywhere in the type, because a colliding summary would admit
+a false accept. Order, non-emptiness, DrawParam arithmetic, non-overlap, and
+whole-command contiguity are enforced at append time against the previous
+boundary; the fold's fields are private, so a resolver can only reach a state
+its own appends produced. One predicate is deliberately stronger than the
+array form it replaces: whole-command rows must carry strictly increasing
+command indices, which implies the duplicate-freedom the old O(n) scan
+checked and additionally rejects an out-of-order row set that scan accepted.
+That direction only shrinks the accepted set. `resolveParallelPassCoverage`
+opens the fold once per child and appends each command it re-reads;
+`validateParallelPassSemanticPlan` and
+`validateParallelPassSemanticPlanCoverage` then compare the fold's totals and
+first command against the child plan's claimed replay span, command index,
+DrawParam begin, and draw count. Nothing downstream of validation reads
+coverage rows: the certificate carries only the snapshot and child plans, and
+the executor consumes child ranges.
+
+`buildParallelPassCandidateCost` derives the
 checked fixed-point record from certified integers only: serial work is the
 pass draw total, the critical path is the widest child, child setup is one
 draw-equivalent per child, and imbalance is widest minus narrowest.

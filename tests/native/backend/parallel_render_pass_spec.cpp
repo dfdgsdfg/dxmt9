@@ -1799,15 +1799,22 @@ struct SemanticPlanFixture {
       return false;
     }
     coverage.drawCount = 64u;
-    coverage.commandCount = 1u;
-    coverage.commands[0] = {
-        .replayOrdinal = child.replayOrdinalBegin,
-        .commandIndex = child.range.entry.commandIndex,
-        .drawParamBegin = 0u,
-        .drawParamCount = static_cast<std::uint32_t>(fixture.snapshot.drawCount),
-    };
-    if (fixture.resolvedCommandCountOverride != 0u) {
-      coverage.commandCount = fixture.resolvedCommandCountOverride;
+    const std::uint32_t rows = fixture.resolvedCommandCountOverride != 0u
+        ? fixture.resolvedCommandCountOverride
+        : 1u;
+    coverage.commands.open(child.replayOrdinalBegin,
+                           fixture.snapshot.childrenCoverCompleteCommands);
+    for (std::uint32_t row = 0u; row < rows; ++row) {
+      if (!coverage.commands.append({
+              .replayOrdinal = child.replayOrdinalBegin + row,
+              .commandIndex = child.range.entry.commandIndex + row,
+              .drawParamBegin =
+                  static_cast<std::uint32_t>(fixture.snapshot.drawCount) * row,
+              .drawParamCount =
+                  static_cast<std::uint32_t>(fixture.snapshot.drawCount),
+          })) {
+        return false;
+      }
     }
     coverage.reads = fixture.resolvedReads;
     coverage.writes = fixture.resolvedWrites;
@@ -1815,6 +1822,75 @@ struct SemanticPlanFixture {
     coverage.route = dxmt9::core::RenderRoute::Portable;
     coverage.passActionEpoch = fixture.snapshot.passActionEpoch;
     return true;
+  }
+
+  // A small programmable epoch stream. The default is the single DrawRun the
+  // rest of the fixture describes, seeded so the derived epoch equals the
+  // snapshot's own. Tests that need a later pass script the boundaries ahead
+  // of it and retarget the interval.
+  struct EpochStreamEntry {
+    dxmt9::core::MetalCommandKind kind =
+        dxmt9::core::MetalCommandKind::DrawRun;
+    bool clearRectsEmpty = false;
+    bool foreignAttachments = false;
+  };
+  std::array<EpochStreamEntry, 8> epochStream{};
+  std::uint32_t epochStreamCount = 1u;
+  std::uint64_t epochSeed = 7u;
+  mutable std::uint32_t epochReads = 0u;
+
+  static bool readEpochFact(
+      const void* context, const dxmt9::core::CpuReadyTape::SourceRef& source,
+      std::uint64_t seqId, std::uint32_t replayOrdinal,
+      dxmt9::encoders::ParallelPassActionEpochFact& fact) noexcept {
+    const auto& fixture = *static_cast<const SemanticPlanFixture*>(context);
+    ++fixture.epochReads;
+    if (source != fixture.expectedSource || seqId != fixture.snapshot.seqId ||
+        replayOrdinal >= fixture.epochStreamCount) {
+      return false;
+    }
+    const auto& entry = fixture.epochStream[replayOrdinal];
+    fact = {};
+    fact.kind = entry.kind;
+    fact.clearRectsEmpty = entry.clearRectsEmpty;
+    fact.attachments = fixture.snapshot.attachments;
+    if (entry.foreignAttachments) {
+      fact.attachments.sampleCount =
+          static_cast<decltype(fact.attachments.sampleCount)>(
+              fixture.snapshot.attachments.sampleCount + 3u);
+    }
+    return true;
+  }
+
+  dxmt9::encoders::ParallelPassActionEpochWitness epochWitness()
+      const noexcept {
+    return {.context = this,
+            .read = readEpochFact,
+            .seedEpoch = epochSeed,
+            .replayOrdinalCount = epochStreamCount};
+  }
+
+  // Move the whole sealed interval to `begin`, keeping the single-command
+  // draw-subrange shape the fixture is built around.
+  void retargetPassInterval(std::uint32_t begin) noexcept {
+    snapshot.replayOrdinalBegin = begin;
+    snapshot.replayOrdinalEnd = begin + 1u;
+    snapshot.firstDraw.replayOrdinal = begin;
+    for (std::uint32_t i = 0u; i < count; ++i) {
+      snapshot.ranges[i].replayOrdinalBegin = begin;
+      snapshot.childReplayOrdinalBegins[i] = begin;
+      children[i].range.replayOrdinalBegin = begin;
+      children[i].replayOrdinalBegin = begin;
+    }
+  }
+
+  void setPassActionEpoch(std::uint64_t epoch) noexcept {
+    snapshot.passActionEpoch = epoch;
+    snapshot.coordinatorProof.firstPassActionEpoch = epoch;
+    for (std::uint32_t i = 0u; i < count; ++i) {
+      snapshot.firstDraws[i].entryRender.passActionEpoch = epoch;
+      children[i].firstDraw.entryRender.passActionEpoch = epoch;
+    }
   }
 
   dxmt9::encoders::ParallelPassCoverageResolver coverageResolver() const noexcept {
@@ -1957,7 +2033,7 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
   SemanticPlanFixture fixture(3u);
   const auto valid = validateParallelPassSemanticPlan(
       fixture.snapshot, fixture.view(), fixture.authorityResolver(),
-      fixture.coverageResolver());
+      fixture.coverageResolver(), fixture.epochWitness());
   check(valid.accepted() && fixture.authorityCalls == 1u &&
             fixture.resolverCalls == fixture.count,
         "coherent sealed snapshot produces one owner lookup and one exact resolver call per child");
@@ -1967,7 +2043,8 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
     mutate(candidate);
     check(!validateParallelPassSemanticPlan(
                 candidate.snapshot, candidate.view(),
-                candidate.authorityResolver(), candidate.coverageResolver())
+                candidate.authorityResolver(), candidate.coverageResolver(),
+                candidate.epochWitness())
                 .accepted(),
           message);
   };
@@ -2024,29 +2101,30 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
                 "child ordinal mutation fails closed");
   expectInvalid([](auto& f) { f.count = 1u; f.snapshot.childCount = 1u; },
                 "capacity mutation fails closed");
-  expectInvalid([](auto& f) {
-    f.resolvedCommandCountOverride =
-        static_cast<std::uint32_t>(
-            dxmt9::encoders::ParallelPassResolvedCoverage{}.commands.size()) +
-        1u;
-  }, "coverage command count above bounded storage fails before indexing");
+  // Row storage no longer bounds a child, so an oversized resolved command
+  // count is now a claim mismatch against the child plan rather than a
+  // capacity failure. It must still fail closed.
+  expectInvalid([](auto& f) { f.resolvedCommandCountOverride = 17u; },
+                "resolved command count above the child's claim fails closed");
+  expectInvalid([](auto& f) { f.resolvedCommandCountOverride = 2u; },
+                "an extra resolved command in a draw-subrange child fails "
+                "closed");
 
   SemanticPlanFixture overlap(3u);
   overlap.snapshot.attachmentWrites.handles[0] = 0x11u;
   overlap.resolvedWrites.handles[0] = 0x11u;
   check(!validateParallelPassSemanticPlan(
               overlap.snapshot, overlap.view(), overlap.authorityResolver(),
-              overlap.coverageResolver())
+              overlap.coverageResolver(), overlap.epochWitness())
               .accepted(),
         "exact read/write overlap fails closed");
 
   for (std::uint32_t count = 2u;
        count <= kParallelRenderPassChildCapacity; ++count) {
     SemanticPlanFixture bounded(count);
-    check(validateParallelPassSemanticPlan(bounded.snapshot,
-                                           bounded.view(),
-                                           bounded.authorityResolver(),
-                                           bounded.coverageResolver()).accepted(),
+    check(validateParallelPassSemanticPlan(
+              bounded.snapshot, bounded.view(), bounded.authorityResolver(),
+              bounded.coverageResolver(), bounded.epochWitness()).accepted(),
           "every bounded child count has a coherent proof");
   }
 }
@@ -2084,13 +2162,13 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   std::array<ParallelPassCandidateInput, 3> candidates{
       ParallelPassCandidateInput{&high.snapshot, high.view(), high.cost(400),
                                  high.authorityResolver(),
-                                 high.coverageResolver(), 2u},
+                                 high.coverageResolver(), high.epochWitness(), 2u},
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(),
                                  tiedFew.cost(400), tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 1u},
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 1u},
       ParallelPassCandidateInput{&low.snapshot, low.view(), low.cost(300),
                                  low.authorityResolver(), low.coverageResolver(),
-                                 0u},
+                                 low.epochWitness(), 0u},
   };
   const auto selected = selectParallelPassCandidate(candidates);
   check(selected.selected && selected.candidateOrdinal == 1u &&
@@ -2105,13 +2183,13 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   const auto allPermutationBase = std::array{
       ParallelPassCandidateInput{&high.snapshot, high.view(), high.cost(400),
                                  high.authorityResolver(),
-                                 high.coverageResolver(), 2u},
+                                 high.coverageResolver(), high.epochWitness(), 2u},
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(),
                                  tiedFew.cost(400), tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 1u},
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 1u},
       ParallelPassCandidateInput{&low.snapshot, low.view(), low.cost(300),
                                  low.authorityResolver(), low.coverageResolver(),
-                                 0u}};
+                                 low.epochWitness(), 0u}};
   auto allPermutation = allPermutationBase;
   do {
     const auto selection = selectParallelPassCandidate(allPermutation);
@@ -2131,7 +2209,7 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
                                  negativeEvidence.view(),
                                  negativeEvidence.cost(400),
                                  negativeEvidence.authorityResolver(),
-                                 negativeEvidence.coverageResolver(), 0u}};
+                                 negativeEvidence.coverageResolver(), negativeEvidence.epochWitness(), 0u}};
   check(!selectParallelPassCandidate(negativeEvidenceInput).selected,
         "adding coordinator negative evidence cannot introduce selection");
 
@@ -2139,7 +2217,7 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   std::array<ParallelPassCandidateInput, 1> negativeInput{
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(), negative,
                                  tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 0u}};
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 0u}};
   check(!selectParallelPassCandidate(negativeInput).selected,
         "non-positive benefit falls back to serial");
   negative.valid = false;
@@ -2157,7 +2235,7 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
       ParallelPassCandidateInput{&malformed.snapshot, malformed.view(),
                                  malformed.cost(400),
                                  malformed.authorityResolver(),
-                                 malformed.coverageResolver(), 0u}};
+                                 malformed.coverageResolver(), malformed.epochWitness(), 0u}};
   check(!selectParallelPassCandidate(malformedInput).selected,
         "unsafe candidate never reaches economics ranking");
 
@@ -2189,7 +2267,7 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   std::array<ParallelPassCandidateInput, 1> hugeInput{
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(), hugeEconomics,
                                  tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 0u}};
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 0u}};
   check(!selectParallelPassCandidate(hugeInput).selected,
         "high-domain economics and checked min/max products select serial");
   hugeEconomics.economics.totalDraws = UINT64_MAX;
@@ -2200,10 +2278,10 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   std::array<ParallelPassCandidateInput, 2> duplicateOrdinals{
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(),
                                  tiedFew.cost(400), tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 0u},
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 0u},
       ParallelPassCandidateInput{&tiedFew.snapshot, tiedFew.view(),
                                  tiedFew.cost(400), tiedFew.authorityResolver(),
-                                 tiedFew.coverageResolver(), 0u}};
+                                 tiedFew.coverageResolver(), tiedFew.epochWitness(), 0u}};
   check(!selectParallelPassCandidate(duplicateOrdinals).selected,
         "duplicate candidate ordinals select serial");
   duplicateOrdinals[1].candidateOrdinal = UINT32_MAX;
@@ -2215,10 +2293,10 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
   std::array<ParallelPassCandidateInput, 2> lexicographic{
       ParallelPassCandidateInput{&lexHigh.snapshot, lexHigh.view(),
                                  lexHigh.cost(400), lexHigh.authorityResolver(),
-                                 lexHigh.coverageResolver(), 1u},
+                                 lexHigh.coverageResolver(), lexHigh.epochWitness(), 1u},
       ParallelPassCandidateInput{&lexLow.snapshot, lexLow.view(),
                                  lexLow.cost(400), lexLow.authorityResolver(),
-                                 lexLow.coverageResolver(), 0u}};
+                                 lexLow.coverageResolver(), lexLow.epochWitness(), 0u}};
   const auto lexExpected = selectParallelPassCandidate(lexicographic);
   check(lexExpected.selected && lexExpected.candidateOrdinal == 0u,
         "equal benefit and child count prefer canonical range vector");
@@ -2264,11 +2342,11 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
         ParallelPassCandidateInput{
             &metadataBase.snapshot, metadataBase.view(), metadataBase.cost(400),
             metadataBase.authorityResolver(), metadataBase.coverageResolver(),
-            1u},
+            metadataBase.epochWitness(), 1u},
         ParallelPassCandidateInput{
             &metadataVariant.snapshot, metadataVariant.view(),
             metadataVariant.cost(400), metadataVariant.authorityResolver(),
-            metadataVariant.coverageResolver(), 0u}};
+            metadataVariant.coverageResolver(), metadataVariant.epochWitness(), 0u}};
     const auto metadataSelection =
         selectParallelPassCandidate(metadataCandidates);
     check(metadataSelection.selected && metadataSelection.candidateOrdinal == 1u,
@@ -2279,7 +2357,53 @@ void fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent() {
 struct ProducerCoverageContext {
   const PassObservationFixture* fixture = nullptr;
   std::uint32_t mutateNonzeroWholeRowField = 0u;
+  std::uint64_t seedEpoch = 7u;
+  mutable std::uint32_t epochReads = 0u;
 };
+
+// The producer fixture folds the same stream the producer itself walked, so
+// the certificate's re-derivation is exercised against real replay order.
+bool resolveProducerEpochFact(
+    const void* context, const dxmt9::core::CpuReadyTape::SourceRef& source,
+    std::uint64_t seqId, std::uint32_t replayOrdinal,
+    dxmt9::encoders::ParallelPassActionEpochFact& fact) noexcept {
+  const auto& state = *static_cast<const ProducerCoverageContext*>(context);
+  ++state.epochReads;
+  if (!state.fixture || source != state.fixture->stream.source.source ||
+      seqId != state.fixture->stream.source.seqId) {
+    return false;
+  }
+  return dxmt9::encoders::readParallelPassActionEpochFact(
+      state.fixture->stream, replayOrdinal, fact);
+}
+
+dxmt9::encoders::ParallelPassActionEpochWitness producerEpochWitness(
+    const ProducerCoverageContext& context) noexcept {
+  return {.context = &context,
+          .read = resolveProducerEpochFact,
+          .seedEpoch = context.seedEpoch,
+          .replayOrdinalCount = static_cast<std::uint32_t>(
+              context.fixture->stream.replayOrdinalCount())};
+}
+
+// An owner that echoes exactly the snapshot it was handed. It removes the
+// snapshot authority as a source of rejection so a test can show which
+// remaining check catches a self-consistent forgery.
+bool resolveEchoingAuthority(
+    const void* context, const dxmt9::core::CpuReadyTape::SourceRef& source,
+    std::uint64_t seqId, std::uint32_t replayOrdinalBegin,
+    std::uint32_t replayOrdinalEnd,
+    dxmt9::encoders::SealedParallelPassSnapshot& authoritative) noexcept {
+  const auto& snapshot =
+      *static_cast<const dxmt9::encoders::SealedParallelPassSnapshot*>(context);
+  if (source != snapshot.source || seqId != snapshot.seqId ||
+      replayOrdinalBegin != snapshot.replayOrdinalBegin ||
+      replayOrdinalEnd != snapshot.replayOrdinalEnd) {
+    return false;
+  }
+  authoritative = snapshot;
+  return true;
+}
 
 bool resolveProducerAuthority(
     const void* context, const dxmt9::core::CpuReadyTape::SourceRef& source,
@@ -2292,7 +2416,9 @@ bool resolveProducerAuthority(
     return false;
   }
   dxmt9::encoders::SealedParallelPassSnapshotBatch rebuilt{};
-  if (!state.fixture->observe(rebuilt).considered) {
+  if (!state.fixture
+           ->observe(rebuilt, true, true, completeProofs(state.seedEpoch))
+           .considered) {
     return false;
   }
   for (const auto& candidate : rebuilt.view()) {
@@ -2327,6 +2453,8 @@ bool resolveProducerCoverage(
     coverage.writes.flags = dxmt9::core::ExactResourceSetComplete |
         dxmt9::core::ExactResourceSetCanonicalized;
     bool haveAttachments = false;
+    coverage.commands.open(child.replayOrdinalBegin, true);
+    std::uint32_t firstCommandIndex = 0u;
     for (std::uint32_t offset = 0u; offset < child.replayOrdinalCount;
          ++offset) {
       std::uint32_t commandIndex = 0u;
@@ -2362,30 +2490,32 @@ bool resolveProducerCoverage(
         }
       }
       coverage.drawCount += command.command.drawParams.size();
-      if (coverage.commandCount >= coverage.commands.size()) {
-        return false;
-      }
-      coverage.commands[coverage.commandCount++] = {
+      dxmt9::encoders::ParallelPassResolvedCoverage::Command row{
           .replayOrdinal = child.replayOrdinalBegin + offset,
           .commandIndex = commandIndex,
           .drawParamBegin = command.command.drawRunRecord->firstParam,
           .drawParamCount = static_cast<std::uint32_t>(
               command.command.drawParams.size()),
       };
-    }
-    if (state.mutateNonzeroWholeRowField != 0u &&
-        coverage.commandCount >= 2u) {
-      auto& row = coverage.commands[1];
-      switch (state.mutateNonzeroWholeRowField) {
-      case 1u:
-        row.commandIndex = coverage.commands[0].commandIndex;
-        break;
-      case 2u:
-        ++row.drawParamBegin;
-        break;
-      case 3u:
-        ++row.drawParamCount;
-        break;
+      if (offset == 0u) {
+        firstCommandIndex = commandIndex;
+      } else if (offset == 1u) {
+        switch (state.mutateNonzeroWholeRowField) {
+        case 1u:
+          row.commandIndex = firstCommandIndex;
+          break;
+        case 2u:
+          ++row.drawParamBegin;
+          break;
+        case 3u:
+          ++row.drawParamCount;
+          break;
+        default:
+          break;
+        }
+      }
+      if (!coverage.commands.append(row)) {
+        return false;
       }
     }
     coverage.route = dxmt9::core::RenderRoute::Portable;
@@ -2404,14 +2534,17 @@ bool resolveProducerCoverage(
       authoritativeCommand.command.drawParams.size() > UINT32_MAX) {
     return false;
   }
-  coverage.commandCount = 1u;
-  coverage.commands[0] = {
-      .replayOrdinal = child.replayOrdinalBegin,
-      .commandIndex = child.range.entry.commandIndex,
-      .drawParamBegin = authoritativeCommand.command.drawRunRecord->firstParam,
-      .drawParamCount = static_cast<std::uint32_t>(
-          authoritativeCommand.command.drawParams.size()),
-  };
+  coverage.commands.open(child.replayOrdinalBegin, false);
+  if (!coverage.commands.append({
+          .replayOrdinal = child.replayOrdinalBegin,
+          .commandIndex = child.range.entry.commandIndex,
+          .drawParamBegin =
+              authoritativeCommand.command.drawRunRecord->firstParam,
+          .drawParamCount = static_cast<std::uint32_t>(
+              authoritativeCommand.command.drawParams.size()),
+      })) {
+    return false;
+  }
   coverage.reads = dxmt9::core::makeDrawEntryReadSet(
       resolved.partition.entry.drawState);
   coverage.writes = dxmt9::core::makeRenderAttachmentWriteSet(
@@ -2458,8 +2591,10 @@ void producerOutputFeedsSynchronousSemanticValidator() {
       .context = &context, .resolve = resolveProducerAuthority};
   const ParallelPassCoverageResolver resolver{
       .context = &context, .resolve = resolveProducerCoverage};
+  const auto epochWitness = producerEpochWitness(context);
   const auto validation = validateParallelPassSemanticPlan(
-      snapshot, {children.data(), snapshot.childCount}, authority, resolver);
+      snapshot, {children.data(), snapshot.childCount}, authority, resolver,
+      epochWitness);
   check(validation.accepted(),
         "producer snapshot passes exact synchronous re-resolution");
 
@@ -2470,8 +2605,8 @@ void producerOutputFeedsSynchronousSemanticValidator() {
   malformedChildren[0].range = malformed.ranges[0];
   malformedChildren[0].firstDraw.provenance = malformed.ranges[0].entry;
   check(!validateParallelPassSemanticPlan(
-              malformed, {malformedChildren.data(), malformed.childCount}, authority,
-              resolver)
+              malformed, {malformedChildren.data(), malformed.childCount},
+              authority, resolver, epochWitness)
               .accepted(),
         "producer partial tail is rejected by re-resolution");
   malformed = snapshot;
@@ -2482,14 +2617,14 @@ void producerOutputFeedsSynchronousSemanticValidator() {
   malformedChildren[0].firstDraw.provenance = malformed.ranges[0].entry;
   check(!validateParallelPassSemanticPlan(
               malformed, {malformedChildren.data(), malformed.childCount},
-              authority, resolver)
+              authority, resolver, epochWitness)
               .accepted(),
         "producer shifted DrawRun range is rejected by owner authority");
   malformed = snapshot;
   malformed.source.storage.generation++;
   check(!validateParallelPassSemanticPlan(
               malformed, {children.data(), malformed.childCount}, authority,
-              resolver)
+              resolver, epochWitness)
               .accepted(),
         "producer stale storage generation is rejected by resolver identity");
   malformed = snapshot;
@@ -2503,7 +2638,7 @@ void producerOutputFeedsSynchronousSemanticValidator() {
   };
   check(!validateParallelPassSemanticPlan(
               malformed, {children.data(), malformed.childCount}, authority,
-              resolver)
+              resolver, epochWitness)
               .accepted(),
         "producer stale sealing command is rejected by owner re-resolution");
 
@@ -2522,7 +2657,7 @@ void producerOutputFeedsSynchronousSemanticValidator() {
   cost.valid = true;
   const std::array candidates{ParallelPassCandidateInput{
       &snapshot, {children.data(), snapshot.childCount}, cost, authority,
-      resolver, 0u}};
+      resolver, epochWitness, 0u}};
   check(selectParallelPassCandidate(candidates).selected,
         "producer candidate ranks only after exact validation");
 
@@ -2558,9 +2693,10 @@ void producerOutputFeedsSynchronousSemanticValidator() {
       .context = &wholeContext, .resolve = resolveProducerAuthority};
   const ParallelPassCoverageResolver wholeResolver{
       .context = &wholeContext, .resolve = resolveProducerCoverage};
+  const auto wholeEpochWitness = producerEpochWitness(wholeContext);
   const auto wholeValidation = validateParallelPassSemanticPlan(
       wholeSnapshot, {wholeChildren.data(), wholeSnapshot.childCount},
-      wholeAuthority, wholeResolver);
+      wholeAuthority, wholeResolver, wholeEpochWitness);
   check(wholeValidation.accepted(),
         "whole-command producer coverage re-resolves every DrawRun");
   check(wholeSnapshot.childCount >= 2u &&
@@ -2571,7 +2707,7 @@ void producerOutputFeedsSynchronousSemanticValidator() {
     check(!validateParallelPassSemanticPlan(
                 wholeSnapshot,
                 {wholeChildren.data(), wholeSnapshot.childCount},
-                wholeAuthority, wholeResolver)
+                wholeAuthority, wholeResolver, wholeEpochWitness)
                 .accepted(),
           "each nonzero whole-command row identity/range mutation fails closed");
   }
@@ -2580,7 +2716,7 @@ void producerOutputFeedsSynchronousSemanticValidator() {
   check(!validateParallelPassSemanticPlan(
               wholeSnapshot,
               {wholeChildren.data(), wholeSnapshot.childCount}, wholeAuthority,
-              wholeResolver)
+              wholeResolver, wholeEpochWitness)
               .accepted(),
         "whole-command duplicate/partial replay span fails closed");
 }
@@ -2783,7 +2919,7 @@ AdapterLaneResult runAdapterLane(
   AdapterLaneResult out{};
   out.decision = runParallelPassProofCoreAdapter(
       fixture.snapshot, fixture.view(), cost, fixture.authorityResolver(),
-      fixture.coverageResolver());
+      fixture.coverageResolver(), fixture.epochWitness());
   out.accounting = accountParallelPassAdapter(out.decision);
   if (!out.decision.selected()) {
     for (const auto& child : fixture.view()) {
@@ -2804,6 +2940,431 @@ AdapterLaneResult runAdapterLane(
   out.createdChildren = backend.created;
   out.parallelEffects = backend.effects;
   return out;
+}
+
+// R-BACK-2.70 / R-VERIF-2.17: the streaming coverage fold replaces a fixed
+// 16-row array with O(1) exact accumulators. The pin is adversarial: a
+// stored-row reference reproducing the pre-change predicate set is run beside
+// the fold over a generated domain of gap, overlap, duplicate, out-of-order,
+// empty, arithmetic, subrange, and exactly-boundary row sets, and the two
+// verdicts are compared. The fold must never accept what the reference
+// rejects; the one permitted divergence is the deliberate fail-closed
+// ordering strengthening.
+void streamingCoverageFoldMatchesStoredRowReference() {
+  using namespace dxmt9::encoders;
+  using Row = ParallelPassCoverageFold::Command;
+  using Failure = ParallelPassCoverageFoldFailure;
+
+  struct ReferenceVerdict {
+    Failure failure = Failure::NotStarted;
+    std::uint32_t failureCommand = UINT32_MAX;
+    std::uint64_t drawTotal = 0u;
+    std::uint32_t commandCount = 0u;
+    bool accepted = false;
+  };
+
+  // Stored-row reference. It keeps every row and re-checks the predicate set
+  // the array form enforced, including the O(n) duplicate scan over prior
+  // rows. The pre-change code collapsed all of these into one `||` chain and
+  // a single rejection, so evaluation order never affected its verdict; the
+  // reference uses the fold's order only so the reported reason class is
+  // comparable.
+  const auto reference = [](std::span<const Row> rows, std::uint32_t begin,
+                            bool wholeCommands) {
+    ReferenceVerdict out{};
+    if (rows.empty()) {
+      return out;
+    }
+    std::vector<Row> stored;
+    std::uint32_t previousDrawParamEnd = 0u;
+    for (std::uint32_t k = 0u; k < rows.size(); ++k) {
+      const auto& row = rows[k];
+      const auto fail = [&](Failure reason) {
+        out.failure = reason;
+        out.failureCommand = k;
+        return out;
+      };
+      if (!wholeCommands && k != 0u) {
+        return fail(Failure::SubrangeCapacity);
+      }
+      if (static_cast<std::uint64_t>(begin) + k !=
+          static_cast<std::uint64_t>(row.replayOrdinal)) {
+        return fail(Failure::CommandOrder);
+      }
+      if (row.drawParamCount == 0u) {
+        return fail(Failure::EmptyCommand);
+      }
+      if (row.drawParamBegin > UINT32_MAX - row.drawParamCount) {
+        return fail(Failure::CommandArithmetic);
+      }
+      if (k != 0u &&
+          std::any_of(stored.begin(), stored.end(), [&](const Row& prior) {
+            return prior.commandIndex == row.commandIndex;
+          })) {
+        return fail(Failure::CommandOverlap);
+      }
+      if (wholeCommands && k != 0u &&
+          row.drawParamBegin != previousDrawParamEnd) {
+        return fail(Failure::CommandContiguity);
+      }
+      if (out.drawTotal > UINT64_MAX - row.drawParamCount) {
+        return fail(Failure::DrawArithmetic);
+      }
+      stored.push_back(row);
+      previousDrawParamEnd = row.drawParamBegin + row.drawParamCount;
+      out.drawTotal += row.drawParamCount;
+      ++out.commandCount;
+    }
+    out.failure = Failure::None;
+    out.accepted = true;
+    return out;
+  };
+
+  constexpr std::uint32_t kBegin = 7u;
+  const auto baseRow = [](std::uint32_t k) {
+    return Row{
+        .replayOrdinal = kBegin + k,
+        .commandIndex = 20u + 2u * k,
+        .drawParamBegin = 100u + 5u * k,
+        .drawParamCount = 5u,
+    };
+  };
+
+  std::uint32_t compared = 0u;
+  std::uint32_t divergences = 0u;
+  std::uint32_t acceptedCases = 0u;
+  for (std::uint32_t rowCount = 1u; rowCount <= 4u; ++rowCount) {
+    for (const bool wholeCommands : {false, true}) {
+      for (std::uint32_t target = 0u; target < rowCount; ++target) {
+        for (std::uint32_t mutation = 0u; mutation <= 9u; ++mutation) {
+          std::vector<Row> rows;
+          for (std::uint32_t k = 0u; k < rowCount; ++k) {
+            Row row = baseRow(k);
+            if (k == target) {
+              switch (mutation) {
+              case 1u: ++row.replayOrdinal; break;                  // gap
+              case 2u: --row.replayOrdinal; break;                  // reorder
+              case 3u: row.commandIndex = baseRow(0u).commandIndex; break;
+              case 4u: row.commandIndex = 20u - 3u; break;          // descend
+              case 5u: ++row.drawParamBegin; break;                 // gap
+              case 6u: --row.drawParamBegin; break;                 // overlap
+              case 7u: row.drawParamCount = 0u; break;              // empty
+              case 8u:
+                row.drawParamBegin = UINT32_MAX - 1u;
+                row.drawParamCount = 5u;
+                break;                                              // overflow
+              case 9u: ++row.drawParamCount; break;                 // tail
+              default: break;
+              }
+            }
+            rows.push_back(row);
+          }
+
+          const auto expected = reference(rows, kBegin, wholeCommands);
+          ParallelPassCoverageFold fold{};
+          fold.open(kBegin, wholeCommands);
+          for (const auto& row : rows) {
+            fold.append(row);
+          }
+          ++compared;
+
+          check(!fold.valid() || expected.accepted,
+                "the streaming fold never accepts a row set the stored-row "
+                "reference rejects");
+          if (expected.accepted != fold.valid()) {
+            bool strictlyIncreasing = true;
+            for (std::size_t k = 1u; k < rows.size(); ++k) {
+              strictlyIncreasing = strictlyIncreasing &&
+                  rows[k].commandIndex > rows[k - 1u].commandIndex;
+            }
+            check(expected.accepted && !fold.valid() && !strictlyIncreasing &&
+                      fold.failure() == Failure::CommandOverlap,
+                  "the only reference/streaming divergence is the deliberate "
+                  "fail-closed command-order strengthening");
+            ++divergences;
+            continue;
+          }
+          if (fold.valid()) {
+            check(fold.drawTotal() == expected.drawTotal &&
+                      fold.commandCount() == expected.commandCount,
+                  "an accepted fold reports the reference's exact totals");
+            ++acceptedCases;
+            continue;
+          }
+          check(fold.failure() == expected.failure &&
+                    fold.failureCommand() == expected.failureCommand,
+                "a rejected fold reports the reference's failure class and "
+                "first-failure locator");
+        }
+      }
+    }
+  }
+  check(compared >= 200u && acceptedCases > 0u && divergences > 0u,
+        "the generated domain exercises accepts, rejects, and the ordering "
+        "strengthening");
+
+  // Exactly-boundary and beyond: the former 16-row storage is not a limit.
+  for (const std::uint32_t rowCount : {15u, 16u, 17u, 52u}) {
+    ParallelPassCoverageFold fold{};
+    fold.open(kBegin, true);
+    for (std::uint32_t k = 0u; k < rowCount; ++k) {
+      check(fold.append(baseRow(k)), "every whole-command row appends");
+    }
+    check(fold.valid() && fold.commandCount() == rowCount &&
+              fold.drawTotal() == static_cast<std::uint64_t>(rowCount) * 5u &&
+              fold.first() == baseRow(0u),
+          "the fold accumulates exactly beyond any fixed row capacity");
+  }
+
+  // An empty child is still not coverage, and a failure locator survives
+  // later appends.
+  ParallelPassCoverageFold empty{};
+  empty.open(kBegin, true);
+  check(!empty.valid() && empty.failure() == Failure::NotStarted,
+        "a child with no resolved command is not covered");
+  ParallelPassCoverageFold sticky{};
+  sticky.open(kBegin, true);
+  check(sticky.append(baseRow(0u)), "first row appends");
+  Row gap = baseRow(1u);
+  ++gap.drawParamBegin;
+  check(!sticky.append(gap), "a contiguity gap is rejected");
+  check(!sticky.append(baseRow(2u)) && !sticky.valid() &&
+            sticky.failure() == Failure::CommandContiguity &&
+            sticky.failureCommand() == 1u,
+        "the first failure and its locator survive later appends");
+}
+
+// R-BACK-2.70: a whole-command child owning far more commands than the former
+// 16-row coverage storage now certifies through the production validator.
+void wideWholeCommandChildrenCertify() {
+  using namespace dxmt9::encoders;
+  PassObservationFixture wide;
+  for (std::uint32_t command = 0u; command < 60u; ++command) {
+    wide.slot.appendDrawRun({}, {}, draws(3u), payloads(3u));
+  }
+  // The production partition planner reports an explicit plan only when some
+  // DrawRun is large enough to subdivide; the wide small-command run is what
+  // the coverage fold is being exercised on.
+  wide.slot.appendDrawRun({}, {}, draws(128u), payloads(128u));
+  wide.slot.appendPresent({}, {});
+  wide.finalize(640u);
+  SealedParallelPassSnapshotBatch output{};
+  const auto observed = wide.observe(output);
+  check(observed.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].childrenCoverCompleteCommands,
+        "a many-command source still produces one whole-command candidate");
+
+  const auto& snapshot = output.passes[0];
+  std::uint32_t widestChild = 0u;
+  for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+    widestChild = std::max(widestChild, snapshot.childReplayOrdinalCounts[i]);
+  }
+  check(widestChild > kParallelRenderPassChildCapacity,
+        "the fixture's widest child owns more commands than the former row "
+        "capacity");
+
+  std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+      children{};
+  for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+    children[i] = {
+        .range = snapshot.ranges[i],
+        .firstDraw = snapshot.firstDraws[i],
+        .binding = bindingSnapshot(ParallelPassDirectBindingMode::Stage1Direct,
+                                   static_cast<std::uint16_t>(i + 1u)),
+        .replayOrdinalBegin = snapshot.childReplayOrdinalBegins[i],
+        .replayOrdinalCount = snapshot.childReplayOrdinalCounts[i],
+        .childOrdinal = i,
+        .localShadowOrdinal = i + 1u,
+        .coversCompleteCommands = true,
+        .forceFullFirstDrawBinding = true,
+    };
+  }
+  ProducerCoverageContext context{.fixture = &wide};
+  const ParallelPassSnapshotAuthority authority{
+      .context = &context, .resolve = resolveProducerAuthority};
+  const ParallelPassCoverageResolver resolver{
+      .context = &context, .resolve = resolveProducerCoverage};
+  const auto witness = producerEpochWitness(context);
+  check(validateParallelPassSemanticPlan(
+            snapshot, {children.data(), snapshot.childCount}, authority,
+            resolver, witness)
+            .accepted(),
+        "a child owning more commands than the former row capacity certifies");
+
+  // The per-row predicates are still enforced at that width.
+  for (std::uint32_t field = 1u; field <= 3u; ++field) {
+    context.mutateNonzeroWholeRowField = field;
+    check(!validateParallelPassSemanticPlan(
+                snapshot, {children.data(), snapshot.childCount}, authority,
+                resolver, witness)
+               .accepted(),
+          "wide whole-command rows still fail closed on identity/range "
+          "mutation");
+  }
+  context.mutateNonzeroWholeRowField = 0u;
+}
+
+// R-BACK-2.69: the certificate never trusts a stored action epoch. The
+// producer issues the coordinator proof per pass, and the certificate
+// re-derives that pass's epoch itself by folding the shared classifier over
+// the generation-pinned replay stream in replay-ordinal order. The stamp is
+// accepted only when it belongs to this pass of this stream.
+void passLocalEpochProofIsIndependentlyReDerived() {
+  using namespace dxmt9::encoders;
+  const auto drawValues = draws(128u);
+  const auto drawPayloads = payloads(drawValues.size());
+  dxmt9::core::ClearDesc partial{};
+  partial.rects.push_back({});
+
+  // The exact GT2 shape the source-wide stamp could not certify: two pass
+  // intervals in one source, the second carrying action epoch 3 against a
+  // source-wide proof epoch of 1.
+  PassObservationFixture twoPasses;
+  twoPasses.slot.appendClear({});                                 // 0
+  twoPasses.slot.appendDrawRun({}, {}, drawValues, drawPayloads);  // 1
+  twoPasses.slot.appendClear(partial);                            // 2
+  twoPasses.slot.appendDrawRun({}, {}, drawValues, drawPayloads);  // 3
+  twoPasses.slot.appendPresent({}, {});                           // 4
+  twoPasses.finalize(620u);
+  SealedParallelPassSnapshotBatch output{};
+  const auto observed =
+      twoPasses.observe(output, true, true, completeProofs(1u));
+  check(observed.eligibleCount == 2u && output.count == 2u &&
+            output.passes[0].replayOrdinalBegin == 1u &&
+            output.passes[1].replayOrdinalBegin == 3u &&
+            output.passes[0].passActionEpoch == 1u &&
+            output.passes[1].passActionEpoch == 3u,
+        "a source's second pass interval carries its own action epoch");
+  check(output.passes[0].coordinatorProof.firstPassActionEpoch == 1u &&
+            output.passes[1].coordinatorProof.firstPassActionEpoch == 3u &&
+            output.passes[0].coordinatorProof.flags ==
+                kParallelPassCoordinatorProofComplete &&
+            output.passes[1].coordinatorProof.flags ==
+                kParallelPassCoordinatorProofComplete,
+        "the coordinator proof is issued per pass and keeps its source-wide "
+        "facts");
+
+  ProducerCoverageContext context{.fixture = &twoPasses, .seedEpoch = 1u};
+  const ParallelPassSnapshotAuthority authority{
+      .context = &context, .resolve = resolveProducerAuthority};
+  const ParallelPassCoverageResolver resolver{
+      .context = &context, .resolve = resolveProducerCoverage};
+  const auto witness = producerEpochWitness(context);
+  const auto& source = twoPasses.stream.source.source;
+  const std::uint64_t seqId = twoPasses.stream.source.seqId;
+
+  // (a) The fold is pure: the same stream yields the same value every time,
+  // for every pass, and only a pass-opening DrawRun derives at all.
+  for (const std::uint32_t ordinal : {0u, 1u, 2u, 3u, 4u}) {
+    const auto first =
+        deriveParallelPassActionEpoch(source, seqId, ordinal, witness);
+    const auto second =
+        deriveParallelPassActionEpoch(source, seqId, ordinal, witness);
+    check(first == second,
+          "action-epoch re-derivation is deterministic over the same stream");
+    const bool startsPass = ordinal == 1u || ordinal == 3u;
+    check(first.valid == startsPass,
+          "only a pass-opening DrawRun ordinal derives an action epoch");
+  }
+  check(deriveParallelPassActionEpoch(source, seqId, 1u, witness).epoch == 1u &&
+            deriveParallelPassActionEpoch(source, seqId, 3u, witness).epoch ==
+                3u,
+        "each derived epoch matches the producer's pass-local stamp");
+  check(!deriveParallelPassActionEpoch(source, seqId, 5u, witness).valid &&
+            !deriveParallelPassActionEpoch(source, seqId + 1u, 3u, witness)
+                 .valid,
+        "out-of-range ordinals and foreign generations derive nothing");
+
+  const auto planChildren =
+      [](const SealedParallelPassSnapshot& snapshot,
+         std::array<ParallelPassChildPlan,
+                    kParallelRenderPassChildCapacity>& children) {
+        for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
+          children[i] = {
+              .range = snapshot.ranges[i],
+              .firstDraw = snapshot.firstDraws[i],
+              .binding = bindingSnapshot(
+                  ParallelPassDirectBindingMode::Stage1Direct,
+                  static_cast<std::uint16_t>(i + 1u)),
+              .replayOrdinalBegin = snapshot.childReplayOrdinalBegins[i],
+              .replayOrdinalCount = snapshot.childReplayOrdinalCounts[i],
+              .childOrdinal = i,
+              .localShadowOrdinal = i + 1u,
+              .coversCompleteCommands =
+                  snapshot.childrenCoverCompleteCommands,
+              .forceFullFirstDrawBinding = true,
+          };
+        }
+        return std::span<const ParallelPassChildPlan>(children.data(),
+                                                      snapshot.childCount);
+      };
+
+  // (b) Both passes certify, not only the source's first one.
+  std::array<std::array<ParallelPassChildPlan,
+                        kParallelRenderPassChildCapacity>, 2> childStorage{};
+  for (std::size_t pass = 0u; pass < output.count; ++pass) {
+    const auto children =
+        planChildren(output.passes[pass], childStorage[pass]);
+    const auto validation = validateParallelPassSemanticPlan(
+        output.passes[pass], children, authority, resolver, witness);
+    check(validation.accepted(),
+          "every pass interval of a multi-pass source certifies");
+  }
+
+  // (c) A stamp that does not belong to this pass fails closed even when the
+  // owner echoes it back and every dependent field agrees with it. Only the
+  // independent re-derivation can see this.
+  const auto secondPass = output.passes[1];
+  std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+      echoChildren{};
+  const auto echoPlan = planChildren(secondPass, echoChildren);
+  const ParallelPassSnapshotAuthority echoAuthority{
+      .context = &secondPass, .resolve = resolveEchoingAuthority};
+  check(validateParallelPassSemanticPlan(secondPass, echoPlan, echoAuthority,
+                                         resolver, witness)
+            .accepted(),
+        "the echoing owner accepts the unmutated second pass");
+
+  auto forged = secondPass;
+  std::array<ParallelPassChildPlan, kParallelRenderPassChildCapacity>
+      forgedChildren{};
+  forged.passActionEpoch = 1u;
+  forged.coordinatorProof.firstPassActionEpoch = 1u;
+  for (std::uint32_t i = 0u; i < forged.childCount; ++i) {
+    forged.firstDraws[i].entryRender.passActionEpoch = 1u;
+  }
+  const auto forgedPlan = planChildren(forged, forgedChildren);
+  const ParallelPassSnapshotAuthority forgedAuthority{
+      .context = &forged, .resolve = resolveEchoingAuthority};
+  const auto forgedResult = validateParallelPassSemanticPlan(
+      forged, forgedPlan, forgedAuthority, resolver, witness);
+  check(!forgedResult.accepted() &&
+            forgedResult.failure ==
+                ParallelPassSemanticPlanFailure::PassIdentity,
+        "a self-consistent stamp taken from another pass fails pass identity");
+
+  auto tampered = secondPass;
+  tampered.coordinatorProof.firstPassActionEpoch =
+      secondPass.passActionEpoch + 1u;
+  const ParallelPassSnapshotAuthority tamperedAuthority{
+      .context = &tampered, .resolve = resolveEchoingAuthority};
+  check(!validateParallelPassSemanticPlan(tampered, echoPlan,
+                                          tamperedAuthority, resolver, witness)
+             .accepted(),
+        "a coordinator proof stamped with a foreign epoch fails closed");
+
+  // (d) A stale source generation still fails closed before the fold runs, so
+  // the re-derivation never sees a snapshot the owner has already rejected.
+  auto stale = secondPass;
+  stale.source.storage.generation++;
+  context.epochReads = 0u;
+  const auto staleResult = validateParallelPassSemanticPlan(
+      stale, echoPlan, authority, resolver, witness);
+  check(!staleResult.accepted() &&
+            staleResult.failure ==
+                ParallelPassSemanticPlanFailure::SourceIdentity &&
+            context.epochReads == 0u,
+        "a stale storage generation fails closed before any epoch fold");
 }
 
 // R-BACK-2.69/2.74: the production adapter is the only path from a sealed pass
@@ -2961,6 +3522,9 @@ int main() {
     semanticPlanMutationAndCoverageProofsFailClosed();
     fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent();
     producerOutputFeedsSynchronousSemanticValidator();
+    streamingCoverageFoldMatchesStoredRowReference();
+    wideWholeCommandChildrenCertify();
+    passLocalEpochProofIsIndependentlyReDerived();
     proofCoreAdapterGatesEveryProductionCandidate();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
