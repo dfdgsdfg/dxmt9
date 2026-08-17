@@ -1431,6 +1431,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       parallelPartitionRequested
           ? encoders::resolveParallelPassDrawQuantumFromEnv()
           : encoders::kProductionPartitionDrawThreshold;
+  // DXMT9_PARALLEL_PASS_IMBALANCE_BOUND — decouples the economics
+  // classifier's UnbalancedChild bound from parallelPassDrawQuantum above.
+  // It never affects the shadow snapshot producer's child
+  // subdivision/eligibility (SealedParallelPassSnapshotInput::drawQuantum),
+  // which keeps using parallelPassDrawQuantum only. Resolved once, coupled
+  // to parallelPassDrawQuantum when unset (see the resolver doc-comment in
+  // dxmt9_parallel_render_pass.hpp), and guarded by ExplicitParallel so
+  // identity/serial modes never touch the env cache.
+  const std::uint32_t parallelPassImbalanceBound = parallelPartitionRequested
+      ? encoders::resolveParallelPassImbalanceBoundFromEnv(
+            parallelPassDrawQuantum)
+      : parallelPassDrawQuantum;
   if (partitionRanges.empty() &&
       (options.partitionExecutionMode ==
            render::PartitionExecutionMode::ExplicitSerial ||
@@ -4151,7 +4163,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     bool economicsAccepted = false;
     const auto economicsDecision = dispatchParallelPassEconomics(
         economics, [&] { economicsAccepted = true; }, [] {},
-        parallelPassDrawQuantum);
+        parallelPassDrawQuantum, parallelPassImbalanceBound);
     if (perf::enabled()) {
       perf::countParallelPassEconomics(economics, economicsDecision);
     }

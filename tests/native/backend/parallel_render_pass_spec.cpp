@@ -1928,6 +1928,129 @@ void economicsClassifierIsPureBoundedAndEnforcedBeforeEffects() {
         "perf-on counter observation reports the enforced decision once");
 }
 
+// DXMT9_PARALLEL_PASS_IMBALANCE_BOUND: pins (a) the resolver's
+// coupled-by-default / clamped-when-explicit table across multiple fallback
+// quantums, (b) that decoupling the bound changes ONLY the UnbalancedChild
+// decision (an imbalance rejected at the eligibility quantum is accepted
+// once an explicit wider bound is supplied, with every other decision field
+// identical), and (c) that the default (no-argument-3) call to
+// classifyParallelPassEconomics stays byte-identical to explicitly passing
+// the coupled sentinel.
+void parallelPassImbalanceBoundDecouplesFromEligibilityQuantum() {
+  using Decision = dxmt9::encoders::ParallelPassEconomicsDecision;
+  using Reason = dxmt9::encoders::ParallelPassEconomicsRejectReason;
+  using Summary = dxmt9::encoders::ParallelPassEconomicsSummary;
+  using dxmt9::encoders::classifyParallelPassEconomics;
+  using dxmt9::encoders::kParallelPassImbalanceBoundMax;
+  using dxmt9::encoders::kParallelPassImbalanceBoundMin;
+  using dxmt9::encoders::kProductionPartitionDrawThreshold;
+  using dxmt9::encoders::resolveParallelPassImbalanceBound;
+
+  // (a) resolver table — unset/0/garbage couple to the caller's fallback
+  // quantum for at least two different quantum values; explicit values
+  // clamp into [kParallelPassImbalanceBoundMin, kParallelPassImbalanceBoundMax].
+  for (const std::uint32_t fallback : {32u, 64u, 128u}) {
+    const auto expect = [&](const char* env, std::uint32_t bound,
+                            bool clamped, std::string_view message) {
+      const auto resolved = resolveParallelPassImbalanceBound(env, fallback);
+      check(resolved.bound == bound && resolved.clamped == clamped, message);
+    };
+    expect(nullptr, fallback, false,
+          "unset env couples to the caller's fallback quantum");
+    expect("", fallback, false,
+          "empty env couples to the caller's fallback quantum");
+    expect("0", fallback, false,
+          "zero env couples to the caller's fallback quantum");
+    expect("not-a-number", fallback, false,
+          "unparseable env couples to the caller's fallback quantum");
+  }
+  check(resolveParallelPassImbalanceBound("4", 64u).bound == 4u &&
+            !resolveParallelPassImbalanceBound("4", 64u).clamped,
+        "in-range explicit value 4 (the minimum) is preserved unclamped");
+  const auto clampedLow = resolveParallelPassImbalanceBound("2", 64u);
+  check(clampedLow.bound == kParallelPassImbalanceBoundMin &&
+            clampedLow.clamped,
+        "explicit value 2 clamps up to the minimum bound of 4");
+  const auto atMax = resolveParallelPassImbalanceBound("4096", 64u);
+  check(atMax.bound == 4096u && !atMax.clamped,
+        "in-range explicit value 4096 (the maximum) is preserved unclamped");
+  const auto clampedHigh = resolveParallelPassImbalanceBound("9999", 64u);
+  check(clampedHigh.bound == kParallelPassImbalanceBoundMax &&
+            clampedHigh.clamped,
+        "explicit value 9999 clamps down to the maximum bound of 4096");
+
+  // (b) economics decoupling. Reuse the existing 64/192-child shape (128-draw
+  // imbalance, total 256, quantum 64) that
+  // economicsClassifierIsPureBoundedAndEnforcedBeforeEffects pins as
+  // UnbalancedChild at the coupled default: it must still reject
+  // UnbalancedChild when the eligibility quantum (64) is used as the bound
+  // (today's coupled behavior, sentinel imbalanceBound=0), and accept once
+  // an explicit wider bound (128) is supplied, with every other decision
+  // field identical.
+  const Summary shape{
+      .totalDraws = 256u,
+      .stage1Draws = 256u,
+      .stage2bDraws = 0u,
+      .forcedStage1Draws = 0u,
+      .psoBoundaryTransitions = 1u,
+      .uniformBoundaryTransitions = 1u,
+      .childCount = 2u,
+      .minimumChildDraws = 64u,
+      .maximumChildDraws = 192u,
+      .valid = true,
+  };
+  const auto coupled =
+      classifyParallelPassEconomics(shape, kProductionPartitionDrawThreshold);
+  check(coupled.reject == Reason::UnbalancedChild && !coupled.accepted,
+        "the 128-draw imbalance rejects UnbalancedChild at the coupled "
+        "default (sentinel imbalanceBound=0)");
+  const auto decoupledNarrow = classifyParallelPassEconomics(
+      shape, kProductionPartitionDrawThreshold, 64u);
+  check(decoupledNarrow.reject == Reason::UnbalancedChild &&
+            !decoupledNarrow.accepted,
+        "an explicit imbalance bound equal to the quantum (64) still "
+        "rejects UnbalancedChild");
+  const auto decoupledWide = classifyParallelPassEconomics(
+      shape, kProductionPartitionDrawThreshold, 128u);
+  check(decoupledWide.accepted && decoupledWide.reject == Reason::None,
+        "the same 128-draw imbalance is accepted once the explicit bound "
+        "widens to 128, independent of the 64-draw eligibility quantum");
+
+  // (c) default-coupling byte identity — the two-argument call (drawQuantum
+  // only) is byte-identical to explicitly passing the coupling sentinel
+  // (imbalanceBound=0) as the third argument.
+  const auto twoArgument =
+      classifyParallelPassEconomics(shape, kProductionPartitionDrawThreshold);
+  const auto explicitSentinel = classifyParallelPassEconomics(
+      shape, kProductionPartitionDrawThreshold, 0u);
+  check(twoArgument == explicitSentinel,
+        "the two-argument call is byte-identical to an explicit "
+        "imbalanceBound=0 coupling sentinel");
+
+  // dispatchParallelPassEconomics/observeParallelPassEconomicsCountersIfEnabled
+  // thread the same argument and reach the same decision as the direct
+  // classifier call.
+  std::uint32_t parallelEffects = 0u;
+  const auto dispatched = dxmt9::encoders::dispatchParallelPassEconomics(
+      shape, [&] { ++parallelEffects; }, [] {},
+      kProductionPartitionDrawThreshold, 128u);
+  check(dispatched.accepted && parallelEffects == 1u,
+        "dispatchParallelPassEconomics threads the explicit imbalance bound "
+        "and reaches acceptance");
+  std::uint32_t observations = 0u;
+  check(dxmt9::encoders::observeParallelPassEconomicsCountersIfEnabled(
+            true, shape,
+            [&](const Summary&, const Decision& decision) {
+              ++observations;
+              check(decision.accepted,
+                    "observer sees the same widened-bound acceptance");
+            },
+            kProductionPartitionDrawThreshold, 128u) &&
+            observations == 1u,
+        "observeParallelPassEconomicsCountersIfEnabled threads the explicit "
+        "imbalance bound");
+}
+
 struct SemanticPlanFixture {
   dxmt9::encoders::SealedParallelPassSnapshot snapshot{};
   std::array<ParallelPassChildPlan,
@@ -4011,6 +4134,7 @@ int main() {
     malformedPlansFailClosedBeforeParentPreparation();
     failuresSeparatePreEffectFallbackFromPostEffectFailStop();
     economicsClassifierIsPureBoundedAndEnforcedBeforeEffects();
+    parallelPassImbalanceBoundDecouplesFromEligibilityQuantum();
     semanticPlanMutationAndCoverageProofsFailClosed();
     fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent();
     producerOutputFeedsSynchronousSemanticValidator();
