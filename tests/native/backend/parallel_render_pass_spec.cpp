@@ -980,10 +980,15 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
   control.slot.appendReadback({});
   control.finalize(408u);
   result = control.observe(output);
-  check(result.eligibleCount == 0u && result.candidateCount == 0u &&
-            result.fallback ==
-                dxmt9::encoders::SealedParallelPassSnapshotFallback::CoordinatorCommand,
-        "readback rejects observation before effects");
+  check(result.eligibleCount == 1u && result.candidateCount == 1u &&
+            result.sealedCount == 1u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u && output.count == 1u &&
+            output.passes[0].sealingCommand.valid &&
+            output.passes[0].sealingCommand.kind ==
+                dxmt9::core::MetalCommandKind::Readback &&
+            output.passes[0].replayOrdinalEnd == 1u,
+        "a readback terminates the pass interval at its serial position "
+        "instead of rejecting the whole source");
 
   auto productionLike = completeProofs(0u);
   productionLike.coordinator.flags = 0u;
@@ -2580,6 +2585,359 @@ void producerOutputFeedsSynchronousSemanticValidator() {
         "whole-command duplicate/partial replay span fails closed");
 }
 
+// R-BACK-2.70: a non-child coordinator command stays at its serial position and
+// segments the source into pass intervals. It never becomes a child range, it
+// never removes an unrelated interval's eligibility, and it fails a pass closed
+// whenever the same attachment would otherwise have continued across it.
+void coordinatorCommandsSegmentPassIntervals() {
+  using Kind = dxmt9::core::MetalCommandKind;
+  using Fallback = dxmt9::encoders::SealedParallelPassSnapshotFallback;
+  using Role = dxmt9::encoders::ParallelPassCommandRole;
+  const auto drawValues = draws(128u);
+  const auto drawPayloads = payloads(drawValues.size());
+  dxmt9::encoders::SealedParallelPassSnapshotBatch output{};
+
+  check(dxmt9::encoders::classifyParallelPassCommandRole(Kind::DrawRun) ==
+                Role::Draw &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Clear) ==
+                Role::ClearBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Present) ==
+                Role::PresentBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::StretchRect) == Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::SurfaceCopy) == Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::Readback) ==
+                Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(Kind::ColorFill) ==
+                Role::CoordinatorBoundary &&
+            dxmt9::encoders::classifyParallelPassCommandRole(
+                Kind::DepthResolve) == Role::CoordinatorBoundary,
+        "every source command kind has one total pass-interval role");
+  check(!dxmt9::encoders::parallelPassSealingKindAccepted(Kind::DrawRun) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(Kind::Clear) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(Kind::Present) &&
+            dxmt9::encoders::parallelPassSealingKindAccepted(
+                Kind::StretchRect),
+        "only coordinator-owned commands may seal a pass; a draw may not");
+
+  // SFIV shape: Clear -> DrawRuns -> StretchRect -> Present. The StretchRect
+  // used to reject the whole source before candidates, sealing, or economics.
+  PassObservationFixture sfiv;
+  sfiv.slot.appendClear({});
+  sfiv.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  sfiv.slot.appendStretchRect({});
+  sfiv.slot.appendPresent({}, {});
+  sfiv.finalize(430u);
+  auto result = sfiv.observe(output);
+  check(result.candidateCount == 1u && result.sealedCount == 1u &&
+            result.eligibleCount == 1u && result.childCount == 2u &&
+            result.drawCount == 128u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u && output.count == 1u,
+        "Clear -> DrawRun -> StretchRect -> Present seals one eligible pass");
+  const auto& sfivPass = output.passes[0];
+  check(sfivPass.leadingClear.valid &&
+            sfivPass.leadingClear.kind == Kind::Clear &&
+            sfivPass.sealingCommand.valid &&
+            sfivPass.sealingCommand.kind == Kind::StretchRect &&
+            sfivPass.sealingCommand.replayOrdinal ==
+                sfivPass.replayOrdinalEnd &&
+            sfivPass.replayOrdinalBegin == 1u &&
+            sfivPass.replayOrdinalEnd == 2u,
+        "the StretchRect is a source-qualified sealing locator at its own "
+        "serial ordinal and is excluded from the pass interval");
+  for (std::size_t i = 0; i < sfivPass.childCount; ++i) {
+    check(sfivPass.ranges[i].kind ==
+              dxmt9::encoders::EncodePartitionRangeKind::DrawRunEntries &&
+              sfivPass.ranges[i].replayOrdinalBegin ==
+                  sfivPass.replayOrdinalBegin &&
+              sfivPass.childReplayOrdinalBegins[i] <
+                  sfivPass.replayOrdinalEnd,
+          "no child range covers the coordinator command's ordinal");
+  }
+
+  // Same attachment resumes across the coordinator command: both fragments of
+  // what would otherwise be one logical pass fail closed.
+  PassObservationFixture split;
+  split.slot.appendClear({});
+  split.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  split.slot.appendStretchRect({});
+  split.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  split.slot.appendPresent({}, {});
+  split.finalize(431u);
+  result = split.observe(output);
+  check(result.candidateCount == 2u && result.eligibleCount == 0u &&
+            output.count == 0u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 1u &&
+            result.rejectionCounts[static_cast<std::size_t>(
+                Fallback::CoordinatorCommand)] == 2u,
+        "a coordinator command inside one logical pass fails both fragments "
+        "closed instead of resuming the pass across it");
+
+  // A different attachment after the coordinator command is a genuine pass
+  // change, so both intervals stay independently eligible.
+  dxmt9::core::CanonicalDrawState stateA{};
+  dxmt9::core::CanonicalDrawState stateB{};
+  stateA.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x91u};
+  stateB.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x92u};
+  PassObservationFixture distinct;
+  distinct.slot.appendDrawRun(stateA, {}, drawValues, drawPayloads);
+  distinct.slot.appendStretchRect({});
+  distinct.slot.appendDrawRun(stateB, {}, drawValues, drawPayloads);
+  distinct.slot.appendPresent({}, {});
+  distinct.finalize(432u);
+  result = distinct.observe(output);
+  check(result.candidateCount == 2u && result.eligibleCount == 2u &&
+            output.count == 2u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].sealingCommand.kind == Kind::StretchRect &&
+            output.passes[1].sealingCommand.kind == Kind::Present &&
+            output.passes[0].replayOrdinalEnd <=
+                output.passes[1].replayOrdinalBegin,
+        "distinct attachments across a coordinator command stay two "
+        "independent sealed passes");
+
+  // Regression pin: a stream with no coordinator helper behaves exactly as it
+  // did before pass-interval extraction.
+  PassObservationFixture pure;
+  pure.slot.appendClear({});
+  pure.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  pure.slot.appendClear({});
+  pure.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  pure.slot.appendPresent({}, {});
+  pure.finalize(433u);
+  result = pure.observe(output);
+  check(result.candidateCount == 2u && result.sealedCount == 2u &&
+            result.eligibleCount == 2u && result.childCount == 4u &&
+            result.drawCount == 256u && output.count == 2u &&
+            result.coordinatorBoundaries == 0u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].passActionEpoch == 7u &&
+            output.passes[1].passActionEpoch == 8u,
+        "a coordinator-free source keeps its exact pre-extraction shape");
+
+  // A coordinator command between two passes never blocks a later interval.
+  PassObservationFixture leading;
+  leading.slot.appendStretchRect({});
+  leading.slot.appendClear({});
+  leading.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
+  leading.slot.appendPresent({}, {});
+  leading.finalize(434u);
+  result = leading.observe(output, /*sourceStartsPass=*/false);
+  check(result.candidateCount == 1u && result.eligibleCount == 1u &&
+            output.count == 1u && result.coordinatorBoundaries == 1u &&
+            result.coordinatorSplits == 0u &&
+            output.passes[0].replayOrdinalBegin == 2u,
+        "a leading coordinator command proves the start of the pass that "
+        "follows it even on a carried source");
+}
+
+// Counts every backend call the executor makes. `effects` covers exactly the
+// calls at or after `beginPassActions()`, which is the Metal effect edge.
+struct AdapterEffectRecorder {
+  std::uint32_t prepared = 0;
+  std::uint32_t created = 0;
+  std::uint32_t effects = 0;
+
+  bool prepareParent() noexcept { ++prepared; return true; }
+  bool createChild(const ParallelPassChildPlan&) noexcept {
+    ++created;
+    return true;
+  }
+  void abandonPrepared() noexcept {}
+  bool beginPassActions() noexcept { ++effects; return true; }
+  bool replayLogicalCommands(
+      std::span<const ParallelPassChildPlan>) noexcept {
+    ++effects;
+    return true;
+  }
+  bool emitChild(const ParallelPassChildPlan&) noexcept {
+    ++effects;
+    return true;
+  }
+  bool endChild(std::uint32_t) noexcept { ++effects; return true; }
+  bool joinChild(std::uint32_t) noexcept { ++effects; return true; }
+  bool endPassActions() noexcept { ++effects; return true; }
+  bool endParent() noexcept { ++effects; return true; }
+  bool publishSidecars() noexcept { ++effects; return true; }
+  bool publishCompletion() noexcept { ++effects; return true; }
+  void failStop(ParallelPassFailurePhase, std::uint32_t) noexcept {}
+};
+
+struct AdapterLaneResult {
+  dxmt9::encoders::ParallelPassAdapterDecision decision{};
+  dxmt9::encoders::ParallelPassAdapterAccounting accounting{};
+  std::uint32_t preparedParents = 0;
+  std::uint32_t createdChildren = 0;
+  std::uint32_t parallelEffects = 0;
+  std::uint64_t serialDraws = 0;
+  bool executed = false;
+};
+
+// Mirrors the production ordering: certificate gate, then selection, then —
+// and only then — Metal effects. Everything else replays serially.
+AdapterLaneResult runAdapterLane(
+    const SemanticPlanFixture& fixture,
+    const dxmt9::encoders::ParallelPassCandidateCost& cost) {
+  using namespace dxmt9::encoders;
+  AdapterLaneResult out{};
+  out.decision = runParallelPassProofCoreAdapter(
+      fixture.snapshot, fixture.view(), cost, fixture.authorityResolver(),
+      fixture.coverageResolver());
+  out.accounting = accountParallelPassAdapter(out.decision);
+  if (!out.decision.selected()) {
+    for (const auto& child : fixture.view()) {
+      out.serialDraws += child.range.drawEntryCount;
+    }
+    return out;
+  }
+  AdapterEffectRecorder backend{};
+  std::array<std::uint32_t, kParallelRenderPassChildCapacity> order{};
+  for (std::uint32_t i = 0u; i < fixture.count; ++i) {
+    order[i] = i;
+  }
+  const auto execution = executeParallelRenderPass(
+      fixture.view(),
+      std::span<const std::uint32_t>(order.data(), fixture.count), backend);
+  out.executed = execution.status == ParallelPassExecutionStatus::Completed;
+  out.preparedParents = backend.prepared;
+  out.createdChildren = backend.created;
+  out.parallelEffects = backend.effects;
+  return out;
+}
+
+// R-BACK-2.69/2.74: the production adapter is the only path from a sealed pass
+// to Metal child creation, an invalid certificate can never be partially
+// consumed, and every rejection returns to exact serial replay before effects.
+void proofCoreAdapterGatesEveryProductionCandidate() {
+  using namespace dxmt9::encoders;
+  using Outcome = ParallelPassAdapterOutcome;
+
+  SemanticPlanFixture accepted(3u);
+  ParallelPassCandidateCost cost{};
+  check(buildParallelPassCandidateCost(accepted.cost(0).economics, cost) &&
+            cost.valid && !cost.overflow &&
+            cost.serialWork.raw == 192ll * ParallelPassFixedPoint::kFraction &&
+            cost.criticalPath.raw == 64ll * ParallelPassFixedPoint::kFraction &&
+            cost.childSetup.raw == 3ll * ParallelPassFixedPoint::kFraction &&
+            cost.imbalance.raw == 0,
+        "the cost record is built from certified integers with checked "
+        "fixed-point conversion");
+
+  const auto valid = runAdapterLane(accepted, cost);
+  check(valid.decision.outcome == Outcome::Selected &&
+            valid.decision.certificate ==
+                ParallelPassSemanticPlanFailure::None &&
+            valid.decision.selection ==
+                ParallelPassCandidateSelectionFailure::None &&
+            valid.decision.candidateOrdinal == 0u && valid.executed &&
+            valid.preparedParents == 1u &&
+            valid.createdChildren == accepted.count &&
+            valid.parallelEffects != 0u && valid.serialDraws == 0u &&
+            valid.accounting.conserves() &&
+            valid.accounting.selected == 1u &&
+            valid.accounting.certificateValid == 1u,
+        "a certified, positively scored plan selects and executes exactly once");
+
+  // The authority owner still holds the unmutated snapshot, so every mutated
+  // candidate is rejected by the certificate before it can reach the selector.
+  const auto expectCertificateInvalid = [&](auto mutate,
+                                            std::string_view message) {
+    SemanticPlanFixture candidate = accepted;
+    mutate(candidate);
+    const auto lane = runAdapterLane(candidate, cost);
+    check(lane.decision.outcome == Outcome::CertificateInvalid &&
+              !lane.decision.certificateValid() && !lane.executed &&
+              lane.preparedParents == 0u && lane.createdChildren == 0u &&
+              lane.parallelEffects == 0u &&
+              lane.serialDraws == 64u * candidate.count &&
+              lane.decision.selection ==
+                  ParallelPassCandidateSelectionFailure::Empty &&
+              lane.accounting.conserves() &&
+              lane.accounting.certificateInvalid == 1u &&
+              lane.accounting.selected == 0u &&
+              lane.accounting.serialFallback == 1u,
+          message);
+  };
+  expectCertificateInvalid([](auto& f) { f.snapshot.passActionEpoch = 8u; },
+                           "action-epoch drift yields zero Metal effects and "
+                           "exact serial replay");
+  expectCertificateInvalid(
+      [](auto& f) { f.snapshot.childDrawCounts[1] = 63u; },
+      "child coverage drift yields zero Metal effects and exact serial replay");
+  expectCertificateInvalid(
+      [](auto& f) {
+        f.children[1].binding.mode =
+            ParallelPassDirectBindingMode::Stage2DirectCbuf;
+      },
+      "mixed child ABI yields zero Metal effects and exact serial replay");
+
+  // A certified plan whose economics cannot be scored is still refused before
+  // effects, and the selector — not the certificate — is what refuses it.
+  ParallelPassCandidateCost overflowed{};
+  auto hugeEconomics = accepted.cost(0).economics;
+  hugeEconomics.totalDraws = UINT64_MAX;
+  check(!buildParallelPassCandidateCost(hugeEconomics, overflowed) &&
+            !overflowed.valid && overflowed.overflow,
+        "an unrepresentable draw total leaves the cost record invalid");
+  const auto unscored = runAdapterLane(accepted, overflowed);
+  check(unscored.decision.outcome == Outcome::NotSelected &&
+            unscored.decision.certificateValid() &&
+            unscored.decision.certificate ==
+                ParallelPassSemanticPlanFailure::None &&
+            unscored.decision.selection ==
+                ParallelPassCandidateSelectionFailure::InvalidEconomics &&
+            !unscored.executed && unscored.parallelEffects == 0u &&
+            unscored.serialDraws == 192u && unscored.accounting.conserves() &&
+            unscored.accounting.certificateValid == 1u &&
+            unscored.accounting.selected == 0u,
+        "an invalid economics record fails closed at selection, after a valid "
+        "certificate, with zero Metal effects");
+
+  // A non-positive benefit is a legitimate serial selection, not an error.
+  auto nonPositive = cost;
+  nonPositive.serialWork = cost.criticalPath;
+  const auto rejected = runAdapterLane(accepted, nonPositive);
+  check(rejected.decision.outcome == Outcome::NotSelected &&
+            rejected.decision.selection ==
+                ParallelPassCandidateSelectionFailure::NonPositiveBenefit &&
+            !rejected.executed && rejected.parallelEffects == 0u &&
+            rejected.accounting.conserves(),
+        "a non-positive benefit selects serial without effects");
+
+  // Conservation over the whole observed population.
+  ParallelPassAdapterAccounting total{};
+  const auto accumulate = [&](const ParallelPassAdapterAccounting& one) {
+    total.considered += one.considered;
+    total.certificateValid += one.certificateValid;
+    total.certificateInvalid += one.certificateInvalid;
+    total.selected += one.selected;
+    total.serialFallback += one.serialFallback;
+  };
+  accumulate(valid.accounting);
+  accumulate(unscored.accounting);
+  accumulate(rejected.accounting);
+  for (std::uint32_t children = 2u;
+       children <= kParallelRenderPassChildCapacity; ++children) {
+    SemanticPlanFixture bounded(children, 20u + children, 700u + children);
+    ParallelPassCandidateCost boundedCost{};
+    check(buildParallelPassCandidateCost(bounded.cost(0).economics,
+                                         boundedCost),
+          "every bounded child count produces a representable cost record");
+    const auto lane = runAdapterLane(bounded, boundedCost);
+    check(lane.decision.selected() && lane.executed &&
+              lane.createdChildren == children && lane.accounting.conserves(),
+          "every bounded certified plan selects and executes");
+    accumulate(lane.accounting);
+  }
+  check(total.conserves() && total.considered == 3u +
+            (kParallelRenderPassChildCapacity - 1u) &&
+            total.certificateValid == total.considered &&
+            total.certificateInvalid == 0u &&
+            total.selected + total.serialFallback == total.considered,
+        "adapter outcomes conserve across the observed population");
+}
+
 }  // namespace
 
 int main() {
@@ -2594,6 +2952,7 @@ int main() {
     multiPassAndAttachmentBoundariesStayIndependent();
     activeReplayOrderAndPartialClearDriveExactBoundaries();
     producerRejectsControlsFragmentsHazardsAndBounds();
+    coordinatorCommandsSegmentPassIntervals();
     childBoundsAndPerfGateFailClosed();
     fakeChildrenPreserveOwnershipOrderingAndExactlyOnceReplay();
     malformedPlansFailClosedBeforeParentPreparation();
@@ -2602,6 +2961,7 @@ int main() {
     semanticPlanMutationAndCoverageProofsFailClosed();
     fixedPointAndCandidateSelectionAreCheckedAndPermutationIndependent();
     producerOutputFeedsSynchronousSemanticValidator();
+    proofCoreAdapterGatesEveryProductionCandidate();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
     return 1;

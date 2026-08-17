@@ -872,6 +872,20 @@ void countParallelPassShadow(
   add(c.parallelPassShadowRejectSnapshot,
       rejected(Fallback::RenderRoute) +
           rejected(Fallback::FirstDrawSnapshot));
+  add(c.parallelPassShadowCoordinatorBoundaries,
+      result.coordinatorBoundaries);
+  add(c.parallelPassShadowCoordinatorSplits, result.coordinatorSplits);
+}
+
+void countParallelPassAdapter(
+    const encoders::ParallelPassAdapterDecision& decision) {
+  const auto accounting = encoders::accountParallelPassAdapter(decision);
+  auto& c = counters();
+  add(c.parallelPassAdapterConsidered, accounting.considered);
+  add(c.parallelPassAdapterCertificateValid, accounting.certificateValid);
+  add(c.parallelPassAdapterCertificateInvalid, accounting.certificateInvalid);
+  add(c.parallelPassAdapterSelected, accounting.selected);
+  add(c.parallelPassAdapterSerialFallback, accounting.serialFallback);
 }
 
 void countCpuReadySessionHeadAppended(bool arenaSource) {

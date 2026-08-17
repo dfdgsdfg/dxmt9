@@ -517,6 +517,21 @@ suffix remains, absorbing a thinner final suffix into its predecessor. The
 builder must validate exact command/draw coverage and distinguish no genuine
 two-child work, planner invariant/search failure, child capacity, and pass
 capacity.
+Pass extraction is per interval, not per source. Every source command is
+classified into one total role: draw, Clear boundary, Present boundary,
+non-child coordinator boundary, or unsupported. `SurfaceCopy`, `StretchRect`,
+`Readback`, `ColorFill`, and `DepthResolve` own their own short-lived encoder,
+so the coordinator has already ended the render encoder when it replays them;
+they therefore terminate a pass interval at exactly the position `Clear` and
+`Present` occupy and stay at their serial position as sealing locators that
+are never child ranges. One such command must not reject unrelated intervals of
+the same source. A coordinator command that a same-attachment draw resumes
+immediately after would split one logical pass: both the interrupted interval
+and the resuming interval fail closed with the coordinator-command reason, and
+the builder must never speculate that a pass resumes across it. Only a command
+kind the builder cannot classify fails the whole source closed. Counters must
+separate the non-child coordinator commands met from the subset that failed a
+pass closed.
 Workers may re-resolve source-qualified locators only while the coordinator
 holds the synchronous source residency pin; no payload pointer may escape the
 joined execution. Before parent creation, one immutable pass-wide binding proof
@@ -750,10 +765,21 @@ pass-wide attachment and exact-hazard facts, pass-action epoch, route/ABI
 compatibility, first-draw snapshots, and fixed capacity bounds. Every locator,
 generation, count, and arithmetic input must be checked before the first Metal
 side effect. A stale, incomplete, unknown, inconsistent, or overflowed
-certificate is invalid and cannot be partially consumed. The current
-implementation provides this algebraic proof core and native evidence only;
-production coordinator enforcement remains open and the provider stays
-default-off.
+certificate is invalid and cannot be partially consumed. The production
+coordinator must own exactly one adapter into this proof core, placed after
+complete locator/ABI/PSO/uniform re-resolution and before render-pass
+preparation or any parent/child Metal effect. The adapter must build the
+authoritative snapshot input from the owning sealed-pass batch and resolve
+exact per-child coverage from the live source while the residency pin is held.
+Only a certificate-valid candidate may enter selection, only the selected plan
+may execute, and every other outcome selects the exact serial replay. The
+adapter must not weaken any existing pre-effect rejection: the economics
+classifier must still be evaluated for every considered candidate so its
+attribution keeps its meaning, it may only add a rejection, and execution
+requires the certificate, the classifier, and the selector to agree. Typed adapter counters
+must conserve `considered = certificate_valid + certificate_invalid` and
+`considered = selected + serial_fallback`, with `selected <= certificate_valid`.
+The provider stays default-off and the adapter makes no promotion claim.
 
 **R-BACK-2.70** A certified plan must cover the effective replay stream with
 ordered, contiguous, non-overlapping source-qualified ranges. The flattened

@@ -432,6 +432,59 @@ struct ParallelFirstDrawSnapshot {
                                    const ParallelFirstDrawSnapshot&) = default;
 };
 
+// Total classification of every source command a sealed-pass observation can
+// meet in the final effective replay order. `CoordinatorBoundary` names the
+// non-child helper commands that own a short-lived Metal encoder of their own:
+// the coordinator must have ended the render encoder before replaying them, so
+// they terminate a pass interval at exactly the position `Clear`/`Present` do.
+// A kind that is not enumerated here is `Unsupported` and fails the whole
+// source closed, which keeps the batch-wide rejection path reachable for any
+// command kind added later.
+enum class ParallelPassCommandRole : std::uint8_t {
+  Draw,
+  ClearBoundary,
+  PresentBoundary,
+  CoordinatorBoundary,
+  Unsupported,
+};
+
+inline constexpr ParallelPassCommandRole classifyParallelPassCommandRole(
+    core::MetalCommandKind kind) noexcept {
+  switch (kind) {
+  case core::MetalCommandKind::DrawRun:
+    return ParallelPassCommandRole::Draw;
+  case core::MetalCommandKind::Clear:
+    return ParallelPassCommandRole::ClearBoundary;
+  case core::MetalCommandKind::Present:
+    return ParallelPassCommandRole::PresentBoundary;
+  case core::MetalCommandKind::SurfaceCopy:
+  case core::MetalCommandKind::StretchRect:
+  case core::MetalCommandKind::Readback:
+  case core::MetalCommandKind::ColorFill:
+  case core::MetalCommandKind::DepthResolve:
+    return ParallelPassCommandRole::CoordinatorBoundary;
+  }
+  return ParallelPassCommandRole::Unsupported;
+}
+
+// A sealed pass may end only at a coordinator-owned command that the
+// coordinator still replays serially at `replayOrdinalEnd`. Every accepted kind
+// therefore stays outside the child ranges and inside the coverage proof
+// (`R-BACK-2.70`).
+inline constexpr bool parallelPassSealingKindAccepted(
+    core::MetalCommandKind kind) noexcept {
+  switch (classifyParallelPassCommandRole(kind)) {
+  case ParallelPassCommandRole::ClearBoundary:
+  case ParallelPassCommandRole::PresentBoundary:
+  case ParallelPassCommandRole::CoordinatorBoundary:
+    return true;
+  case ParallelPassCommandRole::Draw:
+  case ParallelPassCommandRole::Unsupported:
+    return false;
+  }
+  return false;
+}
+
 enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   None,
   PlanMissing,
@@ -669,6 +722,12 @@ struct SealedParallelPassSnapshotBatchResult {
   std::uint32_t eligibleCountMax = 0;
   std::uint32_t childCountMax = 0;
   std::uint64_t drawCountMax = 0;
+  // Non-child coordinator commands met in this source. Every one of them stays
+  // at its serial position; `coordinatorSplits` is the subset that also failed
+  // a pass interval closed because the same attachment resumed immediately
+  // afterwards, so one logical pass would otherwise have been split.
+  std::uint32_t coordinatorBoundaries = 0;
+  std::uint32_t coordinatorSplits = 0;
   bool considered = false;
 
   friend constexpr bool operator==(
@@ -1417,8 +1476,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         snapshot->sealingCommand.source.seqId != snapshot->seqId ||
         snapshot->sealingCommand.replayOrdinal !=
             snapshot->replayOrdinalEnd ||
-        (snapshot->sealingCommand.kind != core::MetalCommandKind::Clear &&
-         snapshot->sealingCommand.kind != core::MetalCommandKind::Present))) ||
+        !parallelPassSealingKindAccepted(snapshot->sealingCommand.kind))) ||
       snapshot->coordinatorProof.firstPassActionEpoch !=
           snapshot->passActionEpoch) {
     return result;
@@ -2021,6 +2079,138 @@ inline ParallelPassCandidateSelection selectParallelPassCandidate(
   result.candidateOrdinal = best.candidateOrdinal;
   result.score = best;
   result.selected = true;
+  return result;
+}
+
+// Deterministic bounded cost record derived only from integers the certified
+// plan already carries, so an identical plan always scores identically
+// regardless of evaluation order or worker scheduling (`R-BACK-2.72`). Serial
+// work is every draw; the parallel critical path is the widest child; each
+// child pays one draw-equivalent first-bind reset; residual imbalance is the
+// widest child minus the narrowest. Any conversion overflow leaves the record
+// invalid, which selects serial.
+inline bool buildParallelPassCandidateCost(
+    const ParallelPassEconomicsSummary& economics,
+    ParallelPassCandidateCost& cost) noexcept {
+  cost = {};
+  cost.economics = economics;
+  if (!economics.valid || economics.overflow || economics.childCount < 2u ||
+      economics.childCount > kParallelRenderPassChildCapacity ||
+      economics.minimumChildDraws == 0u ||
+      economics.maximumChildDraws < economics.minimumChildDraws ||
+      economics.maximumChildDraws > economics.totalDraws) {
+    cost.overflow = true;
+    return false;
+  }
+  if (!parallelPassFixedPointFromUnsigned(economics.totalDraws,
+                                          cost.serialWork) ||
+      !parallelPassFixedPointFromUnsigned(economics.maximumChildDraws,
+                                          cost.criticalPath) ||
+      !parallelPassFixedPointFromUnsigned(economics.childCount,
+                                          cost.childSetup) ||
+      !parallelPassFixedPointFromUnsigned(
+          economics.maximumChildDraws - economics.minimumChildDraws,
+          cost.imbalance)) {
+    cost.overflow = true;
+    return false;
+  }
+  cost.valid = true;
+  return true;
+}
+
+enum class ParallelPassAdapterOutcome : std::uint8_t {
+  CertificateInvalid,
+  NotSelected,
+  Selected,
+};
+
+struct ParallelPassAdapterDecision {
+  ParallelPassAdapterOutcome outcome =
+      ParallelPassAdapterOutcome::CertificateInvalid;
+  ParallelPassSemanticPlanFailure certificate =
+      ParallelPassSemanticPlanFailure::MissingSnapshot;
+  ParallelPassCandidateSelectionFailure selection =
+      ParallelPassCandidateSelectionFailure::Empty;
+  std::uint32_t candidateOrdinal = UINT32_MAX;
+
+  constexpr bool certificateValid() const noexcept {
+    return outcome != ParallelPassAdapterOutcome::CertificateInvalid;
+  }
+  constexpr bool selected() const noexcept {
+    return outcome == ParallelPassAdapterOutcome::Selected;
+  }
+
+  friend constexpr bool operator==(const ParallelPassAdapterDecision&,
+                                   const ParallelPassAdapterDecision&) =
+      default;
+};
+
+struct ParallelPassAdapterAccounting {
+  std::uint64_t considered = 0;
+  std::uint64_t certificateValid = 0;
+  std::uint64_t certificateInvalid = 0;
+  std::uint64_t selected = 0;
+  std::uint64_t serialFallback = 0;
+
+  constexpr bool conserves() const noexcept {
+    return considered == certificateValid + certificateInvalid &&
+        considered == selected + serialFallback &&
+        selected <= certificateValid;
+  }
+};
+
+inline constexpr ParallelPassAdapterAccounting accountParallelPassAdapter(
+    const ParallelPassAdapterDecision& decision) noexcept {
+  ParallelPassAdapterAccounting result{.considered = 1u};
+  if (decision.certificateValid()) {
+    result.certificateValid = 1u;
+  } else {
+    result.certificateInvalid = 1u;
+  }
+  if (decision.selected()) {
+    result.selected = 1u;
+  } else {
+    result.serialFallback = 1u;
+  }
+  return result;
+}
+
+// The single production entry into the policy proof core. It runs before any
+// Metal effect: an invalid certificate can never reach the selector, and an
+// unselected candidate can never reach child creation. The certificate is
+// consumed whole — a partial result is never carried forward — and the
+// selector independently revalidates through the same owner-issued authority
+// and exact coverage resolver (`R-BACK-2.69`, `R-BACK-2.74`).
+inline ParallelPassAdapterDecision runParallelPassProofCoreAdapter(
+    const SealedParallelPassSnapshot& snapshot,
+    std::span<const ParallelPassChildPlan> children,
+    const ParallelPassCandidateCost& cost,
+    const ParallelPassSnapshotAuthority& authority,
+    const ParallelPassCoverageResolver& coverage) noexcept {
+  ParallelPassAdapterDecision result{};
+  const auto certificate = validateParallelPassSemanticPlan(
+      &snapshot, children, authority, coverage);
+  result.certificate = certificate.failure;
+  if (!certificate.accepted()) {
+    return result;
+  }
+  result.outcome = ParallelPassAdapterOutcome::NotSelected;
+  const std::array<ParallelPassCandidateInput, 1> candidates{
+      ParallelPassCandidateInput{
+          .snapshot = &snapshot,
+          .children = children,
+          .cost = cost,
+          .authority = authority,
+          .coverage = coverage,
+          .candidateOrdinal = 0u,
+      }};
+  const auto selection = selectParallelPassCandidate(candidates);
+  result.selection = selection.failure;
+  if (!selection.selected || selection.candidateOrdinal != 0u) {
+    return result;
+  }
+  result.outcome = ParallelPassAdapterOutcome::Selected;
+  result.candidateOrdinal = selection.candidateOrdinal;
   return result;
 }
 

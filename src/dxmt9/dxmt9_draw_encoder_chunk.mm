@@ -1113,6 +1113,167 @@ core::RenderRoute resolveParallelPassRenderRoute(
       : core::RenderRoute::Portable;
 }
 
+// Owner-issued snapshot authority for the policy proof core. The producer's
+// own bounded batch is the only owner of a sealed pass observation, so the
+// certificate re-reads the pass from it by exact source/sequence/interval
+// identity instead of trusting the value the caller carried through planning.
+// An ambiguous or missing owner entry fails closed.
+bool resolveParallelPassSnapshotAuthority(
+    const void* context, const core::CpuReadyTape::SourceRef& source,
+    std::uint64_t seqId, std::uint32_t replayOrdinalBegin,
+    std::uint32_t replayOrdinalEnd,
+    encoders::SealedParallelPassSnapshot& authoritative) noexcept {
+  const auto* batch =
+      static_cast<const encoders::SealedParallelPassSnapshotBatch*>(context);
+  if (!batch) {
+    return false;
+  }
+  const encoders::SealedParallelPassSnapshot* found = nullptr;
+  for (const auto& pass : batch->view()) {
+    if (pass.source != source || pass.seqId != seqId ||
+        pass.replayOrdinalBegin != replayOrdinalBegin ||
+        pass.replayOrdinalEnd != replayOrdinalEnd) {
+      continue;
+    }
+    if (found) {
+      return false;
+    }
+    found = &pass;
+  }
+  if (!found) {
+    return false;
+  }
+  authoritative = *found;
+  return true;
+}
+
+struct ParallelPassCoverageContext {
+  const encoders::EncodePartitionReplayStream* stream = nullptr;
+  const resources::Pool* pool = nullptr;
+};
+
+// Exact per-child coverage resolved from the live source while the coordinator
+// still holds the residency pin. It re-reads every command the child owns and
+// canonicalizes its resources through the same proof owner the producer used,
+// so the certificate compares owner-resolved facts rather than replayed values.
+bool resolveParallelPassCoverage(
+    const void* context,
+    const encoders::SealedParallelPassSnapshot& snapshot,
+    const encoders::ParallelPassChildPlan& child,
+    encoders::ParallelPassResolvedCoverage& coverage) noexcept {
+  const auto* state = static_cast<const ParallelPassCoverageContext*>(context);
+  if (!state || !state->stream || !state->pool) {
+    return false;
+  }
+  coverage = {};
+  coverage.reads.flags = core::ExactResourceSetComplete |
+      core::ExactResourceSetCanonicalized;
+  coverage.writes.flags = core::ExactResourceSetComplete |
+      core::ExactResourceSetCanonicalized;
+  coverage.attachments = snapshot.attachments;
+  coverage.passActionEpoch = snapshot.passActionEpoch;
+  const std::uint32_t commandCount = snapshot.childrenCoverCompleteCommands
+      ? child.replayOrdinalCount
+      : 1u;
+  if (commandCount == 0u || commandCount > coverage.commands.size()) {
+    return false;
+  }
+  std::uint64_t resolvedDraws = 0u;
+  for (std::uint32_t offset = 0u; offset < commandCount; ++offset) {
+    std::uint32_t commandIndex = 0u;
+    if (!state->stream->commandIndexAt(
+            static_cast<std::size_t>(child.replayOrdinalBegin) + offset,
+            commandIndex)) {
+      return false;
+    }
+    const auto source = state->stream->source.payload.commandAt(commandIndex);
+    if (source.kind() != core::MetalCommandKind::DrawRun ||
+        !source.command.drawState.hot ||
+        !source.command.drawState.shaderLayout ||
+        !source.command.drawRunRecord || source.command.drawParams.empty() ||
+        source.command.drawParams.size() > UINT32_MAX ||
+        core::makeRenderAttachmentKey(*source.command.drawState.hot) !=
+            snapshot.attachments) {
+      return false;
+    }
+    const auto route = resolveParallelPassRenderRoute(
+        state->pool, source.command.drawState);
+    if (route == core::RenderRoute::Unknown ||
+        (offset != 0u && route != coverage.route)) {
+      return false;
+    }
+    coverage.route = route;
+    const auto rawReads = core::makeDrawEntryReadSet(source.command.drawState);
+    const auto rawWrites = core::makeRenderAttachmentWriteSet(
+        *source.command.drawState.hot);
+    if (!rawReads.complete() || !rawWrites.complete()) {
+      return false;
+    }
+    for (std::uint32_t i = 0u; i < rawReads.count; ++i) {
+      std::uint64_t canonical = 0u;
+      if (!resolveParallelPassResourceIdentity(
+              state->pool, rawReads.handles[i], canonical) ||
+          canonical == 0u || !coverage.reads.add(canonical)) {
+        return false;
+      }
+    }
+    for (std::uint32_t i = 0u; i < rawWrites.count; ++i) {
+      std::uint64_t canonical = 0u;
+      if (!resolveParallelPassResourceIdentity(
+              state->pool, rawWrites.handles[i], canonical) ||
+          canonical == 0u || !coverage.writes.add(canonical)) {
+        return false;
+      }
+    }
+    const auto drawParamCount =
+        static_cast<std::uint32_t>(source.command.drawParams.size());
+    coverage.commands[offset] = {
+        .replayOrdinal = child.replayOrdinalBegin + offset,
+        .commandIndex = commandIndex,
+        .drawParamBegin = source.command.drawRunRecord->firstParam,
+        .drawParamCount = drawParamCount,
+    };
+    if (resolvedDraws > UINT64_MAX - drawParamCount) {
+      return false;
+    }
+    resolvedDraws += drawParamCount;
+  }
+  coverage.commandCount = commandCount;
+  coverage.drawCount = snapshot.childrenCoverCompleteCommands
+      ? resolvedDraws
+      : child.range.drawEntryCount;
+  return coverage.drawCount != 0u && coverage.reads.complete() &&
+      coverage.writes.complete();
+}
+
+// A parallel pass closes at the same coordinator command the serial encoder
+// would have flushed on, so the encoder-split reason must stay the one the
+// serial lane records for that kind.
+perf::EncoderSplitReason parallelPassCloseReason(
+    const encoders::SealedParallelPassSnapshot& pass) noexcept {
+  if (pass.sealedAtSourceEnd || !pass.sealingCommand.valid) {
+    return perf::EncoderSplitReason::Final;
+  }
+  switch (pass.sealingCommand.kind) {
+  case core::MetalCommandKind::Present:
+    return perf::EncoderSplitReason::Present;
+  case core::MetalCommandKind::Clear:
+    return perf::EncoderSplitReason::ClearBarrier;
+  case core::MetalCommandKind::SurfaceCopy:
+    return perf::EncoderSplitReason::SurfaceCopy;
+  case core::MetalCommandKind::StretchRect:
+  case core::MetalCommandKind::DepthResolve:
+    return perf::EncoderSplitReason::StretchRect;
+  case core::MetalCommandKind::Readback:
+    return perf::EncoderSplitReason::Readback;
+  case core::MetalCommandKind::ColorFill:
+    return perf::EncoderSplitReason::ColorFill;
+  case core::MetalCommandKind::DrawRun:
+    break;
+  }
+  return perf::EncoderSplitReason::RenderTargetChange;
+}
+
 struct ActiveSeedMergeTicketAudit {
   ActiveSeedMergeTargetResolver resolver{};
   std::uint64_t mismatch = 0;
@@ -3907,13 +4068,46 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     economics.totalDraws = preflightDrawCount;
     economics.valid = !economics.overflow &&
         economics.totalDraws == pass.drawCount;
+
+    // R-BACK-2.68/2.69: the certificate gate runs before the existing
+    // economics classifier and before any Metal effect. It re-reads the pass
+    // from its owning batch and re-resolves exact per-child coverage from the
+    // live source, so a plan that drifted during the preflight can never reach
+    // the selector. The classifier below is unchanged; the proof core only
+    // adds rejections.
+    ParallelPassCandidateCost candidateCost{};
+    const bool candidateCostValid =
+        buildParallelPassCandidateCost(economics, candidateCost);
+    const ParallelPassCoverageContext coverageContext{
+        .stream = &partitionReplayStream,
+        .pool = &ctx.pool,
+    };
+    const auto adapterDecision = runParallelPassProofCoreAdapter(
+        pass, parallelPlanStorage.view(), candidateCost,
+        ParallelPassSnapshotAuthority{
+            .context = &parallelPassShadows,
+            .resolve = resolveParallelPassSnapshotAuthority,
+        },
+        ParallelPassCoverageResolver{
+            .context = &coverageContext,
+            .resolve = resolveParallelPassCoverage,
+        });
+    if (perf::enabled()) {
+      perf::countParallelPassAdapter(adapterDecision);
+    }
+
+    // The pure economics classifier is unchanged and still evaluated for every
+    // candidate the coordinator considered, so its existing attribution keeps
+    // its meaning. It can only add a rejection: nothing below can execute
+    // unless the certificate, the classifier, and the selector all agree.
     bool economicsAccepted = false;
     const auto economicsDecision = dispatchParallelPassEconomics(
         economics, [&] { economicsAccepted = true; }, [] {});
     if (perf::enabled()) {
       perf::countParallelPassEconomics(economics, economicsDecision);
     }
-    if (!economicsAccepted) {
+    if (!adapterDecision.certificateValid() || !economicsAccepted ||
+        !candidateCostValid || !adapterDecision.selected()) {
       return rejectBeforeEffects();
     }
 
@@ -4010,13 +4204,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .openedWithClear = prepared.actions.color0Clear != 0u ||
             prepared.actions.depthClear != 0u ||
             prepared.actions.stencilClear != 0u,
-        .closeReason = pass.sealedAtSourceEnd
-            ? perf::EncoderSplitReason::Final
-            : pass.sealingCommand.kind == Kind::Present
-                ? perf::EncoderSplitReason::Present
-                : pass.sealingCommand.kind == Kind::Clear
-                    ? perf::EncoderSplitReason::ClearBarrier
-                : perf::EncoderSplitReason::RenderTargetChange,
+        .closeReason = parallelPassCloseReason(pass),
     };
     if (perf::enabled()) {
       production.storeProof = renderPassStoreProofSummaryForLookahead(
