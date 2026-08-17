@@ -231,6 +231,13 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassShadowRejectSnapshot{0};
   std::atomic<std::uint64_t> parallelPassShadowCoordinatorBoundaries{0};
   std::atomic<std::uint64_t> parallelPassShadowCoordinatorSplits{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDrawsUnder8{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws8To15{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws16To31{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws32To63{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws64To127{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws128To255{0};
+  std::atomic<std::uint64_t> parallelPassShadowSealedDraws256Plus{0};
   std::atomic<std::uint64_t> parallelPassAdapterConsidered{0};
   std::atomic<std::uint64_t> parallelPassAdapterCertificateValid{0};
   std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalid{0};

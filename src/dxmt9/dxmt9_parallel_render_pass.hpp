@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <tuple>
 #include <type_traits>
@@ -18,6 +19,46 @@ namespace dxmt9::encoders {
 
 inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
 inline constexpr std::size_t kParallelRenderPassCandidateCapacity = 16u;
+
+// ---------------------------------------------------------------------
+// DXMT9_PARALLEL_PASS_DRAW_QUANTUM — diagnostic/tuning env knob.
+// ---------------------------------------------------------------------
+//
+// The parallel sealed-pass builder (subdivideParallelPassDraws,
+// subdivideParallelPassWholeCommands) and the economics classifier
+// (classifyParallelPassEconomics) share `kProductionPartitionDrawThreshold`
+// (dxmt9_encode_partition.hpp) as their two-child floor / eligibility
+// quantum. This knob lets an experiment override that quantum for the
+// PARALLEL path only, without touching the serial partition planner
+// (planProductionEncodePartitions), which keeps using
+// kProductionPartitionDrawThreshold directly and never reads this env var or
+// its resolvers. It is a tuning/experiment surface, not a stable provider
+// contract: see agents/rules/environment_variables_encoder.rules.md.
+inline constexpr std::uint32_t kParallelPassDrawQuantumMin = 4u;
+inline constexpr std::uint32_t kParallelPassDrawQuantumMax = 1024u;
+
+// Pure parse+clamp of DXMT9_PARALLEL_PASS_DRAW_QUANTUM. A null, empty, "0",
+// or unparseable string resolves to kProductionPartitionDrawThreshold
+// (byte-identical default behavior) with `clamped=false`. A parsed value is
+// clamped to [kParallelPassDrawQuantumMin, kParallelPassDrawQuantumMax];
+// `clamped` reports whether clamping changed the parsed value so the
+// env-reading wrapper can log exactly one bounded warning.
+struct ParallelPassDrawQuantumResolution {
+  std::uint32_t quantum = kProductionPartitionDrawThreshold;
+  bool clamped = false;
+
+  friend constexpr bool operator==(const ParallelPassDrawQuantumResolution&,
+                                   const ParallelPassDrawQuantumResolution&) =
+      default;
+};
+
+ParallelPassDrawQuantumResolution resolveParallelPassDrawQuantum(
+    const char* env) noexcept;
+
+// Process-once env reader; reads DXMT9_PARALLEL_PASS_DRAW_QUANTUM via
+// std::getenv on first call, caches the clamped quantum, and logs one
+// bounded warning if the parsed value needed clamping.
+std::uint32_t resolveParallelPassDrawQuantumFromEnv();
 inline constexpr std::uint32_t kParallelRenderPassNoFailedChild = UINT32_MAX;
 
 enum class ParallelPassDirectBindingMode : std::uint8_t {
@@ -166,6 +207,10 @@ struct ParallelPassChildSubdivision {
   std::array<std::uint32_t, kParallelRenderPassChildCapacity> drawCounts{};
   std::uint32_t childCount = 0;
   bool valid = false;
+
+  friend constexpr bool operator==(const ParallelPassChildSubdivision&,
+                                   const ParallelPassChildSubdivision&) =
+      default;
 };
 
 enum class ParallelPassWholeCommandPlanFailure : std::uint8_t {
@@ -196,20 +241,22 @@ struct ParallelPassWholeCommandSubdivision {
 // into its preceding child and caps emitted groups at sixteen.
 template <typename DrawCountAt>
 inline constexpr ParallelPassWholeCommandSubdivision
-subdivideParallelPassWholeCommands(std::uint32_t replayOrdinalBegin,
-                                   std::uint32_t commandCount,
-                                   std::uint64_t totalDraws,
-                                   DrawCountAt&& drawCountAt) noexcept {
+subdivideParallelPassWholeCommands(
+    std::uint32_t replayOrdinalBegin,
+    std::uint32_t commandCount,
+    std::uint64_t totalDraws,
+    DrawCountAt&& drawCountAt,
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) noexcept {
   ParallelPassWholeCommandSubdivision result{};
-  if (commandCount < 2u ||
-      totalDraws < 2u * kProductionPartitionDrawThreshold) {
+  if (drawQuantum == 0u || commandCount < 2u ||
+      totalDraws < 2ull * drawQuantum) {
     result.failure = ParallelPassWholeCommandPlanFailure::NoTwoChildWork;
     return result;
   }
   const std::uint32_t maximumChildren = static_cast<std::uint32_t>(
       std::min<std::uint64_t>({
           kParallelRenderPassChildCapacity, commandCount,
-          totalDraws / kProductionPartitionDrawThreshold}));
+          totalDraws / drawQuantum}));
   if (maximumChildren < 2u ||
       replayOrdinalBegin > UINT32_MAX - commandCount) {
     result.failure = ParallelPassWholeCommandPlanFailure::InvalidOrOverflow;
@@ -237,8 +284,8 @@ subdivideParallelPassWholeCommands(std::uint32_t replayOrdinalBegin,
     const std::uint64_t remainingDraws = totalDraws - consumedDraws;
     const std::uint32_t remainingCommands = commandCount - command - 1u;
     if (result.childCount + 1u < maximumChildren &&
-        groupDraws >= kProductionPartitionDrawThreshold &&
-        remainingDraws >= kProductionPartitionDrawThreshold &&
+        groupDraws >= drawQuantum &&
+        remainingDraws >= drawQuantum &&
         remainingCommands != 0u) {
       const std::size_t child = result.childCount++;
       result.replayOrdinalBegins[child] = groupBegin;
@@ -250,7 +297,7 @@ subdivideParallelPassWholeCommands(std::uint32_t replayOrdinalBegin,
     }
   }
   if (consumedDraws != totalDraws || groupCommands == 0u ||
-      groupDraws < kProductionPartitionDrawThreshold ||
+      groupDraws < drawQuantum ||
       result.childCount >= kParallelRenderPassChildCapacity) {
     result.failure = consumedDraws == totalDraws
         ? ParallelPassWholeCommandPlanFailure::NoTwoChildWork
@@ -273,14 +320,15 @@ subdivideParallelPassWholeCommands(std::uint32_t replayOrdinalBegin,
 // its independent 32-draw target; sealed passes instead derive no more than
 // floor(total/64) even children and place any remainder in the final children.
 inline constexpr ParallelPassChildSubdivision
-subdivideParallelPassDraws(std::uint64_t totalDraws) noexcept {
+subdivideParallelPassDraws(
+    std::uint64_t totalDraws,
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) noexcept {
   ParallelPassChildSubdivision result{};
-  if (totalDraws > UINT32_MAX) {
+  if (drawQuantum == 0u || totalDraws > UINT32_MAX) {
     return result;
   }
   const std::uint64_t boundedChildren = std::min<std::uint64_t>(
-      kParallelRenderPassChildCapacity,
-      totalDraws / kProductionPartitionDrawThreshold);
+      kParallelRenderPassChildCapacity, totalDraws / drawQuantum);
   if (boundedChildren < 2u) {
     return result;
   }
@@ -292,7 +340,7 @@ subdivideParallelPassDraws(std::uint64_t totalDraws) noexcept {
   for (std::uint32_t child = 0u; child < result.childCount; ++child) {
     const std::uint32_t count = quotient +
         (child >= result.childCount - remainder ? 1u : 0u);
-    if (count < kProductionPartitionDrawThreshold ||
+    if (count < drawQuantum ||
         cursor > draws - count) {
       return {};
     }
@@ -310,8 +358,13 @@ subdivideParallelPassDraws(std::uint64_t totalDraws) noexcept {
 // child boundary already changes both PSO and uniform identity in serial order.
 inline constexpr ParallelPassEconomicsDecision
 classifyParallelPassEconomics(
-    const ParallelPassEconomicsSummary& summary) noexcept {
+    const ParallelPassEconomicsSummary& summary,
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) noexcept {
   ParallelPassEconomicsDecision result{.considered = true};
+  if (drawQuantum == 0u) {
+    result.reject = ParallelPassEconomicsRejectReason::InvalidOrOverflow;
+    return result;
+  }
   auto reject = [&](ParallelPassEconomicsRejectReason reason) {
     result.reject = reason;
     return result;
@@ -344,11 +397,10 @@ classifyParallelPassEconomics(
   if (summary.forcedStage1Draws != 0u) {
     return reject(ParallelPassEconomicsRejectReason::ForcedStage1);
   }
-  if (summary.minimumChildDraws < kProductionPartitionDrawThreshold) {
+  if (summary.minimumChildDraws < drawQuantum) {
     return reject(ParallelPassEconomicsRejectReason::ThinChild);
   }
-  if (summary.maximumChildDraws - summary.minimumChildDraws >
-      kProductionPartitionDrawThreshold) {
+  if (summary.maximumChildDraws - summary.minimumChildDraws > drawQuantum) {
     return reject(ParallelPassEconomicsRejectReason::UnbalancedChild);
   }
   const std::uint64_t extraChildFirstBinds = summary.childCount - 1u;
@@ -396,8 +448,9 @@ template <typename Accepted, typename SerialFallback>
 ParallelPassEconomicsDecision dispatchParallelPassEconomics(
     const ParallelPassEconomicsSummary& summary,
     Accepted&& accepted,
-    SerialFallback&& serialFallback) {
-  const auto decision = classifyParallelPassEconomics(summary);
+    SerialFallback&& serialFallback,
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) {
+  const auto decision = classifyParallelPassEconomics(summary, drawQuantum);
   if (decision.accepted) {
     std::forward<Accepted>(accepted)();
   } else {
@@ -410,12 +463,13 @@ template <typename Observer>
 bool observeParallelPassEconomicsCountersIfEnabled(
     bool perfEnabled,
     const ParallelPassEconomicsSummary& summary,
-    Observer&& observer) {
+    Observer&& observer,
+    std::uint32_t drawQuantum = kProductionPartitionDrawThreshold) {
   if (!perfEnabled) {
     return false;
   }
   std::forward<Observer>(observer)(
-      summary, classifyParallelPassEconomics(summary));
+      summary, classifyParallelPassEconomics(summary, drawQuantum));
   return true;
 }
 
@@ -712,6 +766,11 @@ struct SealedParallelPassSnapshotInput {
   bool planValidated = false;
   bool sourceStartsPass = false;
   bool sourceEndsPass = false;
+  // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — see the resolver doc-comment near the
+  // top of this file. Defaults to kProductionPartitionDrawThreshold so every
+  // caller that does not set it explicitly (including every existing test)
+  // keeps byte-identical behavior.
+  std::uint32_t drawQuantum = kProductionPartitionDrawThreshold;
 };
 
 struct ParallelPassCommandLocator {
@@ -945,6 +1004,33 @@ struct SealedParallelPassSnapshotBatch {
   }
 };
 
+// Draw-size buckets for a sealed pass candidate's total draw count, sampled
+// at the same site that increments `sealedCount` (boundaryComplete, before
+// the accept/reject split). Always-on: one comparison chain plus one array
+// slot per sealed pass. Bucket sum must equal `sealedCount`
+// (parallel_render_pass_spec.cpp pins the conservation).
+enum class SealedPassDrawBucket : std::uint8_t {
+  Under8 = 0,
+  From8To15,
+  From16To31,
+  From32To63,
+  From64To127,
+  From128To255,
+  From256Plus,
+  Count,
+};
+
+inline constexpr SealedPassDrawBucket classifySealedPassDrawBucket(
+    std::uint64_t drawCount) noexcept {
+  if (drawCount < 8u) return SealedPassDrawBucket::Under8;
+  if (drawCount < 16u) return SealedPassDrawBucket::From8To15;
+  if (drawCount < 32u) return SealedPassDrawBucket::From16To31;
+  if (drawCount < 64u) return SealedPassDrawBucket::From32To63;
+  if (drawCount < 128u) return SealedPassDrawBucket::From64To127;
+  if (drawCount < 256u) return SealedPassDrawBucket::From128To255;
+  return SealedPassDrawBucket::From256Plus;
+}
+
 struct SealedParallelPassSnapshotBatchResult {
   SealedParallelPassSnapshotFallback fallback =
       SealedParallelPassSnapshotFallback::PlanMissing;
@@ -965,6 +1051,10 @@ struct SealedParallelPassSnapshotBatchResult {
   // afterwards, so one logical pass would otherwise have been split.
   std::uint32_t coordinatorBoundaries = 0;
   std::uint32_t coordinatorSplits = 0;
+  // Indexed by SealedPassDrawBucket; sum equals sealedCount.
+  std::array<std::uint32_t,
+             static_cast<std::size_t>(SealedPassDrawBucket::Count)>
+      sealedDrawBuckets{};
   bool considered = false;
 
   friend constexpr bool operator==(

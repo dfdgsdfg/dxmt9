@@ -1,8 +1,12 @@
 #include "dxmt9_parallel_render_pass.hpp"
 
+#include "util/log/log.hpp"
+
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 
 namespace dxmt9::encoders {
@@ -136,6 +140,13 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     return rejectBatch(Fallback::PlanNotValidated, snapshots);
   }
   const auto& stream = *input.stream;
+  // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — see dxmt9_parallel_render_pass.hpp.
+  // Falls back to the production default when a caller (deliberately or by
+  // mistake) passes 0; every existing caller that omits the field already
+  // gets kProductionPartitionDrawThreshold from the struct default.
+  const std::uint32_t drawQuantum =
+      input.drawQuantum != 0u ? input.drawQuantum
+                              : kProductionPartitionDrawThreshold;
   if (!stream.valid || !stream.source.source.valid() ||
       stream.source.seqId == 0u || !stream.source.payload.valid() ||
       stream.replayOrdinalCount() == 0u ||
@@ -339,7 +350,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   auto buildCandidateChildren = [&](std::uint32_t replayOrdinalEnd) {
     current.childCount = 0u;
     if (replayOrdinalEnd <= current.replayOrdinalBegin ||
-        current.drawCount < kProductionPartitionDrawThreshold) {
+        current.drawCount < drawQuantum) {
       return;
     }
     const std::uint32_t commandCount =
@@ -356,8 +367,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
         rejectCandidate(Fallback::FirstDrawSnapshot);
         return;
       }
-      const auto subdivision =
-          subdivideParallelPassDraws(source.command.drawParams.size());
+      const auto subdivision = subdivideParallelPassDraws(
+          source.command.drawParams.size(), drawQuantum);
       if (!subdivision.valid) {
         return;
       }
@@ -389,7 +400,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
             return 0u;
           }
           return source.command.drawParams.size();
-        });
+        },
+        drawQuantum);
     if (!subdivision.valid()) {
       if (subdivision.failure ==
           ParallelPassWholeCommandPlanFailure::InvalidOrOverflow) {
@@ -401,8 +413,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     std::uint32_t coveredCommands = 0u;
     for (std::uint32_t child = 0u;
          child < subdivision.childCount; ++child) {
-      if (subdivision.drawCounts[child] <
-              kProductionPartitionDrawThreshold ||
+      if (subdivision.drawCounts[child] < drawQuantum ||
           coveredDraws > UINT64_MAX - subdivision.drawCounts[child] ||
           coveredCommands > UINT32_MAX -
               subdivision.replayOrdinalCounts[child]) {
@@ -458,6 +469,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
         endProven && replayOrdinalEnd > current.replayOrdinalBegin;
     if (boundaryComplete) {
       ++result.sealedCount;
+      ++result.sealedDrawBuckets[static_cast<std::size_t>(
+          classifySealedPassDrawBucket(current.drawCount))];
     }
     buildCandidateChildren(replayOrdinalEnd);
     if (current.childCount < 2u && !candidateRejected) {
@@ -645,6 +658,45 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
   }
   result.eligibleCountMax = result.eligibleCount;
   return result;
+}
+
+// ---------------------------------------------------------------------
+// DXMT9_PARALLEL_PASS_DRAW_QUANTUM — see the doc-comment in the header.
+// ---------------------------------------------------------------------
+
+ParallelPassDrawQuantumResolution resolveParallelPassDrawQuantum(
+    const char* env) noexcept {
+  if (!env || env[0] == '\0') {
+    return {};
+  }
+  char* end = nullptr;
+  errno = 0;
+  const auto parsed = std::strtoul(env, &end, 10);
+  if (end == env || errno == ERANGE || parsed == 0) {
+    return {};
+  }
+  ParallelPassDrawQuantumResolution result{};
+  const auto clamped = std::clamp<unsigned long>(
+      parsed, kParallelPassDrawQuantumMin, kParallelPassDrawQuantumMax);
+  result.quantum = static_cast<std::uint32_t>(clamped);
+  result.clamped = clamped != parsed;
+  return result;
+}
+
+std::uint32_t resolveParallelPassDrawQuantumFromEnv() {
+  static const ParallelPassDrawQuantumResolution resolution = [] {
+    const auto resolved =
+        resolveParallelPassDrawQuantum(std::getenv("DXMT9_PARALLEL_PASS_DRAW_QUANTUM"));
+    if (resolved.clamped) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-parallel-pass",
+          "DXMT9_PARALLEL_PASS_DRAW_QUANTUM clamped to %u (valid range [%u,%u])",
+          resolved.quantum, kParallelPassDrawQuantumMin,
+          kParallelPassDrawQuantumMax);
+    }
+    return resolved;
+  }();
+  return resolution.quantum;
 }
 
 }  // namespace dxmt9::encoders
