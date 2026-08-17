@@ -243,6 +243,17 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalid{0};
   std::atomic<std::uint64_t> parallelPassAdapterSelected{0};
   std::atomic<std::uint64_t> parallelPassAdapterSerialFallback{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidMissingSnapshot{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidSourceIdentity{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidPassIdentity{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidCoordinatorProof{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidAttachmentProof{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidResourceProof{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidFirstDrawProof{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidChildCapacity{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidChildPlan{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidCoverage{0};
+  std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidArithmetic{0};
   std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};

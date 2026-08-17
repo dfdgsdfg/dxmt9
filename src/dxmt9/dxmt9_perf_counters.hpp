@@ -295,6 +295,33 @@ void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result);
 void countParallelPassAdapter(
     const encoders::ParallelPassAdapterDecision& decision);
+
+// Typed breakdown of `parallel_pass_adapter_certificate_invalid`, keyed by
+// the `ParallelPassSemanticPlanFailure` checkpoint that rejected the
+// candidate. The fields sum to the aggregate counter
+// (`dxmt9-parallel-render-pass-spec` pins the conservation).
+struct ParallelPassAdapterCertificateInvalidSnapshot {
+  std::uint64_t missingSnapshot = 0;
+  std::uint64_t sourceIdentity = 0;
+  std::uint64_t passIdentity = 0;
+  std::uint64_t coordinatorProof = 0;
+  std::uint64_t attachmentProof = 0;
+  std::uint64_t resourceProof = 0;
+  std::uint64_t firstDrawProof = 0;
+  std::uint64_t childCapacity = 0;
+  std::uint64_t childPlan = 0;
+  std::uint64_t coverage = 0;
+  std::uint64_t arithmetic = 0;
+
+  constexpr std::uint64_t total() const noexcept {
+    return missingSnapshot + sourceIdentity + passIdentity +
+        coordinatorProof + attachmentProof + resourceProof +
+        firstDrawProof + childCapacity + childPlan + coverage + arithmetic;
+  }
+};
+
+ParallelPassAdapterCertificateInvalidSnapshot
+snapshotParallelPassAdapterCertificateInvalid() noexcept;
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);

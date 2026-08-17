@@ -1,9 +1,11 @@
 #include "../../../src/dxmt9/dxmt9_parallel_render_pass.hpp"
 #include "../../../src/dxmt9/dxmt9_parallel_render_pass_metal.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -3559,9 +3561,53 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
             valid.accounting.certificateValid == 1u,
         "a certified, positively scored plan selects and executes exactly once");
 
+  // Read the one typed reason field that a given
+  // `ParallelPassSemanticPlanFailure` checkpoint is expected to own in the
+  // `parallel_pass_adapter_certificate_invalid_*` counter breakdown.
+  using Failure = ParallelPassSemanticPlanFailure;
+  const auto reasonField =
+      [](const dxmt9::perf::ParallelPassAdapterCertificateInvalidSnapshot& s,
+         Failure failure) -> std::uint64_t {
+    switch (failure) {
+    case Failure::MissingSnapshot:
+      return s.missingSnapshot;
+    case Failure::SourceIdentity:
+      return s.sourceIdentity;
+    case Failure::PassIdentity:
+      return s.passIdentity;
+    case Failure::CoordinatorProof:
+      return s.coordinatorProof;
+    case Failure::AttachmentProof:
+      return s.attachmentProof;
+    case Failure::ResourceProof:
+      return s.resourceProof;
+    case Failure::FirstDrawProof:
+      return s.firstDrawProof;
+    case Failure::ChildCapacity:
+      return s.childCapacity;
+    case Failure::ChildPlan:
+      return s.childPlan;
+    case Failure::Coverage:
+      return s.coverage;
+    case Failure::Arithmetic:
+      return s.arithmetic;
+    case Failure::None:
+    case Failure::Count:
+      return 0u;
+    }
+    return 0u;
+  };
+
   // The authority owner still holds the unmutated snapshot, so every mutated
-  // candidate is rejected by the certificate before it can reach the selector.
-  const auto expectCertificateInvalid = [&](auto mutate,
+  // candidate is rejected by the certificate before it can reach the
+  // selector. Each fixture also drives the real `countParallelPassAdapter`
+  // writer so the typed `parallel_pass_adapter_certificate_invalid_*`
+  // breakdown is proven against production code, not just the local
+  // in-memory accounting struct: exactly the reason counter matching
+  // `expectedFailure` must move by one, every other typed reason must stay
+  // put, and the per-reason total must track the aggregate
+  // `certificateInvalid` counter one-for-one.
+  const auto expectCertificateInvalid = [&](auto mutate, Failure expectedFailure,
                                             std::string_view message) {
     SemanticPlanFixture candidate = accepted;
     mutate(candidate);
@@ -3573,24 +3619,59 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
               lane.serialDraws == 64u * candidate.count &&
               lane.decision.selection ==
                   ParallelPassCandidateSelectionFailure::Empty &&
+              lane.decision.certificate == expectedFailure &&
               lane.accounting.conserves() &&
               lane.accounting.certificateInvalid == 1u &&
               lane.accounting.selected == 0u &&
               lane.accounting.serialFallback == 1u,
           message);
+
+    const auto before =
+        dxmt9::perf::snapshotParallelPassAdapterCertificateInvalid();
+    dxmt9::perf::countParallelPassAdapter(lane.decision);
+    const auto after =
+        dxmt9::perf::snapshotParallelPassAdapterCertificateInvalid();
+    check(after.total() == before.total() + 1u &&
+              reasonField(after, expectedFailure) ==
+                  reasonField(before, expectedFailure) + 1u,
+          "the typed reason counter for the expected checkpoint moves by "
+          "exactly one");
+    for (const auto other :
+         {Failure::MissingSnapshot, Failure::SourceIdentity,
+          Failure::PassIdentity, Failure::CoordinatorProof,
+          Failure::AttachmentProof, Failure::ResourceProof,
+          Failure::FirstDrawProof, Failure::ChildCapacity, Failure::ChildPlan,
+          Failure::Coverage, Failure::Arithmetic}) {
+      if (other == expectedFailure) {
+        continue;
+      }
+      check(reasonField(after, other) == reasonField(before, other),
+            "every other typed reason counter is untouched");
+    }
   };
   expectCertificateInvalid([](auto& f) { f.snapshot.passActionEpoch = 8u; },
+                           Failure::SourceIdentity,
                            "action-epoch drift yields zero Metal effects and "
-                           "exact serial replay");
+                           "exact serial replay, attributed to source "
+                           "identity because the authority owner still "
+                           "holds the unmutated snapshot");
   expectCertificateInvalid(
       [](auto& f) { f.snapshot.childDrawCounts[1] = 63u; },
-      "child coverage drift yields zero Metal effects and exact serial replay");
+      Failure::SourceIdentity,
+      "child coverage drift yields zero Metal effects and exact serial "
+      "replay, attributed to source identity for the same reason");
   expectCertificateInvalid(
       [](auto& f) {
         f.children[1].binding.mode =
             ParallelPassDirectBindingMode::Stage2DirectCbuf;
       },
-      "mixed child ABI yields zero Metal effects and exact serial replay");
+      Failure::ChildPlan,
+      "mixed child ABI leaves the snapshot untouched, so it clears source "
+      "identity and is caught by the child-plan proof instead");
+  expectCertificateInvalid(
+      [](auto& f) { f.children[1].childOrdinal = 99u; }, Failure::FirstDrawProof,
+      "an out-of-order child ordinal leaves the snapshot untouched and "
+      "fails the per-child first-draw provenance proof");
 
   // A certified plan whose economics cannot be scored is still refused before
   // effects, and the selector — not the certificate — is what refuses it.
@@ -3661,6 +3742,13 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
 }  // namespace
 
 int main() {
+  // The typed certificate-invalid breakdown pin
+  // (proofCoreAdapterGatesEveryProductionCandidate) drives the real
+  // `dxmt9::perf::countParallelPassAdapter` writer, whose atomics are
+  // compiled to a no-op unless perf counters are enabled. `enabled()` caches
+  // the env read in a function-local static on first use, so this must be
+  // set before any perf counter call in the process.
+  setenv("DXMT_PERF_COUNTERS", "1", /*overwrite=*/1);
   try {
     eligibilityAndSelectionAreTypedAndBounded();
     coordinatorProofSnapshotRequiresEveryPreEffectFact();
