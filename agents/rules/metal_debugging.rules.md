@@ -230,7 +230,14 @@ that finishes in-window and then often hangs post-scene until the timeout
 kill, and SIGKILL loses the final counter flush, so `result.json` reports the
 last periodic emission (~8% presents undercount observed, H231). Enable
 `DXMT9_PERF_FRAME_SAMPLING=1` and compute scene-fps from the per-frame
-`wall_ms` samples in the run log instead; total process elapsed and
+`wall_ms` samples in the run log instead — and anchor the extraction to the
+`[dxmt9-perf-frame ...]` line prefix. A loose `wall_ms=` regex also matches the
+cumulative `parallel_pass_worker_wall_ms` counter in periodic `[dxmt9-perf]`
+emissions; in a parallel-mode run those cumulative samples injected 11.5 fake
+seconds into ~61 real seconds and fabricated a parallel-only harmonic-fps
+collapse, while identity runs were immune because their zero values were
+filtered — the artifact reads exactly like a mode-specific hitch tail
+(retracted 2026-08-18, see `specs/backend/encode-scheduling/gap.md`); total process elapsed and
 timed-out-vs-natural-exit only distinguish whether the post-scene hang
 occurred, not render speed. If the desktop may be locked when a probe is scheduled,
 pass `run_3dmark05_perf_probe.sh --wait-unlocked-sec N`; the wrapper polls
