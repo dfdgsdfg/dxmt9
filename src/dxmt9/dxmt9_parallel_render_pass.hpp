@@ -539,6 +539,21 @@ inline constexpr bool parallelPassSealingKindAccepted(
   return false;
 }
 
+// The second, non-coordinator way a sealed pass can end: an attachment change.
+// No coordinator command sits at `replayOrdinalEnd` — the first draw of the
+// next pass does, and the producer records that draw as the sealing locator.
+// `parallelPassCloseReason` already consumes exactly this spelling and maps it
+// to the serial lane's `RenderTargetChange` encoder split, so it is a
+// production shape rather than a malformed snapshot. It is admitted only after
+// the certificate independently re-derives that the sealing ordinal opens a
+// *different* pass, which is what distinguishes it from a draw that belongs
+// inside the interval (`R-BACK-2.69`).
+inline constexpr bool parallelPassAttachmentChangeSealingKind(
+    core::MetalCommandKind kind) noexcept {
+  return classifyParallelPassCommandRole(kind) ==
+      ParallelPassCommandRole::Draw;
+}
+
 // The attachment identity a `Clear` publishes. It is shared by the producer
 // and by the certificate's independent epoch re-derivation so a leading-clear
 // match cannot be decided by two different rules (`R-BACK-2.69`).
@@ -554,6 +569,19 @@ inline core::RenderAttachmentKey parallelPassAttachmentKeyForClear(
   key.sampleCount = std::max(key.sampleCount, key.depthStencil.sampleCount);
   return key;
 }
+
+// The one source-wide starting action epoch the coordinator publishes. It
+// seeds the producer's fold and, separately, the certificate's re-derivation,
+// so both sides must take it from here rather than compute their own. It is a
+// per-source constant on purpose: the epoch domain is scoped by
+// (source, seqId) and is never compared across sources, and whether a source
+// starts a pass is carried by `SealedParallelPassSnapshotInput::sourceStartsPass`
+// instead. Zero is the domain's invalid sentinel and must never be published:
+// `ParallelPassActionEpochWitness::valid()` refuses a zero seed, so a
+// zero-seeded source stamps candidates from a fold the certificate cannot
+// re-derive, and every pass in it fails `PassIdentity` for a reason unrelated
+// to its identity (`R-BACK-2.69`).
+inline constexpr std::uint64_t kParallelPassSeedActionEpoch = 1u;
 
 // The single implementation of the pass-action-epoch state machine. It is a
 // pure fold over the effective replay order: no clock, no float, no
@@ -1915,6 +1943,16 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     return result;
   }
   result.failure = ParallelPassSemanticPlanFailure::PassIdentity;
+  // A sealed pass ends in exactly one of three ways: at the source end, at a
+  // coordinator-owned command the coordinator still replays serially at
+  // `replayOrdinalEnd`, or at an attachment change whose sealing locator is the
+  // first draw of the next pass. The third spelling carries one extra proof
+  // obligation, discharged after the interval's own epoch is re-derived below.
+  const bool coordinatorSealed = snapshot->sealingCommand.valid &&
+      parallelPassSealingKindAccepted(snapshot->sealingCommand.kind);
+  const bool attachmentChangeSealed = snapshot->sealingCommand.valid &&
+      !coordinatorSealed &&
+      parallelPassAttachmentChangeSealingKind(snapshot->sealingCommand.kind);
   if (snapshot->passActionEpoch == 0u ||
       snapshot->replayOrdinalBegin >= snapshot->replayOrdinalEnd ||
       (!snapshot->sealedAtSourceEnd && !snapshot->sealingCommand.valid) ||
@@ -1924,7 +1962,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         snapshot->sealingCommand.source.seqId != snapshot->seqId ||
         snapshot->sealingCommand.replayOrdinal !=
             snapshot->replayOrdinalEnd ||
-        !parallelPassSealingKindAccepted(snapshot->sealingCommand.kind))) ||
+        (!coordinatorSealed && !attachmentChangeSealed))) ||
       snapshot->coordinatorProof.firstPassActionEpoch !=
           snapshot->passActionEpoch) {
     return result;
@@ -1940,6 +1978,25 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
   if (!derivedEpoch.valid ||
       derivedEpoch.epoch != snapshot->passActionEpoch) {
     return result;
+  }
+  // An attachment-change seal is admitted only when the same independent fold
+  // proves the sealing ordinal opens a pass of its own, and a different one.
+  // `deriveParallelPassActionEpoch` is valid at an ordinal exactly when that
+  // DrawRun opens a pass interval, so this rejects a draw that belongs inside
+  // the interval. The epoch state machine advances on every transition that
+  // closes an open pass, so a valid derivation at a strictly later ordinal
+  // always carries a larger epoch; the inequality is checked explicitly rather
+  // than inferred. Coverage independently forbids any non-DrawRun command or
+  // foreign attachment strictly inside `[replayOrdinalBegin, replayOrdinalEnd)`,
+  // so no third pass opening can hide between the two derived ones.
+  if (attachmentChangeSealed) {
+    const auto nextPassEpoch = deriveParallelPassActionEpoch(
+        snapshot->source, snapshot->seqId, snapshot->replayOrdinalEnd,
+        epochWitness);
+    if (!nextPassEpoch.valid ||
+        nextPassEpoch.epoch == snapshot->passActionEpoch) {
+      return result;
+    }
   }
   result.failure = ParallelPassSemanticPlanFailure::CoordinatorProof;
   if ((snapshot->coordinatorProof.flags &

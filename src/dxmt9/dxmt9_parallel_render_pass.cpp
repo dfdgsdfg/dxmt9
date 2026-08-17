@@ -154,6 +154,15 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
           std::numeric_limits<std::uint32_t>::max()) {
     return rejectBatch(Fallback::ReplayInvalid, snapshots);
   }
+  // The producer and the certificate must require the same seed. Zero is the
+  // pass-action epoch's invalid sentinel, and
+  // `ParallelPassActionEpochWitness::valid()` refuses it, so a zero-seeded
+  // source could only ever emit candidates whose stamp no re-derivation can
+  // reproduce. Fail the source closed here with the typed epoch reason instead
+  // of publishing candidates that are certificate-invalid by construction.
+  if (input.proofs.coordinator.firstPassActionEpoch == 0u) {
+    return rejectBatch(Fallback::PassActionEpoch, snapshots);
+  }
   // Query, UpdateTexture, and ordered controls are normally excluded before a
   // SourcePayloadView exists. Clear, Present, and the non-child coordinator
   // helpers are the coordinator-owned pass boundaries this producer can reason
