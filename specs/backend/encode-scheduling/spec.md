@@ -1529,6 +1529,32 @@ those gates pass. Promoting another default must not make an already supported
 provider mode unreachable. Treating the Arena as unconditional or deleting a
 fallback is a provider-lifecycle decision, not a storage-only refactor.
 
+### Parallel partition lane: measured position and reopen trigger
+
+The `ExplicitParallel` lane concluded its 2026-08 calibration track as a
+complete, safety-proven, economics-calibrated provider that is
+performance-neutral on every measured workload, and it is deliberately parked
+rather than promoted. The measured basis: on GT2 the encode stage is not the
+critical path — the encode thread's ready-queue depth never exceeds one, it
+waits 10-11ms p50 per source for the producer, and matched pairs across
+identity/parallel shapes agree within 1.5% average fps with zero GPU errors —
+so parallelizing encode moves nothing while the frame is producer-paced. The
+lane's economics are no longer estimates: the benefit relation charges the
+measured two draw-equivalents per child and thirty-two draw-equivalents of
+per-pass dispatch/join overhead, which correctly excludes small-pass workloads
+(SFIV) and leaves large-pass selection unchanged.
+
+The lane's role is therefore a preserved provider option in the R-BACK-2.66
+sense, not a dormant experiment: the certificate, typed attribution, and
+calibrated selector remain production-ready behind the opt-in. The reopen
+trigger is observable without new instrumentation — a workload or a future
+producer-cost reduction where the encode stage becomes the pacer, visible as
+`completion_no_enqueue_wait_to_encode_dequeue` collapsing toward zero while
+the encode stage wall approaches the frame wall. Until that trigger fires,
+new parallel-lane work should be limited to keeping the seam compiling and
+verified; repeated performance matrices on producer-paced workloads are not
+evidence and should not be scheduled.
+
 ## 10. Verification Mapping
 
 | Contract | Evidence |
