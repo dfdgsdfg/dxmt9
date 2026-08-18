@@ -29,6 +29,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.16 - The Setup Prologue Is Half A Per-Draw Metal Debug Group](state-churn-encode-append-decomposition.16.md)
 - [state-churn-encode-append-decomposition.17 - Current-HEAD Producer-Wall Resize: PE Layer 10.3 ms, Drain Fence Harvested, Chunk-Seal Cadence Is The Lead](state-churn-encode-append-decomposition.17.md)
 - [state-churn-encode-append-decomposition.18 - Chunk-Seal Cadence A/B: 2 ms Of Producer CPU Removed, Zero FPS, And No Stage Owns The 37 ms Frame](state-churn-encode-append-decomposition.18.md)
+- [state-churn-encode-append-decomposition.19 - Thread Attribution: The Game Thread Is Genuinely Saturated, And The Measurement Host Is Not Clean](state-churn-encode-append-decomposition.19.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
