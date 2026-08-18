@@ -3907,10 +3907,17 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
             cost.valid && !cost.overflow &&
             cost.serialWork.raw == 192ll * ParallelPassFixedPoint::kFraction &&
             cost.criticalPath.raw == 64ll * ParallelPassFixedPoint::kFraction &&
-            cost.childSetup.raw == 3ll * ParallelPassFixedPoint::kFraction &&
-            cost.imbalance.raw == 0,
+            cost.childSetup.raw ==
+                3ll * kParallelPassChildSetupDrawEquivalents *
+                    ParallelPassFixedPoint::kFraction &&
+            cost.imbalance.raw == 0 &&
+            cost.perPassOverhead.raw ==
+                static_cast<std::int64_t>(
+                    kParallelPassPerPassOverheadDrawEquivalents) *
+                    ParallelPassFixedPoint::kFraction,
         "the cost record is built from certified integers with checked "
-        "fixed-point conversion");
+        "fixed-point conversion, including the calibrated per-child setup "
+        "and per-pass coordinator overhead terms");
 
   const auto valid = runAdapterLane(accepted, cost);
   check(valid.decision.outcome == Outcome::Selected &&
@@ -4151,6 +4158,15 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
   accumulate(valid.accounting);
   accumulate(unscored.accounting);
   accumulate(rejected.accounting);
+  // Calibration pin (GT2-shaped large pass still selects): every bounded
+  // child count (2..16, each with 64 draws/child, so totalDraws grows with
+  // childCount) still clears the calibrated
+  // `kParallelPassChildSetupDrawEquivalents` +
+  // `kParallelPassPerPassOverheadDrawEquivalents` cost floor and selects
+  // through the real `buildParallelPassCandidateCost` /
+  // `selectParallelPassCandidate` production path — see
+  // `parallelPassCostCalibrationConstantsChangeSelectionDirection` below for
+  // the paired small-pass shape that now fails instead.
   for (std::uint32_t children = 2u;
        children <= kParallelRenderPassChildCapacity; ++children) {
     SemanticPlanFixture bounded(children, 20u + children, 700u + children);
@@ -4170,6 +4186,99 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
             total.certificateInvalid == 0u &&
             total.selected + total.serialFallback == total.considered,
         "adapter outcomes conserve across the observed population");
+}
+
+// Calibration pin for `kParallelPassChildSetupDrawEquivalents` /
+// `kParallelPassPerPassOverheadDrawEquivalents` (measured 2026-08-18 on GT2,
+// see the constants' comment in dxmt9_parallel_render_pass.hpp for the raw
+// numbers). Exercises the real `buildParallelPassCandidateCost` production
+// function directly against a hand-built economics summary shaped like the
+// SFIV selection-attribution finding (small, jagged 2-child passes): this
+// keeps the pin exact and independent of `SemanticPlanFixture`, whose
+// fixed 64-draws/child shape cannot represent a small pass. The formula
+// itself — `benefit = serialWork - (criticalPath + childSetup + imbalance +
+// perPassOverhead)` — is the same one `scoreParallelPassCandidate` runs, and
+// is reproduced here with the same checked fixed-point helpers so the pin
+// fails if either the constants or the formula drift.
+void parallelPassCostCalibrationConstantsChangeSelectionDirection() {
+  using namespace dxmt9::encoders;
+
+  // Provenance pin: catches an accidental edit to either constant before it
+  // reaches the cost formula below.
+  static_assert(kParallelPassChildSetupDrawEquivalents == 2u,
+                "measured ~1.6 draw-equivalents/child, rounded up "
+                "(fail-closed direction) -- see the constant's comment");
+  static_assert(kParallelPassPerPassOverheadDrawEquivalents == 32u,
+                "measured ~33 draw-equivalents/pass, rounded down to a "
+                "power-of-two within measurement noise -- see the "
+                "constant's comment");
+
+  // SFIV-like small pass: 2 children, 8 draws each, 16 draws total. The
+  // selection-attribution finding was 1,390/1,390 certificate-valid
+  // candidates failing NonPositiveBenefit for exactly this jagged
+  // small-2-child shape.
+  ParallelPassEconomicsSummary small{
+      .totalDraws = 16u,
+      .stage1Draws = 16u,
+      .childCount = 2u,
+      .minimumChildDraws = 8u,
+      .maximumChildDraws = 8u,
+      .valid = true,
+  };
+  ParallelPassCandidateCost smallCost{};
+  check(buildParallelPassCandidateCost(small, smallCost) && smallCost.valid &&
+            !smallCost.overflow,
+        "the small-pass economics produce a representable cost record");
+  check(smallCost.serialWork.raw == 16ll * ParallelPassFixedPoint::kFraction &&
+            smallCost.criticalPath.raw ==
+                8ll * ParallelPassFixedPoint::kFraction &&
+            smallCost.childSetup.raw ==
+                2ll * kParallelPassChildSetupDrawEquivalents *
+                    ParallelPassFixedPoint::kFraction &&
+            smallCost.imbalance.raw == 0 &&
+            smallCost.perPassOverhead.raw ==
+                static_cast<std::int64_t>(
+                    kParallelPassPerPassOverheadDrawEquivalents) *
+                    ParallelPassFixedPoint::kFraction,
+        "the small-pass cost record matches the calibrated per-child and "
+        "per-pass terms exactly");
+
+  // The pre-calibration formula (childSetup = childCount * 1, no per-pass
+  // term) would have scored this shape positive: 16 - (8 + 2 + 0) = +6.
+  ParallelPassFixedPoint oldChildSetup{};
+  check(parallelPassFixedPointFromUnsigned(small.childCount, oldChildSetup),
+        "old-formula child setup term converts");
+  ParallelPassFixedPoint oldTotalCost{};
+  check(parallelPassFixedPointAdd(smallCost.criticalPath, oldChildSetup,
+                                  oldTotalCost) &&
+            parallelPassFixedPointAdd(oldTotalCost, smallCost.imbalance,
+                                      oldTotalCost),
+        "old-formula total cost sums");
+  ParallelPassFixedPoint oldBenefit{};
+  check(parallelPassFixedPointSubtract(smallCost.serialWork, oldTotalCost,
+                                       oldBenefit) &&
+            oldBenefit.raw == 6ll * ParallelPassFixedPoint::kFraction,
+        "under the pre-calibration formula this shape would have scored "
+        "a positive benefit (+6 draw-equivalents)");
+
+  // The calibrated formula scores the same shape negative:
+  // 16 - (8 + 4 + 0 + 32) = -28.
+  ParallelPassFixedPoint newTotalCost{};
+  check(parallelPassFixedPointAdd(smallCost.criticalPath, smallCost.childSetup,
+                                  newTotalCost) &&
+            parallelPassFixedPointAdd(newTotalCost, smallCost.imbalance,
+                                      newTotalCost) &&
+            parallelPassFixedPointAdd(newTotalCost, smallCost.perPassOverhead,
+                                      newTotalCost),
+        "calibrated total cost sums");
+  ParallelPassFixedPoint newBenefit{};
+  check(parallelPassFixedPointSubtract(smallCost.serialWork, newTotalCost,
+                                       newBenefit) &&
+            newBenefit.raw == -28ll * ParallelPassFixedPoint::kFraction,
+        "the calibrated formula scores the same small-pass shape as a "
+        "non-positive benefit (-28 draw-equivalents), which is exactly the "
+        "sign flip that drives selectParallelPassCandidate's "
+        "NonPositiveBenefit fallback for this class of pass");
 }
 
 }  // namespace
@@ -4210,6 +4319,7 @@ int main() {
     passLocalEpochProofIsIndependentlyReDerived();
     boundaryAdjacentPassIdentityCertifies();
     proofCoreAdapterGatesEveryProductionCandidate();
+    parallelPassCostCalibrationConstantsChangeSelectionDirection();
   } catch (const TestFailure& error) {
     std::cerr << "parallel_render_pass_spec failed: " << error.what() << '\n';
     return 1;

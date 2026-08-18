@@ -116,8 +116,9 @@ std::uint32_t resolveParallelPassImbalanceBoundFromEnv(
 // ---------------------------------------------------------------------
 //
 // Calibration probe for the Q16.16 per-child setup term in
-// `buildParallelPassCandidateCost` (currently a guessed one draw-equivalent
-// per child). Gates the extra clock reads around each child's setup (Metal
+// `buildParallelPassCandidateCost` (calibrated 2026-08-18 to
+// `kParallelPassChildSetupDrawEquivalents`; see that constant's comment for
+// the measurement). Gates the extra clock reads around each child's setup (Metal
 // encoder obtain + binding/state prologue up to the first draw issue), draw
 // loop body, and `endEncoding()` — see
 // `agents/rules/environment_variables_perf.rules.md`. Mirrors the
@@ -2353,12 +2354,43 @@ inline bool parallelPassFixedPointMultiply(
   return parallelPassFixedPointInCostDomain(result);
 }
 
+// ---------------------------------------------------------------------
+// Per-child and per-pass overhead calibration constants.
+// ---------------------------------------------------------------------
+//
+// Measured 2026-08-18 on GT2 (`-gt2`) with DXMT9_PERF_PARALLEL_CHILD_SPLIT=1
+// at merged commit 50718194:
+//
+//   - Per-child fixed cost: setup 14.4us + end 0.5us ~= 15us/child, against
+//     a measured serial per-draw encode cost of 9.06us/draw -> ~1.6
+//     draw-equivalents per child. Rounded UP to 2 (the old value was a
+//     guessed 1); rounding up is the conservative/fail-closed direction
+//     because childSetup only ever subtracts from benefit.
+//   - Per-pass coordinator overhead (dispatch+join):
+//     `parallel_pass_worker_wall_ms`/pass ~= 1.64ms at ~6.3 children/pass,
+//     minus the widest-child body (~1.30ms already covered by
+//     `criticalPath`), leaves ~0.3ms/pass ~= 33 draw-equivalents/pass at
+//     the same 9.06us/draw serial rate. This term was entirely missing
+//     from the cost model before this change. Rounded DOWN to 32 (a
+//     power-of-two) rather than up to 33; the 1-draw-equivalent gap is
+//     within measurement noise and 32 keeps the constant cheap to reason
+//     about. If a future calibration disagrees, prefer 33 and document why.
+//
+// Both constants only ever increase total cost, so they only ever shrink
+// the selected candidate set (fail-closed direction) -- this is a pure
+// economics tuning change, not a safety change; R-BACK-2.72 determinism is
+// preserved because both are compile-time constants.
+inline constexpr std::uint32_t kParallelPassChildSetupDrawEquivalents = 2u;
+inline constexpr std::uint32_t kParallelPassPerPassOverheadDrawEquivalents =
+    32u;
+
 struct ParallelPassCandidateCost {
   ParallelPassEconomicsSummary economics{};
   ParallelPassFixedPoint serialWork{};
   ParallelPassFixedPoint criticalPath{};
   ParallelPassFixedPoint childSetup{};
   ParallelPassFixedPoint imbalance{};
+  ParallelPassFixedPoint perPassOverhead{};
   bool valid = false;
   bool overflow = false;
 };
@@ -2370,7 +2402,8 @@ inline bool validateParallelPassStructuralEconomics(
       !parallelPassFixedPointInCostDomain(cost.serialWork) ||
       !parallelPassFixedPointInCostDomain(cost.criticalPath) ||
       !parallelPassFixedPointInCostDomain(cost.childSetup) ||
-      !parallelPassFixedPointInCostDomain(cost.imbalance)) {
+      !parallelPassFixedPointInCostDomain(cost.imbalance) ||
+      !parallelPassFixedPointInCostDomain(cost.perPassOverhead)) {
     return false;
   }
   const auto& economics = cost.economics;
@@ -2501,7 +2534,9 @@ inline ParallelPassCandidateScore scoreParallelPassCandidate(
   ParallelPassFixedPoint totalCost{};
   if (!parallelPassFixedPointAdd(cost.criticalPath, cost.childSetup,
                                  totalCost) ||
-      !parallelPassFixedPointAdd(totalCost, cost.imbalance, totalCost)) {
+      !parallelPassFixedPointAdd(totalCost, cost.imbalance, totalCost) ||
+      !parallelPassFixedPointAdd(totalCost, cost.perPassOverhead,
+                                 totalCost)) {
     return result;
   }
   ParallelPassFixedPoint benefit = cost.serialWork;
@@ -2659,9 +2694,14 @@ inline ParallelPassCandidateSelection selectParallelPassCandidate(
 // plan already carries, so an identical plan always scores identically
 // regardless of evaluation order or worker scheduling (`R-BACK-2.72`). Serial
 // work is every draw; the parallel critical path is the widest child; each
-// child pays one draw-equivalent first-bind reset; residual imbalance is the
-// widest child minus the narrowest. Any conversion overflow leaves the record
-// invalid, which selects serial.
+// child pays `kParallelPassChildSetupDrawEquivalents` draw-equivalents for
+// its first-bind reset (measured ~1.6, see the constant's comment); the pass
+// as a whole additionally pays a fixed
+// `kParallelPassPerPassOverheadDrawEquivalents` draw-equivalents of
+// dispatch/join coordinator overhead that does not scale with child count;
+// residual imbalance is the widest child minus the narrowest. Any conversion
+// or checked-multiply overflow leaves the record invalid, which selects
+// serial.
 inline bool buildParallelPassCandidateCost(
     const ParallelPassEconomicsSummary& economics,
     ParallelPassCandidateCost& cost) noexcept {
@@ -2675,15 +2715,28 @@ inline bool buildParallelPassCandidateCost(
     cost.overflow = true;
     return false;
   }
+  const std::uint64_t childSetupDrawEquivalents =
+      static_cast<std::uint64_t>(economics.childCount) *
+      static_cast<std::uint64_t>(kParallelPassChildSetupDrawEquivalents);
+  if (economics.childCount != 0u &&
+      childSetupDrawEquivalents /
+              static_cast<std::uint64_t>(economics.childCount) !=
+          static_cast<std::uint64_t>(kParallelPassChildSetupDrawEquivalents)) {
+    cost.overflow = true;
+    return false;
+  }
   if (!parallelPassFixedPointFromUnsigned(economics.totalDraws,
                                           cost.serialWork) ||
       !parallelPassFixedPointFromUnsigned(economics.maximumChildDraws,
                                           cost.criticalPath) ||
-      !parallelPassFixedPointFromUnsigned(economics.childCount,
+      !parallelPassFixedPointFromUnsigned(childSetupDrawEquivalents,
                                           cost.childSetup) ||
       !parallelPassFixedPointFromUnsigned(
           economics.maximumChildDraws - economics.minimumChildDraws,
-          cost.imbalance)) {
+          cost.imbalance) ||
+      !parallelPassFixedPointFromUnsigned(
+          kParallelPassPerPassOverheadDrawEquivalents,
+          cost.perPassOverhead)) {
     cost.overflow = true;
     return false;
   }

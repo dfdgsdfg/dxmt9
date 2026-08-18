@@ -1407,8 +1407,17 @@ the executor consumes child ranges.
 
 `buildParallelPassCandidateCost` derives the
 checked fixed-point record from certified integers only: serial work is the
-pass draw total, the critical path is the widest child, child setup is one
-draw-equivalent per child, and imbalance is widest minus narrowest.
+pass draw total, the critical path is the widest child, child setup is
+`kParallelPassChildSetupDrawEquivalents` (2) draw-equivalents per child,
+imbalance is widest minus narrowest, and the pass additionally pays a fixed
+`kParallelPassPerPassOverheadDrawEquivalents` (32) draw-equivalents of
+coordinator dispatch/join overhead that does not scale with child count. Both
+constants are calibrated from the 2026-08-18 GT2 `DXMT9_PERF_PARALLEL_CHILD_SPLIT`
+measurement (per-child setup+end ≈15µs ≈1.6 draw-equivalents at the measured
+9.06µs/draw serial encode rate; per-pass join/prep ≈0.3ms ≈33 draw-equivalents)
+and are documented at their definitions with the measurement provenance;
+changing either requires a new measurement, and both only ever increase cost,
+so recalibration in this form can only shrink the selected set.
 
 The adapter is a gate, never a relaxation. A certificate-invalid candidate can
 never reach the selector, and an unselected candidate can never reach child
