@@ -750,4 +750,16 @@ std::uint32_t resolveParallelPassImbalanceBoundFromEnv(
   return resolution.bound;
 }
 
+// ---------------------------------------------------------------------
+// DXMT9_PERF_PARALLEL_CHILD_SPLIT — see the doc-comment in the header.
+// ---------------------------------------------------------------------
+
+bool parallelChildSplitPerfEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_PARALLEL_CHILD_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
 }  // namespace dxmt9::encoders

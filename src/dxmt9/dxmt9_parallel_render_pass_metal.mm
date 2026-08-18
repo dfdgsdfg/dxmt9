@@ -159,7 +159,16 @@ bool ParallelPassMetalBackend::endChild(std::uint32_t ordinal) noexcept {
       childEnded_[ordinal]) {
     return false;
   }
+  const bool collectPerf = perf::enabled() && parallelChildSplitPerfEnabled();
+  const auto started = collectPerf ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
   children_[ordinal].endEncoding();
+  if (collectPerf) {
+    perf::countParallelChildEnd(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started)
+            .count()));
+  }
   childEnded_[ordinal] = true;
   return true;
 }

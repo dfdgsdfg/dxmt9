@@ -3964,6 +3964,66 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
     return 0u;
   };
 
+  // Read the one typed reason field that a given
+  // `ParallelPassCandidateSelectionFailure` checkpoint is expected to own in
+  // the `parallel_pass_adapter_selection_*` counter breakdown.
+  using SelectionFailure = ParallelPassCandidateSelectionFailure;
+  const auto selectionReasonField =
+      [](const dxmt9::perf::ParallelPassAdapterSelectionSnapshot& s,
+         SelectionFailure failure) -> std::uint64_t {
+    switch (failure) {
+    case SelectionFailure::Empty:
+      return s.empty;
+    case SelectionFailure::InvalidPlan:
+      return s.invalidPlan;
+    case SelectionFailure::InvalidEconomics:
+      return s.invalidEconomics;
+    case SelectionFailure::NonPositiveBenefit:
+      return s.nonPositiveBenefit;
+    case SelectionFailure::Arithmetic:
+      return s.arithmetic;
+    case SelectionFailure::InvalidCandidateOrdinal:
+      return s.invalidCandidateOrdinal;
+    case SelectionFailure::None:
+    case SelectionFailure::Count:
+      return 0u;
+    }
+    return 0u;
+  };
+
+  // Drives the real `countParallelPassAdapter` writer for a
+  // certificate-valid-but-not-selected decision (the seam the certificate
+  // breakdown above cannot see) and proves that exactly the expected typed
+  // `parallel_pass_adapter_selection_*` reason counter moves by one while
+  // every other typed selection reason stays put.
+  const auto expectSelectionFailure =
+      [&](const ParallelPassAdapterDecision& decision,
+          SelectionFailure expectedFailure, std::string_view message) {
+    check(decision.certificateValid() && !decision.selected() &&
+              decision.selection == expectedFailure,
+          "the decision under test is certificate-valid but not selected, "
+          "for the expected reason");
+    const auto before = dxmt9::perf::snapshotParallelPassAdapterSelection();
+    dxmt9::perf::countParallelPassAdapter(decision);
+    const auto after = dxmt9::perf::snapshotParallelPassAdapterSelection();
+    check(after.total() == before.total() + 1u &&
+              selectionReasonField(after, expectedFailure) ==
+                  selectionReasonField(before, expectedFailure) + 1u,
+          message);
+    for (const auto other :
+         {SelectionFailure::Empty, SelectionFailure::InvalidPlan,
+          SelectionFailure::InvalidEconomics,
+          SelectionFailure::NonPositiveBenefit, SelectionFailure::Arithmetic,
+          SelectionFailure::InvalidCandidateOrdinal}) {
+      if (other == expectedFailure) {
+        continue;
+      }
+      check(selectionReasonField(after, other) ==
+                selectionReasonField(before, other),
+            "every other typed selection reason counter is untouched");
+    }
+  };
+
   // The authority owner still holds the unmutated snapshot, so every mutated
   // candidate is rejected by the certificate before it can reach the
   // selector. Each fixture also drives the real `countParallelPassAdapter`
@@ -4060,6 +4120,9 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
             unscored.accounting.selected == 0u,
         "an invalid economics record fails closed at selection, after a valid "
         "certificate, with zero Metal effects");
+  expectSelectionFailure(unscored.decision, SelectionFailure::InvalidEconomics,
+                         "the typed selection reason counter for invalid "
+                         "economics moves by exactly one");
 
   // A non-positive benefit is a legitimate serial selection, not an error.
   auto nonPositive = cost;
@@ -4071,6 +4134,10 @@ void proofCoreAdapterGatesEveryProductionCandidate() {
             !rejected.executed && rejected.parallelEffects == 0u &&
             rejected.accounting.conserves(),
         "a non-positive benefit selects serial without effects");
+  expectSelectionFailure(rejected.decision,
+                         SelectionFailure::NonPositiveBenefit,
+                         "the typed selection reason counter for "
+                         "non-positive benefit moves by exactly one");
 
   // Conservation over the whole observed population.
   ParallelPassAdapterAccounting total{};

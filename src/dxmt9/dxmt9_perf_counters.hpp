@@ -263,6 +263,15 @@ void countParallelPassWorkerTaskBegin();
 void countParallelPassWorkerTaskEnd(std::uint64_t cpuNs);
 void countParallelPassWorkerWallTime(std::uint64_t wallNs);
 
+// Heavy opt-in per-child phase split, gated by
+// `encoders::parallelChildSplitPerfEnabled()`
+// (`DXMT9_PERF_PARALLEL_CHILD_SPLIT`). Callers must not read the clock or
+// call these unless that gate is enabled; see
+// `agents/rules/environment_variables_perf.rules.md`.
+void countParallelChildSetup(std::uint64_t cpuNs);
+void countParallelChildBody(std::uint64_t cpuNs);
+void countParallelChildEnd(std::uint64_t cpuNs);
+
 // Cold, typed evidence seam for the Render Tape parallel-join worker.  This
 // deliberately reads the existing raw counters instead of extending the
 // canonical shutdown-report schema; production provider tools can therefore
@@ -322,6 +331,28 @@ struct ParallelPassAdapterCertificateInvalidSnapshot {
 
 ParallelPassAdapterCertificateInvalidSnapshot
 snapshotParallelPassAdapterCertificateInvalid() noexcept;
+
+// Typed breakdown of adapter-considered candidates whose certificate was
+// valid but the proof-core selector still rejected them, keyed by
+// `ParallelPassCandidateSelectionFailure`. The fields sum to
+// `parallelPassAdapterCertificateValid - parallelPassAdapterSelected`
+// (`dxmt9-parallel-render-pass-spec` pins the conservation).
+struct ParallelPassAdapterSelectionSnapshot {
+  std::uint64_t empty = 0;
+  std::uint64_t invalidPlan = 0;
+  std::uint64_t invalidEconomics = 0;
+  std::uint64_t nonPositiveBenefit = 0;
+  std::uint64_t arithmetic = 0;
+  std::uint64_t invalidCandidateOrdinal = 0;
+
+  constexpr std::uint64_t total() const noexcept {
+    return empty + invalidPlan + invalidEconomics + nonPositiveBenefit +
+        arithmetic + invalidCandidateOrdinal;
+  }
+};
+
+ParallelPassAdapterSelectionSnapshot
+snapshotParallelPassAdapterSelection() noexcept;
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);
