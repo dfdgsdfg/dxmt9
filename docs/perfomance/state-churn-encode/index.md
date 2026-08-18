@@ -27,6 +27,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 ## Recent Leaf Documents
 
 - [state-churn-encode-append-decomposition.16 - The Setup Prologue Is Half A Per-Draw Metal Debug Group](state-churn-encode-append-decomposition.16.md)
+- [state-churn-encode-append-decomposition.17 - Current-HEAD Producer-Wall Resize: PE Layer 10.3 ms, Drain Fence Harvested, Draw Records Average 4.9 KB](state-churn-encode-append-decomposition.17.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
