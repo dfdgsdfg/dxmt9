@@ -43,13 +43,20 @@ macOS storage housekeeping burns about two cores continuously:
 `StorageManagementService` (17.0 s in the 20 s window), 
 `ApplicationsStorageExtension` (6.5 s), and five `fseventsd` client threads
 (~3.2 s each). This is the session's phantom disk consumer (the volume has
-been pinned near 100% for days) and a real scheduling perturbation: a
-2 ms/frame delta is plausibly inside the noise this creates.
+been pinned near 100% for days) and a standing operational hazard for
+future fine-grained comparisons (see the verdict for why it does not
+explain the .18 result).
 
-**Verdict.** The .18 puzzle narrows to two live explanations — the decimated
-flush-savings estimate overstates the removal (the documented N=64
-chunk-period aliasing), or the saving is real but buried under host
-contamination — and both point the same way operationally: (a) no further
+**Verdict.** The .18 puzzle narrows to two explanations, and they are not
+equally live. The contamination-masking hypothesis is undercut by the .18
+data itself: within-config ABBA repeatability was 0.1-0.3%, so the run-time
+noise floor was low — a constant background load slows both arms equally and
+cannot hide a 5% delta, and a bursty one would have scattered the repeats.
+The leading explanation is therefore that the decimated flush-savings
+estimate overstates the removal (the documented N=64 chunk-period aliasing:
+at the default cadence the sampled flush population aligns with the 64-record
+chunk period). Host contamination remains an operational hazard rather than
+the explanation of record. Both still point the same way operationally: (a) no further
 producer-CPU experiments until the host is clean (free tens of GB so the
 storage daemons settle), and (b) separating game logic from the PE layer on
 this thread requires symbolizing the 32-bit PE side in traces or extending
