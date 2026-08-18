@@ -677,6 +677,24 @@ void countParallelPassWorkerWallTime(std::uint64_t wallNs) {
   add(counters().parallelPassWorkerWallNs, wallNs);
 }
 
+void countParallelChildSetup(std::uint64_t cpuNs) {
+  auto& c = counters();
+  add(c.parallelChildSetupCpuNs, cpuNs);
+  add(c.parallelChildSetupSamples);
+}
+
+void countParallelChildBody(std::uint64_t cpuNs) {
+  auto& c = counters();
+  add(c.parallelChildBodyCpuNs, cpuNs);
+  add(c.parallelChildBodySamples);
+}
+
+void countParallelChildEnd(std::uint64_t cpuNs) {
+  auto& c = counters();
+  add(c.parallelChildEndCpuNs, cpuNs);
+  add(c.parallelChildEndSamples);
+}
+
 RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept {
   const Counters& c = counters();
   return RenderTapeParallelJoinSnapshot{
@@ -898,59 +916,94 @@ void countParallelPassAdapter(
   add(c.parallelPassAdapterCertificateInvalid, accounting.certificateInvalid);
   add(c.parallelPassAdapterSelected, accounting.selected);
   add(c.parallelPassAdapterSerialFallback, accounting.serialFallback);
-  if (accounting.certificateInvalid == 0u) {
-    return;
+  if (accounting.certificateInvalid != 0u) {
+    // The typed reason is a per-checkpoint breakdown of the aggregate
+    // `certificateInvalid` count above: exactly one reason counter
+    // increments per invalid certificate, and their sum equals the
+    // aggregate (`dxmt9-parallel-render-pass-spec` pins the conservation).
+    // Each kind stays distinct rather than merged into a coarser bucket,
+    // because each one is a separate checkpoint in
+    // `validateParallelPassSemanticPlan` with a real diagnostic difference
+    // (missing input vs. identity/epoch proof vs. coordinator/attachment/
+    // resource proof vs. first-draw proof vs. capacity/plan-shape vs. exact
+    // coverage vs. the reserved arithmetic overflow checkpoint).
+    using Failure = encoders::ParallelPassSemanticPlanFailure;
+    static_assert(static_cast<std::uint8_t>(Failure::Count) == 12u);
+    switch (decision.certificate) {
+    case Failure::None:
+      break;
+    case Failure::MissingSnapshot:
+      add(c.parallelPassAdapterCertificateInvalidMissingSnapshot);
+      break;
+    case Failure::SourceIdentity:
+      add(c.parallelPassAdapterCertificateInvalidSourceIdentity);
+      break;
+    case Failure::PassIdentity:
+      add(c.parallelPassAdapterCertificateInvalidPassIdentity);
+      break;
+    case Failure::CoordinatorProof:
+      add(c.parallelPassAdapterCertificateInvalidCoordinatorProof);
+      break;
+    case Failure::AttachmentProof:
+      add(c.parallelPassAdapterCertificateInvalidAttachmentProof);
+      break;
+    case Failure::ResourceProof:
+      add(c.parallelPassAdapterCertificateInvalidResourceProof);
+      break;
+    case Failure::FirstDrawProof:
+      add(c.parallelPassAdapterCertificateInvalidFirstDrawProof);
+      break;
+    case Failure::ChildCapacity:
+      add(c.parallelPassAdapterCertificateInvalidChildCapacity);
+      break;
+    case Failure::ChildPlan:
+      add(c.parallelPassAdapterCertificateInvalidChildPlan);
+      break;
+    case Failure::Coverage:
+      add(c.parallelPassAdapterCertificateInvalidCoverage);
+      break;
+    case Failure::Arithmetic:
+      add(c.parallelPassAdapterCertificateInvalidArithmetic);
+      break;
+    case Failure::Count:
+      break;
+    }
   }
-  // The typed reason is a per-checkpoint breakdown of the aggregate
-  // `certificateInvalid` count above: exactly one reason counter increments
-  // per invalid certificate, and their sum equals the aggregate
-  // (`dxmt9-parallel-render-pass-spec` pins the conservation). Each kind
-  // stays distinct rather than merged into a coarser bucket, because each
-  // one is a separate checkpoint in `validateParallelPassSemanticPlan` with
-  // a real diagnostic difference (missing input vs. identity/epoch proof vs.
-  // coordinator/attachment/resource proof vs. first-draw proof vs.
-  // capacity/plan-shape vs. exact coverage vs. the reserved arithmetic
-  // overflow checkpoint).
-  using Failure = encoders::ParallelPassSemanticPlanFailure;
-  static_assert(static_cast<std::uint8_t>(Failure::Count) == 12u);
-  switch (decision.certificate) {
-  case Failure::None:
-    break;
-  case Failure::MissingSnapshot:
-    add(c.parallelPassAdapterCertificateInvalidMissingSnapshot);
-    break;
-  case Failure::SourceIdentity:
-    add(c.parallelPassAdapterCertificateInvalidSourceIdentity);
-    break;
-  case Failure::PassIdentity:
-    add(c.parallelPassAdapterCertificateInvalidPassIdentity);
-    break;
-  case Failure::CoordinatorProof:
-    add(c.parallelPassAdapterCertificateInvalidCoordinatorProof);
-    break;
-  case Failure::AttachmentProof:
-    add(c.parallelPassAdapterCertificateInvalidAttachmentProof);
-    break;
-  case Failure::ResourceProof:
-    add(c.parallelPassAdapterCertificateInvalidResourceProof);
-    break;
-  case Failure::FirstDrawProof:
-    add(c.parallelPassAdapterCertificateInvalidFirstDrawProof);
-    break;
-  case Failure::ChildCapacity:
-    add(c.parallelPassAdapterCertificateInvalidChildCapacity);
-    break;
-  case Failure::ChildPlan:
-    add(c.parallelPassAdapterCertificateInvalidChildPlan);
-    break;
-  case Failure::Coverage:
-    add(c.parallelPassAdapterCertificateInvalidCoverage);
-    break;
-  case Failure::Arithmetic:
-    add(c.parallelPassAdapterCertificateInvalidArithmetic);
-    break;
-  case Failure::Count:
-    break;
+  // Typed breakdown of candidates whose certificate was valid but the
+  // proof-core selector still rejected them: this is the seam the
+  // certificate breakdown above cannot see, because a certificate-invalid
+  // decision never reaches the selector and its `.selection` field stays at
+  // the default `Empty` sentinel. Guarding on `certificateValid()` keeps
+  // that default from being misread as a real `Empty` selection failure.
+  if (decision.certificateValid() && !decision.selected()) {
+    using SelectionFailure = encoders::ParallelPassCandidateSelectionFailure;
+    static_assert(static_cast<std::uint8_t>(SelectionFailure::Count) == 7u);
+    switch (decision.selection) {
+    case SelectionFailure::None:
+      // Selected==false with failure==None cannot happen by construction of
+      // `selectParallelPassCandidate`; leave unattributed rather than guess.
+      break;
+    case SelectionFailure::Empty:
+      add(c.parallelPassAdapterSelectionEmpty);
+      break;
+    case SelectionFailure::InvalidPlan:
+      add(c.parallelPassAdapterSelectionInvalidPlan);
+      break;
+    case SelectionFailure::InvalidEconomics:
+      add(c.parallelPassAdapterSelectionInvalidEconomics);
+      break;
+    case SelectionFailure::NonPositiveBenefit:
+      add(c.parallelPassAdapterSelectionNonPositiveBenefit);
+      break;
+    case SelectionFailure::Arithmetic:
+      add(c.parallelPassAdapterSelectionArithmetic);
+      break;
+    case SelectionFailure::InvalidCandidateOrdinal:
+      add(c.parallelPassAdapterSelectionInvalidCandidateOrdinal);
+      break;
+    case SelectionFailure::Count:
+      break;
+    }
   }
 }
 
@@ -977,6 +1030,21 @@ snapshotParallelPassAdapterCertificateInvalid() noexcept {
       .childPlan = load(c.parallelPassAdapterCertificateInvalidChildPlan),
       .coverage = load(c.parallelPassAdapterCertificateInvalidCoverage),
       .arithmetic = load(c.parallelPassAdapterCertificateInvalidArithmetic),
+  };
+}
+
+ParallelPassAdapterSelectionSnapshot
+snapshotParallelPassAdapterSelection() noexcept {
+  const Counters& c = counters();
+  return ParallelPassAdapterSelectionSnapshot{
+      .empty = load(c.parallelPassAdapterSelectionEmpty),
+      .invalidPlan = load(c.parallelPassAdapterSelectionInvalidPlan),
+      .invalidEconomics = load(c.parallelPassAdapterSelectionInvalidEconomics),
+      .nonPositiveBenefit =
+          load(c.parallelPassAdapterSelectionNonPositiveBenefit),
+      .arithmetic = load(c.parallelPassAdapterSelectionArithmetic),
+      .invalidCandidateOrdinal =
+          load(c.parallelPassAdapterSelectionInvalidCandidateOrdinal),
   };
 }
 

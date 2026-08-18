@@ -171,6 +171,19 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassWorkerActivePeak{0};
   std::atomic<std::uint64_t> parallelPassWorkerCpuNs{0};
   std::atomic<std::uint64_t> parallelPassWorkerWallNs{0};
+  // Heavy opt-in per-child phase split (`DXMT9_PERF_PARALLEL_CHILD_SPLIT`),
+  // sized to calibrate the Q16.16 per-child setup term in
+  // `buildParallelPassCandidateCost`. Setup covers Metal encoder obtain plus
+  // binding/state prologue up to the first draw issue; body covers the draw
+  // loop; end covers the child's `endEncoding()`. Sample counters are kept
+  // per phase so ms/child is directly computable even if a phase is skipped
+  // by an early return.
+  std::atomic<std::uint64_t> parallelChildSetupCpuNs{0};
+  std::atomic<std::uint64_t> parallelChildSetupSamples{0};
+  std::atomic<std::uint64_t> parallelChildBodyCpuNs{0};
+  std::atomic<std::uint64_t> parallelChildBodySamples{0};
+  std::atomic<std::uint64_t> parallelChildEndCpuNs{0};
+  std::atomic<std::uint64_t> parallelChildEndSamples{0};
   std::atomic<std::uint64_t> parallelPassBindingStage1Selected{0};
   std::atomic<std::uint64_t> parallelPassBindingStage2bSelected{0};
   std::atomic<std::uint64_t> parallelPassStage2bChildren{0};
@@ -254,6 +267,18 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidChildPlan{0};
   std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidCoverage{0};
   std::atomic<std::uint64_t> parallelPassAdapterCertificateInvalidArithmetic{0};
+  // Typed breakdown of adapter-considered candidates whose certificate was
+  // valid but the proof-core selector still rejected them
+  // (`decision.certificateValid() && !decision.selected()`), keyed by
+  // `ParallelPassCandidateSelectionFailure`. `None` never appears here: it
+  // means the candidate was selected. Their sum equals
+  // `parallelPassAdapterCertificateValid - parallelPassAdapterSelected`.
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionEmpty{0};
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionInvalidPlan{0};
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionInvalidEconomics{0};
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionNonPositiveBenefit{0};
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionArithmetic{0};
+  std::atomic<std::uint64_t> parallelPassAdapterSelectionInvalidCandidateOrdinal{0};
   std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};

@@ -111,6 +111,20 @@ ParallelPassImbalanceBoundResolution resolveParallelPassImbalanceBound(
 std::uint32_t resolveParallelPassImbalanceBoundFromEnv(
     std::uint32_t fallbackQuantum);
 
+// ---------------------------------------------------------------------
+// DXMT9_PERF_PARALLEL_CHILD_SPLIT — heavy opt-in per-child phase split.
+// ---------------------------------------------------------------------
+//
+// Calibration probe for the Q16.16 per-child setup term in
+// `buildParallelPassCandidateCost` (currently a guessed one draw-equivalent
+// per child). Gates the extra clock reads around each child's setup (Metal
+// encoder obtain + binding/state prologue up to the first draw issue), draw
+// loop body, and `endEncoding()` — see
+// `agents/rules/environment_variables_perf.rules.md`. Mirrors the
+// `DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT` gate pattern: a process-once cached
+// predicate so the timers cost nothing unless explicitly requested.
+bool parallelChildSplitPerfEnabled() noexcept;
+
 inline constexpr std::uint32_t kParallelRenderPassNoFailedChild = UINT32_MAX;
 
 enum class ParallelPassDirectBindingMode : std::uint8_t {

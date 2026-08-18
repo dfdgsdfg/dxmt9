@@ -4346,6 +4346,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .emitChild = +[](void* raw, const ParallelPassChildPlan& child,
                          WMT::RenderCommandEncoder encoder) noexcept {
           auto& state = *static_cast<ProductionParallelContext*>(raw);
+          const bool collectChildSplitPerf =
+              perf::enabled() && parallelChildSplitPerfEnabled();
+          const auto setupStarted = collectChildSplitPerf
+              ? std::chrono::steady_clock::now()
+              : std::chrono::steady_clock::time_point{};
           const auto resolved = resolveEncodePartition(
               child.range, *state.stream);
           if (!resolved || resolved.partition.drawParams.empty() ||
@@ -4363,46 +4368,64 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               static_cast<unsigned long long>(state.sourceSeqId),
               static_cast<unsigned long long>(state.encoderIndex),
               child.childOrdinal));
-          if (child.coversCompleteCommands) {
-            const std::uint64_t ordinalEnd =
-                static_cast<std::uint64_t>(child.replayOrdinalBegin) +
-                child.replayOrdinalCount;
-            for (std::uint64_t ordinal = child.replayOrdinalBegin;
-                 ordinal < ordinalEnd; ++ordinal) {
-              std::uint32_t childCommandIndex = 0u;
-              if (!state.stream->commandIndexAt(
-                      static_cast<std::size_t>(ordinal),
-                      childCommandIndex)) {
-                return false;
-              }
-              const auto childSource = state.stream->source.payload.commandAt(
-                  childCommandIndex);
-              if (childSource.kind() != Kind::DrawRun) {
-                return false;
-              }
-              const auto childDrawItems =
-                  childSource.command.drawItems.empty()
-                      ? childSource.command.drawParams
-                      : childSource.command.drawItems;
-              if (!(*state.encodeParallelDrawRun)(
-                      childCommandIndex, childSource.command,
-                      childDrawItems, 0u, encoder, child.binding,
-                      childBinding)) {
-                return false;
-              }
+          if (collectChildSplitPerf) {
+            perf::countParallelChildSetup(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - setupStarted)
+                    .count()));
+          }
+          const auto bodyStarted = collectChildSplitPerf
+              ? std::chrono::steady_clock::now()
+              : std::chrono::steady_clock::time_point{};
+          const auto recordBody = [&] {
+            if (collectChildSplitPerf) {
+              perf::countParallelChildBody(static_cast<std::uint64_t>(
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now() - bodyStarted)
+                      .count()));
             }
-          } else {
+          };
+          const bool bodyOk = [&]() noexcept {
+            if (child.coversCompleteCommands) {
+              const std::uint64_t ordinalEnd =
+                  static_cast<std::uint64_t>(child.replayOrdinalBegin) +
+                  child.replayOrdinalCount;
+              for (std::uint64_t ordinal = child.replayOrdinalBegin;
+                   ordinal < ordinalEnd; ++ordinal) {
+                std::uint32_t childCommandIndex = 0u;
+                if (!state.stream->commandIndexAt(
+                        static_cast<std::size_t>(ordinal),
+                        childCommandIndex)) {
+                  return false;
+                }
+                const auto childSource =
+                    state.stream->source.payload.commandAt(childCommandIndex);
+                if (childSource.kind() != Kind::DrawRun) {
+                  return false;
+                }
+                const auto childDrawItems =
+                    childSource.command.drawItems.empty()
+                        ? childSource.command.drawParams
+                        : childSource.command.drawItems;
+                if (!(*state.encodeParallelDrawRun)(
+                        childCommandIndex, childSource.command,
+                        childDrawItems, 0u, encoder, child.binding,
+                        childBinding)) {
+                  return false;
+                }
+              }
+              return true;
+            }
             const std::size_t commandDrawBegin =
                 child.range.entry.drawParamIndex -
                 state.command.drawRunRecord->firstParam;
-            if (!(*state.encodeParallelDrawRun)(
-                    state.commandIndex, state.command,
-                    resolved.partition.drawParams, commandDrawBegin,
-                    encoder, child.binding, childBinding)) {
-              return false;
-            }
-          }
-          return true;
+            return (*state.encodeParallelDrawRun)(
+                state.commandIndex, state.command,
+                resolved.partition.drawParams, commandDrawBegin, encoder,
+                child.binding, childBinding);
+          }();
+          recordBody();
+          return bodyOk;
         },
         .joinChild = +[](void*, std::uint32_t) noexcept { return true; },
         .endPassActions = +[](void*) noexcept { return true; },
