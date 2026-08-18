@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 17
-title: Current-HEAD Producer-Wall Resize — PE Layer 10.3 ms, Drain Fence Harvested, Draw Records Average 4.9 KB
+title: Current-HEAD Producer-Wall Resize — PE Layer 10.3 ms, Drain Fence Harvested, Chunk-Seal Cadence Is The Lead
 date: 2026-08-18
 type: experiment-run
 status: accepted-attribution
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05--pe-decim-now; experiments/output/a
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.08.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.11.md; docs/perfomance/present-pacing/present-pacing-drain-fence-attribution.206.md
 ---
 
-# Current-HEAD Producer-Wall Resize — PE Layer 10.3 ms, Drain Fence Harvested, Draw Records Average 4.9 KB
+# Current-HEAD Producer-Wall Resize — PE Layer 10.3 ms, Drain Fence Harvested, Chunk-Seal Cadence Is The Lead
 
 **Question.** After the parallel partition track closed as performance-neutral
 (the encode stage has slack; frames are producer-paced), what is the producer
@@ -57,20 +57,37 @@ draw-record production itself. Caveat: `append`'s reading carries the
 documented N=64/chunk-period aliasing (`±13%`, [.08]); the direction of the
 conclusion does not depend on it.
 
-**The concrete lead — draw records average `4.9 KB` each.**
-`append_drawidx_bytes = 12.81 GB` over the run against
-`append_drawidx_calls = 2.60 M`: **`4,920 bytes` per indexed-draw record,
-`8.2 MB/present` of wire volume**, against the sparse-delta design's
-documented "typical record ~100 B" (`environment_variables_bridge.rules.md`,
-`DXMT9_PE_DRAW_FULL_SNAPSHOT` row). Two orders of magnitude above the design
-intent, and byte copying is exactly where `append`'s `2.3 µs/call` goes. The
-next question is the record's byte composition: what fills 4.9 KB per draw
-(inline uniform payloads? redundant sections? full-snapshot-shaped state
-riding the delta path?), and how much of it is removable or deduplicable.
-While frames are producer-paced, every removed millisecond here converts 1:1
-to fps.
+**Retraction of the first-draft lead — the `4.9 KB/record` figure was a
+counter artifact, not wire volume.** A source investigation
+(`d3d9_pe_device.cpp:10234-10298`, `:10401-10454`, `:10201-10231`) shows
+`append_drawidx_bytes` sums the caller's `sizeHint`, and for DrawIndexed that
+is the frozen constant `kLegacyDrawIndexedPrimitiveSizeHint = 4920` —
+deliberately preserved so chunk-seal cadence stays bit-identical to the
+pre-migration fat-packet recorder. The measured average equals the constant
+bit-for-bit (`12,811,704,600 / 2,604,005 = 4,920.00`), the sibling
+`append_draw`/`append_applystate` averages equal their own frozen hints
+(`4,888`), and the real sparse record (56 B wire header plus dirty-gated
+sections of 8-28 B each) is on the order of a few hundred bytes as designed.
+The full-snapshot predicate is confirmed off. There is no wire-bloat lever;
+the true per-record bytes live in `CommandChunkBuilder::payloadBytes()` and
+are not what this counter measures.
+
+**The corrected lead — chunk-flush cadence, not record size.** The same
+emission already decomposes `append`'s real `6.33 ms/present`:
+`append_encode` (66,318 samples, `64.5 ms`) is ~`790 ns`/record calibrated =
+**`~2.2 ms/present` of per-record section building**, while `append_flush`
+(1,073 samples, `72.9 ms`) is **`68 µs` per chunk seal × ~42 seals/present =
+`~2.9 ms/present`** — the once-per-64-records chunk flush (the PE-side seal
+plus `commitChunk` crossing) is the larger half. `790 ns` to serialize a few
+hundred bytes also suggests section-building overhead rather than copying.
+Both are attackable: `DXMT9_PE_CHUNK_MAX_RECORDS` (default 64) is already an
+env tunable, so the flush share can be A/B'd immediately (fewer, larger
+chunks), with the caveat that chunk cadence is a behavioural contract — a
+cadence change shifts publish granularity and downstream pipelining, so the
+A/B must watch encode-stage pacing and visual gates, not just producer CPU.
 
 **Verdict.** The producer wall's reducible share today is owned by PE
-draw-record production (`~6-8 ms/present`), not by fences (`0.33`), constant
-setters (`0.5`), or the encode stage (slack). The next track is a draw-record
-byte-composition decomposition.
+draw-record **production cost** (`~6-8 ms/present`: ~2.9 chunk-seal, ~2.2
+per-record encode, ~3.0 entry residual), not by record size, fences
+(`0.33`), constant setters (`0.5`), or the encode stage (slack). The next
+probes are a chunk-size cadence A/B and a per-record encode decomposition.
