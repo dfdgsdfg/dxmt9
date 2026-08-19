@@ -7,12 +7,36 @@
 #include <cstdint>
 #include <vector>
 
-// Flat, chunk-lifetime wrapper-retention set. Entries are kept in one
-// capacity-preserving arena instead of one unordered_set + vector pair per
-// wrapper kind. An acquisition is a checkpoint into that arena, so rollback
-// never allocates and releases only entries appended by the failed record.
+// Flat wrapper-retention set. Entries are kept in one capacity-preserving
+// arena instead of one unordered_set + vector pair per wrapper kind. An
+// acquisition is a checkpoint into that arena, so rollback never allocates and
+// releases only entries appended by the failed record.
+//
+// The pin an entry holds exists for one reason: a recorded-but-not-yet-imported
+// chunk names the unix object by raw pointer, so the object must survive the
+// app releasing its D3D9 wrapper before the chunk is committed. Retention was
+// already deduplicated per entry, so the wire cost was one addref/release pair
+// per unique object per chunk — measured on GT2 as 663+663 buffer crossings and
+// ~293x2 shader/texture crossings per present (~0.7 ms/present,
+// `state-churn-encode-append-decomposition.24`). Those pairs are pure churn
+// whenever the same object is named by the next chunk too, which for a scene's
+// working set is nearly always.
+//
+// So entries now survive a chunk boundary. `endEpoch()` closes a chunk: an
+// entry named during the epoch that just ended, or during the one before it,
+// keeps its pin and costs no crossing when the next chunk names it again; a
+// colder entry is released there. `clear()` still drops everything and is what
+// Reset / ResetEx / device teardown call, so no pin outlives the device or
+// crosses a `dxmt9c_device_reset*` call. The only behavioural difference is
+// that a unix object the app has dropped can stay alive up to two chunk
+// periods longer than before (GT2: ~5 ms) — a strictly longer real reference,
+// never a shorter one, so no pointer can dangle that did not dangle before.
 class D3D9PePendingCommandRetainer {
 public:
+    // An entry survives this many fully idle epochs before its pin is dropped.
+    // 1 means "named in the epoch that just closed, or the one before it".
+    static constexpr std::uint64_t kWarmEpochs = 1u;
+
     D3D9PePendingCommandRetainer() {
         entries_.reserve(64);
     }
@@ -101,6 +125,28 @@ public:
         }
     }
 
+    // Closes the current chunk epoch: entries not named within the last
+    // kWarmEpochs + 1 epochs release their pin and leave the arena; everything
+    // else stays pinned for the next chunk at zero wire cost. Must not be
+    // called with a record in flight — the caller rolls back first, so no
+    // outstanding Acquired checkpoint can survive the compaction below.
+    void endEpoch() noexcept {
+        std::size_t write = 0;
+        for (std::size_t read = 0; read < entries_.size(); ++read) {
+            const Entry& entry = entries_[read];
+            if (epoch_ - entry.lastTouchedEpoch <= kWarmEpochs) {
+                if (write != read) {
+                    entries_[write] = entry;
+                }
+                ++write;
+                continue;
+            }
+            release(entry);
+        }
+        entries_.resize(write);
+        ++epoch_;
+    }
+
     void clear() {
         for (auto it = entries_.rbegin(); it != entries_.rend(); ++it) {
             release(*it);
@@ -112,6 +158,7 @@ private:
     struct Entry {
         std::uint32_t kind = 0;
         void* ptr = nullptr;
+        std::uint64_t lastTouchedEpoch = 0;
     };
 
     template<typename T, typename AddRefFn>
@@ -125,9 +172,12 @@ private:
                 return entry.kind == kind && entry.ptr == ptr;
             });
         if (duplicate != entries_.end()) {
+            // Already pinned — by this chunk or by a recent one. Refresh the
+            // warmth stamp and cross nothing.
+            duplicate->lastTouchedEpoch = epoch_;
             return;
         }
-        entries_.push_back(Entry{kind, ptr});
+        entries_.push_back(Entry{kind, ptr, epoch_});
         // Publish the entry before taking ownership so a vector-growth
         // failure cannot leak an AddRef that rollback/clear cannot see.
         addRef(ptr);
@@ -159,4 +209,5 @@ private:
     }
 
     std::vector<Entry> entries_{};
+    std::uint64_t epoch_ = 0;
 };

@@ -225,10 +225,14 @@ void testCachedIdentityBuilderAndSeal() {
         "sealed blob rejects mutation until reset");
 
   builder.reset();
-  check(first.refs == 1u && second.refs == 1u &&
-            builder.recordCount() == 0u && builder.handleCount() == 0u &&
+  check(builder.recordCount() == 0u && builder.handleCount() == 0u &&
             !builder.sealed(),
-        "reset releases retained wrappers while preserving builder capacity");
+        "reset clears the record/handle/payload arenas and the seal");
+  check(first.refs == 2u && second.refs == 2u,
+        "a chunk boundary keeps recently-named wrapper pins warm");
+  builder.resetAndReleaseRetained();
+  check(first.refs == 1u && second.refs == 1u,
+        "the discard path releases every retained wrapper");
 }
 
 void testInvalidIdentityAndExplicitRollback() {
@@ -402,10 +406,15 @@ void testNonDrawProducerMatrix() {
             query.refs == 2u,
         "non-draw matrix retains each wrapper once per chunk");
   builder.reset();
+  check(srcTexture.refs == 2u && dstTexture.refs == 2u &&
+            srcSurface.refs == 2u && dstSurface.refs == 2u &&
+            query.refs == 2u,
+        "non-draw matrix keeps its wrapper pins warm across a chunk boundary");
+  builder.resetAndReleaseRetained();
   check(srcTexture.refs == 1u && dstTexture.refs == 1u &&
             srcSurface.refs == 1u && dstSurface.refs == 1u &&
             query.refs == 1u,
-        "non-draw matrix releases all cached wrapper ownership");
+        "non-draw matrix releases all cached wrapper ownership on discard");
 }
 
 void testSparseDrawAndApplyProducerMatrix() {
@@ -613,9 +622,13 @@ void testSparseDrawAndApplyProducerMatrix() {
             vertexDecl.refs == 2u && surface.refs == 2u,
         "draw handle table retains each cached wrapper once per chunk");
   builder.reset();
+  check(texture.refs == 2u && buffer.refs == 2u && shader.refs == 2u &&
+            vertexDecl.refs == 2u && surface.refs == 2u,
+        "draw builder keeps its wrapper pins warm across a chunk boundary");
+  builder.resetAndReleaseRetained();
   check(texture.refs == 1u && buffer.refs == 1u && shader.refs == 1u &&
             vertexDecl.refs == 1u && surface.refs == 1u,
-        "draw builder reset releases every retained wrapper");
+        "draw builder discard releases every retained wrapper");
 
   std::array duplicateSlots = {
       SparseBindingInput<D9CCommandChunkWireTextureBinding>{

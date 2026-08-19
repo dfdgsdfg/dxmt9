@@ -222,7 +222,10 @@ struct Fixture {
   }
 
   ~Fixture() {
-    builder.reset();
+    // Discard, not a chunk boundary: reset() would leave the warm retainer pin
+    // in place (see D3D9PePendingCommandRetainer), and this fixture is going
+    // away, so release it explicitly before the registry entry is erased.
+    builder.resetAndReleaseRetained();
     registry.erase(textureRef.identity, &texture);
   }
 };
@@ -326,10 +329,18 @@ void testWarmRecordImportReplayAllocations() {
   check(repeated, "bounded warm canonical corpus records, imports, and replays");
   check(gAllocationCount.load(std::memory_order_relaxed) == 0u,
         "warm canonical record/import/replay performs zero system allocations");
+  // The resolve/retain layer must balance exactly; the builder's retention
+  // layer legitimately still holds one warm pin, because the corpus ends on a
+  // chunk boundary (reset()) rather than a discard, and the texture is named by
+  // every iteration.
   check(fixture.sink.drawCount - drawsBefore == 512u &&
             fixture.sink.textureCount - texturesBefore == 256u &&
-            fixture.texture.refs == 1u,
-        "warm corpus replays every draw and balances both ownership layers");
+            fixture.texture.refs == 2u,
+        "warm corpus replays every draw, balances the resolve layer, and "
+        "carries exactly one warm builder pin across 256 chunk boundaries");
+  fixture.builder.resetAndReleaseRetained();
+  check(fixture.texture.refs == 1u,
+        "discarding the builder balances the retention layer too");
 }
 
 void testSparseDrawWireSizeReduction() {

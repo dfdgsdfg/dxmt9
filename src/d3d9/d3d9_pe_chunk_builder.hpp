@@ -97,7 +97,12 @@ class CommandChunkBuilder {
   void rollbackRecord() noexcept;
 
   SealedCommandChunk seal() noexcept;
+  // Chunk boundary after a successful commit: keeps recently-named wrapper
+  // pins warm across the boundary (see D3D9PePendingCommandRetainer).
   void reset() noexcept;
+  // Discard: same as reset() but also releases every warm pin. Use at device
+  // teardown / Reset / ResetEx.
+  void resetAndReleaseRetained() noexcept;
 
   bool recordActive() const noexcept { return active_.active; }
   bool sealed() const noexcept { return sealed_; }

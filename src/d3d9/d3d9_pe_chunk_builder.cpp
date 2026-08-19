@@ -356,6 +356,26 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
 
 void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
+  // Chunk boundary, not a discard: the committed chunk's handles are now the
+  // unix side's problem, but the objects this chunk named are overwhelmingly
+  // the objects the next one will name, so their pins stay warm for a bounded
+  // number of epochs instead of being dropped and re-taken over the bridge.
+  // See D3D9PePendingCommandRetainer's header comment.
+  retainer_.endEpoch();
+  records_.clear();
+  handles_.clear();
+  handleObjects_.clear();
+  payload_.clear();
+  sealedBlob_.clear();
+  sealed_ = false;
+}
+
+void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
+  rollbackRecord();
+  // Discard, not a chunk boundary: drop every pin including the warm ones the
+  // previous epochs are still holding. This is what device teardown, Reset and
+  // ResetEx run, so no retainer pin can survive into a dxmt9c_device_reset*
+  // call or outlive the device.
   retainer_.clear();
   records_.clear();
   handles_.clear();

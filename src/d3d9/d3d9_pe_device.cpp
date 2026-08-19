@@ -1736,7 +1736,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // Discarded chunks never acquire a tape ObjectDestroy event. Drain
         // the logical pending refs before raw D9C retainer reset.
         drainPendingRenderTapeChunk(false);
-        commandChunk_.reset();
+        // Discard path (device teardown, Reset, ResetEx): release the warm
+        // retainer pins too, so nothing is still holding a unix object when
+        // dxmt9c_device_reset* / dxmt9c_device_release runs.
+        commandChunk_.resetAndReleaseRetained();
     }
 
     void clearPeStateTracking() {
