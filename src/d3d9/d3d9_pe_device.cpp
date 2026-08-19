@@ -1354,6 +1354,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
      * device-level GetBackBuffer and GetSwapChain through a stable
      * per-sc wrapper that owns the back-buffer cache. */
     std::unordered_map<UINT, IDirect3DSwapChain9*> swapchainWrappers_{};
+    /* Per-index unix swap-chain handle, owned for exactly as long as
+     * swapchainWrappers_ above (both are dropped by releaseAllBound(), which
+     * runs on the device destructor, Reset and ResetEx). Every call to
+     * dxmt9c_device_get_swap_chain allocates a fresh D9CSwapChain wrapper AND
+     * its bridge entry carries a deferred-replay drain fence — GT2 measured it
+     * at 617.9 us/call, the single most expensive getter crossing in the run —
+     * while the object it wraps is stable: core::Device::swapChains_ is only
+     * appended to (CreateAdditionalSwapChain) and resized in place
+     * (resetValidated), never erased or replaced. Resolve one handle per index
+     * and borrow it. */
+    std::unordered_map<UINT, D9CSwapChain*> swapchainHandles_{};
 
     PeHotStateShadow peState_{};
     PeConstShadowBlock peConsts_{};
@@ -1656,6 +1667,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return dxmt9c_device_get_render_state(dev_, static_cast<uint32_t>(state));
     }
 
+    /* Borrowed per-index unix swap-chain handle; see swapchainHandles_.
+     * The returned pointer must NOT be released by the caller — it is dropped
+     * with the rest of the swap-chain cache in releaseAllBound(). */
+    D9CSwapChain* borrowSwapChainHandle(UINT index) {
+        if (const auto it = swapchainHandles_.find(index);
+            it != swapchainHandles_.end()) {
+            return it->second;
+        }
+        D9CSwapChain* chain =
+            dev_ ? dxmt9c_device_get_swap_chain(dev_, index) : nullptr;
+        if (!chain) {
+            return nullptr;
+        }
+        try {
+            swapchainHandles_.emplace(index, chain);
+        } catch (...) {
+            dxmt9c_swapchain_release(chain);
+            return nullptr;
+        }
+        return chain;
+    }
+
     void releaseAllBound() {
         for (auto& t : textures_)   setRef(t, (IDirect3DBaseTexture9*)nullptr);
         setRef(vs_, (IDirect3DVertexShader9*)nullptr);
@@ -1682,6 +1715,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (sc) sc->Release();
         }
         swapchainWrappers_.clear();
+        for (auto& [idx, chain] : swapchainHandles_) {
+            if (chain) dxmt9c_swapchain_release(chain);
+        }
+        swapchainHandles_.clear();
         // T2 device-lost: explicitly nullify the device's primary RT slot
         // and depth-stencil on the C side so no stale Metal surface handle
         // survives a Reset(). The PE shadow's pendingRtMask/pendingDs is
@@ -12451,13 +12488,12 @@ public:
     HRESULT STDMETHODCALLTYPE GetDisplayMode(UINT sc, D3DDISPLAYMODE* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_display_mode device=%p sc=%u", this, sc);
-        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
+        D9CSwapChain* chain = borrowSwapChainHandle(sc);
         if (!chain) {
             return D3DERR_INVALIDCALL;
         }
         D9CPresentParams cpp{};
         const HRESULT hr = hr32(dxmt9c_swapchain_get_present_params(chain, &cpp));
-        dxmt9c_swapchain_release(chain);
         if (FAILED(hr)) {
             dxmt9DeviceDebugLog("device_get_display_mode -> hr=0x%08x", (unsigned)hr);
             return hr;
@@ -12849,7 +12885,7 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
         dxmt9DeviceDebugLog("device_get_back_buffer device=%p sc=%u idx=%u", this, sc, idx);
-        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
+        D9CSwapChain* chain = borrowSwapChainHandle(sc);
         if (!chain) return D3DERR_INVALIDCALL;
         // Wine d3d9 test_swapchain_parameters: GetBackBuffer with an
         // index meeting or exceeding the swapchain's BackBufferCount
@@ -12861,20 +12897,15 @@ public:
         D9CPresentParams cppGuard{};
         if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cppGuard)))) {
             if (idx >= cppGuard.backBufferCount) {
-                dxmt9c_swapchain_release(chain);
                 return D3DERR_INVALIDCALL;
             }
         }
-        D9CSurface* s = dxmt9c_swapchain_get_back_buffer(chain, idx, 0);
-        if (!s) {
-            dxmt9c_swapchain_release(chain);
-            return D3DERR_INVALIDCALL;
-        }
-        // Release the C-side handles we hold; the cached swap-chain
-        // wrapper owns its own retained references and the eventual
-        // PE surface wrapper holds its own ref via CreatePeSurface.
-        dxmt9c_surface_release(s);
-        dxmt9c_swapchain_release(chain);
+        // The former dxmt9c_swapchain_get_back_buffer + surface_release probe
+        // that stood here is gone: it allocated and immediately dropped a unix
+        // surface handle purely to map "no such back buffer" to
+        // D3DERR_INVALIDCALL, which the swap-chain wrapper's own
+        // GetBackBuffer below does with the identical null check and the
+        // identical HRESULT, without disturbing *ppS (already NULL).
         // Wine d3d9 contract: device-level GetBackBuffer must return
         // the same COM wrapper as the matching swap-chain GetBackBuffer
         // for any (sc, idx). Route through the cached swap-chain
@@ -12907,13 +12938,12 @@ public:
         // the helper takes a per-call counter and the current backbuffer height.
         static std::atomic<uint64_t> rasterTick{0};
         uint32_t displayHeight = 0;
-        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, swapChain);
+        D9CSwapChain* chain = borrowSwapChainHandle(swapChain);
         if (chain) {
             D9CPresentParams cpp{};
             if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cpp)))) {
                 displayHeight = cpp.backBufferHeight;
             }
-            dxmt9c_swapchain_release(chain);
         }
         const auto tick = rasterTick.fetch_add(1, std::memory_order_relaxed) + 1;
         const auto est = ::dxmt9::d3d9::computeRasterStatusEstimate(tick, displayHeight);

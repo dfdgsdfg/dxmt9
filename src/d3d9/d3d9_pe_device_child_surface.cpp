@@ -4,7 +4,9 @@
 
 #include "d3d9_pe_device_child.hpp"
 
+#include "d3d9_pe_level_surface_cache.hpp"
 #include "util/com/com_private_data.hpp"
+#include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -649,6 +651,88 @@ static void fillSurfaceDesc(const D9CSurfaceDesc &src, D3DSURFACE_DESC &dst) {
  * for the device to extract the handle when binding the resource.
  * ========================================================================= */
 
+// A level-surface handle owned by the containing texture wrapper rather than by
+// the returned surface wrapper. `GetSurfaceLevel` / `GetCubeMapSurface` still
+// hand out a fresh COM object per call (unchanged app-visible identity and
+// AddRef-on-return), but that object borrows the container's already-resolved
+// unix handle, wire identity and descriptor instead of re-crossing the bridge
+// three times. The borrow is lifetime-safe because the surface wrapper AddRefs
+// its container for its whole lifetime, so the container — and therefore the
+// handle it owns — always outlives every borrower.
+struct PeBorrowedSurfaceHandle {
+  const dxmt9::d3d9::pe::PeWireObjectRef *wire = nullptr;
+  const D9CSurfaceDesc *desc = nullptr;
+  bool descValid = false;
+};
+
+// Level-surface handle sharing is disabled whenever Render Tape capture is
+// configured. The tape records one ObjectDefine / ObjectDestroy pair and one
+// surface-alias registration per wire identity, and a shared identity would
+// make those events ambiguous; the capture lane is a bounded diagnostic, so it
+// keeps the per-call owning path. Read once, like every other DXMT9_* knob.
+static bool peLevelSurfaceCacheEnabled() {
+  static const bool enabled =
+      !dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE");
+  return enabled;
+}
+
+// One resolved (container, subresource) level surface. The handle is owned by
+// the container wrapper and released exactly once from its destructor.
+struct PeLevelSurfaceEntry {
+  D9CSurface *handle = nullptr;
+  dxmt9::d3d9::pe::PeWireObjectRef wire{};
+  D9CSurfaceDesc desc{};
+  bool descValid = false;
+};
+
+using PeLevelSurfaceCache =
+    dxmt9::d3d9::pe::LevelSurfaceCache<PeLevelSurfaceEntry>;
+
+// Resolves `index` through `cache`, crossing the bridge at most once per
+// (container, index). Returns nullptr when the caller must use the per-call
+// owning path; `levelMissing` then distinguishes "the unix side reports no such
+// subresource" (already proven, do not re-cross) from "the index is outside the
+// cacheable window" (re-cross on the owning path).
+static const PeLevelSurfaceEntry *resolveCachedLevelSurface(
+    D9CTexture *texture, PeLevelSurfaceCache &cache, std::uint32_t index,
+    bool &levelMissing) {
+  levelMissing = false;
+  if (const auto *hit = cache.find(index)) {
+    return hit;
+  }
+  if (!PeLevelSurfaceCache::cacheable(index)) {
+    return nullptr;
+  }
+  PeLevelSurfaceEntry entry{};
+  entry.handle = dxmt9c_texture_get_surface_level(texture, index);
+  if (!entry.handle) {
+    levelMissing = true;
+    return nullptr;
+  }
+  dxmt9::d3d9::pe::cacheWireObjectRef(
+      entry.handle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+      dxmt9c_surface_get_wire_identity, entry.wire);
+  entry.descValid = loadSurfaceDesc(entry.handle, entry.desc);
+  const auto *stored = cache.store(index, entry);
+  if (!stored || stored->handle != entry.handle) {
+    // Storage refused the entry, or a duplicate raced us into the slot. Either
+    // way we still own the handle we just resolved; drop it so the refcount
+    // ledger matches the pre-cache behaviour.
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(entry.wire);
+    dxmt9c_surface_release(entry.handle);
+  }
+  return stored;
+}
+
+// Releases every handle a container's level cache owns. Called once, from the
+// container's destructor, before the container drops its own texture reference.
+static void releaseCachedLevelSurfaces(PeLevelSurfaceCache &cache) noexcept {
+  cache.releaseAll([](PeLevelSurfaceEntry &entry) noexcept {
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(entry.wire);
+    dxmt9c_surface_release(entry.handle);
+  });
+}
+
 /* ── Surface ────────────────────────────────────────────────────────────────
  */
 
@@ -698,6 +782,11 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   void *userMemory_ = nullptr;
   int32_t userMemoryPitch_ = 0;
   DWORD priorityShadow_ = 0;
+  // False when s_ is owned by the containing texture wrapper's level cache.
+  // A borrowed handle must not be released, unpublished from the wire-object
+  // cache, or reported to Render Tape as destroyed when this wrapper dies —
+  // the container still owns it and other wrappers may still be using it.
+  bool ownsHandle_ = true;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -707,15 +796,28 @@ public:
                   void *userMemory = nullptr,
                   int32_t userMemoryPitch = 0,
                   const dxmt9::d3d9::pe::PeWireObjectRef *parentTexture = nullptr,
-                  std::uint32_t parentSubresource = 0u)
+                  std::uint32_t parentSubresource = 0u,
+                  const PeBorrowedSurfaceHandle *borrowed = nullptr)
       : s_(s), device_(device), container_(container), recorder_(recorder),
-        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
+        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch),
+        ownsHandle_(borrowed == nullptr) {
     if (device_)
       device_->AddRef();
-    dxmt9::d3d9::pe::cacheWireObjectRef(
-        s_, D9C_CHUNK_HANDLE_KIND_SURFACE,
-        dxmt9c_surface_get_wire_identity, wireObject_);
-    descValid_ = loadSurfaceDesc(s_, desc_);
+    if (borrowed) {
+      // Identity and descriptor were resolved once by the container; both are
+      // immutable for the handle's lifetime, so re-fetching them here would be
+      // two more bridge round trips for the same answer.
+      wireObject_ = borrowed->wire ? *borrowed->wire
+                                   : dxmt9::d3d9::pe::PeWireObjectRef{};
+      descValid_ = borrowed->descValid;
+      if (borrowed->desc)
+        desc_ = *borrowed->desc;
+    } else {
+      dxmt9::d3d9::pe::cacheWireObjectRef(
+          s_, D9C_CHUNK_HANDLE_KIND_SURFACE,
+          dxmt9c_surface_get_wire_identity, wireObject_);
+      descValid_ = loadSurfaceDesc(s_, desc_);
+    }
     // A texture level surface is a view of the parent's generation-qualified
     // subresource for every format. Route its mutations to that parent so the
     // capture registry never treats aliased bytes as independent surface
@@ -759,13 +861,15 @@ public:
   bool peLocked() const { return locked_; }
 
   ~D3D9SurfaceImpl() {
-    if (recorder_)
+    if (recorder_ && ownsHandle_)
       recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     if (dc_)
       DeleteDC(dc_);
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
-    dxmt9c_surface_release(s_);
+    if (ownsHandle_) {
+      dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
+      dxmt9c_surface_release(s_);
+    }
     if (container_)
       container_->Release();
     if (device_)
@@ -1400,6 +1504,9 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   void *userMemory_ = nullptr;
   int32_t userMemoryPitch_ = 0;
   DWORD priorityShadow_ = 0;
+  // Owns one unix D9CSurface handle per resolved mip level; every surface
+  // wrapper handed out by GetSurfaceLevel borrows from here.
+  PeLevelSurfaceCache levelSurfaces_{};
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -1421,6 +1528,9 @@ public:
     if (recorder_)
       recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    // Every borrower AddRef'd this container, so no surface wrapper can still
+    // be alive here; the level handles may be released before the texture.
+    releaseCachedLevelSurfaces(levelSurfaces_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
@@ -1579,6 +1689,29 @@ public:
     *ppS = nullptr;
     dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u", this,
                         level);
+    if (peLevelSurfaceCacheEnabled()) {
+      bool levelMissing = false;
+      const auto *entry =
+          resolveCachedLevelSurface(t_, levelSurfaces_, level, levelMissing);
+      if (entry) {
+        const PeBorrowedSurfaceHandle borrowed{&entry->wire, &entry->desc,
+                                               entry->descValid};
+        *ppS = new D3D9SurfaceImpl(entry->handle, device_,
+                                   static_cast<IDirect3DBaseTexture9 *>(this),
+                                   recorder_, true, nullptr, 0, &wireObject_,
+                                   level, &borrowed);
+        dxmt9DeviceDebugLog(
+            "texture_get_surface_level this=%p level=%u -> surface=%p (cached)",
+            this, level, *ppS);
+        return finishPeCall(S_OK);
+      }
+      if (levelMissing) {
+        dxmt9DeviceDebugLog(
+            "texture_get_surface_level this=%p level=%u -> invalid", this,
+            level);
+        return finishPeCall(D3DERR_INVALIDCALL);
+      }
+    }
     D9CSurface *s = dxmt9c_texture_get_surface_level(t_, level);
     if (!s) {
       dxmt9DeviceDebugLog(
@@ -2024,6 +2157,9 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   std::vector<CaptureLock> captureLocks_{};
   DWORD priorityShadow_ = 0;
+  // Owns one unix D9CSurface handle per resolved face/level subresource; every
+  // surface wrapper handed out by GetCubeMapSurface borrows from here.
+  PeLevelSurfaceCache levelSurfaces_{};
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -2042,6 +2178,9 @@ public:
     if (recorder_)
       recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    // Every borrower AddRef'd this container, so no surface wrapper can still
+    // be alive here; the level handles may be released before the texture.
+    releaseCachedLevelSurfaces(levelSurfaces_);
     dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
@@ -2213,6 +2352,30 @@ public:
           "cube_get_surface_level this=%p face=%u level=%u -> invalid", this,
           static_cast<unsigned>(face), level);
       return finishPeCall(D3DERR_INVALIDCALL);
+    }
+    if (peLevelSurfaceCacheEnabled()) {
+      bool levelMissing = false;
+      const auto *entry =
+          resolveCachedLevelSurface(t_, levelSurfaces_, idx, levelMissing);
+      if (entry) {
+        const PeBorrowedSurfaceHandle borrowed{&entry->wire, &entry->desc,
+                                               entry->descValid};
+        *ppS = new D3D9SurfaceImpl(entry->handle, device_,
+                                   static_cast<IDirect3DBaseTexture9 *>(this),
+                                   recorder_, true, nullptr, 0, &wireObject_,
+                                   idx, &borrowed);
+        dxmt9DeviceDebugLog(
+            "cube_get_surface_level this=%p face=%u level=%u -> surface=%p "
+            "(cached)",
+            this, static_cast<unsigned>(face), level, *ppS);
+        return finishPeCall(S_OK);
+      }
+      if (levelMissing) {
+        dxmt9DeviceDebugLog(
+            "cube_get_surface_level this=%p face=%u level=%u -> invalid", this,
+            static_cast<unsigned>(face), level);
+        return finishPeCall(D3DERR_INVALIDCALL);
+      }
     }
     D9CSurface *s = dxmt9c_texture_get_surface_level(t_, idx);
     if (!s) {
