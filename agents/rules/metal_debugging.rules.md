@@ -611,11 +611,24 @@ their samples surface as unmapped high addresses (measured 2026-08-19: with a
 probe-verified `DXMT9_PE_MODULE_MAP=1` module map, 92.7% of game-thread
 samples were `unknown_64bit` and zero fell below 4 GiB). The dyld-loaded unix
 side (`winemetal.so`) still symbolizes normally. Use the in-process PE
-sampler instead: run with `DXMT9_PE_MODULE_MAP=1` plus the PE thread sampler
-env (see `agents/rules/environment_variables_bridge.rules.md`), which reads
-the game thread's true Win32 `Eip` via SuspendThread/GetThreadContext and
-classifies against the same module map; `scripts/tools/symbolicate_xctrace_pe.py`
-remains the join tool for its emitted histogram lines. The lower-level
+sampler instead: run with `DXMT9_PE_MODULE_MAP=1 DXMT9_PE_THREAD_SAMPLER=1
+DXMT_LOG_LEVEL=info` (rate knob `DXMT9_PE_THREAD_SAMPLER_HZ`, default `250`;
+see `agents/rules/environment_variables_bridge.rules.md`), which reads
+the game thread's true Win32 `Eip`/`Rip` via SuspendThread/GetThreadContext and
+classifies against the same module map. Join its cumulative
+`[dxmt9-pe-sampler]` groups with
+
+```sh
+python3 scripts/tools/symbolicate_xctrace_pe.py \
+  --sampler-log traces/<run>/3dmark05-direct.log \
+  --output-csv traces/<run>/analysis/pe-sampler.csv \
+  --output-md  traces/<run>/analysis/pe-sampler.md
+```
+
+which also writes `pe-sampler-selfpc.csv` (top self-`d3d9.dll` PC buckets with
+RVAs). **A sampler run is not a valid FPS sample** — it stops the game thread
+`hz` times a second — so pair it with a clean no-sampler scout for any
+wall-clock claim. The lower-level
 3DMark05 wrapper also prints `xctrace_system_trace_export_cmd` and
 `xctrace_system_trace_summary_cmd` in dry-run and real-run output for manual
 fallbacks. Those summary commands require RenderPass-labelled xctrace rows and

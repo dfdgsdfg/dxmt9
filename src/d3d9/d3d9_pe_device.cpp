@@ -45,6 +45,7 @@
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
+#include "d3d9_pe_thread_sampler.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
@@ -303,6 +304,38 @@ static void dxmt9PeDumpModuleMap() {
     }
 }
 #endif
+
+// DXMT9_PE_THREAD_SAMPLER (diagnostic, Tier 2 of PE 32-bit symbolication):
+// suspend the game thread `HZ` times a second and classify its true Win32
+// program counter against the module map. Read once at first use; zero cost
+// when unset. See src/d3d9/d3d9_pe_thread_sampler.hpp for the suspend-window
+// safety contract, and agents/rules/environment_variables_bridge.rules.md for
+// why a run with this enabled is not a valid performance sample.
+static bool dxmt9PeThreadSamplerEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_THREAD_SAMPLER");
+    return enabled;
+}
+
+static std::uint32_t dxmt9PeThreadSamplerHz() {
+    static const std::uint32_t hz = [] {
+        // Unset, unparseable, and 0 all fall back to the default rather than
+        // clamping to the floor, so a typo reads as "default", not "50".
+        const auto parsed = dxmt9::util::getenvU32("DXMT9_PE_THREAD_SAMPLER_HZ");
+        const std::uint32_t requested =
+            (parsed.has_value() && *parsed != 0)
+                ? *parsed
+                : dxmt9::d3d9::pe::kPeSamplerDefaultHz;
+        return dxmt9::d3d9::pe::clampPeSamplerHz(requested);
+    }();
+    return hz;
+}
+
+static void dxmt9PeThreadSamplerInfoLog(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-pe-sampler", fmt, args);
+    va_end(args);
+}
 
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
@@ -1456,6 +1489,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
       return s;
     }();
     std::uint64_t peStatsDecimationPresents_ = 0;
+    // DXMT9_PE_THREAD_SAMPLER. Heap-owned and released through
+    // PeThreadSampler::stopAndRelease(), which deliberately leaks the block
+    // rather than freeing it under a sampler thread that did not join in time.
+    dxmt9::d3d9::pe::PeThreadSampler* peThreadSampler_ = nullptr;
+    std::uint64_t peThreadSamplerPresents_ = 0;
+    bool peThreadSamplerPresentThreadChecked_ = false;
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
     std::int64_t peRecorderLastChunkReturnNs_ = 0;
     std::int64_t peRecorderCurrentChunkFirstAppendNs_ = 0;
@@ -7020,6 +7059,121 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             appendTypeText.c_str());
     }
 
+    // DXMT9_PE_THREAD_SAMPLER: start one sampler targeting the thread that
+    // created the device. That is the game thread by construction — D3D9
+    // device creation is what the renderer thread does — and it is the thread
+    // whose PE-side samples xctrace cannot attribute.
+    void startPeThreadSamplerIfRequested() {
+        if (!dxmt9PeThreadSamplerEnabled()) {
+            return;
+        }
+        const std::uint32_t hz = dxmt9PeThreadSamplerHz();
+        // A second device must not add a second thread stopping the same
+        // target, so the sampler refuses; distinguish that from an OS failure
+        // rather than reporting a stale GetLastError() for it.
+        const bool alreadyLive =
+            dxmt9::d3d9::pe::PeThreadSampler::processSamplerIsLive();
+        peThreadSampler_ =
+            dxmt9::d3d9::pe::PeThreadSampler::startForThread(GetCurrentThreadId(), hz);
+        if (!peThreadSampler_) {
+            if (alreadyLive) {
+                dxmt9PeThreadSamplerInfoLog(
+                    "not_started reason=already_running_for_process thread_id=0x%lx",
+                    static_cast<unsigned long>(GetCurrentThreadId()));
+            } else {
+                dxmt9PeThreadSamplerInfoLog(
+                    "not_started reason=start_failed thread_id=0x%lx hz=%u "
+                    "error=0x%08lx",
+                    static_cast<unsigned long>(GetCurrentThreadId()), hz,
+                    static_cast<unsigned long>(GetLastError()));
+            }
+            return;
+        }
+        dxmt9PeThreadSamplerInfoLog(
+            "started thread_id=0x%lx hz=%u interval_ms=%u",
+            static_cast<unsigned long>(peThreadSampler_->targetThreadId()), hz,
+            peThreadSampler_->intervalMs());
+    }
+
+    void stopPeThreadSampler() {
+        if (!peThreadSampler_) {
+            return;
+        }
+        dxmt9::d3d9::pe::PeThreadSampler::stopAndRelease(peThreadSampler_);
+        peThreadSampler_ = nullptr;
+    }
+
+    // Emits ONE cumulative [dxmt9-pe-sampler] group: a header line, one line
+    // per module with a nonzero count (top 20 by count), then the self-module
+    // PC histogram's top buckets. Counters are cumulative and never reset, so
+    // a consumer reads the LAST group in the log.
+    void logPeThreadSampler() {
+        if (!peThreadSampler_) {
+            return;
+        }
+        dxmt9::d3d9::pe::PeSamplerSnapshot snap;
+        peThreadSampler_->snapshot(snap);
+        dxmt9PeThreadSamplerInfoLog(
+            "presents=%llu samples=%llu suspend_failures=%llu "
+            "ctx_failures=%llu resume_failures=%llu hz=%u module_table=%u",
+            static_cast<unsigned long long>(peThreadSamplerPresents_),
+            static_cast<unsigned long long>(snap.samples),
+            static_cast<unsigned long long>(snap.suspendFailures),
+            static_cast<unsigned long long>(snap.contextFailures),
+            static_cast<unsigned long long>(snap.resumeFailures),
+            snap.hz,
+            snap.moduleTableReady ? 1u : 0u);
+        for (std::size_t i = 0; i < snap.moduleRows; ++i) {
+            dxmt9PeThreadSamplerInfoLog(
+                "module=%s samples=%llu",
+                snap.moduleNames[i],
+                static_cast<unsigned long long>(snap.topModules[i].samples));
+        }
+        if (snap.selfModuleName[0] != '\0') {
+            // Names the module the buckets below are relative to, so the join
+            // tool subtracts the right [dxmt9-pe-module-map] base for the RVA.
+            dxmt9PeThreadSamplerInfoLog("selfpc_module=%s", snap.selfModuleName);
+        }
+        for (std::size_t i = 0; i < snap.selfPcRows; ++i) {
+            dxmt9PeThreadSamplerInfoLog(
+                "selfpc bucket=0x%llx samples=%llu",
+                static_cast<unsigned long long>(snap.topSelfPc[i].bucket),
+                static_cast<unsigned long long>(snap.topSelfPc[i].samples));
+        }
+        dxmt9PeThreadSamplerInfoLog(
+            "selfpc_overflow=%llu",
+            static_cast<unsigned long long>(snap.selfPcOverflow));
+    }
+
+    // Present-cadence tick for the sampler dump, mirroring the decimation
+    // cadence: cumulative line every 60 presents, plus a final line from the
+    // destructor so the last partial interval is never lost.
+    void notePeThreadSamplerPresent() {
+        if (!peThreadSampler_) {
+            return;
+        }
+        // The sampler targets the thread that created the device on the
+        // assumption that it is also the thread that renders. If an app splits
+        // those, every sample describes the wrong thread and nothing else in
+        // the output would say so — the histogram would just look idle. Say it
+        // once, loudly, instead of leaving a silently wrong answer.
+        if (!peThreadSamplerPresentThreadChecked_) {
+            peThreadSamplerPresentThreadChecked_ = true;
+            const DWORD presentThread = GetCurrentThreadId();
+            if (presentThread != peThreadSampler_->targetThreadId()) {
+                dxmt9PeThreadSamplerInfoLog(
+                    "target_thread_mismatch sampled=0x%lx present=0x%lx "
+                    "note=samples_describe_the_device_creating_thread_not_the_present_thread",
+                    static_cast<unsigned long>(peThreadSampler_->targetThreadId()),
+                    static_cast<unsigned long>(presentThread));
+            }
+        }
+        ++peThreadSamplerPresents_;
+        if (peThreadSamplerPresents_ % 60 == 0) {
+            logPeThreadSampler();
+        }
+    }
+
     // Present-cadence tick for the decimated dump: increments a cumulative
     // present counter and emits the cumulative line every 60 presents. A
     // final line is also emitted unconditionally from the destructor so the
@@ -12166,6 +12320,9 @@ public:
         // a safe, one-time-per-device site for the Tier 1 PE symbolication
         // diagnostic.
         dxmt9PeDumpModuleMap();
+        // DXMT9_PE_THREAD_SAMPLER: same site, same reasoning — every module is
+        // loaded by now, and the creating thread is the game thread.
+        startPeThreadSamplerIfRequested();
         dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
                             adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
@@ -12187,6 +12344,10 @@ public:
         logVsConstSetterRangePerf("destructor");
         logPeRecorderStats("destructor", true);
         logPeStatsDecimation();
+        // Emit the last partial interval before the sampler stops, then stop
+        // it: the sampler thread must not outlive the state it reads.
+        logPeThreadSampler();
+        stopPeThreadSampler();
         clearPendingCommandChunk();
         releaseAllBound();
         dxmt9c_device_release(dev_);
@@ -12669,6 +12830,7 @@ public:
             logPeRecorderStats("present");
             markPePresentReturnedForCadence();
             notePeStatsDecimationPresent();
+            notePeThreadSamplerPresent();
             if (renderTapeCaptureWasActive) {
                 finishRenderTapeCaptureAtPresentBoundary();
             } else {
