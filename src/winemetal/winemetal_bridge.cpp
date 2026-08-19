@@ -145,6 +145,12 @@ struct BridgePerfCounters {
   BridgePerfBucket total{};
   std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeClass::Count)> classes{};
   std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeDetail::Count)> details{};
+  // Per-opcode buckets (generated enum size). Reported as the top rows by
+  // total ns so a single hot opcode — e.g. a per-draw resource crossing —
+  // is identifiable without class/detail guesswork.
+  std::array<BridgePerfBucket,
+             static_cast<std::size_t>(dxmt9::bridge::BridgeOpcode::dxmt9c_bridge_op_count)>
+      opcodes{};
 };
 #endif  // DXMT9_BRIDGE_PERF_COUNTERS
 
@@ -558,6 +564,40 @@ void reportBridgePerfCounters() {
     printBucket(bridgeDetailName(static_cast<BridgeDetail>(i)), counters.details[i]);
   }
   std::fprintf(stderr, "\n");
+
+  // Top opcodes by accumulated ns, one line so log scrapers can key on it.
+  constexpr std::size_t kTopOpcodes = 12;
+  std::array<std::size_t, kTopOpcodes> top{};
+  std::size_t topCount = 0;
+  for (std::size_t code = 0; code < counters.opcodes.size(); ++code) {
+    const std::uint64_t ns = load(counters.opcodes[code].ns);
+    if (ns == 0) {
+      continue;
+    }
+    std::size_t insert = topCount < kTopOpcodes ? topCount : kTopOpcodes;
+    while (insert > 0 &&
+           load(counters.opcodes[top[insert - 1]].ns) < ns) {
+      if (insert < kTopOpcodes) {
+        top[insert] = top[insert - 1];
+      }
+      --insert;
+    }
+    if (insert < kTopOpcodes) {
+      top[insert] = code;
+      if (topCount < kTopOpcodes) {
+        ++topCount;
+      }
+    }
+  }
+  std::fprintf(stderr, "[dxmt9-bridge-perf-opcodes]");
+  for (std::size_t i = 0; i < topCount; ++i) {
+    const std::size_t code = top[i];
+    std::fprintf(stderr, " %s=%llu/%.3fms",
+                 dxmt9::bridge::bridgeOpcodeName(static_cast<unsigned int>(code)),
+                 static_cast<unsigned long long>(load(counters.opcodes[code].calls)),
+                 static_cast<double>(load(counters.opcodes[code].ns)) / 1000000.0);
+  }
+  std::fprintf(stderr, "\n");
 }
 
 void ensureBridgePerfRegistered() {
@@ -585,6 +625,37 @@ void recordBridgePerf(unsigned int code, std::uint64_t nanoseconds) {
   BridgeDetail detail = BridgeDetail::Count;
   if (classifyBridgeDetail(code, detail)) {
     addBridgePerf(counters.details[static_cast<std::size_t>(detail)], nanoseconds);
+  }
+  if (code < static_cast<unsigned int>(dxmt9::bridge::BridgeOpcode::dxmt9c_bridge_op_count)) {
+    addBridgePerf(counters.opcodes[code], nanoseconds);
+  }
+
+  // DXMT9_BRIDGE_PERF_PERIODIC_COMMITS: emit the cumulative bridge-perf
+  // report every N commit_chunk crossings. The atexit report is lost when a
+  // benchmark is SIGKILLed at its timeout (3DMark05's post-scene hang policy),
+  // which previously made per-class crossing cost unmeasurable on GT2 — the
+  // same lesson as H231's presents-at-kill counter loss, in bridge form.
+  // Commit crossings are the trigger (not presents) because Present rides the
+  // chunk as a record in the hot path and never appears as a standalone
+  // present-class bridge call.
+  if (detail == BridgeDetail::CommitChunk) {
+    static const std::uint64_t cadence = [] {
+      const char* env = std::getenv("DXMT9_BRIDGE_PERF_PERIODIC_COMMITS");
+      if (!env || env[0] == '\0' || env[0] == '0') {
+        return 0ull;
+      }
+      char* end = nullptr;
+      const auto parsed = std::strtoull(env, &end, 10);
+      return end != env ? static_cast<std::uint64_t>(parsed) : 0ull;
+    }();
+    if (cadence != 0) {
+      static std::atomic<std::uint64_t> commitCrossings{0};
+      const std::uint64_t seen =
+          commitCrossings.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (seen % cadence == 0) {
+        reportBridgePerfCounters();
+      }
+    }
   }
 }
 
