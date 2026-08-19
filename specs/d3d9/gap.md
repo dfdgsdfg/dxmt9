@@ -725,6 +725,48 @@ local array and emitted silently-wrong output. Re-enabling it is its own project
 control-flow operands — but this is the second time this session that a missing
 range check turned a wrong input into wrong pixels rather than an error.
 
+## Conformance-gate audit after the PE getter-cache/warm-epoch merge (2026-08-20)
+
+The full-suite gate run after `6faeb559` initially read as 16 fails including
+"14 regressions" whose names (surface container/desc, refcount, desc-binding
+policies) matched the merge's surface exactly. Every one of them was an
+artifact, established by a three-point matrix (merge parent `840d95c1`,
+cache-only `f9dc7e75`, merged head — full suite each) plus singleton and
+isolated-chunk reruns:
+
+- **The merge introduced zero conformance regressions.** Clean head fails ≡
+  clean base fails. The suspicious 14 all pass as singletons on head.
+- **Two artifact mechanisms, both worth knowing:** (1) a concurrently running
+  build/test load pushed one 60 s chunk into TIMEOUT and its kill poisoned the
+  two following chunks plus the focus-sensitive
+  `fullscreen_window_position_restore`; (2) the decl/fvf group (indices 16-19)
+  dies as a group from a pre-existing flaky SEH teardown crash — see below.
+  Chunk-level fail patterns whose names happen to overlap a change's surface
+  read exactly like regressions; **singleton re-verification before attributing
+  any conformance regression is mandatory.** The staged-build sidecar's sha256
+  is what proves each matrix point actually loaded the intended build.
+- **`create_cube_texture_dim_policy` was a real pre-existing bug, now fixed**
+  (`88fcdc76`): `CreateCubeTexture(64, Levels=8)` returned `D3D_OK` and the
+  over-long level count reached `MTLTextureDescriptor`, which kills the process.
+  The shared PE validator (`peTextureLevelCountHResult`) now rejects any zero
+  axis and an explicit `Levels > floor(log2(maxDimension))+1` for
+  CreateTexture / CreateVolumeTexture / CreateCubeTexture before the bridge;
+  value-level mirror in `dxmt9-core-d3d9-device-validation-spec`. Post-fix full
+  suite: 234/235, the only fail being the known
+  `visual_process_vertices_xyzhw_policy` accuracy fail (documented above).
+- **Open flake — decl-group SEH teardown crash.** The chunk process for
+  indices 16-19 intermittently dies at second-device teardown with
+  `err:seh:call_stack_handlers invalid frame ... unable to dispatch exception`
+  (stdout lost, rc=1), but only when the D3D9Ex QI group (indices 4-7) ran
+  earlier in the **same persistent wineserver session**: ~30% on the minimal
+  two-invocation repro, 4 of 5 observed full-suite runs, never on a cold
+  wineserver. Present and identical at `840d95c1`/`f9dc7e75`/head, so it
+  predates the 2026-08-20 work; the 2026-08-02 snapshot recorded these cases
+  as pass. Repro, run matrix, and the `chunk-admission` red herring are in
+  `tests/conformance/d3d9/evidence/decl-group-seh-teardown-flake-20260820.json`.
+  Root cause (Wine SEH dispatch on a foreign stack at device teardown — whether
+  dxmt9's unix-side threads or Wine's own) is unattributed.
+
 ## Render-tape pending command-chunk ownership
 
 The PE render-tape registry has two independent bounded lifetime axes for a
