@@ -529,3 +529,8 @@ test('dxmt9-summarize-xctrace-metal-intervals', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-symbolicate-xctrace-pe', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/test_symbolicate_xctrace_pe.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)

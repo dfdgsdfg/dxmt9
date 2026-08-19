@@ -25,6 +25,11 @@
 #include <unistd.h>
 #endif
 #include "d3d9_pe.hpp"
+#if defined(_WIN32)
+// tlhelp32.h requires windows.h (pulled in by d3d9_pe.hpp above) to already
+// be visible for HANDLE / DWORD / SIZE_T / ULONG_PTR / WINBOOL.
+#include <tlhelp32.h>
+#endif
 #include "d3d9_pe_device_child.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
@@ -40,6 +45,7 @@
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
+#include "dxmt9/assert.hpp"
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -194,6 +200,109 @@ static bool dxmt9PeInlineConstDeltaEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_INLINE_CONST_DELTA");
     return enabled;
 }
+
+// DXMT9_PE_MODULE_MAP (diagnostic, Tier 1 of PE 32-bit symbolication): dump
+// the process's loaded-module base/size map and one validation probe address
+// so xctrace `time-profile` samples of the opaque 32-bit game thread can be
+// joined against real module ranges by
+// scripts/tools/symbolicate_xctrace_pe.py. Read once at first use; zero cost
+// when unset. Windows-only (Toolhelp32) — this translation unit is compiled
+// only in the win32 PE lanes (src/d3d9/meson.build), but the implementation
+// is still guarded with #ifdef _WIN32 in case this ever gets pulled into a
+// shared header compiled on the host/unix lane.
+static bool dxmt9PeModuleMapEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_MODULE_MAP");
+    return enabled;
+}
+
+static void dxmt9PeModuleMapInfoLog(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-pe-module-map", fmt, args);
+    va_end(args);
+}
+
+#ifdef _WIN32
+// Marker function used purely as the module-map validation probe: its own
+// runtime address, logged alongside the module map, must fall inside our own
+// d3d9.dll's [base, base+size) range. The join script asserts this to verify
+// its address space matches the Win32 VA space it is joining against.
+static void dxmt9PeModuleMapProbeMarker() {}
+
+static void dxmt9PeDumpModuleMap() {
+    if (!dxmt9PeModuleMapEnabled()) {
+        return;
+    }
+
+    const DWORD pid = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        dxmt9PeModuleMapInfoLog(
+            "snapshot_failed error=0x%08lx", static_cast<unsigned long>(GetLastError()));
+        return;
+    }
+
+    MODULEENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+
+    const auto probeAddr =
+        reinterpret_cast<std::uintptr_t>(&dxmt9PeModuleMapProbeMarker);
+    bool probeContained = false;
+
+    if (Module32FirstW(snapshot, &entry)) {
+        do {
+            char baseName[MAX_PATH]{};
+            const int written = WideCharToMultiByte(
+                CP_UTF8, 0, entry.szModule, -1, baseName, sizeof(baseName),
+                nullptr, nullptr);
+            if (written <= 0) {
+                std::snprintf(baseName, sizeof(baseName), "<unnamed>");
+            }
+
+            const auto base =
+                reinterpret_cast<std::uintptr_t>(entry.modBaseAddr);
+            const auto size = static_cast<std::uintptr_t>(entry.modBaseSize);
+
+            dxmt9PeModuleMapInfoLog(
+                "module=%s base=0x%llx size=0x%llx",
+                baseName,
+                static_cast<unsigned long long>(base),
+                static_cast<unsigned long long>(size));
+
+            if (probeAddr >= base && probeAddr < base + size) {
+                probeContained = true;
+            }
+        } while (Module32NextW(snapshot, &entry));
+    } else {
+        dxmt9PeModuleMapInfoLog(
+            "module_enum_failed error=0x%08lx", static_cast<unsigned long>(GetLastError()));
+    }
+
+    CloseHandle(snapshot);
+
+    dxmt9PeModuleMapInfoLog(
+        "probe=dxmt9PeModuleMapProbeMarker addr=0x%llx contained=%u",
+        static_cast<unsigned long long>(probeAddr),
+        probeContained ? 1u : 0u);
+
+    // The probe address must land inside our own d3d9.dll's logged module
+    // range: if it does not, the enumerated module list does not describe
+    // this process's own address space and the join in
+    // symbolicate_xctrace_pe.py cannot be trusted.
+    DXMT_ASSERT(probeContained);
+}
+#else
+static void dxmt9PeDumpModuleMap() {
+    // Non-Windows build of this translation unit: no Toolhelp32 API
+    // available. Should not be reachable — src/d3d9/meson.build only
+    // compiles d3d9_pe_device.cpp on the windows host_machine lane — but
+    // kept as a safe no-op guard in case that build wiring ever changes.
+    if (dxmt9PeModuleMapEnabled()) {
+        dxmt9PeModuleMapInfoLog("unsupported_platform");
+    }
+}
+#endif
 
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
@@ -12051,6 +12160,12 @@ public:
             }
         }
         initGammaRampIdentity();
+        // DXMT9_PE_MODULE_MAP: dump the loaded-module map after all modules
+        // (game exe, our PE d3d9.dll/winemetal.dll, Wine DLLs) are loaded.
+        // Device creation happens well after process/module init, so this is
+        // a safe, one-time-per-device site for the Tier 1 PE symbolication
+        // diagnostic.
+        dxmt9PeDumpModuleMap();
         dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
                             adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
