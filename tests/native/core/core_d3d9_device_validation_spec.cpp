@@ -5,6 +5,8 @@
 //   * peResetExModeHResult         — ResetEx windowed / fullscreen mode rules
 //   * peNormalizeBackBufferCount   — BackBufferCount=0 -> 1 normalization
 //   * peQueryDataSizeForType       — IDirect3DQuery9::GetDataSize per-type size
+//   * peTextureLevelCountHResult   — CreateTexture / CreateVolumeTexture /
+//                                     CreateCubeTexture dimension/Levels policy
 //
 // Why a value-level spec?  d3d9_pe_device.cpp is built only on the PE
 // (Windows) side (it includes <windows.h> / <d3d9.h>) so native
@@ -27,6 +29,9 @@
 //       occlusion_query_public_sizes  (OCCLUSION       -> sizeof(DWORD)  = 4)
 //       timestamp_query_public_sizes  (TIMESTAMP/FREQ  -> sizeof(UINT64) = 8,
 //                                      TIMESTAMPDISJOINT-> sizeof(BOOL)   = 4)
+//   * tests/conformance/d3d9/d3d9_conformance_resource.c:
+//       test_create_cube_texture_dim_policy (edge==0 and Levels beyond
+//                                            floor(log2(edge))+1 -> INVALIDCALL)
 //
 // Wine commit 6e073d28dee3af7f4c965daec94644e0f9f92727.
 
@@ -177,6 +182,30 @@ uint32_t mirrorQueryDataSizeForType(uint32_t type) {
   }
 }
 
+// Mirrors peFullMipLevelCount() / peTextureLevelCountHResult(): the D3D9
+// mip-chain policy shared by CreateTexture / CreateVolumeTexture /
+// CreateCubeTexture.  Levels == 0 means "full chain" and is always
+// accepted; an explicit Levels beyond floor(log2(maxDimension))+1 is
+// D3DERR_INVALIDCALL, and a 0 dimension is always invalid.
+uint32_t mirrorFullMipLevelCount(uint32_t maxDimension) {
+  uint32_t dimension = maxDimension;
+  uint32_t levels = 1u;
+  while (dimension > 1u) {
+    dimension >>= 1u;
+    ++levels;
+  }
+  return levels;
+}
+
+int32_t mirrorTextureLevelCountHResult(uint32_t minDimension, uint32_t maxDimension,
+                                       uint32_t levels) {
+  if (minDimension == 0u) return kD3DERR_INVALIDCALL;
+  if (levels != 0u && levels > mirrorFullMipLevelCount(maxDimension)) {
+    return kD3DERR_INVALIDCALL;
+  }
+  return kD3D_OK;
+}
+
 // ---------------------------------------------------------------------------
 
 void testPresentParamsValidation() {
@@ -321,6 +350,49 @@ void testQueryDataSizePerType() {
           "unsupported query type reports size 0");
 }
 
+void testTextureMipLevelCountPolicy() {
+  // test_create_cube_texture_dim_policy: edge length 1 is the minimum legal
+  // cube size, and levels=1 is always valid regardless of edge.
+  checkEq(mirrorTextureLevelCountHResult(1u, 1u, 1u), kD3D_OK,
+          "edge length 1 with levels 1 is valid");
+  // Power-of-two edge length, single explicit level, is the canonical
+  // happy path.
+  checkEq(mirrorTextureLevelCountHResult(64u, 64u, 1u), kD3D_OK,
+          "edge length 64 with levels 1 is valid");
+  // Edge length == 0 must be rejected regardless of Levels.
+  checkEq(mirrorTextureLevelCountHResult(0u, 0u, 1u), kD3DERR_INVALIDCALL,
+          "edge length 0 is invalid");
+  checkEq(mirrorTextureLevelCountHResult(0u, 0u, 0u), kD3DERR_INVALIDCALL,
+          "edge length 0 is invalid even with Levels=0 (full chain)");
+  // A single zero axis is invalid even when another axis is large — the
+  // 2D/volume call sites pass (min, max), and Metal asserts on any zero axis.
+  checkEq(mirrorTextureLevelCountHResult(0u, 64u, 1u), kD3DERR_INVALIDCALL,
+          "one zero axis is invalid even beside a large axis");
+  // Explicit Levels exceeding floor(log2(edge))+1 must be rejected.  For
+  // edge=64 the cap is log2(64)+1=7, so Levels=8 is out of range.
+  checkEq(mirrorFullMipLevelCount(64u), 7u, "edge 64 has a 7-level full chain");
+  checkEq(mirrorTextureLevelCountHResult(64u, 64u, 7u), kD3D_OK,
+          "edge 64 with the exact cap of 7 levels is valid");
+  checkEq(mirrorTextureLevelCountHResult(64u, 64u, 8u), kD3DERR_INVALIDCALL,
+          "edge 64 with 8 levels exceeds the 7-level cap");
+  // The cap follows the largest axis: 16x1 still has a 5-level chain.
+  checkEq(mirrorTextureLevelCountHResult(1u, 16u, 5u), kD3D_OK,
+          "16x1 with the exact cap of 5 levels is valid");
+  checkEq(mirrorTextureLevelCountHResult(1u, 16u, 6u), kD3DERR_INVALIDCALL,
+          "16x1 with 6 levels exceeds the 5-level cap");
+  // Levels == 0 means "full chain" and is always accepted for a valid
+  // (non-zero) dimension.
+  checkEq(mirrorTextureLevelCountHResult(64u, 64u, 0u), kD3D_OK,
+          "Levels=0 (full chain) is always valid for a non-zero dimension");
+  // Non-power-of-two dimensions still resolve a correct full chain and cap.
+  checkEq(mirrorFullMipLevelCount(1u), 1u, "edge 1 has a 1-level full chain");
+  checkEq(mirrorFullMipLevelCount(3u), 2u, "edge 3 has a 2-level full chain");
+  checkEq(mirrorTextureLevelCountHResult(3u, 3u, 2u), kD3D_OK,
+          "edge 3 with the exact cap of 2 levels is valid");
+  checkEq(mirrorTextureLevelCountHResult(3u, 3u, 3u), kD3DERR_INVALIDCALL,
+          "edge 3 with 3 levels exceeds the 2-level cap");
+}
+
 }  // namespace
 
 int main() {
@@ -332,6 +404,7 @@ int main() {
     testResetExModeValidation();
     testBackBufferCountNormalization();
     testQueryDataSizePerType();
+    testTextureMipLevelCountPolicy();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

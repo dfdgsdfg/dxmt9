@@ -575,6 +575,37 @@ static bool isUnknownFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_UNKNOWN;
 }
 
+// D3D9 mip-chain policy shared by CreateTexture / CreateVolumeTexture /
+// CreateCubeTexture (Wine dlls/d3d9/tests/device.c test_cube_textures,
+// scaffold test_create_cube_texture_dim_policy in
+// tests/conformance/d3d9/d3d9_conformance_resource.c): a 0 dimension is
+// always invalid, and an explicit Levels beyond floor(log2(maxDimension))+1
+// is D3DERR_INVALIDCALL. Levels == 0 means "full chain" and is always
+// accepted. This has to be rejected here, before crossing the C bridge --
+// the unix provider's resolveMipLevelCount()/fullMipLevelCount()
+// (device_c_resources.cpp) pass an explicit Levels through unclamped, and an
+// over-long count reaches MTLTextureDescriptor, which asserts instead of
+// failing gracefully.
+static uint32_t peFullMipLevelCount(UINT maxDimension) {
+    UINT dimension = maxDimension;
+    uint32_t levels = 1u;
+    while (dimension > 1u) {
+        dimension >>= 1u;
+        ++levels;
+    }
+    return levels;
+}
+
+[[nodiscard]] static HRESULT peTextureLevelCountHResult(UINT minDimension, UINT maxDimension,
+                                                        UINT levels) {
+    // Every axis must be nonzero: MTLTextureDescriptor asserts on a zero
+    // width/height/depth just as it does on an over-long level count, so a
+    // single zero axis must be rejected here even when another axis is large.
+    if (minDimension == 0u) return D3DERR_INVALIDCALL;
+    if (levels != 0u && levels > peFullMipLevelCount(maxDimension)) return D3DERR_INVALIDCALL;
+    return S_OK;
+}
+
 // ── D3D9 present-parameter / Ex-mode / query validation ──────────────────
 // Pure, PE-side validators that encode the Windows-runtime HRESULT
 // contract for the device's swap-chain-shaped entry points (Reset,
@@ -13032,6 +13063,8 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        const HRESULT levelHr = peTextureLevelCountHResult(std::min(w, h), std::max(w, h), levels);
+        if (FAILED(levelHr)) return levelHr;
         // Wine D3D9Ex contract from dlls/d3d9/tests/d3d9ex.c
         // test_resource_access: D3DPOOL_MANAGED is rejected outright on
         // Ex devices (every MANAGED row in the matrix is marked
@@ -13093,6 +13126,9 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        const HRESULT levelHr =
+            peTextureLevelCountHResult(std::min({w, h, d}), std::max({w, h, d}), levels);
+        if (FAILED(levelHr)) return levelHr;
         // Wine D3D9Ex contract: see CreateTexture above — MANAGED pool
         // is rejected outright on Ex devices.
         if (extended_ && pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
@@ -13125,6 +13161,8 @@ public:
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        const HRESULT levelHr = peTextureLevelCountHResult(size, size, levels);
+        if (FAILED(levelHr)) return levelHr;
         // Wine D3D9Ex contract: see CreateTexture above — MANAGED pool
         // is rejected outright on Ex devices.
         if (extended_ && pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
