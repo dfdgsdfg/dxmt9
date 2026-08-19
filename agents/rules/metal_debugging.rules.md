@@ -600,7 +600,11 @@ per-encoder GPU time (see §4 and the encoder labels set at
 `dxmt9_blit_encoders.cpp:302`, `dxmt9_blit_encoders.cpp:380`,
 `dxmt9_presenter.cpp:480`). For 3DMark05, prefer
 `scripts/tools/run_3dmark05_system_trace_sidecar.sh -- ...` over manual
-parallel shell orchestration; it runs the probe wrapper dry-run first, refuses
+parallel shell orchestration. For attributing the wine game thread's opaque
+32-bit PE samples per module (game exe vs PE `d3d9.dll` vs `winemetal.dll`
+vs wine DLLs), run the workload with `DXMT9_PE_MODULE_MAP=1` and
+`DXMT_LOG_LEVEL=info`, export the `time-profile` table, and join with
+`scripts/tools/symbolicate_xctrace_pe.py`; it runs the probe wrapper dry-run first, refuses
 locked sessions before starting xctrace, can wait for unlock with
 sidecar `--wait-unlocked-sec N`, then exports and summarizes `metal-gpu-intervals`
 against dxmt encoder attribution. The lower-level
