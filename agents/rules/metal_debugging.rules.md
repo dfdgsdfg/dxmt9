@@ -604,10 +604,18 @@ parallel shell orchestration; it runs the probe wrapper dry-run first, refuses
 locked sessions before starting xctrace, can wait for unlock with
 sidecar `--wait-unlocked-sec N`, then exports and summarizes `metal-gpu-intervals`
 against dxmt encoder attribution. For attributing the wine game thread's opaque
-32-bit PE samples per module (game exe vs PE `d3d9.dll` vs `winemetal.dll`
-vs wine DLLs), run the workload with `DXMT9_PE_MODULE_MAP=1` and
-`DXMT_LOG_LEVEL=info`, export the `time-profile` table, and join with
-`scripts/tools/symbolicate_xctrace_pe.py`. The lower-level
+PE samples per module: **xctrace cannot do it on Apple Silicon.** PE x86 code
+runs Rosetta-translated, and Instruments only maps translated PCs back to
+origin images for dyld-known images — PE modules are not dyld images, so
+their samples surface as unmapped high addresses (measured 2026-08-19: with a
+probe-verified `DXMT9_PE_MODULE_MAP=1` module map, 92.7% of game-thread
+samples were `unknown_64bit` and zero fell below 4 GiB). The dyld-loaded unix
+side (`winemetal.so`) still symbolizes normally. Use the in-process PE
+sampler instead: run with `DXMT9_PE_MODULE_MAP=1` plus the PE thread sampler
+env (see `agents/rules/environment_variables_bridge.rules.md`), which reads
+the game thread's true Win32 `Eip` via SuspendThread/GetThreadContext and
+classifies against the same module map; `scripts/tools/symbolicate_xctrace_pe.py`
+remains the join tool for its emitted histogram lines. The lower-level
 3DMark05 wrapper also prints `xctrace_system_trace_export_cmd` and
 `xctrace_system_trace_summary_cmd` in dry-run and real-run output for manual
 fallbacks. Those summary commands require RenderPass-labelled xctrace rows and
