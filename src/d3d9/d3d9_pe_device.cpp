@@ -1067,15 +1067,25 @@ static constexpr DWORD kReszDepthResolveSentinel = 0x7FA05000u;
  * ========================================================================= */
 
 class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush {
-    // Phase 21: chunk-flush thresholds. Defaults match what the PE
-    // recorder has been tuned around since Phase 5 (64 records = a few
-    // dozen draws + their state setters; 256 KB ≈ one full vertex
-    // upload for a complex draw + headers). Both are env-overridable
-    // via DXMT9_PE_CHUNK_MAX_RECORDS / DXMT9_PE_CHUNK_MAX_BYTES; the
-    // helpers below cap the env values to prevent pathological inputs
-    // from blowing chunk-side allocations.
-    static constexpr UINT kDefaultMaxPendingCommandRecords = 64;
-    static constexpr size_t kDefaultMaxPendingCommandBytes = 256 * 1024;
+    // Chunk-flush thresholds. The historical defaults (64 records /
+    // 256 KiB, tuned around Phase 5) were promoted to 4x on 2026-08-19
+    // after the measured GT2 evidence in
+    // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.21.md:
+    // fewer, larger chunk seals return ~1.2 ms/present of game-thread
+    // CPU (44 -> 8 seals/present) for a reproducible median fps win
+    // (GT2 +2.0% non-overlapping, GT1 +3.5%, GT3 +2.5%, SFIV
+    // percentile-equal) with byte-identical locality (CB/pass/subCB
+    // per present) and conserved encode pacing. Both remain
+    // env-overridable via DXMT9_PE_CHUNK_MAX_RECORDS /
+    // DXMT9_PE_CHUNK_MAX_BYTES — the pre-promotion cadence is
+    // DXMT9_PE_CHUNK_MAX_RECORDS=64 DXMT9_PE_CHUNK_MAX_BYTES=262144 —
+    // and the helpers below cap env values to prevent pathological
+    // inputs from blowing chunk-side allocations. Note the two move
+    // together: the frozen legacy sizeHints make the byte precheck
+    // bind near 53 draw records at the old byte cap, so raising only
+    // the record cap is inert.
+    static constexpr UINT kDefaultMaxPendingCommandRecords = 256;
+    static constexpr size_t kDefaultMaxPendingCommandBytes = 1310720;
     static constexpr UINT kAbsoluteMaxPendingCommandRecords = 4096;
     static constexpr size_t kAbsoluteMaxPendingCommandBytes = 16 * 1024 * 1024;
     static UINT maxPendingCommandRecords() {
