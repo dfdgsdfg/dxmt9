@@ -49,6 +49,22 @@ test('dxmt9-pe-full-snapshot-equivalence-spec',
      pe_full_snapshot_equivalence_spec,
      env: dxmt9_native_test_env)
 
+# Host coverage for the pure core of DXMT9_PE_THREAD_SAMPLER: module-range
+# normalization, PC -> module classification, the bounded self-PC histogram,
+# and the deterministic top-N selections. The Win32 sampling thread in the same
+# header is compile-checked only by the PE lanes.
+pe_thread_sampler_spec = executable(
+  'dxmt9-pe-thread-sampler-spec',
+  'pe_thread_sampler_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-thread-sampler-spec', pe_thread_sampler_spec)
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',

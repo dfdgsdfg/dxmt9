@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
-"""Join an xctrace `time-profile` export against a dxmt9 PE module-map log.
+"""Turn dxmt9 PE-side samples into a per-module CPU breakdown.
 
-Tier 1 of PE 32-bit symbolication (see agents/rules/metal_debugging.rules.md
-and agents/rules/environment_variables_bridge.rules.md): xctrace samples of
-the Wine game thread are largely opaque because the 32-bit PE code (game exe,
-our PE `d3d9.dll`, `winemetal.dll`, and Wine's own PE-side DLLs) has no dyld
-image xctrace can attribute to. `DXMT9_PE_MODULE_MAP=1` makes the PE side log
-its own Toolhelp32 module snapshot (`[dxmt9-pe-module-map] module=... base=...
-size=...`) once at device creation. This tool re-symbolicates the top frame of
-each sample on a selected thread against that module map by address range,
-turning "95% opaque" into a per-module CPU breakdown.
+Two input modes, mutually exclusive:
+
+`--time-profile` (Tier 1) joins an xctrace `time-profile` export against a
+`DXMT9_PE_MODULE_MAP=1` log. xctrace samples of the Wine game thread are
+largely opaque because the 32-bit PE code (game exe, our PE `d3d9.dll`,
+`winemetal.dll`, and Wine's own PE-side DLLs) has no dyld image xctrace can
+attribute to; the module map (`[dxmt9-pe-module-map] module=... base=...
+size=...`, logged once at device creation) lets the top frame of each sample be
+classified by address range.
+
+`--sampler-log` (Tier 2) reads the in-process sampler's own emission instead.
+On Apple Silicon Tier 1 hits a wall that no module map can fix: PE x86 code
+runs Rosetta-translated and Instruments only maps translated PCs back to origin
+images for dyld images, so ~93% of game-thread samples arrive as unmapped
+64-bit addresses. `DXMT9_PE_THREAD_SAMPLER=1` sidesteps it by reading the game
+thread's true Win32 program counter from inside the process and classifying it
+against the same module map, emitting cumulative `[dxmt9-pe-sampler]` groups.
+This mode parses the LAST such group (the counters are cumulative, so the last
+group is the whole run) and, when the same log also carries the module map,
+turns the self-module PC buckets into RVAs.
 
 Parsing approach for the xctrace XML mirrors
 scripts/tools/summarize_xctrace_cpu_threads.py: rows carry either an inline
@@ -87,6 +98,9 @@ class ModuleMap:
                 return True
         return False
 
+    def ranges(self) -> list[tuple[int, int, str]]:
+        return list(self._ranges)
+
     def __len__(self) -> int:
         return len(self._ranges)
 
@@ -115,6 +129,222 @@ def parse_module_map_log(path: Path) -> tuple[ModuleMap, Optional[tuple[str, int
             )
     modules.finalize()
     return modules, probe, self_reported
+
+
+# --- in-process PE thread-sampler log parsing ------------------------------
+# Emitted by DXMT9_PE_THREAD_SAMPLER as cumulative groups every 60 presents,
+# plus a final group at device teardown. A group is one header line followed by
+# its module / selfpc lines. Counters never reset, so the LAST group is the
+# whole run and every earlier group is a strict prefix of it.
+
+SAMPLER_TAG = "[dxmt9-pe-sampler]"
+SAMPLER_HEADER_RE = re.compile(r"\bpresents=(?P<presents>\d+)\b.*?\bsamples=(?P<samples>\d+)\b")
+SAMPLER_KV_RE = re.compile(r"\b(?P<key>[a-z_]+)=(?P<value>0x[0-9a-fA-F]+|\d+)\b")
+SAMPLER_MODULE_RE = re.compile(r"\bmodule=(?P<module>\S+)\s+samples=(?P<samples>\d+)")
+SAMPLER_SELF_MODULE_RE = re.compile(r"\bselfpc_module=(?P<module>\S+)")
+SAMPLER_BUCKET_RE = re.compile(
+    r"\bselfpc\s+bucket=0x(?P<bucket>[0-9a-fA-F]+)\s+samples=(?P<samples>\d+)"
+)
+SAMPLER_OVERFLOW_RE = re.compile(r"\bselfpc_overflow=(?P<overflow>\d+)")
+
+
+class SamplerReport:
+    def __init__(self) -> None:
+        self.header: dict[str, int] = {}
+        self.modules: list[tuple[str, int]] = []
+        self.self_module: Optional[str] = None
+        self.buckets: list[tuple[int, int]] = []
+        self.selfpc_overflow: int = 0
+
+    @property
+    def samples(self) -> int:
+        return self.header.get("samples", 0)
+
+    @property
+    def hz(self) -> int:
+        return self.header.get("hz", 0)
+
+
+def parse_sampler_log(path: Path) -> Optional[SamplerReport]:
+    """Parse the LAST cumulative [dxmt9-pe-sampler] group, or None if the log
+    has no group at all (sampler never started, or DXMT_LOG_LEVEL hid it)."""
+    lines = [
+        line
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if SAMPLER_TAG in line
+    ]
+    header_index: Optional[int] = None
+    for index, line in enumerate(lines):
+        if SAMPLER_HEADER_RE.search(line):
+            header_index = index
+    if header_index is None:
+        return None
+
+    report = SamplerReport()
+    header_text = lines[header_index]
+    # Header carries presents/samples/*_failures/hz/module_table as key=value.
+    for match in SAMPLER_KV_RE.finditer(header_text.split(SAMPLER_TAG, 1)[1]):
+        value_text = match.group("value")
+        report.header[match.group("key")] = int(value_text, 0)
+
+    for line in lines[header_index + 1 :]:
+        if SAMPLER_HEADER_RE.search(line):
+            break  # defensive: a later group means our scan missed the last one
+        self_module_match = SAMPLER_SELF_MODULE_RE.search(line)
+        if self_module_match:
+            report.self_module = self_module_match.group("module")
+            continue
+        overflow_match = SAMPLER_OVERFLOW_RE.search(line)
+        if overflow_match:
+            report.selfpc_overflow = int(overflow_match.group("overflow"))
+            continue
+        bucket_match = SAMPLER_BUCKET_RE.search(line)
+        if bucket_match:
+            report.buckets.append(
+                (int(bucket_match.group("bucket"), 16), int(bucket_match.group("samples")))
+            )
+            continue
+        module_match = SAMPLER_MODULE_RE.search(line)
+        if module_match:
+            report.modules.append(
+                (module_match.group("module"), int(module_match.group("samples")))
+            )
+    return report
+
+
+def sampler_module_rows(report: SamplerReport) -> list[dict[str, object]]:
+    """Same four-column shape as the time-profile mode. `weight_ms` is derived
+    from the sampling rate (samples * 1000/hz), not measured, because the
+    sampler counts stops rather than timing them; with no hz it stays 0."""
+    total = report.samples or sum(samples for _, samples in report.modules)
+    per_sample_ms = (1000.0 / report.hz) if report.hz else 0.0
+    rows: list[dict[str, object]] = []
+    for module, samples in report.modules:
+        share = (samples / total) if total else 0.0
+        rows.append(
+            {
+                "module": module,
+                "samples": samples,
+                "weight_ms": round(samples * per_sample_ms, 3),
+                "share_of_thread": round(share, 6),
+            }
+        )
+    rows.sort(key=lambda r: (-int(r["samples"]), str(r["module"])))
+    return rows
+
+
+def selfpc_base(modules: ModuleMap, self_module: Optional[str]) -> tuple[Optional[int], str]:
+    """Resolve the module-map base the self-PC buckets are relative to.
+    Prefers the sampler's own `selfpc_module=` name; falls back to the first
+    logged module whose name contains "d3d9"."""
+    if self_module:
+        needle = self_module.lower()
+        for base, _end, name in modules.ranges():
+            if name.lower() == needle:
+                return base, name
+    for base, _end, name in modules.ranges():
+        if "d3d9" in name.lower():
+            return base, name
+    return None, self_module or ""
+
+
+def selfpc_rows(
+    report: SamplerReport, base: Optional[int]
+) -> list[dict[str, object]]:
+    total = sum(samples for _, samples in report.buckets)
+    rows: list[dict[str, object]] = []
+    for bucket, samples in report.buckets:
+        rows.append(
+            {
+                "bucket": f"0x{bucket:x}",
+                "rva": f"0x{bucket - base:x}" if base is not None and bucket >= base else "",
+                "samples": samples,
+                "share_of_selfpc_top": round((samples / total) if total else 0.0, 6),
+            }
+        )
+    rows.sort(key=lambda r: (-int(r["samples"]), str(r["bucket"])))
+    return rows
+
+
+def write_selfpc_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=["bucket", "rva", "samples", "share_of_selfpc_top"]
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def selfpc_csv_path(output_csv: Path) -> Path:
+    return output_csv.with_name(output_csv.stem + "-selfpc" + output_csv.suffix)
+
+
+def write_sampler_md(
+    path: Path,
+    *,
+    report: SamplerReport,
+    module_rows: list[dict[str, object]],
+    self_rows: list[dict[str, object]],
+    self_module_name: str,
+    self_base: Optional[int],
+    module_count: int,
+    probe_name: str,
+    probe_addr: Optional[int],
+    probe_verdict: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    lines.append("# PE in-process thread sampler (Tier 2)")
+    lines.append("")
+    lines.append(f"- Presents at last emission: {report.header.get('presents', 0)}")
+    lines.append(f"- Samples: {report.samples}")
+    lines.append(f"- Sampling rate: {report.hz} Hz")
+    lines.append(
+        f"- Suspend failures: {report.header.get('suspend_failures', 0)}"
+        f" / context failures: {report.header.get('ctx_failures', 0)}"
+        f" / resume failures: {report.header.get('resume_failures', 0)}"
+    )
+    lines.append(f"- Modules in map: {module_count}")
+    lines.append(
+        f"- Probe `{probe_name}` addr=0x{probe_addr:x} containment: **{probe_verdict}**"
+        if probe_addr is not None
+        else "- Probe: not found in module-map log (RVA column is unvalidated)"
+    )
+    lines.append("")
+    lines.append(
+        "`weight_ms` is derived as `samples * 1000/hz`, not measured: the "
+        "sampler counts thread stops, it does not time them."
+    )
+    lines.append("")
+    lines.append("| module | samples | weight_ms | share_of_thread |")
+    lines.append("|---|---|---|---|")
+    for row in module_rows:
+        lines.append(
+            f"| {row['module']} | {row['samples']} | {row['weight_ms']} | "
+            f"{float(row['share_of_thread']):.1%} |"
+        )
+    lines.append("")
+    if self_base is None:
+        lines.append(
+            f"## Self-module PC buckets (`{self_module_name or 'unknown'}`, RVA unresolved)"
+        )
+    else:
+        lines.append(
+            f"## Self-module PC buckets (`{self_module_name}` base=0x{self_base:x})"
+        )
+    lines.append("")
+    lines.append(f"- Buckets dropped to overflow: {report.selfpc_overflow}")
+    lines.append("")
+    lines.append("| bucket | rva | samples | share_of_selfpc_top |")
+    lines.append("|---|---|---|---|")
+    for row in self_rows:
+        lines.append(
+            f"| {row['bucket']} | {row['rva'] or '-'} | {row['samples']} | "
+            f"{float(row['share_of_selfpc_top']):.1%} |"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # --- xctrace time-profile XML parsing -------------------------------------
@@ -395,10 +625,141 @@ def write_md(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def check_probe(
+    modules: ModuleMap,
+    probe: Optional[tuple[str, int]],
+    self_reported: Optional[bool],
+) -> tuple[bool, str]:
+    """Re-derive the module-map probe verdict. The probe is a marker function
+    inside our own PE d3d9.dll, so containment means the address falls inside a
+    module whose name matches "d3d9" -- not a match against the probe symbol's
+    own name."""
+    if probe is None:
+        return False, "FAIL"
+    probe_ok = modules.contains_in_module_matching("d3d9", probe[1])
+    # Cross-check against the PE side's own self-reported verdict when it
+    # logged one -- disagreement means either this tool's re-derivation or the
+    # PE-side DXMT_ASSERT-guarded check disagree with the module ranges, which
+    # is itself worth surfacing.
+    if self_reported is not None and self_reported != probe_ok:
+        print(
+            "warning: PE-reported probe containment "
+            f"({self_reported}) disagrees with recomputed containment "
+            f"({probe_ok})",
+            file=sys.stderr,
+        )
+    return probe_ok, ("PASS" if probe_ok else "FAIL")
+
+
+def run_sampler_mode(
+    args: argparse.Namespace,
+    *,
+    modules: ModuleMap,
+    probe: Optional[tuple[str, int]],
+    probe_ok: bool,
+    probe_verdict: str,
+) -> int:
+    report = parse_sampler_log(args.sampler_log)
+    if report is None:
+        print(
+            "error: no [dxmt9-pe-sampler] emission group found in "
+            f"{args.sampler_log} (was DXMT9_PE_THREAD_SAMPLER=1 set, with "
+            "DXMT_LOG_LEVEL=info?)",
+            file=sys.stderr,
+        )
+        return 1
+
+    module_rows = sampler_module_rows(report)
+    write_csv(args.output_csv, module_rows)
+
+    self_base, self_module_name = selfpc_base(modules, report.self_module)
+    self_rows = selfpc_rows(report, self_base)
+    selfpc_path = selfpc_csv_path(args.output_csv)
+    write_selfpc_csv(selfpc_path, self_rows)
+
+    write_sampler_md(
+        args.output_md,
+        report=report,
+        module_rows=module_rows,
+        self_rows=self_rows,
+        self_module_name=self_module_name,
+        self_base=self_base,
+        module_count=len(modules),
+        probe_name=probe[0] if probe else "",
+        probe_addr=probe[1] if probe else None,
+        probe_verdict=probe_verdict,
+    )
+
+    print(f"samples={report.samples} hz={report.hz}")
+    print(
+        "suspend_failures={} ctx_failures={} resume_failures={}".format(
+            report.header.get("suspend_failures", 0),
+            report.header.get("ctx_failures", 0),
+            report.header.get("resume_failures", 0),
+        )
+    )
+    print(
+        f"modules={len(modules)} module_rows={len(module_rows)} "
+        f"selfpc_rows={len(self_rows)} selfpc_overflow={report.selfpc_overflow}"
+    )
+    print(f"selfpc_csv={selfpc_path}")
+    print(f"probe_verdict={probe_verdict}")
+
+    if report.buckets and self_base is None:
+        # The buckets are raw VAs; without a base they cannot be turned into
+        # anything a disassembler can be pointed at.
+        print(
+            "warning: self-PC buckets present but no module-map base resolved "
+            "-- rva column is empty",
+            file=sys.stderr,
+        )
+
+    if probe is None:
+        # Only the RVA column depends on the module map here: the per-module
+        # classification was done in-process against the sampler's own
+        # enumeration, so a missing probe downgrades to a warning rather than
+        # the hard failure it is in --time-profile mode.
+        print(
+            "warning: no probe= line in the module-map log; self-PC RVAs are "
+            "unvalidated",
+            file=sys.stderr,
+        )
+        return 0
+    if not probe_ok and not args.allow_probe_failure:
+        print(
+            "error: probe address containment FAILED (pass --allow-probe-failure "
+            "to continue anyway)",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--time-profile", required=True, type=Path)
-    parser.add_argument("--module-map-log", required=True, type=Path)
+    parser.add_argument(
+        "--time-profile",
+        type=Path,
+        default=None,
+        help="Tier 1: xctrace time-profile XML export to join. Mutually "
+        "exclusive with --sampler-log.",
+    )
+    parser.add_argument(
+        "--sampler-log",
+        type=Path,
+        default=None,
+        help="Tier 2: a run log carrying DXMT9_PE_THREAD_SAMPLER's cumulative "
+        "[dxmt9-pe-sampler] groups. The last group is used. Mutually "
+        "exclusive with --time-profile.",
+    )
+    parser.add_argument(
+        "--module-map-log",
+        type=Path,
+        default=None,
+        help="DXMT9_PE_MODULE_MAP=1 log. Required with --time-profile; with "
+        "--sampler-log it defaults to the sampler log itself (both are Info "
+        "lines from the same run) and supplies the self-PC RVA base.",
+    )
     parser.add_argument(
         "--process-regex",
         default=r"\.exe\b",
@@ -421,14 +782,40 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if (args.time_profile is None) == (args.sampler_log is None):
+        print(
+            "error: pass exactly one of --time-profile or --sampler-log",
+            file=sys.stderr,
+        )
+        return 2
+    module_map_log = args.module_map_log
+    if module_map_log is None:
+        if args.time_profile is not None:
+            print(
+                "error: --module-map-log is required with --time-profile",
+                file=sys.stderr,
+            )
+            return 2
+        module_map_log = args.sampler_log
+
+    modules, probe, self_reported = parse_module_map_log(module_map_log)
+    probe_ok, probe_verdict = check_probe(modules, probe, self_reported)
+
+    if args.sampler_log is not None:
+        return run_sampler_mode(
+            args,
+            modules=modules,
+            probe=probe,
+            probe_ok=probe_ok,
+            probe_verdict=probe_verdict,
+        )
+
     process_re = re.compile(args.process_regex)
 
     explicit_tid: Optional[int] = None
     if args.thread_tid is not None:
         text = str(args.thread_tid).strip()
         explicit_tid = int(text, 16) if text.lower().startswith("0x") else int(text)
-
-    modules, probe, self_reported = parse_module_map_log(args.module_map_log)
 
     selected_thread, buckets, total_rows, no_backtrace_rows = summarize(
         args.time_profile,
@@ -450,24 +837,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     probe_name = probe[0] if probe else ""
     probe_addr = probe[1] if probe else None
-    probe_ok = False
-    if probe is not None and probe_addr is not None:
-        # The probe is a marker function inside our own PE d3d9.dll, so
-        # containment means the address falls inside a module whose name
-        # matches "d3d9" -- not a match against the probe symbol's own name.
-        probe_ok = modules.contains_in_module_matching("d3d9", probe_addr)
-        # Cross-check against the PE side's own self-reported verdict when it
-        # logged one -- disagreement means either this tool's re-derivation
-        # or the PE-side DXMT_ASSERT-guarded check disagree with the module
-        # ranges, which is itself worth surfacing.
-        if self_reported is not None and self_reported != probe_ok:
-            print(
-                "warning: PE-reported probe containment "
-                f"({self_reported}) disagrees with recomputed containment "
-                f"({probe_ok})",
-                file=sys.stderr,
-            )
-    probe_verdict = "PASS" if probe_ok else "FAIL"
 
     write_md(
         args.output_md,
