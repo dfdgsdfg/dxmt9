@@ -117,6 +117,19 @@ static bool dxmt9PeRecorderStatsEnabled() {
     return enabled;
 }
 
+// Single resolved-once gate for notePeDeviceCallAfterPresent's per-call
+// diagnostic scaffold: dxmt9PeCurrentCallName plus the inter-append pair
+// attribution (recordPeBetweenCallsEntry) and the pe_present_call_milestone /
+// pe_present_next_call Info logs it feeds are all read only behind
+// DXMT9_PE_RECORDER_STATS today. DXMT9_PE_STATS_DECIMATION and
+// DXMT9_PE_THREAD_SAMPLER are independent diagnostics that read neither, so
+// they must not be OR'd in here. If a future consumer needs this data
+// without DXMT9_PE_RECORDER_STATS, extend this predicate rather than adding
+// a second unguarded call site.
+static bool dxmt9PeCallTrackingEnabled() {
+    return dxmt9PeRecorderStatsEnabled();
+}
+
 static bool dxmt9PerfVsConstSetterRangeEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_PERF_VS_CONST_SETTER_RANGE");
@@ -4229,15 +4242,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     PePresentCallSample notePeDeviceCallAfterPresent(const char* callName,
                                                      const void* callerPc = nullptr) {
+        // Hot path: this is called on every D3D9 device entry. With no
+        // diagnostic consumer enabled (see dxmt9PeCallTrackingEnabled), skip
+        // straight to an empty untracked sample instead of setting the
+        // thread-local call name and walking through the recorder-stats
+        // helpers below, each of which would just re-check the same flag.
+        if (!dxmt9PeCallTrackingEnabled()) {
+            return {};
+        }
         dxmt9PeSetCurrentCallName(callName);
-        dxmt9PeCurrentCallEntryNs = dxmt9PeRecorderStatsEnabled()
-            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
-            : 0;
+        dxmt9PeCurrentCallEntryNs =
+            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
         recordPeBetweenCallsEntry(callName, dxmt9PeCurrentCallEntryNs,
                                   callerPc);
         const PePresentCallSample sample =
             logPeCallMilestoneAfterPresent(callName, callerPc);
-        if (!sample.tracked && dxmt9PeRecorderStatsEnabled()) {
+        if (!sample.tracked) {
             PePresentCallSample untracked{};
             untracked.entryNs = dxmt9PeCurrentCallEntryNs;
             untracked.callerPc = callerPc;
