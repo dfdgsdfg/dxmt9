@@ -702,7 +702,15 @@ or conformance contract:
 The retired PE pending-command retainer was one capacity-preserving flat entry arena.
 Each record starts with a checkpoint; failure releases and removes only the
 checkpoint suffix. Query, shader, declaration, surface, texture, and buffer
-wrappers use the same exact deduplication path. Unix commit/replay uses a
+wrappers use the same exact deduplication path. A retained pin is not scoped to
+one chunk: it exists so a recorded-but-not-yet-imported chunk's raw object
+pointer stays valid, and since consecutive chunks name the same working set, a
+pin survives the chunk boundary and is released only after the entry has gone
+unnamed for a bounded number of chunk epochs. Every discard path — device
+teardown, `Reset`, `ResetEx` — releases every pin regardless of epoch, so no
+retainer pin can be outstanding across a `dxmt9c_device_reset*` call or outlive
+the device. The effect on object lifetime is one-directional: a pin is held
+strictly longer than the chunk that took it, never shorter. Unix commit/replay uses a
 thread-local `ReplayScratchArena` for resolved core handles, pending draw
 submissions, run parameters, binding overrides, and payload views; vector
 capacity survives calls. These changes close the known per-record container
