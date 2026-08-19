@@ -33,6 +33,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.20 - Cadence Re-Verification: Aliasing Refuted, The Saving Is Real, FPS Conversion Is Environment-Split](state-churn-encode-append-decomposition.20.md)
 - [state-churn-encode-append-decomposition.21 - Deciding Clean-Host ABBA: The Cadence Win Is Real, Median +2.0%](state-churn-encode-append-decomposition.21.md)
 - [state-churn-encode-append-decomposition.22 - Cadence Promotion: All Gates Green, Default Flipped To 256 Records / 1.25 MiB](state-churn-encode-append-decomposition.22.md)
+- [state-churn-encode-append-decomposition.23 - In-Process PE Sampler First Light: Game 60%, Crossings 17%, Recorder 10%](state-churn-encode-append-decomposition.23.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
