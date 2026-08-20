@@ -69,21 +69,6 @@ void unpublishCachedWireObjectRef(const PeWireObjectRef& object) noexcept {
   }
 }
 
-bool lookupCachedWireObjectRef(void* object, std::uint32_t expectedKind,
-                               PeWireObjectRef& out) noexcept {
-  out = {};
-  if (!object) {
-    return true;
-  }
-  std::lock_guard lock(g_wireObjectCacheMutex);
-  const auto it = g_wireObjectCache.find(object);
-  if (it == g_wireObjectCache.end() || !it->second.valid(expectedKind)) {
-    return false;
-  }
-  out = it->second;
-  return true;
-}
-
 CommandChunkBuilder::CommandChunkBuilder(
     const CommandChunkBuilderCapacities& capacities) {
   records_.reserve(capacities.records);

@@ -24,8 +24,6 @@ struct PeWireObjectRef {
 
 void publishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
 void unpublishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
-bool lookupCachedWireObjectRef(void* object, std::uint32_t expectedKind,
-                               PeWireObjectRef& out) noexcept;
 void noteWireIdentityGetterCall() noexcept;
 std::uint64_t wireIdentityGetterCallCount() noexcept;
 

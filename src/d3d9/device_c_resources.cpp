@@ -897,9 +897,13 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
                   static_cast<void*>(t), level, out->pitch, out->bits);
     return dxmt9::core::D3D_OK;
   }
-  auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
+  dxmt9::core::Rect rectStorage{};
+  const dxmt9::core::Rect* rect = nullptr;
+  if (r) {
+    rectStorage = dxmt9::core::Rect{r->left, r->top, r->right, r->bottom};
+    rect = &rectStorage;
+  }
   auto lock = t->obj->lockRect(level, rect, lockFlagsToCore(flags));
-  delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
@@ -1327,9 +1331,13 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
     dxmt9DebugLog("surface_lock_rect begin surface=%p flags=0x%x rect=<full>",
                   static_cast<void*>(s), flags);
   }
-  auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
+  dxmt9::core::Rect rectStorage{};
+  const dxmt9::core::Rect* rect = nullptr;
+  if (r) {
+    rectStorage = dxmt9::core::Rect{r->left, r->top, r->right, r->bottom};
+    rect = &rectStorage;
+  }
   auto lock = s->obj->lockRect(rect, lockFlagsToCore(flags));
-  delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
