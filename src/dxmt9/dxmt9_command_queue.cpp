@@ -2198,8 +2198,13 @@ void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lo
   (void)q.queueLifecycle_.ensureWriterSlot(lock, kMaxQueuedChunks);
 }
 
+// TLA+: ProducerMarkReclaim!BeginMark / !WorkerBeginBatch — the seq ticket a
+// mark stamps with. The load is lock-free by construction (see the
+// memory-order argument on `CommandQueue::nextSeqId_`); callers that already
+// hold `mutex_` get an exact value, callers that do not must pair it with the
+// re-stamp protocol in `restampIfTicketAdvancedLocked` below.
 std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
-  return seqId == 0 ? q.nextSeqId_ : seqId;
+  return seqId == 0 ? q.markTicketAcquire() : seqId;
 }
 
 void markChunkResourcesWithExactSeq(
@@ -2222,6 +2227,33 @@ void markChunkResourcesWithExactSeq(
       break;
     }
   }
+}
+
+// TLA+: ProducerMarkReclaim!WorkerRestamp — the re-stamp protocol that pairs
+// with every lock-free ticket read.
+//
+// A mark loop that ran WITHOUT `CommandQueue::mutex_` stamped with a ticket
+// that a concurrent publish (`SlotAdvance` in the model:
+// `QueueLifecycleController::commitCurrentChunk`, reached from the producer's
+// map-wait force-publish and the draw/payload chunk limits) may have raised
+// meanwhile, leaving the stamps BELOW the seq the records will finally be
+// published under. The caller of this helper holds `mutex_`, so the ticket is
+// frozen — every writer of `nextSeqId_` needs the same mutex — which makes one
+// re-read plus a conditional replay of the same stamp loop a fixed point
+// rather than another race. `markStampUpper` is a monotone max, so replaying
+// the loop can only raise a watermark.
+//
+// This generalizes `forceDrawResourceMarkingAfterSplit_`, which covers only
+// the narrower case of a split the batch loop itself caused.
+template <typename StampFn>
+std::uint64_t restampIfTicketAdvancedLocked(CommandQueue& q,
+                                            std::uint64_t markTicket,
+                                            StampFn&& stamp) {
+  const std::uint64_t frozenTicket = q.markTicketAcquire();
+  if (frozenTicket != markTicket) {
+    stamp(frozenTicket);
+  }
+  return frozenTicket;
 }
 
 std::uint64_t steadyClockNanoseconds() {
@@ -3262,6 +3294,21 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
   if (entries.empty()) {
     return;
   }
+  // T2a — the stamp loop runs on the pool's documented arena-stamp exception
+  // (`dxmt9_resource_pool.hpp`): `mark*Use` reaches only HandleArena-locked
+  // slot metadata, so `CommandQueue::mutex_` is not what protects it. Safety
+  // rests on the pin-ordering premise instead — the PE recorder retainer holds
+  // a unix reference on every resource this chunk names for the whole of
+  // `commit_chunk`, so none of them can be `destroyPending`, so none can be
+  // reclaimed mid-mark. TLA+: ProducerMarkReclaim!StampMark under
+  // `PinDiscipline = "Enforced"`.
+  //
+  // Single seqId snapshot for the whole bulk-mark — the importer is about to
+  // emit Draw* records onto the same chunk, so all resources get pinned to the
+  // chunk's nextSeqId together.
+  const std::uint64_t markTicket = seqIdForMark(*this, 0);
+  markChunkResourcesWithExactSeq(pool_, entries, markTicket);
+
   const bool phaseSplit = markChunkPhaseSplitEnabled();
   const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
                                         : std::chrono::steady_clock::time_point{};
@@ -3273,27 +3320,12 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - lockWaitStart).count()));
   }
-  // Single seqId snapshot for the whole bulk-mark — the importer is
-  // about to emit Draw* records onto the same chunk, so all resources
-  // get pinned to the chunk's nextSeqId together.
-  const std::uint64_t seqId = seqIdForMark(*this, 0);
-  for (const auto& entry : entries) {
-    switch (entry.kind) {
-    case core::ChunkHandleKind::Texture:
-      pool_.markTextureUse(entry.handle, seqId);
-      break;
-    case core::ChunkHandleKind::Surface:
-      pool_.markSurfaceUse(entry.handle, seqId);
-      break;
-    case core::ChunkHandleKind::Buffer:
-      pool_.markBufferUse(entry.handle, seqId);
-      break;
-    case core::ChunkHandleKind::Shader:
-    case core::ChunkHandleKind::VertexDecl:
-      // No pool table for these yet — kinds reserved for future use.
-      break;
-    }
-  }
+  // All that is left under the mutex is the frozen-ticket re-read; the
+  // re-stamp itself is the rare branch. See restampIfTicketAdvancedLocked.
+  (void)restampIfTicketAdvancedLocked(
+      *this, markTicket, [this, entries](std::uint64_t frozenTicket) {
+        markChunkResourcesWithExactSeq(pool_, entries, frozenTicket);
+      });
 }
 
 core::ChunkBufferBindingCaptureResult
@@ -3305,8 +3337,21 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
   if (entries.empty()) {
     return core::ChunkBufferBindingCaptureResult::Complete;
   }
-  // See markChunkResources above: same env-gated acquire/marking split, and
-  // this is the default (non-legacy) path most commits actually take, which
+  // T2a — this is the default (non-legacy) path most commits actually take.
+  // The stamp loop moves off `CommandQueue::mutex_` onto the pool's
+  // arena-stamp exception for the reason spelled out in markChunkResources
+  // above; the binding CAPTURE deliberately does NOT move with it (that is
+  // T2b, still out of scope), so the mutex acquire below stays.
+  //
+  // Order is stamps-before-capture, not capture-before-stamps. `markStampUpper`
+  // is a monotone max, so an early stamp can only be too LOW, which is exactly
+  // what the frozen-ticket re-stamp under the lock repairs. An early capture
+  // has no such repair: it would publish a backing snapshot for a record whose
+  // watermark the commit has not raised yet.
+  const std::uint64_t markTicket = seqIdForMark(*this, 0);
+  markChunkResourcesWithExactSeq(pool_, entries, markTicket);
+
+  // See markChunkResources above: same env-gated acquire/marking split, which
   // previously left commit_chunk_phase_mark_lock_cpu_ms at 0 on every run.
   const bool phaseSplit = markChunkPhaseSplitEnabled();
   const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
@@ -3320,26 +3365,18 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - lockWaitStart).count()));
   }
-  const std::uint64_t seqId = seqIdForMark(*this, 0);
+  (void)restampIfTicketAdvancedLocked(
+      *this, markTicket, [this, entries](std::uint64_t frozenTicket) {
+        markChunkResourcesWithExactSeq(pool_, entries, frozenTicket);
+      });
   bool missingRequired = false;
   for (const auto& entry : entries) {
-    switch (entry.kind) {
-    case core::ChunkHandleKind::Texture:
-      pool_.markTextureUse(entry.handle, seqId);
-      break;
-    case core::ChunkHandleKind::Surface:
-      pool_.markSurfaceUse(entry.handle, seqId);
-      break;
-    case core::ChunkHandleKind::Buffer:
-      pool_.markBufferUse(entry.handle, seqId);
-      snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
-      missingRequired |= snapshots.back().requiresCapturedBacking &&
-                         !snapshots.back().snapshot.valid();
-      break;
-    case core::ChunkHandleKind::Shader:
-    case core::ChunkHandleKind::VertexDecl:
-      break;
+    if (entry.kind != core::ChunkHandleKind::Buffer) {
+      continue;
     }
+    snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
+    missingRequired |= snapshots.back().requiresCapturedBacking &&
+                       !snapshots.back().snapshot.valid();
   }
   return missingRequired
              ? core::ChunkBufferBindingCaptureResult::MissingRequired
@@ -3517,41 +3554,84 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
       DXMT_ASSERT(batch.front().stateMaterialized);
     }
-    // SEGMENT-HOLD: from here through the append below, `lock` is
-    // continuously held with no interior unlock/relock (the two helpers that
-    // may unlock -- ensureWritingSlotUnlocked and
-    // maybeCommitDrawPayloadArenaUnlocked -- already returned above, and
-    // maybeCommitDrawChunkUnlocked below has not been called yet). This is
-    // the per-batch resource-marking + append body the module comment above
-    // calls out as the priority segment (22.6 calls/present).
-    {
-      // Sub-segmented: the marking half is a candidate for the pool header's
-      // documented arena-stamp exception (stamp under HandleArena's own mutex
-      // after taking the seq ticket under the queue lock), while the append
-      // half's mobility depends on writing-slot exclusivity. The split decides
-      // which restructure buys the measured hold back.
-      {
-        QueueMutexSegmentScope qmxMarkSegment("submit_draw_run_batch_impl/mark");
-        PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
-        const std::uint64_t seqId = seqIdForMark(queue, 0);
-        if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-          pool.markDrawResources(batch.front().materializedState().hot, seqId);
+    // T2a' — the per-batch stamp loop. Every entry point it reaches
+    // (`Pool::markDrawResources`, `markDrawBindingSnapshotResources`,
+    // `markDrawBindingOverrideResources`) bottoms out in `markBufferUse` /
+    // `markTextureUse` / `markSurfaceUse` / `markBufferSnapshotUse`, each of
+    // which touches only HandleArena-locked slot metadata — the pool header's
+    // documented arena-stamp exception. None of them reads the heap manager,
+    // the slot ring, or any other `CommandQueue::mutex_`-protected state, so
+    // the loop is callable with the queue mutex released.
+    const auto stampBatch = [&](std::uint64_t seqId) {
+      if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+        pool.markDrawResources(batch.front().materializedState().hot, seqId);
+      }
+      for (auto& submission : batch) {
+        std::span<const core::DrawParamPayloadView> payloads{};
+        if (!submission.payload.userVertexData.empty() ||
+            !submission.payload.userIndexData.empty() ||
+            !submission.payload.bindingOverrideData.empty() ||
+            !submission.payload.bindingSnapshotData.empty()) {
+          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
         }
-        for (auto& submission : batch) {
-          std::span<const core::DrawParamPayloadView> payloads{};
-          if (!submission.payload.userVertexData.empty() ||
-              !submission.payload.userIndexData.empty() ||
-              !submission.payload.bindingOverrideData.empty() ||
-              !submission.payload.bindingSnapshotData.empty()) {
-            payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-          }
-          markDrawBindingSnapshotResources(pool, payloads, seqId);
-          if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-            markDrawBindingOverrideResources(pool, payloads, seqId);
-          }
+        markDrawBindingSnapshotResources(pool, payloads, seqId);
+        if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+          markDrawBindingOverrideResources(pool, payloads, seqId);
         }
       }
+    };
+    // The marking window runs UNLOCKED. Three facts make that sound:
+    //
+    //  1. RECLAIM. The pin-ordering premise, symmetric to the producer's: the
+    //     replay offload worker holds the retained wrappers for every resource
+    //     this batch names and drops them only in `releaseRetainedWrappers`
+    //     after the replay, so nothing here can be `destroyPending`, so
+    //     nothing here can be reclaimed mid-stamp.
+    //     TLA+: ProducerMarkReclaim!WorkerStampMark.
+    //  2. COMMAND ORDER. No other actor can append into the writing slot
+    //     inside the window. Every producer-side direct call goes through
+    //     `drainDeferredReplay` (R-BACK-2.51(d)) first, which does not return
+    //     while this worker still has queued chunks to replay.
+    //  3. SLOT IDENTITY. What the window does NOT exclude is a *publish* of
+    //     the open slot — a scoped or bypassing `buffer_lock` can reach
+    //     `commitCurrentChunk` without a full drain — which both retires the
+    //     writing slot and raises the seq. Both are repaired below:
+    //     `ensureWritingSlotUnlocked` re-opens a slot, and
+    //     `restampIfTicketAdvancedLocked` re-stamps for the new seq.
+    std::uint64_t markTicket = 0;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
+      lock.unlock();
+      markTicket = seqIdForMark(queue, 0);
+      stampBatch(markTicket);
+      lock.lock();
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
+      // The unlocked window above permits a concurrent force-publish to have
+      // retired the writing slot, so it has to be re-established before
+      // currentSlotUnlocked(). `pendingPayloadBytes` is deliberately not
+      // re-evaluated: a slot that was published is empty, so the arena limit
+      // cannot bind, and if it was not published the check above already ran.
+      ensureWritingSlotUnlocked(queue, lock);
+      DXMT_ASSERT(batch.front().stateMaterialized);
+    }
+    // SEGMENT-HOLD: from here through the append below, `lock` is
+    // continuously held with no interior unlock/relock (the helpers that may
+    // unlock -- ensureWritingSlotUnlocked and
+    // maybeCommitDrawPayloadArenaUnlocked -- already returned above, and
+    // maybeCommitDrawChunkUnlocked below has not been called yet). The
+    // marking half of the old combined segment is gone from the hold; what is
+    // left is the append the module comment above calls out (22.6
+    // calls/present).
+    {
       QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
+      // Frozen-ticket re-read. If a force-publish moved the seq while the
+      // stamps were being written unlocked, the batch is re-stamped with the
+      // new one BEFORE its records enter the slot, so the stamps still cover
+      // the seq the slot will be published under. Removing this step is the
+      // `RestampDiscipline = "Removed"` counterexample.
+      (void)restampIfTicketAdvancedLocked(queue, markTicket, stampBatch);
       DXMT_ASSERT(batch.front().stateMaterialized);
       currentBackBuffer =
           batch.front().materializedState().hot.colorAttachments[0].handle;
@@ -3750,12 +3830,15 @@ CommandQueue::beginCpuReadyArenaSource(
   case core::CpuReadyTape::ReserveProbe::InvalidRequest:
     return {.status = CpuReadyArenaBeginStatus::Invalid};
   }
-  if (nextSeqId_ == 0 ||
-      nextSeqId_ == std::numeric_limits<std::uint64_t>::max()) {
+  // `mutex_` is held here, so relaxed is exact — every writer needs it too.
+  const std::uint64_t admittedSeqId =
+      nextSeqId_.load(std::memory_order_relaxed);
+  if (admittedSeqId == 0 ||
+      admittedSeqId == std::numeric_limits<std::uint64_t>::max()) {
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
 
-  const std::uint64_t seqId = nextSeqId_;
+  const std::uint64_t seqId = admittedSeqId;
   const std::uint64_t buildGeneration = nextArenaBuildGeneration_++;
   const core::CpuReadyAdmissionIdentity identity{
       .rawOrdinal = rawOrdinal,
@@ -3778,7 +3861,10 @@ CommandQueue::beginCpuReadyArenaSource(
   control.sourceId = reservation->id;
   control.storage = reservation->storage;
   control.payload = nullptr;
-  ++nextSeqId_;
+  // Release, for the same reason as the publish increment in
+  // QueueLifecycleController::commitCurrentChunk: a lock-free
+  // `markTicketAcquire()` reader synchronizes with this store.
+  nextSeqId_.store(admittedSeqId + 1, std::memory_order_release);
   arenaAdmissionActive_.store(true, std::memory_order_release);
   arenaBuildContext_.emplace(
       *reservation, controlIndex, layout, cpuReadyTape_, currentBackBuffer_);

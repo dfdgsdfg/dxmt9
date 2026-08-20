@@ -8,14 +8,38 @@
 //
 //  * **Mutating ops** (`createBuffer`/`createTexture`/`createSurface`,
 //    `destroy*`, `finalizeBufferMap`, `reclaim*`) normally require
-//    `CommandQueue::mutex_`. The only exception is strict arena publication's
-//    `mark*` phase: while the strict ticket/source transaction remains pinned,
-//    admission must retain every raw handle record and every captured renamed
-//    backing used by the immutable source snapshot. The publisher may then
-//    release the queue scheduling lock and stamp those retained objects with
-//    that ticket's exact seqId; HandleArena's own mutex serializes the stamps.
-//    This exception does not permit capture, lookup of later-live Pool state,
-//    or any other Pool mutation outside `CommandQueue::mutex_`.
+//    `CommandQueue::mutex_`. The exception is the `mark*` phase: every
+//    `mark*Use` / `mark*Resources` entry point bottoms out in an
+//    `arena.update()` on the record's own slot and touches no other Pool or
+//    queue state, so HandleArena's own mutex is sufficient to serialize it.
+//    A caller may therefore stamp retained objects with a seqId while holding
+//    no queue lock. This exception does not permit capture, lookup of
+//    later-live Pool state, or any other Pool mutation outside
+//    `CommandQueue::mutex_`.
+//
+//    Three production callers use it (`src/dxmt9/dxmt9_command_queue.cpp`):
+//      - strict arena publication, which pins the ticket/source transaction,
+//        releases the queue scheduling lock, and stamps with that ticket's
+//        exact seqId;
+//      - the producer's commit-time bulk mark
+//        (`markChunkResources` / `markChunkResourcesAndCaptureBufferBindings`,
+//        design T2a);
+//      - the replay offload worker's per-batch draw mark
+//        (`submitDrawRunBatchImpl`, design T2a').
+//
+//    A caller that stamps outside the queue mutex owes TWO obligations, both
+//    model-checked in `specs/verification/tla/ProducerMarkReclaim.tla` with a
+//    purpose-built counterexample configuration each:
+//      1. PIN ORDERING — every record it stamps must be held by a reference
+//         the caller owns for the whole stamping window, so `destroyPending`
+//         cannot be set for it and `gcArena` cannot reach it.
+//         (`PinDiscipline = "Removed"`.)
+//      2. RE-STAMP — the seq ticket is an acquire load of `nextSeqId_`, which
+//         a concurrent publish may raise before the stamped records reach the
+//         slot. The caller must re-read the ticket once it holds
+//         `CommandQueue::mutex_` (which freezes it) and re-stamp if it moved,
+//         before the mutex-protected step the stamps have to cover.
+//         (`RestampDiscipline = "Removed"`.)
 //
 //  * **Lookup ops** (`findBuffer`/`findTexture`/`findSurface`) may be
 //    called without the queue mutex. HandleArena serializes its own slot

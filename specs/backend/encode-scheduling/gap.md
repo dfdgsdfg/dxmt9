@@ -476,14 +476,27 @@ sites. Two tracks are open:
 | Track | Status | Evidence debt |
 |---|---|---|
 | Segment-hold attribution of the handoff sites + trimming the top holder | instrumentation in flight | one GT2 profile run after the segment split lands |
-| Producer concurrency redesign (T2 lock-free marking / T3 decoupling per `docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md`) | design brief audit-resolved (`5d01a9d1`); formal layer delivered (`cfcfdac1`): `ProducerMarkReclaim.tla` green with its Buggy counterexample producing the expected NoUseAfterFree violation, shared predicates wired behavior-identically into gcArena/mark*, native trace-conformance spec passing | remaining before implementation: the deterministic interleaving harness for the C++ atomics ordering (R-VERIF-7.3 direction); the original four §7 source audits (capture read-set vs worker write-set, pin release ordering, rename-ring privacy, reclaim actor set); then `ProducerMarkReclaim.tla` + Buggy counterexample cfg, shared pure predicates, TLC trace-replay native runner, and the R-VERIF-7.3-style deterministic interleaving harness — all before any implementation, per `rendering_correctness.rules.md` |
+| Producer concurrency redesign (T2 lock-free marking / T3 decoupling per `docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md`) | design brief audit-resolved (`5d01a9d1`); formal layer delivered (`cfcfdac1`); **T2a' implemented**: both marking paths moved off `CommandQueue::mutex_` onto the pool's arena-stamp exception — the producer's commit-time bulk mark (`markChunkResources`, `markChunkResourcesAndCaptureBufferBindings`) and the replay worker's per-batch draw mark (`submitDrawRunBatchImpl`, the measured `0.93 ms/present` hold in `append-decomposition.29`). Model extended with a second premise and a second Buggy dimension: `WorkerStampMark`/`SlotAdvance`/`WorkerRestamp` and `RestampDiscipline`, with `WorkerAppendCoveredByStamps` as the direct obligation. Production cfg green at 276,840 distinct states / depth 29; **both** counterexample cfgs produce the expected `NoUseAfterFree` violation (`PinDiscipline="Removed"` in 3 steps, `RestampDiscipline="Removed"` in 9). `nextSeqId_` is now `std::atomic<u64>` — acquire ticket read, writes unchanged and still under the mutex. `dxmt9-producer-mark-reclaim-spec` carries both counterexample traces plus the re-stamp truth cases | evidence debt: (a) **profile re-measurement** — a `DXMT9_PERF_QUEUE_MUTEX_SPLIT` GT2 run confirming the `submit_draw_run_batch_impl/mark` segment row is gone from the hold ledger and that `mark_chunk_resources_and_capture_buffer_bindings` acquire-wait dropped, without a new row appearing elsewhere; (b) **wild matched pair** (GT2 primary, plus GT1/GT3/SFIV) for the fps claim and visual/`gpu_command_buffer_errors` gates; (c) the deterministic interleaving harness for the C++ atomics ordering (R-VERIF-7.3 direction) remains open — the model explicitly does not cover release/acquire pairing or torn reads; (d) no counter observes how often the re-stamp actually fires in the wild, so the size of the ticket/slot-seq window is modelled but unmeasured. `CommandQueue::submitDrawRun` (the non-batch path) deliberately keeps its mark under the mutex — strictly conservative, and not one of the two measured holds |
 
 The pin-ordering premise (retainer pins make `destroyPending` impossible
-during marking) is currently enforced by the shared mutex, not by the pins;
-promoting any lock-free mark without the model plus the counterexample-capable
-Buggy cfg is prohibited — `ResourceLifetime.tla`'s watermark-only scope has
-already missed one refcount-class escape (`specs/verification/gap.md`,
-2026-08-02).
+during marking) was, before T2a', enforced by the shared mutex rather than by
+the pins; promoting any lock-free mark without the model plus the
+counterexample-capable Buggy cfg is prohibited — `ResourceLifetime.tla`'s
+watermark-only scope has already missed one refcount-class escape
+(`specs/verification/gap.md`, 2026-08-02).
+
+T2a' added a **second** premise that the mutex had also been supplying for
+free, and which the original model could not see: the stamp's seq ticket and
+the seq its records finally land under were the same read only because the
+ticket was taken inside the hold that ended at the append. Outside it, a
+concurrent force-publish can move the seq between the two, leaving stamps below
+the chunk's final seq — a premature reclaim, not a stale-pointer dereference,
+so `PinDiscipline` alone would never have caught it. The production protocol is
+a frozen-ticket re-read under the mutex plus a conditional re-stamp
+(`restampIfTicketAdvancedLocked`), which generalizes the pre-existing
+`forceDrawResourceMarkingAfterSplit_` flag. Any future caller that takes the
+arena-stamp exception owes both premises; the pool header states them and each
+has its own `.counterexample.cfg` executed by `scripts/check/verify_tla.sh`.
 
 ## Historical Verdict
 

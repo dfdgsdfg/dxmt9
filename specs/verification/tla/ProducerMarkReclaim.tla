@@ -2,34 +2,66 @@
 (*
  * dxmt9 Producer Mark / Reclaim — TLA+ Specification
  *
- * Licenses the T2a / T2b relaxations of the producer↔queue concurrency track
- * (`docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md`
- * §8): commit-time resource marking, and the per-buffer binding capture that
- * rides with it, move OFF `CommandQueue::mutex_` and run under HandleArena's
- * own mutex instead. The safety argument they rest on is the pin-ordering
- * premise (§2): during `commit_chunk` the PE recorder retainer holds a unix
- * reference on every resource the chunk names, so `destroyPending` cannot be
- * set for a resource that is being marked, so a reclaim racing a lock-free
- * mark can never free a record the producer is still touching.
+ * Licenses the T2a / T2a' / T2b relaxations of the producer↔queue concurrency
+ * track (`docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md`
+ * §8 / §9): commit-time resource marking, the replay worker's per-batch draw
+ * resource marking, and the per-buffer binding capture that rides with the
+ * former, move OFF `CommandQueue::mutex_` and run under HandleArena's own
+ * mutex instead.
  *
- * Today that premise is enforced *trivially* by the shared mutex, not by the
- * pins. This model checks it as a standalone ordering property, so removing
- * the mutex does not silently remove the guarantee.
+ * TWO independent premises are checked, and each has its own purpose-built
+ * counterexample configuration:
  *
- * Actors (all four run concurrently; no action pair is mutually excluded
- * except where a `commitPhase` guard says so):
+ *  1. PIN ORDERING (`PinDiscipline`). During `commit_chunk` the PE recorder
+ *     retainer holds a unix reference on every resource the chunk names, and
+ *     the replay worker holds the retained wrappers for every resource its
+ *     batch names until its replay is done. `destroyPending` therefore cannot
+ *     be set for a resource that is being marked, so a reclaim racing a
+ *     lock-free mark can never free a record a marker is still touching.
+ *
+ *  2. RE-STAMP DISCIPLINE (`RestampDiscipline`). Once the stamp value leaves
+ *     the queue mutex, the seq TICKET it carries and the seq the records
+ *     finally land under stop being the same read. The ticket is an acquire
+ *     load of `nextSeqId_`; a concurrent force-publish / chunk split
+ *     (`SlotAdvance`) can raise that seq between the ticket read and the
+ *     append, leaving stamps BELOW the chunk's final seq. The GPU watermark
+ *     then passes the stamp while the chunk that names the record is still
+ *     pending, and `gcArena` frees it — a premature reclaim that the mutex
+ *     used to make unreachable for free, because ticket and append happened
+ *     inside one hold. The protocol that restores it is to re-read the ticket
+ *     after re-acquiring the mutex and, if it moved, re-stamp before the
+ *     append — a generalization of the existing production
+ *     `forceDrawResourceMarkingAfterSplit_` mechanism
+ *     (`src/dxmt9/dxmt9_command_queue.cpp`).
+ *
+ * Both premises are enforced *trivially* by the shared mutex today, not by the
+ * pins and not by any re-read. This model checks them as standalone ordering
+ * properties, so removing the mutex does not silently remove the guarantees.
+ *
+ * Actors (all five run concurrently; no action pair is mutually excluded
+ * except where a `commitPhase` / `workerPhase` guard says so):
  *
  *   Producer   — PinChunkResources → BeginMark → StampMark* / CaptureRead*
  *                → EndCommit; plus MapFastRead (T2c's atomic watermark read).
  *   Retainer   — the pin lifetime itself: pins are a *precondition* of
  *                marking (PinChunkResources) and are released strictly after
  *                EndCommit (ReleasePins), per design §7 Q2.
- *   Worker     — the commit-replay offload worker: ReleasePins hands the
- *                retained wrappers to it, and WorkerReleaseRefs models
- *                `releaseRetainedWrappers` dropping them on replay
- *                completion. Design §7 Q4: the worker is a *third* reclaim
- *                actor, and its ref drop can land anywhere inside a later
- *                chunk's mark window.
+ *   Worker     — the commit-replay offload worker. Two roles, both modelled:
+ *                (a) WorkerReleaseRefs models `releaseRetainedWrappers`
+ *                dropping refs it inherited from an earlier chunk, which can
+ *                land anywhere inside a later chunk's mark window (design §7
+ *                Q4 — the worker is a *third* reclaim actor); and
+ *                (b) WorkerBeginBatch → WorkerStampMark* → WorkerEndStamping
+ *                → WorkerRestamp? → WorkerAppend → WorkerReleaseBatchRefs →
+ *                WorkerRetireBatch is `submitDrawRunBatchImpl`'s per-batch
+ *                marking + append, the T2a' half. Its pin premise is
+ *                symmetric to the producer's: it holds its batch's retained
+ *                refs across its own marking window and releases them
+ *                strictly after the append.
+ *   Publisher  — SlotAdvance: any actor that force-publishes the open writing
+ *                slot (the producer's map-wait commit, the draw/payload chunk
+ *                limits) and so raises the seq a pending append will get.
+ *                Design §9: "the writing slot is not worker-exclusive".
  *   Completion — AdvanceCompleted (`completedSeqId` watermark) and Reclaim
  *                (`Pool::reclaimCompleted` → `gcArena`).
  *
@@ -38,16 +70,18 @@
  * is exactly `gcArena`'s condition in `src/dxmt9/dxmt9_resource_pool.hpp`.
  * Pins never appear in that gate. They appear one step earlier, in
  * `SetDestroyPending(r)`: a pinned record has refs > 0, so its destructor
- * path cannot run. `PinDiscipline = "Removed"` deletes exactly that premise
- * and nothing else; the companion counterexample configuration is expected
- * to fail `NoUseAfterFree`.
+ * path cannot run. `PinDiscipline = "Removed"` deletes exactly that premise;
+ * `RestampDiscipline = "Removed"` deletes exactly the re-stamp step. Each has
+ * a companion counterexample configuration expected to fail `NoUseAfterFree`.
  *
  * Scope / non-claims:
  *   - This model does NOT prove the C++ atomics ordering of a lock-free
  *     `lastUsedSeqId` stamp (release/acquire pairing, torn reads). `StampMark`
  *     is one atomic action because HandleArena's own shared mutex serializes
- *     the slot metadata; the memory-model obligation stays with the
- *     deterministic interleaving harness (design §5 layer 3, R-VERIF-7.3).
+ *     the slot; the ticket is one atomic action because `nextSeqId_` is a
+ *     single `std::atomic<u64>` acquire load. The memory-model obligation
+ *     stays with the deterministic interleaving harness (design §5 layer 3,
+ *     R-VERIF-7.3).
  *   - It does not model HandleArena's generation check, which is an
  *     independent fail-closed *detection* of a stale handle. The property
  *     checked here is ordering: a being-marked record is never reclaimed in
@@ -56,22 +90,32 @@
  *
  * Properties verified:
  *   Safety   — TypeOK, NoUseAfterFree, NoReclaimInsideMarkWindow,
- *              ReclaimRespectsWatermark, MapReadSound
+ *              ReclaimRespectsWatermark, PinnedRecordsAreNotDestroyPending,
+ *              MapReadSound, WorkerAppendCoveredByStamps,
+ *              CommitStampsCoverChunkSeq
  *   Action   — MarkMonotonic, CompletedMonotonic, ObservedCompletedMonotonic
  *)
 
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
-  Resources,      \* set of resource identifiers (e.g., {r1, r2})
-  MAX_SEQID,      \* model-checking bound on the seq-id domain
-  PinDiscipline   \* "Enforced" (production) | "Removed" (counterexample)
+  Resources,         \* set of resource identifiers (e.g., {r1, r2})
+  MAX_SEQID,         \* model-checking bound on the seq-id domain
+  PinDiscipline,     \* "Enforced" (production) | "Removed" (counterexample)
+  RestampDiscipline  \* "Enforced" (production) | "Removed" (counterexample)
 
 ASSUME Resources # {}
 ASSUME MAX_SEQID \in Nat /\ MAX_SEQID >= 2
 ASSUME PinDiscipline \in {"Enforced", "Removed"}
+ASSUME RestampDiscipline \in {"Enforced", "Removed"}
 
 CommitPhases == {"Idle", "Pinned", "Marking", "Committed"}
+
+\* Worker batch phases. "Marked" is the ONLY phase in which the worker owns
+\* `CommandQueue::mutex_`: it re-acquires at WorkerEndStamping and releases
+\* after WorkerAppend. SlotAdvance is excluded against exactly that phase,
+\* which is what makes an in-lock re-stamp a fixed point.
+WorkerPhases == {"Idle", "Marking", "Marked", "Appended", "Pending"}
 
 VARIABLES
   retainerPinned,          \* Resources → BOOLEAN — PE retainer holds a ref
@@ -79,19 +123,26 @@ VARIABLES
   destroyPending,          \* Resources → BOOLEAN — last unix ref dropped
   freed,                   \* Resources → BOOLEAN — slot released by gcArena
   lastUsedSeqId,           \* Resources → Nat     — the marked watermark
-  nextSeqId,               \* Nat — next ticket the producer may reserve
+  nextSeqId,               \* Nat — seq the open writing slot will be given
   completedSeqId,          \* Nat — GPU-completed watermark (truth)
   observedCompletedSeqId,  \* Nat — the producer's own (stale) atomic read
   commitPhase,             \* one of CommitPhases
+  commitSeqId,             \* Nat — the ticket BeginMark reserved
   chunkNamed,              \* SUBSET Resources — resources this chunk names
   marked,                  \* SUBSET chunkNamed — already stamped
   captured,                \* SUBSET marked — binding capture already read
+  workerPhase,             \* one of WorkerPhases
+  workerBatch,             \* SUBSET Resources — resources this batch names
+  workerStamped,           \* SUBSET workerBatch — already stamped
+  workerTicket,            \* Nat — the seq ticket this batch stamped with
+  workerAppendSeqId,       \* Nat — seq the appended records landed under (0=none)
   useAfterFree             \* BOOLEAN — sticky fault flag (see NoUseAfterFree)
 
 vars ==
   <<retainerPinned, workerPinned, destroyPending, freed, lastUsedSeqId,
     nextSeqId, completedSeqId, observedCompletedSeqId, commitPhase,
-    chunkNamed, marked, captured, useAfterFree>>
+    commitSeqId, chunkNamed, marked, captured, workerPhase, workerBatch,
+    workerStamped, workerTicket, workerAppendSeqId, useAfterFree>>
 
 (* ================================================================
    Shared predicate vocabulary
@@ -116,12 +167,27 @@ MarkStampUpper(current, stamp) == IF stamp > current THEN stamp ELSE current
 \* A record is pinned when ANY holder still owns a unix reference.
 IsPinned(r) == retainerPinned[r] \/ workerPinned[r]
 
-\* The ticket BeginMark reserved for the chunk currently being committed.
-\* BeginMark is the only action that moves nextSeqId, so this is exact for
-\* every state in which a commit is between BeginMark and ReleasePins.
-ChunkSeqId == nextSeqId - 1
-
 CommitInFlight == commitPhase \in {"Pinned", "Marking", "Committed"}
+
+\* The worker owns `CommandQueue::mutex_` only while it is between
+\* WorkerEndStamping and WorkerAppend.
+WorkerHoldsQueueMutex == workerPhase = "Marked"
+
+(*
+ * WorkerRecordInUse(r)
+ * A record the worker's batch still needs. Two disjoint reasons:
+ *   - the batch is mid-mark / mid-append, so the worker is literally
+ *     dereferencing the record; or
+ *   - the batch's records have been appended into a chunk (seq
+ *     workerAppendSeqId) that the GPU has NOT completed, so the encoder is
+ *     still going to consume them.
+ * Freeing such a record is a use-after-free, which is what the seq stamp —
+ * not the pin — is supposed to prevent past the ref release.
+ *)
+WorkerRecordInUse(r) ==
+  /\ r \in workerBatch
+  /\ \/ workerPhase \in {"Marking", "Marked", "Appended"}
+     \/ (workerPhase = "Pending" /\ workerAppendSeqId > completedSeqId)
 
 (* ================================================================
    Initialization
@@ -137,9 +203,15 @@ Init ==
   /\ completedSeqId         = 0
   /\ observedCompletedSeqId = 0
   /\ commitPhase            = "Idle"
+  /\ commitSeqId            = 0
   /\ chunkNamed             = {}
   /\ marked                 = {}
   /\ captured               = {}
+  /\ workerPhase            = "Idle"
+  /\ workerBatch            = {}
+  /\ workerStamped          = {}
+  /\ workerTicket           = 0
+  /\ workerAppendSeqId      = 0
   /\ useAfterFree           = FALSE
 
 (* ================================================================
@@ -163,7 +235,8 @@ PinChunkResources(S) ==
   /\ commitPhase' = "Pinned"
   /\ UNCHANGED <<workerPinned, destroyPending, freed, lastUsedSeqId,
                  nextSeqId, completedSeqId, observedCompletedSeqId,
-                 marked, captured, useAfterFree>>
+                 commitSeqId, marked, captured, workerPhase, workerBatch,
+                 workerStamped, workerTicket, workerAppendSeqId, useAfterFree>>
 
 (*
  * ReleasePins
@@ -183,7 +256,9 @@ ReleasePins ==
   /\ marked'      = {}
   /\ captured'    = {}
   /\ UNCHANGED <<destroyPending, freed, lastUsedSeqId, nextSeqId,
-                 completedSeqId, observedCompletedSeqId, useAfterFree>>
+                 completedSeqId, observedCompletedSeqId, commitSeqId,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
 
 (* ================================================================
    Producer
@@ -191,31 +266,38 @@ ReleasePins ==
 
 (*
  * BeginMark
- * Reserves the chunk's ticket (`seqIdForMark`'s `nextSeqId` read). After
- * this step ChunkSeqId names it.
+ * Reserves the chunk's ticket (`seqIdForMark`'s `nextSeqId` read) and, unlike
+ * the worker's batch, publishes under it: `commit_chunk`'s synchronous half
+ * both takes the ticket and owns the chunk it names. That is why the producer
+ * side carries no re-stamp obligation — `commitSeqId` cannot move once taken.
+ * `CommitStampsCoverChunkSeq` states this as an invariant so a future change
+ * that decouples the two fails here instead of in the field.
  *)
 BeginMark ==
   /\ commitPhase = "Pinned"
   /\ nextSeqId <= MAX_SEQID
+  /\ commitSeqId' = nextSeqId
   /\ nextSeqId'   = nextSeqId + 1
   /\ commitPhase' = "Marking"
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  lastUsedSeqId, completedSeqId, observedCompletedSeqId,
-                 chunkNamed, marked, captured, useAfterFree>>
+                 chunkNamed, marked, captured, workerPhase, workerBatch,
+                 workerStamped, workerTicket, workerAppendSeqId, useAfterFree>>
 
 (*
  * StampMark(r)  — T2a.
  * `Pool::mark*Use`: stamp the max of the record's watermark and this chunk's
  * ticket. Under T2a this runs WITHOUT `CommandQueue::mutex_`, so it is not
  * excluded against Reclaim / AdvanceCompleted / SetDestroyPending /
- * WorkerReleaseRefs — TLC interleaves it freely with all of them. It is a
- * single atomic action because HandleArena's own mutex serializes the slot.
+ * WorkerReleaseRefs / SlotAdvance — TLC interleaves it freely with all of
+ * them. It is a single atomic action because HandleArena's own mutex
+ * serializes the slot.
  *
  * The guard deliberately does NOT test `freed[r]`: the production mark loop
  * walks the chunk's resource list and does not re-check liveness. Touching a
  * reclaimed record is therefore *reachable* in the model and is recorded in
  * `useAfterFree` rather than being excluded by fiat. That is what makes the
- * counterexample configuration able to see the bug class.
+ * counterexample configurations able to see the bug class.
  *)
 StampMark(r) ==
   /\ commitPhase = "Marking"
@@ -223,14 +305,15 @@ StampMark(r) ==
   /\ r \notin marked
   /\ marked' = marked \cup {r}
   /\ lastUsedSeqId' =
-       [lastUsedSeqId EXCEPT ![r] = MarkStampUpper(lastUsedSeqId[r], ChunkSeqId)]
+       [lastUsedSeqId EXCEPT ![r] = MarkStampUpper(lastUsedSeqId[r], commitSeqId)]
   \* The parentheses are load-bearing: TLA+ binds `=` tighter than `\/`, so
   \* the unparenthesized form would parse as `(useAfterFree' = useAfterFree)
   \* \/ (...)` and leave the fault flag unconstrained.
   /\ useAfterFree' = (useAfterFree \/ freed[r])
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  nextSeqId, completedSeqId, observedCompletedSeqId,
-                 commitPhase, chunkNamed, captured>>
+                 commitPhase, commitSeqId, chunkNamed, captured, workerPhase,
+                 workerBatch, workerStamped, workerTicket, workerAppendSeqId>>
 
 (*
  * CaptureRead(r)  — T2b.
@@ -248,7 +331,9 @@ CaptureRead(r) ==
   /\ useAfterFree' = (useAfterFree \/ freed[r])
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  lastUsedSeqId, nextSeqId, completedSeqId,
-                 observedCompletedSeqId, commitPhase, chunkNamed, marked>>
+                 observedCompletedSeqId, commitPhase, commitSeqId, chunkNamed,
+                 marked, workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId>>
 
 (*
  * EndCommit
@@ -262,8 +347,9 @@ EndCommit ==
   /\ commitPhase' = "Committed"
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  lastUsedSeqId, nextSeqId, completedSeqId,
-                 observedCompletedSeqId, chunkNamed, marked, captured,
-                 useAfterFree>>
+                 observedCompletedSeqId, commitSeqId, chunkNamed, marked,
+                 captured, workerPhase, workerBatch, workerStamped,
+                 workerTicket, workerAppendSeqId, useAfterFree>>
 
 (*
  * MapFastRead  — T2c.
@@ -277,28 +363,202 @@ MapFastRead ==
        observedCompletedSeqId' = v
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  lastUsedSeqId, nextSeqId, completedSeqId, commitPhase,
-                 chunkNamed, marked, captured, useAfterFree>>
+                 commitSeqId, chunkNamed, marked, captured, workerPhase,
+                 workerBatch, workerStamped, workerTicket, workerAppendSeqId,
+                 useAfterFree>>
 
 (* ================================================================
-   Worker
+   Publisher — the ticket/slot-seq race
    ================================================================ *)
 
 (*
- * WorkerReleaseRefs
- * `releaseRetainedWrappers` on replay completion (or fail-stop) drops the
- * offload worker's references. Unguarded by `commitPhase` on purpose: it runs
- * on the worker thread and routinely lands inside the producer's mark window
- * for a LATER chunk. When the same resource is also named by that later
- * chunk, `retainerPinned` still covers it — that overlap is the whole
- * pin-ordering argument, and it is what the counterexample configuration
- * removes.
+ * SlotAdvance
+ * Some OTHER actor publishes the open writing slot, so the seq a pending
+ * append will finally get moves up. In production this is
+ * `QueueLifecycleController::commitCurrentChunk`'s seq increment, reached
+ * from the producer's map-wait force-publish and from the draw-count /
+ * payload-arena chunk limits — design §9's "the writing slot is not
+ * worker-exclusive".
+ *
+ * It is excluded against `WorkerHoldsQueueMutex` and nothing else: `nextSeqId_`
+ * is only ever mutated under `CommandQueue::mutex_`, so an actor holding that
+ * mutex observes a frozen ticket. That exclusion is exactly what makes the
+ * in-lock re-stamp below a fixed point rather than another race.
  *)
-WorkerReleaseRefs ==
-  /\ \E r \in Resources : workerPinned[r]
-  /\ workerPinned' = [r \in Resources |-> FALSE]
+SlotAdvance ==
+  /\ ~WorkerHoldsQueueMutex
+  /\ nextSeqId <= MAX_SEQID
+  /\ nextSeqId' = nextSeqId + 1
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 lastUsedSeqId, completedSeqId, observedCompletedSeqId,
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
+
+(* ================================================================
+   Worker — T2a', the symmetric marking actor
+   ================================================================ *)
+
+(*
+ * WorkerBeginBatch(S)
+ * `submitDrawRunBatchImpl` starts a batch. The worker already holds the
+ * retained wrappers for every resource the batch names (they were handed over
+ * at `commit_chunk` and are dropped only by `releaseRetainedWrappers` after
+ * replay), which is the pin premise, symmetric to the producer's. The ticket
+ * is read here as one acquire load of `nextSeqId_` — NOT under the queue
+ * mutex, which is the whole point of T2a'.
+ *)
+WorkerBeginBatch(S) ==
+  /\ workerPhase = "Idle"
+  /\ S # {}
+  /\ \A r \in S : ~destroyPending[r] /\ ~freed[r]
+  /\ nextSeqId <= MAX_SEQID
+  /\ workerPinned' = [r \in Resources |-> IF r \in S THEN TRUE ELSE workerPinned[r]]
+  /\ workerBatch'   = S
+  /\ workerStamped' = {}
+  /\ workerTicket'  = nextSeqId
+  /\ workerPhase'   = "Marking"
   /\ UNCHANGED <<retainerPinned, destroyPending, freed, lastUsedSeqId,
                  nextSeqId, completedSeqId, observedCompletedSeqId,
-                 commitPhase, chunkNamed, marked, captured, useAfterFree>>
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerAppendSeqId, useAfterFree>>
+
+(*
+ * WorkerStampMark(r)  — T2a'.
+ * The worker's `pool.markDrawResources` / `markDrawBindingSnapshotResources`
+ * / `markDrawBindingOverrideResources` loop, moved off `CommandQueue::mutex_`
+ * onto the pool's documented arena-stamp exception. Identical shape to the
+ * producer's StampMark: monotone max through the shared predicate, no
+ * `freed[r]` guard, fault recorded rather than excluded.
+ *)
+WorkerStampMark(r) ==
+  /\ workerPhase = "Marking"
+  /\ r \in workerBatch
+  /\ r \notin workerStamped
+  /\ workerStamped' = workerStamped \cup {r}
+  /\ lastUsedSeqId' =
+       [lastUsedSeqId EXCEPT ![r] = MarkStampUpper(lastUsedSeqId[r], workerTicket)]
+  /\ useAfterFree' = (useAfterFree \/ freed[r])
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 nextSeqId, completedSeqId, observedCompletedSeqId,
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerTicket, workerAppendSeqId>>
+
+(*
+ * WorkerEndStamping
+ * The unlocked marking window closes: the worker re-acquires
+ * `CommandQueue::mutex_` for the slot-append section.
+ *)
+WorkerEndStamping ==
+  /\ workerPhase = "Marking"
+  /\ workerStamped = workerBatch
+  /\ workerPhase' = "Marked"
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 lastUsedSeqId, nextSeqId, completedSeqId,
+                 observedCompletedSeqId, commitPhase, commitSeqId, chunkNamed,
+                 marked, captured, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
+
+(*
+ * WorkerRestamp  — THE PROTOCOL.
+ * With the mutex held, re-read the ticket. If a SlotAdvance moved it while
+ * the stamps were being written unlocked, every resource in the batch is
+ * re-stamped with the new seq before the append. This is the generalization
+ * of the production `forceDrawResourceMarkingAfterSplit_` flag, which today
+ * covers only the narrower case of a split that the batch loop itself caused.
+ *
+ * `RestampDiscipline = "Removed"` deletes this action and the WorkerAppend
+ * guard that pairs with it, and nothing else.
+ *)
+WorkerRestamp ==
+  /\ RestampDiscipline = "Enforced"
+  /\ workerPhase = "Marked"
+  /\ workerTicket # nextSeqId
+  /\ lastUsedSeqId' =
+       [r \in Resources |-> IF r \in workerBatch
+                            THEN MarkStampUpper(lastUsedSeqId[r], nextSeqId)
+                            ELSE lastUsedSeqId[r]]
+  /\ workerTicket' = nextSeqId
+  /\ useAfterFree' = (useAfterFree \/ (\E r \in workerBatch : freed[r]))
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 nextSeqId, completedSeqId, observedCompletedSeqId,
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerAppendSeqId>>
+
+(*
+ * WorkerAppend
+ * `currentSlotUnlocked(queue).appendDrawRunBatch(batch)` — the records land
+ * in the open writing slot, which will be published as seq `nextSeqId`. The
+ * safety obligation `WorkerAppendCoveredByStamps` is evaluated from here on.
+ *)
+WorkerAppend ==
+  /\ workerPhase = "Marked"
+  /\ (RestampDiscipline = "Enforced" => workerTicket = nextSeqId)
+  /\ workerAppendSeqId' = nextSeqId
+  /\ workerPhase'       = "Appended"
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 lastUsedSeqId, nextSeqId, completedSeqId,
+                 observedCompletedSeqId, commitPhase, commitSeqId, chunkNamed,
+                 marked, captured, workerBatch, workerStamped, workerTicket,
+                 useAfterFree>>
+
+(*
+ * WorkerReleaseBatchRefs
+ * `releaseRetainedWrappers` on replay completion drops the batch's refs. Note
+ * this happens BEFORE the chunk it appended into has completed on the GPU —
+ * which is precisely why the seq stamp, not the pin, is what protects the
+ * record from here to completion, and therefore why a stamp below the chunk's
+ * seq is a real use-after-free rather than a bookkeeping detail.
+ *)
+WorkerReleaseBatchRefs ==
+  /\ workerPhase = "Appended"
+  /\ workerPinned' =
+       [r \in Resources |-> IF r \in workerBatch THEN FALSE ELSE workerPinned[r]]
+  /\ workerPhase' = "Pending"
+  /\ UNCHANGED <<retainerPinned, destroyPending, freed, lastUsedSeqId,
+                 nextSeqId, completedSeqId, observedCompletedSeqId,
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerBatch, workerStamped, workerTicket, workerAppendSeqId,
+                 useAfterFree>>
+
+(*
+ * WorkerRetireBatch
+ * The GPU watermark passed the chunk the batch appended into, so the records
+ * are no longer live and the worker may start another batch.
+ *)
+WorkerRetireBatch ==
+  /\ workerPhase = "Pending"
+  /\ completedSeqId >= workerAppendSeqId
+  /\ workerPhase'       = "Idle"
+  /\ workerBatch'       = {}
+  /\ workerStamped'     = {}
+  /\ workerTicket'      = 0
+  /\ workerAppendSeqId' = 0
+  /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
+                 lastUsedSeqId, nextSeqId, completedSeqId,
+                 observedCompletedSeqId, commitPhase, commitSeqId, chunkNamed,
+                 marked, captured, useAfterFree>>
+
+(*
+ * WorkerReleaseRefs
+ * `releaseRetainedWrappers` dropping refs the worker inherited from an
+ * EARLIER chunk. Unguarded by `commitPhase` on purpose: it runs on the worker
+ * thread and routinely lands inside the producer's mark window for a later
+ * chunk. When the same resource is also named by that later chunk,
+ * `retainerPinned` still covers it — that overlap is the whole pin-ordering
+ * argument, and it is what `PinDiscipline = "Removed"` removes. It never
+ * touches the batch the worker is currently replaying; those refs are dropped
+ * by WorkerReleaseBatchRefs, strictly after the append.
+ *)
+WorkerReleaseRefs ==
+  /\ \E r \in Resources : workerPinned[r] /\ r \notin workerBatch
+  /\ workerPinned' =
+       [r \in Resources |-> IF r \in workerBatch THEN workerPinned[r] ELSE FALSE]
+  /\ UNCHANGED <<retainerPinned, destroyPending, freed, lastUsedSeqId,
+                 nextSeqId, completedSeqId, observedCompletedSeqId,
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
 
 (* ================================================================
    Reclaim — three actors, one enabling condition
@@ -325,7 +585,9 @@ SetDestroyPending(r) ==
   /\ destroyPending' = [destroyPending EXCEPT ![r] = TRUE]
   /\ UNCHANGED <<retainerPinned, workerPinned, freed, lastUsedSeqId,
                  nextSeqId, completedSeqId, observedCompletedSeqId,
-                 commitPhase, chunkNamed, marked, captured, useAfterFree>>
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
 
 (*
  * Reclaim(r)
@@ -333,19 +595,23 @@ SetDestroyPending(r) ==
  * nothing more: destroyPending AND the GPU watermark has passed the record's
  * last use. Pins are NOT consulted here.
  *
- * Freeing a record that a live commit window still names is itself the
- * use-after-free — the producer is about to dereference it — so it is
- * recorded in `useAfterFree` at the moment it happens, not only when the
- * later StampMark / CaptureRead touches it.
+ * Freeing a record that a live commit window or a live worker batch still
+ * needs is itself the use-after-free — someone is about to dereference it —
+ * so it is recorded in `useAfterFree` at the moment it happens, not only when
+ * a later StampMark / CaptureRead touches it.
  *)
 Reclaim(r) ==
   /\ ~freed[r]
   /\ CanReclaimRecord(destroyPending[r], lastUsedSeqId[r], completedSeqId)
   /\ freed' = [freed EXCEPT ![r] = TRUE]
-  /\ useAfterFree' = (useAfterFree \/ (CommitInFlight /\ r \in chunkNamed))
+  /\ useAfterFree' = (useAfterFree
+                      \/ (CommitInFlight /\ r \in chunkNamed)
+                      \/ WorkerRecordInUse(r))
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, lastUsedSeqId,
                  nextSeqId, completedSeqId, observedCompletedSeqId,
-                 commitPhase, chunkNamed, marked, captured>>
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId>>
 
 (* ================================================================
    Completion
@@ -353,16 +619,18 @@ Reclaim(r) ==
 
 (*
  * AdvanceCompleted
- * The GPU completes chunks in order. A ticket cannot complete before the
- * producer has reserved the next one, which keeps the currently-committing
- * chunk's own ticket out of the watermark.
+ * The GPU completes chunks in order. A seq cannot complete before the slot
+ * after it has been opened, which keeps the newest published chunk out of the
+ * watermark.
  *)
 AdvanceCompleted ==
   /\ completedSeqId < nextSeqId - 1
   /\ completedSeqId' = completedSeqId + 1
   /\ UNCHANGED <<retainerPinned, workerPinned, destroyPending, freed,
                  lastUsedSeqId, nextSeqId, observedCompletedSeqId,
-                 commitPhase, chunkNamed, marked, captured, useAfterFree>>
+                 commitPhase, commitSeqId, chunkNamed, marked, captured,
+                 workerPhase, workerBatch, workerStamped, workerTicket,
+                 workerAppendSeqId, useAfterFree>>
 
 (* ================================================================
    Specification
@@ -376,6 +644,14 @@ Next ==
   \/ EndCommit
   \/ ReleasePins
   \/ MapFastRead
+  \/ SlotAdvance
+  \/ \E S \in (SUBSET Resources) : WorkerBeginBatch(S)
+  \/ \E r \in Resources : WorkerStampMark(r)
+  \/ WorkerEndStamping
+  \/ WorkerRestamp
+  \/ WorkerAppend
+  \/ WorkerReleaseBatchRefs
+  \/ WorkerRetireBatch
   \/ WorkerReleaseRefs
   \/ \E r \in Resources : SetDestroyPending(r)
   \/ \E r \in Resources : Reclaim(r)
@@ -393,14 +669,20 @@ TypeOK ==
   /\ destroyPending         \in [Resources -> BOOLEAN]
   /\ freed                  \in [Resources -> BOOLEAN]
   /\ \A r \in Resources : freed[r] => destroyPending[r]
-  /\ lastUsedSeqId          \in [Resources -> 0..MAX_SEQID]
+  /\ lastUsedSeqId          \in [Resources -> 0..(MAX_SEQID + 1)]
   /\ nextSeqId              \in 1..(MAX_SEQID + 1)
   /\ completedSeqId         \in 0..MAX_SEQID
   /\ observedCompletedSeqId \in 0..MAX_SEQID
   /\ commitPhase            \in CommitPhases
+  /\ commitSeqId            \in 0..MAX_SEQID
   /\ chunkNamed             \subseteq Resources
   /\ marked                 \subseteq chunkNamed
   /\ captured               \subseteq marked
+  /\ workerPhase            \in WorkerPhases
+  /\ workerBatch            \subseteq Resources
+  /\ workerStamped          \subseteq workerBatch
+  /\ workerTicket           \in 0..(MAX_SEQID + 1)
+  /\ workerAppendSeqId      \in 0..(MAX_SEQID + 1)
   /\ useAfterFree           \in BOOLEAN
 
 (* ================================================================
@@ -409,24 +691,25 @@ TypeOK ==
 
 (*
  * NoUseAfterFree
- * The sticky fault flag is set by exactly three sites:
- *   - StampMark(r)   on a record already freed,
- *   - CaptureRead(r) on a record already freed,
- *   - Reclaim(r)     of a record the in-flight commit window still names.
- * This is the model's central claim, and the one the "Removed" configuration
- * is expected to violate.
+ * The sticky fault flag is set by exactly five sites:
+ *   - StampMark(r) / CaptureRead(r) / WorkerStampMark(r) / WorkerRestamp
+ *     on a record already freed, and
+ *   - Reclaim(r) of a record an in-flight commit window or an in-use worker
+ *     batch still needs.
+ * This is the model's central claim, and the one BOTH "Removed"
+ * configurations are expected to violate.
  *)
 NoUseAfterFree == ~useAfterFree
 
 (*
  * NoReclaimInsideMarkWindow
  * The same property stated positionally rather than through the fault flag:
- * between PinChunkResources and ReleasePins, nothing the chunk names is
- * freed. Kept separate so a future change that loses the fault-flag wiring
- * still fails.
+ * nothing a live commit window or a live worker batch needs is freed. Kept
+ * separate so a future change that loses the fault-flag wiring still fails.
  *)
 NoReclaimInsideMarkWindow ==
-  CommitInFlight => \A r \in chunkNamed : ~freed[r]
+  /\ CommitInFlight => \A r \in chunkNamed : ~freed[r]
+  /\ \A r \in Resources : WorkerRecordInUse(r) => ~freed[r]
 
 (*
  * ReclaimRespectsWatermark
@@ -448,6 +731,29 @@ PinnedRecordsAreNotDestroyPending ==
     \A r \in Resources : IsPinned(r) => ~destroyPending[r]
 
 (*
+ * WorkerAppendCoveredByStamps  — the re-stamp obligation.
+ * Once the worker's records are in the slot, every resource the batch names
+ * must already carry a stamp at least as high as the seq that slot will be
+ * published under. This is the property the queue mutex used to give away for
+ * free by making the ticket read and the append one hold, and the one
+ * `RestampDiscipline = "Removed"` breaks.
+ *)
+WorkerAppendCoveredByStamps ==
+  (workerPhase \in {"Appended", "Pending"}) =>
+    \A r \in workerBatch : lastUsedSeqId[r] >= workerAppendSeqId
+
+(*
+ * CommitStampsCoverChunkSeq
+ * The producer's counterpart. It holds without any re-stamp because
+ * `commit_chunk` reserves the ticket and owns the chunk published under it,
+ * so `commitSeqId` cannot move inside the window. Stated as an invariant so a
+ * future change that decouples the two is caught here.
+ *)
+CommitStampsCoverChunkSeq ==
+  (commitPhase \in {"Marking", "Committed"}) =>
+    \A r \in marked : lastUsedSeqId[r] >= commitSeqId
+
+(*
  * MapReadSound
  * The producer's atomic `completedSeqId` read never runs ahead of the truth,
  * so a DISCARD fast path that acts on it can only be conservative.
@@ -461,6 +767,8 @@ Safety ==
   /\ ReclaimRespectsWatermark
   /\ PinnedRecordsAreNotDestroyPending
   /\ MapReadSound
+  /\ WorkerAppendCoveredByStamps
+  /\ CommitStampsCoverChunkSeq
 
 (* ================================================================
    Action properties

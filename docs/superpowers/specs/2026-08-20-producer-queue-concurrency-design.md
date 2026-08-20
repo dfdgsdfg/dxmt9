@@ -204,6 +204,62 @@ a protocol. Final implementation order:
    until post-replay release), then move both mark paths off the queue
    mutex. Ticket (`seqIdForMark`) still taken under the queue lock or from
    an atomic `nextSeqId`.
+
+   **Status: implemented.** Model first, per §6. The extension found a
+   second premise the mutex had been supplying for free and that §9's
+   original sketch did not name: **the ticket and the slot seq stop being
+   the same read.** `seqIdForMark` returns `nextSeqId_`, i.e. the seq the
+   open writing slot will be published under; taking it inside the hold
+   that ends at the append made stamp == final chunk seq by construction.
+   Outside that hold, a force-publish (`SlotAdvance` — the producer's
+   map-wait commit, or the draw/payload chunk limits; §9's own "the writing
+   slot is not worker-exclusive") can raise the seq in between, leaving the
+   stamps BELOW the chunk's final seq. The watermark then passes them while
+   that chunk is still pending and `gcArena` frees a record the encoder is
+   still going to read. Note the failure mode: a **premature reclaim**, not
+   a dereference of a freed record — so the `PinDiscipline` dimension could
+   never have exposed it, which is why it needed its own Buggy dimension.
+
+   Delivered:
+   - Model: `WorkerBeginBatch` / `WorkerStampMark` / `WorkerEndStamping` /
+     `WorkerRestamp` / `WorkerAppend` / `WorkerReleaseBatchRefs` /
+     `WorkerRetireBatch`, plus `SlotAdvance` and the `RestampDiscipline`
+     constant. New invariant `WorkerAppendCoveredByStamps` states the
+     obligation directly; `CommitStampsCoverChunkSeq` states the producer's
+     counterpart, which holds without a re-stamp because `commit_chunk`
+     reserves the ticket and owns the chunk published under it.
+     Production cfg green (1,140,594 states generated / 276,840 distinct /
+     depth 29). Both counterexample cfgs produce
+     `Invariant NoUseAfterFree is violated`: `PinDiscipline="Removed"` in 3
+     steps, `RestampDiscipline="Removed"` in 9
+     (`WorkerBeginBatch → SlotAdvance → WorkerStampMark →
+     WorkerEndStamping → WorkerAppend → AdvanceCompleted →
+     WorkerReleaseBatchRefs → SetDestroyPending → Reclaim`).
+   - Ticket source: `CommandQueue::nextSeqId_` is `std::atomic<u64>` with
+     `markTicketAcquire()`; every write stays where it was and still runs
+     under `mutex_`, now with `release`.
+   - Producer path: `markChunkResources` and
+     `markChunkResourcesAndCaptureBufferBindings` stamp before acquiring,
+     then keep one acquire for the frozen-ticket re-read (rare re-stamp) and
+     the capture loop. Stamps-before-capture, because a monotone-max stamp
+     that is too low is repairable and an early capture is not. On the
+     producer path the re-stamp is *insurance*, not a proven requirement:
+     `commit_chunk` reserves the ticket and its own publish, and every
+     append path re-marks under the mutex with its own ticket
+     (`skipDrawResourceMarking_` has no production setter, so per-draw
+     marking is unconditionally live). It costs one acquire load.
+   - Worker path: `submitDrawRunBatchImpl` releases the mutex around the
+     per-batch stamp loop, re-establishes the writing slot, then re-stamps
+     if the frozen ticket moved before appending — generalizing
+     `forceDrawResourceMarkingAfterSplit_`. The
+     `submit_draw_run_batch_impl/mark` segment leaves the hold ledger.
+   - Contract: the pool header's arena-stamp exception now names its three
+     production callers and states both obligations.
+
+   Not done here: capture (T2b) stays under the mutex, the slot append
+   (T2d) is untouched, and `CommandQueue::submitDrawRun` (the non-batch
+   path) keeps its mark under the mutex. Evidence still owed: the profile
+   re-measurement and the wild matched pair (step 3).
 2. **T2d — reserve-copy-commit slot append**: bump-allocate + ticket under
    the lock, copy outside, brief re-acquire to advance the slot's committed
    watermark; publishers ship only the committed prefix. Requires a bounded

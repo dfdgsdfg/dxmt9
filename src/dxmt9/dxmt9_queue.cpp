@@ -1545,7 +1545,11 @@ void QueueLifecycleController::flushAndWait(
   (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
 
   auto* nextSeqId = submissionBinding_.nextSeqId;
-  const u64 targetSeqId = (!nextSeqId || *nextSeqId == 0) ? 0 : *nextSeqId - 1;
+  // Relaxed throughout this file: `lock` is held, and every writer of this
+  // variable needs the same mutex, so the value cannot move under us.
+  const u64 nextSeqIdValue =
+      nextSeqId ? nextSeqId->load(std::memory_order_relaxed) : 0;
+  const u64 targetSeqId = nextSeqIdValue == 0 ? 0 : nextSeqIdValue - 1;
   waitForSequence(lock, targetSeqId);
 }
 
@@ -1639,7 +1643,7 @@ bool QueueLifecycleController::commitCurrentChunk(
   // arena sources use their separate sized-admission path and therefore remain
   // independently bounded by CpuReadyTape watermarks.
   const size_t writingSlotIndexBeforeWait = **writingSlot;
-  const u64 nextSeqIdBeforeWait = *nextSeqId;
+  const u64 nextSeqIdBeforeWait = nextSeqId->load(std::memory_order_relaxed);
   const bool waitNeeded = *inflightCount >= inflightLimit;
   if (waitNeeded) {
     observeCommitWait(writingSlotIndexBeforeWait, slot.seqId, inflightLimit);
@@ -1685,14 +1689,14 @@ bool QueueLifecycleController::commitCurrentChunk(
   // gives for "no writing slot" at entry.
   if (!writingSlot->has_value() ||
       **writingSlot != writingSlotIndexBeforeWait ||
-      *nextSeqId != nextSeqIdBeforeWait) {
+      nextSeqId->load(std::memory_order_relaxed) != nextSeqIdBeforeWait) {
     dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/post_wait",
                                           qmxEnabled, qmxSegStart);
     return false;
   }
 
   const size_t publishedSlotIndex = **writingSlot;
-  const u64 publishedSeqId = *nextSeqId;
+  const u64 publishedSeqId = nextSeqId->load(std::memory_order_relaxed);
   observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
   recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
@@ -1701,7 +1705,7 @@ bool QueueLifecycleController::commitCurrentChunk(
   recordNoEnqueueWaitGapToCommitPublish();
   bool sealed = false;
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
-    slot.seqId = *nextSeqId;
+    slot.seqId = nextSeqId->load(std::memory_order_relaxed);
     writingPayload->seqId = slot.seqId;
     const auto onBeforePublishStart = std::chrono::steady_clock::now();
     if (onBeforePublish) {
@@ -1725,7 +1729,10 @@ bool QueueLifecycleController::commitCurrentChunk(
       poisonTapeFailureLocked();
       return;
     }
-    ++(*nextSeqId);
+    // Release: the publish increment is what a lock-free `markTicketAcquire()`
+    // reader synchronizes with. TLA+: ProducerMarkReclaim!SlotAdvance.
+    nextSeqId->store(nextSeqId->load(std::memory_order_relaxed) + 1,
+                     std::memory_order_release);
     slot.state = ChunkSlot::State::Pending;
     *lastCommittedSeqId = slot.seqId;
     ++(*inflightCount);

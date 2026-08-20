@@ -869,7 +869,36 @@ class CommandQueue {
   // These are raw-pointer-bound into queueLifecycle_ via bindSelfLifecycle.
   // Callers that need to read completedSeqId_ (e.g., DeviceImpl's
   // mapBuffer wait rule) treat them as read-only data guarded by mutex_.
-  std::uint64_t nextSeqId_ = 1;           // next seq to allocate
+  // Next seq to allocate. Atomic ONLY so the mark ticket can be read without
+  // `mutex_` (design T2a/T2a'); every WRITE still happens under `mutex_` and
+  // stays where it was — `QueueLifecycleController::commitCurrentChunk`'s
+  // publish increment and `beginCpuReadyArenaSource`'s admission increment.
+  //
+  // Memory-order argument for the lock-free read (`markTicketAcquire()`):
+  //   * The writers publish with `release`, so a reader that observes seq N
+  //     also observes every slot mutation the publisher of N-1 made before it.
+  //     The mark path does not depend on that, but the release keeps the
+  //     store from being reordered ahead of the slot bookkeeping it seals.
+  //   * The reader loads with `acquire`. A value read outside the mutex may be
+  //     STALE (some publisher raised it after the load) but never invented and
+  //     never regressed, because the variable is monotonically increasing and
+  //     only ever written under one mutex. Staleness in the low direction is
+  //     exactly the ticket/slot-seq race, and the re-stamp protocol — re-read
+  //     under `mutex_`, re-stamp if it moved — is what closes it.
+  //     TLA+: ProducerMarkReclaim!SlotAdvance / !WorkerRestamp, with
+  //     `RestampDiscipline = "Removed"` as the executable counterexample.
+  //   * A reader holding `mutex_` observes a frozen value, since every writer
+  //     needs the same mutex. That is what makes the re-stamp a fixed point
+  //     rather than another race.
+  std::atomic<std::uint64_t> nextSeqId_{1};
+
+  // TLA+: ProducerMarkReclaim — the ticket read in `WorkerBeginBatch` and
+  // `BeginMark`. Callable with or without `mutex_`; see the memory-order
+  // argument above for what each case guarantees.
+  std::uint64_t markTicketAcquire() const noexcept {
+    return nextSeqId_.load(std::memory_order_acquire);
+  }
+
   std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present

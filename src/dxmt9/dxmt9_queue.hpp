@@ -8,6 +8,7 @@
 #include "../winemetal/Metal.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -734,7 +735,11 @@ class QueueLifecycleController {
   struct SubmissionBinding {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
-    u64* nextSeqId = nullptr;
+    // Atomic only so the mark ticket can be read without `mutex` (design
+    // T2a/T2a'); every write below still happens with `mutex` held, so the
+    // relaxed loads inside this controller are exact. See the memory-order
+    // argument on `CommandQueue::nextSeqId_`.
+    std::atomic<u64>* nextSeqId = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
     std::deque<u64>* completedPresentSeqQueue = nullptr;
     size_t* inflightCount = nullptr;

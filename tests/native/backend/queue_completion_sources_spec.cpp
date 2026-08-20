@@ -606,7 +606,9 @@ void retainEncodeChunkSessionStoresOwnerInSubmissionRecord() {
 struct QueueFixture {
   std::optional<std::size_t> writingSlot{};
   std::size_t writeIndex = 0;
-  std::uint64_t nextSeqId = 1;
+  // Atomic to match SubmissionBinding::nextSeqId — the mark ticket is read
+  // without the queue mutex (design T2a/T2a'); writes still happen under it.
+  std::atomic<std::uint64_t> nextSeqId{1};
   std::deque<std::uint64_t> completedSeqQueue{};
   std::deque<std::uint64_t> completedPresentSeqQueue{};
   std::size_t inflightCount = 0;
@@ -672,7 +674,9 @@ struct QueueFixture {
     slots[slotIndex].seqId = seqId;
     slots[slotIndex].payload->seqId = seqId;
     lastCommittedSeqId = std::max(lastCommittedSeqId, seqId);
-    nextSeqId = std::max(nextSeqId, seqId + 1u);
+    nextSeqId.store(std::max(nextSeqId.load(std::memory_order_relaxed),
+                             seqId + 1u),
+                    std::memory_order_relaxed);
     ++inflightCount;
   }
 
