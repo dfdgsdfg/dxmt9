@@ -202,6 +202,14 @@ test('dxmt9-perf-counter-schema-audit', python3,
 test('dxmt9-perf-docs-source-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_docs_sources.py')],
      is_parallel: false)
+# Diffs the dxmt9c_* wire-symbol set (five device_c_bridge_*.cpp forwarder
+# files, plus any stray extern "C" dxmt9c_* definition elsewhere under src/)
+# against the machine-readable ```classification block in
+# specs/backend/producer-concurrency/spec.md §3. See
+# scripts/check/audit_bridge_entry_classification.py for the taxonomy.
+test('dxmt9-bridge-entry-classification-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_bridge_entry_classification.py')],
+     is_parallel: false)
 # winemetal.so install_name fixup audit — see
 # scripts/check/audit_winemetal_install_names.py for the rationale. Catches
 # a partial-build regression where the post-link `winemetal_unix_install_name_fixup`
