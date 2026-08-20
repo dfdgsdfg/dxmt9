@@ -319,8 +319,15 @@ review obligation, not a resolved fact):
   removal is neither safe on the live fallbacks nor worth anything on the
   dead paths. The get_swap_chain precedent was different in kind: that
   getter crossed every call.
-- **G3** — shader/vdecl creation's terminal-check-only asymmetry vs every
-  other create's full drain: by-design (non-GPU-resident inputs) or gap.
+- **G3 — RESOLVED (2026-08-21 source audit): by design.** The shader/vdecl
+  create bodies are pure value construction — bytecode parse/hash/copy into
+  a fresh standalone `D9CShader`/`D9CVertexDecl`, with **no** `d->iface`,
+  `d->dev()`, pool, or queue access (`device_c_shader_vdecl.cpp`) — so the
+  family has no replay-ordering surface and `DXMT9_TERMINAL_OR_RETURN` is
+  the correct minimal contract (refuse creation on a poisoned pipeline,
+  wait for nothing). Resource creates differ in kind: they enter the core
+  device/pool (`d->iface->CreateTexture` etc.) and keep the conservative
+  `ordering-fence`. The asymmetry is the taxonomy working as intended.
 - **G4 — RESOLVED (2026-08-21 source audit): by design, no change.** The
   inventory's "paying a fence they cannot act on" was wrong in both
   directions. `dxmt9c_device_addref` has **zero PE callers** (the wrapper's
