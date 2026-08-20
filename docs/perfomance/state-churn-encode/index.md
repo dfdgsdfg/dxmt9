@@ -36,6 +36,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.23 - In-Process PE Sampler First Light: Game 60%, Crossings 17%, Recorder 10%](state-churn-encode-append-decomposition.23.md)
 - [state-churn-encode-append-decomposition.24 - Crossing Decomposition: Lock Round-Trips, A 78 µs Getter, And Refcount Churn Over The Bridge](state-churn-encode-append-decomposition.24.md)
 - [state-churn-encode-append-decomposition.25 - Getter-Cache + Warm-Epoch Harvest: Bridge −2.21 ms/present Converts To +7.2% GT2](state-churn-encode-append-decomposition.25.md)
+- [state-churn-encode-append-decomposition.26 - Post-Harvest Triage: Drain Is Solved, Mark Owns Commit, Locks Are Unix-Side Work](state-churn-encode-append-decomposition.26.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
