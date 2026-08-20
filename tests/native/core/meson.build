@@ -292,6 +292,22 @@ core_d3d9_device_validation_spec = executable(
 test('dxmt9-core-d3d9-device-validation-spec', core_d3d9_device_validation_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Pure value-level pin on the PE-side recorder-lock resolution predicate
+# (dxmt9PeRecorderLockRequired in src/d3d9/d3d9_pe_device.cpp) that gates
+# whether recorderMutex_ is taken on the hot PE-append path: flag x env ->
+# locked/unlocked. d3d9_pe_device.cpp is a Windows-only TU so the predicate
+# is mirrored here at value level.
+core_d3d9_recorder_lock_spec = executable(
+  'dxmt9-core-d3d9-recorder-lock-spec',
+  'core_d3d9_recorder_lock_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-recorder-lock-spec', core_d3d9_recorder_lock_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # Wine D3D9 behavioral oracle: shared-handle / user-memory argument
 # validation (test_shared_handle_policy / test_ex_shared_handle_policy).
 # Pure value-level pins on the PE-side validators in

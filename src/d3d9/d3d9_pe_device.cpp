@@ -350,6 +350,54 @@ static void dxmt9PeThreadSamplerInfoLog(const char* fmt, ...) {
     va_end(args);
 }
 
+// DXMT9_PE_FORCE_RECORDER_LOCK: rollback/insurance lane for wild apps that
+// release resources from loader threads despite not passing
+// D3DCREATE_MULTITHREADED. See dxmt9PeRecorderLockRequired() below.
+static bool dxmt9PeForceRecorderLockEnabled() {
+    static const bool enabled =
+        dxmt9::util::getenvFlag("DXMT9_PE_FORCE_RECORDER_LOCK");
+    return enabled;
+}
+
+// Native D3D9 semantics: the device lock is taken only when the app passed
+// D3DCREATE_MULTITHREADED in CreateDevice's BehaviorFlags; without it, the
+// app promises single-threaded access and dxmt9 must not pay a
+// recursive-mutex lock/unlock on every PE recorder append (measured ~9.6%
+// of hot d3d9.dll self-PC on GT2, which does not pass the flag). Pure so it
+// is host-testable without a device: flag set -> locked; flag clear + env
+// set -> locked (rollback lane); flag clear + env clear -> unlocked.
+static bool dxmt9PeRecorderLockRequired(DWORD behaviorFlags,
+                                        bool forceLockEnv) noexcept {
+    return (behaviorFlags & D3DCREATE_MULTITHREADED) != 0 || forceLockEnv;
+}
+
+// Conditional guard for D3D9DeviceImpl::recorderMutex_. When
+// recorderLockRequired_ is false (the common case: the app did not pass
+// D3DCREATE_MULTITHREADED), this costs exactly one branch on construction
+// and one on destruction — no atomic, no clock, no syscall. When true, it
+// behaves exactly like the std::lock_guard it replaces.
+struct PeRecorderGuard {
+    PeRecorderGuard(std::recursive_mutex& mutex, bool locked) noexcept
+        : mutex_(mutex), locked_(locked) {
+        if (locked_) {
+            mutex_.lock();
+        }
+    }
+
+    ~PeRecorderGuard() {
+        if (locked_) {
+            mutex_.unlock();
+        }
+    }
+
+    PeRecorderGuard(const PeRecorderGuard&) = delete;
+    PeRecorderGuard& operator=(const PeRecorderGuard&) = delete;
+
+private:
+    std::recursive_mutex& mutex_;
+    bool locked_;
+};
+
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -1337,6 +1385,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     UINT         adapter_ = 0;
     D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
+    // Native D3D9 semantics: the device lock is taken only when the app
+    // passed D3DCREATE_MULTITHREADED; otherwise the app promises
+    // single-threaded access and recorderMutex_ (below) is skipped on the
+    // hot append path. Resolved once at construction — see
+    // dxmt9PeRecorderLockRequired(). DXMT9_PE_FORCE_RECORDER_LOCK is the
+    // rollback/insurance lane for apps that violate the contract.
+    bool         recorderLockRequired_ = false;
+    // Debug-only thread-confinement companion to recorderLockRequired_: the
+    // thread that constructed this device. Used by
+    // assertRecorderThreadConfined() to DXMT_ASSERT that no other thread
+    // calls a recorder-guarded path while the lock is skipped — catching
+    // app UB (calling cross-thread without D3DCREATE_MULTITHREADED) loudly
+    // in debug builds instead of silently corrupting the recorder.
+    std::uint32_t creatingThreadId_ = 0;
     BOOL         softwareVertexProcessing_ = FALSE;
     // Wine d3d9ex test_frame_latency: default Ex device latency is 3.
     UINT         maxFrameLatencyShadow_ = 3;
@@ -10480,7 +10542,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPendingCommandChunk(PeRecorderFlushReason reason) {
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         if (!commandChunkNegotiated_) {
             return D3DERR_NOTAVAILABLE;
         }
@@ -10604,7 +10667,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "appendRecord emitters must return HRESULT, not bool: a bool "
             "false would silently convert to S_OK");
         const size_t bytes = sizeHint;
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         if (!commandChunkNegotiated_ || bytes == 0u || bytes > 0xffffffffull) {
             return commandChunkNegotiated_ ? D3DERR_INVALIDCALL
                                            : D3DERR_NOTAVAILABLE;
@@ -10720,7 +10784,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // append pair: recorderMutex_ is recursive, so the nested per-append
         // acquisitions below become cheap re-entries instead of repeated
         // cold lock/unlock cycles on this hot path.
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
         if (!inlineConstDelta) {
             // Drain any accumulated const dirty ranges into chunk records
@@ -10772,7 +10837,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // See appendDrawPrimitiveRecord: recursive re-entry on an
         // already-held recorderMutex_ is cheaper than the repeated cold
         // acquisitions the nested const-flush + draw appends would do.
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
         if (!inlineConstDelta) {
             const HRESULT constHr = flushPendingConsts();
@@ -10855,7 +10921,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // See appendDrawPrimitiveRecord: recursive re-entry on an
         // already-held recorderMutex_ is cheaper than the repeated cold
         // acquisitions the nested const-flush + draw appends would do.
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         // Payload sizing moved AHEAD of the state build, because the producer
@@ -10967,7 +11034,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // See appendDrawPrimitiveRecord: recursive re-entry on an
         // already-held recorderMutex_ is cheaper than the repeated cold
         // acquisitions the nested const-flush + draw appends would do.
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         // Payload sizing moved AHEAD of the state build; see the non-indexed UP
@@ -11246,7 +11314,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // chunk-commit flushes everything in the recorded order.
     HRESULT chunkBarrierFlush() {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Barrier);
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const std::int64_t constEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
@@ -11450,7 +11519,8 @@ public:
         if (!buffer) {
             return S_OK;
         }
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const bool referenced = commandChunk_.referencesObject(buffer);
         if (!referenced) {
             return S_OK;
@@ -12345,6 +12415,9 @@ public:
                    DWORD implicitSwapchainFlags)
         : dev_(dev), factory_(factory)
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
+        , recorderLockRequired_(dxmt9PeRecorderLockRequired(
+              behaviorFlags, dxmt9PeForceRecorderLockEnabled()))
+        , creatingThreadId_(dxmt9PeCurrentThreadId())
         , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
         , renderTapeCapture_(
@@ -12421,6 +12494,18 @@ public:
 
     bool commandChunkReady() const noexcept {
         return commandChunkNegotiated_;
+    }
+
+    // Debug-only companion to recorderLockRequired_: when the recorder lock
+    // is being skipped (the app did not pass D3DCREATE_MULTITHREADED and
+    // DXMT9_PE_FORCE_RECORDER_LOCK is not set), assert that the calling
+    // thread is the thread that created this device. A real cross-thread
+    // call here is app UB per the D3D9 contract; catch it loudly in debug
+    // builds instead of racing the unlocked recorder state. Compiles out
+    // under NDEBUG (release), same as every other DXMT_ASSERT.
+    void assertRecorderThreadConfined() const noexcept {
+        DXMT_ASSERT(recorderLockRequired_ ||
+                     creatingThreadId_ == dxmt9PeCurrentThreadId());
     }
 
     ~D3D9DeviceImpl() {
@@ -12694,7 +12779,8 @@ public:
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pPP) noexcept override {
         dxmt9PeSetCurrentCallName("Reset");
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         if (!pPP) return D3DERR_INVALIDCALL;
         // Present-parameter validation (same rule as CreateDevice): invalid
         // swap effect, BackBufferCount over the cap, COPY with > 1 back
@@ -12787,7 +12873,8 @@ public:
         const bool recordPresentTiming = dxmt9PeRecorderStatsEnabled();
         const std::uint32_t presentThreadId = dxmt9PeCurrentThreadId();
         const auto presentTimingEnter = std::chrono::steady_clock::now();
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const bool renderTapeCaptureWasActive =
             renderTapeCapture_ &&
             renderTapeCapture_->state() ==
@@ -13363,7 +13450,8 @@ public:
                                              IDirect3DSurface9* dst,
                                              const POINT* dstPt) noexcept override {
         dxmt9PeSetCurrentCallName("UpdateSurface");
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         dxmt9DeviceDebugLog("device_update_surface device=%p src=%p dst=%p srcRect=%s dstPt=%s",
                             this, src, dst,
                             srcRect ? "<custom>" : "<full>",
@@ -13453,7 +13541,8 @@ public:
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) noexcept override {
         dxmt9PeSetCurrentCallName("UpdateTexture");
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         // Wine d3d9 IDirect3DDevice9::UpdateTexture: both args non-NULL;
         // src must be SYSTEMMEM; dst must NOT be SYSTEMMEM/SCRATCH. See
         // test_update_texture_pool_copy_2d in d3d9_conformance_resource.c.
@@ -13516,7 +13605,8 @@ public:
         dxmt9PeSetCurrentCallName("GetRenderTargetData");
         auto peCadence = claimPeFirstCallAfterPresent();
         const void* callerPc = DXMT9_PE_CALLSITE_PC();
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         const auto peCall =
             logPeCallMilestoneAfterPresent("GetRenderTargetData", callerPc);
         logPeFirstCallAfterPresent("GetRenderTargetData", peCadence, peCall);
@@ -13584,7 +13674,8 @@ public:
                                            const RECT* dstRect,
                                            D3DTEXTUREFILTERTYPE filter) noexcept override {
         dxmt9PeSetCurrentCallName("StretchRect");
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         dxmt9DeviceDebugLog("device_stretch_rect device=%p src=%p dst=%p filter=%u srcRect=%s dstRect=%s",
                             this, src, dst, (unsigned)filter,
                             srcRect ? "<custom>" : "<full>",
@@ -13690,7 +13781,8 @@ public:
                                          const RECT* pRect,
                                          D3DCOLOR color) noexcept override {
         dxmt9PeSetCurrentCallName("ColorFill");
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         // Wine d3d9 ColorFill: DXT-compressed and SYSTEMMEM surfaces are
         // rejected. visual_colorfill_format_policy.
         if (!pSurf) return D3DERR_INVALIDCALL;
@@ -13957,7 +14049,8 @@ public:
             logPeCallReturnAfterPresent(peCall, "EndScene", hr);
             return hr;
         };
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_end_scene device=%p", this);
@@ -13977,7 +14070,8 @@ public:
             logPeCallReturnAfterPresent(peCall, "Clear", hr);
             return hr;
         };
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         // Wine d3d9: Clear count/pRects must agree, and Z clears require
@@ -14464,7 +14558,8 @@ public:
      * source/dest retained), so it orders atomically with the surrounding
      * draws/clears in the same chunk. */
     HRESULT requestReszDepthResolve() noexcept {
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        assertRecorderThreadConfined();
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         // MSAA depth source = the currently bound depth-stencil surface.
         D9CSurface* const depthSrcRaw = rawSurf(dsSurface_);
         // INTZ depth destination = the texture bound at fragment stage 0.
