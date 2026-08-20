@@ -5,6 +5,15 @@ dxmt9_native_test_env = environment()
 # silently re-baseline pe_producer_differential_spec's certification.
 dxmt9_native_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
 dxmt9_native_test_env_vars = ['DXMT9_UPDATE_PE_PRODUCER_GOLDEN=0']
+# TSan halt-on-error: without this, a race caught under -Db_sanitize=thread
+# prints a report to stderr but the test binary still exits 0, so `meson test`
+# reports OK. TSAN_OPTIONS is inert on a non-TSan build, so this is safe to set
+# unconditionally for every configuration. (No pre-existing ASan/UBSan/MSan
+# halt-on-error block was found in this file to mirror at HEAD; this is net-new,
+# tracked by the "C++ memory-order harness" row in
+# specs/backend/producer-concurrency/gap.md.)
+dxmt9_native_test_env.set('TSAN_OPTIONS', 'halt_on_error=1:abort_on_error=1')
+dxmt9_native_test_env_vars += 'TSAN_OPTIONS=halt_on_error=1:abort_on_error=1'
 if host_machine.system() == 'darwin'
   dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([
     '-Wl,-no_warn_duplicate_libraries',
@@ -209,6 +218,16 @@ test('dxmt9-perf-docs-source-audit', python3,
 # scripts/check/audit_bridge_entry_classification.py for the taxonomy.
 test('dxmt9-bridge-entry-classification-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_bridge_entry_classification.py')],
+     is_parallel: false)
+# Binds R-BACK-43.4/43.5 thread-ownership declarations to their taxonomy in
+# both directions: every `ThreadOwnershipToken` member under src/ must carry
+# an adjacent comment naming one of the six closed R-BACK-43.4 classes, and
+# every declaration-site file named in specs/backend/producer-concurrency/
+# spec.md §2's second table must still contain a ThreadOwnershipToken
+# declaration or a class comment. See
+# scripts/check/audit_thread_ownership_declarations.py.
+test('dxmt9-thread-ownership-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_thread_ownership_declarations.py')],
      is_parallel: false)
 # winemetal.so install_name fixup audit — see
 # scripts/check/audit_winemetal_install_names.py for the rationale. Catches
