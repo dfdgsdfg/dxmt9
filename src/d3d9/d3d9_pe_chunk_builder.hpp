@@ -63,6 +63,18 @@ struct SealedCommandChunk {
   bool valid() const noexcept { return !blob.empty(); }
 };
 
+// R-BACK-43.4 `producer-owned` (PE game thread). Every member below —
+// `records_`, `handles_`, `handleObjects_`, `payload_`, `sealedBlob_`,
+// `retainer_`, `active_`, `sealed_` — is written and read only on the thread
+// driving the D3D9 recorder, and none of it is reachable from the replay
+// worker, encode thread, or completion path: the builder's output crosses to
+// unix as the sealed POD blob, never as live state.
+//
+// Enforcement is at the `D3D9DeviceImpl` call boundary
+// (`assertRecorderThreadConfined()`, R-BACK-43.5 shape (c)), not with a token
+// here — see the same note on `D3D9PePendingCommandRetainer` for why a
+// builder-local construction-bound token would be incorrect under
+// `D3DCREATE_MULTITHREADED` rather than merely duplicated.
 class CommandChunkBuilder {
  public:
   explicit CommandChunkBuilder(

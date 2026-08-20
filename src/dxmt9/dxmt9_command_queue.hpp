@@ -18,6 +18,7 @@
 // @autoreleasepool itself (the encode chunk scopes its own).
 
 #include "../winemetal/Metal.hpp"
+#include "dxmt9/thread_ownership.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
@@ -869,6 +870,14 @@ class CommandQueue {
   // These are raw-pointer-bound into queueLifecycle_ via bindSelfLifecycle.
   // Callers that need to read completedSeqId_ (e.g., DeviceImpl's
   // mapBuffer wait rule) treat them as read-only data guarded by mutex_.
+  // R-BACK-43.4 `owner-published`. PUBLICATION MECHANISM: the queue-mutex
+  // holder is the sole writer and publishes with a release store; every other
+  // actor reads it lock-free through `markTicketAcquire()`'s acquire load and
+  // must pair that read with the frozen-ticket re-stamp protocol
+  // (`restampIfTicketAdvancedLocked`) before the mutex-protected step its
+  // stamps have to cover. No thread-affinity assert: multi-reader by design,
+  // and the argument below is what makes the read sound.
+  //
   // Next seq to allocate. Atomic ONLY so the mark ticket can be read without
   // `mutex_` (design T2a/T2a'); every WRITE still happens under `mutex_` and
   // stays where it was — `QueueLifecycleController::commitCurrentChunk`'s
@@ -899,6 +908,15 @@ class CommandQueue {
     return nextSeqId_.load(std::memory_order_acquire);
   }
 
+  // R-BACK-43.4 `queue-shared`. REASON IT IS NOT ONE OF THE NARROWER CLASSES:
+  // it is the reclaim gate's read side and has three driving actors — the
+  // completion loop advances it, the producer reads it on the map/DISCARD
+  // fast path (`mapWaitSeqId` / `finalizeBufferMap`), and the replay offload
+  // worker reads it when a last-ref drop runs destroy-and-gc. No single owner
+  // exists to publish from, so `mutex_` is the synchronization. Design T2c
+  // would move it to `owner-published` (completion-written atomic) once the
+  // R-BACK-43.6 ladder covers the map fast path; until then, do not read it
+  // without `mutex_`.
   std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
@@ -919,6 +937,19 @@ class CommandQueue {
   // not part of ChunkSlot so encode-side ReadySlotSnapshot refs stay narrow.
   std::array<std::uint64_t, kCommandChunkCount> slotFirstCommandSteadyNs_{};
   std::optional<size_t> writingSlot_{};
+  // R-BACK-43.4 `worker-owned` BETWEEN EVENTS, with one documented exception.
+  // The thread that (re-)established the writing slot via `ensureWritingSlot*`
+  // owns the slot's contents until it is published; in the hot path that is
+  // the replay offload worker in `submitDrawRunBatchImpl`. The EXCEPTION is
+  // the producer's map-wait force-publish, which reaches the same slot through
+  // `commitCurrentChunk` while holding `mutex_` — so the contract is "owner OR
+  // holder of `mutex_`", which is why this is a shape-(c) token and why an
+  // UNLOCKED append is unsafe without the T2d reserve-copy-commit protocol
+  // (design doc §9, model obligation still open; gap.md "T2d"). Rebound at
+  // `ensureWritingSlotUnlocked` and asserted at the append site with
+  // `lock.owns_lock()` as the witness.
+  [[no_unique_address]] core::ThreadOwnershipToken writingSlotOwnership_{
+      core::deferThreadOwnership};
   size_t writeIndex_ = 0;
   size_t inflightCount_ = 0;
   std::deque<std::uint64_t> completedSeqQueue_{};

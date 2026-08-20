@@ -31,6 +31,24 @@
 // that a unix object the app has dropped can stay alive up to two chunk
 // periods longer than before (GT2: ~5 ms) — a strictly longer real reference,
 // never a shorter one, so no pointer can dangle that did not dangle before.
+//
+// R-BACK-43.4 `producer-owned` (PE game thread). `entries_` and `epoch_` are
+// written and read only from the thread that drives the D3D9 recorder. This
+// class holds NO token of its own: it is a private member of
+// `CommandChunkBuilder`, itself private to `D3D9DeviceImpl`, and every path
+// that reaches it passes `D3D9DeviceImpl::assertRecorderThreadConfined()`
+// first (18 recorder-guarded entry points, one per `PeRecorderGuard` site).
+// A construction-bound token here would be WRONG, not merely redundant: under
+// `D3DCREATE_MULTITHREADED` the device legitimately serves other threads with
+// `recorderMutex_` held, and only the device knows that — its assert is the
+// R-BACK-43.5 shape-(c) form that admits it, with `recorderLockRequired_` as
+// the lock witness.
+//
+// The pins this class holds are also what discharges the PRODUCER SIDE of the
+// pool's arena-stamp pin-ordering obligation (`dxmt9_resource_pool.hpp`): a
+// retained wrapper strictly contains the same chunk's marking window, so a
+// record being stamped cannot become `destroyPending`. `endEpoch()` — the
+// release point — must therefore stay after a successful commit_chunk return.
 class D3D9PePendingCommandRetainer {
 public:
     // An entry survives this many fully idle epochs before its pin is dropped.

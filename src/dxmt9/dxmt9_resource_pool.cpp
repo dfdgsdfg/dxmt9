@@ -1412,6 +1412,11 @@ bool Pool::uploadBufferData(WMT::Device device,
                             const std::uint8_t* bytes,
                             std::size_t byteCount,
                             u64 completedSeqId) {
+  // R-BACK-43.4/43.5 — `producer-owned` rename ring + capture read-set. This
+  // is the D3D9 writable-Unlock upload path; it rotates the ring shape via
+  // rotateBufferBacking and bumps contentRevision, both of which the
+  // commit-time capture reads without any lock against this writer.
+  DXMT_ASSERT_OWNED_BY(producerOwnership_);
   return bufferArena_.update(handleValue, [&](BufferRecord& record) {
     if (record.isManagedVersioned && !record.renameRing.empty()) {
       const auto selection =
@@ -1458,6 +1463,9 @@ bool Pool::uploadBufferDataRange(WMT::Device device,
                                  u64 completedSeqId) {
   (void)device;
   (void)completedSeqId;
+  // R-BACK-43.4/43.5 — `producer-owned` capture read-set writer (NOOVERWRITE
+  // range upload; bumps contentRevision and writes `contents` in place).
+  DXMT_ASSERT_OWNED_BY(producerOwnership_);
   bool accepted = false;
   const bool found = bufferArena_.update(handleValue, [&](BufferRecord& record) {
     // This entry point is intentionally narrow. A range upload is valid only
@@ -1494,6 +1502,11 @@ void* Pool::finalizeBufferMap(WMT::Device device,
                               core::BufferHandle handle,
                               u32 flags,
                               u64 completedSeqId) {
+  // R-BACK-43.4/43.5 — `producer-owned` rename ring + capture read-set. This
+  // is the D3D9 Lock path (`dxmt9c_buffer_lock` → CommandQueue::mapBuffer);
+  // it is the second and last caller of rotateBufferBacking, so asserting
+  // here and in uploadBufferData covers that helper's entry.
+  DXMT_ASSERT_OWNED_BY(producerOwnership_);
   void* result = nullptr;
   bufferArena_.update(handle.value, [&](BufferRecord& record) {
     // R-BACK-5.8 — rotate before zero-fill so the bytes we clear belong to the

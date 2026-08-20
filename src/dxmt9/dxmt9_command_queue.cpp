@@ -2196,6 +2196,13 @@ core::ChunkSlot& currentSlotUnlocked(CommandQueue& q) {
 
 void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lock) {
   (void)q.queueLifecycle_.ensureWriterSlot(lock, kMaxQueuedChunks);
+  // R-BACK-43.4/43.5 — acquisition point for the `worker-owned` writing slot.
+  // Whoever just (re-)established the slot owns its contents until publish;
+  // `ensureWriterSlot` may have released and re-taken `lock` internally, so
+  // this is deliberately AFTER it returns. See CommandQueue::
+  // writingSlotOwnership_ for the force-publish exception the assert side
+  // admits through its lock witness.
+  q.writingSlotOwnership_.bindToCurrentThread();
 }
 
 // TLA+: ProducerMarkReclaim!BeginMark / !WorkerBeginBatch — the seq ticket a
@@ -3626,6 +3633,15 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     // calls/present).
     {
       QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
+      // R-BACK-43.4/43.5 — `worker-owned` writing slot, shape-(c) check. The
+      // witness is structurally true here because this whole segment runs with
+      // `lock` held; its value is that a future unlocked append (T2d's
+      // reserve-copy-commit, whose bounded model is still owed) cannot land
+      // silently — without the mutex the assert falls back to requiring that
+      // this thread is still the one that established the slot, which the
+      // producer's map-wait force-publish can invalidate at any point.
+      DXMT_ASSERT_OWNED_BY_OR_LOCKED(queue.writingSlotOwnership_,
+                                     lock.owns_lock());
       // Frozen-ticket re-read. If a force-publish moved the seq while the
       // stamps were being written unlocked, the batch is re-stamped with the
       // new one BEFORE its records enter the slot, so the stamps still cover

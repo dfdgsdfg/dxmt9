@@ -36,6 +36,13 @@ namespace dxmt9::d3d9::devicec {
 // contextually convertible to `bool` (false == empty, matching
 // `Low4GBAllocation::operator bool()`), and expose a `size_t size` member
 // naming the block's real usable capacity in bytes.
+//
+// R-BACK-43.4: this type carries NO internal synchronization. Its single
+// production instance (`low4GBPool()` in `device_c_marshal.cpp`) is
+// `arena-protected` by `low4GBPoolMutex()` there — the component's own lock,
+// explicitly not `CommandQueue::mutex_`, because the game thread allocates
+// shadows while the replay offload worker can drive their release. A new
+// caller must take that mutex; nothing else covers this state.
 template <typename Block>
 class Low4GBBlockPool {
  public:

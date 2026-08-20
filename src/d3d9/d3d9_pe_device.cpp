@@ -47,6 +47,7 @@
 #include "d3d9_pe_stats_decimation.hpp"
 #include "d3d9_pe_thread_sampler.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9/thread_ownership.hpp"
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -1422,13 +1423,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // dxmt9PeRecorderLockRequired(). DXMT9_PE_FORCE_RECORDER_LOCK is the
     // rollback/insurance lane for apps that violate the contract.
     bool         recorderLockRequired_ = false;
-    // Debug-only thread-confinement companion to recorderLockRequired_: the
-    // thread that constructed this device. Used by
-    // assertRecorderThreadConfined() to DXMT_ASSERT that no other thread
-    // calls a recorder-guarded path while the lock is skipped — catching
-    // app UB (calling cross-thread without D3DCREATE_MULTITHREADED) loudly
-    // in debug builds instead of silently corrupting the recorder.
-    std::uint32_t creatingThreadId_ = 0;
+    // R-BACK-43.4 `producer-owned` (PE game thread) — the PE recorder, the
+    // chunk builder it owns, and their retainer are written and read only on
+    // the thread that constructed this device, EXCEPT under the documented
+    // R-BACK-43.5 shape-(c) exception: with D3DCREATE_MULTITHREADED (or the
+    // DXMT9_PE_FORCE_RECORDER_LOCK rollback lane) recorderMutex_ covers
+    // cross-thread access instead, which is exactly what recorderLockRequired_
+    // above witnesses.
+    //
+    // Debug-only thread-confinement companion to recorderLockRequired_: this
+    // token binds to the constructing thread and assertRecorderThreadConfined()
+    // DXMT_ASSERTs that no other thread calls a recorder-guarded path while the
+    // lock is skipped — catching app UB (calling cross-thread without
+    // D3DCREATE_MULTITHREADED) loudly in debug builds instead of silently
+    // corrupting the recorder. Shared helper per R-BACK-43.5; this site is the
+    // reference shape the helper was extracted from.
+    dxmt9::core::ThreadOwnershipToken recorderOwnership_{};
     BOOL         softwareVertexProcessing_ = FALSE;
     // Wine d3d9ex test_frame_latency: default Ex device latency is 3.
     UINT         maxFrameLatencyShadow_ = 3;
@@ -12520,7 +12530,8 @@ public:
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
         , recorderLockRequired_(dxmt9PeRecorderLockRequired(
               behaviorFlags, dxmt9PeForceRecorderLockEnabled()))
-        , creatingThreadId_(dxmt9PeCurrentThreadId())
+        // recorderOwnership_ binds to this thread through its default member
+        // initializer, so it needs no entry here.
         , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
         , extended_(extended)
         , renderTapeCapture_(
@@ -12606,9 +12617,13 @@ public:
     // call here is app UB per the D3D9 contract; catch it loudly in debug
     // builds instead of racing the unlocked recorder state. Compiles out
     // under NDEBUG (release), same as every other DXMT_ASSERT.
+    //
+    // R-BACK-43.5 shape (c): `recorderLockRequired_` is the lock witness —
+    // when it is set, recorderMutex_ (not thread confinement) is what makes
+    // the recorder safe, so any thread may proceed.
     void assertRecorderThreadConfined() const noexcept {
-        DXMT_ASSERT(recorderLockRequired_ ||
-                     creatingThreadId_ == dxmt9PeCurrentThreadId());
+        DXMT_ASSERT_OWNED_BY_OR_LOCKED(recorderOwnership_,
+                                        recorderLockRequired_);
     }
 
     ~D3D9DeviceImpl() {

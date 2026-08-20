@@ -41,7 +41,16 @@ std::atomic<uintptr_t> g_ntAllocScanHint{0x10000000u};
 
 // Bounded pool of recycled low-4GB shadow-lock blocks (see
 // device_c_low4gb_pool.hpp for why this exists and its bucket/eviction
-// policy). Guarded by its own dedicated mutex — deliberately NOT
+// policy).
+//
+// R-BACK-43.4 `arena-protected` — serialized by `low4GBPoolMutex()` below,
+// this component's OWN lock, never by `CommandQueue::mutex_`. Both entry
+// points (`acquireLow4GB` / `releaseLow4GB`) take it, and no caller may assume
+// the queue mutex covers this pool. No thread-affinity assert: two actors
+// (game thread, replay offload worker) reach it by design, which is exactly
+// why it has a lock instead of an ownership claim.
+//
+// Guarded by its own dedicated mutex — deliberately NOT
 // CommandQueue::mutex_ — because shadow alloc happens on the game thread
 // (D3D9 Lock calls) while shadow release can also be driven by the
 // commit-replay offload worker when it drops the last reference to a

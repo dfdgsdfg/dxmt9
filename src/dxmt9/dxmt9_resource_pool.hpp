@@ -59,8 +59,17 @@
 //        not released into the free list while its `lastUsedSeqId`
 //        is ahead of the GPU-completed watermark; chunk N's encoder
 //        holds the marking that pins every record it consumes.
+//
+//  * **Buffer rename ring + capture read-set** are `producer-owned` under
+//    R-BACK-43.4 (`specs/backend/producer-concurrency/spec.md` §2): the ring
+//    SHAPE and the fields `captureChunkBufferBinding` reads are written only
+//    on the game thread, and reach the worker/encode side only as the
+//    immutable commit-time snapshot. `Pool::producerOwnership_` is the
+//    R-BACK-43.5 debug guard; see `BufferRecord`'s field comments for the
+//    exact member split against the `arena-protected` stamps.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9/thread_ownership.hpp"
 #include "dxmt9_heap_manager.hpp"
 #include "dxmt9_mark_reclaim_predicates.hpp"
 #include "../winemetal/Metal.hpp"
@@ -171,6 +180,18 @@ struct ReorderedIndexBufferLookup {
 };
 
 struct BufferRecord {
+  // R-BACK-43.4 — the fields `Pool::captureChunkBufferBinding` reads
+  // (`desc.size`, `buffer`, `contents`, `contentRevision`,
+  // `renameActiveIndex`, `renameRing[].replayResidency`, and the
+  // `isDynamicRename` / `isManagedVersioned` flavor flags) form the chunk
+  // buffer-binding CAPTURE READ-SET. Its writers are `producer-owned` (every
+  // one is a game-thread path: create, D3D9 Lock/Unlock upload,
+  // finalizeBufferMap — audited in the design doc §7 Q1) and the values are
+  // `owner-published` to the worker/encode side as the immutable commit-time
+  // `ChunkBufferBindingSnapshot`, never by a live read of this record.
+  // Enforced by `Pool::producerOwnership_` at the three writer entry points
+  // (R-BACK-43.5). `lastUsedSeqId` below is the exception — `arena-protected`,
+  // stamped from the worker under the HandleArena mutex.
   core::BufferDesc desc{};
   WMT::Reference<WMT::Buffer> buffer;
   void* contents = nullptr;  // CPU-mapped pointer (shared mode only)
@@ -195,6 +216,18 @@ struct BufferRecord {
   // either policy, and `renameActiveIndex` points at the entry mirrored into
   // `buffer` / `contents`. Runtime rotation is safe only when draw bindings
   // snapshot concrete ring entries.
+  //
+  // R-BACK-43.4 `producer-owned` — the ring SHAPE (`renameActiveIndex`, ring
+  // membership, and the `buffer`/`contents` mirror above) is written only on
+  // the game thread: createBuffer, `Pool::uploadBufferData` /
+  // `uploadBufferDataRange` (D3D9 Unlock upload), and
+  // `Pool::finalizeBufferMap` (D3D9 Lock). The worker/encode side never reads
+  // the live ring — it consumes the immutable commit-time
+  // `ChunkBufferBindingSnapshot`. Guarded by `Pool::producerOwnership_`
+  // (R-BACK-43.5). NOT covered by that class: `BufferRenameRingEntry::
+  // lastUsedSeqId`, which is `arena-protected` and legitimately stamped from
+  // the replay worker through `markBufferUse` / `markBufferSnapshotUse` under
+  // the HandleArena mutex (pool header contract, arena-stamp exception).
   bool isDynamicRename = false;
   bool isManagedVersioned = false;
   u32 renameActiveIndex = 0;
@@ -474,6 +507,18 @@ class HandleArena {
 // Pool container. The typed arenas are the only production storage path.
 struct Pool {
   std::unordered_set<u64> dumpedGpuTextures;
+
+  // R-BACK-43.5 — thread-affinity guard for the `producer-owned` buffer
+  // rename ring and capture read-set (see BufferRecord above). Binds at Pool
+  // construction, which happens inside `CommandQueue`'s constructor, itself
+  // reached from the app's CreateDevice call on the game thread. Asserted at
+  // the three ring/read-set writer entry points — `uploadBufferData`,
+  // `uploadBufferDataRange`, `finalizeBufferMap` — which between them
+  // dominate every call to the file-local `rotateBufferBacking`. The mark
+  // paths deliberately do NOT assert: they are `arena-protected` and are
+  // called from the replay worker by design (pool header arena-stamp
+  // exception).
+  [[no_unique_address]] core::ThreadOwnershipToken producerOwnership_{};
 
   // R-BACK-5.7: cached `MTLDevice.hasUnifiedMemory` snapshot. Set ONCE by
   // CommandQueue at construction (`setHasUnifiedMemory`). Read by

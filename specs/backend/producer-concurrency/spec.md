@@ -39,7 +39,7 @@ Evidence: the four source audits in the design doc §7 and the
 
 | State | Class (R-BACK-43.4) | Evidence / mechanism |
 |---|---|---|
-| Buffer rename ring (`renameRing`, `renameActiveIndex`) | `producer-owned` | Referenced only inside the pool; worker/encode consume the commit-time snapshot. |
+| Buffer rename ring SHAPE (`renameRing` membership, `renameActiveIndex`, the `buffer`/`contents` mirror) | `producer-owned` | Referenced only inside the pool; worker/encode consume the commit-time snapshot. Scope note: `BufferRenameRingEntry::lastUsedSeqId` is NOT in this class — it is the `arena-protected` row below and is legitimately stamped from the replay worker via `markBufferUse` / `markBufferSnapshotUse`. |
 | Chunk buffer-binding capture read-set (`contents`, `contentRevision`, `desc.size`, flavor flags) | `producer-owned` (writes) + `owner-published` via commit-time snapshot | Every writer is a game-thread path (create/Lock/Unlock/finalize). |
 | `lastUsedSeqId` per record | `arena-protected` | Stamped via `markStampUpper` under the arena mutex; monotone max. |
 | `nextSeqId_` | `owner-published` | Writers under the queue mutex with release stores; lock-free acquire reads via `markTicketAcquire()` paired with the re-stamp protocol. |
@@ -47,6 +47,18 @@ Evidence: the four source audits in the design doc §7 and the
 | Writing slot contents | `worker-owned` between `ensureWritingSlot` and publish, EXCEPT the producer's map-wait force-publish | The exception is why unlocked appending is unsafe without the reserve-copy-commit protocol (T2d, model required). |
 | Retainer pins / warm epochs | `producer-owned` (PE side) | Program-ordered release strictly after same-chunk marking; release can synchronously drive reclaim on the releasing thread. |
 | Reclaim gate (`destroyPending` + watermark) | `queue-shared` | Three driving actors (producer, worker, completion), all under the queue mutex; the pin premise keeps marked records out of `destroyPending`. |
+| Low-4GB wow64 shadow block pool | `arena-protected` | `low4GBPoolMutex()` in `src/d3d9/device_c_marshal.cpp`, explicitly not `CommandQueue::mutex_`; two actors (game thread allocates, worker can drive release). |
+
+Per R-BACK-43.4 each row above is also declared as a comment adjacent to the
+owning declaration, so the class travels with the code:
+
+| State | Declaration site | R-BACK-43.5 assert |
+|---|---|---|
+| Rename ring + capture read-set | `BufferRecord` fields, `struct Pool`, and the pool header's concurrency-contract block (`src/dxmt9/dxmt9_resource_pool.hpp`) | `Pool::producerOwnership_` asserted at `uploadBufferData` / `uploadBufferDataRange` / `finalizeBufferMap`, which dominate every `rotateBufferBacking` entry |
+| PE recorder / chunk builder / retainer | `src/d3d9/d3d9_pe_device.cpp` (`recorderOwnership_`), `d3d9_pe_chunk_builder.hpp`, `d3d9_pe_retainer.hpp` | `D3D9DeviceImpl::assertRecorderThreadConfined()` at the 18 recorder-guarded entry points. The builder and retainer carry declarations only: a construction-bound token inside them would be **incorrect**, not redundant, because `D3DCREATE_MULTITHREADED` legitimately admits other threads under `recorderMutex_` and only the device knows that (the or-locked witness is `recorderLockRequired_`) |
+| `nextSeqId_`, `completedSeqId_` | `src/dxmt9/dxmt9_command_queue.hpp` | none — multi-reader by design; the publication argument is the evidence |
+| Writing slot | `CommandQueue::writingSlotOwnership_` | bound at `ensureWritingSlotUnlocked`, asserted or-locked at `submitDrawRunBatchImpl`'s append segment with `lock.owns_lock()` as witness. Structurally true today; it exists so a future unlocked append (T2d) cannot land without the model |
+| Low-4GB shadow pool | `src/d3d9/device_c_low4gb_pool.hpp` + the instance in `device_c_marshal.cpp` | none — mutex-serialized by design |
 
 ## 3. Bridge entry synchronicity classification
 
@@ -361,6 +373,6 @@ review obligation, not a resolved fact):
 | Contract | Evidence |
 |---|---|
 | R-BACK-43.4/43.6 mark/reclaim ordering | `ProducerMarkReclaim.tla` (+ 2 counterexample cfgs), shared predicates `canReclaimRecord`/`markStampUpper`, `dxmt9-producer-mark-reclaim-spec` |
-| R-BACK-43.5 thread-affinity asserts | `assertRecorderThreadConfined` (reference shape); shared helper adoption tracked in gap.md |
+| R-BACK-43.5 thread-affinity asserts | `dxmt9::core::ThreadOwnershipToken` + `DXMT_ASSERT_OWNED_BY` / `DXMT_ASSERT_OWNED_BY_OR_LOCKED` in `include/dxmt9/thread_ownership.hpp` — one shared header serving both `src/d3d9` (PE) and `src/dxmt9` (unix), compiled out under `NDEBUG`. Adopters: `D3D9DeviceImpl::recorderOwnership_` (migrated reference shape, `assertRecorderThreadConfined`), `resources::Pool::producerOwnership_` (rename ring + capture read-set writers), `CommandQueue::writingSlotOwnership_` (or-locked at the `submitDrawRunBatchImpl` append). Negative control: inverting the pool assert aborts `dxmt9-dynamic-rename-ring-spec` |
 | Queue-mutex contention observability | `DXMT9_PERF_QUEUE_MUTEX_SPLIT` per-site acquire/hold/segment rows |
 | C++ memory-order obligation | OPEN — deterministic interleaving harness (R-VERIF-7.3 direction), gap.md |
