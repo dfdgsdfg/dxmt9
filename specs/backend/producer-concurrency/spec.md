@@ -100,7 +100,7 @@ waits with NOOVERWRITE/DISCARD bypass classes, and the fail-fast
 | Buffer lock/unlock (2) | `visibility-wait` | resource-scoped cv (measured 0.105 ms/present blocked total, all plain-MANAGED; NOOVERWRITE/DISCARD bypass) | high (21.7 pairs/present) |
 | Surface/texture lock/unlock, GetRenderTargetData, StretchRect/ColorFill/UpdateSurface/UpdateTexture, check_device_state/test_cooperative_level (11) | `visibility-wait` | global drain (surface lock's measured cost is unix CPU, not the drain) | low-mid |
 | Scene markers: begin/end_scene (2) | `state-mutation-ack` | never-blocks (`DXMT9_TERMINAL_OR_RETURN` only — deliberately not drain-fenced; see the in-file comment) | high (2/present) |
-| State setters + draws + present + reset + creates + texture ops + swapchain/query/stateblock ops + device-level check_device_multisample (73) | `ordering-fence` | global drain (R-BACK-2.51 single-FIFO invariant) | setters/draws high |
+| State setters + draws + present + reset + creates + texture ops + swapchain/query/stateblock ops + device-level check_device_multisample (73) | `ordering-fence` | global drain (R-BACK-2.51 single-FIFO invariant) | setters/draws **cold on steady state** (measured `bridge_state=2` calls over a full GT2 run — hot Set*/Draw* traffic rides `commit_chunk` per the DOD contract; these wire entries serve the non-chunked fallback); present ~1/present, creates mid, texture ops mid-high |
 | addref/release pairs (20) | `state-mutation-ack` | mostly never-blocks; device addref/release pay the global drain wait with the result discarded | buffer pairs were 663×2/present pre-warm-epochs |
 | Shader/vdecl create (3) | `state-mutation-ack` | terminal-check only (no queue-depth wait) — the one create family that does not drain | low-mid |
 | `factory_create_device2` (1) | `state-mutation-ack` | never-blocks (no drain macro in `device_c_bridge_factory.cpp`) — writes `outDevice` and returns an HRESULT ack, unlike `factory_create`/`factory_create_device`'s bare pointer return | cold |
@@ -350,8 +350,19 @@ review obligation, not a resolved fact):
   replay pending — and the discarded result is intentional fail-open so a
   poisoned pipeline cannot block teardown (same policy as the shader/vdecl
   lifetime entries). Measured GT2 cost: absent from the opcode table.
-- **G5** — the state-setter family's `high` frequency is inferred from class
-  totals, not per-opcode measurement.
+- **G5 — RESOLVED (2026-08-21, measured): the inferred `high` was wrong by
+  five orders of magnitude.** The `[dxmt9-bridge-perf]` class report from the
+  GT2 `bridge-opcodes-r2` run shows `bridge_state=2` calls over the entire
+  ~1,621-present run (0.013 ms total) — the state-setter wire entries cross
+  only at initialization, because hot `Set*`/`Draw*` traffic is
+  chunk-recorded and replayed (`bridge_draw=28,052` ≈ the
+  `commit_chunk`+present cadence, not per-draw crossings). The family table's
+  frequency column is corrected; the `ordering-fence` class stands as the
+  correct ceiling for the cold fallback path. This is the DOD wire contract
+  (`documentation_spec.rules.md`: "Hot-path Set*/Draw* … must not regress to
+  one PE/unix call per D3D9 operation") confirmed by measurement — and the
+  classification table's frequency column now records measured values, not
+  volume inferences.
 
 ## 4. Ordering protocols
 
