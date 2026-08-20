@@ -588,7 +588,11 @@ struct Pool {
   // paths deliberately do NOT assert: they are `arena-protected` and are
   // called from the replay worker by design (pool header arena-stamp
   // exception).
-  [[no_unique_address]] core::ThreadOwnershipToken producerOwnership_{};
+  // First-use bound (shape (d)): the producer is whoever performs the first
+  // producer-path operation, not whoever constructed the Pool — D3D9 permits
+  // create-on-one-thread/render-on-another with external serialization.
+  [[no_unique_address]] core::ThreadOwnershipToken producerOwnership_{
+      core::deferThreadOwnership};
 
   // R-BACK-5.7: cached `MTLDevice.hasUnifiedMemory` snapshot. Set ONCE by
   // CommandQueue at construction (`setHasUnifiedMemory`). Read by

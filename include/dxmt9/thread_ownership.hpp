@@ -112,12 +112,37 @@ class ThreadOwnershipToken {
 #endif
   }
 
+  // Shape (d): first-use ownership. The first thread to check becomes the
+  // owner; later checks assert it. For owners identified by the work they do
+  // rather than by construction site — D3D9 legitimately permits creating a
+  // device on one thread and rendering from another (with external
+  // serialization), so a construction-bound token on such state would fire
+  // on a conforming app. CAS keeps the first-bind race-free when the very
+  // first two producer-path calls could in principle race (they cannot on a
+  // conforming caller, but the DEBUG BUILD must not itself be racy).
+  bool bindOrOwnedByCurrentThread() const noexcept {
+#ifndef NDEBUG
+    const void* const self = detail::currentThreadOwnershipIdentity();
+    const void* expected = nullptr;
+    if (owner_.compare_exchange_strong(expected, self,
+                                       std::memory_order_relaxed)) {
+      return true;
+    }
+    return expected == self;
+#else
+    return true;
+#endif
+  }
+
  private:
 #ifndef NDEBUG
   // Atomic because a rebindable token is legitimately written by one thread
   // and read by another (the shape-(c) exception); a plain member would make
   // the DEBUG BUILD ITSELF racy while diagnosing a race.
-  std::atomic<const void*> owner_{nullptr};
+  // `mutable`: shape (d)'s first-use bind mutates only this debug
+  // bookkeeping from const observers (capture is a const Pool method);
+  // logically the observation does not change the guarded state.
+  mutable std::atomic<const void*> owner_{nullptr};
 #endif
 };
 
@@ -125,6 +150,11 @@ class ThreadOwnershipToken {
 
 // R-BACK-43.5 — `producer-owned` / `worker-owned` confinement check.
 #define DXMT_ASSERT_OWNED_BY(token) DXMT_ASSERT((token).ownedByCurrentThread())
+
+// Shape (d): the first checking thread becomes the owner; later checks
+// assert it. See ThreadOwnershipToken::bindOrOwnedByCurrentThread.
+#define DXMT_ASSERT_OWNED_OR_BIND(token) \
+  DXMT_ASSERT((token).bindOrOwnedByCurrentThread())
 
 // R-BACK-43.5 shape (c) — owner OR a documented lock holder. `lockedWitness`
 // must be an expression that actually observes the lock (e.g.

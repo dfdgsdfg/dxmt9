@@ -307,11 +307,17 @@ void auditProductionMemoryOrders(const std::string& sourceRoot) {
 
   // The mirrored re-stamp body. If production's control flow changes, S2A's
   // decomposition is no longer the same protocol and must be re-derived.
+  // (T2b/c added the gated restamp-fire counter between the frozen re-read
+  // and the conditional stamp — race-neutral: two atomic adds under mutex_,
+  // no effect on the frozen-ticket/monotone-max protocol S2A mirrors.)
   requireContains(queueCpp,
                   "const std::uint64_t frozenTicket = q.markTicketAcquire(); "
-                  "if (frozenTicket != markTicket) { stamp(frozenTicket); } "
+                  "const bool restamped = frozenTicket != markTicket;",
+                  "restampIfTicketAdvancedLocked's frozen re-read is mirrored by S2A");
+  requireContains(queueCpp,
+                  "if (restamped) { stamp(frozenTicket); } "
                   "return frozenTicket;",
-                  "restampIfTicketAdvancedLocked's body is mirrored by S2A");
+                  "restampIfTicketAdvancedLocked's conditional stamp is mirrored by S2A");
 
   // The two production callers this harness drives must still take the ticket
   // BEFORE the mutex — the whole stale-window premise. `markChunkResources`
@@ -321,16 +327,19 @@ void auditProductionMemoryOrders(const std::string& sourceRoot) {
                   "markChunkResourcesWithExactSeq(pool_, entries, markTicket);",
                   "the producer bulk mark must still stamp before locking");
 
-  // Stamps-before-capture (spec.md §4). If the capture loop ever moves ahead
-  // of the stamp loop, schedule S3d's premise is void.
-  const auto stampsAt = queueCpp.find(
-      "snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));");
+  // Stamps-before-capture (spec.md §4). T2b moved the capture LOOP into
+  // Pool::captureChunkBufferBindings; the ordering obligation now lives at
+  // the queue's combined mark+capture entry: the frozen-ticket re-stamp must
+  // precede the pool capture CALL. If the capture call ever moves ahead of
+  // the re-stamp, schedule S3d's premise is void.
   const auto restampAt = queueCpp.find("(void)restampIfTicketAdvancedLocked(");
-  check(stampsAt != std::string::npos && restampAt != std::string::npos,
+  const auto captureCallAt =
+      queueCpp.find("return pool_.captureChunkBufferBindings(entries, snapshots);");
+  check(restampAt != std::string::npos && captureCallAt != std::string::npos,
         "memory-order audit could not locate the capture/re-stamp sites");
-  check(restampAt < stampsAt,
-        "stamps-before-capture drifted: the capture loop now precedes the "
-        "frozen-ticket re-stamp");
+  check(restampAt < captureCallAt,
+        "stamps-before-capture ordering drifted: the re-stamp must precede "
+        "the pool capture call in the combined mark+capture entry");
 }
 
 // NEGATIVE CONTROL for the audit above. An audit that silently stopped
