@@ -694,6 +694,21 @@ present_ordinal_boundary_spec = executable(
 test('dxmt9-present-ordinal-boundary-spec', present_ordinal_boundary_spec,
      env: dxmt9_native_test_env)
 
+# Producer mark / reclaim shared predicates + TLC trace conformance. Binds
+# `specs/verification/tla/ProducerMarkReclaim.tla` to the C++ predicates in
+# `src/dxmt9/dxmt9_mark_reclaim_predicates.hpp` that `Pool::mark*Use` and
+# `HandleArena::reclaimCompleted` call. Header-only: no Metal, no queue.
+producer_mark_reclaim_spec = executable(
+  'dxmt9-producer-mark-reclaim-spec',
+  'producer_mark_reclaim_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-producer-mark-reclaim-spec', producer_mark_reclaim_spec,
+     env: dxmt9_native_test_env)
+
 # R-BACK-2.54 / R-BACK-2.56 command-chunk canonical replay/lifetime scaffolds.
 foreach spec : [
   ['chunk-record-replay', 'chunk_record_replay_spec.cpp'],

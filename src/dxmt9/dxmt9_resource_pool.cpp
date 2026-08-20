@@ -165,7 +165,12 @@ void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
     // record.lastUsedSeqId <= completedSeqId, no in-flight encoder can
     // still be dereferencing this record's pointer (chunk-N encoder
     // marks its resources with lastUsedSeqId = N, and N > completedSeqId
-    // until the chunk completes).
+    // until the chunk completes). The gate itself lives in
+    // HandleArena::reclaimCompleted and is the shared `canReclaimRecord`
+    // predicate — TLA+: ProducerMarkReclaim!Reclaim, whose companion
+    // ProducerMarkReclaim.counterexample.cfg shows what this watermark
+    // does NOT cover on its own: the retainer pin, not the watermark, is
+    // what keeps a being-marked record out of destroyPending.
     DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
     releaseHeapIfBacked(heapManager, record);
   });
@@ -952,14 +957,19 @@ void Pool::uploadTextureLevel(WMT::Device device,
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
 }
 
+// TLA+: ProducerMarkReclaim!StampMark(r) — every mark* entry point below
+// writes the record watermark through the shared `markStampUpper` predicate,
+// which is the model's monotone max. The producer↔queue concurrency track
+// moves these call sites off `CommandQueue::mutex_` (T2a); the value they
+// compute must be identical when it does.
 void Pool::markBufferUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   bufferArena_.update(handle.value, [seqId](BufferRecord& rec) {
-    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
     if (rec.hasVersionedBacking() &&
         rec.renameActiveIndex < rec.renameRing.size()) {
       auto& active = rec.renameRing[rec.renameActiveIndex];
-      active.lastUsedSeqId = std::max(active.lastUsedSeqId, seqId);
+      active.lastUsedSeqId = markStampUpper(active.lastUsedSeqId, seqId);
       // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
       DXMT_ASSERT(active.lastUsedSeqId <= rec.lastUsedSeqId);
     }
@@ -971,13 +981,13 @@ void Pool::markBufferSnapshotUse(core::Handle handle,
                                  u64 seqId) {
   if (!handle || !snapshot.valid()) return;
   bufferArena_.update(handle.value, [seqId, snapshot](BufferRecord& rec) {
-    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
     if (!rec.hasVersionedBacking()) {
       return;
     }
     for (auto& entry : rec.renameRing) {
       if (entry.buffer && entry.buffer.handle == snapshot.metalHandle) {
-        entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        entry.lastUsedSeqId = markStampUpper(entry.lastUsedSeqId, seqId);
         // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
         DXMT_ASSERT(entry.lastUsedSeqId <= rec.lastUsedSeqId);
         return;
@@ -1041,14 +1051,14 @@ Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
 void Pool::markTextureUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   textureArena_.update(handle.value, [seqId](TextureRecord& rec) {
-    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
   });
 }
 
 void Pool::markSurfaceUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   surfaceArena_.update(handle.value, [seqId](SurfaceRecord& rec) {
-    rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
   });
 }
 

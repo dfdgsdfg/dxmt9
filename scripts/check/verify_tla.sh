@@ -39,13 +39,29 @@ for spec in "$tla_dir"/*.tla; do
   unset metadir
 done
 
-# The NOOVERWRITE model also carries a deliberately buggy full-shadow
-# transition. Keep its counterexample executable: a future change that makes
-# the buggy configuration green means the model no longer distinguishes the
-# regression, while a production configuration failure is still handled above.
-counterexample_cfg="$tla_dir/NoOverwriteByteRange.counterexample.cfg"
-counterexample_spec="$tla_dir/NoOverwriteByteRange.tla"
-if [[ -f "$counterexample_cfg" ]]; then
+# Some models carry a deliberately broken companion configuration. Keep those
+# counterexamples executable: a change that makes a buggy configuration green
+# means the model no longer distinguishes the regression it exists to guard,
+# while a production configuration failure is still handled by the loop above.
+#
+# Rows are "<model>|<expected TLC message>". The model name selects both
+# `<model>.tla` and `<model>.counterexample.cfg`.
+counterexample_models=(
+  # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
+  "NoOverwriteByteRange|Invariant NoOverwriteReadPreserved is violated"
+  # Pin-ordering premise removed: a reclaim frees a record the producer's
+  # commit window still names. See
+  # docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md §4.
+  "ProducerMarkReclaim|Invariant NoUseAfterFree is violated"
+)
+
+for row in "${counterexample_models[@]}"; do
+  model="${row%%|*}"
+  expected="${row#*|}"
+  counterexample_cfg="$tla_dir/$model.counterexample.cfg"
+  counterexample_spec="$tla_dir/$model.tla"
+  [[ -f "$counterexample_cfg" && -f "$counterexample_spec" ]] || continue
+
   metadir="$(mktemp -d)"
   counterexample_log="$metadir/tlc.log"
   set +e
@@ -53,14 +69,13 @@ if [[ -f "$counterexample_cfg" ]]; then
     -config "$counterexample_cfg" "$counterexample_spec" >"$counterexample_log" 2>&1
   status=$?
   set -e
-  if [[ "$status" -eq 0 ]] ||
-     ! grep -q "Invariant NoOverwriteReadPreserved is violated" "$counterexample_log"; then
+  if [[ "$status" -eq 0 ]] || ! grep -q "$expected" "$counterexample_log"; then
     cat "$counterexample_log"
-    echo "expected NoOverwriteByteRange counterexample was not observed" >&2
+    echo "expected $model counterexample was not observed" >&2
     exit 1
   fi
-  echo "=== NoOverwriteByteRange.counterexample.cfg (expected failure) ==="
-  echo "expected invariant counterexample observed"
+  echo "=== $model.counterexample.cfg (expected failure) ==="
+  echo "expected invariant counterexample observed: $expected"
   rm -rf "$metadir"
   unset metadir
-fi
+done
