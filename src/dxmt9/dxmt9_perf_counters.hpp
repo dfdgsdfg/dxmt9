@@ -1290,6 +1290,34 @@ void countD3D9BufferLock(std::uint64_t nanoseconds,
                          std::uint32_t pool,
                          bool fullResource,
                          bool shadowCopy);
+// dxmt9c_surface_lock_rect attribution (state-churn-encode-append-decomposition.24/.26:
+// 1.33 ms/call, 0.58 ms/present on GT2, confirmed NOT a drain-fence wait).
+// coreNanoseconds times the s->obj->lockRect(...) call into core Surface/Texture
+// lockRect; shadowNanoseconds times the whole wow64-pointer-shadow block
+// (alloc-or-reuse + copyNativeToShadow) when the wow64 shadow path is taken (0
+// on 64-bit or when the native pointer already fits 32 bits).
+void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
+                              std::uint64_t shadowNanoseconds,
+                              std::uint64_t bytes,
+                              bool discard);
+// dxmt9c_texture_lock_rect equivalent of the surface counters above; shares
+// the same opcode family and cost shape (core lockRect call vs. wow64 shadow
+// alloc/copy block).
+void countD3D9TextureLockRect(std::uint64_t coreNanoseconds,
+                              std::uint64_t shadowNanoseconds,
+                              std::uint64_t bytes,
+                              bool discard);
+// Times the D3DLOCK_DISCARD zero-fill (`storage.bytes.assign(...)`) inside
+// core Texture::lockRect (src/d3d9/core_texture.cpp). Texture::lockRect is
+// the single non-palettized lockRect body shared by both
+// dxmt9c_texture_lock_rect and dxmt9c_surface_lock_rect (the latter via
+// Surface::lockRect's texture-container delegation), so this one counter
+// pair attributes the fill cost regardless of which PE entry point locked
+// the resource. It does NOT cover Surface's own standalone-backing discard
+// fill (core_surface.cpp, non-texture-container surfaces such as plain
+// render targets) — that is a separate storage class outside the scope of
+// this task and remains uninstrumented.
+void countTextureLockDiscardFillCpuTime(std::uint64_t nanoseconds, std::uint64_t bytes);
 void countUniformVsConsts(std::size_t bytes);
 void countUniformPsConsts(std::size_t bytes);
 void countUniformFfpVs(std::size_t bytes);

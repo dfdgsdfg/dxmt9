@@ -2,8 +2,10 @@
 #include "core_resources_internal.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -97,9 +99,20 @@ LockedRegion Texture::lockRect(u32 subresource, const Rect *rect, u32 flags) {
   }
   LevelStorage &storage = levels_[subresource];
   if ((flags & UsageDiscard) != 0) {
-    storage.bytes.assign(static_cast<size_t>(storage.slicePitch) *
-                             static_cast<size_t>(storage.depth),
-                         0);
+    // state-churn-encode-append-decomposition.24/.26: candidate (a) for
+    // dxmt9c_surface_lock_rect's 1.33 ms/call cost. D3DLOCK_DISCARD does not
+    // require zeroed contents, so this fill is removable work if it turns
+    // out to dominate — timed here rather than removed in this
+    // instrumentation-only pass.
+    const size_t fillBytes = static_cast<size_t>(storage.slicePitch) *
+                             static_cast<size_t>(storage.depth);
+    const auto fillStart = std::chrono::steady_clock::now();
+    storage.bytes.assign(fillBytes, 0);
+    const auto fillNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - fillStart).count());
+    dxmt9::perf::countTextureLockDiscardFillCpuTime(fillNs,
+                                                     static_cast<std::uint64_t>(fillBytes));
   }
   locked_ = true;
   if (storage.pitch == 0 || storage.bytes.empty()) {

@@ -1496,6 +1496,24 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9BufferLockScratchPool{0};
   std::atomic<std::uint64_t> d3d9BufferLockDynamic{0};
   std::atomic<std::uint64_t> d3d9BufferLockWriteOnly{0};
+  // dxmt9c_surface_lock_rect / dxmt9c_texture_lock_rect attribution
+  // (state-churn-encode-append-decomposition.24/.26). *_core_ns times the
+  // obj->lockRect(...) call into core; *_shadow_ns times the wow64 pointer-
+  // shadow alloc+copy block (32-bit GT2 lane is where this is live).
+  std::atomic<std::uint64_t> surfaceLockRectCalls{0};
+  std::atomic<std::uint64_t> surfaceLockRectCoreNs{0};
+  std::atomic<std::uint64_t> surfaceLockRectShadowNs{0};
+  std::atomic<std::uint64_t> surfaceLockRectDiscardCalls{0};
+  std::atomic<std::uint64_t> surfaceLockRectBytes{0};
+  std::atomic<std::uint64_t> textureLockRectCalls{0};
+  std::atomic<std::uint64_t> textureLockRectCoreNs{0};
+  std::atomic<std::uint64_t> textureLockRectShadowNs{0};
+  std::atomic<std::uint64_t> textureLockRectDiscardCalls{0};
+  std::atomic<std::uint64_t> textureLockRectBytes{0};
+  // Shared core Texture::lockRect D3DLOCK_DISCARD zero-fill (see
+  // countTextureLockDiscardFillCpuTime for the entry-point coverage note).
+  std::atomic<std::uint64_t> textureLockDiscardFillNs{0};
+  std::atomic<std::uint64_t> textureLockDiscardFillBytes{0};
   std::atomic<std::uint64_t> uniformVsConstsCalls{0};
   std::atomic<std::uint64_t> uniformVsConstsBytes{0};
   std::atomic<std::uint64_t> uniformPsConstsCalls{0};

@@ -5243,6 +5243,36 @@ void countD3D9BufferLock(std::uint64_t nanoseconds,
   if ((usage & kUsageWriteOnly) != 0) add(c.d3d9BufferLockWriteOnly);
 }
 
+void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
+                              std::uint64_t shadowNanoseconds,
+                              std::uint64_t bytes,
+                              bool discard) {
+  auto& c = counters();
+  add(c.surfaceLockRectCalls);
+  add(c.surfaceLockRectCoreNs, coreNanoseconds);
+  add(c.surfaceLockRectShadowNs, shadowNanoseconds);
+  add(c.surfaceLockRectBytes, bytes);
+  if (discard) add(c.surfaceLockRectDiscardCalls);
+}
+
+void countD3D9TextureLockRect(std::uint64_t coreNanoseconds,
+                              std::uint64_t shadowNanoseconds,
+                              std::uint64_t bytes,
+                              bool discard) {
+  auto& c = counters();
+  add(c.textureLockRectCalls);
+  add(c.textureLockRectCoreNs, coreNanoseconds);
+  add(c.textureLockRectShadowNs, shadowNanoseconds);
+  add(c.textureLockRectBytes, bytes);
+  if (discard) add(c.textureLockRectDiscardCalls);
+}
+
+void countTextureLockDiscardFillCpuTime(std::uint64_t nanoseconds, std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.textureLockDiscardFillNs, nanoseconds);
+  add(c.textureLockDiscardFillBytes, bytes);
+}
+
 void countUniformVsConsts(std::size_t bytes) {
   add(counters().uniformVsConstsCalls);
   add(counters().uniformVsConstsBytes, static_cast<std::uint64_t>(bytes));

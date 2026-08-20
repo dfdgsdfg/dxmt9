@@ -903,7 +903,14 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     rectStorage = dxmt9::core::Rect{r->left, r->top, r->right, r->bottom};
     rect = &rectStorage;
   }
+  // state-churn-encode-append-decomposition.24/.26: same core-vs-shadow
+  // attribution as dxmt9c_surface_lock_rect above (shared opcode family /
+  // cost shape).
+  const auto lockRectCoreStart = std::chrono::steady_clock::now();
   auto lock = t->obj->lockRect(level, rect, lockFlagsToCore(flags));
+  const auto lockRectCoreNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - lockRectCoreStart).count());
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
@@ -911,13 +918,17 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
                   static_cast<void*>(t), level, lock.pitch, lock.data);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  std::uint64_t lockRectShadowNs = 0;
+  std::uint64_t lockRectBytes = 0;
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
+    const auto shadowStart = std::chrono::steady_clock::now();
     const auto& desc = t->obj->desc();
     const uint32_t levelWidth = std::max(1u, desc.width >> std::min(level, 31u));
     const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
     const auto footprint = lockFootprint(desc.format, levelWidth, levelHeight, r);
     const uint32_t rowBytes = footprint.rowBytes;
     const uint32_t rows = footprint.rows;
+    lockRectBytes = static_cast<std::uint64_t>(rowBytes) * static_cast<std::uint64_t>(rows);
     // SFIV BC3 level-9 page-fault repro (2026-05-10): for tiny mips
     // (e.g. 1x1 BC3) Metal/the runtime reports `lock.pitch` equal to
     // the BASE-level row pitch (1024 for a 256x256 BC3 base), and the
@@ -977,7 +988,22 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p pitch=%u rowBytes=%u rows=%u",
                   static_cast<void*>(t), level, shadow.nativePtr, out->bits,
                   shadow.nativePitch, rowBytes, rows);
+    lockRectShadowNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - shadowStart).count());
+  } else {
+    const auto& desc = t->obj->desc();
+    const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
+    const uint32_t reportedHeight = r
+        ? static_cast<uint32_t>(std::max<int32_t>(
+              0, std::clamp(r->bottom, 0, static_cast<int32_t>(levelHeight)) -
+                     std::clamp(r->top, 0, static_cast<int32_t>(levelHeight))))
+        : levelHeight;
+    lockRectBytes = static_cast<std::uint64_t>(std::abs(out->pitch)) *
+                    static_cast<std::uint64_t>(reportedHeight);
   }
+  dxmt9::perf::countD3D9TextureLockRect(lockRectCoreNs, lockRectShadowNs, lockRectBytes,
+                                        (flags & kD3DLockDiscard) != 0);
   t->lockedLevels.insert(level);
   dxmt9DebugLog("texture_lock_rect ok texture=%p level=%u pitch=%d bits=%p",
                 static_cast<void*>(t), level, out->pitch, out->bits);
@@ -1337,7 +1363,15 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
     rectStorage = dxmt9::core::Rect{r->left, r->top, r->right, r->bottom};
     rect = &rectStorage;
   }
+  // state-churn-encode-append-decomposition.24/.26: attribute
+  // dxmt9c_surface_lock_rect's 1.33 ms/call cost between the core lockRect
+  // body and the 32-bit wow64 pointer-shadow block below (GT2 is a 32-bit
+  // lane, so the shadow path is live there).
+  const auto lockRectCoreStart = std::chrono::steady_clock::now();
   auto lock = s->obj->lockRect(rect, lockFlagsToCore(flags));
+  const auto lockRectCoreNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - lockRectCoreStart).count());
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
@@ -1345,7 +1379,19 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
                   static_cast<void*>(s), lock.pitch, lock.data);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  std::uint64_t lockRectShadowNs = 0;
+  std::uint64_t lockRectBytes = 0;
+  {
+    const auto& desc = s->obj->desc();
+    const uint32_t reportedHeight = static_cast<uint32_t>(std::max<int32_t>(
+        0, (r ? std::clamp(r->bottom, 0, static_cast<int32_t>(desc.height))
+              : static_cast<int32_t>(desc.height)) -
+               (r ? std::clamp(r->top, 0, static_cast<int32_t>(desc.height)) : 0)));
+    lockRectBytes = static_cast<std::uint64_t>(std::abs(out->pitch)) *
+                    static_cast<std::uint64_t>(reportedHeight);
+  }
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
+    const auto shadowStart = std::chrono::steady_clock::now();
     const auto& desc = s->obj->desc();
     const uint32_t nativePitch = static_cast<uint32_t>(std::abs(out->pitch));
     const uint32_t rectHeight = static_cast<uint32_t>(std::max<int32_t>(
@@ -1392,7 +1438,12 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
                     static_cast<void*>(s), lock.data, out->bits, nativePitch,
                     rowBytes, rows, bytes);
     }
+    lockRectShadowNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - shadowStart).count());
   }
+  dxmt9::perf::countD3D9SurfaceLockRect(lockRectCoreNs, lockRectShadowNs, lockRectBytes,
+                                        (flags & kD3DLockDiscard) != 0);
   if (s->ownerTex) {
     s->ownerTex->lockedLevels.insert(s->ownerLevel);
   } else {
