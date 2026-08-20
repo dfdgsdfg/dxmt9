@@ -303,12 +303,22 @@ unaffected.
 **Open classification items** (from the 2026-08-21 inventory; each is a
 review obligation, not a resolved fact):
 
-- **G2** — the device-state getters carry the full global drain although the
-  D3D9 contract alone would make them `app-return-value`; whether the drain
-  is required (unix `DeviceState` reads must observe replay) or uniform macro
-  application is THE first `record-only`-direction review target
-  (R-BACK-43.2), sized by the `get_swap_chain` precedent (0.64 ms/present for
-  one drained getter before its cache).
+- **G2 — RESOLVED (2026-08-21 source audit): no migration.** Of the 14
+  drained device-state getters, **nine are dead on the steady-state path** —
+  the public D3D9 `Get*` answers entirely from the PE shadow and never
+  crosses (viewport, scissor, material, clip_plane, fvf, vs/ps consts,
+  max-frame-latency, plus RT/DS in their cached common case; material and
+  clip_plane additionally have no-op unix stubs). **Five have a genuine
+  shadow-miss fallback crossing** (render_state, TSS, sampler_state,
+  transform, and RT/DS's uncached branches — DS's `!dsSurfaceExplicit_`
+  being the likeliest live one), and there the read target is
+  replay-mutated state, so the drain is **load-bearing when reached**.
+  Measured GT2 cost of all 14 combined: zero (absent from the opcode table
+  and the drain-site breakdown). Verdict: classification stands as written
+  (`app-return-value` by contract, executed as `ordering-fence`); drain
+  removal is neither safe on the live fallbacks nor worth anything on the
+  dead paths. The get_swap_chain precedent was different in kind: that
+  getter crossed every call.
 - **G3** — shader/vdecl creation's terminal-check-only asymmetry vs every
   other create's full drain: by-design (non-GPU-resident inputs) or gap.
 - **G4** — device addref/release drain with ignored result: paying an
