@@ -709,6 +709,25 @@ producer_mark_reclaim_spec = executable(
 test('dxmt9-producer-mark-reclaim-spec', producer_mark_reclaim_spec,
      env: dxmt9_native_test_env)
 
+# Layer 3 of the semantic-isomorphism plan (design brief §5): the deterministic
+# interleaving harness that discharges the C++ memory-order obligation the
+# model cannot see. Real threads driving the REAL `CommandQueue` (arena-lease
+# fixture), the REAL `nextSeqId_` atomic + `mutex_`, and the REAL `Pool` /
+# `HandleArena` mark and reclaim paths. `meson.project_source_root()` is passed
+# as argv[1] for the production memory-order source contract.
+producer_interleaving_spec = executable(
+  'dxmt9-producer-interleaving-spec',
+  'producer_interleaving_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-producer-interleaving-spec', producer_interleaving_spec,
+     args: [meson.project_source_root()],
+     env: dxmt9_native_test_env,
+     timeout: 300)
+
 # R-BACK-2.54 / R-BACK-2.56 command-chunk canonical replay/lifetime scaffolds.
 foreach spec : [
   ['chunk-record-replay', 'chunk_record_replay_spec.cpp'],
