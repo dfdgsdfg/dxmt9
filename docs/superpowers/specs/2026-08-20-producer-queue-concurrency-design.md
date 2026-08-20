@@ -187,3 +187,29 @@ measured acquire-wait (mark 0.60 + map 0.42 common path), bounded below by
 whatever the slow-path map waits keep. Each step is independently
 measurable (≥2× the layout-noise floor for T2a+T2b combined; T2c alone is
 borderline and should be bundled).
+
+## 9. Segment-hold findings (2026-08-20, leaf .29) and the concretized plan
+
+The instrumented holder ledger: worker slot-append copy 3.42 ms/present
+(560 batches, max 9.9 ms), worker marking 0.93, slot publish 0.83,
+encode submit 0.43, map finalize 0.28, producer mark body 0.16 — a ~17%
+mutex duty cycle. The writing slot is not worker-exclusive (the producer's
+map-wait force-publish reaches it), so unlocked appending is unsafe without
+a protocol. Final implementation order:
+
+1. **T2a' — marking to the arena-stamp exception, both actors** (worker
+   0.93 + producer 0.16 + the producer's mark acquire disappears): extend
+   `ProducerMarkReclaim.tla` with a symmetric `WorkerStampMark` action
+   (same pin-ordering premise — the worker holds its chunk's retained refs
+   until post-replay release), then move both mark paths off the queue
+   mutex. Ticket (`seqIdForMark`) still taken under the queue lock or from
+   an atomic `nextSeqId`.
+2. **T2d — reserve-copy-commit slot append**: bump-allocate + ticket under
+   the lock, copy outside, brief re-acquire to advance the slot's committed
+   watermark; publishers ship only the committed prefix. Requires a bounded
+   model of append/publish/force-publish interleaving (QueueLifecycle family
+   extension) with a Buggy cfg showing the half-appended-slot escape when
+   the watermark rule is removed.
+3. Re-profile with the same segment instrumentation (duty-cycle target
+   ~2-3%), then the wild fps pair.
+

@@ -39,6 +39,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.26 - Post-Harvest Triage: Drain Is Solved, Mark Owns Commit, Locks Are Unix-Side Work](state-churn-encode-append-decomposition.26.md)
 - [state-churn-encode-append-decomposition.27 - DOD Batch + Recorder-Mutex Gating: Correctness Kept, FPS Claim Retracted Into Layout Noise](state-churn-encode-append-decomposition.27.md)
 - [state-churn-encode-append-decomposition.28 - Mark Decomposition: 61% Is Queue-Mutex Wait, And It Is Not Frequency Contention](state-churn-encode-append-decomposition.28.md)
+- [state-churn-encode-append-decomposition.29 - Segment Holds Unmask The Owner: The Worker's Slot Append Copy Holds 3.4 ms/present](state-churn-encode-append-decomposition.29.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
