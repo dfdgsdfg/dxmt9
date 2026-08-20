@@ -41,11 +41,19 @@ extern "C" int32_t dxmt9c_device_present(D9CDevice* d, const D9CRect* src, const
   dxmt9DebugLog("device_present begin destWindow=%llu flags=0x%x src=%d dst=%d",
                 static_cast<unsigned long long>(destWindow), flags, src ? 1 : 0, dst ? 1 : 0);
   using Rect = dxmt9::core::Rect;
-  Rect* srcRect = src ? new Rect{src->left, src->top, src->right, src->bottom} : nullptr;
-  Rect* dstRect = dst ? new Rect{dst->left, dst->top, dst->right, dst->bottom} : nullptr;
+  Rect srcStorage{};
+  Rect dstStorage{};
+  const Rect* srcRect = nullptr;
+  const Rect* dstRect = nullptr;
+  if (src) {
+    srcStorage = Rect{src->left, src->top, src->right, src->bottom};
+    srcRect = &srcStorage;
+  }
+  if (dst) {
+    dstStorage = Rect{dst->left, dst->top, dst->right, dst->bottom};
+    dstRect = &dstStorage;
+  }
   const auto hr = d->iface->PresentEx(srcRect, dstRect, {destWindow}, dirty, flags);
-  delete srcRect;
-  delete dstRect;
   dxmt9DebugLog("device_present hr=0x%08x", static_cast<unsigned>(hr));
   if (failed(hr)) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
@@ -386,10 +394,18 @@ extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, con
     dxmt9DebugLog("device_stretch_rect invalid filter=%u", filter);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  auto* srcRect =
-      sr ? new dxmt9::core::Rect{sr->left, sr->top, sr->right, sr->bottom} : nullptr;
-  auto* dstRect =
-      dr ? new dxmt9::core::Rect{dr->left, dr->top, dr->right, dr->bottom} : nullptr;
+  dxmt9::core::Rect srcStorage{};
+  dxmt9::core::Rect dstStorage{};
+  const dxmt9::core::Rect* srcRect = nullptr;
+  const dxmt9::core::Rect* dstRect = nullptr;
+  if (sr) {
+    srcStorage = dxmt9::core::Rect{sr->left, sr->top, sr->right, sr->bottom};
+    srcRect = &srcStorage;
+  }
+  if (dr) {
+    dstStorage = dxmt9::core::Rect{dr->left, dr->top, dr->right, dr->bottom};
+    dstRect = &dstStorage;
+  }
   const auto hr = d->iface->StretchRect(src->obj, srcRect, dst->obj, dstRect,
                                         filter == kD3DTexfLinear);
   if (failed(hr)) {
@@ -416,8 +432,6 @@ extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, con
         static_cast<unsigned>(dstDesc.pool), dstDesc.renderTarget ? 1u : 0u,
         dstDesc.depthStencil ? 1u : 0u, dstDesc.width, dstDesc.height, filter);
   }
-  delete srcRect;
-  delete dstRect;
   return hr;
 }
 
@@ -426,16 +440,19 @@ extern "C" int32_t dxmt9c_device_color_fill(D9CDevice* d, D9CSurface* surf, cons
   if (!surf) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
+  dxmt9::core::Rect rectStorage{};
+  const dxmt9::core::Rect* rect = nullptr;
+  if (r) {
+    rectStorage = dxmt9::core::Rect{r->left, r->top, r->right, r->bottom};
+    rect = &rectStorage;
+  }
   dxmt9::core::ColorRGBA rgba{
       ((colorARGB >> 16) & 0xff) / 255.0f,
       ((colorARGB >> 8) & 0xff) / 255.0f,
       (colorARGB & 0xff) / 255.0f,
       ((colorARGB >> 24) & 0xff) / 255.0f,
   };
-  const auto hr = d->iface->FillSurface(surf->obj, rect, rgba);
-  delete rect;
-  return hr;
+  return d->iface->FillSurface(surf->obj, rect, rgba);
 }
 
 extern "C" int32_t dxmt9c_device_get_render_target_data(D9CDevice* d, D9CSurface* rt,
