@@ -1551,6 +1551,10 @@ struct Counters {
   std::atomic<std::uint64_t> heapAllocFailureCount{0};
   std::atomic<std::uint64_t> useHeapCalls{0};
   std::atomic<std::uint64_t> useResourceCalls{0};
+  // Wow64 shadow-lock low-4GB block pool (see device_c_low4gb_pool.hpp).
+  std::atomic<std::uint64_t> surfaceLockShadowPoolHits{0};
+  std::atomic<std::uint64_t> surfaceLockShadowPoolMisses{0};
+  std::atomic<std::uint64_t> surfaceLockShadowPoolEvictions{0};
   // R-BACK-13.* — Tile-Shader FFP fast-path counters (Apple Silicon only).
   std::atomic<std::uint64_t> tileFfpPassCount{0};
   std::atomic<std::uint64_t> portableFfpPassCount{0};

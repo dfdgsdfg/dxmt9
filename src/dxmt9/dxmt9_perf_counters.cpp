@@ -5336,6 +5336,10 @@ void countHeapAllocFailure() { add(counters().heapAllocFailureCount); }
 void countUseHeap() { add(counters().useHeapCalls); }
 void countUseResource() { add(counters().useResourceCalls); }
 
+void countSurfaceLockShadowPoolHit() { add(counters().surfaceLockShadowPoolHits); }
+void countSurfaceLockShadowPoolMiss() { add(counters().surfaceLockShadowPoolMisses); }
+void countSurfaceLockShadowPoolEviction() { add(counters().surfaceLockShadowPoolEvictions); }
+
 // R-BACK-13.* — Tile-Shader FFP counters.
 void countTileFfpPass() { add(counters().tileFfpPassCount); }
 void countPortableFfpPass() { add(counters().portableFfpPassCount); }

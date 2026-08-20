@@ -968,7 +968,7 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     }
     if (!shadow.shadow || shadow.shadow.size < shadowBytes) {
       releaseShadowLock(shadow);
-      shadow.shadow = allocateLow4GB(shadowBytes);
+      shadow.shadow = acquireLow4GB(shadowBytes);
     }
     if (!shadow.shadow) {
       dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
@@ -1203,7 +1203,7 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
     if (!b->wow64Lock.shadow || b->wow64Lock.shadow.size < actualSize) {
       releaseShadowLock(b->wow64Lock);
       const auto allocStart = std::chrono::steady_clock::now();
-      b->wow64Lock.shadow = allocateLow4GB(actualSize);
+      b->wow64Lock.shadow = acquireLow4GB(actualSize);
       shadowAllocNs += static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - allocStart).count());
@@ -1422,7 +1422,7 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
       if (!shadow.shadow || shadow.shadow.size < bytes) {
         const auto allocStart = std::chrono::steady_clock::now();
         releaseShadowLock(shadow);
-        shadow.shadow = allocateLow4GB(bytes);
+        shadow.shadow = acquireLow4GB(bytes);
         dxmt9::perf::countSurfaceLockShadowAlloc(
             static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(

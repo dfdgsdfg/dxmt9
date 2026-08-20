@@ -1,12 +1,16 @@
 #include "device_c_common.hpp"
 
+#include "device_c_low4gb_pool.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 #include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdint>
 #include <iterator>
+#include <mutex>
 
 #if defined(__APPLE__)
 #include <mach/kern_return.h>
@@ -20,6 +24,39 @@ namespace dxmt9::d3d9::devicec {
 namespace {
 
 thread_local uint32_t g_wow64ClientCallDepth = 0;
+
+// Scan-start hint for allocateLow4GB's NtAllocateVirtualMemory low-address
+// scan (see the loop in allocateLow4GB below). Persisted across calls so a
+// pool-overflow or oversized allocation does not re-pay the syscall-per-
+// failed-attempt scan from the fixed 0x10000000 base every time; the scan
+// picks up where the last successful allocation left off and wraps back to
+// the base if it runs off the top without success. Concurrency: multiple
+// threads can call allocateLow4GB (game thread locks, offload-worker-driven
+// releases that grow a shadow), so this is a plain atomic rather than the
+// pre-existing non-atomic `nextHint` local static used by the mach_vm
+// fallback loop further down — a torn read there only costs a slightly
+// worse starting guess, never correctness, but a fresh atomic is just as
+// cheap and avoids adding a second race.
+std::atomic<uintptr_t> g_ntAllocScanHint{0x10000000u};
+
+// Bounded pool of recycled low-4GB shadow-lock blocks (see
+// device_c_low4gb_pool.hpp for why this exists and its bucket/eviction
+// policy). Guarded by its own dedicated mutex — deliberately NOT
+// CommandQueue::mutex_ — because shadow alloc happens on the game thread
+// (D3D9 Lock calls) while shadow release can also be driven by the
+// commit-replay offload worker when it drops the last reference to a
+// D9CSurface/D9CTexture/D9CBuffer wrapper (releaseRetainedWrappers).
+// Contention is negligible: shadow lock/unlock is well under one call per
+// present.
+std::mutex& low4GBPoolMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+Low4GBBlockPool<Low4GBAllocation>& low4GBPool() {
+  static Low4GBBlockPool<Low4GBAllocation> pool;
+  return pool;
+}
 
 struct Wow64NativePointerRange {
   uintptr_t begin = 0;
@@ -117,14 +154,15 @@ Low4GBAllocation allocateLow4GB(size_t size) {
 
   if (auto ntAlloc = resolveNtAllocateVirtualMemory()) {
     const auto ntFree = resolveNtFreeVirtualMemory();
-    for (uintptr_t attempt = 0x10000000u; attempt + rounded < limit; attempt += step) {
+    constexpr uintptr_t kScanBase = 0x10000000u;
+    auto tryNtAt = [&](uintptr_t attempt) -> Low4GBAllocation {
       void* base = reinterpret_cast<void*>(attempt);
       size_t region = static_cast<size_t>(rounded);
       const int32_t status =
           ntAlloc(reinterpret_cast<void*>(static_cast<intptr_t>(-1)), &base, 0, &region,
                   0x3000u, 0x04u);
       if (status != 0) {
-        continue;
+        return {};
       }
       if (reinterpret_cast<uintptr_t>(base) <= 0xffffffffu) {
         return {base, region, true, false};
@@ -132,6 +170,34 @@ Low4GBAllocation allocateLow4GB(size_t size) {
       if (ntFree) {
         size_t freeSize = 0;
         ntFree(reinterpret_cast<void*>(static_cast<intptr_t>(-1)), &base, &freeSize, 0x8000u);
+      }
+      return {};
+    };
+
+    // Start from the last successful base instead of always re-scanning
+    // from kScanBase — a workload that churns many small allocations
+    // otherwise re-walks the same already-claimed low region on every
+    // pool-overflow/oversized allocation, paying a syscall per failed
+    // attempt for ground already covered. Ignore a stale/out-of-range hint.
+    uintptr_t hint = g_ntAllocScanHint.load(std::memory_order_relaxed);
+    if (hint < kScanBase || hint + rounded >= limit) {
+      hint = kScanBase;
+    }
+    for (uintptr_t attempt = hint; attempt + rounded < limit; attempt += step) {
+      if (auto alloc = tryNtAt(attempt)) {
+        g_ntAllocScanHint.store(attempt + step, std::memory_order_relaxed);
+        return alloc;
+      }
+    }
+    // Wrap: the hinted tail didn't have room; retry the skipped head
+    // (kScanBase..hint) before falling through to the mach_vm path.
+    if (hint != kScanBase) {
+      for (uintptr_t attempt = kScanBase; attempt < hint && attempt + rounded < limit;
+           attempt += step) {
+        if (auto alloc = tryNtAt(attempt)) {
+          g_ntAllocScanHint.store(attempt + step, std::memory_order_relaxed);
+          return alloc;
+        }
       }
     }
   }
@@ -201,8 +267,48 @@ void freeLow4GB(Low4GBAllocation alloc) {
 #endif
 }
 
+Low4GBAllocation acquireLow4GB(size_t size) {
+  using Pool = Low4GBBlockPool<Low4GBAllocation>;
+  const size_t bucketCapacity = Pool::bucketCapacityFor(size);
+  if (bucketCapacity != 0) {
+    {
+      std::lock_guard guard(low4GBPoolMutex());
+      if (auto block = low4GBPool().tryAcquire(size)) {
+        dxmt9::perf::countSurfaceLockShadowPoolHit();
+        return *block;
+      }
+    }
+    dxmt9::perf::countSurfaceLockShadowPoolMiss();
+    // Miss: allocate at the bucket's exact capacity (not the caller's
+    // smaller requested size) so the block it produces is poolable when
+    // it is later released — otherwise every miss would allocate an
+    // odd-sized block that can never be recycled.
+    return allocateLow4GB(bucketCapacity);
+  }
+  // Oversized (or zero) request: never touches the pool, in either
+  // direction. Pooling multi-megabyte blocks indefinitely would hoard a
+  // scarce sub-4GB address range for shadow locks that are already rare.
+  return allocateLow4GB(size);
+}
+
+void releaseLow4GB(Low4GBAllocation alloc) {
+  if (!alloc) {
+    return;
+  }
+  using Pool = Low4GBBlockPool<Low4GBAllocation>;
+  const size_t bucketCapacity = Pool::bucketCapacityFor(alloc.size);
+  if (bucketCapacity != 0 && alloc.size == bucketCapacity) {
+    std::lock_guard guard(low4GBPoolMutex());
+    if (low4GBPool().tryRelease(bucketCapacity, alloc)) {
+      return;
+    }
+    dxmt9::perf::countSurfaceLockShadowPoolEviction();
+  }
+  freeLow4GB(alloc);
+}
+
 void releaseShadowLock(ShadowLock& lock) {
-  freeLow4GB(lock.shadow);
+  releaseLow4GB(lock.shadow);
   lock = ShadowLock{};
 }
 

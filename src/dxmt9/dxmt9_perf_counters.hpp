@@ -1340,6 +1340,15 @@ void countHeapCompaction();
 void countHeapAllocFailure();
 void countUseHeap();
 void countUseResource();
+// Wow64 shadow-lock low-4GB block pool (device_c_low4gb_pool.hpp,
+// wired in device_c_marshal.cpp's acquireLow4GB/releaseLow4GB). A hit
+// avoids the OS low-address-scan allocation entirely; a miss falls
+// through to allocateLow4GB's slow path; an eviction is a release that
+// could not be pooled (non-poolable size, bucket full, or over the
+// pool's total-byte cap) and was freed directly instead.
+void countSurfaceLockShadowPoolHit();
+void countSurfaceLockShadowPoolMiss();
+void countSurfaceLockShadowPoolEviction();
 // R-BACK-13.* — Tile-Shader FFP counters.
 void countTileFfpPass();
 void countPortableFfpPass();

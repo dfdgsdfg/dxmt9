@@ -77,6 +77,16 @@ bool computeShaderBytecodeWordCount(const uint32_t* bytecode, size_t* outWords);
 bool pointerFits32Bit(const void* ptr);
 Low4GBAllocation allocateLow4GB(size_t size);
 void freeLow4GB(Low4GBAllocation alloc);
+// Pool-aware acquire/release for wow64 shadow-lock backing storage. `acquireLow4GB`
+// first probes the bounded low-4GB block pool (see device_c_low4gb_pool.hpp) and
+// only calls the slow-path `allocateLow4GB` scan on a pool miss or for
+// non-poolable (oversized) requests. `releaseLow4GB` offers a block back to the
+// pool instead of freeing it immediately when possible. Every shadow-lock caller
+// should use these instead of `allocateLow4GB`/`freeLow4GB` directly so freed
+// blocks are recycled across distinct D3D9 objects, not just within one
+// object's repeated locks (that narrower reuse is `ShadowLock` itself).
+Low4GBAllocation acquireLow4GB(size_t size);
+void releaseLow4GB(Low4GBAllocation alloc);
 void releaseShadowLock(ShadowLock& lock);
 bool requiresWow64PointerShadow();
 bool isWow64NativePointerAllowed(uint64_t value);

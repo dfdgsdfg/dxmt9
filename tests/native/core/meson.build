@@ -308,6 +308,24 @@ core_d3d9_recorder_lock_spec = executable(
 test('dxmt9-core-d3d9-recorder-lock-spec', core_d3d9_recorder_lock_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Pure bookkeeping pin on the wow64 low-4GB shadow-lock block pool
+# (src/d3d9/device_c_low4gb_pool.hpp): bucket sizing, hit/miss/eviction
+# accounting, and the per-bucket/total-byte caps. The real OS-backed
+# allocator (allocateLow4GB/freeLow4GB in device_c_marshal.cpp) needs
+# __APPLE__/Wine symbol resolution and is not host-testable, so only this
+# policy core is pinned here.
+device_c_low4gb_pool_spec = executable(
+  'dxmt9-device-c-low4gb-pool-spec',
+  'device_c_low4gb_pool_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-device-c-low4gb-pool-spec', device_c_low4gb_pool_spec)
+
 # Wine D3D9 behavioral oracle: shared-handle / user-memory argument
 # validation (test_shared_handle_policy / test_ex_shared_handle_policy).
 # Pure value-level pins on the PE-side validators in
