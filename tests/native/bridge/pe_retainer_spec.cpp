@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <iostream>
+#include <memory>
+#include <vector>
 
 struct RefCounter {
   std::uint32_t refs = 1;
@@ -205,6 +207,175 @@ int main() {
         !check(warm.size() == 0u, "clear empties the warm arena")) {
       return 1;
     }
+  }
+
+  // --- R-BACK-43.7 RetentionIndex consistency pins ---------------------
+  // retain()'s duplicate check moved from an O(n) std::find_if scan to a
+  // (kind, ptr) -> index accelerator that must stay in lockstep with
+  // entries_ across rollback, endEpoch compaction, and growth.
+
+  // retain-after-rollback: the index must not resolve a tombstoned/removed
+  // slot to a stale entries_ index, and a fresh retain of the same pointer
+  // must dedupe correctly afterward.
+  {
+    D3D9PePendingCommandRetainer idx;
+    D9CBuffer obj{};
+
+    auto acquire = idx.beginAcquire();
+    idx.retainBuffer(&obj, acquire);
+    if (!check(obj.refs == 2u,
+               "retain-after-rollback: initial retain addrefs once")) {
+      return 1;
+    }
+    idx.rollback(acquire);
+    if (!check(obj.refs == 1u,
+               "retain-after-rollback: rollback releases the pin") ||
+        !check(idx.size() == 0u,
+               "retain-after-rollback: rollback empties the arena")) {
+      return 1;
+    }
+    auto reacquire = idx.beginAcquire();
+    idx.retainBuffer(&obj, reacquire);
+    if (!check(obj.refs == 2u,
+               "retain-after-rollback: re-retain addrefs fresh") ||
+        !check(idx.size() == 1u,
+               "retain-after-rollback: re-retain occupies one slot")) {
+      return 1;
+    }
+    // A second retain in the same acquire must dedupe through the rebuilt
+    // index, not double-addref via a stale erased entry.
+    idx.retainBuffer(&obj, reacquire);
+    if (!check(obj.refs == 2u,
+               "retain-after-rollback: repeat retain dedupes through the "
+               "reused slot") ||
+        !check(idx.size() == 1u,
+               "retain-after-rollback: dedupe does not grow the arena")) {
+      return 1;
+    }
+    idx.clear();
+    if (!check(obj.refs == 1u, "retain-after-rollback: clear releases the pin")) {
+      return 1;
+    }
+  }
+
+  // endEpoch compaction rebuild: when a middle entry is evicted, every
+  // surviving entry's index shifts. The accelerator must be rebuilt so a
+  // dedupe after compaction resolves to the correct (shifted) entry and
+  // never falls back to a stale index into entries_.
+  {
+    D3D9PePendingCommandRetainer idx;
+    D9CBuffer keepFirst{};
+    D9CBuffer dropMiddle{};
+    D9CBuffer keepLast{};
+
+    auto a = idx.beginAcquire();
+    idx.retainBuffer(&keepFirst, a);
+    idx.retainBuffer(&dropMiddle, a);
+    idx.retainBuffer(&keepLast, a);
+    idx.endEpoch();  // closes the epoch all three were named in: all survive.
+
+    auto b = idx.beginAcquire();
+    idx.retainBuffer(&keepFirst, b);
+    idx.retainBuffer(&keepLast, b);
+    idx.endEpoch();  // dropMiddle idle 1 epoch: still inside kWarmEpochs.
+
+    auto c = idx.beginAcquire();
+    idx.retainBuffer(&keepFirst, c);
+    idx.retainBuffer(&keepLast, c);
+    idx.endEpoch();  // dropMiddle idle 2 epochs: evicted. keepLast's
+                      // position in entries_ shifts down by one.
+
+    if (!check(dropMiddle.refs == 1u,
+               "endEpoch compaction: the cold middle entry is evicted") ||
+        !check(keepFirst.refs == 2u && keepLast.refs == 2u,
+               "endEpoch compaction: the warm entries around it survive") ||
+        !check(idx.size() == 2u,
+               "endEpoch compaction: the arena shrinks to the survivors")) {
+      return 1;
+    }
+
+    // Dedupe against the shifted entry must hit the rebuilt index, not a
+    // stale position (which after compaction could alias dropMiddle's old
+    // slot or an out-of-range index).
+    auto d = idx.beginAcquire();
+    idx.retainBuffer(&keepLast, d);
+    if (!check(keepLast.refs == 2u,
+               "endEpoch compaction: dedupe after rebuild does not "
+               "re-addref the shifted entry") ||
+        !check(idx.size() == 2u,
+               "endEpoch compaction: dedupe after rebuild does not grow "
+               "the arena")) {
+      return 1;
+    }
+
+    // A brand-new object retained right after the rebuild must still index
+    // correctly (appended at the next free position, not colliding with a
+    // stale slot the rebuild left behind).
+    D9CBuffer freshAfterCompaction{};
+    idx.retainBuffer(&freshAfterCompaction, d);
+    if (!check(freshAfterCompaction.refs == 2u,
+               "endEpoch compaction: a fresh retain after rebuild addrefs "
+               "once") ||
+        !check(idx.size() == 3u,
+               "endEpoch compaction: a fresh retain after rebuild appends "
+               "one entry")) {
+      return 1;
+    }
+
+    idx.clear();
+    if (!check(keepFirst.refs == 1u && keepLast.refs == 1u &&
+                  freshAfterCompaction.refs == 1u,
+               "endEpoch compaction: clear releases every surviving pin")) {
+      return 1;
+    }
+  }
+
+  // Overflow/growth: the accelerator grows (never falls back to a scan) once
+  // the working set exceeds its initial capacity; dedupe must stay correct
+  // at scale, both for the initial retain pass and for a second pass that
+  // re-retains every object.
+  {
+    D3D9PePendingCommandRetainer idx;
+    constexpr int kCount = 200;
+    std::vector<std::unique_ptr<D9CBuffer>> buffers;
+    buffers.reserve(kCount);
+
+    auto acquire = idx.beginAcquire();
+    for (int i = 0; i < kCount; ++i) {
+      buffers.push_back(std::make_unique<D9CBuffer>());
+      idx.retainBuffer(buffers.back().get(), acquire);
+    }
+    bool allAddreffedOnce = true;
+    for (auto& b : buffers) {
+      allAddreffedOnce = allAddreffedOnce && (b->refs == 2u);
+    }
+    if (!check(allAddreffedOnce,
+               "index growth: every distinct buffer is addref'd exactly "
+               "once") ||
+        !check(idx.size() == static_cast<std::size_t>(kCount),
+               "index growth: the arena holds every distinct entry")) {
+      return 1;
+    }
+
+    // Re-retaining the whole set must dedupe every one of them through the
+    // grown table, not just the entries present before the last grow.
+    for (auto& b : buffers) {
+      idx.retainBuffer(b.get(), acquire);
+    }
+    allAddreffedOnce = true;
+    for (auto& b : buffers) {
+      allAddreffedOnce = allAddreffedOnce && (b->refs == 2u);
+    }
+    if (!check(allAddreffedOnce,
+               "index growth: re-retaining after growth still dedupes "
+               "every entry") ||
+        !check(idx.size() == static_cast<std::size_t>(kCount),
+               "index growth: re-retaining after growth does not grow the "
+               "arena")) {
+      return 1;
+    }
+
+    idx.clear();
   }
 
   return 0;

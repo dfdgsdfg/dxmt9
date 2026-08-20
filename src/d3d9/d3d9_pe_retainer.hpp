@@ -138,7 +138,12 @@ public:
 
     void rollback(const Acquired& acquired) {
         while (entries_.size() > acquired.checkpoint) {
-            release(entries_.back());
+            const Entry& entry = entries_.back();
+            // Only the tail is ever popped here, so surviving entries below
+            // the checkpoint keep their indices — erase just the popped key
+            // instead of rebuilding the whole table.
+            index_.erase(entry.kind, entry.ptr);
+            release(entry);
             entries_.pop_back();
         }
     }
@@ -163,6 +168,13 @@ public:
         }
         entries_.resize(write);
         ++epoch_;
+        // The compaction above can move any surviving entry to a new index,
+        // so the accelerator must be rebuilt in full. `write <= entries_`'s
+        // pre-compaction size (no entries were added), so this never needs a
+        // slot array larger than what already exists — see RetentionIndex's
+        // comment for why that keeps this call allocation-free and endEpoch()
+        // genuinely noexcept.
+        index_.rebuildFrom(entries_);
     }
 
     void clear() {
@@ -170,6 +182,7 @@ public:
             release(*it);
         }
         entries_.clear();
+        index_.clear();
     }
 
 private:
@@ -179,25 +192,169 @@ private:
         std::uint64_t lastTouchedEpoch = 0;
     };
 
+    // R-BACK-43.7: `retain()`'s duplicate check used to be a
+    // `std::find_if` scan over `entries_` (O(n) per call, O(n^2) per chunk
+    // once the warm set fills up — the exact shape this spec's process rule
+    // was written to catch). This table maps (kind, ptr) -> index into
+    // `entries_` so the check is O(1) amortized. `entries_` stays the sole
+    // storage of truth for retention/rollback/release; the index is a pure
+    // accelerator that is rebuilt (never left dangling) at every point that
+    // can move or drop entries:
+    //   - `rollback()` only ever pops from the tail, so it erases exactly
+    //     the popped keys (tombstones them) without touching the rest.
+    //   - `endEpoch()` compacts `entries_` in place, which can change every
+    //     surviving entry's index, so it does one full `rebuildFrom()` —
+    //     itself O(n), no worse than the compaction loop it follows, and by
+    //     construction never grows past the pre-compaction capacity because
+    //     `write <= entries_.size()` (no entries are added), so the rebuild
+    //     never reallocates and `endEpoch()` stays genuinely `noexcept`.
+    //   - `clear()` drops everything, so the index is cleared too.
+    // Deletion uses tombstones rather than backward-shift because the only
+    // deletion path (`rollback()`) is a record-build-failure path, not the
+    // steady-state hot path (every `rollbackRecord()` caller in
+    // `d3d9_pe_chunk_draw.cpp` / `d3d9_pe_chunk_nondraw.cpp` is a validation
+    // failure branch) — tombstone accumulation between rollbacks is bounded
+    // by the (rare) failure rate, and `endEpoch()`'s full rebuild reclaims
+    // them on every chunk boundary regardless.
+    struct RetentionIndex {
+        enum class SlotState : std::uint8_t { Empty, Occupied, Tombstone };
+        struct Slot {
+            SlotState state = SlotState::Empty;
+            std::uint32_t kind = 0;
+            void* ptr = nullptr;
+            std::size_t index = 0;
+        };
+
+        std::vector<Slot> slots;
+        std::size_t occupied = 0;  // Occupied only.
+        std::size_t used = 0;      // Occupied + Tombstone (load-factor input).
+
+        static std::size_t hashOf(std::uint32_t kind, void* ptr) noexcept {
+            std::uint64_t h =
+                static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(ptr)) *
+                0x9E3779B97F4A7C15ull;
+            h ^= static_cast<std::uint64_t>(kind) + 0x517CC1B727220A95ull;
+            h ^= h >> 33;
+            return static_cast<std::size_t>(h);
+        }
+
+        void insertRaw(std::uint32_t kind, void* ptr, std::size_t index) noexcept {
+            const auto mask = slots.size() - 1u;
+            auto idx = hashOf(kind, ptr) & mask;
+            for (;;) {
+                Slot& s = slots[idx];
+                if (s.state != SlotState::Occupied) {
+                    s = Slot{SlotState::Occupied, kind, ptr, index};
+                    ++occupied;
+                    ++used;
+                    return;
+                }
+                idx = (idx + 1u) & mask;
+            }
+        }
+
+        const std::size_t* find(std::uint32_t kind, void* ptr) const noexcept {
+            if (slots.empty()) {
+                return nullptr;
+            }
+            const auto mask = slots.size() - 1u;
+            auto idx = hashOf(kind, ptr) & mask;
+            for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+                const Slot& s = slots[idx];
+                if (s.state == SlotState::Empty) {
+                    return nullptr;
+                }
+                if (s.state == SlotState::Occupied && s.kind == kind &&
+                    s.ptr == ptr) {
+                    return &s.index;
+                }
+                idx = (idx + 1u) & mask;
+            }
+            return nullptr;
+        }
+
+        void erase(std::uint32_t kind, void* ptr) noexcept {
+            if (slots.empty()) {
+                return;
+            }
+            const auto mask = slots.size() - 1u;
+            auto idx = hashOf(kind, ptr) & mask;
+            for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+                Slot& s = slots[idx];
+                if (s.state == SlotState::Empty) {
+                    return;
+                }
+                if (s.state == SlotState::Occupied && s.kind == kind &&
+                    s.ptr == ptr) {
+                    s.state = SlotState::Tombstone;
+                    --occupied;
+                    return;
+                }
+                idx = (idx + 1u) & mask;
+            }
+        }
+
+        // Rebuilds the table from scratch against the authoritative
+        // `entries` array, indexed by position. Grows (never shrinks) the
+        // slot array only when `entries.size()` needs more room than the
+        // current capacity provides; a same-size rebuild reuses the
+        // existing allocation (`std::fill`, not `assign`), so callers whose
+        // `entries` never grows (endEpoch's post-compaction call) never
+        // reallocate.
+        void rebuildFrom(const std::vector<Entry>& entries) {
+            std::size_t capacity = slots.empty() ? 64u : slots.size();
+            const std::size_t target =
+                std::max<std::size_t>(entries.size() * 2u, 64u);
+            while (capacity < target) {
+                capacity <<= 1u;
+            }
+            if (capacity != slots.size()) {
+                slots.assign(capacity, Slot{});
+            } else {
+                std::fill(slots.begin(), slots.end(), Slot{});
+            }
+            occupied = 0u;
+            used = 0u;
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                insertRaw(entries[i].kind, entries[i].ptr, i);
+            }
+        }
+
+        void clear() noexcept {
+            slots.clear();
+            occupied = 0u;
+            used = 0u;
+        }
+    };
+
     template<typename T, typename AddRefFn>
     void retain(std::uint32_t kind, T* ptr, AddRefFn&& addRef) {
         if (!ptr) {
             return;
         }
-        const auto duplicate = std::find_if(
-            entries_.begin(), entries_.end(),
-            [kind, ptr](const Entry& entry) {
-                return entry.kind == kind && entry.ptr == ptr;
-            });
-        if (duplicate != entries_.end()) {
+        if (const std::size_t* found = index_.find(kind, ptr)) {
             // Already pinned — by this chunk or by a recent one. Refresh the
             // warmth stamp and cross nothing.
-            duplicate->lastTouchedEpoch = epoch_;
+            entries_[*found].lastTouchedEpoch = epoch_;
             return;
         }
         entries_.push_back(Entry{kind, ptr, epoch_});
-        // Publish the entry before taking ownership so a vector-growth
-        // failure cannot leak an AddRef that rollback/clear cannot see.
+        try {
+            if (index_.slots.empty() ||
+                index_.used * 4u >= index_.slots.size() * 3u) {
+                index_.rebuildFrom(entries_);
+            } else {
+                index_.insertRaw(kind, ptr, entries_.size() - 1u);
+            }
+        } catch (...) {
+            // Keep entries_/index_ mutually consistent: an entry that is not
+            // indexed must not exist, the same invariant the original
+            // publish-before-addRef ordering protected.
+            entries_.pop_back();
+            throw;
+        }
+        // Publish the entry (and its index) before taking ownership so a
+        // failure above cannot leak an AddRef that rollback/clear cannot see.
         addRef(ptr);
     }
 
@@ -227,5 +384,6 @@ private:
     }
 
     std::vector<Entry> entries_{};
+    RetentionIndex index_{};
     std::uint64_t epoch_ = 0;
 };

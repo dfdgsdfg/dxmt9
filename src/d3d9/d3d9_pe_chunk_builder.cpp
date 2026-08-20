@@ -76,6 +76,7 @@ CommandChunkBuilder::CommandChunkBuilder(
   handleObjects_.reserve(capacities.handles);
   payload_.reserve(capacities.payloadBytes);
   sealedBlob_.reserve(capacities.sealedBytes);
+  handlePresence_.init(capacities.handles);
 }
 
 bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
@@ -188,6 +189,13 @@ bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
       handles_.pop_back();
       throw;
     }
+    // Count this pointer's chunk-lifetime multiplicity so referencesObject()
+    // can answer in O(1); handlePresence_'s findOrInsert() never throws, and
+    // rollbackRecord() below undoes exactly this increment if a later step
+    // in this same append fails.
+    if (auto* slot = handlePresence_.findOrInsert(object.object)) {
+      ++slot->count;
+    }
     retainer_.retainWireObject(object.identity.kind, object.object,
                                active_.retainedCheckpoint);
   } catch (...) {
@@ -235,6 +243,22 @@ void CommandChunkBuilder::rollbackRecord() noexcept {
     return;
   }
   retainer_.rollback(active_.retainedCheckpoint);
+  // Undo this record's handlePresence_ increments before handleObjects_ is
+  // truncated below — the range [handleCheckpoint, handleObjects_.size())
+  // is exactly what this failed record added. Skipped once the table has
+  // overflowed: referencesObject() has already committed to the linear
+  // fallback for the rest of this chunk's lifetime, so the counts no longer
+  // matter.
+  if (!handlePresence_.overflowed) {
+    for (std::size_t i = active_.handleCheckpoint; i < handleObjects_.size();
+         ++i) {
+      if (auto* slot = handlePresence_.find(handleObjects_[i])) {
+        if (slot->count > 0u) {
+          --slot->count;
+        }
+      }
+    }
+  }
   records_.resize(active_.recordCheckpoint);
   handles_.resize(active_.handleCheckpoint);
   handleObjects_.resize(active_.handleCheckpoint);
@@ -350,6 +374,9 @@ void CommandChunkBuilder::reset() noexcept {
   records_.clear();
   handles_.clear();
   handleObjects_.clear();
+  // handlePresence_ tracks exactly handleObjects_'s chunk-lifetime contents,
+  // so it is cleared in lockstep every time handleObjects_ is.
+  handlePresence_.clear();
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
@@ -365,15 +392,24 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   records_.clear();
   handles_.clear();
   handleObjects_.clear();
+  handlePresence_.clear();
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
 }
 
 bool CommandChunkBuilder::referencesObject(void* object) const noexcept {
-  return object &&
-         std::find(handleObjects_.begin(), handleObjects_.end(), object) !=
-             handleObjects_.end();
+  if (!object) {
+    return false;
+  }
+  if (!handlePresence_.overflowed) {
+    const auto* slot = handlePresence_.find(object);
+    return slot != nullptr && slot->count > 0u;
+  }
+  // Overflow fallback: handleObjects_ is always kept complete, so the
+  // original linear scan is still correct, just the pre-overflow O(n).
+  return std::find(handleObjects_.begin(), handleObjects_.end(), object) !=
+         handleObjects_.end();
 }
 
 }  // namespace dxmt9::d3d9::pe

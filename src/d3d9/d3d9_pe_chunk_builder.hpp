@@ -3,6 +3,7 @@
 #include "d3d9_pe_retainer.hpp"
 #include "device_c_chunk_schema.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -148,6 +149,131 @@ class CommandChunkBuilder {
     D3D9PePendingCommandRetainer::Acquired retainedCheckpoint{};
   };
 
+  // R-BACK-43.7: `referencesObject()` used to be a `std::find` over the
+  // whole builder-lifetime `handleObjects_` array, called per qualifying
+  // buffer Lock — the full-arena O(n) shape this spec's process rule was
+  // written to catch. This is a chunk-lifetime pointer -> multiplicity
+  // accelerator: `handleObjects_` stays the source of truth (an object can
+  // be named by more than one handle across different records in the same
+  // chunk, so the table stores a count, not a presence bit). On overflow it
+  // stops answering and the caller falls back to the original linear scan,
+  // which stays correct because every pushed handle object is still
+  // appended to `handleObjects_` regardless of table state. `reset()` /
+  // `resetAndReleaseRetained()` clear it in full (handleObjects_ is
+  // cleared too); `rollbackRecord()` decrements counts for exactly the
+  // range of handles a failed record added, using the same handleCheckpoint
+  // bound the surrounding rollback already computes.
+  //
+  // This does NOT replace `appendHandle`'s own record-local dedup scan
+  // (finding a handle already appended by the *current* record): that scan
+  // is bounded by one record's handle count (tens, per R-BACK-43.7's own
+  // review), and this table answers a different question — "does this
+  // pointer appear anywhere in the chunk" — that would need to carry
+  // per-record membership to serve the narrower query, which the dedup
+  // scan does not need.
+  struct HandlePresenceTable {
+    struct Slot {
+      void* key = nullptr;
+      std::uint32_t count = 0u;
+    };
+
+    std::vector<Slot> slots;
+    std::size_t occupied = 0u;
+    bool overflowed = false;
+
+    void init(std::size_t handleCapacityHint) noexcept {
+      std::size_t capacity = 64u;
+      const std::size_t target =
+          std::max<std::size_t>(handleCapacityHint * 2u, 64u);
+      while (capacity < target) {
+        capacity <<= 1u;
+      }
+      slots.assign(capacity, Slot{});
+      occupied = 0u;
+      overflowed = false;
+    }
+
+    // Finds `key`'s slot, inserting a fresh zero-count slot if absent.
+    // Returns nullptr (and sets `overflowed`) once the table has no more
+    // room; callers must fall back to a linear scan for the rest of the
+    // chunk's lifetime once that happens.
+    Slot* findOrInsert(void* key) noexcept {
+      if (overflowed || slots.empty()) {
+        return nullptr;
+      }
+      const auto mask = slots.size() - 1u;
+      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+        Slot& s = slots[idx];
+        if (s.key == key) {
+          return &s;
+        }
+        if (s.key == nullptr) {
+          if (occupied * 4u >= slots.size() * 3u) {
+            overflowed = true;
+            return nullptr;
+          }
+          s.key = key;
+          s.count = 0u;
+          ++occupied;
+          return &s;
+        }
+        idx = (idx + 1u) & mask;
+      }
+      overflowed = true;
+      return nullptr;
+    }
+
+    // Mutable lookup: never inserts, never sets `overflowed`, but returns a
+    // writable slot so a caller that already knows `key` is present (such as
+    // rollbackRecord() undoing its own earlier increment) can adjust its
+    // count without a second, insert-capable probe.
+    Slot* find(void* key) noexcept {
+      if (overflowed || slots.empty()) {
+        return nullptr;
+      }
+      const auto mask = slots.size() - 1u;
+      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+        Slot& s = slots[idx];
+        if (s.key == key) {
+          return &s;
+        }
+        if (s.key == nullptr) {
+          return nullptr;
+        }
+        idx = (idx + 1u) & mask;
+      }
+      return nullptr;
+    }
+
+    // Non-mutating lookup for const query contexts (referencesObject()).
+    const Slot* find(void* key) const noexcept {
+      if (overflowed || slots.empty()) {
+        return nullptr;
+      }
+      const auto mask = slots.size() - 1u;
+      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+        const Slot& s = slots[idx];
+        if (s.key == key) {
+          return &s;
+        }
+        if (s.key == nullptr) {
+          return nullptr;
+        }
+        idx = (idx + 1u) & mask;
+      }
+      return nullptr;
+    }
+
+    void clear() noexcept {
+      std::fill(slots.begin(), slots.end(), Slot{});
+      occupied = 0u;
+      overflowed = false;
+    }
+  };
+
   bool failActiveRecord() noexcept;
 
   std::vector<D9CCommandChunkWireRecordHeader> records_;
@@ -156,6 +282,7 @@ class CommandChunkBuilder {
   std::vector<std::byte> payload_;
   std::vector<std::byte> sealedBlob_;
   D3D9PePendingCommandRetainer retainer_;
+  HandlePresenceTable handlePresence_;
   ActiveRecord active_{};
   bool sealed_ = false;
 };

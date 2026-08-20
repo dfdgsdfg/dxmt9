@@ -9,9 +9,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct RefCounter {
   std::uint32_t refs = 1u;
@@ -689,6 +691,109 @@ void testConstShadowFeedsConstantSections() {
         "staged constant range appends through the direct canonical producer");
 }
 
+// R-BACK-43.7 index-consistency pins for CommandChunkBuilder::
+// referencesObject()'s O(1) accelerator (HandlePresenceTable): rollback must
+// undo exactly what the failed record added, and once the fixed-capacity
+// table overflows, every prior and later distinct object must still be
+// found through the linear-scan fallback rather than silently dropped.
+void testReferencesObjectRollbackAndOverflow() {
+  {
+    D9CTexture a;
+    D9CTexture b;
+    D9CTexture rollbackOnly;
+    PeWireObjectRef aRef = wireRef(&a, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x9001u);
+    PeWireObjectRef bRef = wireRef(&b, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x9002u);
+    PeWireObjectRef rollbackRef =
+        wireRef(&rollbackOnly, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x9003u);
+
+    CommandChunkBuilder builder;
+    check(!builder.referencesObject(&a) && !builder.referencesObject(&b),
+          "a fresh builder references nothing");
+
+    std::uint32_t index = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   index),
+          "first record appends a");
+    const D9CCommandChunkWireUpdateTexture fixedA{
+        .srcHandleIndex = index, .dstHandleIndex = index};
+    check(builder.appendPayloadValue(fixedA) && builder.commitRecord(),
+          "first record commits");
+    check(builder.referencesObject(&a) && !builder.referencesObject(&b),
+          "referencesObject sees the committed handle, not an unappended one");
+
+    // A record that fails after appending a NEW handle must roll that
+    // handle's presence back out.
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(rollbackRef,
+                                   D9C_CHUNK_HANDLE_KIND_TEXTURE, index),
+          "second record appends a handle before failing");
+    check(builder.referencesObject(&rollbackOnly),
+          "the not-yet-committed handle is visible mid-record");
+    builder.rollbackRecord();
+    check(!builder.referencesObject(&rollbackOnly),
+          "rollback removes presence for exactly the handle it undid");
+    check(builder.referencesObject(&a),
+          "rollback does not disturb an earlier record's presence");
+
+    // Re-referencing `a` from a second record, then rolling that record
+    // back, must not under-decrement `a`'s count below what the first
+    // (committed) record still holds.
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   index) &&
+              builder.appendHandle(bRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   index),
+          "third record re-references a and newly references b");
+    builder.rollbackRecord();
+    check(builder.referencesObject(&a) && !builder.referencesObject(&b),
+          "rollback drops the new reference (b) but a stays referenced by "
+          "the committed first record");
+
+    builder.resetAndReleaseRetained();
+    check(!builder.referencesObject(&a) && !builder.referencesObject(&b) &&
+              !builder.referencesObject(&rollbackOnly),
+          "resetAndReleaseRetained clears every chunk-lifetime presence");
+  }
+
+  {
+    CommandChunkBuilder builder;
+    // The presence table's slot array never shrinks below 64 regardless of
+    // CommandChunkBuilderCapacities' hint, so overflow triggers once
+    // occupied reaches 3/4 of 64 (48) on the 49th distinct insert; go well
+    // past that to also exercise the steady overflowed state.
+    constexpr std::size_t kDistinctObjects = 96u;
+    std::vector<std::unique_ptr<D9CTexture>> textures;
+    textures.reserve(kDistinctObjects);
+    for (std::size_t i = 0; i < kDistinctObjects; ++i) {
+      textures.push_back(std::make_unique<D9CTexture>());
+      const auto ref = wireRef(textures.back().get(),
+                               D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xA000u + i);
+      std::uint32_t index = 0u;
+      check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+                builder.appendHandle(ref, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                     index),
+            "overflow fixture appends a fresh distinct object");
+      const D9CCommandChunkWireUpdateTexture fixed{
+          .srcHandleIndex = index, .dstHandleIndex = index};
+      check(builder.appendPayloadValue(fixed) && builder.commitRecord(),
+            "overflow fixture record commits");
+    }
+    // Every appended object — before, at, and after the overflow point —
+    // must still be found: the linear-scan fallback must stay correct
+    // rather than silently losing coverage past the table's capacity.
+    for (std::size_t i = 0; i < kDistinctObjects; ++i) {
+      check(builder.referencesObject(textures[i].get()),
+            "post-overflow referencesObject still finds every appended "
+            "object");
+    }
+    D9CTexture neverAppended;
+    check(!builder.referencesObject(&neverAppended),
+          "post-overflow referencesObject still rejects an unappended "
+          "object");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -698,6 +803,7 @@ int main() {
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
     testConstShadowFeedsConstantSections();
+    testReferencesObjectRollbackAndOverflow();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

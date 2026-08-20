@@ -154,6 +154,159 @@ extern "C" int32_t dxmt9c_device_get_render_target_data(D9CDevice* d, D9CSurface
 
 namespace {
 
+// Open-addressed pointer-presence accelerator for the mark-phase ledger-
+// target dedup (state-churn-encode-append-decomposition.{26,28}: measured
+// 0.17 ms/present, `commit_chunk_phase_mark_dedup_cpu_ms`). It only ever
+// answers "have I already inserted this key", never owns the retained data —
+// `raw.ledgerTargets` stays the single source of truth. On overflow it stops
+// answering (rather than growing on the hot path) and the caller falls back
+// to the original O(n) linear scan over `raw.ledgerTargets`, which remains
+// correct because every accepted key was always pushed there too. Slots grow
+// monotonically call-to-call (never shrink), the same reserve-and-keep shape
+// as `D3D9PePendingCommandRetainer::entries_`.
+struct LedgerTargetPresence {
+  std::vector<dxmt9::d3d9::ReplayDrainTarget*> slots;
+  std::size_t occupied = 0;
+  bool overflowed = false;
+
+  void reset(std::size_t capacityHint) noexcept {
+    std::size_t capacity = slots.empty() ? 64u : slots.size();
+    const std::size_t target = std::max<std::size_t>(capacityHint * 2u, 64u);
+    while (capacity < target) {
+      capacity <<= 1u;
+    }
+    if (capacity != slots.size()) {
+      slots.assign(capacity, nullptr);
+    } else {
+      std::fill(slots.begin(), slots.end(), nullptr);
+    }
+    occupied = 0u;
+    overflowed = false;
+  }
+
+  bool contains(dxmt9::d3d9::ReplayDrainTarget* key) const noexcept {
+    if (slots.empty()) {
+      return false;
+    }
+    const auto mask = slots.size() - 1u;
+    auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+      if (slots[idx] == key) {
+        return true;
+      }
+      if (slots[idx] == nullptr) {
+        return false;
+      }
+      idx = (idx + 1u) & mask;
+    }
+    return false;
+  }
+
+  // Precondition: contains(key) == false. Returns false (and sets
+  // overflowed) if the table has no room for another entry.
+  bool insert(dxmt9::d3d9::ReplayDrainTarget* key) noexcept {
+    if (overflowed || slots.empty() || occupied * 4u >= slots.size() * 3u) {
+      overflowed = true;
+      return false;
+    }
+    const auto mask = slots.size() - 1u;
+    auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+      if (slots[idx] == nullptr) {
+        slots[idx] = key;
+        ++occupied;
+        return true;
+      }
+      idx = (idx + 1u) & mask;
+    }
+    overflowed = true;
+    return false;
+  }
+};
+
+// Same accelerator shape for the mark-phase core-resource-entry dedup, keyed
+// by (kind, handle) instead of a raw pointer. `scratch.coreEntries` remains
+// the source of truth for the same overflow-fallback reason as above.
+struct CoreEntryPresence {
+  struct Slot {
+    bool occupiedSlot = false;
+    dxmt9::core::ChunkHandleKind kind{};
+    std::uint64_t handleValue = 0;
+  };
+
+  std::vector<Slot> slots;
+  std::size_t occupied = 0;
+  bool overflowed = false;
+
+  static std::size_t hashOf(dxmt9::core::ChunkHandleKind kind,
+                            std::uint64_t handleValue) noexcept {
+    std::uint64_t h = handleValue * 0x9E3779B97F4A7C15ull;
+    h ^= static_cast<std::uint64_t>(kind) + 0x517CC1B727220A95ull;
+    h ^= h >> 33;
+    return static_cast<std::size_t>(h);
+  }
+
+  void reset(std::size_t capacityHint) noexcept {
+    std::size_t capacity = slots.empty() ? 64u : slots.size();
+    const std::size_t target = std::max<std::size_t>(capacityHint * 2u, 64u);
+    while (capacity < target) {
+      capacity <<= 1u;
+    }
+    if (capacity != slots.size()) {
+      slots.assign(capacity, Slot{});
+    } else {
+      std::fill(slots.begin(), slots.end(), Slot{});
+    }
+    occupied = 0u;
+    overflowed = false;
+  }
+
+  bool contains(dxmt9::core::ChunkHandleKind kind,
+               dxmt9::core::Handle handle) const noexcept {
+    if (slots.empty()) {
+      return false;
+    }
+    const auto mask = slots.size() - 1u;
+    auto idx = hashOf(kind, handle.value) & mask;
+    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+      const auto& s = slots[idx];
+      if (!s.occupiedSlot) {
+        return false;
+      }
+      if (s.kind == kind && s.handleValue == handle.value) {
+        return true;
+      }
+      idx = (idx + 1u) & mask;
+    }
+    return false;
+  }
+
+  // Precondition: contains(kind, handle) == false. Returns false (and sets
+  // overflowed) if the table has no room for another entry.
+  bool insert(dxmt9::core::ChunkHandleKind kind,
+             dxmt9::core::Handle handle) noexcept {
+    if (overflowed || slots.empty() || occupied * 4u >= slots.size() * 3u) {
+      overflowed = true;
+      return false;
+    }
+    const auto mask = slots.size() - 1u;
+    auto idx = hashOf(kind, handle.value) & mask;
+    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+      auto& s = slots[idx];
+      if (!s.occupiedSlot) {
+        s.occupiedSlot = true;
+        s.kind = kind;
+        s.handleValue = handle.value;
+        ++occupied;
+        return true;
+      }
+      idx = (idx + 1u) & mask;
+    }
+    overflowed = true;
+    return false;
+  }
+};
+
 struct ReplayScratchArena {
   std::vector<dxmt9::core::DrawRunSubmission> submissions;
   std::vector<dxmt9::core::DrawParam> runParams;
@@ -161,6 +314,8 @@ struct ReplayScratchArena {
   std::vector<dxmt9::core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
   std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
+  LedgerTargetPresence ledgerTargetPresence;
+  CoreEntryPresence coreEntryPresence;
   bool inUse = false;
 
   void clear() noexcept {
@@ -170,6 +325,12 @@ struct ReplayScratchArena {
     bindingSnapshots.clear();
     runPayloads.clear();
     coreEntries.clear();
+    // ledgerTargetPresence / coreEntryPresence are NOT cleared here: they are
+    // resized-and-refilled explicitly by
+    // persistResolvedResourcesAndCaptureBindings() via reset(capacityHint),
+    // which needs the current call's handle count to size them. Leaving
+    // stale slot contents around between calls is harmless because reset()
+    // always overwrites every slot before first use.
   }
 };
 
@@ -1160,12 +1321,15 @@ int32_t replayResolvedChunk(
 // Body of commit_chunk's mark phase (commit_chunk_phase_mark_cpu_ms), which
 // GT2 measures at 0.888 ms/present, 62% of the sync half, 56.5us/call. Split
 // into its three owners so a subsequent optimization knows which one to
-// target: the PE-side resolved-handle dedup loop (two O(n^2) scans — a
-// std::find over raw.ledgerTargets per buffer handle, a std::any_of over
-// scratch.coreEntries per handle), the single call into the core
-// upperDevice (which, on the default non-CpuReadyTape lane, subsumes
-// commit_chunk_phase_mark_lock_cpu_ms's queue-mutex acquire wait), and the
-// buffer-snapshot sort. All gated on the same
+// target: the PE-side resolved-handle dedup loop (originally two O(n^2)
+// scans — a std::find over raw.ledgerTargets per buffer handle, a
+// std::any_of over scratch.coreEntries per handle; both are now O(1)
+// amortized via LedgerTargetPresence/CoreEntryPresence, falling back to the
+// original linear scan only past a measured capacity —
+// state-churn-encode-append-decomposition.{26,28}, R-BACK-43.7), the single
+// call into the core upperDevice (which, on the default non-CpuReadyTape
+// lane, subsumes commit_chunk_phase_mark_lock_cpu_ms's queue-mutex acquire
+// wait), and the buffer-snapshot sort. All gated on the same
 // DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT env as the parent phase split.
 bool persistResolvedResourcesAndCaptureBindings(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
@@ -1174,6 +1338,11 @@ bool persistResolvedResourcesAndCaptureBindings(
   CommitChunkPhaseTimer dedupPhase(phaseSplit);
   auto& scratch = replayScratchArena();
   ScopedReplayScratchUse scratchUse(scratch);
+  // Size both presence accelerators off this call's handle count before the
+  // loop below; reset() only reallocates when growing past a previous call's
+  // capacity, so steady-state chunks pay a fill, not an allocation.
+  scratch.ledgerTargetPresence.reset(imported.handles.size());
+  scratch.coreEntryPresence.reset(imported.handles.size());
   std::uint64_t bufferHandleCount = 0u;
   for (std::size_t i = 0u; i < imported.handles.size(); ++i) {
     dxmt9::core::Handle handle{};
@@ -1193,11 +1362,22 @@ bool persistResolvedResourcesAndCaptureBindings(
       if (value && value->obj) {
         handle = value->obj->handle();
         ++bufferHandleCount;
-        const bool targetDuplicate = std::find(
-            raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
-            value->replayDrainTarget.get()) != raw.ledgerTargets.end();
+        auto* target = value->replayDrainTarget.get();
+        bool targetDuplicate;
+        if (!scratch.ledgerTargetPresence.overflowed) {
+          targetDuplicate = scratch.ledgerTargetPresence.contains(target);
+        } else {
+          // Overflow fallback: raw.ledgerTargets is always kept complete, so
+          // the linear scan is still correct, just the pre-overflow O(n).
+          targetDuplicate = std::find(
+              raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
+              target) != raw.ledgerTargets.end();
+        }
         if (!targetDuplicate) {
-          raw.ledgerTargets.push_back(value->replayDrainTarget.get());
+          raw.ledgerTargets.push_back(target);
+          if (!scratch.ledgerTargetPresence.overflowed) {
+            scratch.ledgerTargetPresence.insert(target);
+          }
         }
       }
       break;
@@ -1208,13 +1388,23 @@ bool persistResolvedResourcesAndCaptureBindings(
     if (handle.value == 0u) continue;
     const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(
         imported.handles[i].kind);
-    const bool duplicate = std::any_of(
-        scratch.coreEntries.begin(), scratch.coreEntries.end(),
-        [&](const dxmt9::core::ChunkHandleEntry& existing) {
-          return existing.kind == kind && existing.handle == handle;
-        });
+    bool duplicate;
+    if (!scratch.coreEntryPresence.overflowed) {
+      duplicate = scratch.coreEntryPresence.contains(kind, handle);
+    } else {
+      // Overflow fallback: scratch.coreEntries is always kept complete, so
+      // the linear scan is still correct, just the pre-overflow O(n).
+      duplicate = std::any_of(
+          scratch.coreEntries.begin(), scratch.coreEntries.end(),
+          [&](const dxmt9::core::ChunkHandleEntry& existing) {
+            return existing.kind == kind && existing.handle == handle;
+          });
+    }
     if (!duplicate) {
       scratch.coreEntries.push_back({.kind = kind, .handle = handle});
+      if (!scratch.coreEntryPresence.overflowed) {
+        scratch.coreEntryPresence.insert(kind, handle);
+      }
     }
   }
   raw.resourceEntries = scratch.coreEntries;
