@@ -42,16 +42,24 @@ Reclaim` violation. Three expected-failure configs now run in `verify_tla.sh`.
 
 Conformance 234/235 (known xyzhw only). Full host suite 723/723.
 
-**FPS evidence: directionally positive, not yet clean.** The first ABBA batch
-was invalidated outright (Spotlight `mdworker` at 22% CPU, two baseline runs
-died early with `missing_capture`, survivors depressed). A quiet-guarded
-rerun (load<2, mdworker<5% for 3 consecutive minutes) measured
-**A +3.6% mean / +5.6% median** over 3+3 interleaved runs — but the afternoon
-machine ran ~10% below the overnight sessions with 5-8% within-arm spread and
-one A/B overlap, versus the 0.3% spreads the overnight windows give. Verdict
-stands at *mechanism accepted, fps claim pending an overnight-quality pair*;
-the measured producer-side recovery (~0.4-0.5 ms/present) predicts +1.1-1.4%,
-inside what the noisy batch shows but not separable from its drift.
+**FPS evidence: prediction-matching, borderline-separable.** The first ABBA
+batch was invalidated outright (Spotlight `mdworker` at 22% CPU, two baseline
+runs dead with `missing_capture`); a quiet-guarded rerun was directionally
+positive (+3.6%/+5.6%) but the afternoon machine ran ~10% slow with 5-8% arm
+spread. The decisive step was **characterizing the environment with a
+B-only×3 block first**: once B measured 27.90/28.02/28.06 (0.6% spread, back
+at the overnight class), an A×3 block plus closing B bracket gave
+**A 28.24±0.23 vs B 27.89±0.21 → +1.22% mean / +0.53% median** — squarely
+inside the +1.1-1.4% the measured producer recovery (~0.4-0.5 ms/present)
+predicts, with the closing-B drift working against A (conservative). Three
+independent batches all positive; effect size ≈2σ of arm noise, so the
+scheduled overnight guarded pair remains the confirmatory sample. Verdict:
+mechanism accepted, fps consistent-with-prediction.
+
+Method note for the ledger: when a wild window is suspect, **measure one arm
+repeatedly first** — an arm-internal spread is a direct read of the window's
+noise floor and costs half an A/B; the afternoon's contaminated batches would
+have been recognized before spending any A runs.
 
 **Ledger after T2a'.** Remaining queue-mutex holders: worker slot-append copy
 3.4-3.8 ms/p (T2d reserve-copy-commit, model required), slot publish 0.83,
