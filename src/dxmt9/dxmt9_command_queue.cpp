@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9_archive_prewarm.hpp"
@@ -81,7 +82,12 @@ void recordCpuReadyTapeStats(const core::CpuReadyTape& tape) {
 // acquire-wait + hold accounting.
 namespace {
 
-constexpr std::size_t kQueueMutexSiteSlots = 64;
+// Raised 64 -> 96 alongside the SEGMENT-HOLD extension below: the acquire-side
+// sites already used ~30 of the original 64 slots, and per-segment tagging
+// (e.g. "run_finish_loop/dequeue", "run_finish_loop/retire",
+// "run_encode_loop/dequeue") adds several more distinct site strings without
+// removing any existing row.
+constexpr std::size_t kQueueMutexSiteSlots = 96;
 
 struct QueueMutexSiteTable {
   std::mutex tableMutex;
@@ -101,6 +107,15 @@ QueueMutexSiteTable& queueMutexSiteTable() {
   return table;
 }
 
+}  // namespace
+
+// queueMutexSplitEnabled() / noteQueueMutexSite() / queueMutexProbeNanos()
+// have external (dxmt9::) linkage -- not anonymous-namespace-local -- because
+// dxmt9_queue.cpp (QueueLifecycleController, a different translation unit)
+// also needs to record SEGMENT-HOLD samples at the interior unlock/relock and
+// cv-wait boundaries it owns. See dxmt9_queue_mutex_diag.hpp for the shared
+// declarations and the QueueMutexSegmentScope/noteQueueMutexSegmentIfEnabled
+// helpers built on top of these three primitives.
 bool queueMutexSplitEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PERF_QUEUE_MUTEX_SPLIT");
@@ -141,6 +156,13 @@ void noteQueueMutexSite(const char* site, std::uint64_t acquireWaitNs,
   t.overflowAcquireWaitNanos += acquireWaitNs;
 }
 
+std::uint64_t queueMutexProbeNanos(std::chrono::steady_clock::duration d) {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+}
+
+namespace {
+
 // Token produced immediately before a site's real std::lock_guard /
 // std::unique_lock construction (or, for a std::defer_lock site, before its
 // explicit lock() call). Deliberately a plain trivially-copyable struct, not
@@ -157,11 +179,6 @@ QueueMutexBeginToken queueMutexProbeBegin() {
     return {};
   }
   return {true, std::chrono::steady_clock::now()};
-}
-
-std::uint64_t queueMutexProbeNanos(std::chrono::steady_clock::duration d) {
-  return static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
 }
 
 // RAII probe placed immediately AFTER the site's real lock object has
@@ -3500,35 +3517,45 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
       DXMT_ASSERT(batch.front().stateMaterialized);
     }
+    // SEGMENT-HOLD: from here through the append below, `lock` is
+    // continuously held with no interior unlock/relock (the two helpers that
+    // may unlock -- ensureWritingSlotUnlocked and
+    // maybeCommitDrawPayloadArenaUnlocked -- already returned above, and
+    // maybeCommitDrawChunkUnlocked below has not been called yet). This is
+    // the per-batch resource-marking + append body the module comment above
+    // calls out as the priority segment (22.6 calls/present).
     {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
-      const std::uint64_t seqId = seqIdForMark(queue, 0);
-      if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-        pool.markDrawResources(batch.front().materializedState().hot, seqId);
-      }
-      for (auto& submission : batch) {
-        std::span<const core::DrawParamPayloadView> payloads{};
-        if (!submission.payload.userVertexData.empty() ||
-            !submission.payload.userIndexData.empty() ||
-            !submission.payload.bindingOverrideData.empty() ||
-            !submission.payload.bindingSnapshotData.empty()) {
-          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-        }
-        markDrawBindingSnapshotResources(pool, payloads, seqId);
+      QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
+      {
+        PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
+        const std::uint64_t seqId = seqIdForMark(queue, 0);
         if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-          markDrawBindingOverrideResources(pool, payloads, seqId);
+          pool.markDrawResources(batch.front().materializedState().hot, seqId);
+        }
+        for (auto& submission : batch) {
+          std::span<const core::DrawParamPayloadView> payloads{};
+          if (!submission.payload.userVertexData.empty() ||
+              !submission.payload.userIndexData.empty() ||
+              !submission.payload.bindingOverrideData.empty() ||
+              !submission.payload.bindingSnapshotData.empty()) {
+            payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+          }
+          markDrawBindingSnapshotResources(pool, payloads, seqId);
+          if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
+            markDrawBindingOverrideResources(pool, payloads, seqId);
+          }
         }
       }
-    }
-    DXMT_ASSERT(batch.front().stateMaterialized);
-    currentBackBuffer =
-        batch.front().materializedState().hot.colorAttachments[0].handle;
+      DXMT_ASSERT(batch.front().stateMaterialized);
+      currentBackBuffer =
+          batch.front().materializedState().hot.colorAttachments[0].handle;
 
-    perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
-      noteCurrentSlotCommandAppendStartedUnlocked(queue);
-      currentSlotUnlocked(queue).appendDrawRunBatch(batch);
+      perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
+      {
+        PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
+        noteCurrentSlotCommandAppendStartedUnlocked(queue);
+        currentSlotUnlocked(queue).appendDrawRunBatch(batch);
+      }
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
@@ -5067,7 +5094,14 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // queueLifecycle_.waitForSequence() below, both of which may unlock/relock
   // it via QueueLifecycleController (a different file).
   QueueMutexProbeScope qmxScope(qmxBegin, "map_buffer", /*skipHold=*/true);
-  const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
+  std::uint64_t waitSeq = 0;
+  {
+    // SEGMENT-HOLD: pool_.mapWaitSeqId() never touches `lock` -- this is
+    // real, previously-invisible hold time between the outer skipHold=true
+    // acquire probe and the first potential unlock/relock helper call below.
+    QueueMutexSegmentScope qmxPreCommitSegment("map_buffer/pre_commit");
+    waitSeq = pool_.mapWaitSeqId(handle, flags);
+  }
   const bool hasWaitSeq = waitSeq != 0;
   const auto waitStart = std::chrono::steady_clock::now();
   // Wine writeonly_vertex_buffer_readback_policy (#66): a Draw followed
@@ -5077,6 +5111,12 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // to Metal yet — without committing, completedSeqId_ can never reach
   // waitSeq and the wait below would block forever. Drive the pending
   // chunk into the submit pipeline first.
+  //
+  // SEGMENT-HOLD: commitCurrentChunk() and waitForSequence() each own their
+  // own interior segment-hold instrumentation (see dxmt9_queue.cpp) around
+  // their respective cv waits, so no additional bracketing is added here --
+  // wrapping this whole if/if pair would double-count hold time already
+  // attributed to "commit_current_chunk/*" below.
   if (waitSeq > lastCommittedSeqId_) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
@@ -5094,20 +5134,29 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
     queueLifecycle_.waitForSequence(lock, waitTarget);
   }
   const auto waitEnd = std::chrono::steady_clock::now();
-  perf::countMapBufferWait(
-      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          waitEnd - totalStart).count()),
-      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          lockAcquired - totalStart).count()),
-      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          waitEnd - waitStart).count()),
-      flags,
-      hasWaitSeq);
-  // R-BACK-5.8 — pass the GPU completion watermark and the device
-  // reference so the rename ring can rotate / fresh-allocate on
-  // DISCARD without blocking on prior completion. Non-DYNAMIC paths
-  // ignore both arguments.
-  return pool_.finalizeBufferMap(device_, handle, flags, completedSeqId_);
+  void* result = nullptr;
+  {
+    // SEGMENT-HOLD: from here to return, `lock` is held continuously (no
+    // further unlock/relock helper calls below) through the accounting call
+    // and pool_.finalizeBufferMap() itself -- this closes out map_buffer's
+    // previously entirely-invisible hold time.
+    QueueMutexSegmentScope qmxFinalizeSegment("map_buffer/finalize");
+    perf::countMapBufferWait(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            waitEnd - totalStart).count()),
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            lockAcquired - totalStart).count()),
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            waitEnd - waitStart).count()),
+        flags,
+        hasWaitSeq);
+    // R-BACK-5.8 — pass the GPU completion watermark and the device
+    // reference so the rename ring can rotate / fresh-allocate on
+    // DISCARD without blocking on prior completion. Non-DYNAMIC paths
+    // ignore both arguments.
+    result = pool_.finalizeBufferMap(device_, handle, flags, completedSeqId_);
+  }
+  return result;
 }
 
 bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {

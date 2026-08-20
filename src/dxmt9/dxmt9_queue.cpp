@@ -1,4 +1,5 @@
 #include "dxmt9_queue.hpp"
+#include "dxmt9_queue_mutex_diag.hpp"
 #include "dxmt9_scheduling_progress_watchdog.hpp"
 
 #include "dxmt9/assert.hpp"
@@ -1428,12 +1429,27 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     }
   };
   const auto waitStarted = std::chrono::steady_clock::now();
+  // SEGMENT-HOLD: the only interior lock release in this function is the
+  // writeCv->wait(lock) below, called at most once per loop iteration. This
+  // is the "ensureWritingSlot*"/QueueLifecycleController handoff site the
+  // module comment in dxmt9_command_queue.cpp calls out for conversion --
+  // reached from ensureWritingSlotUnlocked, in turn called by every
+  // submit_* draw/clear/StretchRect/ColorFill/DepthResolve site and the
+  // hot submit_draw_run_batch_impl per-batch loop, i.e. per-present traffic.
+  // A single "ensure_writer_slot" tag accumulates one sample per bracketed
+  // interval (pre-wait bookkeeping through to the next wait, or through to
+  // the final acquireWriterSlot() bookkeeping after the loop breaks).
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   // probeReserve() mutates the pressure latch, so keep it out of a condition
   // variable predicate. Each wake re-enters this loop under the scheduling
   // lock; only TemporaryPressure is a normal reason to wait.
   for (;;) {
     if (*stop) {
       endWriterPressure();
+      dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                            qmxSegStart);
       return false;
     }
     const auto probe = cpuReadyTape->probeReserve();
@@ -1441,6 +1457,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
         probe == CpuReadyTape::ReserveProbe::Corrupt) {
       endWriterPressure();
       poisonTapeFailureLocked();
+      dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                            qmxSegStart);
       return false;
     }
     if (probe == CpuReadyTape::ReserveProbe::Stopped) {
@@ -1448,6 +1466,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
       if (!*stop) {
         poisonTapeFailureLocked();
       }
+      dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                            qmxSegStart);
       return false;
     }
     if (probe == CpuReadyTape::ReserveProbe::Ready &&
@@ -1463,7 +1483,11 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
       // event, but this observation cannot create a submission boundary.
       beginWriterPressure();
     }
+    dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                          qmxSegStart);
     writeCv->wait(lock);
+    qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
   }
   endWriterPressure();
   if (waitNeeded) {
@@ -1472,6 +1496,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
         std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   }
   if (*stop) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                          qmxSegStart);
     return false;
   }
   observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
@@ -1490,6 +1516,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     *writingSlot = *writeIndex;
     recordCpuReadyTapeStats(*cpuReadyTape);
   });
+  dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
+                                        qmxSegStart);
   return writingSlot->has_value();
 }
 
@@ -1528,6 +1556,19 @@ bool QueueLifecycleController::commitCurrentChunk(
   // TLA+: QueueLifecycleRefinement / CommitEmpty or CommitPublish.
   DXMT_ASSERT(lock.owns_lock());
   static_cast<void>(lock);
+  // SEGMENT-HOLD: this function owns exactly one interior lock-release point
+  // (the writeCv->wait below). Reachable from the game/replay-offload
+  // producer via CommandQueue::submitPresent, CommandQueue::mapBuffer, and
+  // the draw-chunk/payload-limit helpers -- i.e. per-present traffic -- so
+  // it is one of the "commitCurrentChunk / ensureWritingSlot*" sites the
+  // module comment in dxmt9_command_queue.cpp calls out for conversion.
+  // "pre_wait" covers this function's own bookkeeping (both the CommitEmpty
+  // early-out and the CommitPublish setup); "post_wait" covers the
+  // publish itself. Both accumulate as separate samples of the same two
+  // tags across the early-return paths below.
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   auto* writingSlot = submissionBinding_.writingSlot;
   auto* writeIndex = submissionBinding_.writeIndex;
   auto* nextSeqId = submissionBinding_.nextSeqId;
@@ -1538,9 +1579,13 @@ bool QueueLifecycleController::commitCurrentChunk(
   auto* stop = submissionBinding_.stop;
   if (!writingSlot || !writeIndex || !nextSeqId || !inflightCount ||
       !lastCommittedSeqId || !writeCv || !stop) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
   if (!writingSlot->has_value()) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
 
@@ -1553,6 +1598,8 @@ bool QueueLifecycleController::commitCurrentChunk(
       });
   if (!writingPayload || writingPayload != slot.payload) {
     poisonTapeFailureLocked();
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
   if (writingPayload->commandsEmpty()) {
@@ -1578,9 +1625,13 @@ bool QueueLifecycleController::commitCurrentChunk(
       recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
     });
     if (!aborted) {
+      dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                            qmxEnabled, qmxSegStart);
       return false;
     }
     noteCpuReadyCapacityProgress();
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
 
@@ -1602,9 +1653,13 @@ bool QueueLifecycleController::commitCurrentChunk(
       encodeCv->notify_one();
     }
   }
+  dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                        qmxEnabled, qmxSegStart);
   const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+  qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                           : std::chrono::steady_clock::time_point{};
   if (waitNeeded) {
     {
       std::lock_guard pendingLock(pendingCompletionMutex_);
@@ -1620,6 +1675,8 @@ bool QueueLifecycleController::commitCurrentChunk(
         std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   }
   if (*stop) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/post_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
   // Revalidate rather than repair: if the writing slot moved while we were
@@ -1629,6 +1686,8 @@ bool QueueLifecycleController::commitCurrentChunk(
   if (!writingSlot->has_value() ||
       **writingSlot != writingSlotIndexBeforeWait ||
       *nextSeqId != nextSeqIdBeforeWait) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/post_wait",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
 
@@ -1674,6 +1733,8 @@ bool QueueLifecycleController::commitCurrentChunk(
     *writeIndex = (*writeIndex + 1) % slots.size();
     recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
   });
+  dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/post_wait",
+                                        qmxEnabled, qmxSegStart);
   if (!sealed) {
     return false;
   }
@@ -1731,6 +1792,10 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
   }
   const auto selected =
       std::span<const ReadySlotSnapshot>(out.data(), count);
+  // SEGMENT-HOLD: commitReservedReadySlotBatch()/restoreReservedReadySlotBatch()
+  // do not unlock/relock -- this covers the caller-side bookkeeping around
+  // the same dequeue phase as reserveReadySlotBatchPrefix's own segment.
+  dxmt9::QueueMutexSegmentScope qmxCommitSegment("run_encode_loop/dequeue");
   if (!commitReservedReadySlotBatch(lock, selected)) {
     (void)restoreReservedReadySlotBatch(lock, selected);
     poisonTapeFailureLocked();
@@ -1762,6 +1827,16 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
     return 0;
   }
 
+  // SEGMENT-HOLD: from here to return, `lock` is held continuously (no
+  // interior unlock/relock in this function) -- this is the "run_encode_loop"
+  // encode-dequeue bookkeeping between cv waits that the module comment in
+  // dxmt9_command_queue.cpp calls out as a priority site. The remaining
+  // dequeue-phase bookkeeping in the caller (dequeueReadySlotBatchPrefix's
+  // commitReservedReadySlotBatch call) and in runEncodeIteration (source
+  // resolution before its own unlock) are tagged the same way at their own
+  // sites below, since they are separate held intervals in different
+  // function scopes.
+  dxmt9::QueueMutexSegmentScope qmxDequeueSegment("run_encode_loop/dequeue");
   perf::countEncodeDequeueReadyDepth(
       static_cast<std::uint64_t>(cpuReadyTape->readyCount()));
   const size_t maxCount = std::min(out.size(), cpuReadyTape->readyCount());
@@ -2227,10 +2302,20 @@ bool QueueLifecycleController::runEncodeIteration(
         const ReadySlotSnapshot&, const SourcePayloadView&)>& encodeFn,
     const std::function<void(u64)>& onInlineComplete) {
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
+  // SEGMENT-HOLD: dequeueReadySlot() below reaches down into
+  // reserveReadySlotBatchPrefix()/dequeueReadySlotBatchPrefix(), which record
+  // their own "run_encode_loop/dequeue" segments around their cv wait and
+  // bookkeeping. This function's own remaining held work -- source
+  // resolution up to the unlock() before encodeFn(), the post-relock submit
+  // bookkeeping, and the inline-completion path -- is tagged separately
+  // below so no interval double-counts another function's segment.
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
   ReadySlotSnapshot source{};
   if (!dequeueReadySlot(lock, source)) {
     return false;
   }
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   std::optional<QueueSubmissionRecord> submission;
   {
     // Resolve only for the synchronous encode call. The locator-only source
@@ -2238,12 +2323,16 @@ bool QueueLifecycleController::runEncodeIteration(
     const auto resolved = resolveRepresentedSource(source);
     if (!resolved.valid()) {
       poisonTapeFailureLocked();
+      dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/dequeue",
+                                            qmxEnabled, qmxSegStart);
       return false;
     }
     if (const auto* legacy = resolved.payload.legacyPayload()) {
       traceEncodeIterationStage("iteration.before-unlock",
                                 source.slotIndex, *legacy);
     }
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/dequeue",
+                                          qmxEnabled, qmxSegStart);
     lock.unlock();
     if (encodeFn) {
       submission = encodeFn(source, resolved.payload);
@@ -2254,6 +2343,8 @@ bool QueueLifecycleController::runEncodeIteration(
     }
   }
   lock.lock();
+  qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                           : std::chrono::steady_clock::time_point{};
 
   if (submission.has_value()) {
     if (submission->fixedCompletionSources.empty()) {
@@ -2262,13 +2353,19 @@ bool QueueLifecycleController::runEncodeIteration(
       };
       if (!submission->assignFixedCompletionSources(completionSources)) {
         poisonTapeFailureLocked();
+        dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/submit",
+                                              qmxEnabled, qmxSegStart);
         return false;
       }
     }
     if (!enqueueSubmission(*submission)) {
+      dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/submit",
+                                            qmxEnabled, qmxSegStart);
       return false;
     }
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/submit", qmxEnabled,
+                                          qmxSegStart);
     lock.unlock();
     for (auto& callback : postCommitCallbacks) {
       if (callback) {
@@ -2276,12 +2373,21 @@ bool QueueLifecycleController::runEncodeIteration(
       }
     }
   } else {
+    // completeInlineChunk() has its own interior unlock/relock and records
+    // its own "run_encode_loop/inline_reclaim" segments (see below); only
+    // the onInlineComplete callback afterward is this function's own held
+    // work, tagged "run_encode_loop/submit" since it plays the same "after
+    // relock, before next cv wait" role as the real-submission branch above.
     if (!completeInlineChunk(lock, source.slotIndex, source.seqId)) {
       return false;
     }
+    qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
     if (onInlineComplete) {
       onInlineComplete(source.seqId);
     }
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/submit", qmxEnabled,
+                                          qmxSegStart);
   }
   return true;
 }
@@ -2369,6 +2475,16 @@ bool QueueLifecycleController::completeInlineChunk(
   if (!lock.owns_lock() || slotIndex >= submissionBinding_.slots.size()) {
     return false;
   }
+  // SEGMENT-HOLD: mirrors reclaimCompletedTapeHead()'s shape exactly -- one
+  // interior unlock/relock pair around resource destruction. The
+  // "run_encode_loop/inline_reclaim" tag brackets the pre-unlock
+  // reclaim-begin bookkeeping and the post-relock finish-reclaim bookkeeping
+  // as two samples of the same site. Rare fail-stop error paths
+  // (poisonTapeFailureLocked()) before the unlock are left unbracketed, same
+  // as reclaimCompletedTapeHead().
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
 
   auto& slot = submissionBinding_.slots[slotIndex];
   const CpuReadyTape::SourceRef source{
@@ -2456,12 +2572,16 @@ bool QueueLifecycleController::completeInlineChunk(
     return false;
   }
 
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
+                                        qmxEnabled, qmxSegStart);
   lock.unlock();
   deferredReleases.clear();
   if (arenaOwner) {
     arenaOwner->destroy();
   }
   lock.lock();
+  qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                           : std::chrono::steady_clock::time_point{};
 
   bool reclaimed = false;
   if (*payloadKind == CpuReadyTape::PayloadKind::Legacy) {
@@ -2470,6 +2590,8 @@ bool QueueLifecycleController::completeInlineChunk(
             source.id, source.storage);
     if (!reclaimingPayload || reclaimingPayload->seqId != seqId) {
       poisonTapeFailureLocked();
+      dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
+                                            qmxEnabled, qmxSegStart);
       return false;
     }
     reclaimingPayload->seqId = 0;
@@ -2483,6 +2605,8 @@ bool QueueLifecycleController::completeInlineChunk(
   DXMT_ASSERT(reclaimed);
   if (!reclaimed) {
     poisonTapeFailureLocked();
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
+                                          qmxEnabled, qmxSegStart);
     return false;
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
@@ -2499,6 +2623,8 @@ bool QueueLifecycleController::completeInlineChunk(
   if (submissionBinding_.finishCv) {
     submissionBinding_.finishCv->notify_all();
   }
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
+                                        qmxEnabled, qmxSegStart);
   return true;
 }
 
@@ -2519,6 +2645,11 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
     return false;
   }
 
+  // SEGMENT-HOLD: from here to return, `lock` is held continuously (no
+  // interior unlock/relock in this function) -- this is the
+  // "run_finish_loop" completion-dequeue bookkeeping the module comment in
+  // dxmt9_command_queue.cpp calls out as a priority site.
+  dxmt9::QueueMutexSegmentScope qmxDequeueSegment("run_finish_loop/dequeue");
   seqId = completedSeqQueue->front();
   bool presentSettled = false;
   const bool publicationCreditReleased =
@@ -2586,11 +2717,24 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   if (!drainCompletedSequence(lock, seqId)) {
     return false;
   }
+  // SEGMENT-HOLD: bracket only this function's OWN bookkeeping -- the head
+  // check before reclaimCompletedTapeHead(), and the onAfterFinish callback
+  // after it returns. reclaimCompletedTapeHead() has its own interior
+  // unlock/relock and records its own "run_finish_loop/retire" samples
+  // around it (see above); wrapping this whole function span would double
+  // count that function's held time.
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
   if (head && head->seqId < seqId) {
     poisonTapeFailureLocked();
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                          qmxSegStart);
     return false;
   }
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                        qmxSegStart);
   // Inline completion already performed its two-phase reclaim before making
   // this sequence visible. An absent head or a newer head therefore requires
   // no second reclaim; an equal GPU-completed head is reclaimed here.
@@ -2598,9 +2742,13 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
       !reclaimCompletedTapeHead(lock, seqId)) {
     return false;
   }
+  qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                           : std::chrono::steady_clock::time_point{};
   if (onAfterFinish) {
     onAfterFinish(seqId);
   }
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                        qmxSegStart);
   return true;
 }
 
@@ -2609,6 +2757,17 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     u64 seqId) {
   // TLA+: QueueLifecycleRefinement / ReclaimFree.
   DXMT_ASSERT(lock.owns_lock());
+  // SEGMENT-HOLD: this function has exactly one interior unlock/relock pair
+  // (around resource destruction below). The "run_finish_loop/retire" tag
+  // brackets both disjoint held halves -- the begin-reclaim bookkeeping
+  // before the unlock, and the finish-reclaim bookkeeping after the relock
+  // -- as two separate samples of the same site, matching the module
+  // comment's "run_finish_loop/retire" example. Rare early-return error
+  // paths (poisonTapeFailureLocked()) are left unbracketed: they are
+  // fail-stop paths, not steady-state per-present traffic.
+  const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   std::vector<DrawShaderLayoutContext> deferredReleases;
   std::optional<CpuReadyTape::DetachedArenaOwner> arenaOwner;
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
@@ -2648,12 +2807,16 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     arenaOwner.emplace(std::move(*detached));
   }
 
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                        qmxSegStart);
   lock.unlock();
   deferredReleases.clear();
   if (arenaOwner) {
     arenaOwner->destroy();
   }
   lock.lock();
+  qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
+                           : std::chrono::steady_clock::time_point{};
 
   bool sourceReclaimed = false;
   if (*payloadKind == CpuReadyTape::PayloadKind::Legacy) {
@@ -2674,6 +2837,8 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   DXMT_ASSERT(sourceReclaimed);
   if (!sourceReclaimed) {
     poisonTapeFailureLocked();
+    dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                          qmxSegStart);
     return false;
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
@@ -2682,6 +2847,8 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     submissionBinding_.writeCv->notify_all();
   }
   noteCpuReadyCapacityProgress();
+  dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
+                                        qmxSegStart);
   return true;
 }
 
