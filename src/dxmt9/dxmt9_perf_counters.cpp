@@ -5255,6 +5255,19 @@ void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
   if (discard) add(c.surfaceLockRectDiscardCalls);
 }
 
+void countSurfaceLockShadowAlloc(std::uint64_t nanoseconds, std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.surfaceLockShadowAllocCalls);
+  add(c.surfaceLockShadowAllocNs, nanoseconds);
+  add(c.surfaceLockShadowAllocBytes, bytes);
+}
+
+void countSurfaceLockShadowCopy(std::uint64_t nanoseconds, std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.surfaceLockShadowCopyNs, nanoseconds);
+  add(c.surfaceLockShadowCopyBytes, bytes);
+}
+
 void countD3D9TextureLockRect(std::uint64_t coreNanoseconds,
                               std::uint64_t shadowNanoseconds,
                               std::uint64_t bytes,

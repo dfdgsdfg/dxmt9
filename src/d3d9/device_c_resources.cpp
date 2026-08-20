@@ -1420,8 +1420,14 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
     if (bytes != 0) {
       auto& shadow = s->ownerTex ? s->ownerTex->wow64Locks[s->ownerLevel] : s->wow64Lock;
       if (!shadow.shadow || shadow.shadow.size < bytes) {
+        const auto allocStart = std::chrono::steady_clock::now();
         releaseShadowLock(shadow);
         shadow.shadow = allocateLow4GB(bytes);
+        dxmt9::perf::countSurfaceLockShadowAlloc(
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - allocStart).count()),
+            static_cast<std::uint64_t>(bytes));
       }
       if (!shadow.shadow) {
         out->bits = nullptr;
@@ -1432,7 +1438,13 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
       shadow.rowBytes = rowBytes;
       shadow.rows = rows;
       shadow.active = true;
+      const auto copyStart = std::chrono::steady_clock::now();
       copyNativeToShadow(shadow);
+      dxmt9::perf::countSurfaceLockShadowCopy(
+          static_cast<std::uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - copyStart).count()),
+          static_cast<std::uint64_t>(shadow.rowBytes) * shadow.rows);
       out->bits = shadow.shadow.ptr;
       dxmt9DebugLog("surface_lock_rect shadow surface=%p native=%p shadow=%p pitch=%u rowBytes=%u rows=%u bytes=%zu",
                     static_cast<void*>(s), lock.data, out->bits, nativePitch,

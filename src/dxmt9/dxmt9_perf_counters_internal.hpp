@@ -1503,6 +1503,11 @@ struct Counters {
   std::atomic<std::uint64_t> surfaceLockRectCalls{0};
   std::atomic<std::uint64_t> surfaceLockRectCoreNs{0};
   std::atomic<std::uint64_t> surfaceLockRectShadowNs{0};
+  std::atomic<std::uint64_t> surfaceLockShadowAllocCalls{0};
+  std::atomic<std::uint64_t> surfaceLockShadowAllocNs{0};
+  std::atomic<std::uint64_t> surfaceLockShadowAllocBytes{0};
+  std::atomic<std::uint64_t> surfaceLockShadowCopyNs{0};
+  std::atomic<std::uint64_t> surfaceLockShadowCopyBytes{0};
   std::atomic<std::uint64_t> surfaceLockRectDiscardCalls{0};
   std::atomic<std::uint64_t> surfaceLockRectBytes{0};
   std::atomic<std::uint64_t> textureLockRectCalls{0};

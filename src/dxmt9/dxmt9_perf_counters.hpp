@@ -1300,6 +1300,11 @@ void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
                               std::uint64_t shadowNanoseconds,
                               std::uint64_t bytes,
                               bool discard);
+// Micro-split of the surface shadow block above: alloc covers the
+// releaseShadowLock + allocateLow4GB pair when the cached shadow was missing
+// or too small; copy covers copyNativeToShadow on every shadowed lock.
+void countSurfaceLockShadowAlloc(std::uint64_t nanoseconds, std::uint64_t bytes);
+void countSurfaceLockShadowCopy(std::uint64_t nanoseconds, std::uint64_t bytes);
 // dxmt9c_texture_lock_rect equivalent of the surface counters above; shares
 // the same opcode family and cost shape (core lockRect call vs. wow64 shadow
 // alloc/copy block).
