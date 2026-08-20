@@ -5,20 +5,71 @@
   "get_declaration_roundtrip_policy",
   "fvf_decl_conversion_roundtrip_policy"
  ],
- "note": "The four decl/fvf cases (binary indices 16-19, one chunk-size-4 chunk) fail as a group in full-suite runs but pass as singletons and as an isolated [16:20) chunk. The failure is not a test-assertion failure: the chunk's Wine process dies at second-device teardown before flushing stdout (all PASS/FAIL lines lost, rc=1), with 'err:seh:call_stack_handlers invalid frame ... Exception frame is not in stack limits => unable to dispatch exception' on stderr when WINEDEBUG is not '-all'. Minimal repro is two back-to-back exe invocations sharing one persistent wineserver session: 'wine dxmt9-d3d9-conformance.exe start=4 end=8' (the D3D9Ex QI group, rc=0) then 'start=16 end=20'. The second run fails ~30% standalone and 4 of 5 observed full-suite runs; a cold wineserver ([8:20) or [12:20) or isolated runs) never fails. Present and identical at merge-parent 840d95c1, cache-only f9dc7e75, and merged head 6faeb559, so it predates the 2026-08-20 getter-cache/warm-epoch work; the 2026-08-02 snapshot recorded these cases as pass, so either the trigger appeared between 2026-08-02 and 840d95c1 or the snapshot run got a lucky roll. The 'commit_chunk_fail reason=chunk-admission' info line that appears near the death is a red herring: it appears identically in passing runs.",
+ "note": "The four decl/fvf cases (binary indices 16-19, one chunk-size-4 chunk) fail as a group in full-suite runs but pass as singletons and as an isolated [16:20) chunk. The failure is not a test-assertion failure: the chunk's Wine process dies at second-device teardown before flushing stdout (all PASS/FAIL lines lost, rc=1), with 'err:seh:call_stack_handlers invalid frame ... Exception frame is not in stack limits => unable to dispatch exception' on stderr when WINEDEBUG is not '-all'. Minimal repro is two back-to-back exe invocations sharing one persistent wineserver session: 'wine dxmt9-d3d9-conformance.exe start=4 end=8' (the D3D9Ex QI group, rc=0) then 'start=16 end=20'. The second run fails ~30% standalone and 4 of 5 observed full-suite runs; a cold wineserver ([8:20) or [12:20) or isolated runs) never fails. Present and identical at merge-parent 840d95c1, cache-only f9dc7e75, and merged head 6faeb559, so it predates the 2026-08-20 getter-cache/warm-epoch work; the 2026-08-02 snapshot recorded these cases as pass, so either the trigger appeared between 2026-08-02 and 840d95c1 or the snapshot run got a lucky roll. The 'commit_chunk_fail reason=chunk-admission' info line that appears near the death is a red herring: it appears identically in passing runs. 2026-08-21 addendum: a full-suite run's still-warm wineserver session also poisons a subsequent SINGLETON of index 17 (observed once; three cold-server singletons then passed), so the trigger is warm-session state generally, not only the [4:8) Ex-QI group; kill the prefix wineserver before using singleton verdicts taken right after a full run.",
  "runs": [
-  {"run": "full-suite-head-6faeb559", "verdict": "fail"},
-  {"run": "full-suite-base-840d95c1", "verdict": "fail"},
-  {"run": "full-suite-cache-only-f9dc7e75", "verdict": "fail"},
-  {"run": "full-suite-head-clean-rerun", "verdict": "fail"},
-  {"run": "full-suite-head-after-cube-fix-88fcdc76", "verdict": "pass"},
-  {"run": "singletons-16-17-18-19", "verdict": "pass"},
-  {"run": "isolated-chunk-16-20", "verdict": "pass"},
-  {"run": "context-8-20", "verdict": "pass"},
-  {"run": "context-12-20", "verdict": "pass"},
-  {"run": "context-4-20", "verdict": "fail"},
-  {"run": "context-0-20", "verdict": "fail"},
-  {"run": "manual-pair-winedebug-all-x3", "verdict": "1 fail / 3"},
-  {"run": "manual-pair-winedebug-default-x6", "verdict": "2 fail / 6"}
+  {
+   "run": "full-suite-head-6faeb559",
+   "verdict": "fail"
+  },
+  {
+   "run": "full-suite-base-840d95c1",
+   "verdict": "fail"
+  },
+  {
+   "run": "full-suite-cache-only-f9dc7e75",
+   "verdict": "fail"
+  },
+  {
+   "run": "full-suite-head-clean-rerun",
+   "verdict": "fail"
+  },
+  {
+   "run": "full-suite-head-after-cube-fix-88fcdc76",
+   "verdict": "pass"
+  },
+  {
+   "run": "singletons-16-17-18-19",
+   "verdict": "pass"
+  },
+  {
+   "run": "isolated-chunk-16-20",
+   "verdict": "pass"
+  },
+  {
+   "run": "context-8-20",
+   "verdict": "pass"
+  },
+  {
+   "run": "context-12-20",
+   "verdict": "pass"
+  },
+  {
+   "run": "context-4-20",
+   "verdict": "fail"
+  },
+  {
+   "run": "context-0-20",
+   "verdict": "fail"
+  },
+  {
+   "run": "manual-pair-winedebug-all-x3",
+   "verdict": "1 fail / 3"
+  },
+  {
+   "run": "manual-pair-winedebug-default-x6",
+   "verdict": "2 fail / 6"
+  },
+  {
+   "run": "post-observer-refactor-7c0335a2 full suite",
+   "verdict": "fail (flake, decl group)"
+  },
+  {
+   "run": "warm-session singleton idx17",
+   "verdict": "fail"
+  },
+  {
+   "run": "cold-server singleton idx17 x3",
+   "verdict": "pass"
+  }
  ]
 }
