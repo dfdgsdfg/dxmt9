@@ -321,8 +321,16 @@ review obligation, not a resolved fact):
   getter crossed every call.
 - **G3** — shader/vdecl creation's terminal-check-only asymmetry vs every
   other create's full drain: by-design (non-GPU-resident inputs) or gap.
-- **G4** — device addref/release drain with ignored result: paying an
-  ordering fence they cannot act on.
+- **G4 — RESOLVED (2026-08-21 source audit): by design, no change.** The
+  inventory's "paying a fence they cannot act on" was wrong in both
+  directions. `dxmt9c_device_addref` has **zero PE callers** (the wrapper's
+  COM AddRef is PE-local) — it never pays anything; classify cold/dead.
+  `dxmt9c_device_release` has exactly **one** caller, the PE device
+  destructor (once per device lifetime), where the drain IS the
+  teardown-ordering guard — the device must not be released with deferred
+  replay pending — and the discarded result is intentional fail-open so a
+  poisoned pipeline cannot block teardown (same policy as the shader/vdecl
+  lifetime entries). Measured GT2 cost: absent from the opcode table.
 - **G5** — the state-setter family's `high` frequency is inferred from class
   totals, not per-opcode measurement.
 
