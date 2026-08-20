@@ -960,15 +960,10 @@ public:
     return container_->QueryInterface(riid, ppv);
   }
   HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC *pD) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "Surface::GetDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "Surface::GetDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "Surface::GetDesc", hr);
-      return hr;
+      return peCall.finish("Surface::GetDesc", hr);
     };
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -1645,15 +1640,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "Texture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "Texture::GetLevelDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "Texture::GetLevelDesc", hr);
-      return hr;
+      return peCall.finish("Texture::GetLevelDesc", hr);
     };
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -1674,15 +1664,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetSurfaceLevel(UINT level, IDirect3DSurface9 **ppS) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "Texture::GetSurfaceLevel", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "Texture::GetSurfaceLevel",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "Texture::GetSurfaceLevel", hr);
-      return hr;
+      return peCall.finish("Texture::GetSurfaceLevel", hr);
     };
     if (!ppS)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -2300,15 +2285,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "CubeTexture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "CubeTexture::GetLevelDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "CubeTexture::GetLevelDesc", hr);
-      return hr;
+      return peCall.finish("CubeTexture::GetLevelDesc", hr);
     };
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -2331,15 +2311,10 @@ public:
   HRESULT STDMETHODCALLTYPE
   GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
                     IDirect3DSurface9 **ppS) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "CubeTexture::GetCubeMapSurface", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "CubeTexture::GetCubeMapSurface",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "CubeTexture::GetCubeMapSurface", hr);
-      return hr;
+      return peCall.finish("CubeTexture::GetCubeMapSurface", hr);
     };
     if (!ppS)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -2622,15 +2597,10 @@ public:
     return container_->QueryInterface(riid, ppv);
   }
   HRESULT STDMETHODCALLTYPE GetDesc(D3DVOLUME_DESC *pD) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "Volume::GetDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "Volume::GetDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "Volume::GetDesc", hr);
-      return hr;
+      return peCall.finish("Volume::GetDesc", hr);
     };
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -2804,15 +2774,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level,
                                          D3DVOLUME_DESC *pD) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "VolumeTexture::GetLevelDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "VolumeTexture::GetLevelDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "VolumeTexture::GetLevelDesc", hr);
-      return hr;
+      return peCall.finish("VolumeTexture::GetLevelDesc", hr);
     };
     if (!pD)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -2831,15 +2796,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetVolumeLevel(UINT level, IDirect3DVolume9 **ppVolume) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "VolumeTexture::GetVolumeLevel", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "VolumeTexture::GetVolumeLevel",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "VolumeTexture::GetVolumeLevel", hr);
-      return hr;
+      return peCall.finish("VolumeTexture::GetVolumeLevel", hr);
     };
     if (!ppVolume)
       return finishPeCall(D3DERR_INVALIDCALL);

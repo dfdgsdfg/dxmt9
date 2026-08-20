@@ -569,15 +569,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "VertexBuffer::GetDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "VertexBuffer::GetDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "VertexBuffer::GetDesc", hr);
-      return hr;
+      return peCall.finish("VertexBuffer::GetDesc", hr);
     };
     if (!pDesc)
       return finishPeCall(D3DERR_INVALIDCALL);
@@ -715,15 +710,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DINDEXBUFFER_DESC *pDesc) noexcept override {
-    const auto peCall = recorder_
-        ? recorder_->NotifyPeFirstCallAfterPresentForChild(
-              "IndexBuffer::GetDesc", DXMT9_PE_CALLSITE_PC())
-        : D3D9PePresentCallToken{};
+    D3D9PeChildCallScope peCall(recorder_, "IndexBuffer::GetDesc",
+                                DXMT9_PE_CALLSITE_PC());
     const auto finishPeCall = [&](HRESULT hr) noexcept {
-      if (recorder_)
-        recorder_->NotifyPeCallReturnAfterPresentForChild(
-            peCall, "IndexBuffer::GetDesc", hr);
-      return hr;
+      return peCall.finish("IndexBuffer::GetDesc", hr);
     };
     if (!pDesc)
       return finishPeCall(D3DERR_INVALIDCALL);

@@ -550,6 +550,36 @@ static Dxmt9PeCallerModuleInfo dxmt9PeResolveCallerModule(
     return info;
 }
 
+// PE call-tracking diagnostic sample (DXMT9_PE_RECORDER_STATS only). This used
+// to live in d3d9_pe_device_child.hpp and be returned by value from every noted
+// D3D9 entry point; it is file-local now because no hot-path signature -- not
+// the device's own entry note, not the child recorder interface -- names it any
+// more. See "Observer boundary" in agents/rules/codebase_conventions.rules.md.
+static constexpr std::size_t D3D9PePresentCallStackDepth = 12;
+
+struct D3D9PePresentCallToken {
+    bool tracked = false;
+    std::uint64_t ordinal = 0;
+    std::uint32_t callCount = 0;
+    std::int64_t returnNs = 0;
+    std::int64_t entryNs = 0;
+    const void* callerPc = nullptr;
+    std::uint32_t threadId = 0;
+    std::uint8_t callerStackCount = 0;
+    std::array<const void*, D3D9PePresentCallStackDepth> callerStack{};
+};
+
+// Diagnostic-owned storage for the entry samples of calls that also emit a
+// paired return log. Every slot is owned by an RAII scope whose destructor
+// releases it, so `depth` is exactly the live nesting of noted D3D9 entry
+// points on this thread (a device method that internally calls another noted
+// method). 16 is far above any real chain; a would-be overflow declines to
+// track rather than aliasing a live slot.
+static constexpr std::size_t kPeCallScopeSlots = 16;
+static thread_local D3D9PePresentCallToken
+    dxmt9PeCallScopeSlots[kPeCallScopeSlots];
+static thread_local std::size_t dxmt9PeCallScopeDepth = 0;
+
 static void dxmt9PeCaptureCallStack(D3D9PePresentCallToken& sample) {
 #if defined(_WIN32)
     void* frames[D3D9PePresentCallStackDepth]{};
@@ -4302,37 +4332,103 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             callerStack.data());
     }
 
-    PePresentCallSample notePeDeviceCallAfterPresent(const char* callName,
-                                                     const void* callerPc = nullptr) {
-        // Hot path: this is called on every D3D9 device entry. With no
-        // diagnostic consumer enabled (see dxmt9PeCallTrackingEnabled), skip
-        // straight to an empty untracked sample instead of setting the
-        // thread-local call name and walking through the recorder-stats
-        // helpers below, each of which would just re-check the same flag.
-        if (!dxmt9PeCallTrackingEnabled()) {
-            return {};
-        }
+    // The whole entry note, reached only with tracking on. It writes the entry
+    // sample into `out`, which is always diagnostic-owned storage -- either a
+    // call-scope slot or a throwaway local -- never a hot-path return value.
+    void notePeDeviceCallAfterPresentTracked(const char* callName,
+                                             const void* callerPc,
+                                             PePresentCallSample& out) {
         dxmt9PeSetCurrentCallName(callName);
         dxmt9PeCurrentCallEntryNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
         recordPeBetweenCallsEntry(callName, dxmt9PeCurrentCallEntryNs,
                                   callerPc);
-        const PePresentCallSample sample =
-            logPeCallMilestoneAfterPresent(callName, callerPc);
-        if (!sample.tracked) {
-            PePresentCallSample untracked{};
-            untracked.entryNs = dxmt9PeCurrentCallEntryNs;
-            untracked.callerPc = callerPc;
-            untracked.threadId = dxmt9PeCurrentThreadId();
-            dxmt9PeCaptureCallStack(untracked);
-            logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
-                                       untracked);
-            return untracked;
+        out = logPeCallMilestoneAfterPresent(callName, callerPc);
+        if (!out.tracked) {
+            out = PePresentCallSample{};
+            out.entryNs = dxmt9PeCurrentCallEntryNs;
+            out.callerPc = callerPc;
+            out.threadId = dxmt9PeCurrentThreadId();
+            dxmt9PeCaptureCallStack(out);
         }
         logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
-                                   sample);
-        return sample;
+                                   out);
     }
+
+    // Hot path: this is called on every D3D9 device entry. With no diagnostic
+    // consumer enabled (see dxmt9PeCallTrackingEnabled) it is one cached-bool
+    // test and nothing else -- no sample is constructed and none crosses the
+    // call boundary. Entry points that also emit the paired return log use
+    // PeCallScope below. See "Observer boundary" in
+    // agents/rules/codebase_conventions.rules.md.
+    void notePeDeviceCallAfterPresent(const char* callName,
+                                      const void* callerPc = nullptr) {
+        if (!dxmt9PeCallTrackingEnabled()) {
+            return;
+        }
+        PePresentCallSample sample;
+        notePeDeviceCallAfterPresentTracked(callName, callerPc, sample);
+    }
+
+    // Slot API behind PeCallScope / D3D9PeChildCallScope. Push answers
+    // kD3D9PePresentCallSlotNone when nothing was tracked, which is the single
+    // cached-bool test on the disabled path.
+    D3D9PePresentCallSlot pushPeCallScope(const char* callName,
+                                          const void* callerPc) noexcept {
+        if (!dxmt9PeCallTrackingEnabled()) {
+            return kD3D9PePresentCallSlotNone;
+        }
+        if (dxmt9PeCallScopeDepth >= kPeCallScopeSlots) {
+            return kD3D9PePresentCallSlotNone;
+        }
+        const std::size_t slot = dxmt9PeCallScopeDepth++;
+        notePeDeviceCallAfterPresentTracked(callName, callerPc,
+                                            dxmt9PeCallScopeSlots[slot]);
+        return static_cast<D3D9PePresentCallSlot>(slot);
+    }
+
+    void notePeCallScopeReturn(D3D9PePresentCallSlot slot,
+                               const char* callName, HRESULT hr) noexcept {
+        if (slot == kD3D9PePresentCallSlotNone) {
+            return;
+        }
+        logPeCallReturnAfterPresent(dxmt9PeCallScopeSlots[slot], callName, hr);
+    }
+
+    void popPeCallScope(D3D9PePresentCallSlot slot) noexcept {
+        // Scopes nest, so the slot being released is always the top one.
+        if (slot != kD3D9PePresentCallSlotNone &&
+            dxmt9PeCallScopeDepth == static_cast<std::size_t>(slot) + 1u) {
+            dxmt9PeCallScopeDepth = slot;
+        }
+    }
+
+    // RAII scope for a device entry point that pairs its entry note with a
+    // return log. Off: one cached-bool test in the constructor, a two-word
+    // object, and a destructor that does nothing. On: the ~96-byte entry sample
+    // stays in the diagnostic's own slot storage. finish() is a no-op for an
+    // untracked scope, and a return path that skips it leaks nothing because
+    // the destructor releases the slot. See "Observer boundary" in
+    // agents/rules/codebase_conventions.rules.md.
+    class PeCallScope {
+    public:
+        PeCallScope(D3D9DeviceImpl& device, const char* callName,
+                    const void* callerPc = nullptr) noexcept
+            : device_(device),
+              slot_(device.pushPeCallScope(callName, callerPc)) {}
+        PeCallScope(const PeCallScope&) = delete;
+        PeCallScope& operator=(const PeCallScope&) = delete;
+        ~PeCallScope() noexcept { device_.popPeCallScope(slot_); }
+
+        HRESULT finish(const char* callName, HRESULT hr) noexcept {
+            device_.notePeCallScopeReturn(slot_, callName, hr);
+            return hr;
+        }
+
+    private:
+        D3D9DeviceImpl& device_;
+        D3D9PePresentCallSlot slot_;
+    };
 
     void markPePresentReturnedForCadence() {
         if (!dxmt9PeRecorderStatsEnabled()) {
@@ -11527,14 +11623,21 @@ public:
         }
         return flushPeRecorder(PeRecorderFlushReason::Child);
     }
-    D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
+    void NotifyPeFirstCallAfterPresentForChild(
         const char* callName, const void* callerPc = nullptr) noexcept override {
-        return notePeDeviceCallAfterPresent(callName, callerPc);
+        notePeDeviceCallAfterPresent(callName, callerPc);
     }
-    void NotifyPeCallReturnAfterPresentForChild(
-        const D3D9PePresentCallToken& token,
-        const char* callName, HRESULT hr) noexcept override {
-        logPeCallReturnAfterPresent(token, callName, hr);
+    D3D9PePresentCallSlot PushPeCallScopeForChild(
+        const char* callName, const void* callerPc) noexcept override {
+        return pushPeCallScope(callName, callerPc);
+    }
+    void NotifyPeCallScopeReturnForChild(D3D9PePresentCallSlot slot,
+                                         const char* callName,
+                                         HRESULT hr) noexcept override {
+        notePeCallScopeReturn(slot, callName, hr);
+    }
+    void PopPeCallScopeForChild(D3D9PePresentCallSlot slot) noexcept override {
+        popPeCallScope(slot);
     }
     void NotifyRenderTapeObjectDefineForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
@@ -13607,9 +13710,19 @@ public:
         const void* callerPc = DXMT9_PE_CALLSITE_PC();
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        const auto peCall =
-            logPeCallMilestoneAfterPresent("GetRenderTargetData", callerPc);
-        logPeFirstCallAfterPresent("GetRenderTargetData", peCadence, peCall);
+        // Decomposed on purpose: the cadence claim above must be taken before
+        // the recorder lock and the milestone log after it, so this site cannot
+        // use notePeDeviceCallAfterPresent. Gating the pair keeps the sample
+        // inside the branch, so the disabled path constructs nothing. When
+        // tracking is off both calls were already no-ops -- the claim is
+        // unclaimed and the milestone sample untracked -- so skipping them
+        // changes no emission.
+        if (dxmt9PeCallTrackingEnabled()) {
+            const auto peCall =
+                logPeCallMilestoneAfterPresent("GetRenderTargetData", callerPc);
+            logPeFirstCallAfterPresent("GetRenderTargetData", peCadence,
+                                       peCall);
+        }
         dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
                             this, rt, dst);
         // get_render_target_data_policy: both args must be non-NULL. Wine
@@ -13871,13 +13984,11 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD idx,
                                                IDirect3DSurface9* pSurf) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "SetRenderTarget", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "SetRenderTarget", DXMT9_PE_CALLSITE_PC());
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::RenderTarget);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "SetRenderTarget", hr);
-            return hr;
+            return peCall.finish("SetRenderTarget", hr);
         };
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
@@ -13924,11 +14035,9 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD idx,
                                                IDirect3DSurface9** ppS) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "GetRenderTarget", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "GetRenderTarget", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "GetRenderTarget", hr);
-            return hr;
+            return peCall.finish("GetRenderTarget", hr);
         };
         if (!ppS) return finishPeCall(D3DERR_INVALIDCALL);
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
@@ -14029,11 +14138,9 @@ public:
 
     /* ── scene ── */
     HRESULT STDMETHODCALLTYPE BeginScene() noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "BeginScene", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "BeginScene", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "BeginScene", hr);
-            return hr;
+            return peCall.finish("BeginScene", hr);
         };
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
@@ -14043,11 +14150,9 @@ public:
         return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE EndScene()   noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "EndScene", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "EndScene", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "EndScene", hr);
-            return hr;
+            return peCall.finish("EndScene", hr);
         };
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
@@ -14064,11 +14169,9 @@ public:
     HRESULT STDMETHODCALLTYPE Clear(DWORD count, const D3DRECT* pRects,
                                      DWORD flags, D3DCOLOR color,
                                      float z, DWORD stencil) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "Clear", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "Clear", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "Clear", hr);
-            return hr;
+            return peCall.finish("Clear", hr);
         };
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
@@ -14278,11 +14381,9 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "GetViewport", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "GetViewport", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "GetViewport", hr);
-            return hr;
+            return peCall.finish("GetViewport", hr);
         };
         if (!pVP) return finishPeCall(D3DERR_INVALIDCALL);
         // Phase 12: PE shadow is the source of truth. SetViewport writes
@@ -14314,11 +14415,9 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "GetScissorRect", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "GetScissorRect", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "GetScissorRect", hr);
-            return hr;
+            return peCall.finish("GetScissorRect", hr);
         };
         if (!pR) return finishPeCall(D3DERR_INVALIDCALL);
         // Phase 12: PE shadow is the source of truth (see GetViewport).
@@ -15165,13 +15264,11 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) noexcept override {
-        const auto peCall =
-            notePeDeviceCallAfterPresent("SetVertexDeclaration");
+        PeCallScope peCall(*this, "SetVertexDeclaration");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "SetVertexDeclaration", hr);
-            return hr;
+            return peCall.finish("SetVertexDeclaration", hr);
         };
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         // PE-shadow stateblock support: remember that vdecl was touched
@@ -15298,9 +15395,8 @@ public:
                                                         UINT count) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
-        const auto peCall =
-            notePeDeviceCallAfterPresent(
-                "SetVertexShaderConstantF", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "SetVertexShaderConstantF",
+                           DXMT9_PE_CALLSITE_PC());
         const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
@@ -15309,8 +15405,7 @@ public:
                 recordPeConstSetterCpu(D9C_COMMAND_RECORD_SET_VS_CONST_F,
                                        callEntryNs, count);
             }
-            logPeCallReturnAfterPresent(peCall, "SetVertexShaderConstantF", hr);
-            return hr;
+            return peCall.finish("SetVertexShaderConstantF", hr);
         };
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -15381,12 +15476,11 @@ public:
     HRESULT STDMETHODCALLTYPE SetStreamSource(UINT stream,
                                                IDirect3DVertexBuffer9* pBuf,
                                                UINT offset, UINT stride) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent("SetStreamSource");
+        PeCallScope peCall(*this, "SetStreamSource");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "SetStreamSource", hr);
-            return hr;
+            return peCall.finish("SetStreamSource", hr);
         };
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
@@ -15480,12 +15574,11 @@ public:
 
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override {
-        const auto peCall = notePeDeviceCallAfterPresent("SetIndices");
+        PeCallScope peCall(*this, "SetIndices");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::VertexInput);
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "SetIndices", hr);
-            return hr;
+            return peCall.finish("SetIndices", hr);
         };
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
         if (indexBuf_ == pIBuf) return finishPeCall(S_OK);
@@ -15540,9 +15633,8 @@ public:
                                                        UINT count) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
-        const auto peCall =
-            notePeDeviceCallAfterPresent(
-                "SetPixelShaderConstantF", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "SetPixelShaderConstantF",
+                           DXMT9_PE_CALLSITE_PC());
         const std::int64_t callEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
@@ -15551,8 +15643,7 @@ public:
                 recordPeConstSetterCpu(D9C_COMMAND_RECORD_SET_PS_CONST_F,
                                        callEntryNs, count);
             }
-            logPeCallReturnAfterPresent(peCall, "SetPixelShaderConstantF", hr);
-            return hr;
+            return peCall.finish("SetPixelShaderConstantF", hr);
         };
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -15613,11 +15704,9 @@ public:
                                              UINT count) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "DrawPrimitive", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "DrawPrimitive", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "DrawPrimitive", hr);
-            return hr;
+            return peCall.finish("DrawPrimitive", hr);
         };
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
@@ -15679,11 +15768,9 @@ public:
                                                     UINT count) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "DrawIndexedPrimitive", hr);
-            return hr;
+            return peCall.finish("DrawIndexedPrimitive", hr);
         };
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
@@ -15758,11 +15845,9 @@ public:
                                                UINT stride) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "DrawPrimitiveUP", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "DrawPrimitiveUP", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(peCall, "DrawPrimitiveUP", hr);
-            return hr;
+            return peCall.finish("DrawPrimitiveUP", hr);
         };
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
@@ -15820,12 +15905,9 @@ public:
                                                       UINT stride) noexcept override {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
-        const auto peCall = notePeDeviceCallAfterPresent(
-            "DrawIndexedPrimitiveUP", DXMT9_PE_CALLSITE_PC());
+        PeCallScope peCall(*this, "DrawIndexedPrimitiveUP", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
-            logPeCallReturnAfterPresent(
-                peCall, "DrawIndexedPrimitiveUP", hr);
-            return hr;
+            return peCall.finish("DrawIndexedPrimitiveUP", hr);
         };
         // T2 device-lost gate.
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);

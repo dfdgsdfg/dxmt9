@@ -97,16 +97,48 @@ def main() -> int:
         fail("D3D9PeRecorderFlush must have exactly one derived implementation")
     require(
         child_hpp,
+        "virtual void NotifyPeFirstCallAfterPresentForChild(",
+        "void first-call notification",
+    )
+    require(
+        child_hpp,
         "const char *callName, const void *callerPc = nullptr) noexcept = 0;",
         "pure first-call notification",
     )
     require(
         child_hpp,
-        "const char *callName, HRESULT hr) noexcept = 0;",
+        "virtual D3D9PePresentCallSlot PushPeCallScopeForChild(",
+        "pure call-scope push",
+    )
+    require(
+        child_hpp,
+        "virtual void NotifyPeCallScopeReturnForChild(D3D9PePresentCallSlot slot,",
+        "pure call-scope return notification",
+    )
+    require(
+        child_hpp,
+        "HRESULT hr) noexcept = 0;",
         "pure return notification",
     )
+    require(
+        child_hpp,
+        "virtual void PopPeCallScopeForChild(D3D9PePresentCallSlot slot) noexcept = 0;",
+        "pure call-scope pop",
+    )
+    # Observer boundary (see agents/rules/codebase_conventions.rules.md): the
+    # ~96-byte PE call-tracking sample is diagnostic storage owned by
+    # d3d9_pe_device.cpp. Only the register-sized slot handle may cross this
+    # header, and the device's own entry note must stay void -- returning the
+    # sample by value put it back into 118 hot-path call-site contracts.
+    forbid(child_hpp, "D3D9PePresentCallToken", "diagnostic sample in child header")
+    require(
+        device,
+        "void notePeDeviceCallAfterPresent(const char* callName,",
+        "void device entry note",
+    )
     require(device, "NotifyPeFirstCallAfterPresentForChild(", "first-call override")
-    require(device, "NotifyPeCallReturnAfterPresentForChild(", "return override")
+    require(device, "NotifyPeCallScopeReturnForChild(", "call-scope return override")
+    require(device, "PopPeCallScopeForChild(", "call-scope pop override")
 
     for dead in (
         "shadowedTextureEquals",

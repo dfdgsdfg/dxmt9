@@ -18,7 +18,13 @@
 #define DXMT9_PE_CALLSITE_PC() nullptr
 #endif
 
-static constexpr std::size_t D3D9PePresentCallStackDepth = 12;
+// Opaque register-sized handle to one entry sample of the PE call-tracking
+// diagnostic (DXMT9_PE_RECORDER_STATS). The sample itself is a ~96-byte record
+// owned by d3d9_pe_device.cpp; only this index crosses a hot-path signature.
+// See "Observer boundary" in agents/rules/codebase_conventions.rules.md.
+using D3D9PePresentCallSlot = std::uint32_t;
+static constexpr D3D9PePresentCallSlot kD3D9PePresentCallSlotNone =
+    static_cast<D3D9PePresentCallSlot>(-1);
 
 // PE-side snapshot taken by D3D9StateBlockImpl::Capture(). Lives entirely in
 // the PE process; never crosses the unix boundary. Holds enough state to
@@ -44,18 +50,6 @@ struct D3D9StateBlockShadow {
   bool initialized = false;
 };
 
-struct D3D9PePresentCallToken {
-  bool tracked = false;
-  std::uint64_t ordinal = 0;
-  std::uint32_t callCount = 0;
-  std::int64_t returnNs = 0;
-  std::int64_t entryNs = 0;
-  const void *callerPc = nullptr;
-  std::uint32_t threadId = 0;
-  std::uint8_t callerStackCount = 0;
-  std::array<const void *, D3D9PePresentCallStackDepth> callerStack{};
-};
-
 struct D3D9PeRecorderFlush {
   virtual HRESULT FlushPeRecorderForChild() = 0;
   virtual bool IsStateBlockRecordingForChild() const = 0;
@@ -72,11 +66,19 @@ struct D3D9PeRecorderFlush {
       std::uint32_t flags,
       const dxmt9::d3d9::pe::PeWireObjectRef &query) = 0;
   virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
-  virtual D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
+  // PE call-tracking diagnostic (DXMT9_PE_RECORDER_STATS). No diagnostic
+  // payload type crosses this interface: the fire-and-forget entry note returns
+  // nothing, and a call that also wants the paired return log takes a
+  // register-sized slot handle into the device's own sample storage. Every one
+  // of these is a single cached-bool test when tracking is off.
+  virtual void NotifyPeFirstCallAfterPresentForChild(
       const char *callName, const void *callerPc = nullptr) noexcept = 0;
-  virtual void NotifyPeCallReturnAfterPresentForChild(
-      const D3D9PePresentCallToken &token,
-      const char *callName, HRESULT hr) noexcept = 0;
+  virtual D3D9PePresentCallSlot PushPeCallScopeForChild(
+      const char *callName, const void *callerPc) noexcept = 0;
+  virtual void NotifyPeCallScopeReturnForChild(D3D9PePresentCallSlot slot,
+                                               const char *callName,
+                                               HRESULT hr) noexcept = 0;
+  virtual void PopPeCallScopeForChild(D3D9PePresentCallSlot slot) noexcept = 0;
   virtual void NotifyRenderTapeObjectDefineForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &object,
       std::span<const std::byte> descriptor,
@@ -133,6 +135,46 @@ struct D3D9PeRecorderFlush {
 
 protected:
   ~D3D9PeRecorderFlush() = default;
+};
+
+// RAII scope for the child wrappers whose entry note is paired with a return
+// log. Off (the default) it is one virtual call that answers "not tracked" from
+// a cached bool, and the object is two words; nothing is constructed, copied,
+// or torn down. On, the entry sample lives in the device's own storage and this
+// holds only its slot handle, so the ~96-byte record never rides a wrapper's
+// call frame or signature. The destructor releases the slot, so an early return
+// that skips finish() leaks nothing; finish() is a no-op for an untracked
+// scope, which reproduces the pre-scope behaviour of "no entry note, no return
+// log". See "Observer boundary" in agents/rules/codebase_conventions.rules.md.
+class D3D9PeChildCallScope {
+public:
+  D3D9PeChildCallScope(D3D9PeRecorderFlush *recorder, const char *callName,
+                       const void *callerPc) noexcept {
+    if (!recorder)
+      return;
+    const D3D9PePresentCallSlot slot =
+        recorder->PushPeCallScopeForChild(callName, callerPc);
+    if (slot == kD3D9PePresentCallSlotNone)
+      return;
+    recorder_ = recorder;
+    slot_ = slot;
+  }
+  D3D9PeChildCallScope(const D3D9PeChildCallScope &) = delete;
+  D3D9PeChildCallScope &operator=(const D3D9PeChildCallScope &) = delete;
+  ~D3D9PeChildCallScope() noexcept {
+    if (recorder_)
+      recorder_->PopPeCallScopeForChild(slot_);
+  }
+
+  HRESULT finish(const char *callName, HRESULT hr) noexcept {
+    if (recorder_)
+      recorder_->NotifyPeCallScopeReturnForChild(slot_, callName, hr);
+    return hr;
+  }
+
+private:
+  D3D9PeRecorderFlush *recorder_ = nullptr;
+  D3D9PePresentCallSlot slot_ = kD3D9PePresentCallSlotNone;
 };
 
 // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when userMemory is non-null

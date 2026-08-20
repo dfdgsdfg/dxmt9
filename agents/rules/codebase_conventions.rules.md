@@ -83,6 +83,43 @@ conventions, not feature requirements; durable behavior belongs in `specs/`.
   loading policy. Keep build and runtime changes explicit about which lane they
   affect.
 
+## Observer Boundary
+
+A diagnostic observes a hot path; it must not become part of it. The disabled
+path is the one that ships, so it is the one the design is judged on.
+
+- Diagnostics must not add types, fields, parameters, or return values to a
+  hot-path signature. A payload that exists only to be logged belongs in the
+  diagnostic's own storage, reached through a register-sized handle or an RAII
+  scope — never returned by value across the call the app actually made.
+- The disabled path costs at most one cached-bool test. No struct construction,
+  no zero-fill, no copy, no unconditional write. An early `return {}` inside the
+  helper is not enough: the fat return type is still baked into every call site's
+  contract.
+- Prefer a pull/sampling observer that reads the hot path from outside over an
+  inline scaffold that rides inside it. `DXMT9_PE_THREAD_SAMPLER`
+  (`src/d3d9/d3d9_pe_thread_sampler.hpp`, documented in
+  [environment_variables_bridge.rules.md](environment_variables_bridge.rules.md))
+  is the exemplar: one sampler thread reads the game thread's PC and costs the
+  measured path nothing when unset.
+- An inline scope that must stay inline documents its measured cost, or hides
+  behind an explicit opt-in env var. `DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT` exists
+  because a timer shipped ungated on a cost nobody had measured.
+
+Measured incidents, three shapes of the same mistake:
+
+| Incident | Shape |
+|---|---|
+| **PE call-token contract** | `D3D9PePresentCallToken`, ~96 bytes of ordinal / timestamps / a 12-entry caller stack, returned **by value** from the entry note at 118 D3D9 call sites (88 device entry points, 30 child wrappers) and named in the child recorder's virtual interface — for logs only `DXMT9_PE_RECORDER_STATS` reads. |
+| **Per-draw debug groups** | A string format, a bridged `WMT::String` allocation, and a push/pop per draw: `2.7 ms/present` on GT2 — see [environment_variables_capture.rules.md](environment_variables_capture.rules.md) (`DXMT9_PER_DRAW_DEBUG_GROUPS`) and [metal_debugging.rules.md](metal_debugging.rules.md) §2. |
+| **Ungated `PerfScope` family** | `4.64 ms/present` (`11.5%` of the frame) against the encode stage wall, after an A/B against frame wall had priced it at `0.3%` — see [environment_variables_perf.rules.md](environment_variables_perf.rules.md). |
+
+How to price one of these is a separate question with its own rules:
+[metal_debugging.rules.md](metal_debugging.rules.md) and
+[environment_variables_perf.rules.md](environment_variables_perf.rules.md). This
+section is only about the structural rule — keep diagnostics out of hot-path
+type contracts, so the question of cost never reaches the call site.
+
 ## Metal / ObjC++ Runtime
 
 - Keep Objective-C++ and Metal ownership inside unix/provider/runtime modules.
