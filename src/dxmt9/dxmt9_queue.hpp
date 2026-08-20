@@ -743,7 +743,13 @@ class QueueLifecycleController {
     std::deque<u64>* completedSeqQueue = nullptr;
     std::deque<u64>* completedPresentSeqQueue = nullptr;
     size_t* inflightCount = nullptr;
-    u64* completedSeqId = nullptr;
+    // Atomic only so the map DISCARD fast path can read the GPU watermark
+    // without `mutex` (design T2c). This controller is the SOLE writer
+    // (`drainCompletedSequence`) and always writes with `mutex` held, so the
+    // relaxed loads inside it are exact and the release store is what the
+    // producer's acquire load pairs with. See the memory-order argument on
+    // `CommandQueue::completedSeqId_`.
+    std::atomic<u64>* completedSeqId = nullptr;
     u64* presentCompletedSeqId = nullptr;
     // Commit-replay offload ordinal (TLA+: PresentFrameLatency ordinal
     // variant). Incremented once per present retired in drainCompletedSequence,

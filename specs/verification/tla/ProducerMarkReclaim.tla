@@ -82,6 +82,14 @@
  *     single `std::atomic<u64>` acquire load. The memory-model obligation
  *     stays with the deterministic interleaving harness (design §5 layer 3,
  *     R-VERIF-7.3).
+ *   - `CaptureRead` abstracts WHAT the capture copies to a single "the record
+ *     existed" obligation. That abstraction is licensed by design §7 Q1 (the
+ *     read-set is producer-written only), NOT proven here; the audit is the
+ *     evidence and `Pool::producerOwnership_` is its executable guard.
+ *   - `MapFastRead` models only the T2c watermark READ. The rename-ring
+ *     rotation that `finalizeBufferMap` performs on the same lock-free fast
+ *     path is `producer-owned` and is modelled by `BufferBackingVersioning`,
+ *     not here.
  *   - It does not model HandleArena's generation check, which is an
  *     independent fail-closed *detection* of a stale handle. The property
  *     checked here is ordering: a being-marked record is never reclaimed in
@@ -92,8 +100,24 @@
  *   Safety   — TypeOK, NoUseAfterFree, NoReclaimInsideMarkWindow,
  *              ReclaimRespectsWatermark, PinnedRecordsAreNotDestroyPending,
  *              MapReadSound, WorkerAppendCoveredByStamps,
- *              CommitStampsCoverChunkSeq
+ *              CommitStampsCoverChunkSeq, NoCaptureAfterFree,
+ *              StampsPrecedeCapture
  *   Action   — MarkMonotonic, CompletedMonotonic, ObservedCompletedMonotonic
+ *
+ * Counterexample configurations (all executed by
+ * `scripts/check/verify_tla.sh` as expected failures):
+ *   .counterexample          PinDiscipline="Removed"     → NoUseAfterFree
+ *   .restamp.counterexample  RestampDiscipline="Removed" → NoUseAfterFree
+ *   .capture.counterexample  PinDiscipline="Removed"     → NoCaptureAfterFree
+ *
+ * The third reuses the EXISTING pin axis rather than adding a redundant
+ * `CapturePinDiscipline` constant: T2b's capture has exactly one safety
+ * premise beyond Q1's read-set audit — the record still exists — and that
+ * premise is the pin chain, so deleting the pin is precisely the deletion
+ * that exposes the capture-side violation. It differs from
+ * `.counterexample` only in which invariant it asks TLC to report: listing
+ * `NoUseAfterFree` there too would hide the capture trace behind the shorter
+ * mark-window one (same axis, three steps instead of six).
  *)
 
 EXTENDS Naturals, FiniteSets
@@ -322,6 +346,40 @@ StampMark(r) ==
  * only, so no ordering against worker progress is required — the ONLY safety
  * obligation left is that the record still exists. Modelled with the same
  * fault-recording shape as StampMark.
+ *
+ * T2b RUNS THIS WITHOUT `CommandQueue::mutex_`, so — exactly like StampMark —
+ * it must not be excluded against Reclaim / SetDestroyPending /
+ * AdvanceCompleted / WorkerReleaseRefs / WorkerStampMark / SlotAdvance, and
+ * it is not: the only guards are the commit phase and the per-record
+ * capture/mark bookkeeping. Three consequences worth stating explicitly,
+ * because each is a premise the mutex used to supply for free:
+ *
+ *   1. EXISTENCE. `freed[r]` is deliberately NOT a guard, so capturing a
+ *      reclaimed record is *reachable* and recorded rather than excluded by
+ *      fiat. What actually keeps it unreachable in production is the pin
+ *      chain: chunk-named ⇒ retainerPinned (PinChunkResources) ⇒
+ *      ~destroyPending (SetDestroyPending's premise) ⇒ outside `gcArena`'s
+ *      gate. `NoCaptureAfterFree` states the obligation on its own, and
+ *      `.capture.counterexample.cfg` (PinDiscipline="Removed") is the trace
+ *      that violates it.
+ *
+ *   2. OTHER RECORDS. Design §8's T2b row asks for the worker-reclaim actor
+ *      erasing records the capture does NOT name, concurrently with it.
+ *      WorkerReleaseRefs → SetDestroyPending(r') → Reclaim(r') interleaves
+ *      freely with CaptureRead(r) here. In production that is a `std::deque`
+ *      slot release under HandleArena's own unique lock while the capture
+ *      holds its shared lock, which is why container-level aliasing is a
+ *      pointer-stability argument (pool header) rather than a model variable.
+ *
+ *   3. NO RE-STAMP ANALOG. The capture copies producer-owned VALUES; nothing
+ *      it reads is derived from the seq ticket, and nothing downstream
+ *      compares the snapshot against `commitSeqId`. So the frozen-ticket
+ *      re-read that StampMark's counterpart owes (WorkerRestamp) has no
+ *      capture-side twin — there is no quantity a later SlotAdvance could
+ *      make stale. That is also why `StampsPrecedeCapture` is the only
+ *      ordering the two owe each other, and it points the one way that is
+ *      repairable: a too-low stamp is fixed by a monotone re-stamp, an early
+ *      capture is not fixable at all.
  *)
 CaptureRead(r) ==
   /\ commitPhase = "Marking"
@@ -754,6 +812,36 @@ CommitStampsCoverChunkSeq ==
     \A r \in marked : lastUsedSeqId[r] >= commitSeqId
 
 (*
+ * NoCaptureAfterFree  — the T2b existence obligation, on its own.
+ * Stated over `captured` rather than through the shared `useAfterFree` flag so
+ * a configuration can ask TLC to report the CAPTURE-side violation
+ * specifically. It is strictly two-sided: it fails both when a CaptureRead
+ * touches an already-freed record and when a Reclaim frees a record this
+ * commit has already captured, which is the whole of "the snapshot the chunk
+ * is about to publish describes a record that still exists".
+ *
+ * Under `PinDiscipline = "Enforced"` it follows from the pin chain:
+ * `captured \subseteq marked \subseteq chunkNamed`, every chunkNamed record is
+ * retainerPinned for the whole window, a pinned record cannot become
+ * destroyPending, and `gcArena`'s gate needs destroyPending. `ReleasePins`
+ * clears `captured` in the same step it drops the pins, so the invariant never
+ * outlives its premise.
+ *
+ * `.capture.counterexample.cfg` deletes that chain and is expected to fail
+ * exactly this invariant.
+ *)
+NoCaptureAfterFree == \A r \in captured : ~freed[r]
+
+(*
+ * StampsPrecedeCapture  — design spec §4's third ordering protocol.
+ * Also a TypeOK conjunct, and repeated here on purpose: as a named invariant a
+ * regression is reported as the protocol it broke rather than as a type error,
+ * and T2b is the change that makes the ordering a real obligation instead of a
+ * side effect of both steps sharing one mutex hold.
+ *)
+StampsPrecedeCapture == captured \subseteq marked
+
+(*
  * MapReadSound
  * The producer's atomic `completedSeqId` read never runs ahead of the truth,
  * so a DISCARD fast path that acts on it can only be conservative.
@@ -769,6 +857,8 @@ Safety ==
   /\ MapReadSound
   /\ WorkerAppendCoveredByStamps
   /\ CommitStampsCoverChunkSeq
+  /\ NoCaptureAfterFree
+  /\ StampsPrecedeCapture
 
 (* ================================================================
    Action properties

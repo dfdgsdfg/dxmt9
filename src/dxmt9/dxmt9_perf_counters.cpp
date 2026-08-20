@@ -6213,6 +6213,14 @@ void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds) {
   add(counters().commitChunkPhasePresentWaitNs, nanoseconds);
 }
 
+void countMarkTicketRestamp(bool restamped) {
+  auto& c = counters();
+  add(c.markTicketRestampChecks);
+  if (restamped) {
+    add(c.markTicketRestampFires);
+  }
+}
+
 void countOffloadPushBackpressureWait() {
   add(counters().offloadPushBackpressureWaits);
 }

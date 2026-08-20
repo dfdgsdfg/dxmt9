@@ -612,7 +612,10 @@ struct QueueFixture {
   std::deque<std::uint64_t> completedSeqQueue{};
   std::deque<std::uint64_t> completedPresentSeqQueue{};
   std::size_t inflightCount = 0;
-  std::uint64_t completedSeqId = 0;
+  // Atomic only so the map DISCARD fast path can read the GPU watermark
+  // without the queue mutex (design T2c); the controller is still the sole
+  // writer and still writes under it.
+  std::atomic<std::uint64_t> completedSeqId{0};
   std::uint64_t presentCompletedSeqId = 0;
   std::uint64_t lastCommittedSeqId = 0;
   CpuReadyTape cpuReadyTape;
@@ -845,7 +848,7 @@ void runEncodeIterationPassesLiveSlotStorage() {
         "inline single-source completion releases the live slot");
   check(fixture.controller.runFinishIteration(lock),
         "finish accepts an already inline-reclaimed completed sequence");
-  checkEq(fixture.completedSeqId, 1ull,
+  checkEq(fixture.completedSeqId.load(), 1ull,
           "finish advances the inline completion waterline");
   checkEq(fixture.inflightCount, 0u,
           "finish retires inline Tape residency accounting");
@@ -1836,7 +1839,7 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   appendCompletionSourcesToQueues(
       fixture.completedSeqQueue,
       &fixture.completedPresentSeqQueue,
-      fixture.completedSeqId,
+      fixture.completedSeqId.load(),
       record.explicitCompletionSourceSpan());
 
   std::uint64_t finishedSeq = 0;
@@ -1859,7 +1862,7 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   checkEq(finishedSeq, 2ull, "tail seq completes second");
   check(fixture.slots[1].state == ChunkSlot::State::Free,
         "tail is freed after its completion drains");
-  checkEq(fixture.completedSeqId, 2ull, "completed seq advances through tail");
+  checkEq(fixture.completedSeqId.load(), 2ull, "completed seq advances through tail");
   checkEq(fixture.presentCompletedSeqId, 2ull,
           "present completion advances at the tail seq");
 }
@@ -1967,7 +1970,7 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
             lock, [&](std::uint64_t seqId) { finishedSeq = seqId; }),
         "tail watcher-produced completion drains");
   checkEq(finishedSeq, 3ull, "tail watcher completion finishes source 3");
-  checkEq(fixture.completedSeqId, 3ull,
+  checkEq(fixture.completedSeqId.load(), 3ull,
           "completed seq advances through the full session");
   checkEq(fixture.presentCompletedSeqId, 3ull,
           "present completion advances only at the session tail");

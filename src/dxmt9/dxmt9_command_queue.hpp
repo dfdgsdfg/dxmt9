@@ -908,16 +908,47 @@ class CommandQueue {
     return nextSeqId_.load(std::memory_order_acquire);
   }
 
-  // R-BACK-43.4 `queue-shared`. REASON IT IS NOT ONE OF THE NARROWER CLASSES:
-  // it is the reclaim gate's read side and has three driving actors — the
-  // completion loop advances it, the producer reads it on the map/DISCARD
-  // fast path (`mapWaitSeqId` / `finalizeBufferMap`), and the replay offload
-  // worker reads it when a last-ref drop runs destroy-and-gc. No single owner
-  // exists to publish from, so `mutex_` is the synchronization. Design T2c
-  // would move it to `owner-published` (completion-written atomic) once the
-  // R-BACK-43.6 ladder covers the map fast path; until then, do not read it
-  // without `mutex_`.
-  std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
+  // R-BACK-43.4 `owner-published` (design T2c; was `queue-shared`).
+  // PUBLICATION MECHANISM: the completion loop is the sole writer — one site,
+  // `QueueLifecycleController::drainCompletedSequence`'s monotone
+  // `max(completedSeqId, seqId)` — and it still runs under `mutex_`, now with
+  // a release store. Readers that hold `mutex_` load relaxed and get an exact
+  // value, because every writer needs the same mutex. The map DISCARD fast
+  // path (`CommandQueue::mapBuffer` when `mapWaitSeqId` returned 0) holds no
+  // lock and loads acquire.
+  //
+  // Memory-order argument for the lock-free read
+  // (`completedSeqIdAcquire()`), the same shape as `nextSeqId_` above:
+  //   * The writer publishes with `release`, so a reader that observes seq N
+  //     also observes the writes that PRECEDE the store — the completed-queue
+  //     pop. Deliberately not more: the inflight decrement and the present
+  //     watermark follow the store inside the same hold and are NOT ordered
+  //     by it. That is sound because no lock-free reader reads them; the one
+  //     lock-free consumer is `finalizeBufferMap`, which uses the value
+  //     alone.
+  //   * The reader loads with `acquire`. The value may be STALE — some
+  //     completion raised it after the load — but never invented and never
+  //     regressed, because the variable is monotone and has one writer. Stale
+  //     in the low direction is the SAFE direction for every consumer here:
+  //     `finalizeBufferMap` uses it to decide whether a rename-ring entry is
+  //     idle, and a too-low watermark can only make it fresh-allocate a
+  //     backing it could have reused. TLA+: ProducerMarkReclaim!MapFastRead,
+  //     invariant `MapReadSound`.
+  //   * It is NOT the reclaim gate's read side. `gcArena` /
+  //     `Pool::reclaimCompleted` are driven from the finish loop with `mutex_`
+  //     held, so the gate still sees the exact value.
+  std::atomic<std::uint64_t> completedSeqId_{0};  // gpu-completed watermark
+
+  // TLA+: ProducerMarkReclaim!MapFastRead — the T2c lock-free watermark read.
+  std::uint64_t completedSeqIdAcquire() const noexcept {
+    return completedSeqId_.load(std::memory_order_acquire);
+  }
+  // Exact read for callers that already hold `mutex_`; see the argument above
+  // for why `relaxed` loses nothing there.
+  std::uint64_t completedSeqIdLocked() const noexcept {
+    return completedSeqId_.load(std::memory_order_relaxed);
+  }
+
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed

@@ -1797,6 +1797,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_phase_mark_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkPhaseMarkBuffers, nullptr, nullptr, 0.0},
     {"commit_chunk_phase_enqueue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhaseEnqueueNs, nullptr, nullptr, 0.0},
     {"commit_chunk_phase_present_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhasePresentWaitNs, nullptr, nullptr, 0.0},
+    {"mark_ticket_restamp_checks", CounterEntry::Kind::UnsignedCount, &Counters::markTicketRestampChecks, nullptr, nullptr, 0.0},
+    {"mark_ticket_restamp_fires", CounterEntry::Kind::UnsignedCount, &Counters::markTicketRestampFires, nullptr, nullptr, 0.0},
     {"offload_push_backpressure_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadPushBackpressureWaits, nullptr, nullptr, 0.0},
     {"offload_push_backpressure_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadPushBackpressureWaitNs, nullptr, nullptr, 0.0},
     {"offload_worker_idle_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadWorkerIdleWaitNs, nullptr, nullptr, 0.0},

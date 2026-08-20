@@ -1018,6 +1018,43 @@ Pool::captureChunkBufferBinding(core::Handle handle) const noexcept {
   return capture;
 }
 
+core::ChunkBufferBindingCaptureResult Pool::captureChunkBufferBindings(
+    std::span<const core::ChunkHandleEntry> entries,
+    std::vector<core::ChunkBufferBindingSnapshot>& snapshots) const {
+  // R-BACK-43.4/43.5 — T2b. Every field `captureChunkBufferBinding` reads is
+  // `producer-owned` (design §7 Q1), so this loop needs no ordering against
+  // the replay worker or the encode thread and does NOT take
+  // `CommandQueue::mutex_`. This assert is the executable half of that claim:
+  // it fires if a second thread ever reaches the commit-time capture.
+  //
+  // The other half — the record still EXISTS while we read it — is the pin
+  // chain, not this token: a chunk-named record is retainer-pinned for the
+  // whole of `commit_chunk`, so it cannot be `destroyPending` and `gcArena`
+  // cannot reach it. TLA+: ProducerMarkReclaim!CaptureRead under
+  // `PinDiscipline = "Enforced"`, with `NoCaptureAfterFree` as the obligation
+  // and `ProducerMarkReclaim.capture.counterexample.cfg` as the trace that
+  // violates it once the pin is deleted.
+  //
+  // Container-level safety is separate again and is the arena's: each probe
+  // takes HandleArena's shared lock, `gcArena` takes its unique lock, and the
+  // slot storage is a pointer-stable `std::deque` (R-VERIF-3.4). So a
+  // concurrent worker-driven reclaim of some OTHER record cannot move or
+  // invalidate the slot this loop is reading.
+  DXMT_ASSERT_OWNED_BY(producerOwnership_);
+  bool missingRequired = false;
+  for (const auto& entry : entries) {
+    if (entry.kind != core::ChunkHandleKind::Buffer) {
+      continue;
+    }
+    snapshots.push_back(captureChunkBufferBinding(entry.handle));
+    missingRequired |= snapshots.back().requiresCapturedBacking &&
+                       !snapshots.back().snapshot.valid();
+  }
+  return missingRequired
+             ? core::ChunkBufferBindingCaptureResult::MissingRequired
+             : core::ChunkBufferBindingCaptureResult::Complete;
+}
+
 CapturedBufferSnapshotStatus Pool::validateCapturedBufferSnapshot(
     core::Handle handle,
     const core::DrawBufferBindingSnapshot& snapshot) const noexcept {

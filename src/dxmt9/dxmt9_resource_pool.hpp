@@ -7,15 +7,18 @@
 // Concurrency contract:
 //
 //  * **Mutating ops** (`createBuffer`/`createTexture`/`createSurface`,
-//    `destroy*`, `finalizeBufferMap`, `reclaim*`) normally require
-//    `CommandQueue::mutex_`. The exception is the `mark*` phase: every
-//    `mark*Use` / `mark*Resources` entry point bottoms out in an
-//    `arena.update()` on the record's own slot and touches no other Pool or
-//    queue state, so HandleArena's own mutex is sufficient to serialize it.
-//    A caller may therefore stamp retained objects with a seqId while holding
-//    no queue lock. This exception does not permit capture, lookup of
-//    later-live Pool state, or any other Pool mutation outside
+//    `destroy*`, `reclaim*`) normally require `CommandQueue::mutex_`. Three
+//    named families are exceptions, each because the state it reaches is
+//    serialized by something narrower than the queue mutex. The exceptions
+//    are exhaustive: nothing else may touch Pool outside
 //    `CommandQueue::mutex_`.
+//
+//    (1) THE ARENA-STAMP EXCEPTION — `mark*`. Every `mark*Use` /
+//    `mark*Resources` entry point bottoms out in an `arena.update()` on the
+//    record's own slot and touches no other Pool or queue state, so
+//    HandleArena's own mutex is sufficient to serialize it. A caller may
+//    therefore stamp retained objects with a seqId while holding no queue
+//    lock.
 //
 //    Three production callers use it (`src/dxmt9/dxmt9_command_queue.cpp`):
 //      - strict arena publication, which pins the ticket/source transaction,
@@ -40,6 +43,73 @@
 //         `CommandQueue::mutex_` (which freezes it) and re-stamp if it moved,
 //         before the mutex-protected step the stamps have to cover.
 //         (`RestampDiscipline = "Removed"`.)
+//
+//    (2) THE COMMIT-TIME CAPTURE — `captureChunkBufferBindings` (design T2b).
+//    Until 2026-08-21 clause (1) ended with the carve-out "this exception
+//    does not permit capture ... outside `CommandQueue::mutex_`". That is no
+//    longer the contract, and the narrower truth that replaces it is: the
+//    capture may run outside the queue mutex, and owes obligation 1 above and
+//    NOT obligation 2.
+//      - It owes PIN ORDERING for the same reason the stamps do, and for the
+//        same records: the chunk names them, so the PE retainer holds a unix
+//        reference on each for the whole of `commit_chunk`. That is the entire
+//        existence argument. TLA+ obligation `NoCaptureAfterFree`,
+//        counterexample `ProducerMarkReclaim.capture.counterexample.cfg`.
+//      - It owes NO RE-STAMP because it copies producer-written VALUES, not a
+//        seq: nothing it reads derives from the ticket, so no concurrent
+//        publish can make the snapshot stale. What it does owe instead is
+//        ORDER — the same commit's stamps must already have run
+//        (`StampsPrecedeCapture`), because a too-low stamp is repairable by a
+//        monotone re-stamp and an early capture is not repairable at all.
+//      - Its read-set is `producer-owned` (design §7 Q1; the per-field split
+//        is on `BufferRecord` below), which is why no ordering against the
+//        replay worker or the encode thread is required. `producerOwnership_`
+//        is the R-BACK-43.5 assert that keeps the confinement honest.
+//      - A concurrent worker-driven reclaim of some OTHER record is safe on
+//        the arena's own terms, not the queue mutex's: each probe holds
+//        HandleArena's shared lock, `gcArena` takes its unique lock, and slot
+//        storage is a pointer-stable `std::deque` (R-VERIF-3.4, below).
+//
+//    (3) THE MAP FAST PATH — `mapWaitSeqId` + `finalizeBufferMap` when
+//    `mapWaitSeqId` returned 0 (design T2c). Also outside the queue mutex.
+//    `mapWaitSeqId` reads two `producer-owned` flavor flags plus the
+//    `arena-protected` `lastUsedSeqId`, all under the arena's shared lock —
+//    `CommandQueue::mutex_` has not protected that watermark since T2a' moved
+//    both mark paths onto exception (1), so the read's race profile is
+//    unchanged by moving it out. `finalizeBufferMap` mutates only
+//    `producer-owned` ring state inside one `arena.update()`, and takes the
+//    GPU watermark as a value from `CommandQueue::completedSeqId_`'s acquire
+//    load (`owner-published`; TLA+ `MapFastRead` / `MapReadSound`). The SLOW
+//    path — visibility wait, force-commit — keeps the queue mutex, because it
+//    reads `lastCommittedSeqId_` and drives `commitCurrentChunk` /
+//    `waitForSequence`, which are `queue-shared`.
+//
+//    One consequence of (3) worth spelling out, because the queue mutex used
+//    to hide it: `finalizeBufferMap`'s `rotateBufferBacking` can now run
+//    concurrently with the replay worker's `snapshotBufferBinding` loop in
+//    `CommandQueue::submitDrawRun`, which reads the LIVE ring under the queue
+//    mutex. That is safe for two reasons, NEITHER of which was the queue
+//    mutex:
+//      - Per-record atomicity is the arena's: the rotate holds
+//        `bufferArena_.update`'s unique lock and each snapshot probe holds
+//        `inspect`'s shared lock, so no probe can see a half-rotated record.
+//        Cross-BUFFER atomicity of the worker's loop is genuinely given up,
+//        and is not needed: each stream's binding is correct as of the
+//        instant it was read, and no consumer requires two streams to have
+//        been read at one instant.
+//      - A rotate can never hand out a backing an in-flight replay still
+//        uses, and the guard for that is NOT `lastUsedSeqId` — the worker may
+//        not have stamped it yet, and `submitDrawRun` already unlocks between
+//        its snapshot and its mark. It is
+//        `BufferRenameRingEntry::replayResidency`, a `shared_ptr` whose count
+//        the commit-time `ChunkBufferBindingSnapshot` holds for the whole
+//        lifetime of the chunk that names the buffer;
+//        `rotateBufferBacking`'s idle test reads it through
+//        `replayResident()` inside the same `arena.update()`. Refcount and
+//        test are both correct without any queue lock.
+//    A change that makes the rotate's idle test depend on a seq stamp instead
+//    of that residency ref, or that gives the worker's snapshot loop a
+//    cross-buffer consistency requirement, breaks this and must re-derive it.
 //
 //  * **Lookup ops** (`findBuffer`/`findTexture`/`findSurface`) may be
 //    called without the queue mutex. HandleArena serializes its own slot
@@ -794,6 +864,24 @@ struct Pool {
 
   core::ChunkBufferBindingSnapshot captureChunkBufferBinding(
       core::Handle handle) const noexcept;
+
+  // T2b — the commit-time binding capture for one chunk's whole resource
+  // ledger, callable WITHOUT `CommandQueue::mutex_`; see this header's
+  // concurrency contract for the two obligations that licenses it.
+  //
+  // The loop lives here rather than in `CommandQueue` for one reason: the
+  // R-BACK-43.5 producer-ownership token that guards the `producer-owned`
+  // read-set is a `Pool` member, so this is the only place the confinement
+  // claim can be asserted where the state it protects is declared. The
+  // per-record `captureChunkBufferBinding` above deliberately carries NO such
+  // assert — `snapshotBufferBinding` forwards to it from the replay worker's
+  // draw-run binding snapshot path, which is a legitimate non-producer
+  // reader of the same fields (it reads the committed backing identity, not
+  // the ring shape).
+  core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots) const;
+
   CapturedBufferSnapshotStatus validateCapturedBufferSnapshot(
       core::Handle handle,
       const core::DrawBufferBindingSnapshot& snapshot) const noexcept;

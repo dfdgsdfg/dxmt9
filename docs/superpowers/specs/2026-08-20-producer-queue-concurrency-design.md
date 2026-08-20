@@ -178,9 +178,20 @@ contract change:
   capture is pinned (chunk-named ⇒ retainer-pinned ⇒ not destroyPending).
   Requires the model to include the worker-reclaim actor erasing *other*
   records concurrently (deque slot stability covers the container).
+
+  **Status: implemented** (see §9 step 2 for what the model review found and
+  what it did not need).
 - **T2c — map DISCARD fast path.** `completedSeqId_` becomes an atomic read;
   ring bookkeeping is producer-private; only the Fresh allocation and the
   slow visibility-wait path keep the queue mutex.
+
+  **Status: implemented**, with one correction to the sketch above: the Fresh
+  allocation does NOT keep the queue mutex. `rotateBufferBacking`'s
+  `device.newBuffer` runs inside `finalizeBufferMap`'s single
+  `arena.update()`, on `producer-owned` ring state, and Metal device buffer
+  creation needs no queue lock — so the fast lane takes no queue mutex at all,
+  Fresh case included. Only the slow visibility-wait path keeps it. See §9
+  step 2.
 
 Expected producer recovery if all three land: the full ~1.0 ms/present of
 measured acquire-wait (mark 0.60 + map 0.42 common path), bounded below by
@@ -260,12 +271,92 @@ a protocol. Final implementation order:
    (T2d) is untouched, and `CommandQueue::submitDrawRun` (the non-batch
    path) keeps its mark under the mutex. Evidence still owed: the profile
    re-measurement and the wild matched pair (step 3).
-2. **T2d — reserve-copy-commit slot append**: bump-allocate + ticket under
+2. **T2b + T2c — capture and the map fast path.**
+
+   **Status: implemented.** Model first, per §6, and the review's first
+   finding was that the model needed no structural change: `CaptureRead` was
+   already guarded only by the commit phase and per-record bookkeeping, never
+   by a phase implying mutual exclusion with reclaim, and it already
+   interleaved freely with `Reclaim` / `SetDestroyPending` /
+   `AdvanceCompleted` / `WorkerReleaseRefs` / `SlotAdvance`. §8's T2b
+   requirement — "the worker-reclaim actor erasing *other* records
+   concurrently" — was already reachable. So the T2b work was to make the
+   obligation SAYABLE rather than to make it true.
+
+   Delivered:
+   - Model: two new invariants over existing variables, so no new variable
+     and no new `UNCHANGED` clause. `NoCaptureAfterFree ==
+     \A r \in captured : ~freed[r]` is two-sided on purpose (it fails both
+     when a capture touches a freed record and when a reclaim frees an
+     already-captured one). `StampsPrecedeCapture == captured \subseteq
+     marked` promotes §4's third protocol from a `TypeOK` conjunct to a named
+     invariant, because T2b is what turns it from a side effect of one mutex
+     hold into a real obligation.
+   - Counterexample: **no new Buggy axis.** `PinDiscipline="Removed"` already
+     exercises the capture-side violation, because the pin chain IS the
+     capture's only safety premise beyond Q1's audit — a
+     `CapturePinDiscipline` constant would delete the same conjunct under a
+     second name. `ProducerMarkReclaim.capture.counterexample.cfg` therefore
+     differs from its sibling only in which invariant it asks TLC to report,
+     and that difference is load-bearing: `NoUseAfterFree` trips three steps
+     in and would shadow the capture trace, while listing only
+     `NoCaptureAfterFree` produces `PinChunkResources → BeginMark →
+     SetDestroyPending → Reclaim → StampMark → CaptureRead`. Note the mark
+     and capture run two steps AFTER the free — the production loops walk the
+     chunk's resource list and re-check nothing, which is exactly why the pin
+     has to be the guarantee rather than a liveness test.
+   - Production cfg unchanged at 1,140,594 generated / 276,840 distinct /
+     depth 29 (the new invariants add no state).
+   - T2b: `Pool::captureChunkBufferBindings` owns the loop, so the
+     R-BACK-43.5 assert lives with the token it uses. The per-record
+     `captureChunkBufferBinding` stays assert-free — `snapshotBufferBinding`
+     forwards to it from the replay worker's draw-run snapshot path, a
+     legitimate non-producer reader. `markChunkResourcesAndCaptureBufferBindings`
+     keeps one acquire around the frozen-ticket re-read and nothing else, and
+     that acquire is scoped to close BEFORE the capture so
+     stamps-before-capture stays literally true of both stampings.
+     `CommandQueue::captureChunkBufferBindings` loses its acquire entirely.
+   - T2c: `completedSeqId_` is `std::atomic<u64>` (release store at the one
+     completion-loop writer, still under `mutex_`; `completedSeqIdLocked()`
+     relaxed for mutex holders, `completedSeqIdAcquire()` for the fast path).
+     `mapBuffer` splits on `mapWaitSeqId == 0`, which is safe to decide
+     unlocked because that read-set contains no `queue-shared` state — and
+     `mutex_` had already stopped protecting `lastUsedSeqId` at step 1. The
+     slow lane re-reads `mapWaitSeqId` under the lock so its behaviour is
+     byte-for-byte the pre-T2c one.
+   - Contract: the pool header's carve-out ("does not permit capture …
+     outside `CommandQueue::mutex_`") is replaced by three enumerated,
+     exhaustive exceptions with their individual obligations.
+   - Observability: `mark_ticket_restamp_checks` / `_fires` closes the
+     "Restamp-fire observability" gap row.
+
+   **What did NOT happen, and why it is a gap row rather than an oversight:**
+   the producer's commit path still takes ONE acquire. `seqIdForMark` READS
+   `nextSeqId_` where `ProducerMarkReclaim!BeginMark` RESERVES it
+   (`nextSeqId' = nextSeqId + 1`). That reservation is what makes
+   `CommitStampsCoverChunkSeq` hold with no re-stamp, so the model's producer
+   premise is stronger than production and §9 step 1's "the re-stamp is
+   insurance, not a proven requirement" is exactly right — but insurance
+   needs a frozen ticket, and a frozen ticket needs the mutex. Removing that
+   last acquire means either making the ticket a real reservation and
+   re-checking the model against it, or proving the read sufficient. Tracked
+   in gap.md as "Producer commit acquire not fully removed".
+
+   Evidence still owed: the profile re-measurement and the wild matched pair
+   (step 4).
+3. **T2d — reserve-copy-commit slot append**: bump-allocate + ticket under
    the lock, copy outside, brief re-acquire to advance the slot's committed
    watermark; publishers ship only the committed prefix. Requires a bounded
    model of append/publish/force-publish interleaving (QueueLifecycle family
    extension) with a Buggy cfg showing the half-appended-slot escape when
    the watermark rule is removed.
-3. Re-profile with the same segment instrumentation (duty-cycle target
-   ~2-3%), then the wild fps pair.
+4. Re-profile with the same segment instrumentation (duty-cycle target
+   ~2-3%), then the wild fps pair. Rows to watch after T2b/T2c:
+   `map_buffer` acquire count (the fast lane should remove most of them,
+   which is why the count and not just the hold moves),
+   `capture_chunk_buffer_bindings` acquires → 0,
+   `mark_chunk_resources_and_capture_buffer_bindings` hold → near-zero with
+   its acquire count unchanged, and `mark_ticket_restamp_fires /
+   mark_ticket_restamp_checks` as the first wild reading of the re-stamp
+   window.
 

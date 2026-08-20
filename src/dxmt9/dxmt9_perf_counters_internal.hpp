@@ -1856,6 +1856,14 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkPhaseMarkBuffers{0};
   std::atomic<std::uint64_t> commitChunkPhaseEnqueueNs{0};
   std::atomic<std::uint64_t> commitChunkPhasePresentWaitNs{0};
+  // R-BACK-43.6 frozen-ticket re-stamp protocol
+  // (`restampIfTicketAdvancedLocked`, src/dxmt9/dxmt9_command_queue.cpp). The
+  // window it closes is model-checked but was unmeasured in the wild: `checks`
+  // counts every frozen-ticket re-read, `fires` the subset where the ticket
+  // had actually moved and the stamp loop was replayed. `fires/checks` is how
+  // often a concurrent publish really lands inside a lock-free mark window.
+  std::atomic<std::uint64_t> markTicketRestampChecks{0};
+  std::atomic<std::uint64_t> markTicketRestampFires{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaits{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaitNs{0};
   std::atomic<std::uint64_t> offloadWorkerIdleWaitNs{0};

@@ -27,10 +27,10 @@ Lock domains, from narrowest to widest:
 
 | Domain | Protects | Notes |
 |---|---|---|
-| `HandleArena` internal mutex | slot metadata, `lastUsedSeqId` stamps | The **arena-stamp exception**: publishers may stamp retained objects without the queue mutex (pool header contract; production callers: producer bulk mark, worker draw mark, both via `restampIfTicketAdvancedLocked`'s frozen-ticket protocol). |
+| `HandleArena` internal mutex | slot metadata, `lastUsedSeqId` stamps, commit-time binding capture, map fast path | The **arena-stamp exception** and its two siblings, all three enumerated in the pool header contract: (1) publishers may stamp retained objects without the queue mutex (producer bulk mark, worker draw mark, both via `restampIfTicketAdvancedLocked`'s frozen-ticket protocol); (2) T2b's `captureChunkBufferBindings`; (3) T2c's `mapWaitSeqId` + `finalizeBufferMap` on the no-wait lane. Exhaustive by construction — nothing else touches Pool outside `CommandQueue::mutex_`. |
 | low-4GB shadow pool mutex | wow64 shadow block pool | `7302fa32`; release reachable from the worker. |
 | wire-object cache mutex | PE wire-identity map | create/destroy frequency only. |
-| `CommandQueue::mutex_` | slot lifecycle, watermarks, capture, map waits, pool structure mutation, reclaim | The residual `queue-shared` domain; per-site contention is observable via `DXMT9_PERF_QUEUE_MUTEX_SPLIT` (42 tagged sites + lifecycle segment holds). |
+| `CommandQueue::mutex_` | slot lifecycle, `lastCommittedSeqId_`, map VISIBILITY waits and force-commit, pool structure mutation, reclaim | The residual `queue-shared` domain; per-site contention is observable via `DXMT9_PERF_QUEUE_MUTEX_SPLIT` (42 tagged sites + lifecycle segment holds). Capture left it in T2b and the map fast path's watermark read in T2c, so neither is in this row any more; `completedSeqId_`'s WRITE still happens here. |
 
 ## 2. Established ownership assignments
 
@@ -40,10 +40,11 @@ Evidence: the four source audits in the design doc §7 and the
 | State | Class (R-BACK-43.4) | Evidence / mechanism |
 |---|---|---|
 | Buffer rename ring SHAPE (`renameRing` membership, `renameActiveIndex`, the `buffer`/`contents` mirror) | `producer-owned` | Referenced only inside the pool; worker/encode consume the commit-time snapshot. Scope note: `BufferRenameRingEntry::lastUsedSeqId` is NOT in this class — it is the `arena-protected` row below and is legitimately stamped from the replay worker via `markBufferUse` / `markBufferSnapshotUse`. |
-| Chunk buffer-binding capture read-set (`contents`, `contentRevision`, `desc.size`, flavor flags) | `producer-owned` (writes) + `owner-published` via commit-time snapshot | Every writer is a game-thread path (create/Lock/Unlock/finalize). |
+| Chunk buffer-binding capture read-set (`contents`, `contentRevision`, `desc.size`, flavor flags) | `producer-owned` (writes) + `owner-published` via commit-time snapshot | Every writer is a game-thread path (create/Lock/Unlock/finalize). The capture READ now also runs outside `CommandQueue::mutex_` (T2b): `Pool::captureChunkBufferBindings`, guarded by `producerOwnership_`, with record existence supplied by the retainer pin and container safety by the arena's own lock. |
+| `Pool::mapWaitSeqId` read-set (`isManagedVersioned`, `isDynamicRename`, `lastUsedSeqId`) | `producer-owned` flags + `arena-protected` watermark | Read inside `bufferArena_.inspect`, i.e. under HandleArena's shared lock. No `queue-shared` operand, which is why T2c's lane selector may run unlocked: `CommandQueue::mutex_` stopped protecting `lastUsedSeqId` when T2a' moved BOTH mark paths onto the arena-stamp exception, so the unlocked read has the same race profile as the locked one it replaces. |
 | `lastUsedSeqId` per record | `arena-protected` | Stamped via `markStampUpper` under the arena mutex; monotone max. |
 | `nextSeqId_` | `owner-published` | Writers under the queue mutex with release stores; lock-free acquire reads via `markTicketAcquire()` paired with the re-stamp protocol. |
-| `completedSeqId_` | `queue-shared` today; T2c targets `owner-published` (atomic) | Written by completion, read by map fast path. |
+| `completedSeqId_` | `owner-published` (T2c; was `queue-shared`) | ONE writer — `QueueLifecycleController::drainCompletedSequence`'s monotone max — still under the queue mutex, now with a release store. Locked readers load relaxed (`completedSeqIdLocked()`, exact because every writer needs the same mutex); the map DISCARD fast path loads acquire (`completedSeqIdAcquire()`). Stale-low is the safe direction for its one lock-free consumer: `finalizeBufferMap` can then only fresh-allocate a ring backing it could have reused. It is NOT the reclaim gate's read side — `Pool::reclaimCompleted` is driven from the finish loop with the mutex held. |
 | Writing slot contents | `worker-owned` between `ensureWritingSlot` and publish, EXCEPT the producer's map-wait force-publish | The exception is why unlocked appending is unsafe without the reserve-copy-commit protocol (T2d, model required). |
 | Retainer pins / warm epochs | `producer-owned` (PE side) | Program-ordered release strictly after same-chunk marking; release can synchronously drive reclaim on the releasing thread. |
 | Reclaim gate (`destroyPending` + watermark) | `queue-shared` | Three driving actors (producer, worker, completion), all under the queue mutex; the pin premise keeps marked records out of `destroyPending`. |
@@ -54,9 +55,9 @@ owning declaration, so the class travels with the code:
 
 | State | Declaration site | R-BACK-43.5 assert |
 |---|---|---|
-| Rename ring + capture read-set | `BufferRecord` fields, `struct Pool`, and the pool header's concurrency-contract block (`src/dxmt9/dxmt9_resource_pool.hpp`) | `Pool::producerOwnership_` asserted at `uploadBufferData` / `uploadBufferDataRange` / `finalizeBufferMap`, which dominate every `rotateBufferBacking` entry |
+| Rename ring + capture read-set | `BufferRecord` fields, `struct Pool`, and the pool header's concurrency-contract block (`src/dxmt9/dxmt9_resource_pool.hpp`) | `Pool::producerOwnership_` asserted at `uploadBufferData` / `uploadBufferDataRange` / `finalizeBufferMap`, which dominate every `rotateBufferBacking` entry, plus `captureChunkBufferBindings` (T2b). Deliberately NOT on the per-record `captureChunkBufferBinding`: `snapshotBufferBinding` forwards to it from the replay worker's draw-run binding snapshot path, which is a legitimate non-producer reader of the committed backing identity |
 | PE recorder / chunk builder / retainer | `src/d3d9/d3d9_pe_device.cpp` (`recorderOwnership_`), `d3d9_pe_chunk_builder.hpp`, `d3d9_pe_retainer.hpp` | `D3D9DeviceImpl::assertRecorderThreadConfined()` at the 18 recorder-guarded entry points. The builder and retainer carry declarations only: a construction-bound token inside them would be **incorrect**, not redundant, because `D3DCREATE_MULTITHREADED` legitimately admits other threads under `recorderMutex_` and only the device knows that (the or-locked witness is `recorderLockRequired_`) |
-| `nextSeqId_`, `completedSeqId_` | `src/dxmt9/dxmt9_command_queue.hpp` | none — multi-reader by design; the publication argument is the evidence |
+| `nextSeqId_`, `completedSeqId_` | `src/dxmt9/dxmt9_command_queue.hpp` | none — multi-reader by design; the publication argument is the evidence. Both carry a memory-order argument next to the declaration naming what the acquire read may and may not observe |
 | Writing slot | `CommandQueue::writingSlotOwnership_` | bound at `ensureWritingSlotUnlocked`, asserted or-locked at `submitDrawRunBatchImpl`'s append segment with `lock.owns_lock()` as witness. Structurally true today; it exists so a future unlocked append (T2d) cannot land without the model |
 | Low-4GB shadow pool | `src/d3d9/device_c_low4gb_pool.hpp` + the instance in `device_c_marshal.cpp` | none — mutex-serialized by design |
 
@@ -377,13 +378,31 @@ review obligation, not a resolved fact):
   `PinDiscipline` axis.
 - **Stamps-before-capture**: a low stamp is repairable (monotone max); an
   early capture is not — capture never precedes the marking of the same
-  commit.
+  commit. Under T2b this stopped being a side effect of both loops sharing one
+  mutex hold and became a real obligation, so the acquire in
+  `markChunkResourcesAndCaptureBufferBindings` is scoped to close BEFORE the
+  capture: the order is bulk stamp → (frozen-ticket re-stamp under the lock) →
+  capture. TLA+: `StampsPrecedeCapture`. The capture-only lane
+  (`CommandQueue::captureChunkBufferBindings`, CpuReadyTape planning) is
+  outside this protocol by construction — it captures without marking, and the
+  arena replay stamps later under its own reserved ticket.
+- **Capture owes no re-stamp analog**: the capture is a value copy of
+  producer-written fields. Nothing it reads derives from the seq ticket and
+  nothing downstream compares the snapshot against `commitSeqId`, so there is
+  no quantity a concurrent `SlotAdvance` could make stale. Its only cross-actor
+  obligation is existence, and that is the pin. TLA+ obligation
+  `NoCaptureAfterFree`; counterexample
+  `ProducerMarkReclaim.capture.counterexample.cfg`, which reuses the
+  `PinDiscipline` axis because the pin IS that obligation's proof — a separate
+  `CapturePinDiscipline` constant would delete the same conjunct under a
+  second name.
 
 ## 5. Verification mapping
 
 | Contract | Evidence |
 |---|---|
-| R-BACK-43.4/43.6 mark/reclaim ordering | `ProducerMarkReclaim.tla` (+ 2 counterexample cfgs), shared predicates `canReclaimRecord`/`markStampUpper`, `dxmt9-producer-mark-reclaim-spec` |
+| R-BACK-43.4/43.6 mark/reclaim ordering | `ProducerMarkReclaim.tla` (+ 3 counterexample cfgs: `.counterexample` → `NoUseAfterFree`, `.restamp.counterexample` → `NoUseAfterFree`, `.capture.counterexample` → `NoCaptureAfterFree`; all three executed as expected failures by `scripts/check/verify_tla.sh`), shared predicates `canReclaimRecord`/`markStampUpper`, `dxmt9-producer-mark-reclaim-spec` |
+| R-BACK-43.6 re-stamp window, wild rate | `mark_ticket_restamp_checks` / `mark_ticket_restamp_fires` (`perf::countMarkTicketRestamp`, always on). `fires/checks` measures how often a concurrent publish lands inside a lock-free mark window — the thing the model bounds but could not size |
 | R-BACK-43.5 thread-affinity asserts | `dxmt9::core::ThreadOwnershipToken` + `DXMT_ASSERT_OWNED_BY` / `DXMT_ASSERT_OWNED_BY_OR_LOCKED` in `include/dxmt9/thread_ownership.hpp` — one shared header serving both `src/d3d9` (PE) and `src/dxmt9` (unix), compiled out under `NDEBUG`. Adopters: `D3D9DeviceImpl::recorderOwnership_` (migrated reference shape, `assertRecorderThreadConfined`), `resources::Pool::producerOwnership_` (rename ring + capture read-set writers), `CommandQueue::writingSlotOwnership_` (or-locked at the `submitDrawRunBatchImpl` append). Negative control: inverting the pool assert aborts `dxmt9-dynamic-rename-ring-spec` |
 | Queue-mutex contention observability | `DXMT9_PERF_QUEUE_MUTEX_SPLIT` per-site acquire/hold/segment rows |
 | C++ memory-order obligation | OPEN — deterministic interleaving harness (R-VERIF-7.3 direction), gap.md |

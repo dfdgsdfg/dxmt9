@@ -220,7 +220,9 @@ QueueControllerState makeBoundQueueState(
       .readyCount = state.cpuReadyTape ? state.cpuReadyTape->readyCount() : 0,
       .completedQueueCount = state.completedSeqQueue ? state.completedSeqQueue->size() : 0,
       .inflightCount = state.inflightCount ? *state.inflightCount : 0,
-      .completedSeqId = state.completedSeqId ? *state.completedSeqId : 0,
+      .completedSeqId = state.completedSeqId
+                            ? state.completedSeqId->load(std::memory_order_relaxed)
+                            : 0,
       .lastCommittedSeqId = state.lastCommittedSeqId ? *state.lastCommittedSeqId : 0,
       .slots = state.slots,
   };
@@ -2517,13 +2519,15 @@ bool QueueLifecycleController::completeInlineChunk(
   auto* completedSeqId = submissionBinding_.completedSeqId;
   auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
   if (completedSeqId && completedSeqQueue) {
+    const u64 completedSeqIdValue =
+        completedSeqId->load(std::memory_order_relaxed);
     if (completedSeqQueue->size() >
-            std::numeric_limits<u64>::max() - *completedSeqId) {
+            std::numeric_limits<u64>::max() - completedSeqIdValue) {
       poisonTapeFailureLocked();
       return false;
     }
     const u64 queuedWaterline =
-        *completedSeqId + completedSeqQueue->size();
+        completedSeqIdValue + completedSeqQueue->size();
     if (queuedWaterline == std::numeric_limits<u64>::max() ||
         seqId != queuedWaterline + 1u) {
       poisonTapeFailureLocked();
@@ -2662,10 +2666,21 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   const bool publicationCreditReleased =
       postEncodeCompletionLedger_.completed(seqId);
   // TLA+: QueueLifecycleRefinement / FinishDequeue.
-  DXMT_ASSERT(seqId == *completedSeqId + 1);
+  DXMT_ASSERT(seqId == completedSeqId->load(std::memory_order_relaxed) + 1);
   finishDequeue(seqId, [&] {
     completedSeqQueue->pop_front();
-    *completedSeqId = std::max(*completedSeqId, seqId);
+    // R-BACK-43.4 `owner-published` — the ONE writer of the GPU watermark,
+    // and it still runs with `mutex` held. Release pairs with the T2c map
+    // fast path's `completedSeqIdAcquire()`, which holds no lock. What that
+    // pairing buys is bounded on purpose: it orders the writes BEFORE this
+    // store (the `pop_front` above), not the present/inflight bookkeeping
+    // that follows inside the same hold. No lock-free reader reads those —
+    // the only lock-free consumer is `finalizeBufferMap`, which uses the
+    // value and nothing else. Everything else loads relaxed under `mutex`,
+    // where the mutex is the ordering.
+    completedSeqId->store(
+        std::max(completedSeqId->load(std::memory_order_relaxed), seqId),
+        std::memory_order_release);
     if (publicationCreditReleased) {
       const auto released =
           postEncodeCompletionLedger_.finishAndRelease(seqId);
@@ -2685,8 +2700,10 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
     auto* completedPresentSeqQueue = submissionBinding_.completedPresentSeqQueue;
     auto* presentCompletedSeqId = submissionBinding_.presentCompletedSeqId;
     if (completedPresentSeqQueue && presentCompletedSeqId) {
+      const u64 completedSeqIdValue =
+          completedSeqId->load(std::memory_order_relaxed);
       while (!completedPresentSeqQueue->empty() &&
-             completedPresentSeqQueue->front() <= *completedSeqId) {
+             completedPresentSeqQueue->front() <= completedSeqIdValue) {
         if (completedPresentSeqQueue->front() == seqId) {
           presentSettled = true;
         }
@@ -2698,7 +2715,7 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
         }
       }
       // TLA+: PresentFrameLatency / PresentCompletionSafety.
-      DXMT_ASSERT(*presentCompletedSeqId <= *completedSeqId);
+      DXMT_ASSERT(*presentCompletedSeqId <= completedSeqIdValue);
     }
   });
   if (submissionBinding_.schedulingProgressWatchdog) {
@@ -2868,10 +2885,13 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
   if (!completedSeqId || !finishCv || !stop) {
     return;
   }
-  if (*completedSeqId < targetSeqId) {
+  // Relaxed throughout: the caller holds `lock`, and the sole writer takes the
+  // same mutex, so these loads are exact.
+  if (completedSeqId->load(std::memory_order_relaxed) < targetSeqId) {
     observeWaitForSequence(targetSeqId);
   }
-  const bool waitNeeded = *completedSeqId < targetSeqId;
+  const bool waitNeeded =
+      completedSeqId->load(std::memory_order_relaxed) < targetSeqId;
   const auto waitStarted = std::chrono::steady_clock::now();
   if (waitNeeded) {
     auto* encodeCv = submissionBinding_.encodeCv;
@@ -2882,7 +2902,10 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
     if (encodeCv) {
       encodeCv->notify_one();
     }
-    finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+    finishCv->wait(lock, [&] {
+      return *stop ||
+             completedSeqId->load(std::memory_order_relaxed) >= targetSeqId;
+    });
     {
       std::lock_guard pendingLock(pendingCompletionMutex_);
       DXMT_ASSERT(producerSequenceWaitDepth_ > 0);
@@ -2895,7 +2918,8 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
     }
   }
   // TLA+: QueueLifecycleRefinement / WaitForSequenceSafety.
-  DXMT_ASSERT(*stop || *completedSeqId >= targetSeqId);
+  DXMT_ASSERT(*stop ||
+              completedSeqId->load(std::memory_order_relaxed) >= targetSeqId);
   if (waitNeeded) {
     const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
     perf::countQueueSequenceWait(static_cast<std::uint64_t>(
@@ -3104,7 +3128,10 @@ void QueueLifecycleController::assertQueueLifecycleInvariants(size_t inflightLim
     return;
   }
 
-  const u64 completedSeqId = binding.completedSeqId ? *binding.completedSeqId : 0;
+  const u64 completedSeqId =
+      binding.completedSeqId
+          ? binding.completedSeqId->load(std::memory_order_relaxed)
+          : 0;
   const u64 lastCommittedSeqId = binding.lastCommittedSeqId ? *binding.lastCommittedSeqId : 0;
   DXMT_ASSERT(completedSeqId <= lastCommittedSeqId);
 
@@ -3727,7 +3754,10 @@ bool QueueLifecycleController::processOnePendingCompletion() {
   }
   if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);
-    const u64 completedSeqId = binding.completedSeqId ? *binding.completedSeqId : 0;
+    const u64 completedSeqId =
+        binding.completedSeqId
+            ? binding.completedSeqId->load(std::memory_order_relaxed)
+            : 0;
     std::array<CpuReadyTape::SourceRef, kMaxEncodeSessionSources> tapeSources{};
     std::size_t tapeSourceCount = 0;
     u64 expectedSeqId = completedSeqId;

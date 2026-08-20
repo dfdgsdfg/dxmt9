@@ -743,17 +743,17 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
             };
         if (backend_->wantsNextChunkLookahead()) {
           runDceChunkLookaheadEncodeLoop(
-              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqIdLocked()); });
           return;
         }
         if (cpuReadySessionLaneEnabled_) {
           runCpuReadySessionEncodeLoop(
-              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqIdLocked()); });
           return;
         }
         runEncodeLoop(
             encodeSingleSource,
-            [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+            [this](std::uint64_t) { allocators_.reclaim(completedSeqIdLocked()); });
       },
       [this] { runFinishLoop(); },
       [this] { runCompletionWatcherLoop(); });
@@ -795,7 +795,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(qmxBegin, "make_encode_context");
-    transientCompletedSeqId = completedSeqId_;
+    transientCompletedSeqId = completedSeqIdLocked();
   }
   auto ctx = encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
@@ -2019,7 +2019,7 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(qmxBegin, "upload_transient_buffer");
-    completedSeqId = completedSeqId_;
+    completedSeqId = completedSeqIdLocked();
   }
   return uploadTransientBufferWithCompletedSeqId(
       bytes, alignment, seqId, completedSeqId);
@@ -2043,7 +2043,7 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(qmxBegin, "upload_transient_buffer_batch");
-    completedSeqId = completedSeqId_;
+    completedSeqId = completedSeqIdLocked();
   }
   return uploadTransientBufferBatchWithCompletedSeqId(
       payloads, alignment, seqId, completedSeqId);
@@ -2072,7 +2072,7 @@ CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(qmxBegin, "reserve_transient_buffer");
-    completedSeqId = completedSeqId_;
+    completedSeqId = completedSeqIdLocked();
   }
   return reserveTransientBufferWithCompletedSeqId(
       size, alignment, seqId, completedSeqId);
@@ -2098,7 +2098,7 @@ resources::ReorderedIndexBufferLookup CommandQueue::findReorderedIndexBuffer(
       sourceHandle.value,
       key,
       seqId,
-      completedSeqId_);
+      completedSeqIdLocked());
 }
 
 bool CommandQueue::rememberRejectedReorderedIndexBuffer(
@@ -2112,7 +2112,7 @@ bool CommandQueue::rememberRejectedReorderedIndexBuffer(
       sourceHandle.value,
       key,
       seqId,
-      completedSeqId_);
+      completedSeqIdLocked());
 }
 
 resources::ReorderedIndexBufferLookup CommandQueue::getOrCreateReorderedIndexBuffer(
@@ -2129,7 +2129,7 @@ resources::ReorderedIndexBufferLookup CommandQueue::getOrCreateReorderedIndexBuf
       key,
       bytes,
       seqId,
-      completedSeqId_);
+      completedSeqIdLocked());
 }
 
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
@@ -2257,7 +2257,13 @@ std::uint64_t restampIfTicketAdvancedLocked(CommandQueue& q,
                                             std::uint64_t markTicket,
                                             StampFn&& stamp) {
   const std::uint64_t frozenTicket = q.markTicketAcquire();
-  if (frozenTicket != markTicket) {
+  const bool restamped = frozenTicket != markTicket;
+  // R-BACK-43.6 observability: the window above is model-checked but was
+  // unmeasured in the wild — nothing said how often a publish actually lands
+  // inside a lock-free mark window. `fires/checks` is that rate. Two gated
+  // atomic adds on a path that already holds `mutex_`.
+  perf::countMarkTicketRestamp(restamped);
+  if (restamped) {
     stamp(frozenTicket);
   }
   return frozenTicket;
@@ -3344,50 +3350,70 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
   if (entries.empty()) {
     return core::ChunkBufferBindingCaptureResult::Complete;
   }
-  // T2a — this is the default (non-legacy) path most commits actually take.
-  // The stamp loop moves off `CommandQueue::mutex_` onto the pool's
-  // arena-stamp exception for the reason spelled out in markChunkResources
-  // above; the binding CAPTURE deliberately does NOT move with it (that is
-  // T2b, still out of scope), so the mutex acquire below stays.
+  // T2a + T2b — this is the default (non-legacy) path most commits actually
+  // take, and NEITHER of its two loops runs under `CommandQueue::mutex_` any
+  // more. The stamp loop rides the pool's arena-stamp exception for the reason
+  // spelled out in markChunkResources above. The binding capture rides the
+  // same exception's T2b clause: its read-set is `producer-owned` (design §7
+  // Q1 / spec §2), and the only cross-actor obligation left — that the record
+  // still exists — is discharged by the retainer pin, not by this mutex.
+  // `Pool::captureChunkBufferBindings` carries the assert and the full
+  // argument. TLA+: ProducerMarkReclaim!CaptureRead, obligation
+  // `NoCaptureAfterFree`, counterexample
+  // `ProducerMarkReclaim.capture.counterexample.cfg`.
   //
-  // Order is stamps-before-capture, not capture-before-stamps. `markStampUpper`
-  // is a monotone max, so an early stamp can only be too LOW, which is exactly
-  // what the frozen-ticket re-stamp under the lock repairs. An early capture
-  // has no such repair: it would publish a backing snapshot for a record whose
-  // watermark the commit has not raised yet.
+  // Order is stamps-before-capture, not capture-before-stamps, and the
+  // acquire below is placed to keep that literally true of BOTH stampings.
+  // `markStampUpper` is a monotone max, so an early stamp can only be too LOW,
+  // which is exactly what the frozen-ticket re-stamp under the lock repairs.
+  // An early capture has no such repair: it would publish a backing snapshot
+  // for a record whose watermark the commit has not raised yet. TLA+:
+  // ProducerMarkReclaim!StampsPrecedeCapture.
+  //
+  // The capture needs NO re-stamp analog. It is a value copy of
+  // producer-written fields; nothing it reads derives from the seq ticket and
+  // nothing downstream compares the snapshot against `commitSeqId`, so there
+  // is no quantity a concurrent `SlotAdvance` could make stale. The ticket
+  // protocol below exists solely for the stamps.
   const std::uint64_t markTicket = seqIdForMark(*this, 0);
   markChunkResourcesWithExactSeq(pool_, entries, markTicket);
 
-  // See markChunkResources above: same env-gated acquire/marking split, which
-  // previously left commit_chunk_phase_mark_lock_cpu_ms at 0 on every run.
-  const bool phaseSplit = markChunkPhaseSplitEnabled();
-  const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
-                                        : std::chrono::steady_clock::time_point{};
-  const auto qmxBegin = queueMutexProbeBegin();
-  std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(
-      qmxBegin, "mark_chunk_resources_and_capture_buffer_bindings");
-  if (phaseSplit) {
-    perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - lockWaitStart).count()));
-  }
-  (void)restampIfTicketAdvancedLocked(
-      *this, markTicket, [this, entries](std::uint64_t frozenTicket) {
-        markChunkResourcesWithExactSeq(pool_, entries, frozenTicket);
-      });
-  bool missingRequired = false;
-  for (const auto& entry : entries) {
-    if (entry.kind != core::ChunkHandleKind::Buffer) {
-      continue;
+  {
+    // The ONLY thing still inside the hold is the frozen-ticket re-read (one
+    // acquire load) plus the rare re-stamp. The capture loop that used to run
+    // here — 164 buffer probes per commit on GT2 — is now outside it. The
+    // probe site keeps its name so the `DXMT9_PERF_QUEUE_MUTEX_SPLIT` row
+    // stays comparable across the change; its HOLD time is what moved, not
+    // its acquire count.
+    //
+    // Why the acquire itself stays: `seqIdForMark` READS `nextSeqId_`, it does
+    // not reserve it, so the producer does not in fact own the seq its chunk
+    // publishes under the way ProducerMarkReclaim!BeginMark models it. Until
+    // the ticket is genuinely reserved, the re-stamp is the insurance that
+    // makes the model's stronger premise safe to rely on. See gap.md.
+    //
+    // See markChunkResources above: same env-gated acquire/marking split,
+    // which previously left commit_chunk_phase_mark_lock_cpu_ms at 0 on every
+    // run.
+    const bool phaseSplit = markChunkPhaseSplitEnabled();
+    const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
+                                          : std::chrono::steady_clock::time_point{};
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "mark_chunk_resources_and_capture_buffer_bindings");
+    if (phaseSplit) {
+      perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - lockWaitStart).count()));
     }
-    snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
-    missingRequired |= snapshots.back().requiresCapturedBacking &&
-                       !snapshots.back().snapshot.valid();
+    (void)restampIfTicketAdvancedLocked(
+        *this, markTicket, [this, entries](std::uint64_t frozenTicket) {
+          markChunkResourcesWithExactSeq(pool_, entries, frozenTicket);
+        });
   }
-  return missingRequired
-             ? core::ChunkBufferBindingCaptureResult::MissingRequired
-             : core::ChunkBufferBindingCaptureResult::Complete;
+
+  return pool_.captureChunkBufferBindings(entries, snapshots);
 }
 
 core::ChunkBufferBindingCaptureResult
@@ -3399,21 +3425,19 @@ CommandQueue::captureChunkBufferBindings(
   if (entries.empty()) {
     return core::ChunkBufferBindingCaptureResult::Complete;
   }
-  const auto qmxBegin = queueMutexProbeBegin();
-  std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "capture_chunk_buffer_bindings");
-  bool missingRequired = false;
-  for (const auto& entry : entries) {
-    if (entry.kind != core::ChunkHandleKind::Buffer) {
-      continue;
-    }
-    snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
-    missingRequired |= snapshots.back().requiresCapturedBacking &&
-                       !snapshots.back().snapshot.valid();
-  }
-  return missingRequired
-             ? core::ChunkBufferBindingCaptureResult::MissingRequired
-             : core::ChunkBufferBindingCaptureResult::Complete;
+  // T2b — capture-only sibling (the CpuReadyTape planning lane, where the
+  // stamps are deferred to replay). It took `mutex_` for nothing but the
+  // capture loop, so with T2b the acquire disappears entirely rather than
+  // shrinking: the `capture_chunk_buffer_bindings`
+  // `DXMT9_PERF_QUEUE_MUTEX_SPLIT` row is expected to go to zero acquires.
+  // Same two obligations, same assert, same model binding as the combined
+  // path above — see `Pool::captureChunkBufferBindings`.
+  //
+  // Note this lane's ordering is NOT stamps-before-capture: it captures
+  // without marking at all, because `resourcesMarkedBeforeReplay` is false
+  // and the arena replay stamps later under its own reserved ticket. That is
+  // unchanged by T2b — it was already true while the mutex was held.
+  return pool_.captureChunkBufferBindings(entries, snapshots);
 }
 
 void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
@@ -4922,7 +4946,7 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
       case BoundaryPolicy::PresentCompletion:
         return presentCompletedSeqId_ >= targetSeqId;
       case BoundaryPolicy::Completion:
-        return completedSeqId_ >= targetSeqId;
+        return completedSeqIdLocked() >= targetSeqId;
       case BoundaryPolicy::Default:
       case BoundaryPolicy::AfterAcquire:
         return presentDequeuedSeqId_ >= targetSeqId;
@@ -4954,7 +4978,7 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   // TLA+: PresentFrameLatency / AppWaitReturnSafe
   DXMT_ASSERT(stop_ || reachedBoundary());
   // TLA+: PresentFrameLatency / PresentCompletionSafety
-  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqId_);
+  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqIdLocked());
   perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
 }
@@ -4998,7 +5022,7 @@ void CommandQueue::drainDeferredPresentBoundary() {
   presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
   DXMT_ASSERT(stop_ || reachedBoundary());
-  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqId_);
+  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqIdLocked());
   if (reachedBoundary()) {
     deferredPresentBoundaryTargetSeqId_ = 0;
   }
@@ -5181,7 +5205,7 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
     return false;
   }
   if (action == core::metalqueue::SessionReleaseAction::SubmitAndWait &&
-      fenceSeqId > completedSeqId_) {
+      fenceSeqId > completedSeqIdLocked()) {
     queueLifecycle_.waitForSequence(lock, fenceSeqId);
   }
   return !stop_;
@@ -5193,8 +5217,62 @@ core::HResult CommandQueue::waitForVBlank() {
 }
 
 void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
-  // Pool storage + queue's wait-for-sequence rule under one mutex.
+  // T2c — two lanes. The FAST lane (no visibility wait: NOOVERWRITE, MANAGED,
+  // dynamic-rename DISCARD, or a buffer nothing has marked yet) takes no queue
+  // mutex at all. The SLOW lane keeps today's locking exactly, including
+  // re-reading `mapWaitSeqId` under the lock.
   const auto totalStart = std::chrono::steady_clock::now();
+
+  // LANE SELECTOR, read with no lock. Read-set classification for
+  // `Pool::mapWaitSeqId`, which is what licenses this (spec §2 / pool header
+  // exception (3)):
+  //   * `flags` — the caller's own argument.
+  //   * `record.isManagedVersioned`, `record.isDynamicRename` —
+  //     `producer-owned`, written once at create on this thread.
+  //   * `record.lastUsedSeqId` — `arena-protected`, NOT `queue-shared`. It is
+  //     read inside `bufferArena_.inspect`, i.e. under HandleArena's shared
+  //     lock, and `CommandQueue::mutex_` has not protected it since T2a' put
+  //     BOTH mark paths on the arena-stamp exception. Moving this read out of
+  //     the queue mutex therefore does not change its race profile at all —
+  //     it was already racing a concurrent worker stamp while the mutex was
+  //     held, with the arena lock as the real serialization.
+  //   * `dynamicBufferRenameEnabled()` — process-static env read.
+  // Nothing in that set is `queue-shared`, so there is no state the queue
+  // mutex was ordering here.
+  std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
+
+  if (waitSeq == 0) {
+    // FAST LANE. With `waitSeq == 0` both slow-lane branches are
+    // unconditionally dead — `0 > lastCommittedSeqId_` is false for every
+    // unsigned value, and `committedSequenceWaitTarget(0, _)` is 0, so
+    // `0 > completedSeqId` is false too. Neither branch's `queue-shared`
+    // operand can change that, which is why this lane can skip reading them
+    // rather than having to prove a value.
+    //
+    // What remains is `finalizeBufferMap` (one `arena.update()` over
+    // `producer-owned` ring state, guarded by `Pool::producerOwnership_`) and
+    // the GPU watermark it needs, taken as an `owner-published` acquire load.
+    // A stale-low watermark is the safe direction: it can only make the ring
+    // fresh-allocate a backing it could have reused. TLA+:
+    // ProducerMarkReclaim!MapFastRead / `MapReadSound`.
+    const auto fastEnd = std::chrono::steady_clock::now();
+    const auto elapsedNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            fastEnd - totalStart).count());
+    // Same counter call as the slow lane so `map_buffer_calls` and the
+    // discard/nooverwrite/readonly/plain buckets stay conserving. Two terms
+    // are 0 by construction, not by omission: there is no acquire, so
+    // `map_buffer_mutex_wait_ms` contributes nothing — that drop IS the T2c
+    // win, and reading it as missing data would be the wrong conclusion — and
+    // this lane never waits on a sequence. The total is measured to the same
+    // point as the slow lane's (entry → just before `finalizeBufferMap`).
+    perf::countMapBufferWait(elapsedNs, 0, 0, flags, /*hasWaitSeq=*/false);
+    return pool_.finalizeBufferMap(device_, handle, flags,
+                                   completedSeqIdAcquire());
+  }
+
+  // SLOW LANE — Pool storage + queue's wait-for-sequence rule under one mutex,
+  // unchanged from before T2c.
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   const auto lockAcquired = std::chrono::steady_clock::now();
@@ -5202,12 +5280,17 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // queueLifecycle_.waitForSequence() below, both of which may unlock/relock
   // it via QueueLifecycleController (a different file).
   QueueMutexProbeScope qmxScope(qmxBegin, "map_buffer", /*skipHold=*/true);
-  std::uint64_t waitSeq = 0;
   {
     // SEGMENT-HOLD: pool_.mapWaitSeqId() never touches `lock` -- this is
     // real, previously-invisible hold time between the outer skipHold=true
     // acquire probe and the first potential unlock/relock helper call below.
     QueueMutexSegmentScope qmxPreCommitSegment("map_buffer/pre_commit");
+    // Re-read under the lock. The unlocked read above only SELECTED the lane;
+    // the value the wait is computed from is taken at exactly the point it was
+    // taken before T2c, so the slow lane's behaviour is byte-for-byte today's.
+    // The re-read cannot send us back to the fast lane: `mapWaitSeqId` is
+    // monotone in the monotone-max `lastUsedSeqId`, and the two flavor flags
+    // are immutable after create.
     waitSeq = pool_.mapWaitSeqId(handle, flags);
   }
   const bool hasWaitSeq = waitSeq != 0;
@@ -5238,7 +5321,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   const std::uint64_t waitTarget =
       core::metalqueue::committedSequenceWaitTarget(waitSeq,
                                                      lastCommittedSeqId_);
-  if (waitTarget > completedSeqId_) {
+  if (waitTarget > completedSeqIdLocked()) {
     queueLifecycle_.waitForSequence(lock, waitTarget);
   }
   const auto waitEnd = std::chrono::steady_clock::now();
@@ -5262,7 +5345,8 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
     // reference so the rename ring can rotate / fresh-allocate on
     // DISCARD without blocking on prior completion. Non-DYNAMIC paths
     // ignore both arguments.
-    result = pool_.finalizeBufferMap(device_, handle, flags, completedSeqId_);
+    result = pool_.finalizeBufferMap(device_, handle, flags,
+                                     completedSeqIdLocked());
   }
   return result;
 }
@@ -5666,9 +5750,9 @@ void CommandQueue::runFinishLoop() {
     // is recorded per loop iteration.
     QueueMutexProbeScope qmxScope(qmxBegin, "run_finish_loop", /*skipHold=*/true);
     if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
-          allocators_.reclaim(completedSeqId_);
-          pool_.reclaimCompleted(completedSeqId_);
-          transientArena_.reclaim(completedSeqId_);
+          allocators_.reclaim(completedSeqIdLocked());
+          pool_.reclaimCompleted(completedSeqIdLocked());
+          transientArena_.reclaim(completedSeqIdLocked());
         })) {
       return;
     }

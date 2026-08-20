@@ -288,6 +288,23 @@ class Machine {
     return true;
   }
 
+  // TLA+: ProducerMarkReclaim!NoCaptureAfterFree — T2b's existence
+  // obligation on its own, stated over `captured` rather than through the
+  // shared fault flag so a capture-side violation is separately observable.
+  bool noCaptureAfterFree() const noexcept {
+    for (std::size_t r = 0; r < kResources; ++r) {
+      if ((captured_ & mask(r)) != 0 && freed_[r]) return false;
+    }
+    return true;
+  }
+
+  // TLA+: ProducerMarkReclaim!StampsPrecedeCapture — spec §4's third ordering
+  // protocol, which T2b turns from a side effect of one mutex hold into a real
+  // obligation.
+  bool stampsPrecedeCapture() const noexcept {
+    return (captured_ & ~marked_) == 0;
+  }
+
   // Returns false when the model's guard for `step` is not enabled — i.e. the
   // encoded trace is not a behaviour of the spec.
   bool step(const Step& s);
@@ -887,6 +904,172 @@ void testTraceCounterexampleStaleTicketPrematureReclaim() {
   check(production.workerAppendCoveredByStamps(), "append now covered");
 }
 
+// ===========================================================================
+// Trace I..L — T2b: the binding capture off `CommandQueue::mutex_`
+// ===========================================================================
+
+// Trace I — the interleaving T2b exists for, and the one design §8's T2b row
+// asks the model to include: the producer is mid-capture of the live chunk
+// while the replay worker drives a reclaim of a record the chunk does NOT
+// name. Under the mutex those two could not overlap at all; now they do, and
+// the capture must still be sound.
+//
+// In production the two collide inside HandleArena rather than inside the
+// queue: the capture holds the arena's shared lock per probe, `gcArena` takes
+// its unique lock, and the slot container is a pointer-stable `std::deque`.
+// The model's claim is the ordering one — the record being captured is not the
+// record being freed, and cannot become it.
+void testTraceCaptureInterleavesWithWorkerReclaim() {
+  const std::array<Step, 16> steps{{
+      // chunk 1 names both resources and completes normally.
+      {Action::PinChunkResources, mask(kR1) | mask(kR2)},
+      {Action::BeginMark},
+      {Action::StampMark, kR1},
+      {Action::CaptureRead, kR1},
+      {Action::StampMark, kR2},
+      {Action::CaptureRead, kR2},
+      {Action::EndCommit},
+      {Action::ReleasePins},
+      // chunk 2 names only r1, and stamps it.
+      {Action::PinChunkResources, mask(kR1)},
+      {Action::BeginMark},
+      {Action::StampMark, kR1},
+      // ... and now, BETWEEN r1's stamp and r1's capture, the worker drops its
+      // inherited refs and the completion path reclaims r2.
+      {Action::WorkerReleaseRefs},
+      {Action::AdvanceCompleted},
+      {Action::SetDestroyPending, kR2},
+      {Action::Reclaim, kR2},
+      // The capture then reads r1, concurrently with all of that.
+      {Action::CaptureRead, kR1},
+  }};
+  Machine machine =
+      replay(PinDiscipline::Enforced, steps, "capture-interleaves-with-reclaim");
+
+  check(machine.freed(kR2), "the unnamed record was reclaimed mid-capture");
+  check(!machine.freed(kR1), "the captured record stayed live");
+  check(machine.noCaptureAfterFree(),
+        "capture concurrent with an unrelated reclaim must stay sound");
+  check(machine.stampsPrecedeCapture(), "capture followed its own stamp");
+  check(!machine.useAfterFree(), "T2b interleaving must not fault");
+
+  // The pin is what makes the difference between the two records, not the
+  // mutex: r1 is chunk-named and therefore retainer-pinned, so the very first
+  // step of r2's reclaim sequence is disabled for it.
+  check(machine.pinned(kR1), "chunk-named record is pinned");
+  check(!machine.step({Action::SetDestroyPending, kR1}),
+        "SetDestroyPending must be disabled for the record being captured");
+  check(!machine.step({Action::Reclaim, kR1}),
+        "Reclaim must be disabled for the record being captured");
+}
+
+// Trace J — the capture needs no re-stamp analog. A `SlotAdvance` lands
+// between the stamp and the capture (in production: another actor
+// force-publishing the open writing slot while `commit_chunk` runs unlocked).
+// It moves the ticket, which is exactly what obliges the STAMP side to re-read
+// under the mutex — and it changes nothing the capture reads, because the
+// capture copies producer-owned values rather than anything derived from a
+// seq.
+void testTraceCaptureNeedsNoRestampAnalog() {
+  const std::array<Step, 4> steps{{
+      {Action::PinChunkResources, mask(kR1)},
+      {Action::BeginMark},           // commitSeqId = 1, nextSeqId -> 2
+      {Action::StampMark, kR1},      // stamps 1
+      {Action::SlotAdvance},         // nextSeqId -> 3, ticket now stale
+  }};
+  Machine machine =
+      replay(PinDiscipline::Enforced, steps, "capture-needs-no-restamp");
+
+  checkEq(machine.nextSeqId(), u64{3}, "a publish moved the seq mid-window");
+  const u64 stampBeforeCapture = machine.lastUsedSeqId(kR1);
+  check(machine.step({Action::CaptureRead, kR1}),
+        "capture is still enabled after the seq moved");
+  checkEq(machine.lastUsedSeqId(kR1), stampBeforeCapture,
+          "capture reads no seq and writes no seq");
+  check(machine.noCaptureAfterFree(), "capture stayed sound across the advance");
+  check(!machine.useAfterFree(), "no fault from the moved ticket");
+
+  // Contrast: the WORKER's stamp side does owe a re-stamp for the same event.
+  // Same `SlotAdvance`, and its append is refused until the ticket is re-read.
+  Machine worker(PinDiscipline::Enforced);
+  check(worker.step({Action::WorkerBeginBatch, mask(kR2)}), "begin batch");
+  check(worker.step({Action::SlotAdvance}), "force-publish");
+  check(worker.step({Action::WorkerStampMark, kR2}), "stale stamp");
+  check(worker.step({Action::WorkerEndStamping}), "end stamping");
+  check(!worker.step({Action::WorkerAppend}),
+        "the STAMP side is blocked by the same event the capture ignores");
+}
+
+// Trace K — stamps-before-capture, as an enabledness fact. The model refuses a
+// capture of an unmarked record, which is the executable form of "an early
+// capture has no repair": a too-low stamp is fixed by a monotone re-stamp, a
+// snapshot published for a record whose watermark this commit has not raised
+// is not fixable at all.
+void testTraceCaptureRequiresItsOwnStamp() {
+  Machine machine(PinDiscipline::Enforced);
+  check(machine.step({Action::PinChunkResources, mask(kR1) | mask(kR2)}), "pin");
+  check(machine.step({Action::BeginMark}), "begin mark");
+  check(!machine.step({Action::CaptureRead, kR1}),
+        "capture must be disabled before this commit's stamp");
+  check(machine.step({Action::StampMark, kR1}), "stamp r1");
+  check(machine.step({Action::CaptureRead, kR1}), "capture enabled after stamp");
+  check(!machine.step({Action::CaptureRead, kR2}),
+        "r2's capture is still gated on r2's own stamp");
+  check(machine.stampsPrecedeCapture(), "ordering protocol holds");
+  // EndCommit needs BOTH loops complete for every named record — the commit
+  // cannot return having captured a subset.
+  check(!machine.step({Action::EndCommit}), "EndCommit blocked on r2");
+  check(machine.step({Action::StampMark, kR2}), "stamp r2");
+  check(!machine.step({Action::EndCommit}), "EndCommit still blocked on capture");
+  check(machine.step({Action::CaptureRead, kR2}), "capture r2");
+  check(machine.step({Action::EndCommit}), "EndCommit enabled once both ran");
+}
+
+// Trace L — the TLC counterexample for the capture premise, translated
+// verbatim from `ProducerMarkReclaim.capture.counterexample.cfg`:
+//
+//   State 2: PinChunkResources({r1})
+//   State 3: BeginMark                commitSeqId = 1
+//   State 4: SetDestroyPending(r1)    <- only reachable with the pin removed
+//   State 5: Reclaim(r1)              lastUsedSeqId 0 <= completedSeqId 0
+//   State 6: StampMark(r1)
+//   State 7: CaptureRead(r1)          <- Invariant NoCaptureAfterFree violated
+//
+// This is `captureChunkBufferBinding` reading a `BufferRecord` whose
+// HandleArena slot `gcArena` already released, and publishing it into the
+// chunk's `bufferSnapshots` as a live backing. Note the mark and capture loops
+// run two steps AFTER the free and re-check nothing — which is why the pin,
+// not a liveness test, has to be the guarantee.
+void testTraceCounterexampleCaptureAfterFree() {
+  const std::array<Step, 6> steps{{
+      {Action::PinChunkResources, mask(kR1)},
+      {Action::BeginMark},
+      {Action::SetDestroyPending, kR1},
+      {Action::Reclaim, kR1},
+      {Action::StampMark, kR1},
+      {Action::CaptureRead, kR1},
+  }};
+  const Machine machine =
+      replay(PinDiscipline::Removed, steps, "tlc-capture-counterexample");
+
+  check(machine.freed(kR1), "r1 was reclaimed inside the commit window");
+  check(!machine.noCaptureAfterFree(),
+        "capture counterexample must violate the capture-side invariant");
+  check(machine.useAfterFree(),
+        "and the shared fault flag trips too — same axis, longer trace");
+
+  // Under the production discipline the trace dies at its third step, which is
+  // precisely what licenses the capture to run without the queue mutex.
+  Machine production(PinDiscipline::Enforced);
+  check(production.step({Action::PinChunkResources, mask(kR1)}), "pin enabled");
+  check(production.step({Action::BeginMark}), "begin mark enabled");
+  check(!production.step({Action::SetDestroyPending, kR1}),
+        "the pin disables the capture counterexample's first bad step");
+  check(production.step({Action::StampMark, kR1}), "stamp enabled");
+  check(production.step({Action::CaptureRead, kR1}), "capture enabled");
+  check(production.noCaptureAfterFree(), "production capture is sound");
+}
+
 }  // namespace
 
 int main() {
@@ -901,6 +1084,10 @@ int main() {
     testTraceMapFastReadStaleButSound();
     testTraceWorkerRestampCoversAdvancedSlotSeq();
     testTraceCounterexampleStaleTicketPrematureReclaim();
+    testTraceCaptureInterleavesWithWorkerReclaim();
+    testTraceCaptureNeedsNoRestampAnalog();
+    testTraceCaptureRequiresItsOwnStamp();
+    testTraceCounterexampleCaptureAfterFree();
   } catch (const TestFailure& failure) {
     std::cerr << "producer_mark_reclaim_spec failed: " << failure.what() << '\n';
     return 1;

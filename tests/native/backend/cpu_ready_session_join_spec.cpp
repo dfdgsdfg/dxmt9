@@ -117,7 +117,7 @@ struct CommandQueueArenaLeaseTestAccess {
 
   static std::uint64_t completedSeqId(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
-    return queue.completedSeqId_;
+    return queue.completedSeqIdLocked();
   }
 
   static std::size_t capacityWaiterCount(CommandQueue& queue) {

@@ -1745,6 +1745,12 @@ void countCommitChunkPhaseMarkHandles(std::uint64_t handleCount);
 void countCommitChunkPhaseMarkBuffers(std::uint64_t bufferCount);
 void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds);
+// R-BACK-43.6 — frozen-ticket re-stamp observability. Called once per
+// `restampIfTicketAdvancedLocked` with whether the ticket had moved, so
+// `mark_ticket_restamp_fires / mark_ticket_restamp_checks` measures how often
+// a concurrent publish really lands inside a lock-free mark window. Always on:
+// two gated atomic adds on a path that already holds `CommandQueue::mutex_`.
+void countMarkTicketRestamp(bool restamped);
 void countOffloadPushBackpressureWait();
 void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds);
 void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds);

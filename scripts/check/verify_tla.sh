@@ -59,6 +59,11 @@ counterexample_models=(
   # stamps sit below the chunk's final seq and the watermark passes them while
   # that chunk is still pending. Design doc §9 step 1 (T2a').
   "ProducerMarkReclaim|.restamp.counterexample|Invariant NoUseAfterFree is violated"
+  # Same pin premise removed as the row above, but reported through the
+  # capture-side invariant: `captureChunkBufferBinding` publishing a snapshot of
+  # a record `gcArena` already released. This is what licenses T2b (capture off
+  # `CommandQueue::mutex_`); design doc §8 T2b.
+  "ProducerMarkReclaim|.capture.counterexample|Invariant NoCaptureAfterFree is violated"
 )
 
 for row in "${counterexample_models[@]}"; do
