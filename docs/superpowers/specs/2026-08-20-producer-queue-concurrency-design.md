@@ -129,17 +129,61 @@ Three layers, strongest first:
 5. Wild: GT2/GT1/GT3/SFIV matched pairs; the win prediction (~0.6 ms for T2)
    is 2× the measured build-layout noise floor, so whole-build A/B is valid.
 
-## 7. Open questions (blocking T2 design finalization)
+## 7. Open questions — RESOLVED by source audit (2026-08-20)
 
-1. Capture read-set vs worker write-set (§2) — source audit of
-   `captureChunkBufferBinding` and every worker-side writer of the fields it
-   reads.
-2. Exact pin release point vs commit return — is the retainer release
-   provably after the last mark of the same chunk on every path including
-   rollback/discard?
-3. `map_buffer`'s rename-ring rotate under lock — which parts are
-   producer-private (ring indices) vs shared (backing allocation), and does
-   the DISCARD fast path need the queue mutex at all?
-4. Does any reclaim path run outside `mutex_` today (destroy-and-gc from
-   wrapper destructors on the producer itself) — if reclaim is
-   producer-driven-only plus completion-driven, the actor set shrinks.
+1. **Capture read-set: producer-written-only.** Every field
+   `captureChunkBufferBinding` reads (`isDynamicRename`/`isManagedVersioned`,
+   `buffer`, `contents`, `desc.size`, `contentRevision`, `renameActiveIndex`,
+   `renameRing[].replayResidency`) is written exclusively on the game thread
+   (create, Lock/Unlock upload, finalizeBufferMap). The worker/encode side
+   never reads the live ring — it consumes only the immutable commit-time
+   snapshot. Capture is well-defined without ordering against worker progress.
+2. **Pin release is strictly after same-chunk marking on every path** —
+   commit_chunk is synchronous on the game thread; `endEpoch()` runs only
+   after a successful return; failure keeps pins; discard paths only touch
+   never-committed chunks. Caveat: a pin release can synchronously drive
+   destroy-and-gc/reclaim on the producer itself.
+3. **Rename ring is producer-private.** `renameRing`/`renameActiveIndex` are
+   referenced only inside the pool; the DISCARD fast path needs the queue
+   mutex only for the `completedSeqId_` read (atomic-izable) and, in the
+   Fresh case, the `device.newBuffer` call. The map slow path (visibility
+   wait, Wine #66) legitimately needs commit/cv machinery.
+4. **The reclaim actor set is THREE-way, not two** — producer (wrapper
+   release), completion loop (`runFinishLoop` → `reclaimCompleted`), AND the
+   replay offload worker (`releaseRetainedWrappers` on replay completion/
+   fail-stop drops last refs → destroy-and-gc on the worker thread). All
+   under `mutex_` today. `ProducerMarkReclaim.tla` must model a
+   Worker-reclaim transition; §2's inventory understated this.
+
+## 8. Post-audit T2 refinement
+
+A load-bearing discovery: `dxmt9_resource_pool.hpp`'s header contract already
+documents (a) lookup ops callable **without** the queue mutex (HandleArena
+serializes slot metadata with its own shared mutex), (b) pointer stability
+via `std::deque` slots plus the watermark, and (c) an existing exception
+where a publisher **releases the queue lock and stamps retained objects
+under the arena's own mutex** — i.e., queue-mutex-free marking is an already
+documented, precedented pattern, currently with the explicit carve-out that
+it "does not permit capture … outside `CommandQueue::mutex_`".
+
+T2 therefore reduces to three provable relaxations, in increasing order of
+contract change:
+
+- **T2a — commit-time marking moves to the arena-stamp exception.** The
+  producer stamps `lastUsedSeqId` under HandleArena's own mutex instead of
+  `CommandQueue::mutex_`. Safety = pin-ordering (Q2, program order) +
+  three-actor reclaim all still under either mutex with the watermark gate.
+- **T2b — capture joins it.** Relax the header carve-out using Q1: the
+  capture read-set is producer-written-only, and record existence during
+  capture is pinned (chunk-named ⇒ retainer-pinned ⇒ not destroyPending).
+  Requires the model to include the worker-reclaim actor erasing *other*
+  records concurrently (deque slot stability covers the container).
+- **T2c — map DISCARD fast path.** `completedSeqId_` becomes an atomic read;
+  ring bookkeeping is producer-private; only the Fresh allocation and the
+  slow visibility-wait path keep the queue mutex.
+
+Expected producer recovery if all three land: the full ~1.0 ms/present of
+measured acquire-wait (mark 0.60 + map 0.42 common path), bounded below by
+whatever the slow-path map waits keep. Each step is independently
+measurable (≥2× the layout-noise floor for T2a+T2b combined; T2c alone is
+borderline and should be bundled).
