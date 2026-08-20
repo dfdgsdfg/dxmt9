@@ -1157,11 +1157,24 @@ int32_t replayResolvedChunk(
   return dxmt9::core::D3D_OK;
 }
 
+// Body of commit_chunk's mark phase (commit_chunk_phase_mark_cpu_ms), which
+// GT2 measures at 0.888 ms/present, 62% of the sync half, 56.5us/call. Split
+// into its three owners so a subsequent optimization knows which one to
+// target: the PE-side resolved-handle dedup loop (two O(n^2) scans — a
+// std::find over raw.ledgerTargets per buffer handle, a std::any_of over
+// scratch.coreEntries per handle), the single call into the core
+// upperDevice (which, on the default non-CpuReadyTape lane, subsumes
+// commit_chunk_phase_mark_lock_cpu_ms's queue-mutex acquire wait), and the
+// buffer-snapshot sort. All gated on the same
+// DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT env as the parent phase split.
 bool persistResolvedResourcesAndCaptureBindings(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     const dxmt9::d3d9::ImportedChunkView& imported) {
+  const bool phaseSplit = commitChunkPhaseSplitEnabled();
+  CommitChunkPhaseTimer dedupPhase(phaseSplit);
   auto& scratch = replayScratchArena();
   ScopedReplayScratchUse scratchUse(scratch);
+  std::uint64_t bufferHandleCount = 0u;
   for (std::size_t i = 0u; i < imported.handles.size(); ++i) {
     dxmt9::core::Handle handle{};
     switch (imported.handles[i].kind) {
@@ -1179,6 +1192,7 @@ bool persistResolvedResourcesAndCaptureBindings(
       auto* value = static_cast<D9CBuffer*>(raw.resolvedObjects[i]);
       if (value && value->obj) {
         handle = value->obj->handle();
+        ++bufferHandleCount;
         const bool targetDuplicate = std::find(
             raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
             value->replayDrainTarget.get()) != raw.ledgerTargets.end();
@@ -1204,23 +1218,32 @@ bool persistResolvedResourcesAndCaptureBindings(
     }
   }
   raw.resourceEntries = scratch.coreEntries;
+  if (phaseSplit) {
+    dxmt9::perf::countCommitChunkPhaseMarkHandles(imported.handles.size());
+    dxmt9::perf::countCommitChunkPhaseMarkBuffers(bufferHandleCount);
+  }
+  dedupPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkDedupCpuTime);
   if (auto upper = device->dev().upperDevice()) {
     raw.cpuReadyTapePlanningEnabled =
         upper->supportsCpuReadyArenaReplay();
+    CommitChunkPhaseTimer corePhase(phaseSplit);
     const auto captureResult = raw.cpuReadyTapePlanningEnabled
         ? upper->captureChunkBufferBindings(raw.resourceEntries,
                                             raw.bufferSnapshots)
         : upper->markChunkResourcesAndCaptureBufferBindings(
               raw.resourceEntries, raw.bufferSnapshots);
+    corePhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCoreCpuTime);
     raw.resourcesMarkedBeforeReplay =
         !raw.cpuReadyTapePlanningEnabled;
     raw.bufferSnapshotsCaptured =
         captureResult ==
         dxmt9::core::ChunkBufferBindingCaptureResult::Complete;
+    CommitChunkPhaseTimer sortPhase(phaseSplit);
     std::sort(raw.bufferSnapshots.begin(), raw.bufferSnapshots.end(),
               [](const auto& left, const auto& right) {
                 return left.buffer.value < right.buffer.value;
               });
+    sortPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkSortCpuTime);
     return captureResult !=
            dxmt9::core::ChunkBufferBindingCaptureResult::MissingRequired;
   }

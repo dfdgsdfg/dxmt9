@@ -1819,6 +1819,14 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkPhaseImportNs{0};
   std::atomic<std::uint64_t> commitChunkPhaseMarkNs{0};
   std::atomic<std::uint64_t> commitChunkPhaseMarkLockNs{0};
+  // Sub-phase split of the mark phase (see dxmt9_perf_counters.hpp for the
+  // owner mapping): PE-side handle-dedup loop, the upperDevice mark/capture
+  // call, and the buffer-snapshot sort, plus per-call handle/buffer counts.
+  std::atomic<std::uint64_t> commitChunkPhaseMarkDedupNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkCoreNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkSortNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkHandles{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkBuffers{0};
   std::atomic<std::uint64_t> commitChunkPhaseEnqueueNs{0};
   std::atomic<std::uint64_t> commitChunkPhasePresentWaitNs{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaits{0};

@@ -6138,6 +6138,26 @@ void countCommitChunkPhaseMarkLockCpuTime(std::uint64_t nanoseconds) {
   add(counters().commitChunkPhaseMarkLockNs, nanoseconds);
 }
 
+void countCommitChunkPhaseMarkDedupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseMarkDedupNs, nanoseconds);
+}
+
+void countCommitChunkPhaseMarkCoreCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseMarkCoreNs, nanoseconds);
+}
+
+void countCommitChunkPhaseMarkSortCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseMarkSortNs, nanoseconds);
+}
+
+void countCommitChunkPhaseMarkHandles(std::uint64_t handleCount) {
+  add(counters().commitChunkPhaseMarkHandles, handleCount);
+}
+
+void countCommitChunkPhaseMarkBuffers(std::uint64_t bufferCount) {
+  add(counters().commitChunkPhaseMarkBuffers, bufferCount);
+}
+
 void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds) {
   add(counters().commitChunkPhaseEnqueueNs, nanoseconds);
 }

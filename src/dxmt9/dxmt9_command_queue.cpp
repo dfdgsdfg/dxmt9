@@ -3001,21 +3001,30 @@ void CommandQueue::prefetchCurrentWritingSlotPipelines() {
   prefetchSlotPipelines(slot, /*seal=*/false);
 }
 
+namespace {
+// Splits the queue-side mark call's cost into "waiting for the queue mutex"
+// and "marking". The distinction decides what the remaining commit_chunk
+// cost IS: the body below is a short loop over unique handles, so if the
+// ~19us this call costs per commit (state-churn-encode-append-decomposition.06)
+// is the acquire, the producer is contending with the encode thread rather
+// than doing work, and that is a different problem with a different fix.
+// Same env gate as the other commit_chunk phases (PE-side
+// commitChunkPhaseSplitEnabled() in device_c_chunk_replay.cpp); resolved once
+// per TU since the two live on opposite sides of the PE/unix boundary.
+bool markChunkPhaseSplitEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+}  // namespace
+
 void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
   if (entries.empty()) {
     return;
   }
-  // Splits this call's cost into "waiting for the queue mutex" and "marking".
-  // The distinction decides what the remaining commit_chunk cost IS: the body
-  // below is a short loop over unique handles, so if the ~19us this call costs
-  // per commit (state-churn-encode-append-decomposition.06) is the acquire,
-  // the producer is contending with the encode thread rather than doing work,
-  // and that is a different problem with a different fix. Same env gate as the
-  // other commit_chunk phases; resolved once.
-  static const bool phaseSplit = [] {
-    const char* env = std::getenv("DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
+  const bool phaseSplit = markChunkPhaseSplitEnabled();
   const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
                                         : std::chrono::steady_clock::time_point{};
   std::unique_lock lock(mutex_);
@@ -3056,7 +3065,18 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
   if (entries.empty()) {
     return core::ChunkBufferBindingCaptureResult::Complete;
   }
+  // See markChunkResources above: same env-gated acquire/marking split, and
+  // this is the default (non-legacy) path most commits actually take, which
+  // previously left commit_chunk_phase_mark_lock_cpu_ms at 0 on every run.
+  const bool phaseSplit = markChunkPhaseSplitEnabled();
+  const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
   std::unique_lock lock(mutex_);
+  if (phaseSplit) {
+    perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - lockWaitStart).count()));
+  }
   const std::uint64_t seqId = seqIdForMark(*this, 0);
   bool missingRequired = false;
   for (const auto& entry : entries) {

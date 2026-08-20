@@ -1682,7 +1682,25 @@ void countCommitChunkPhasePrepareCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkPhaseImportCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkPhaseMarkCpuTime(std::uint64_t nanoseconds);
 // Of that mark phase, how much was spent acquiring the CommandQueue mutex.
+// Wired into both the legacy markChunkResources path and the default
+// markChunkResourcesAndCaptureBufferBindings path (2026-08-20; the latter was
+// previously unwired and always reported 0 for this counter).
 void countCommitChunkPhaseMarkLockCpuTime(std::uint64_t nanoseconds);
+// Sub-phase split of commit_chunk_phase_mark_cpu_ms itself, attributing the
+// mark phase's ~56.5us/call (GT2, 62% of the sync half) to its three PE-side
+// owners: the resolved-handle dedup loop, the upperDevice mark/capture call
+// (which subsumes mark_lock's acquire wait), and the buffer-snapshot sort.
+// dedup + core + sort do not sum exactly to the parent commit_chunk_phase_mark
+// timer because the parent also covers persistResolvedResourcesAndCaptureBindings's
+// own bookkeeping around them (raw.resourceEntries assignment, branch/return
+// plumbing) — small relative to the three, but real.
+void countCommitChunkPhaseMarkDedupCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhaseMarkCoreCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhaseMarkSortCpuTime(std::uint64_t nanoseconds);
+// Per-call denominators so dedup/core/sort cost can be divided into a
+// per-handle / per-buffer figure. Same env gate as the phase timers above.
+void countCommitChunkPhaseMarkHandles(std::uint64_t handleCount);
+void countCommitChunkPhaseMarkBuffers(std::uint64_t bufferCount);
 void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds);
 void countOffloadPushBackpressureWait();
