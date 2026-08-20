@@ -465,6 +465,26 @@ therefore prove the exact source-qualified Clear-open shape across ordinary as
 well as natural-fallback provenance; a Natural-only policy cannot recover the
 dominant measured opportunity.
 
+## Producer↔queue mutex concurrency (opened 2026-08-20)
+
+GT2 attribution (`docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.28.md`)
+measured the producer losing ~1.0 ms/present acquiring `CommandQueue::mutex_`
+(`mark_and_capture` 0.60 + `map_buffer` 0.42), refuted acquire-frequency
+contention as the cause, and left the long holders hidden at hold-handoff
+sites. Two tracks are open:
+
+| Track | Status | Evidence debt |
+|---|---|---|
+| Segment-hold attribution of the handoff sites + trimming the top holder | instrumentation in flight | one GT2 profile run after the segment split lands |
+| Producer concurrency redesign (T2 lock-free marking / T3 decoupling per `docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md`) | design brief drafted | the four §7 source audits (capture read-set vs worker write-set, pin release ordering, rename-ring privacy, reclaim actor set); then `ProducerMarkReclaim.tla` + Buggy counterexample cfg, shared pure predicates, TLC trace-replay native runner, and the R-VERIF-7.3-style deterministic interleaving harness — all before any implementation, per `rendering_correctness.rules.md` |
+
+The pin-ordering premise (retainer pins make `destroyPending` impossible
+during marking) is currently enforced by the shared mutex, not by the pins;
+promoting any lock-free mark without the model plus the counterexample-capable
+Buggy cfg is prohibited — `ResourceLifetime.tla`'s watermark-only scope has
+already missed one refcount-class escape (`specs/verification/gap.md`,
+2026-08-02).
+
 ## Historical Verdict
 
 The removed carrier experiments demonstrated that overlap alone is insufficient:
