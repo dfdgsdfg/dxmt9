@@ -3525,8 +3525,13 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     // the per-batch resource-marking + append body the module comment above
     // calls out as the priority segment (22.6 calls/present).
     {
-      QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
+      // Sub-segmented: the marking half is a candidate for the pool header's
+      // documented arena-stamp exception (stamp under HandleArena's own mutex
+      // after taking the seq ticket under the queue lock), while the append
+      // half's mobility depends on writing-slot exclusivity. The split decides
+      // which restructure buys the measured hold back.
       {
+        QueueMutexSegmentScope qmxMarkSegment("submit_draw_run_batch_impl/mark");
         PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
         const std::uint64_t seqId = seqIdForMark(queue, 0);
         if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
@@ -3546,6 +3551,7 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
           }
         }
       }
+      QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
       DXMT_ASSERT(batch.front().stateMaterialized);
       currentBackBuffer =
           batch.front().materializedState().hot.colorAttachments[0].handle;
