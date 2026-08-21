@@ -49,9 +49,9 @@ Sikarugir-CX 24.0.7 Wine:
 
 Frame-sampled averages, not 3DMark scores: one completed HEAD run per
 workload (full-scene positive-frame average; SFIV over a 90-second matched
-window after warm-up). Single runs, so no run range is quoted — same-day
-ambient variation on this host is about ±2%. All four runs passed with zero
-GPU errors.
+window after warm-up). Single runs, so no run range is quoted — repeated
+measurements of one build on this host drift about ±3% with ambient load and
+time of day. All four runs passed with zero GPU errors.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.02.md)

@@ -767,6 +767,43 @@ isolated-chunk reruns:
   Root cause (Wine SEH dispatch on a foreign stack at device teardown — whether
   dxmt9's unix-side threads or Wine's own) is unattributed.
 
+  **2026-08-22 re-investigation (at `6cee26e5`).** Reproduced fresh; adds three
+  facts and one caveat.
+
+  1. *Not dxmt9-side.* The crash is inside Wine's own `call_stack_handlers` /
+     `NtRaiseException`. dxmt9's PE code contains no SEH/exception-frame
+     manipulation at all (no `RtlUnwind`, `ExceptionList`, `__except`, or
+     `EXCEPTION_REGISTRATION` anywhere in `src/d3d9/`, `src/dxmt9/`,
+     `src/winemetal/`), so there is nothing in this tree to patch. The fault
+     address `00000001000FF448` and stack range
+     `0000000000022000-0000000000120000` were byte-identical across every
+     failing repro (Wine PE loading is not ASLR-randomised here), i.e. the
+     crash is deterministic given the same execution history.
+  2. *Two device-capability lines print before the crash instead of four*,
+     placing death at the second device's teardown — consistent with the
+     original evidence file.
+  3. *Index spaces differ and have caused confusion.* MANIFEST.toml positions
+     for these four cases are 26/28/29/30; the runner's `--start/--end`
+     selectors use the binary's dispatch-table order, where they are 16-19
+     (chunk `[16:20)`). Same tests.
+
+  **Caveat on the "it generalises beyond the decl group" observation.** The
+  same investigation saw a full-suite run produce 30/235 fails with this
+  signature scattered across chunks `[8:12)`, a timeout-cascade
+  `[100:124)`, `[136:140)`, `[188:192)` — but that run executed while a second
+  agent was running host builds and the 727-test suite on the same machine.
+  Two full-suite runs on 2026-08-21 under a quiet host produced exactly the
+  decl group plus the known xyzhw fail. So the honest reading is: the crash
+  mechanism is not decl-specific, and its *rate* rises sharply under host
+  load — which is also the already-recorded chunk-poisoning artifact. Treat
+  any `PROCESS-EXIT-1` chunk, not only the decl group, as needing cold-server
+  singleton re-verification, and do not run the suite under concurrent load.
+
+  **Untested mitigation.** `wineserver -k` between invocations reduced but did
+  not eliminate the crash (1 of 4 still failed) because `-k` does not wait for
+  the old server to exit; `wineserver -k -w` is the obvious next A/B before
+  adopting any runner-level change.
+
 ## Render-tape pending command-chunk ownership
 
 The PE render-tape registry has two independent bounded lifetime axes for a

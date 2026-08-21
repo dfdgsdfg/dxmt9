@@ -24,7 +24,7 @@ current absolute numbers.
 (user-directed single-run scope — deliberately weaker than the two-run
 methodology of
 [serial-partition A/B](baselines-serial-partition-ab.02.md); same-day ambient
-variation on this host is about ±2%, so sub-2% deltas against this table are
+variation on this host is about ±3%, so sub-3% deltas against this table are
 not meaningful). `perf` profile, `DXMT9_PERF_FRAME_SAMPLING=1`, no gputrace,
 encoder breakdown off, `--keep-frontmost`, 120 s supervised timeout (SFIV
 180 s via `run_experiment.py`). Primary FPS is the positive-frame average
@@ -57,7 +57,10 @@ so the failure is an exit-path artifact, not a measurement problem; the
 passing run is the one quoted.
 
 **Limitations.** Single runs: no run-range column in the README this cycle,
-and the ±2% ambient figure is carried from this session's repeated GT2/GT3
-window observations, not re-derived here. SFIV's steady median (59.45 vs the
+and the ±3% ambient figure comes from this session's repeated same-build
+GT2/GT3 window observations (GT2 27.2 daytime vs 28.7-29.0 evening; GT3 63 vs
+67 — about 6% peak-to-peak), not from a variance run here. It was first
+written as ±2%, which understated those very observations; corrected
+2026-08-22 together with the README line quoting it. SFIV's steady median (59.45 vs the
 long-standing ~59.7-59.9) confirms the renderer's steady body is unchanged;
 its window average remains hitch-tail sensitive.
