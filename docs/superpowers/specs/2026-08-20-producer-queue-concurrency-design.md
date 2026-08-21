@@ -360,3 +360,18 @@ a protocol. Final implementation order:
    mark_ticket_restamp_checks` as the first wild reading of the re-stamp
    window.
 
+## 10. Track closure (2026-08-21)
+
+T2a'/T2b/T2c shipped model-first; the producer's queue-mutex footprint fell
+to the frozen-ticket re-read plus legitimate visibility waits, and the
+restamp window measured 1,066,758 checks / 0 fires on GT2. Cross-workload
+profiles (GT1 total acquire-wait 0.126 ms/present, SFIV 0.089, GT2 ~1.0 with
+producer share ~0.15) show no remaining producer contention anywhere, so
+**T2d is deferred**: its fps motivation dissolved once the producer stopped
+acquiring, and the holder's duty cycle has no waiting victim. T2d's
+architectural value (duty-cycle reduction, live slot-assert, encode-side
+concurrency precursor) is recorded in the gap row with its reopen
+conditions. The multi-workload gate (GT1/GT3/SFIV pass, zero GPU errors,
+visuals normal, SFIV in-benchmark average 43.0 → 47.0) closed the
+GT2-only evidence debt for the whole series.
+
