@@ -138,6 +138,40 @@ static bool dxmt9PerfVsConstSetterRangeEnabled() {
     return enabled;
 }
 
+// Diagnostics-off fast path for the six PE shader-constant setter entry
+// points (SetVertexShaderConstantF/I/B, SetPixelShaderConstantF/I/B). GT2
+// measures ~21,700 of these calls per present; with every diagnostic
+// disabled, the per-call scaffolding these setters carried (a decimated
+// scope guard, PeCallScope, a callEntryNs ternary, a finishPeCall lambda,
+// notePeDeviceCallAfterPresent, and a debug-log call) costs ~35 ns/call --
+// mostly branches and scope-object construction on the disabled path, which
+// is expensive under Rosetta-translated x86. This folds every gate that
+// scaffold depends on into ONE process-constant bool so the disabled path
+// collapses to a single branch straight into validateConstRange +
+// touchConstShadow. Every member is read once at process start (each
+// accessor below caches its env read in a function-local static), so the
+// composite is safe to cache the same way.
+static bool dxmt9PeConstSetterSlowPathRequired() {
+    static const bool required =
+        // dxmt9PeCallTrackingEnabled() -- the gate for
+        // notePeDeviceCallAfterPresent / PeCallScope, see the "Single
+        // resolved-once gate" comment above -- is defined as exactly
+        // dxmt9PeRecorderStatsEnabled(), so one check covers both.
+        dxmt9PeRecorderStatsEnabled() ||
+        // DXMT9_PE_STATS_DECIMATION: N != 0 arms the per-call decimated
+        // scope guard (DxmtPeDecimatedScopeGuard / dxmt9PeArmDecimatedScope
+        // against peEntryConstDecimatedStats_, phase 1 per
+        // d3d9_pe_const_shadow.hpp).
+        dxmt9PeStatsDecimationN() != 0 ||
+        // DXMT9_PERF_VS_CONST_SETTER_RANGE.
+        dxmt9PerfVsConstSetterRangeEnabled() ||
+        // dxmt9DeviceDebugLog emits at LogLevel::Debug; DXMT_LOG_LEVEL is
+        // read once into a function-local static by configuredLogLevel(),
+        // so this admits-Debug check is itself process-constant.
+        dxmt9::util::shouldLog(dxmt9::util::LogLevel::Debug);
+    return required;
+}
+
 static bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
@@ -15443,8 +15477,12 @@ public:
         std::memcpy(pData, shadow.values.data() + base, avail);
     }
 
-    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
-                                                        UINT count) noexcept override {
+    // Diagnostics-on body for SetVertexShaderConstantF, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantFSlow(UINT start, const float* pData,
+                                  UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         PeCallScope peCall(*this, "SetVertexShaderConstantF",
@@ -15478,6 +15516,18 @@ public:
         touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
         return finishPeCall(S_OK);
     }
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
+                                                        UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetVertexShaderConstantFSlow(start, pData, count);
+        }
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
+        if (FAILED(hr)) return hr;
+        // Shadow-only: defer the record until the next flushPendingConsts()
+        // (called before each draw record + at chunk commit).
+        touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
                                                         UINT count) noexcept override {
         notePeDeviceCallAfterPresent("GetVertexShaderConstantF");
@@ -15485,13 +15535,27 @@ public:
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstF, start, pData, count, sizeof(float) * 4);
         return S_OK;    }
-    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
-                                                        UINT count) noexcept override {
+    // Diagnostics-on body for SetVertexShaderConstantI, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantISlow(UINT start, const INT* pData,
+                                  UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetVertexShaderConstantI");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
+        if (FAILED(hr)) return hr;
+        touchConstShadow(peConsts_.vsConstI, start, count, pData, sizeof(int32_t) * 4);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
+                                                        UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetVertexShaderConstantISlow(start, pData, count);
+        }
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
         if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.vsConstI, start, count, pData, sizeof(int32_t) * 4);
@@ -15504,13 +15568,27 @@ public:
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
-                                                        UINT count) noexcept override {
+    // Diagnostics-on body for SetVertexShaderConstantB, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantBSlow(UINT start, const BOOL* pData,
+                                  UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetVertexShaderConstantB");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
+        if (FAILED(hr)) return hr;
+        touchConstShadow(peConsts_.vsConstB, start, count, pData, sizeof(uint32_t));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
+                                                        UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetVertexShaderConstantBSlow(start, pData, count);
+        }
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
         if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.vsConstB, start, count, pData, sizeof(uint32_t));
@@ -15681,8 +15759,12 @@ public:
         if (!ppPS) return D3DERR_INVALIDCALL;
         if (ps_) ps_->AddRef(); *ppPS = ps_; return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
-                                                       UINT count) noexcept override {
+    // Diagnostics-on body for SetPixelShaderConstantF, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantFSlow(UINT start, const float* pData,
+                                 UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         PeCallScope peCall(*this, "SetPixelShaderConstantF",
@@ -15704,6 +15786,16 @@ public:
         touchConstShadow(peConsts_.psConstF, start, count, pData, sizeof(float) * 4);
         return finishPeCall(S_OK);
     }
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
+                                                       UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetPixelShaderConstantFSlow(start, pData, count);
+        }
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
+        if (FAILED(hr)) return hr;
+        touchConstShadow(peConsts_.psConstF, start, count, pData, sizeof(float) * 4);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
                                                        UINT count) noexcept override {
         notePeDeviceCallAfterPresent("GetPixelShaderConstantF");
@@ -15711,13 +15803,27 @@ public:
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstF, start, pData, count, sizeof(float) * 4);
         return S_OK;    }
-    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
-                                                       UINT count) noexcept override {
+    // Diagnostics-on body for SetPixelShaderConstantI, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantISlow(UINT start, const INT* pData,
+                                 UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetPixelShaderConstantI");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
+        if (FAILED(hr)) return hr;
+        touchConstShadow(peConsts_.psConstI, start, count, pData, sizeof(int32_t) * 4);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
+                                                       UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetPixelShaderConstantISlow(start, pData, count);
+        }
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
         if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.psConstI, start, count, pData, sizeof(int32_t) * 4);
@@ -15730,13 +15836,27 @@ public:
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
-                                                       UINT count) noexcept override {
+    // Diagnostics-on body for SetPixelShaderConstantB, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantBSlow(UINT start, const BOOL* pData,
+                                 UINT count) noexcept {
         DxmtPeDecimatedScopeGuard peEntryScope;
         dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetPixelShaderConstantB");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
+        if (FAILED(hr)) return hr;
+        touchConstShadow(peConsts_.psConstB, start, count, pData, sizeof(uint32_t));
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
+                                                       UINT count) noexcept override {
+        if (dxmt9PeConstSetterSlowPathRequired()) {
+            return SetPixelShaderConstantBSlow(start, pData, count);
+        }
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
         if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.psConstB, start, count, pData, sizeof(uint32_t));
