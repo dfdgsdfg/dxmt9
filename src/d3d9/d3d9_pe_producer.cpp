@@ -58,32 +58,36 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   DxmtPeDecimatedPhaseTimer phaseTexturesStreams(
       parentSampled, peSparsePhaseTexturesStreamsDecimatedStats());
   std::size_t textureCount = 0;
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-    if (!snapshot && (shadow.pendingTextureMask & (1u << slot)) == 0u) {
-      continue;
+  if (snapshot || shadow.pendingTextureMask != 0u) {
+    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+      if (!snapshot && (shadow.pendingTextureMask & (1u << slot)) == 0u) {
+        continue;
+      }
+      auto& entry = scratch.textures[textureCount++];
+      entry.wire = D9CCommandChunkWireTextureBinding{};
+      entry.wire.slot = slot;
+      entry.wire.valid = 1u;
+      entry.object = bindings.textures[slot];
     }
-    auto& entry = scratch.textures[textureCount++];
-    entry.wire = D9CCommandChunkWireTextureBinding{};
-    entry.wire.slot = slot;
-    entry.wire.valid = 1u;
-    entry.object = bindings.textures[slot];
   }
   out.textures = std::span(scratch.textures).first(textureCount);
 
   // --- streams -------------------------------------------------------------
   std::size_t streamCount = 0;
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if (!snapshot && (shadow.pendingStreamMask & (1u << slot)) == 0u) {
-      continue;
+  if (snapshot || shadow.pendingStreamMask != 0u) {
+    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+      if (!snapshot && (shadow.pendingStreamMask & (1u << slot)) == 0u) {
+        continue;
+      }
+      auto& entry = scratch.streams[streamCount++];
+      entry.wire = D9CCommandChunkWireStreamBinding{};
+      entry.wire.slot = slot;
+      entry.wire.valid = 1u;
+      entry.wire.offset = bindings.streams[slot].offset;
+      entry.wire.stride = bindings.streams[slot].stride;
+      entry.wire.frequency = 0u;
+      entry.object = bindings.streams[slot].buffer;
     }
-    auto& entry = scratch.streams[streamCount++];
-    entry.wire = D9CCommandChunkWireStreamBinding{};
-    entry.wire.slot = slot;
-    entry.wire.valid = 1u;
-    entry.wire.offset = bindings.streams[slot].offset;
-    entry.wire.stride = bindings.streams[slot].stride;
-    entry.wire.frequency = 0u;
-    entry.object = bindings.streams[slot].buffer;
   }
   out.streams = std::span(scratch.streams).first(streamCount);
   phaseTexturesStreams.stop();
@@ -164,22 +168,24 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   DxmtPeDecimatedPhaseTimer phaseAttachmentsScalars(
       parentSampled, peSparsePhaseAttachmentsScalarsDecimatedStats());
   std::size_t renderTargetCount = 0;
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS;
-       ++slot) {
-    // populateDrawPacketAttachmentSnapshot's rule: a slot is present when it
-    // is explicitly set or holds a non-null surface.
-    const bool present =
-        snapshot ? (bindings.rtExplicitMask[slot] ||
-                    bindings.renderTargets[slot].object != nullptr)
-                 : (shadow.pendingRtMask & (1u << slot)) != 0u;
-    if (!present) {
-      continue;
+  if (snapshot || shadow.pendingRtMask != 0u) {
+    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS;
+         ++slot) {
+      // populateDrawPacketAttachmentSnapshot's rule: a slot is present when it
+      // is explicitly set or holds a non-null surface.
+      const bool present =
+          snapshot ? (bindings.rtExplicitMask[slot] ||
+                      bindings.renderTargets[slot].object != nullptr)
+                   : (shadow.pendingRtMask & (1u << slot)) != 0u;
+      if (!present) {
+        continue;
+      }
+      auto& entry = scratch.renderTargets[renderTargetCount++];
+      entry.wire = D9CCommandChunkWireRenderTargetBinding{};
+      entry.wire.slot = slot;
+      entry.wire.valid = 1u;
+      entry.object = bindings.renderTargets[slot];
     }
-    auto& entry = scratch.renderTargets[renderTargetCount++];
-    entry.wire = D9CCommandChunkWireRenderTargetBinding{};
-    entry.wire.slot = slot;
-    entry.wire.valid = 1u;
-    entry.object = bindings.renderTargets[slot];
   }
   out.renderTargets = std::span(scratch.renderTargets).first(renderTargetCount);
 
@@ -211,15 +217,17 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   DxmtPeDecimatedPhaseTimer phaseClipTssLights(
       parentSampled, peSparsePhaseClipTssLightsDecimatedStats());
   std::size_t clipPlaneCount = 0;
-  for (std::uint32_t slot = 0; slot < 6u; ++slot) {
-    // Snapshot emits every plane (the packet set clipPlaneMask = 0x3F).
-    if (!snapshot && (shadow.pendingClipPlaneMask & (1u << slot)) == 0u) {
-      continue;
+  if (snapshot || shadow.pendingClipPlaneMask != 0u) {
+    for (std::uint32_t slot = 0; slot < 6u; ++slot) {
+      // Snapshot emits every plane (the packet set clipPlaneMask = 0x3F).
+      if (!snapshot && (shadow.pendingClipPlaneMask & (1u << slot)) == 0u) {
+        continue;
+      }
+      auto& entry = scratch.clipPlanes[clipPlaneCount++];
+      entry.slot = slot;
+      std::memcpy(entry.values, &shadow.clipPlaneShadow[slot * 4u],
+                  sizeof(entry.values));
     }
-    auto& entry = scratch.clipPlanes[clipPlaneCount++];
-    entry.slot = slot;
-    std::memcpy(entry.values, &shadow.clipPlaneShadow[slot * 4u],
-                sizeof(entry.values));
   }
   out.clipPlanes = std::span(scratch.clipPlanes).first(clipPlaneCount);
 
@@ -267,20 +275,24 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // can contribute a light, an enable, or both.
   std::size_t lightCount = 0;
   std::size_t lightEnableCount = 0;
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-    if (snapshot || (shadow.pendingLightSlotMask & (1u << slot)) != 0u) {
-      auto& entry = scratch.lights[lightCount++];
-      entry.slot = slot;
-      entry.light = shadow.lightShadow[slot];
-    }
-    if (snapshot ||
-        (shadow.pendingLightEnableValidMask & (1u << slot)) != 0u) {
-      auto& entry = scratch.lightEnables[lightEnableCount++];
-      entry.slot = slot;
-      // Snapshot reads the shadow; delta reads the pending value mask.
-      const std::uint32_t source = snapshot ? shadow.lightEnableShadow
-                                            : shadow.pendingLightEnableMask;
-      entry.enabled = (source & (1u << slot)) != 0u;
+  if (snapshot ||
+      (shadow.pendingLightSlotMask | shadow.pendingLightEnableValidMask) !=
+          0u) {
+    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
+      if (snapshot || (shadow.pendingLightSlotMask & (1u << slot)) != 0u) {
+        auto& entry = scratch.lights[lightCount++];
+        entry.slot = slot;
+        entry.light = shadow.lightShadow[slot];
+      }
+      if (snapshot ||
+          (shadow.pendingLightEnableValidMask & (1u << slot)) != 0u) {
+        auto& entry = scratch.lightEnables[lightEnableCount++];
+        entry.slot = slot;
+        // Snapshot reads the shadow; delta reads the pending value mask.
+        const std::uint32_t source = snapshot ? shadow.lightEnableShadow
+                                              : shadow.pendingLightEnableMask;
+        entry.enabled = (source & (1u << slot)) != 0u;
+      }
     }
   }
   out.lights = std::span(scratch.lights).first(lightCount);
