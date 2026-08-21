@@ -63,6 +63,18 @@ D3D9-only change) as a byte-identity check. Run a same-build A/A pair first — 
 validates the harness, though note it is structurally blind to a worktree
 *configuration* asymmetry, which only the parity check catches.
 
+**The Wine root is shared mutable state, so staging is a side effect on every
+later run.** `stage_builtin_pe_dlls` copies `d3d9.dll` / `winemetal.dll` from
+`--exe`'s directory into `$WINE_ROOT/lib/wine/x86_64-windows/`, and they stay
+there. A conformance bisect that builds old commits in throwaway worktrees
+therefore leaves the *last point measured* staged in the Wine root — verified
+2026-08-22, where the root held the midpoint build after the run finished. The
+next conformance or wild run then silently measures that binary. **Restage HEAD
+(any default-args runner invocation does it) before trusting a later run, and
+delete bisect worktrees when done** so a stale `--exe` cannot be pointed at
+them. The `.staged-build.json` sidecar is what makes this checkable: compare
+its hash against the tree you meant to test.
+
 **Builtin-lane PE DLLs are loaded from the Wine root, not from where you put
 them.** `wine_builtin_dll=true` postprocesses `d3d9.dll` / `winemetal.dll` with
 Wine's `"Wine builtin DLL"` signature, so Wine resolves them from
