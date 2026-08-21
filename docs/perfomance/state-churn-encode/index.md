@@ -43,6 +43,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.30 - T2a' Lands: Both Mark Paths Leave The Queue Mutex, Model-First](state-churn-encode-append-decomposition.30.md)
 - [state-churn-encode-append-decomposition.31 - Surface-Lock Shadow: A 1.5 ms Address Scan, A 93% Counter Win, And An FPS Null](state-churn-encode-append-decomposition.31.md)
 - [state-churn-encode-append-decomposition.32 - T2b/T2c + Scan Batch Land: Counters All Win, FPS Null, And The Lock-Path Slack Rule](state-churn-encode-append-decomposition.32.md)
+- [state-churn-encode-append-decomposition.35 - Entry Fast Path + Section Skips: Mechanisms Land, FPS Null-to-Marginal](state-churn-encode-append-decomposition.35.md)
 - [state-churn-encode-append-decomposition.34 - buildSparseState Phase Split + touchConstShadow Bulk Path: Flat Attribution, Call-Volume Verdict](state-churn-encode-append-decomposition.34.md)
 - [state-churn-encode-append-decomposition.33 - Series Closure: Evidence Availability Correction, Multi-Workload Gate Deferred](state-churn-encode-append-decomposition.33.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
