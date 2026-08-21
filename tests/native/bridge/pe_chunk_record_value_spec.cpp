@@ -656,6 +656,111 @@ void testSparseDrawAndApplyProducerMatrix() {
 // pe_producer_differential_spec's stream-retention and six index-buffer fixtures,
 // which exercise the real production path rather than a staging helper.
 
+// Pins touchConstShadow's exact per-call semantics (dirty range, dirtyElems,
+// and the zero-fill aliasing boundary on a freshly-extended region) at the
+// pre-optimization baseline. A bulk-span memcmp early-out and pre-sized
+// shadow storage are only safe to add if every one of these behaviors is
+// unchanged afterward.
+void testTouchConstShadowSemantics() {
+  // (a) fully redundant re-set: no dirty, values unchanged.
+  {
+    ConstShadow shadow;
+    std::array<float, 16> v1{};
+    for (std::size_t i = 0; i < v1.size(); ++i) v1[i] = static_cast<float>(i);
+    touchConstShadow(shadow, 0u, 4u, v1.data(), sizeof(float) * 4u);
+    check(shadow.dirty() && shadow.dirtyStart == 0u && shadow.dirtyEnd == 4u,
+          "(a) initial set is dirty over the full range");
+    shadow.clear();
+    touchConstShadow(shadow, 0u, 4u, v1.data(), sizeof(float) * 4u);
+    check(!shadow.dirty(), "(a) fully redundant re-set produces no dirty");
+    check(std::memcmp(shadow.values.data(), v1.data(), sizeof(v1)) == 0,
+          "(a) values are unchanged by the redundant re-set");
+  }
+
+  // (b) partial change mid-span: dirtyElems exactly at changed indices,
+  // merged range is [firstChanged, lastChanged).
+  {
+    ConstShadow shadow;
+    std::array<float, 16> v1{};
+    for (std::size_t i = 0; i < v1.size(); ++i) v1[i] = static_cast<float>(i);
+    touchConstShadow(shadow, 0u, 4u, v1.data(), sizeof(float) * 4u);
+    shadow.clear();
+    std::array<float, 16> v2 = v1;
+    v2[4] = -999.0f;  // register 1
+    v2[9] = 555.0f;   // register 2
+    touchConstShadow(shadow, 0u, 4u, v2.data(), sizeof(float) * 4u);
+    check(shadow.dirty() && shadow.dirtyStart == 1u && shadow.dirtyEnd == 3u,
+          "(b) partial change merges to [firstChanged, lastChanged)");
+    check(shadow.dirtyElems.size() == 4u && shadow.dirtyElems[0] == 0u &&
+              shadow.dirtyElems[1] == 1u && shadow.dirtyElems[2] == 1u &&
+              shadow.dirtyElems[3] == 0u,
+          "(b) dirtyElems is set exactly at the changed indices");
+  }
+
+  // (c) first-time set into a fresh region with nonzero data: whole range
+  // dirty, every touched dirtyElems entry set.
+  {
+    ConstShadow shadow;
+    std::array<float, 8> v{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
+    touchConstShadow(shadow, 0u, 2u, v.data(), sizeof(float) * 4u);
+    check(shadow.dirty() && shadow.dirtyStart == 0u && shadow.dirtyEnd == 2u,
+          "(c) fresh nonzero set marks the whole range dirty");
+    check(shadow.dirtyElems[0] == 1u && shadow.dirtyElems[1] == 1u,
+          "(c) every touched element is marked dirty");
+  }
+
+  // (d) first-time set into a fresh region with ALL-ZERO data: the shadow's
+  // resize() zero-fills the newly materialized bytes, so all-zero input
+  // compares equal to the zero-fill and the base implementation's
+  // per-element loop finds nothing changed. This is the zero-fill aliasing
+  // boundary the optimization must reproduce exactly.
+  {
+    ConstShadow shadow;
+    std::array<float, 8> vz{};  // all zero
+    touchConstShadow(shadow, 0u, 2u, vz.data(), sizeof(float) * 4u);
+    check(!shadow.dirty(),
+          "(d) fresh all-zero set aliases the zero-fill and stays clean");
+    check(shadow.dirtyElems.size() == 2u && shadow.dirtyElems[0] == 0u &&
+              shadow.dirtyElems[1] == 0u,
+          "(d) no dirtyElems entries are marked for the all-zero set");
+    check(shadow.values.size() == sizeof(float) * 4u * 2u,
+          "(d) the shadow is still resized to cover the requested span");
+  }
+
+  // (e) span extension: a prior shorter set, then a longer set overlapping
+  // the old (already-materialized, matching) region and a newly-extended
+  // (zero-filled, differing) region. Only the newly-extended register must
+  // be marked dirty -- this is exactly the case a bulk-span early-out must
+  // NOT take, because the span was not already fully covered before this
+  // call's resize.
+  {
+    ConstShadow shadow;
+    std::array<float, 4> vinit{1.0f, 2.0f, 3.0f, 4.0f};
+    touchConstShadow(shadow, 0u, 1u, vinit.data(), sizeof(float) * 4u);
+    shadow.clear();
+    std::array<float, 8> vext{1.0f, 2.0f, 3.0f, 4.0f, 9.0f, 9.0f, 9.0f, 9.0f};
+    touchConstShadow(shadow, 0u, 2u, vext.data(), sizeof(float) * 4u);
+    check(shadow.dirty() && shadow.dirtyStart == 1u && shadow.dirtyEnd == 2u,
+          "(e) span extension only marks the newly-extended register dirty");
+    check(shadow.dirtyElems[0] == 0u && shadow.dirtyElems[1] == 1u,
+          "(e) the pre-existing matching register stays clean");
+  }
+
+  // (f) bool elemSize=4 path. Values are all nonzero so the fresh-set
+  // assertion below is not itself an instance of the (d) zero-fill aliasing
+  // case -- that boundary is already covered separately by (d).
+  {
+    ConstShadow shadow;
+    std::array<std::uint32_t, 4> vb{1u, 2u, 3u, 4u};
+    touchConstShadow(shadow, 0u, 4u, vb.data(), sizeof(std::uint32_t));
+    check(shadow.dirty() && shadow.dirtyStart == 0u && shadow.dirtyEnd == 4u,
+          "(f) bool elemSize=4 first-time set is dirty over the full range");
+    shadow.clear();
+    touchConstShadow(shadow, 0u, 4u, vb.data(), sizeof(std::uint32_t));
+    check(!shadow.dirty(), "(f) bool elemSize=4 redundant re-set is clean");
+  }
+}
+
 void testConstShadowFeedsConstantSections() {
   const std::array<float, 8> values{
       1.0f, -2.0f, 3.0f, -4.0f, 5.0f, -6.0f, 7.0f, -8.0f};
@@ -1011,6 +1116,7 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
+    testTouchConstShadowSemantics();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();
     testRecordLocalDedupAccelerator();
