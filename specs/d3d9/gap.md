@@ -711,10 +711,48 @@ so was reading the two groups as one bug. They were three unrelated causes:
 Four causes behind what this paragraph called one, which is why the shared
 symptom was a bad grouping heuristic.
 
-`visual_process_vertices_xyzhw_policy` (index 186) also used the buggy macro, but
-still fails after the fix at `visual_misc.c:14142-14143` — ProcessVertices
-coordinate assertions, a different failure. Whether the macro fix changed
-anything there was not measured.
+`visual_process_vertices_xyzhw_policy` (index 189 in the runner's binary index
+space) also used the buggy macro, but still fails after the fix at
+`visual_misc.c:14142-14143` — ProcessVertices coordinate assertions, a
+different failure. Whether the macro fix changed anything there was not
+measured.
+
+**2026-08-22 investigation — this is a test-fixture defect, not a dxmt9
+regression.** A scoped `--verbose` run shows the failure is not confined to
+`14142/14143`: ~24 distinct check-pair sites fail, spanning `14142` to
+`17726`. Instrumented ground-truth (temporary `printf` of mapped-vs-expected,
+reverted after capture) across nine shader mechanisms gives four *mutually
+incompatible* discrepancy shapes, which no single dxmt9 change can satisfy:
+
+| fixture | dxmt9 (v0) | fixture expects | shape |
+|---|---|---|---|
+| `expected_normal` (`o0=pos+normal`, normal.xy=0) | `(160,360)` | `(240,300)` | uniform 0.5x on X and Y |
+| `expected_tangent` (`o0=pos+tangent`, tangent=(1,0,0)) | `(480,360)` | `(480,300)` | X exact, Y only scaled |
+| `expected_blendweight` (bw=(0.25,0.25,0,0)) | `(240,300)` | `(400,240)` | additive shift `X+160, Y-60` |
+| `expected_generic_usage` | `(160,300)` | `(240,270)` | a fourth, distinct shape |
+| `expected_short4n_pos` (fixed-function, `vs=NULL`) | `(240,300)` — world-scaled, matches wined3d's formula | `(160,360)` — as if `D3DTS_WORLD` were never set | **opposite direction** |
+
+The falsification is algebraic and was independently re-checked: `normal` and
+`tangent` read the same position array under the same persistent
+`D3DTS_WORLD=scale(0.5,0.5,1)`, so a "premultiply the position by S" fix needs
+`S=0.5` to explain `normal` and `S=1.0` to explain `tangent`. Applying the
+world *after* the shader instead predicts `(400,300)` for `tangent`, which the
+fixture also contradicts. `blendweight`'s shift is additive, not
+multiplicative. And the fixed-function row shows dxmt9 applying the world
+matrix *correctly* while the fixture omits it — the opposite sign from a
+systematic missing-transform bug. So the `expected_*` C literals carry several
+independent authoring errors, matching the `PROCESS_VS_REGTYPE` precedent
+above in this same file.
+
+Wine cannot arbitrate the programmable path at all:
+`wined3d_device_process_vertices` (`dlls/wined3d/device.c:3616-3695`) nulls the
+vertex shader and only ever runs fixed-function `WORLD·VIEW·PROJ`, so dxmt9's
+VS-interpreter ProcessVertices is a dxmt9-only feature with no external oracle.
+**Consequently the fixtures must not simply be reset to dxmt9's output.** The
+accepted order is: first build Wine-free native coverage deriving expectations
+from the D3D9 contract (there is currently zero native ProcessVertices
+coverage), then recompute each `expected_*` array from that verified formula,
+one array at a time.
 
 **Defence-in-depth note:** `validateRegisterIndex`
 (`dxmt9_shader_decoder.cpp:173-215`) would have rejected a temp index of 256
