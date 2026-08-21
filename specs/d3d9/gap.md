@@ -787,6 +787,41 @@ isolated-chunk reruns:
      selectors use the binary's dispatch-table order, where they are 16-19
      (chunk `[16:20)`). Same tests.
 
+  **2026-08-22, later the same day — the "context-dependent flake" framing is
+  itself refuted, and two prior verifications were vacuous.** Measured
+  directly: the decl chunk `[16:20)` run **alone on a cold wineserver, with no
+  preceding chunk at all**, fails **4 of 6** trials with the same
+  `err:seh:call_stack_handlers invalid frame 00000001000FF448` signature. A
+  three-arm A/B over the documented two-invocation repro (Ex-QI chunk `[4:8)`
+  first, then the decl chunk; 5 trials per arm) gave failures 2/5 with no
+  server kill between, 2/5 with `wineserver -k`, and 4/5 with `wineserver
+  -k -w` — i.e. no arm helps, and killing *and waiting for* the server between
+  the two invocations does not prevent it. Therefore:
+
+  - "only when the D3D9Ex QI group ran earlier in the same persistent
+    wineserver session" and "never on a cold wineserver" are **wrong**. The
+    decl group fails roughly half to two-thirds of the time regardless of
+    context; the Ex-QI pairing was correlation, not cause.
+  - `wineserver -k -w` is **not** a mitigation and must not be adopted as one.
+  - Two earlier "the decl group passes 5/5 in isolation, so this is the known
+    flake and not a regression" verifications (2026-08-21, quoted into
+    `docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.34.md`
+    and repeated in session reporting) used `--start 26 --end 31`. Those are
+    MANIFEST.toml positions; the runner indexes the binary dispatch table,
+    where `[26:31)` is `reset_hresult_matrix_policy` /
+    `reset_resources_policy` / `resource_access_{base,ex}_pool_policy` /
+    `vertex_buffer_read_write`. **The decl group was never executed by those
+    runs**, so they cleared nothing. The retraction is recorded in that leaf.
+  - `commit_chunk_fail reason=chunk-admission index=4294967295 hr=0x8876086c`
+    appears in both passing and failing isolated trials, so it remains the
+    red herring the evidence file called it.
+
+  **Open question this raises:** whether the ~60% isolated failure rate is a
+  dxmt9 regression (the 2026-08-02 snapshot recorded these four cases as
+  pass) or a Wine/host-environment change. Answering it needs the isolated
+  `[16:20)` trial repeated at an older commit with its own staged PE build —
+  not yet done.
+
   **Caveat on the "it generalises beyond the decl group" observation.** The
   same investigation saw a full-suite run produce 30/235 fails with this
   signature scattered across chunks `[8:12)`, a timeout-cascade

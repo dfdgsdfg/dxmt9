@@ -74,7 +74,18 @@ same-day A/B before any use.
 reads (parent-gated), and the production change leaves the decimation
 instrument block byte-identical. Cold-server conformance: 249/254 with the
 first pass, where the 5 fails were the known `visual_process_vertices_xyzhw`
-plus the four-test decl group — the decl group passed 5/5 on an immediate
-scoped rerun (`--start 26 --end 31`), confirming the known SEH flake fired
-again rather than a regression; the flake's root cause remains on the
-correctness backlog.
+plus the four-test decl group.
+
+**Retracted 2026-08-22 — the decl-group exoneration in this leaf was
+vacuous.** It read: "the decl group passed 5/5 on an immediate scoped rerun
+(`--start 26 --end 31`), confirming the known SEH flake fired again rather
+than a regression". Those selectors are MANIFEST.toml positions, but
+`run_d3d9_conformance.py --start/--end` index the binary's dispatch table,
+where `[26:31)` is `reset_hresult_matrix_policy` / `reset_resources_policy` /
+`resource_access_{base,ex}_pool_policy` / `vertex_buffer_read_write` — the
+decl group is `[16:20)`. The "rerun" never executed the tests it claimed to
+clear, so it was no evidence either way. Measured properly the same day, the
+decl group fails **4 of 6** isolated cold-wineserver runs of `[16:20)` with
+no preceding chunk at all. Nothing in this leaf's own subject (the phase
+probe and touchConstShadow) is affected — the retraction is confined to the
+conformance sentence. See `specs/d3d9/gap.md` for the corrected flake entry.
