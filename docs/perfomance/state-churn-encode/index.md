@@ -43,6 +43,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-append-decomposition.30 - T2a' Lands: Both Mark Paths Leave The Queue Mutex, Model-First](state-churn-encode-append-decomposition.30.md)
 - [state-churn-encode-append-decomposition.31 - Surface-Lock Shadow: A 1.5 ms Address Scan, A 93% Counter Win, And An FPS Null](state-churn-encode-append-decomposition.31.md)
 - [state-churn-encode-append-decomposition.32 - T2b/T2c + Scan Batch Land: Counters All Win, FPS Null, And The Lock-Path Slack Rule](state-churn-encode-append-decomposition.32.md)
+- [state-churn-encode-append-decomposition.33 - Series Closure: Multi-Workload Gate Green, appendHandle O(1), T2d Deferred](state-churn-encode-append-decomposition.33.md)
 - [state-churn-encode-append-decomposition.15 - Per-Call-Site Counters Make The Split Computable](state-churn-encode-append-decomposition.15.md)
 - [state-churn-encode-append-decomposition.14 - Partitioning encodeDraw Works, But The Residual Was Mostly Mine](state-churn-encode-append-decomposition.14.md)
 - [state-churn-encode-append-decomposition.13 - A Third Of encode_draw Is Unattributed, And I Priced The Instrument Wrong](state-churn-encode-append-decomposition.13.md)
