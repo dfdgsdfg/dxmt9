@@ -3354,11 +3354,10 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
   // take, and NEITHER of its two loops runs under `CommandQueue::mutex_` any
   // more. The stamp loop rides the pool's arena-stamp exception for the reason
   // spelled out in markChunkResources above. The binding capture rides the
-  // same exception's T2b clause: its read-set is `producer-owned` (design §7
-  // Q1 / spec §2), and the only cross-actor obligation left — that the record
+  // same arena-lock clause: its read-set is protected by the buffer arena's
+  // shared lock, and the only cross-actor obligation left — that the record
   // still exists — is discharged by the retainer pin, not by this mutex.
-  // `Pool::captureChunkBufferBindings` carries the assert and the full
-  // argument. TLA+: ProducerMarkReclaim!CaptureRead, obligation
+  // TLA+: ProducerMarkReclaim!CaptureRead, obligation
   // `NoCaptureAfterFree`, counterexample
   // `ProducerMarkReclaim.capture.counterexample.cfg`.
   //
@@ -3430,8 +3429,8 @@ CommandQueue::captureChunkBufferBindings(
   // capture loop, so with T2b the acquire disappears entirely rather than
   // shrinking: the `capture_chunk_buffer_bindings`
   // `DXMT9_PERF_QUEUE_MUTEX_SPLIT` row is expected to go to zero acquires.
-  // Same two obligations, same assert, same model binding as the combined
-  // path above — see `Pool::captureChunkBufferBindings`.
+  // The same retainer-pin and arena-lock obligations as the combined path
+  // above apply — see `Pool::captureChunkBufferBindings`.
   //
   // Note this lane's ordering is NOT stamps-before-capture: it captures
   // without marking at all, because `resourcesMarkedBeforeReplay` is false
@@ -5228,7 +5227,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // exception (3)):
   //   * `flags` — the caller's own argument.
   //   * `record.isManagedVersioned`, `record.isDynamicRename` —
-  //     `producer-owned`, written once at create on this thread.
+  //     arena-protected flavor flags, initialized at create.
   //   * `record.lastUsedSeqId` — `arena-protected`, NOT `queue-shared`. It is
   //     read inside `bufferArena_.inspect`, i.e. under HandleArena's shared
   //     lock, and `CommandQueue::mutex_` has not protected it since T2a' put
@@ -5250,7 +5249,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
     // rather than having to prove a value.
     //
     // What remains is `finalizeBufferMap` (one `arena.update()` over
-    // `producer-owned` ring state, guarded by `Pool::producerOwnership_`) and
+    // arena-protected ring state) and
     // the GPU watermark it needs, taken as an `owner-published` acquire load.
     // A stale-low watermark is the safe direction: it can only make the ring
     // fresh-allocate a backing it could have reused. TLA+:

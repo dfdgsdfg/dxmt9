@@ -138,7 +138,16 @@ the key; the leaf is history, and history is what this tree is for.
   part, label that figure where it is quoted.
 - New leaves should not need the key. If a new leaf would already qualify, its
   `source:` is wrong — cite a concrete surviving artifact instead
-  (`scripts/check/audit_perf_docs_sources.py` enforces this for new files).
+  (`scripts/check/audit_perf_docs_sources.py` enforces this for new or changed
+  current leaves).
+
+`scripts/check/audit_perf_docs_sources.py` audits the changed performance leaves
+and all current `accepted-verdict` leaves, so a clean tree still checks the
+current verdict surface. Its supported `source:` syntax uses semicolon or
+comma separators and simple brace expansion such as `{gt1,gt3}`; every
+expanded path must exist. Historical leaves outside that scope remain legacy
+debt and are not silently rewritten. If a historical leaf must be touched while
+its evidence is gone, record the applicable `outdated:` value explicitly.
 
 ## AGENTS.md vs. Rules vs. Specs
 

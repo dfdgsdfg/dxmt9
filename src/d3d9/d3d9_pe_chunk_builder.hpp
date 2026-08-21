@@ -169,13 +169,12 @@ class CommandChunkBuilder {
   // range of handles a failed record added, using the same handleCheckpoint
   // bound the surrounding rollback already computes.
   //
-  // This does NOT replace `appendHandle`'s own record-local dedup scan
-  // (finding a handle already appended by the *current* record): that scan
-  // is bounded by one record's handle count (tens, per R-BACK-43.7's own
-  // review), and this table answers a different question — "does this
-  // pointer appear anywhere in the chunk" — that would need to carry
-  // per-record membership to serve the narrower query, which the dedup
-  // scan does not need.
+  // `appendHandle` normally uses its separate record-local identity table;
+  // this table answers a different question — "does this pointer appear
+  // anywhere in the chunk?" — and therefore stores chunk-lifetime pointer
+  // multiplicity. If the record-local table overflows, appendHandle falls
+  // back to its bounded current-record scan, which remains the correctness
+  // fallback for that exceptional path.
   struct HandlePresenceTable {
     struct Slot {
       void* key = nullptr;
@@ -279,16 +278,11 @@ class CommandChunkBuilder {
     }
   };
 
-  // R-BACK-43.7 follow-up (fresh binary-matched sampler evidence,
-  // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.32.md):
-  // appendHandle()'s *record-local* dedup scan — "did the record currently
-  // being built already append this exact wire identity, and if so at which
-  // absolute handle index" — was left as an O(record window) linear scan by
-  // R-BACK-43.7's own review, on the argument that a record's handle window
-  // is "tens" of entries. Sampler evidence refutes that: 9.5% of d3d9.dll
-  // self-PC time (~0.35ms/present on GT2) lands in this loop, so call volume
-  // (many appendHandle calls across many records, not any single record's
-  // width) makes the O(n) shape hot.
+  // R-BACK-43.7 — appendHandle()'s *record-local* dedup lookup asks whether
+  // the current record already appended this exact wire identity and, on a
+  // hit, returns its absolute handle index. The table removes the previous
+  // record-window scan from the normal path. On fixed-table overflow,
+  // appendHandle falls back to the original bounded current-record scan.
   //
   // This is deliberately a SEPARATE structure from HandlePresenceTable
   // above, not an extension of it, because the two answer different

@@ -34,9 +34,11 @@
  *     `forceDrawResourceMarkingAfterSplit_` mechanism
  *     (`src/dxmt9/dxmt9_command_queue.cpp`).
  *
- * Both premises are enforced *trivially* by the shared mutex today, not by the
- * pins and not by any re-read. This model checks them as standalone ordering
- * properties, so removing the mutex does not silently remove the guarantees.
+ * Before T2a/T2b, the queue mutex supplied these exclusions incidentally; the
+ * production contract now relies on HandleArena locking, retainer pins, and
+ * the frozen-ticket re-read. This model checks the premises as standalone
+ * ordering properties so narrowing the queue lock does not silently remove a
+ * guarantee.
  *
  * Actors (all five run concurrently; no action pair is mutually excluded
  * except where a `commitPhase` / `workerPhase` guard says so):
@@ -84,12 +86,15 @@
  *     R-VERIF-7.3).
  *   - `CaptureRead` abstracts WHAT the capture copies to a single "the record
  *     existed" obligation. That abstraction is licensed by design §7 Q1 (the
- *     read-set is producer-written only), NOT proven here; the audit is the
- *     evidence and `Pool::producerOwnership_` is its executable guard.
+ *     read-set is producer-ordered, while storage is arena-protected), NOT
+ *     proven here; HandleArena shared/unique locking and the immutable
+ *     commit-time snapshot are the production guards. `D3DCREATE_MULTITHREADED`
+ *     still serializes producer API order, but is not a Pool ownership claim.
  *   - `MapFastRead` models only the T2c watermark READ. The rename-ring
  *     rotation that `finalizeBufferMap` performs on the same lock-free fast
- *     path is `producer-owned` and is modelled by `BufferBackingVersioning`,
- *     not here.
+ *     path is `arena-protected` and is modelled by `BufferBackingVersioning`,
+ *     not here. Producer API order remains serialized separately when
+ *     `D3DCREATE_MULTITHREADED` is enabled.
  *   - It does not model HandleArena's generation check, which is an
  *     independent fail-closed *detection* of a stale handle. The property
  *     checked here is ordering: a being-marked record is never reclaimed in
@@ -341,11 +346,13 @@ StampMark(r) ==
 
 (*
  * CaptureRead(r)  — T2b.
- * `captureChunkBufferBinding`: read the producer-written fields of a record
- * the chunk names. Design §7 Q1 established the read-set is producer-written
- * only, so no ordering against worker progress is required — the ONLY safety
- * obligation left is that the record still exists. Modelled with the same
- * fault-recording shape as StampMark.
+ * `captureChunkBufferBinding`: read the producer-ordered fields of a record
+ * the chunk names. The live record is arena-protected: HandleArena's shared
+ * lock serializes this read against unique-lock mutation/reclaim. The
+ * immutable commit-time snapshot is the worker/encoder publication boundary,
+ * and the retainer pin keeps the named record alive. No ordering against
+ * worker progress is required beyond those mechanisms; the model records the
+ * remaining existence obligation with the same fault shape as StampMark.
  *
  * T2b RUNS THIS WITHOUT `CommandQueue::mutex_`, so — exactly like StampMark —
  * it must not be excluded against Reclaim / SetDestroyPending /
@@ -371,8 +378,9 @@ StampMark(r) ==
  *      holds its shared lock, which is why container-level aliasing is a
  *      pointer-stability argument (pool header) rather than a model variable.
  *
- *   3. NO RE-STAMP ANALOG. The capture copies producer-owned VALUES; nothing
- *      it reads is derived from the seq ticket, and nothing downstream
+ *   3. NO RE-STAMP ANALOG. The capture copies producer-ordered VALUES under
+ *      the arena shared lock; nothing it reads is derived from the seq ticket,
+ *      and nothing downstream
  *      compares the snapshot against `commitSeqId`. So the frozen-ticket
  *      re-read that StampMark's counterpart owes (WorkerRestamp) has no
  *      capture-side twin — there is no quantity a later SlotAdvance could

@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "dxmt9/core.hpp"
@@ -327,6 +328,74 @@ void testConcreteSnapshotMarkProtectsRotatedBacking() {
           "snapshot mark stamps the matching concrete ring entry");
   checkEq(record->lastUsedSeqId, std::uint64_t{7u},
           "snapshot mark also advances the logical buffer watermark");
+}
+
+void testSequentialAlternatingThreadsShareRenameAndCaptureArena() {
+  using namespace dxmt9::core;
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, dynamicBufferDesc(8u));
+  auto* record = resourcePool.findBuffer(handle.value);
+  check(record != nullptr, "alternating-thread buffer is reachable");
+  SyntheticBufferHandleGuard handleGuard{record};
+  constexpr obj_handle_t generation0 = 0x1357u;
+  record->buffer.handle = generation0;
+  record->renameRing[0].buffer.handle = generation0;
+
+  // Keep the initial backing busy so the map operation exercises a real
+  // rename after the calls have crossed thread boundaries.
+  resourcePool.markBufferUse(handle, /*seqId=*/5u);
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  ChunkBufferBindingCaptureResult captureResult =
+      ChunkBufferBindingCaptureResult::MissingRequired;
+
+  // D3DCREATE_MULTITHREADED permits externally serialized calls from
+  // different threads. These joins intentionally make the handoff
+  // sequential: arena locking, rather than a first-use thread token, owns
+  // the rename/capture state.
+  std::thread captureThread([&] {
+    captureResult = resourcePool.captureChunkBufferBindings(entries, captured);
+  });
+  captureThread.join();
+  check(captureResult == ChunkBufferBindingCaptureResult::Complete,
+        "capture succeeds on the first alternating thread");
+  checkEq(captured.size(), std::size_t{1u},
+          "alternating-thread capture records one backing");
+  checkEq(captured[0].snapshot.metalHandle, generation0,
+          "capture observes the initial backing generation");
+
+  const std::array<std::uint8_t, 8> bytes{1, 2, 3, 4, 5, 6, 7, 8};
+  bool uploadResult = false;
+  std::thread uploadThread([&] {
+    uploadResult = resourcePool.uploadBufferData(
+        dev, handle.value, bytes.data(), bytes.size(), /*completedSeqId=*/4u);
+  });
+  uploadThread.join();
+  check(uploadResult, "upload succeeds on the second alternating thread");
+  check(record->shadow == std::vector<std::uint8_t>(bytes.begin(), bytes.end()),
+        "alternating upload publishes the complete CPU shadow");
+
+  void* mapped = nullptr;
+  std::thread mapThread([&] {
+    mapped = resourcePool.finalizeBufferMap(dev, handle, UsageDiscard,
+                                            /*completedSeqId=*/4u);
+  });
+  mapThread.join();
+  check(mapped != nullptr, "map succeeds on the first thread after handoff");
+  checkEq(record->renameRing.size(), std::size_t{2u},
+          "map rotates away from the busy captured backing");
+  checkEq(record->renameActiveIndex, 1u,
+          "map selects a fresh backing after alternating upload");
+  check(std::all_of(record->shadow.begin(), record->shadow.end(),
+                    [](std::uint8_t byte) { return byte == 0u; }),
+        "discard map zero-fills the newly selected CPU shadow");
 }
 
 void testChunkAdmissionCaptureSurvivesLaterRename() {
@@ -722,6 +791,7 @@ int main() {
     testNonDiscardLockSkipsRotation();
     testDynamicNoOverwriteRangeUploadPreservesSentinels();
     testConcreteSnapshotMarkProtectsRotatedBacking();
+    testSequentialAlternatingThreadsShareRenameAndCaptureArena();
     testChunkAdmissionCaptureSurvivesLaterRename();
     testRawCaptureLeasePreventsCompletedBackingReuse();
     testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking();

@@ -22,9 +22,12 @@ under `tests/meson.build`.
   the `Counters` struct that are never referenced from `kCounterTable`,
   preventing silent-miss regressions in `[dxmt9-perf]` output (test
   `dxmt9-perf-counter-table-audit`).
-- `audit_perf_docs_sources.py` — checks newly added `docs/perfomance` leaf files
-  so deleted/retired `specs/perfomance.plan.md` line ranges are not used as new
-  provenance or maintenance state.
+- `audit_perf_docs_sources.py` — checks changed `docs/perfomance` leaves and
+  current `accepted-verdict` leaves (including on a clean tree). It parses the
+  supported semicolon/comma source syntax and simple `{a,b}` expansion, then
+  requires every concrete source path to exist. Historical leaves remain
+  outside the default scope; an explicitly marked `outdated:` leaf records
+  that legacy evidence debt instead of silently making it current.
 - `test_render_tape_cli.py` — produces a bounded v2 frame-tape fixture through
   the native builder and checks validator/inspect success with a verified
   mutation blob, digest-named bundle pack/validation, corrupted-header

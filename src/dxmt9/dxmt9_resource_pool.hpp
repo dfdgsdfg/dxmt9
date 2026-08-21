@@ -61,10 +61,10 @@
 //        ORDER — the same commit's stamps must already have run
 //        (`StampsPrecedeCapture`), because a too-low stamp is repairable by a
 //        monotone re-stamp and an early capture is not repairable at all.
-//      - Its read-set is `producer-owned` (design §7 Q1; the per-field split
-//        is on `BufferRecord` below), which is why no ordering against the
-//        replay worker or the encode thread is required. `producerOwnership_`
-//        is the R-BACK-43.5 assert that keeps the confinement honest.
+//      - Its read-set is arena-protected (the per-field split is on
+//        `BufferRecord` below), which is why no ordering against the
+//        replay worker or the encode thread is required. The arena's shared
+//        lock keeps this read-set synchronized with record mutation.
 //      - A concurrent worker-driven reclaim of some OTHER record is safe on
 //        the arena's own terms, not the queue mutex's: each probe holds
 //        HandleArena's shared lock, `gcArena` takes its unique lock, and slot
@@ -72,12 +72,12 @@
 //
 //    (3) THE MAP FAST PATH — `mapWaitSeqId` + `finalizeBufferMap` when
 //    `mapWaitSeqId` returned 0 (design T2c). Also outside the queue mutex.
-//    `mapWaitSeqId` reads two `producer-owned` flavor flags plus the
-//    `arena-protected` `lastUsedSeqId`, all under the arena's shared lock —
+//    `mapWaitSeqId` reads the arena-protected flavor flags and
+//    `lastUsedSeqId`, all under the arena's shared lock —
 //    `CommandQueue::mutex_` has not protected that watermark since T2a' moved
 //    both mark paths onto exception (1), so the read's race profile is
 //    unchanged by moving it out. `finalizeBufferMap` mutates only
-//    `producer-owned` ring state inside one `arena.update()`, and takes the
+//    arena-protected ring state inside one `arena.update()`, and takes the
 //    GPU watermark as a value from `CommandQueue::completedSeqId_`'s acquire
 //    load (`owner-published`; TLA+ `MapFastRead` / `MapReadSound`). The SLOW
 //    path — visibility wait, force-commit — keeps the queue mutex, because it
@@ -130,16 +130,14 @@
 //        is ahead of the GPU-completed watermark; chunk N's encoder
 //        holds the marking that pins every record it consumes.
 //
-//  * **Buffer rename ring + capture read-set** are `producer-owned` under
-//    R-BACK-43.4 (`specs/backend/producer-concurrency/spec.md` §2): the ring
-//    SHAPE and the fields `captureChunkBufferBinding` reads are written only
-//    on the game thread, and reach the worker/encode side only as the
-//    immutable commit-time snapshot. `Pool::producerOwnership_` is the
-//    R-BACK-43.5 debug guard; see `BufferRecord`'s field comments for the
-//    exact member split against the `arena-protected` stamps.
+//  * **Buffer rename mutation + capture transaction** are arena-protected:
+//    mutation uses the buffer arena's unique lock and commit-time capture
+//    keeps its shared lock across the read. The binding identity published to
+//    replay is the immutable snapshot. `HandleArena::find` protects handle
+//    resolution only; its returned pointer-stable live view is not covered by
+//    this lock claim and retains separate ordering/lifetime obligations.
 
 #include "dxmt9/core.hpp"
-#include "dxmt9/thread_ownership.hpp"
 #include "dxmt9_heap_manager.hpp"
 #include "dxmt9_mark_reclaim_predicates.hpp"
 #include "../winemetal/Metal.hpp"
@@ -254,14 +252,11 @@ struct BufferRecord {
   // (`desc.size`, `buffer`, `contents`, `contentRevision`,
   // `renameActiveIndex`, `renameRing[].replayResidency`, and the
   // `isDynamicRename` / `isManagedVersioned` flavor flags) form the chunk
-  // buffer-binding CAPTURE READ-SET. Its writers are `producer-owned` (every
-  // one is a game-thread path: create, D3D9 Lock/Unlock upload,
-  // finalizeBufferMap — audited in the design doc §7 Q1) and the values are
-  // `owner-published` to the worker/encode side as the immutable commit-time
-  // `ChunkBufferBindingSnapshot`, never by a live read of this record.
-  // Enforced by `Pool::producerOwnership_` at the three writer entry points
-  // (R-BACK-43.5). `lastUsedSeqId` below is the exception — `arena-protected`,
-  // stamped from the worker under the HandleArena mutex.
+  // buffer-binding CAPTURE READ-SET. Mutation and commit-time capture are
+  // serialized by the buffer HandleArena's unique/shared lock. Capture copies
+  // the values into the immutable `ChunkBufferBindingSnapshot`; compatibility
+  // and diagnostic raw views returned by `findBuffer` are outside this lock
+  // claim. Sequence watermarks are stamped through the arena update path.
   core::BufferDesc desc{};
   WMT::Reference<WMT::Buffer> buffer;
   void* contents = nullptr;  // CPU-mapped pointer (shared mode only)
@@ -287,17 +282,12 @@ struct BufferRecord {
   // `buffer` / `contents`. Runtime rotation is safe only when draw bindings
   // snapshot concrete ring entries.
   //
-  // R-BACK-43.4 `producer-owned` — the ring SHAPE (`renameActiveIndex`, ring
-  // membership, and the `buffer`/`contents` mirror above) is written only on
-  // the game thread: createBuffer, `Pool::uploadBufferData` /
-  // `uploadBufferDataRange` (D3D9 Unlock upload), and
-  // `Pool::finalizeBufferMap` (D3D9 Lock). The worker/encode side never reads
-  // the live ring — it consumes the immutable commit-time
-  // `ChunkBufferBindingSnapshot`. Guarded by `Pool::producerOwnership_`
-  // (R-BACK-43.5). NOT covered by that class: `BufferRenameRingEntry::
-  // lastUsedSeqId`, which is `arena-protected` and legitimately stamped from
-  // the replay worker through `markBufferUse` / `markBufferSnapshotUse` under
-  // the HandleArena mutex (pool header contract, arena-stamp exception).
+  // R-BACK-43.4 — the ring SHAPE (`renameActiveIndex`, ring membership, and
+  // the `buffer`/`contents` mirror above) is mutated through the buffer
+  // HandleArena lock and captured through `inspect`. The worker/encode binding
+  // path consumes the immutable commit-time `ChunkBufferBindingSnapshot`;
+  // raw `findBuffer` views do not inherit the lookup lock. Backing sequence
+  // watermarks and replay residency retain their independent obligations.
   bool isDynamicRename = false;
   bool isManagedVersioned = false;
   u32 renameActiveIndex = 0;
@@ -402,6 +392,9 @@ class HandleArena {
   }
 
   Record* find(u64 handleValue) noexcept {
+    // The lock protects decoding and slot resolution only. Pointer-stable
+    // deque storage plus the resource-lifetime protocol keeps the returned
+    // address valid; callers do not retain this shared lock while reading.
     std::shared_lock lock(mutex_);
     return findUnlocked(handleValue);
   }
@@ -578,22 +571,6 @@ class HandleArena {
 struct Pool {
   std::unordered_set<u64> dumpedGpuTextures;
 
-  // R-BACK-43.5 — thread-affinity guard for the `producer-owned` buffer
-  // rename ring and capture read-set (see BufferRecord above). Binds at Pool
-  // construction, which happens inside `CommandQueue`'s constructor, itself
-  // reached from the app's CreateDevice call on the game thread. Asserted at
-  // the three ring/read-set writer entry points — `uploadBufferData`,
-  // `uploadBufferDataRange`, `finalizeBufferMap` — which between them
-  // dominate every call to the file-local `rotateBufferBacking`. The mark
-  // paths deliberately do NOT assert: they are `arena-protected` and are
-  // called from the replay worker by design (pool header arena-stamp
-  // exception).
-  // First-use bound (shape (d)): the producer is whoever performs the first
-  // producer-path operation, not whoever constructed the Pool — D3D9 permits
-  // create-on-one-thread/render-on-another with external serialization.
-  [[no_unique_address]] core::ThreadOwnershipToken producerOwnership_{
-      core::deferThreadOwnership};
-
   // R-BACK-5.7: cached `MTLDevice.hasUnifiedMemory` snapshot. Set ONCE by
   // CommandQueue at construction (`setHasUnifiedMemory`). Read by
   // createBuffer/createTexture/createSurface and the texture upload path
@@ -668,7 +645,8 @@ struct Pool {
   // Record a CPU-visible write to a buffer. MANAGED writes rotate to an idle
   // or fresh Shared Metal backing before the full CPU shadow is copied;
   // other pools mirror into the active `contents` directly. Returns true if
-  // the handle resolved. Caller holds the pool's mutex.
+  // the handle resolved. The buffer arena's unique lock serializes the
+  // record mutation; the caller need not hold the queue mutex.
   bool uploadBufferData(WMT::Device device,
                         u64 handleValue,
                         const std::uint8_t* bytes,
@@ -678,7 +656,8 @@ struct Pool {
   // Publish only the byte range written by a DEFAULT+DYNAMIC
   // D3DLOCK_NOOVERWRITE lock. The range is validated against the logical
   // buffer extent before either the CPU shadow or the active Shared backing
-  // is touched. Caller holds the queue mutex.
+  // is touched. The buffer arena's unique lock serializes the record
+  // mutation; the caller need not hold the queue mutex.
   bool uploadBufferDataRange(WMT::Device device,
                              u64 handleValue,
                              u64 offset,
@@ -729,7 +708,8 @@ struct Pool {
   // Apply the map flags' side effects (UsageDiscard zero-fill) and
   // return the CPU pointer for the buffer. Must be called AFTER any
   // required wait has completed. Returns nullptr for missing handle
-  // or empty storage. Caller holds the pool's mutex.
+  // or empty storage. The buffer arena's unique lock serializes the record
+  // mutation; the caller need not hold the queue mutex.
   //
   // R-BACK-5.8 — when the record is `isDynamicRename` and `flags` carries
   // `UsageDiscard`, this rotates the per-handle rename ring before returning
@@ -873,15 +853,10 @@ struct Pool {
   // ledger, callable WITHOUT `CommandQueue::mutex_`; see this header's
   // concurrency contract for the two obligations that licenses it.
   //
-  // The loop lives here rather than in `CommandQueue` for one reason: the
-  // R-BACK-43.5 producer-ownership token that guards the `producer-owned`
-  // read-set is a `Pool` member, so this is the only place the confinement
-  // claim can be asserted where the state it protects is declared. The
-  // per-record `captureChunkBufferBinding` above deliberately carries NO such
-  // assert — `snapshotBufferBinding` forwards to it from the replay worker's
-  // draw-run binding snapshot path, which is a legitimate non-producer
-  // reader of the same fields (it reads the committed backing identity, not
-  // the ring shape).
+  // The loop lives here rather than in `CommandQueue` so each per-record
+  // capture uses the buffer arena's shared lock in the same way as
+  // `snapshotBufferBinding`; this keeps capture and rename mutation
+  // synchronized even when sequential callers alternate threads.
   core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
       std::span<const core::ChunkHandleEntry> entries,
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots) const;

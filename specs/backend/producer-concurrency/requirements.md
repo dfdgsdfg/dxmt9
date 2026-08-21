@@ -63,11 +63,30 @@ argument from scratch because no standing contract existed
   | `queue-shared` | Genuinely multi-writer/multi-reader under `CommandQueue::mutex_`. | The queue mutex; each new member of this class needs a stated reason it cannot be one of the classes above. |
   | `immutable-after-init` | Written once before any concurrent access. | None; the initialization point must be named. |
 
+- **Pool rename/capture ownership:** `BufferRecord` rename-ring mutation and
+  the buffer-binding capture transaction are `arena-protected`, not
+  first-thread-affine `producer-owned` state. `HandleArena::inspect` keeps the
+  shared lock across capture reads; its unique locks protect insertion,
+  rename/rotation, map finalization, and reclaim. A plain `HandleArena::find`
+  protects only handle resolution, not subsequent access through the returned
+  view, and must not be cited as a live-record read lock. This lock domain is
+  independent of `CommandQueue::mutex_`. `D3DCREATE_MULTITHREADED` serializes
+  producer API ordering through the device recorder mutex, but that does not
+  turn Pool storage into thread-affine state. The retainer pin must cover the
+  capture/mark window, generation-qualified handles and sequence watermarks
+  must remain monotone, and the immutable commit-time snapshot remains the
+  worker/encoder publication boundary. `D3DLOCK_NOOVERWRITE` continues to
+  publish only its validated byte range; this ownership reclassification does
+  not relax its in-flight read-set obligation.
+
 - **R-BACK-43.5** `producer-owned` and `worker-owned` state must be guarded by
   a debug-only thread-affinity assertion that compiles out of release builds
   (the `recorderLockRequired_`/`assertRecorderThreadConfined` shape from
-  `b96fdbda` is the reference implementation). The assertion helper must be
-  shared, not re-implemented per site.
+  `b96fdbda` is the reference implementation). `arena-protected` state is
+  guarded by its named component lock instead and must not acquire a misleading
+  first-thread-affinity token. The assertion helper must be shared, not
+  re-implemented per site; `D3DCREATE_MULTITHREADED` callers are admitted by
+  the recorder-lock witness rather than by a construction-thread assumption.
 
 - **R-BACK-43.6** Reclassifying state OUT of `queue-shared` (lock removal,
   lock narrowing, atomic conversion) requires, before the production change
