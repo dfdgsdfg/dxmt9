@@ -15,22 +15,35 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposit
 
 Follow-through on [.34]'s two candidates. Both landed semantics-preserving
 (`29660161` const-setter entry fast path, `c8a0e1e9` buildSparseState
-delta-mode section skips); host suite 727/727, all lanes rebuilt,
-cold-server conformance at the known set (the four-test decl SEH flake fired
-on both full-suite runs today and passed 5/5 on scoped rerun both times —
-its fire rate is up, root cause still on the correctness backlog; xyzhw
-remains the one true known fail).
+delta-mode section skips). The retained sources are the nine experiment
+output directories listed in the frontmatter; they support the run-specific
+performance tables and diagnostic outputs below. No preserved artifact in
+those sources records the previously reported host-suite `727/727` or
+cold-server conformance results, so neither claim is used as current evidence
+here. Conformance remains a separate correctness gate and must be cited from
+a preserved runner report before being stated as a result of this experiment.
 
-**Design facts worth keeping.** (1) The entry fast path folds five per-call
+This leaf records PE shadow/producer fast-path mechanics shared with Render
+Tape capture; it does not close the general Render Tape producer contract.
+Sparse-delta bootstrap folding, `PresentEx`, reducible controls/destruction,
+prior-output loads,
+broader provider grammar, and the production capture-to-provider replay pin
+remain open in the [Render Tape gap](../../../specs/experiments/gap.md).
+
+**Design facts worth keeping.** (1) The entry fast path folds four per-call
 diagnostic gates (call tracking == recorder stats, decimation N, VS
 const-range probe, debug-log level) into one process-constant bool; every
-member was verified read-once (`d3d9_pe_device.cpp:117-139`,
+member was verified read-once (`d3d9_pe_device.cpp:117-172`,
 `d3d9_pe_decimated_scope.hpp:26-33`, `log.cpp:106-123`). With any diagnostic
 enabled, the verbatim old body runs as a noinline slow path, so the
 `dxmt9-core-device-com-spec` phase-offset pins hold unchanged. (2) The
 pending render-state/TSS/transform tables were found already ctz-word-based
 (`forEach` over 4-8 occupancy words, free when empty) — only the plain-mask
 slot loops needed guards.
+
+The temporary sparse-state phase probe used to obtain the `.34`/`.35`
+measurement was retired after collection. It is not part of the production
+path, and its counters are not current runtime evidence.
 
 **Instrument blindness, stated explicitly:** with `DXMT9_PE_STATS_DECIMATION`
 set, every setter routes through the slow path, so the decimated
@@ -61,7 +74,8 @@ Verdict: **null-to-marginal** — compatible with the predicted ~0.5 ms/present
 saving (~1.4%) at its lower edge, but not separable from noise at this
 bracket's resolution. No fps win is claimed. Both changes are kept: they are
 byte-identical on the wire, reduce disabled-path scaffolding that every
-future diagnostic would otherwise ride on, and carry zero measured cost.
+future diagnostic would otherwise ride on, and show no measurable regression
+within this bracket (performance-neutral at the resolution of these runs).
 
 **Ledger after this increment.** The producer track's cheap mechanical
 candidates are now exhausted: entry scaffolding folded, section walks

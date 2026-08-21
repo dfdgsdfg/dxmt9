@@ -59,15 +59,6 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 // signature because the draw sites can skip that flush under
 // DXMT9_PE_INLINE_CONST_DELTA=1 and fold the ranges into the record instead --
 // whoever migrates them owns that decision. Non-const for the same reason.
-// `parentSampled` is the DXMT9_PE_STATS_DECIMATION sub-phase-attribution
-// hook: pass true only when the caller's own decimated `draw_packet` scope
-// selected this call for timing (i.e. the caller's DxmtPeDecimatedScopeGuard
-// is armed), so buildSparseState's internal phase timers stay parent-gated
-// rather than becoming a second independently-sampled instrument -- see
-// d3d9_pe_sparse_state_phase_stats.hpp. Defaults to false so every other
-// caller (buildFullSnapshotState below, and native tests that call this
-// directly) costs nothing extra: with parentSampled=false every phase timer
-// constructor takes its early "not sampled" return with no clock read.
 bool buildSparseState(const PeHotStateShadow& shadow,
                         PeConstShadowBlock& constants,
                         const PeBindingView& bindings,
@@ -77,8 +68,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                         bool inlineConstDelta,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeader& header,
-                        SparseStateInput& out,
-                        bool parentSampled = false) noexcept;
+                        SparseStateInput& out) noexcept;
 
 // Builds the value-owned checkpoint form used by Render Tape. Unlike the
 // normal draw path this preserves the complete constant shadow rather than
