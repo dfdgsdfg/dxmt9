@@ -271,6 +271,31 @@ core_d3d9_multiply_transform_spec = executable(
 test('dxmt9-core-d3d9-multiply-transform-spec', core_d3d9_multiply_transform_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Wine-free native coverage of IDirect3DDevice9::ProcessVertices
+# (src/d3d9/d3d9_pe_process_vertices.cpp), the fixed-function
+# WORLD*VIEW*PROJ + viewport map, the XYZRHW output contract (rhw = 1/w,
+# including the w==0 fallback and the D3DRS_CLIPPING z-clamp), the simple-VS
+# interpreter's composition rule (no implicit transform is applied to either
+# the input or output position register on the programmable path -- this is
+# the property Wine cannot arbitrate, because wined3d_device_process_vertices
+# nulls the vertex shader and only ever exercises fixed-function), and the
+# SHORT2/UBYTE4N/D3DCOLOR declaration-decode formulas independent of any
+# transform. d3d9_pe_process_vertices.cpp is a Windows-only TU (built only
+# into dxmt9_pe_core_srcs), so its pure value-level core is mirrored here
+# byte-for-byte, following the pattern of
+# core_d3d9_multiply_transform_spec.cpp / core_d3d9_device_validation_spec.cpp
+# above.
+core_d3d9_process_vertices_spec = executable(
+  'dxmt9-core-d3d9-process-vertices-spec',
+  'core_d3d9_process_vertices_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-process-vertices-spec', core_d3d9_process_vertices_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # Wine D3D9 behavioral oracle: present-parameter validation
 # (test_present_parameter_validation / test_present_parameter_normalization),
 # Ex create/reset mode validation (test_ex_create_reset_mode_validation),

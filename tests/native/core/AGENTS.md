@@ -17,6 +17,7 @@ Each spec is a standalone executable wired into Meson via
 | `draw_uniforms_layout_spec.cpp` | Per-frequency uniform struct layout asserts (`R-BACK-12.16-12.18`) |
 | `draw_uniforms_dirty_spec.cpp` | DirtyMask + range counter contract (`R-BACK-12.8-12.12`) |
 | `chunk_record_micro_spec.cpp` | CPU-only canonical sparse chunk build/seal/preflight microbenchmark (B1) |
+| `core_d3d9_process_vertices_spec.cpp` | Wine-free `ProcessVertices` oracle: fixed-function WORLD*VIEW*PROJ + viewport map, XYZRHW/rhw contract, simple-VS interpreter composition rule, SHORT2/UBYTE4N/D3DCOLOR decode |
 
 Shared helpers in `core_spec_fixtures.hpp` (harness, byte builders, recording
 backend, D3D9 bytecode constants, token builders).
