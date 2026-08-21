@@ -4324,8 +4324,23 @@ bool encodeDraw(EncodeContext& ctx,
         vertexBytes = pv.userVertexData;
       }
     } else if (hot.streamBuffers[0]) {
+      // R-BACK-43.4/gap "Raw findBuffer live views" — `buffer->buffer` is
+      // `arena-protected`, mutated by rename-ring rotation for versioned
+      // backings (BufferRecord::isDynamicRename / isManagedVersioned) and
+      // read here without the arena lock. Check the commit-time snapshot
+      // FIRST so the short-circuit skips the live-view read whenever a
+      // snapshot is present: `captureChunkBufferBindings` aborts the chunk
+      // (ChunkBufferBindingCaptureResult::MissingRequired) before any draw
+      // reaches encode when `hasVersionedBacking()` is true and capture did
+      // not produce a valid snapshot, so a versioned record always has
+      // `stream0Snapshot->valid()==true` here and `buffer->buffer` is never
+      // evaluated for it. The live read below on the non-snapshot side only
+      // fires for non-versioned records, whose `.buffer` is set once at
+      // create time and never reassigned (mapBuffer's SLOW lane drains a
+      // sequence wait before any plain-pool mutation, so it also cannot be
+      // reused for a live rewrite here).
       if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[0].value);
-          buffer && (buffer->buffer || (stream0Snapshot && stream0Snapshot->valid()))) {
+          buffer && ((stream0Snapshot && stream0Snapshot->valid()) || buffer->buffer)) {
         stream0Record = buffer;
         vertexBuffer = WMT::Buffer{stream0Snapshot
             ? stream0Snapshot->metalHandle
@@ -4349,6 +4364,18 @@ bool encodeDraw(EncodeContext& ctx,
                 << " contents=" << (buffer->contents ? 1 : 0);
           emitQueueTraceLine(trace.str());
         }
+        // `buffer->shadow`/`buffer->contents` are `arena-protected` and only
+        // mutated (uploadBufferData / uploadBufferDataRange / finalizeBufferMap,
+        // all under bufferArena_.update()'s unique lock) on the producer
+        // thread. This branch is reached only when `stream0Snapshot` produced
+        // no bytes, which — by the same MissingRequired-abort argument above —
+        // means this record does not have a versioned backing. For a
+        // non-versioned record, `CommandQueue::mapBuffer`'s SLOW lane
+        // (waitSeq != 0) drains a sequence wait before `finalizeBufferMap`/
+        // `uploadBufferData*` can mutate `shadow`/`contents`, so any mutation
+        // is ordered-after completion of the encode work that could
+        // concurrently read this record. `desc.size` is immutable-after-init
+        // (set once at BufferRecord construction, never reassigned).
         if (const auto bytes = snapshotBufferBytes(stream0Snapshot);
             !bytes.empty()) {
           vertexBytes = bytes;
@@ -4640,6 +4667,10 @@ bool encodeDraw(EncodeContext& ctx,
           }
         }
 
+        // Diagnostic-only: this whole block is gated by `traceEncode &&
+        // !ffLayout && ... `/`forceTrace` above (a debug geometry trace
+        // dump), so the unlocked `indexRecord->shadow`/`contents`/`desc.size`
+        // reads below are outside the production draw path.
         if (hot.indexBuffer || !pv.userIndexData.empty()) {
           const auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
           std::span<const u8> indexBytes;
@@ -4802,6 +4833,9 @@ bool encodeDraw(EncodeContext& ctx,
                   << ")";
           }
         };
+        // Diagnostic-only: gated by the `forceTrace` FFP trace block started
+        // above (`debug::fixedFunctionTraceTextureHandle()`); not reached on
+        // the production draw path.
         std::span<const u8> indexBytes;
         if (!pv.userIndexData.empty()) {
           indexBytes = pv.userIndexData;
@@ -4933,15 +4967,24 @@ bool encodeDraw(EncodeContext& ctx,
         const auto* extraSnapshot =
             streamBindingSnapshot(bindingSnapshot, stream);
         if (hot.streamBuffers[stream]) {
+          // See the stream-0 comment above: check the snapshot first so the
+          // `||` short-circuits away the unlocked `buffer->buffer` read
+          // whenever a valid commit-time snapshot already answers the
+          // condition. `liveMetalHandle`/`shadowBytes`/`hasContents` below
+          // are diagnostic-only (`[dxmt9-encode-stream]` trace) — read them
+          // only under `traceEncode` instead of unconditionally, since they
+          // are otherwise unused arena-protected live-view reads.
           if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
-              buffer && (buffer->buffer || (extraSnapshot && extraSnapshot->valid()))) {
+              buffer && ((extraSnapshot && extraSnapshot->valid()) || buffer->buffer)) {
             extraRecord = buffer;
             extraVertexBuffer = WMT::Buffer{extraSnapshot
                 ? extraSnapshot->metalHandle
                 : buffer->buffer.handle};
-            liveMetalHandle = buffer->buffer.handle;
-            shadowBytes = buffer->shadow.size();
-            hasContents = buffer->contents != nullptr;
+            if (traceEncode) {
+              liveMetalHandle = buffer->buffer.handle;
+              shadowBytes = buffer->shadow.size();
+              hasContents = buffer->contents != nullptr;
+            }
           }
         }
         if (!extraVertexBuffer && vertexDecl.streams[stream].buffer) {
@@ -4956,6 +4999,16 @@ bool encodeDraw(EncodeContext& ctx,
             }
           }
         }
+        // `extraRecord->buffer` here is reached only when `!extraSnapshot`,
+        // i.e. no valid commit-time binding snapshot was captured for this
+        // stream. Per T2b (`Pool::captureChunkBufferBindings`), a stream
+        // whose record has `hasVersionedBacking()==true` always yields a
+        // valid snapshot or the whole chunk is rejected before any draw
+        // reaches encode, so a missing snapshot here means a non-versioned
+        // record whose `.buffer` is set once at create time and never
+        // reassigned (see the stream-0 comment above for the mapBuffer
+        // drain-fence argument covering `shadow`/`contents` on that same
+        // class of record).
         if (streamIbStagingActive(streamIbStagingCache) &&
             indexedDraw &&
             !extraSnapshot &&
@@ -5566,6 +5619,13 @@ bool encodeDraw(EncodeContext& ctx,
           << " vertexCount=" << static_cast<unsigned long long>(vertexCount);
       emitQueueTraceLine(out.str());
     }
+    // `forceExpandIndexed` is `DXMT_FORCE_EXPAND_INDEXED` /
+    // `DXMT9_PROBE_FORCE_EXPAND_INDEXED*` — a correctness-invalid diagnostic
+    // classifier, default off (agents/rules/environment_variables_encoder.rules.md).
+    // Every `findBuffer` read inside this block, including the
+    // `resolveStreamBytes` lambda's `buffer->shadow`/`buffer->contents`
+    // fallback below, is diagnostic-only and not part of the production
+    // draw path.
     if (forceExpandIndexed) {
       PerfScope fvfDecodeExpandedScope(perf::countEncodeDrawFvfDecodeCpuTime,
                             perf::countEncodeDrawFvfDecodeExpandedCpuTime);
@@ -5932,9 +5992,23 @@ bool encodeDraw(EncodeContext& ctx,
             indexBufferOffset += transientIndexBuffer.offset;
           }
         } else {
+          // Same arena-protected live-view pattern as the stream-0/extra-
+          // stream sites above: check the snapshot first so `buffer->buffer`
+          // is read only when no valid commit-time snapshot exists, which
+          // (per T2b) implies a non-versioned record whose `.buffer` never
+          // changes post-create. The `needIndexBytesForDiagnostics` branch
+          // and the final `!buffer->shadow.empty()` fallback both read
+          // `shadow`/`contents`/`desc.size`, which are `arena-protected` and
+          // mutated only under `bufferArena_.update()` from
+          // `uploadBufferData`/`uploadBufferDataRange`/`finalizeBufferMap`;
+          // `CommandQueue::mapBuffer`'s SLOW lane (the path taken whenever
+          // `mapWaitSeqId` is nonzero, i.e. whenever the record is not on
+          // the FAST NOOVERWRITE/MANAGED/dynamic-rename-DISCARD lane) drains
+          // a sequence wait before any such mutation, ordering it after any
+          // concurrent encode read of this same record.
           auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
           indexBufferRecord = buffer;
-          if (buffer && (buffer->buffer || (indexSnapshot && indexSnapshot->valid()))) {
+          if (buffer && ((indexSnapshot && indexSnapshot->valid()) || buffer->buffer)) {
             indexBuffer = WMT::Buffer{indexSnapshot
                 ? indexSnapshot->metalHandle
                 : buffer->buffer.handle};
@@ -6679,6 +6753,11 @@ bool encodeDraw(EncodeContext& ctx,
                                                    hot.viewport.scissor,
                                                    effectiveViewport.scissor);
         }
+        // `dumpIndexedGeometryEligible` gates on `DXMT9_DUMP_INDEXED_GEOMETRY_DIR`
+        // (agents/rules/environment_variables_capture.rules.md, "Mini-replay /
+        // payload capture" — diagnostic-only, unset by default). The
+        // `findBuffer`/`buffer->shadow`/`buffer->contents` reads in
+        // `resolveDumpStreamBytes` below are diagnostic-only.
         if (dumpIndexedGeometryEligible) {
           std::array<IndexedGeometryStreamPayload, core::kMaxStreams - 1u>
               dumpExtraStreams{};

@@ -97,6 +97,9 @@ struct UsedHeapSet {
 
 void considerTexture(resources::Pool& pool, core::Handle handle, UsedHeapSet& set) {
   if (!handle) return;
+  // `isHeapBacked`/`heap` are `immutable-after-init` — see the identical
+  // comment beside `beginRenderPass`'s `considerBuffer`/`considerTexture` in
+  // dxmt9_render_pass_encoder.mm.
   if (auto* rec = pool.findTexture(handle.value); rec && rec->isHeapBacked) {
     set.push(rec->heap.handle);
   }

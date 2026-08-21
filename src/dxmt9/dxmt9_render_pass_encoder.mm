@@ -878,6 +878,12 @@ void configurePreparedRenderPassEncoder(
         usedHeaps[usedHeapCount++] = h;
       }
     };
+    // `isHeapBacked`/`heap` on BufferRecord/TextureRecord are set exactly
+    // once, before the record is inserted into the arena (Pool::createBuffer
+    // / Pool::createTexture) and are never reassigned afterward — no code
+    // path outside record construction writes either field (verified by
+    // grepping every assignment site). Reading them through a plain `find`
+    // view is therefore `immutable-after-init`, not a live-view race.
     auto considerBuffer = [&](core::Handle handle) {
       if (!handle)
         return;
