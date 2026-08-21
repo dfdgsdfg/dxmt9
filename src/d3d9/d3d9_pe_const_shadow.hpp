@@ -29,6 +29,36 @@ struct ConstShadow {
         dirtyElems.clear();
         clear();
     }
+
+    // Pre-allocate storage capacity (not size) to the caller-supplied
+    // D3D9 register-file cap, without changing values.size(),
+    // dirtyElems.size(), or dirty state.
+    //
+    // This must reserve() rather than resize(): values.size() is
+    // load-bearing outside this file as "how many registers have ever
+    // actually been touched" -- D3D9StateBlockShadow capture does
+    // `out.vsConstF = peConsts_.vsConstF.values` wholesale
+    // (d3d9_pe_device.cpp), and stateblock replay derives the restore
+    // count directly from that vector's size
+    // (`saved_.vsConstF.size() / kFloatVecSize` in
+    // D3D9DeviceChildImpl::replaySavedShadow,
+    // d3d9_pe_device_child_misc.cpp) to call
+    // `SetVertexShaderConstantF(0, data, count)`. If this pre-sized
+    // values up to the full register-file cap, every stateblock capture
+    // would restore the whole cap's worth of registers -- including ones
+    // the app never set, as zero -- instead of only the registers the app
+    // actually touched, which is an observable wire/behavior change.
+    // touchConstShadow's existing `if (values.size() < needed)
+    // values.resize(needed)` remains the sole path that grows size(); with
+    // capacity already reserved here, that resize no longer reallocates or
+    // copies for any span within the reserved cap, which is the actual hot
+    // cost this removes. reset() -> values.clear() drops size() back to 0
+    // but (per the standard) preserves capacity, so the reservation survives
+    // a stateblock End/reset cycle without re-establishing it.
+    void reserveCapacity(std::size_t byteCap, std::size_t elemCap) {
+        values.reserve(byteCap);
+        dirtyElems.reserve(elemCap);
+    }
 };
 
 struct PeConstShadowBlock {
@@ -38,6 +68,22 @@ struct PeConstShadowBlock {
     ConstShadow psConstF{};
     ConstShadow psConstI{};
     ConstShadow psConstB{};
+
+    // D3D9 register-file caps used to bound the Set*Constant* entry points
+    // in d3d9_pe_device.cpp (kVsConstFMax=256, kVsConstIMax=16,
+    // kVsConstBMax=16, kPsConstFMax=224, kPsConstIMax=16, kPsConstBMax=16)
+    // and mirrored by D9C_DRAW_PACKET_MAX_CONST_{VS,PS}_{F,I,B} in
+    // include/dxmt9/device_c.h, which d9c_draw_packet_const_delta_section_
+    // range_valid checks against. Both sources agree, so touchConstShadow
+    // can never be asked to grow a shadow past what is reserved here.
+    PeConstShadowBlock() {
+        vsConstF.reserveCapacity(256u * sizeof(float) * 4u, 256u);
+        vsConstI.reserveCapacity(16u * sizeof(std::int32_t) * 4u, 16u);
+        vsConstB.reserveCapacity(16u * sizeof(std::uint32_t), 16u);
+        psConstF.reserveCapacity(224u * sizeof(float) * 4u, 224u);
+        psConstI.reserveCapacity(16u * sizeof(std::int32_t) * 4u, 16u);
+        psConstB.reserveCapacity(16u * sizeof(std::uint32_t), 16u);
+    }
 
     void reset() {
         vsConstF.reset();
@@ -147,6 +193,14 @@ inline void touchConstShadow(ConstShadow& shadow,
         return;
     }
     const auto needed = static_cast<std::size_t>(needed64);
+    // Captured BEFORE the resize below: true only when this call's whole
+    // span was already materialized by a previous call. A freshly-extended
+    // region is zero-filled by resize() and must NOT take the bulk
+    // early-out below -- an all-zero write into it has to fall through to
+    // the per-element loop, which is what makes it alias the zero-fill and
+    // stay clean (see the (d)/(e) cases in
+    // testTouchConstShadowSemantics()).
+    const bool alreadyCovered = shadow.values.size() >= needed;
     if (shadow.values.size() < needed) {
         shadow.values.resize(needed);
     }
@@ -162,6 +216,15 @@ inline void touchConstShadow(ConstShadow& shadow,
     if (bytes != 0 && data) {
         auto* dst = shadow.values.data() + offset;
         const auto* src = static_cast<const std::uint8_t*>(data);
+        // Bulk-span early-out: one vectorized compare over the whole span
+        // instead of per-element memcmp/memcpy calls. Only valid when the
+        // span was already materialized (alreadyCovered) -- see the
+        // comment above. When it fires and the span is unchanged, this is
+        // observably identical to the per-element loop finding every
+        // element equal: no dirtyElems writes, no merged-range update.
+        if (alreadyCovered && std::memcmp(dst, src, bytes) == 0) {
+            return;
+        }
         for (std::uint32_t i = 0; i < count; ++i) {
             const auto elemOffset = static_cast<std::size_t>(i) * elemSize;
             if (std::memcmp(dst + elemOffset, src + elemOffset, elemSize) == 0) {
