@@ -43,6 +43,7 @@
 #include "device_c_render_tape_origin_locator.hpp"
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_sparse_state_phase_stats.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "d3d9_pe_thread_sampler.hpp"
@@ -2247,7 +2248,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return dxmt9::d3d9::pe::buildSparseState(
             peState_, peConsts_, peBindingView_, peSparsePayloads_, params,
             forceFullSnapshot, inlineConstDelta, peSparseScratch_,
-            peSparseHeader_, peSparseState_);
+            peSparseHeader_, peSparseState_,
+            /*parentSampled=*/decimatedScope.stats != nullptr);
     }
 
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {
@@ -7278,7 +7280,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "entry_draw_events=%llu entry_draw_sampled=%llu entry_draw_ms=%.3f "
             "entry_state_events=%llu entry_state_sampled=%llu entry_state_ms=%.3f "
             "draw_swvp_sampled=%llu draw_swvp_ms=%.3f "
-            "draw_record_sampled=%llu draw_record_ms=%.3f%s%s",
+            "draw_record_sampled=%llu draw_record_ms=%.3f "
+            "draw_packet_phase_render_states_sampled=%llu draw_packet_phase_render_states_ms=%.3f "
+            "draw_packet_phase_textures_streams_sampled=%llu draw_packet_phase_textures_streams_ms=%.3f "
+            "draw_packet_phase_shaders_vertex_index_sampled=%llu draw_packet_phase_shaders_vertex_index_ms=%.3f "
+            "draw_packet_phase_attachments_scalars_sampled=%llu draw_packet_phase_attachments_scalars_ms=%.3f "
+            "draw_packet_phase_clip_tss_lights_sampled=%llu draw_packet_phase_clip_tss_lights_ms=%.3f "
+            "draw_packet_phase_constants_sampled=%llu draw_packet_phase_constants_ms=%.3f "
+            "draw_packet_phase_remainder_sampled=%llu draw_packet_phase_remainder_ms=%.3f%s%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -7314,6 +7323,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<double>(peDrawPhaseSwvpDecimatedStats_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(peDrawPhaseRecordDecimatedStats_.sampled),
             static_cast<double>(peDrawPhaseRecordDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseRenderStatesDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseRenderStatesDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseTexturesStreamsDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseTexturesStreamsDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseShadersVertexIndexDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseShadersVertexIndexDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseAttachmentsScalarsDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseAttachmentsScalarsDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseClipTssLightsDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseClipTssLightsDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseConstantsDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseConstantsDecimatedStats().sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                peSparsePhaseRemainderDecimatedStats().sampled),
+            static_cast<double>(
+                peSparsePhaseRemainderDecimatedStats().sampledNs) / 1.0e6,
             constSetterBucketText.c_str(),
             appendTypeText.c_str());
     }

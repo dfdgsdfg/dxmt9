@@ -1,5 +1,7 @@
 #include "d3d9_pe_producer.hpp"
 
+#include "d3d9_pe_decimated_scope.hpp"
+#include "d3d9_pe_sparse_state_phase_stats.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 #include "dxmt9/assert.hpp"
 #include "util/log/log.hpp"
@@ -27,7 +29,8 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                         bool inlineConstDelta,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeader& header,
-                        SparseStateInput& out) noexcept {
+                        SparseStateInput& out,
+                        bool parentSampled) noexcept {
   // Snapshot mode drains the whole shadow instead of the pending set, so the
   // record is self-contained and replayable out of order. Same gate the fat-
   // packet producer used.
@@ -35,9 +38,12 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   out = SparseStateInput{};
 
   // --- render states -------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseRenderStates(
+      parentSampled, peSparsePhaseRenderStatesDecimatedStats());
   const auto& renderStateTable =
       snapshot ? shadow.renderStateShadow : shadow.pendingRenderStates;
   if (renderStateTable.size() > scratch.renderStates.size()) {
+    phaseRenderStates.stop();
     return false;  // over cap: seal the chunk rather than truncate
   }
   std::size_t renderStateCount = 0;
@@ -46,8 +52,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
         D9CCommandChunkWireRenderState{.state = state, .value = value};
   });
   out.renderStates = std::span(scratch.renderStates).first(renderStateCount);
+  phaseRenderStates.stop();
 
   // --- textures ------------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseTexturesStreams(
+      parentSampled, peSparsePhaseTexturesStreamsDecimatedStats());
   std::size_t textureCount = 0;
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
     if (!snapshot && (shadow.pendingTextureMask & (1u << slot)) == 0u) {
@@ -77,8 +86,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
     entry.object = bindings.streams[slot].buffer;
   }
   out.streams = std::span(scratch.streams).first(streamCount);
+  phaseTexturesStreams.stop();
 
   // --- shaders -------------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseShadersVertexIndex(
+      parentSampled, peSparsePhaseShadersVertexIndexDecimatedStats());
   std::size_t shaderCount = 0;
   const auto appendShader = [&](std::uint32_t stage, bool valid,
                                 const PeWireObjectRef& ref) {
@@ -146,8 +158,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
     entry.object = bindings.indexBuffer;
   }
   out.indexBuffers = std::span(scratch.indexBuffers).first(indexBufferCount);
+  phaseShadersVertexIndex.stop();
 
   // --- attachments ---------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseAttachmentsScalars(
+      parentSampled, peSparsePhaseAttachmentsScalarsDecimatedStats());
   std::size_t renderTargetCount = 0;
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS;
        ++slot) {
@@ -190,8 +205,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
     scratch.materials[0] = shadow.materialShadow;
     out.materials = scratch.materials;
   }
+  phaseAttachmentsScalars.stop();
 
   // --- clip planes ---------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseClipTssLights(
+      parentSampled, peSparsePhaseClipTssLightsDecimatedStats());
   std::size_t clipPlaneCount = 0;
   for (std::uint32_t slot = 0; slot < 6u; ++slot) {
     // Snapshot emits every plane (the packet set clipPlaneMask = 0x3F).
@@ -214,6 +232,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   if (tssTable.size() > scratch.textureStageStates.size() ||
       samplerTable.size() > scratch.samplerStates.size() ||
       transformTable.size() > scratch.transforms.size()) {
+    phaseClipTssLights.stop();
     return false;
   }
   std::size_t tssCount = 0;
@@ -266,8 +285,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   }
   out.lights = std::span(scratch.lights).first(lightCount);
   out.lightEnables = std::span(scratch.lightEnables).first(lightEnableCount);
+  phaseClipTssLights.stop();
 
   // --- constants -----------------------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseConstants(
+      parentSampled, peSparsePhaseConstantsDecimatedStats());
   // Under DXMT9_PE_INLINE_CONST_DELTA the draw sites deliberately do NOT call
   // flushPendingConsts, and the dirty ranges ride inside the draw record
   // instead. The legacy shape folded them into the fat packet's
@@ -306,11 +328,13 @@ bool buildSparseState(const PeHotStateShadow& shadow,
       const std::uint32_t start = shadowRange.dirtyStart;
       const std::uint32_t count = shadowRange.dirtyEnd - shadowRange.dirtyStart;
       if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
+        phaseConstants.stop();
         return false;
       }
       const auto offset = static_cast<std::size_t>(start) * ranges[kind].elemSize;
       const auto bytes = static_cast<std::size_t>(count) * ranges[kind].elemSize;
       if (shadowRange.values.size() < offset + bytes) {
+        phaseConstants.stop();
         return false;
       }
       *ranges[kind].out = SparseConstantRangeInput{
@@ -324,8 +348,11 @@ bool buildSparseState(const PeHotStateShadow& shadow,
       shadowRange.clear();
     }
   }
+  phaseConstants.stop();
 
   // --- payloads and draw header -------------------------------------------
+  DxmtPeDecimatedPhaseTimer phaseRemainder(
+      parentSampled, peSparsePhaseRemainderDecimatedStats());
   // Every ref that reached a section must carry a usable identity. Without
   // this, a caller that fills only `object` produces sections that
   // CommandChunkBuilder::appendHandle silently rejects -- it calls
@@ -439,6 +466,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                    shadow.pendingStreamMask == allStreams)) {
     header.flags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   }
+  phaseRemainder.stop();
   return true;
 }
 
