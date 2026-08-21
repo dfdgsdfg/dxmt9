@@ -66,6 +66,7 @@ namespace {
 using dxmt9::d3d9::ImportedChunkView;
 using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::pe::CommandChunkBuilder;
+using dxmt9::d3d9::pe::CommandChunkBuilderCapacities;
 using dxmt9::d3d9::pe::PeWireObjectRef;
 using dxmt9::d3d9::pe::SparseBindingInput;
 using dxmt9::d3d9::pe::SparseStateInput;
@@ -791,6 +792,214 @@ void testReferencesObjectRollbackAndOverflow() {
     check(!builder.referencesObject(&neverAppended),
           "post-overflow referencesObject still rejects an unappended "
           "object");
+    // Release every retained pin while `textures` is still alive: `builder`
+    // is declared before `textures`, so without this the block's implicit
+    // destructors would tear down `textures` first and then run
+    // `retainer_`'s release calls against already-freed D9CTexture objects.
+    builder.resetAndReleaseRetained();
+  }
+}
+
+// appendHandle()'s record-local dedup accelerator (RecordLocalDedupTable,
+// R-BACK-43.9): it must reproduce the pre-existing linear-scan semantics
+// exactly -- a repeat reference within the SAME record returns the SAME
+// absolute index without growing handles_; the identical identity
+// re-appearing in a LATER record gets a genuinely new index; a record that
+// appends a new identity and then rolls back must not let that identity
+// alias a later, unrelated record; once the table's fixed capacity
+// overflows, dedup must keep working correctly through the linear-scan
+// fallback; and the original integrity check -- two different pointers
+// presenting the same generation-qualified identity within one record fails
+// the record atomically -- must still hold.
+void testRecordLocalDedupAccelerator() {
+  {
+    // Same-record repeat reference returns the same index, every time.
+    D9CTexture a;
+    D9CTexture b;
+    PeWireObjectRef aRef = wireRef(&a, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xB001u);
+    PeWireObjectRef bRef = wireRef(&b, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xB002u);
+
+    CommandChunkBuilder builder;
+    std::uint32_t firstIndex = 0u;
+    std::uint32_t secondIndex = 0u;
+    std::uint32_t repeatIndex = 0u;
+    std::uint32_t repeatIndex2 = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   firstIndex) &&
+              builder.appendHandle(bRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   secondIndex) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   repeatIndex) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   repeatIndex2),
+          "same-record repeats append via the fast path");
+    check(firstIndex == 0u && secondIndex == 1u && repeatIndex == firstIndex &&
+              repeatIndex2 == firstIndex && builder.handleCount() == 2u,
+          "same-record repeat reference returns the same index every time");
+    const D9CCommandChunkWireUpdateTexture fixed{
+        .srcHandleIndex = firstIndex, .dstHandleIndex = secondIndex};
+    check(builder.appendPayloadValue(fixed) && builder.commitRecord(),
+          "record with repeated fast-path handles commits");
+
+    // Cross-record repeat: same identity, later record, must get a new
+    // absolute index (handles_ grows) rather than reusing the earlier
+    // record's.
+    std::uint32_t crossRecordIndex = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(aRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   crossRecordIndex),
+          "second record repeats identity a");
+    check(crossRecordIndex == 2u && builder.handleCount() == 3u,
+          "cross-record repeat creates a new entry exactly as today");
+    const D9CCommandChunkWireUpdateTexture secondFixed{
+        .srcHandleIndex = crossRecordIndex,
+        .dstHandleIndex = crossRecordIndex};
+    check(builder.appendPayloadValue(secondFixed) && builder.commitRecord(),
+          "second record commits");
+  }
+
+  {
+    // Rollback then re-append does not alias: appending identity `x` in a
+    // record that is then rolled back must not let a LATER record's append
+    // of the same identity be mistaken for a same-record repeat -- which
+    // would wrongly reuse the rolled-back record's now-discarded handle
+    // index.
+    D9CTexture x;
+    PeWireObjectRef xRef = wireRef(&x, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xB003u);
+
+    CommandChunkBuilder builder;
+    std::uint32_t rollbackIndex = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(xRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   rollbackIndex),
+          "record appends x before failing");
+    check(rollbackIndex == 0u, "x gets absolute index 0 before rollback");
+    builder.rollbackRecord();
+    check(builder.handleCount() == 0u,
+          "rollback discards the handle entirely");
+
+    std::uint32_t freshIndex = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(xRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   freshIndex),
+          "a later record re-appends the same identity after rollback");
+    check(freshIndex == 0u, "the later record gets a genuinely fresh index");
+    const D9CCommandChunkWireUpdateTexture fixed{
+        .srcHandleIndex = freshIndex, .dstHandleIndex = freshIndex};
+    check(builder.appendPayloadValue(fixed) && builder.commitRecord(),
+          "the later record commits normally");
+    check(builder.handleCount() == 1u,
+          "no stale rolled-back entry leaked into the committed record");
+
+    // Repeating x again within a THIRD record must still dedup correctly
+    // within that record's own window (same-record hit, not a stale
+    // alias to the rolled-back second record).
+    std::uint32_t repeatIndex = 0u;
+    std::uint32_t repeatIndex2 = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(xRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   repeatIndex) &&
+              builder.appendHandle(xRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   repeatIndex2),
+          "third record re-references x twice");
+    check(repeatIndex == 1u && repeatIndex2 == repeatIndex &&
+              builder.handleCount() == 2u,
+          "post-rollback re-append still dedups within its own record");
+    builder.rollbackRecord();
+  }
+
+  {
+    // Overflow fallback correctness: force RecordLocalDedupTable's fixed
+    // capacity to overflow with many distinct identities, then verify
+    // same-record dedup still works exactly (via the linear-scan fallback)
+    // for both a pre-existing identity and a fresh post-overflow one.
+    CommandChunkBuilder builder(CommandChunkBuilderCapacities{.handles = 8u});
+    // capacity = max(64, next_pow2(8*2)) = 64; 3/4 load factor = 48, so the
+    // 49th distinct identity trips overflow.
+    constexpr std::size_t kDistinctObjects = 64u;
+    std::vector<std::unique_ptr<D9CTexture>> textures;
+    textures.reserve(kDistinctObjects);
+    std::vector<PeWireObjectRef> refs;
+    refs.reserve(kDistinctObjects);
+    for (std::size_t i = 0; i < kDistinctObjects; ++i) {
+      textures.push_back(std::make_unique<D9CTexture>());
+      refs.push_back(wireRef(textures.back().get(),
+                             D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xC000u + i));
+      std::uint32_t index = 0u;
+      check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+                builder.appendHandle(refs.back(),
+                                     D9C_CHUNK_HANDLE_KIND_TEXTURE, index),
+            "overflow fixture appends a fresh distinct identity");
+      const D9CCommandChunkWireUpdateTexture fixed{
+          .srcHandleIndex = index, .dstHandleIndex = index};
+      check(builder.appendPayloadValue(fixed) && builder.commitRecord(),
+            "overflow fixture record commits");
+    }
+    check(builder.handleCount() == kDistinctObjects,
+          "overflow fixture appended exactly one handle per distinct "
+          "identity");
+
+    // Past overflow, exercise same-record dedup for both an already-known
+    // identity (refs[0]) and a brand-new one: both must still dedup
+    // correctly through the linear-scan fallback.
+    std::uint32_t knownFirst = 0u;
+    std::uint32_t knownRepeat = 0u;
+    D9CTexture fresh;
+    PeWireObjectRef freshRef =
+        wireRef(&fresh, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xD000u);
+    std::uint32_t freshFirst = 0u;
+    std::uint32_t freshRepeat = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(refs[0], D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   knownFirst) &&
+              builder.appendHandle(refs[0], D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   knownRepeat) &&
+              builder.appendHandle(freshRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   freshFirst) &&
+              builder.appendHandle(freshRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   freshRepeat),
+          "post-overflow record dedups both a known and a brand-new "
+          "identity");
+    check(knownFirst == knownRepeat && freshFirst == freshRepeat &&
+              knownFirst != freshFirst,
+          "post-overflow dedup returns stable per-identity indices via the "
+          "linear-scan fallback");
+    check(builder.handleCount() == kDistinctObjects + 2u,
+          "post-overflow record adds exactly one handle per new distinct "
+          "identity, none for the repeats");
+    const D9CCommandChunkWireUpdateTexture fixed{
+        .srcHandleIndex = knownFirst, .dstHandleIndex = freshFirst};
+    check(builder.appendPayloadValue(fixed) && builder.commitRecord(),
+          "post-overflow record commits");
+    // Release every retained pin while `textures` (declared after `builder`)
+    // is still alive, matching the same fix applied to
+    // testReferencesObjectRollbackAndOverflow's overflow fixture above.
+    builder.resetAndReleaseRetained();
+  }
+
+  {
+    // Defensive integrity check preserved: two different pointers that
+    // present the SAME generation-qualified identity within one record must
+    // still fail the record atomically, exactly like the original scan.
+    D9CTexture first;
+    D9CTexture impostor;
+    PeWireObjectRef firstRef =
+        wireRef(&first, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xE001u);
+    PeWireObjectRef impostorRef =
+        wireRef(&impostor, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xE001u);
+
+    CommandChunkBuilder builder;
+    std::uint32_t index = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+              builder.appendHandle(firstRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                   index),
+          "record appends the genuine object first");
+    check(!builder.appendHandle(impostorRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                index) &&
+              !builder.recordActive() && builder.handleCount() == 0u,
+          "a colliding identity from a different pointer fails the record "
+          "atomically, same as the original linear scan");
   }
 }
 
@@ -804,6 +1013,7 @@ int main() {
     testSparseDrawAndApplyProducerMatrix();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();
+    testRecordLocalDedupAccelerator();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

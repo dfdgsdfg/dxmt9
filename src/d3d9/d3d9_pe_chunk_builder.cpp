@@ -77,6 +77,7 @@ CommandChunkBuilder::CommandChunkBuilder(
   payload_.reserve(capacities.payloadBytes);
   sealedBlob_.reserve(capacities.sealedBytes);
   handlePresence_.init(capacities.handles);
+  recordLocalDedup_.init(capacities.handles);
 }
 
 bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
@@ -102,6 +103,11 @@ bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
       .handleCheckpoint = handles_.size(),
       .payloadCheckpoint = payloadCheckpoint,
       .payloadStart = payloadStart,
+      // Assigned unconditionally, before this record's outcome (commit vs.
+      // rollback) is known: RecordLocalDedupTable's self-invalidation
+      // depends on every beginRecord() handing out a fresh, never-repeated
+      // ordinal regardless of what happens to the record.
+      .recordOrdinal = nextRecordOrdinal_++,
       .retainedCheckpoint = retainer_.beginAcquire(),
   };
   return true;
@@ -156,27 +162,11 @@ bool CommandChunkBuilder::overwritePayload(
   return true;
 }
 
-bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
-                                         std::uint32_t expectedKind,
-                                         std::uint32_t& absoluteIndex) noexcept {
-  absoluteIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
-  if (!active_.active || sealed_ || !object.valid(expectedKind)) {
-    return failActiveRecord();
-  }
-  for (std::size_t i = active_.handleCheckpoint; i < handles_.size(); ++i) {
-    if (!identityEqual(handles_[i], object.identity)) {
-      continue;
-    }
-    if (handleObjects_[i] != object.object) {
-      return failActiveRecord();
-    }
-    absoluteIndex = static_cast<std::uint32_t>(i);
-    return true;
-  }
+bool CommandChunkBuilder::appendNewHandleEntry(
+    const PeWireObjectRef& object, std::uint32_t& absoluteIndex) noexcept {
   if (handles_.size() >= std::numeric_limits<std::uint32_t>::max()) {
-    return failActiveRecord();
+    return false;
   }
-
   try {
     handles_.push_back(D9CCommandChunkWireHandleEntry{
         .kind = object.identity.kind,
@@ -191,17 +181,69 @@ bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
     }
     // Count this pointer's chunk-lifetime multiplicity so referencesObject()
     // can answer in O(1); handlePresence_'s findOrInsert() never throws, and
-    // rollbackRecord() below undoes exactly this increment if a later step
-    // in this same append fails.
+    // rollbackRecord() undoes exactly this increment if a later step in this
+    // same append fails.
     if (auto* slot = handlePresence_.findOrInsert(object.object)) {
       ++slot->count;
     }
     retainer_.retainWireObject(object.identity.kind, object.object,
                                active_.retainedCheckpoint);
   } catch (...) {
-    return failActiveRecord();
+    return false;
   }
   absoluteIndex = static_cast<std::uint32_t>(handles_.size() - 1u);
+  return true;
+}
+
+bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
+                                         std::uint32_t expectedKind,
+                                         std::uint32_t& absoluteIndex) noexcept {
+  absoluteIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+  if (!active_.active || sealed_ || !object.valid(expectedKind)) {
+    return failActiveRecord();
+  }
+
+  if (!recordLocalDedup_.overflowed) {
+    RecordLocalDedupTable::Slot* insertAt = nullptr;
+    std::uint32_t hitIndex = 0u;
+    void* hitObject = nullptr;
+    const auto lookup = recordLocalDedup_.findForRecord(
+        object.identity, active_.recordOrdinal, &insertAt, &hitIndex,
+        &hitObject);
+    if (lookup == RecordLocalDedupTable::Lookup::kHit) {
+      if (hitObject != object.object) {
+        return failActiveRecord();
+      }
+      absoluteIndex = hitIndex;
+      return true;
+    }
+    if (lookup == RecordLocalDedupTable::Lookup::kMiss) {
+      if (!appendNewHandleEntry(object, absoluteIndex)) {
+        return failActiveRecord();
+      }
+      recordLocalDedup_.insert(*insertAt, object.identity,
+                               active_.recordOrdinal, absoluteIndex,
+                               object.object);
+      return true;
+    }
+    // kOverflowed: fall through to the linear scan below, which stays
+    // correct (just O(record window)) for the remainder of this and every
+    // future record in the chunk's lifetime.
+  }
+
+  for (std::size_t i = active_.handleCheckpoint; i < handles_.size(); ++i) {
+    if (!identityEqual(handles_[i], object.identity)) {
+      continue;
+    }
+    if (handleObjects_[i] != object.object) {
+      return failActiveRecord();
+    }
+    absoluteIndex = static_cast<std::uint32_t>(i);
+    return true;
+  }
+  if (!appendNewHandleEntry(object, absoluteIndex)) {
+    return failActiveRecord();
+  }
   return true;
 }
 
@@ -375,8 +417,13 @@ void CommandChunkBuilder::reset() noexcept {
   handles_.clear();
   handleObjects_.clear();
   // handlePresence_ tracks exactly handleObjects_'s chunk-lifetime contents,
-  // so it is cleared in lockstep every time handleObjects_ is.
+  // so it is cleared in lockstep every time handleObjects_ is. Same for
+  // recordLocalDedup_: its self-invalidation is ordinal-based, but clearing
+  // it here keeps `occupied` bounded to one chunk's distinct-identity count
+  // instead of accumulating across every chunk the builder ever seals
+  // (nextRecordOrdinal_ itself intentionally keeps counting across resets).
   handlePresence_.clear();
+  recordLocalDedup_.clear();
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
@@ -393,6 +440,7 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   handles_.clear();
   handleObjects_.clear();
   handlePresence_.clear();
+  recordLocalDedup_.clear();
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;

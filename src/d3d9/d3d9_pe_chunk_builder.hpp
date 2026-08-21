@@ -146,6 +146,11 @@ class CommandChunkBuilder {
     std::size_t handleCheckpoint = 0u;
     std::size_t payloadCheckpoint = 0u;
     std::size_t payloadStart = 0u;
+    // Monotonically increasing, assigned once per beginRecord() regardless
+    // of whether the record eventually commits or rolls back, and never
+    // reused (see RecordLocalDedupTable below). 0 is reserved as "no active
+    // record" and is never handed out by beginRecord().
+    std::uint64_t recordOrdinal = 0u;
     D3D9PePendingCommandRetainer::Acquired retainedCheckpoint{};
   };
 
@@ -274,7 +279,184 @@ class CommandChunkBuilder {
     }
   };
 
+  // R-BACK-43.7 follow-up (fresh binary-matched sampler evidence,
+  // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.32.md):
+  // appendHandle()'s *record-local* dedup scan — "did the record currently
+  // being built already append this exact wire identity, and if so at which
+  // absolute handle index" — was left as an O(record window) linear scan by
+  // R-BACK-43.7's own review, on the argument that a record's handle window
+  // is "tens" of entries. Sampler evidence refutes that: 9.5% of d3d9.dll
+  // self-PC time (~0.35ms/present on GT2) lands in this loop, so call volume
+  // (many appendHandle calls across many records, not any single record's
+  // width) makes the O(n) shape hot.
+  //
+  // This is deliberately a SEPARATE structure from HandlePresenceTable
+  // above, not an extension of it, because the two answer different
+  // questions with different correctness requirements:
+  //   - HandlePresenceTable (referencesObject()) asks "does this *pointer*
+  //     occur anywhere in the chunk" and is correctly keyed by pointer alone
+  //     — it does not need to know whether the identity recorded against
+  //     that pointer is internally consistent.
+  //   - This table must reproduce the original scan's *identity*-keyed
+  //     semantics exactly: two different pointers that present the same
+  //     generation-qualified identity within one record is a genuine
+  //     integrity fault (a stale/duplicate wire-cache entry) that the
+  //     original scan detects and fails the record for
+  //     (`handleObjects_[i] != object.object` -> failActiveRecord()). A
+  //     pointer-keyed lookup cannot see that fault at all: the second,
+  //     differently-pointered append would simply miss on its own pointer
+  //     and be treated as a brand-new handle, silently losing the check.
+  //     So this table is keyed by the (kind, generation, objectId) identity
+  //     tuple, matching what the original loop actually compared first.
+  //
+  // Record-locality is achieved without a per-record clear or per-record
+  // capacity: every slot is stamped with the record ordinal that last wrote
+  // it. `ActiveRecord::recordOrdinal` is assigned once per beginRecord(),
+  // monotonically increasing and never reused — including for a record that
+  // is later rolled back, since it is handed out before the record's outcome
+  // is known — so a slot stamped by a rolled-back or already-committed
+  // record can never alias a later record's ordinal. A slot whose stamp does
+  // not match the *current* record's ordinal is treated as absent for this
+  // record's dedup query (a "miss") and is unconditionally overwritten by
+  // the new entry in place, exactly like inserting into an empty slot, so
+  // `occupied` — and therefore overflow risk — is bounded by the number of
+  // *chunk-lifetime distinct identities*, not by records seen. Overflow
+  // (fixed capacity, same 3/4 load-factor policy as HandlePresenceTable)
+  // permanently falls callers back to the original per-record linear scan
+  // for the remainder of the chunk's lifetime — identical fallback policy to
+  // HandlePresenceTable, and correct for the same reason: every appended
+  // handle is still recorded in `handles_`/`handleObjects_` regardless of
+  // this table's state.
+  struct RecordLocalDedupTable {
+    struct Slot {
+      bool used = false;
+      std::uint32_t kind = 0u;
+      std::uint32_t generation = 0u;
+      std::uint64_t objectId = 0u;
+      std::uint64_t recordOrdinal = 0u;
+      std::uint32_t handleIndex = 0u;
+      void* object = nullptr;
+    };
+
+    enum class Lookup { kMiss, kHit, kOverflowed };
+
+    std::vector<Slot> slots;
+    std::size_t occupied = 0u;
+    bool overflowed = false;
+
+    static std::size_t hashIdentity(
+        const D9CWireObjectIdentity& identity) noexcept {
+      // Plain multiplicative mix over the three identity fields; this table
+      // is chunk-local and never persisted, so no cross-process stability
+      // requirement applies, only in-memory distribution.
+      std::uint64_t h = identity.objectId;
+      h ^= static_cast<std::uint64_t>(identity.kind) * 0x9e3779b97f4a7c15ull;
+      h ^= static_cast<std::uint64_t>(identity.generation) *
+           0xc2b2ae3d27d4eb4full;
+      h ^= h >> 33u;
+      h *= 0xff51afd7ed558ccdull;
+      h ^= h >> 33u;
+      return static_cast<std::size_t>(h);
+    }
+
+    void init(std::size_t handleCapacityHint) noexcept {
+      std::size_t capacity = 64u;
+      const std::size_t target =
+          std::max<std::size_t>(handleCapacityHint * 2u, 64u);
+      while (capacity < target) {
+        capacity <<= 1u;
+      }
+      slots.assign(capacity, Slot{});
+      occupied = 0u;
+      overflowed = false;
+    }
+
+    void clear() noexcept {
+      std::fill(slots.begin(), slots.end(), Slot{});
+      occupied = 0u;
+      overflowed = false;
+    }
+
+    // Looks up `identity` scoped to `recordOrdinal`.
+    //  - kOverflowed: table has no room to answer; caller must fall back to
+    //    the original linear scan (and keeps doing so for the rest of the
+    //    chunk's lifetime, mirroring HandlePresenceTable's policy).
+    //  - kHit: this exact identity was already appended by the record with
+    //    ordinal `recordOrdinal`; `*outIndex`/`*outObject` are the stored
+    //    handle index and object pointer from that append.
+    //  - kMiss: no live entry for this record. `*insertAt` names the slot a
+    //    fresh insert belongs in (either genuinely empty, or holding a
+    //    stale-ordinal entry for the same identity that is safe to
+    //    overwrite in place).
+    Lookup findForRecord(const D9CWireObjectIdentity& identity,
+                         std::uint64_t recordOrdinal, Slot** insertAt,
+                         std::uint32_t* outIndex, void** outObject) noexcept {
+      if (insertAt) {
+        *insertAt = nullptr;
+      }
+      if (overflowed || slots.empty()) {
+        return Lookup::kOverflowed;
+      }
+      const auto mask = slots.size() - 1u;
+      auto idx = hashIdentity(identity) & mask;
+      for (std::size_t probes = 0; probes < slots.size(); ++probes) {
+        Slot& s = slots[idx];
+        if (!s.used) {
+          if (occupied * 4u >= slots.size() * 3u) {
+            overflowed = true;
+            return Lookup::kOverflowed;
+          }
+          if (insertAt) {
+            *insertAt = &s;
+          }
+          return Lookup::kMiss;
+        }
+        if (s.kind == identity.kind && s.generation == identity.generation &&
+            s.objectId == identity.objectId) {
+          if (s.recordOrdinal == recordOrdinal) {
+            if (outIndex) {
+              *outIndex = s.handleIndex;
+            }
+            if (outObject) {
+              *outObject = s.object;
+            }
+            return Lookup::kHit;
+          }
+          // Same identity, stamped by an earlier (committed or
+          // rolled-back) record: stale for this record's query. Reuse the
+          // slot in place rather than probing further, so `occupied` does
+          // not grow on repeat identities across records.
+          if (insertAt) {
+            *insertAt = &s;
+          }
+          return Lookup::kMiss;
+        }
+        idx = (idx + 1u) & mask;
+      }
+      overflowed = true;
+      return Lookup::kOverflowed;
+    }
+
+    void insert(Slot& slot, const D9CWireObjectIdentity& identity,
+               std::uint64_t recordOrdinal, std::uint32_t handleIndex,
+               void* object) noexcept {
+      const bool wasUsed = slot.used;
+      slot.used = true;
+      slot.kind = identity.kind;
+      slot.generation = identity.generation;
+      slot.objectId = identity.objectId;
+      slot.recordOrdinal = recordOrdinal;
+      slot.handleIndex = handleIndex;
+      slot.object = object;
+      if (!wasUsed) {
+        ++occupied;
+      }
+    }
+  };
+
   bool failActiveRecord() noexcept;
+  bool appendNewHandleEntry(const PeWireObjectRef& object,
+                            std::uint32_t& absoluteIndex) noexcept;
 
   std::vector<D9CCommandChunkWireRecordHeader> records_;
   std::vector<D9CCommandChunkWireHandleEntry> handles_;
@@ -283,7 +465,13 @@ class CommandChunkBuilder {
   std::vector<std::byte> sealedBlob_;
   D3D9PePendingCommandRetainer retainer_;
   HandlePresenceTable handlePresence_;
+  RecordLocalDedupTable recordLocalDedup_;
   ActiveRecord active_{};
+  // Never reused across the builder's whole lifetime (spans many chunks via
+  // reset()/resetAndReleaseRetained()), so a RecordLocalDedupTable slot's
+  // stamp can never alias a later record. Starts at 1 so 0 stays a safe
+  // "no record" sentinel, though nothing currently relies on that.
+  std::uint64_t nextRecordOrdinal_ = 1u;
   bool sealed_ = false;
 };
 
