@@ -32,6 +32,10 @@ Two execution shapes:
 Output:
   tmp/d3d9-conformance-results.json
     {"<function_name>": "pass"|"fail"|"skip"|"timeout", ...}
+  experiments/output/conformance-<UTC>/
+    results.json + staged-build.json + run.json -- a timestamped bundle
+    that survives the next run, so a document can cite a verdict.
+    Disable with --no-archive.
 
 The function name in the JSON matches the binary's internal table for
 the main conformance exe (strip the leading "test_") and the function
@@ -49,6 +53,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -59,6 +64,7 @@ DEFAULT_EXE_DIR = DEFAULT_EXE.parent
 DEFAULT_WINE = REPO_ROOT / "experiments/wine/sikarugir-cx-24.0.7/bin/wine"
 DEFAULT_PREFIX = REPO_ROOT / "tmp/conformance-prefix"
 DEFAULT_OUTPUT = REPO_ROOT / "tmp/d3d9-conformance-results.json"
+DEFAULT_ARCHIVE_ROOT = REPO_ROOT / "experiments/output"
 DEFAULT_MANIFEST = REPO_ROOT / "tests/conformance/d3d9/MANIFEST.toml"
 DEFAULT_WINEMETAL_SO = REPO_ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal.so"
 TEST_SOURCE = REPO_ROOT / "tests/conformance/d3d9/d3d9_conformance.c"
@@ -118,6 +124,12 @@ def parse_args() -> argparse.Namespace:
                    help="WINEPREFIX path.")
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
                    help="JSON output path.")
+    p.add_argument("--archive-root", type=Path, default=DEFAULT_ARCHIVE_ROOT,
+                   help="Directory receiving the timestamped run bundle "
+                        "(default: experiments/output).")
+    p.add_argument("--no-archive", action="store_true",
+                   help="Skip the timestamped run bundle; --output alone is "
+                        "then the only record, and the next run overwrites it.")
     p.add_argument("--retry-timeouts", action="store_true", default=True,
                    help="Replay timed-out chunks as singletons (default: on).")
     p.add_argument("--no-retry-timeouts", action="store_false",
@@ -151,6 +163,21 @@ def _relative_or_absolute(path: Path) -> str:
         except ValueError:
             return str(path)
     return str(path)
+
+
+def _describe_head() -> str:
+    """Short HEAD description, or "" when git is unavailable.
+
+    The verdicts are only interpretable against the code that produced them,
+    and the staged-build sidecar records the binaries but not the source point.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "describe", "--always", "--dirty"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def load_manifest_cases(manifest_path: Path) -> dict[str, list[str]]:
@@ -617,6 +644,46 @@ def main() -> int:
         else:
             summary.setdefault(v, 0)
             summary[v] += 1
+
+    # `--output` is one fixed path that every run overwrites, so a verdict was
+    # uncitable the moment the next run started: a performance or spec document
+    # that wanted to state "conformance was N/M at this commit" had nothing to
+    # point `source:` at, and the claim had to be dropped. Land a timestamped
+    # bundle under experiments/output/ -- the tree documents already cite -- so
+    # a result survives as evidence.
+    if not args.no_archive:
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        archive = args.archive_root / f"conformance-{stamp}"
+        try:
+            archive.mkdir(parents=True, exist_ok=False)
+            with (archive / "results.json").open("w") as f:
+                json.dump(out, f, indent=2, sort_keys=True)
+                f.write("\n")
+            if staged:
+                with (archive / "staged-build.json").open("w") as f:
+                    json.dump({"artifacts": staged}, f, indent=2, sort_keys=True)
+                    f.write("\n")
+            with (archive / "run.json").open("w") as f:
+                json.dump({
+                    "argv": sys.argv[1:],
+                    "utc": stamp,
+                    "commit": _describe_head(),
+                    "start": args.start,
+                    "end": args.end,
+                    "skip_aux": bool(args.skip_aux),
+                    "chunk_size": args.chunk_size,
+                    "wine": str(args.wine),
+                    "prefix": str(args.prefix),
+                    "summary": summary,
+                    "aux_summary": aux_summary,
+                }, f, indent=2, sort_keys=True)
+                f.write("\n")
+            print(f"[runner] archived run -> {_relative_or_absolute(archive)}",
+                  file=sys.stderr)
+        except OSError as exc:
+            # Never fail a completed suite over bookkeeping; --output still holds
+            # the verdicts.
+            print(f"[runner] archive skipped ({exc})", file=sys.stderr)
     print(
         f"[runner] done: {len(out)} tests "
         f"pass={summary['pass']} fail={summary['fail']} "
