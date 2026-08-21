@@ -754,6 +754,41 @@ from the D3D9 contract (there is currently zero native ProcessVertices
 coverage), then recompute each `expected_*` array from that verified formula,
 one array at a time.
 
+**Native coverage landed 2026-08-22** (`dxmt9-core-d3d9-process-vertices-spec`,
+6 cases): fixed-function WORLD·VIEW·PROJ→viewport with a world-multiply-applied-
+exactly-once discriminator, the XYZRHW/`rhw = 1/clip.w` output contract
+including the `clip.w == 0 → invW = 1` in-code fallback, the interpreter's
+composition rule, and SHORT2/UBYTE4N/D3DCOLOR decode. Every expected value is
+hand-derived arithmetic in the test.
+
+**But it does not close the oracle gap, and the distinction matters before
+anyone edits a fixture.** `d3d9_pe_process_vertices.cpp` is Windows-only
+(`dxmt9_pe_core_srcs`), so the spec *mirrors* the algorithm from source
+reading rather than calling it — the established convention here
+(`core_d3d9_multiply_transform_spec.cpp` and siblings), but it means a change
+to the real file does not fail this spec. Its three parts have very different
+evidential weight:
+
+- fixed-function transform — genuinely oracle-backed (matches wined3d's
+  software-VP formula);
+- decode formulas — oracle-backed (D3D9-documented);
+- the programmable interpreter's composition rule — **documented, not
+  validated.** No oracle exists: Wine never runs a vertex shader in
+  ProcessVertices, so this is a dxmt9-defined behavior.
+
+Therefore recomputing the programmable-path `expected_*` arrays "from the
+verified formula" would amount to defining dxmt9's current output as correct.
+That is a scope decision, not a mechanical fix: either accept the rule as the
+contract and say so in `MANIFEST.toml`'s acceptance text, or retire those
+subtests as asserting something no oracle defines. Do not silently reset the
+literals.
+
+Also found: `d3d9_pe_process_vertices.hpp:104-110` claims `v3` defaults to
+NORMAL for vs_1_x shaders without an explicit DCL, but
+`analyzeSimpleProcessVertexShader` (lines 611-628) gives implicit defaults only
+to POSITION/DIFFUSE/SPECULAR/TEXCOORD0-7. Doc/code mismatch in the header;
+unfixed.
+
 **Defence-in-depth note:** `validateRegisterIndex`
 (`dxmt9_shader_decoder.cpp:173-215`) would have rejected a temp index of 256
 against `kMaxTempIndex = 32`, but it is deliberately parked and uncalled since
@@ -854,11 +889,34 @@ isolated-chunk reruns:
     appears in both passing and failing isolated trials, so it remains the
     red herring the evidence file called it.
 
-  **Open question this raises:** whether the ~60% isolated failure rate is a
-  dxmt9 regression (the 2026-08-02 snapshot recorded these four cases as
-  pass) or a Wine/host-environment change. Answering it needs the isolated
-  `[16:20)` trial repeated at an older commit with its own staged PE build —
-  not yet done.
+  **Answered 2026-08-22 — not a dxmt9 regression; the rate is flat across the
+  whole range.** The isolated `[16:20)` trial was repeated at three commits,
+  each with its own PE + unix build staged from that commit's tree:
+
+  | point | commit | trials | fails | rate |
+  |---|---|---:|---:|---:|
+  | the "passing" 2026-08-02 snapshot | `07ecac94` | 12 | 5 | 42% |
+  | midpoint (~2026-08-11) | `faa0c378` | 6 | 2 | 33% |
+  | HEAD (2026-08-22) | `3ed5ca36` | 12 | 4 | 33% |
+  | HEAD, freshly created prefix | `3ed5ca36` | 3 | 1 | 33% |
+
+  No step function anywhere; every count sits within ~1 of its expectation
+  under a single constant `p ≈ 0.35`. Staging identity was verified rather
+  than assumed: the three trees' staged `d3d9.dll` hashes are distinct
+  (`c1e37160…`, `6f64ea00…`, `72ff43df…`) and the Wine root held a bisect
+  build after the run, confirming the runner really did load per-commit
+  binaries (`stage_builtin_pe_dlls` copies from `--exe`'s directory into
+  `$WINE_ROOT/lib/wine/x86_64-windows`, so this is the failure mode
+  `build.rules.md` warns about, and it was checked). **Restage HEAD after any
+  such bisect** — the Wine root is shared, and a stale staged DLL silently
+  contaminates every later conformance or wild run.
+
+  So the 2026-08-02 "pass" was a false negative from a single sample: at
+  `p ≈ 0.35` one run comes back clean ~65% of the time. The practical
+  consequence is that this gate has been unreliable for at least three weeks
+  and single-run greens never meant what they appeared to mean — treat any
+  `[16:20)` verdict as needing repetition, and prefer the isolated N≥6 form
+  when the answer matters.
 
   **Caveat on the "it generalises beyond the decl group" observation.** The
   same investigation saw a full-suite run produce 30/235 fails with this
