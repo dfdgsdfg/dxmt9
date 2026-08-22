@@ -149,6 +149,33 @@ expanded path must exist. Historical leaves outside that scope remain legacy
 debt and are not silently rewritten. If a historical leaf must be touched while
 its evidence is gone, record the applicable `outdated:` value explicitly.
 
+## Citing Code From Specs And Docs
+
+**Cite `path` plus a symbol name. Do not cite `path:LINE`.** Line numbers in
+prose rot silently and nothing gates them.
+
+Measured 2026-08-22 while decomposing `d3d9_pe_device.cpp`: 193 citations of
+the form `d3d9_pe_device.cpp:<line>` exist across 9 spec/doc files, 167 of them
+in `specs/d3d9/gap_d3d9.md` alone — and they were **already wrong before the
+refactor touched anything**. Checked against the pre-decomposition file,
+`gap_d3d9.md` cited `:2203-2226` for `D3DRASTER_STATUS::ScanLine` when
+`computeRasterStatusEstimate` sat at line 13243, and `:276-279` for the FVF
+`FLOAT1..4` decode when it sat at 1273/1300/1329. Off by ~11,000 lines with no
+code motion involved.
+
+Do **not** answer this with a line-number audit. A gate that fails on every
+source insertion becomes a docs edit tax, and those 193 stale citations are the
+measured proof that the tax does not get paid — it converts a silent
+inaccuracy into a loud one that gets routinely bypassed. The repo already has
+the correct shape in two audits: `audit_thread_ownership_declarations.py`
+asserts the cited file exists and still contains a named marker, explicitly not
+a line, and `audit_perf_docs_sources.py` strips any `#L1-L4` fragment before
+validating a `source:` path. Extend that shape — path exists ∧ symbol present
+— if a gate is wanted.
+
+Existing `:LINE` citations are known-stale; rewrite one to path + symbol when
+you are editing that passage anyway, not as a sweep.
+
 ## AGENTS.md vs. Rules vs. Specs
 
 | Doc | Question it answers | Lifetime | Scope |
