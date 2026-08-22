@@ -66,6 +66,25 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.testOnlyForceNextCpuReadyArenaRollbackFailure_ = true;
   }
 
+  static void armBatchPlannerObservation(CommandQueue& queue,
+                                         bool forceInvalid) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyObserveNextCpuReadyArenaPlanner_ = true;
+    queue.testOnlyCpuReadyArenaPlannerInvocationCount_ = 0;
+    queue.testOnlyCpuReadyArenaPlannerValid_ = false;
+    queue.testOnlyForceNextCpuReadyArenaPlannerInvalid_ = forceInvalid;
+  }
+
+  static std::uint32_t batchPlannerInvocationCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyCpuReadyArenaPlannerInvocationCount_;
+  }
+
+  static bool batchPlannerValid(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyCpuReadyArenaPlannerValid_;
+  }
+
   static std::size_t readyCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.readyCount();
@@ -1013,11 +1032,51 @@ void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
   check(begin->selectSourceSegment(1, 0),
         "no-capture second source selection must succeed");
   queue.submitDrawRunBatch(submissions);
+  CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, false);
   check(begin->publishBatchWithStatus({}, nullptr) ==
             CommandQueue::CpuReadyArenaPublishStatus::Published,
         "no-capture SegmentSerial batch must run the event-wide proof");
+  check(CommandQueueArenaLeaseTestAccess::batchPlannerInvocationCount(queue) ==
+            1u &&
+            CommandQueueArenaLeaseTestAccess::batchPlannerValid(queue),
+        "no-capture planner must be invoked exactly once and validate the "
+        "complete source window");
   check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
         "successful no-capture proof must publish both Ready rows atomically");
+}
+
+void testBatchPlannerRejectionRollsBackBeforeEffects() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(129, layouts);
+  check(begin.has_value(), "planner rejection admission must succeed");
+  const auto submission = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "planner rejection first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "planner rejection second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, true);
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "planner rejection must select pre-effect EventSerial fallback");
+  check(CommandQueueArenaLeaseTestAccess::batchPlannerInvocationCount(queue) ==
+            1u &&
+            !CommandQueueArenaLeaseTestAccess::batchPlannerValid(queue),
+        "forced invalid planner result must be observed exactly once");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::residentSources(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(queue) == 1u &&
+            CommandQueueArenaLeaseTestAccess::writeIndex(queue) == 0u &&
+            !queue.cpuReadyArenaPoisoned(),
+        "planner rejection must leave zero Ready/resident entries, restored "
+        "cursors, and no poison");
 }
 
 void testBatchBuilderFailureRollsBackForEventSerialFallback() {
@@ -1087,6 +1146,7 @@ int main() {
     testCountOneSettlementRequiresExactIdentityTuple();
     testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
     testBatchPublishRunsEventProofWithoutCaptureSidecar();
+    testBatchPlannerRejectionRollsBackBeforeEffects();
     testBatchBuilderFailureRollsBackForEventSerialFallback();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {

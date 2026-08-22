@@ -1411,6 +1411,13 @@ class CommandQueue {
   // the production caller must take the complete EventSerial retry exactly
   // once. Never set by production.
   bool testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
+  // Native planner seam: tests may observe one event-wide planner result or
+  // force that result invalid before any Ready/resource effect. These fields
+  // are never armed by production callers.
+  bool testOnlyObserveNextCpuReadyArenaPlanner_ = false;
+  std::uint32_t testOnlyCpuReadyArenaPlannerInvocationCount_ = 0;
+  bool testOnlyCpuReadyArenaPlannerValid_ = false;
+  bool testOnlyForceNextCpuReadyArenaPlannerInvalid_ = false;
   bool testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyOverrideLiveActiveRenderInstance_ = false;

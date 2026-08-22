@@ -4885,6 +4885,15 @@ CommandQueue::publishCpuReadyArenaBatch(
         eventPlanValid = framegraph::planMultiSourcePassCoalesceReplay(
                              sources)
                              .valid();
+        if (testOnlyForceNextCpuReadyArenaPlannerInvalid_) {
+          testOnlyForceNextCpuReadyArenaPlannerInvalid_ = false;
+          eventPlanValid = false;
+        }
+        if (testOnlyObserveNextCpuReadyArenaPlanner_) {
+          ++testOnlyCpuReadyArenaPlannerInvocationCount_;
+          testOnlyCpuReadyArenaPlannerValid_ = eventPlanValid;
+          testOnlyObserveNextCpuReadyArenaPlanner_ = false;
+        }
       }
     }
     if (payloadSealed && eventPlanValid && captureIdentity &&
