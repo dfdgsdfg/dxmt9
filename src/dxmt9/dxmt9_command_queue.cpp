@@ -3651,10 +3651,7 @@ CommandQueue::takeCpuReadyArenaFailure() noexcept {
 CommandQueue::CpuReadyArenaBeginDiagnostic
 CommandQueue::cpuReadyArenaBeginDiagnostic() noexcept {
   std::lock_guard lock(mutex_);
-  return {
-      .stopReason = lastCpuReadyArenaBeginStopReason_,
-      .poisonOrigin = queueLifecycle_.firstPoisonOrigin(),
-  };
+  return {.poisonOrigin = queueLifecycle_.firstPoisonOrigin()};
 }
 
 CommandQueue::CpuReadyArenaBuildLease::CpuReadyArenaBuildLease(
@@ -3908,12 +3905,9 @@ CommandQueue::beginCpuReadyArenaSource(
   // single "hold" duration would not be meaningful.
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_source", /*skipHold=*/true);
-  lastCpuReadyArenaBeginStopReason_ =
-      CpuReadyArenaBeginStopReason::None;
   if (stop_) {
-    lastCpuReadyArenaBeginStopReason_ =
-        CpuReadyArenaBeginStopReason::QueueAlreadyStopped;
-    return {.status = CpuReadyArenaBeginStatus::Stopped};
+    return {.status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
@@ -3930,9 +3924,10 @@ CommandQueue::beginCpuReadyArenaSource(
       stop_ = true;
     }
     if (stop_) {
-      lastCpuReadyArenaBeginStopReason_ =
-          CpuReadyArenaBeginStopReason::CompatibilityFlushStopped;
-      return {.status = CpuReadyArenaBeginStatus::Stopped};
+      return {
+          .status = CpuReadyArenaBeginStatus::Stopped,
+          .stopReason =
+              CpuReadyArenaBeginStopReason::CompatibilityFlushStopped};
     }
     if (writingSlot_) {
       return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -3951,9 +3946,9 @@ CommandQueue::beginCpuReadyArenaSource(
   case core::CpuReadyTape::ReserveProbe::TemporaryPressure:
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   case core::CpuReadyTape::ReserveProbe::Stopped:
-    lastCpuReadyArenaBeginStopReason_ =
-        CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped;
-    return {.status = CpuReadyArenaBeginStatus::Stopped};
+    return {
+        .status = CpuReadyArenaBeginStatus::Stopped,
+        .stopReason = CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped};
   case core::CpuReadyTape::ReserveProbe::Corrupt:
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   case core::CpuReadyTape::ReserveProbe::InvalidRequest:
@@ -4035,12 +4030,9 @@ CommandQueue::beginCpuReadyArenaSources(
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
-  lastCpuReadyArenaBeginStopReason_ =
-      CpuReadyArenaBeginStopReason::None;
   if (stop_) {
-    lastCpuReadyArenaBeginStopReason_ =
-        CpuReadyArenaBeginStopReason::QueueAlreadyStopped;
-    return {.status = CpuReadyArenaBeginStatus::Stopped};
+    return {.status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
@@ -4057,9 +4049,10 @@ CommandQueue::beginCpuReadyArenaSources(
       stop_ = true;
     }
     if (stop_) {
-      lastCpuReadyArenaBeginStopReason_ =
-          CpuReadyArenaBeginStopReason::CompatibilityFlushStopped;
-      return {.status = CpuReadyArenaBeginStatus::Stopped};
+      return {
+          .status = CpuReadyArenaBeginStatus::Stopped,
+          .stopReason =
+              CpuReadyArenaBeginStopReason::CompatibilityFlushStopped};
     }
     if (writingSlot_) {
       return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -4106,9 +4099,10 @@ CommandQueue::beginCpuReadyArenaSources(
         // Ready entry; v2 EventSerial may retry the complete raw event.
         return {.status = CpuReadyArenaBeginStatus::RecoverableFailure};
       case core::CpuReadyTape::ArenaBatchReserveFailure::Stopped:
-        lastCpuReadyArenaBeginStopReason_ =
-            CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped;
-        return {.status = CpuReadyArenaBeginStatus::Stopped};
+        return {
+            .status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason =
+                CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped};
       case core::CpuReadyTape::ArenaBatchReserveFailure::Invalid:
         return {.status = CpuReadyArenaBeginStatus::Invalid};
       case core::CpuReadyTape::ArenaBatchReserveFailure::Corrupt:

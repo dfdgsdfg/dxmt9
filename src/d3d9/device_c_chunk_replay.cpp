@@ -1657,7 +1657,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
               : 1,
       });
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
-  const auto logAdmissionFailure = [&](std::uint32_t beginStatus) {
+  const auto logAdmissionFailure = [&](std::uint32_t beginStatus,
+                                       dxmt9::CommandQueue::
+                                           CpuReadyArenaBeginStopReason
+                                               stopReason) {
     if (!queue) {
       return;
     }
@@ -1666,7 +1669,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
             ? plan.arenaLayout->pageCount
             : (plan.sources.empty() ? 0u
                                     : plan.sources.front().arenaLayout.pageCount);
-    const auto diagnostic = queue->cpuReadyArenaBeginDiagnostic();
+    // Read the one-shot poison origin once on this failure-only path.  The
+    // stop reason comes from the exact returned begin result below, never a
+    // mutable queue-global value that a later admission can overwrite.
+    const auto poisonOrigin = queue->cpuReadyArenaBeginDiagnostic().poisonOrigin;
     dxmt9::util::logf(
         dxmt9::util::LogLevel::Warn, "dxmt9-device",
         "cpu_ready_arena_admission begin_status=%u raw=%llu records=%u "
@@ -1677,11 +1683,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
         raw.recordCount, captureIdentityRequested ? 1u : 0u,
         plan.sourceCount, plan.segmentCount, plannedPages,
         plannerMaxPagesPerSource, limits.maxPagesPerSource,
-        cpuReadyArenaBeginStopReasonName(diagnostic.stopReason),
-        diagnostic.poisonOrigin.file ? diagnostic.poisonOrigin.file : "none",
-        diagnostic.poisonOrigin.line,
-        diagnostic.poisonOrigin.function ? diagnostic.poisonOrigin.function
-                                         : "none");
+        cpuReadyArenaBeginStopReasonName(stopReason),
+        poisonOrigin.file ? poisonOrigin.file : "none", poisonOrigin.line,
+        poisonOrigin.function ? poisonOrigin.function : "none");
   };
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:
@@ -1777,7 +1781,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
   if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
       !begin.has_value()) {
-    logAdmissionFailure(static_cast<std::uint32_t>(begin.status));
+    logAdmissionFailure(static_cast<std::uint32_t>(begin.status),
+                        begin.stopReason);
     if (segmentSerial && begin.status ==
             dxmt9::CommandQueue::CpuReadyArenaBeginStatus::RecoverableFailure) {
       // Admission and builder construction happen before replay invokes any

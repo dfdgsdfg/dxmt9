@@ -58,11 +58,6 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = true;
   }
 
-  static CommandQueue::CpuReadyArenaBeginDiagnostic beginDiagnostic(
-      CommandQueue& queue) {
-    return queue.cpuReadyArenaBeginDiagnostic();
-  }
-
   static bool injectCompletedSettlement(
       CommandQueue& queue, core::CpuReadyTape::ArenaGroupSettlement settlement) {
     std::lock_guard lock(queue.mutex_);
@@ -619,6 +614,8 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     check(active &&
               pressure.status ==
                   CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure &&
+              pressure.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::None &&
               !pressure,
           "typed begin must expose an overlapping transaction as pressure");
   }
@@ -628,7 +625,7 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
     check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped,
           "typed begin must distinguish a stopped queue");
-    check(CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue).stopReason ==
+    check(stopped.stopReason ==
               CommandQueue::CpuReadyArenaBeginStopReason::QueueAlreadyStopped,
           "typed begin must retain the queue-already-stopped reason");
   }
@@ -637,8 +634,7 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     CommandQueueArenaLeaseTestAccess::stopCpuReadyTape(queue);
     const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
     check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
-              CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue)
-                      .stopReason ==
+              stopped.stopReason ==
                   CommandQueue::CpuReadyArenaBeginStopReason::
                       CpuReadyTapeAlreadyStopped,
           "typed begin must distinguish a stopped CpuReadyTape");
@@ -649,11 +645,54 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     CommandQueueArenaLeaseTestAccess::stopAfterCompatibilityFlush(queue);
     const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
     check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
-              CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue)
-                      .stopReason ==
+              stopped.stopReason ==
                   CommandQueue::CpuReadyArenaBeginStopReason::
                       CompatibilityFlushStopped,
           "typed begin must distinguish a stop during compatibility flush");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::setStopped(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      QueueAlreadyStopped,
+          "batch begin must associate queue-already-stopped with its return");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::stopCpuReadyTape(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CpuReadyTapeAlreadyStopped,
+          "batch begin must associate tape-stopped with its return");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::ensureEmptyLegacyWriter(queue);
+    CommandQueueArenaLeaseTestAccess::stopAfterCompatibilityFlush(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CompatibilityFlushStopped,
+          "batch begin must associate compatibility stop with its return");
+  }
+  check(sizeof(CommandQueue::CpuReadyArenaBeginResult) ==
+            sizeof(CommandQueue::CpuReadyArenaBeginResultLayoutBaseline),
+        "typed begin stop reason must fit the existing result padding");
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const auto invalid = queue.beginCpuReadyArenaSource(0, layout);
+    check(invalid.stopReason ==
+              CommandQueue::CpuReadyArenaBeginStopReason::None,
+          "non-stopped begin results must carry no stop reason");
   }
   {
     CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});

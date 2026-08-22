@@ -567,8 +567,6 @@ class CommandQueue {
   };
 
   struct CpuReadyArenaBeginDiagnostic {
-    CpuReadyArenaBeginStopReason stopReason =
-        CpuReadyArenaBeginStopReason::None;
     core::metalqueue::QueueLifecycleController::PoisonOriginSnapshot
         poisonOrigin{};
   };
@@ -582,6 +580,11 @@ class CommandQueue {
 
   struct CpuReadyArenaBeginResult {
     CpuReadyArenaBeginStatus status = CpuReadyArenaBeginStatus::Invalid;
+    // Kept beside status so it occupies the status-alignment padding.  This
+    // is part of the returned value, never a queue-global sidecar: callers
+    // must retain the reason associated with this exact admission attempt.
+    CpuReadyArenaBeginStopReason stopReason =
+        CpuReadyArenaBeginStopReason::None;
     std::optional<CpuReadyArenaBuildLease> lease{};
 
     bool has_value() const noexcept { return lease.has_value(); }
@@ -595,6 +598,18 @@ class CommandQueue {
       return *lease;
     }
   };
+
+  // Layout baseline for the pre-diagnostic return value.  The reason field
+  // above must fit in existing padding and never enlarge this ABI-local
+  // native result type.
+  struct CpuReadyArenaBeginResultLayoutBaseline {
+    CpuReadyArenaBeginStatus status = CpuReadyArenaBeginStatus::Invalid;
+    std::optional<CpuReadyArenaBuildLease> lease{};
+  };
+  static_assert(
+      sizeof(CpuReadyArenaBeginResult) ==
+          sizeof(CpuReadyArenaBeginResultLayoutBaseline),
+      "CpuReadyArenaBeginResult diagnostics must fit existing padding");
 
   struct CpuReadyArenaPlanLimits {
     std::size_t pageSize = 0;
@@ -1548,8 +1563,6 @@ class CommandQueue {
   std::atomic<bool> arenaAdmissionActive_{false};
   std::atomic<bool> arenaBuildPoisoned_{false};
   std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
-  CpuReadyArenaBeginStopReason lastCpuReadyArenaBeginStopReason_ =
-      CpuReadyArenaBeginStopReason::None;
   std::uint64_t nextArenaBuildGeneration_ = 1;
   // Native coordinator fault seam: fail one post-reservation semantic
   // preflight, restore the exact tentative prefix, then return from the
