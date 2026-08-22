@@ -1016,6 +1016,13 @@ reinterprets those bytes. The current segmented grammar is schema
 Present ordinal, and bounded capture token used for the only legal PE-to-
 provider join.
 
+Within v2, `EventSerial` is the reachable compatibility projection: each event
+has exactly one complete identity entry. `SegmentSerial` is the separate opt-in
+projection that may expose multiple entries for one event only after the full
+event-group proof succeeds. A failed v2 SegmentSerial proof falls back to the
+complete v2 EventSerial event before provider effects; it never revives the
+Retired v1 bytes.
+
 In v2, the source table is an ordered identity-segment table. One event owns
 one or more entries, each naming its event ordinal, production
 `sourceOrdinal`, production `seqId`, and non-empty event-local record range.
@@ -1024,9 +1031,11 @@ contiguous same-event group, not redundant wire fields. The entries for one
 event must partition the event's records exactly once; the flattened identity
 order is strict by event then segment.
 The membership table partitions each segment's records and pins the frozen
-pre-reorder logical pass ID, DAG pass index, and pass kind. A pass may cross a
-segment edge only through adjacent contiguous membership pieces with the same
-pass identity. Segment edges are not DAG or logical-pass boundaries.
+post-proof logical pass ID, optimized DAG pass index, and pass kind. EventSerial
+and SegmentSerial use the same event-wide source graph and pass-coalesce proof;
+a pass may cross a segment edge only through adjacent contiguous membership
+pieces with the same proven identity. Segment edges are not DAG or logical-pass
+boundaries, and IDs are never inferred from source-local order.
 
 Validation first authenticates both components, then checks exact command-event
 and record coverage, canonical table/range layout, strict source/sequence
@@ -1035,6 +1044,32 @@ agreement with the tape's Present ordinal. No slot index, pointer, borrowed
 payload span, or registry address is serialized. Projection treats the sidecar
 as a capability: absence or mismatch fails before it creates a staging
 directory or invokes a provider.
+
+The v2 header also carries a bounded event-settlement table after the source
+and membership tables. Its `settlementEntrySize`, `settlementTableOffset`, and
+`settlementCount` describe the exact remaining bytes; each row carries the
+event ordinal, raw ordinal, build generation, first source ordinal, tail
+`seqId`, and source count. A capture result is COMPLETE only after the final
+group-tail completion fence authenticates every expected row, and the
+provider/CLI exposes the rows and count as evidence (the final row is a
+summary, never a substitute for the table). Production drains settlement
+evidence into this bounded table; it does not retain an unbounded completion
+deque.
+
+Projection materialization creates a fresh digest-bound sidecar with authority
+`DerivedProjection`, source-qualified segment rows, and a value-owned derived
+settlement row. This authority describes only the new materialized bytes; it
+is not capture or queue-completion evidence and is never accepted where an
+executable-project input requires `Capture`. The provider CLI rejects v1 and
+malformed controls before effects. Its intentionally independent
+`dxmt9.render_tape.provider_replay.v2` output schema reports authority,
+source/sequence segment rows, provenance segment count, and settlement
+table/count; `completed_segment_count`, `event_settlement_table`, and the
+tail-only `final_event_settlement` are queue-completion evidence and therefore
+remain zero/empty/null for `DerivedProjection`. Capture/provider-replay
+authority reports those completion fields only after its authenticated tail
+fence. This v2 provider schema does not revive or reinterpret retired
+identity-v1 artifacts.
 
 The production capture-side identity join is implemented and remains bounded.
 The schema and validator accept provider-emitted identity only when it is
@@ -1435,9 +1470,23 @@ bundle contains 36 command sources and 51 frozen pass ranges, and the
 capture-authority sidecar validates exact command/record coverage. The final
 event ordinal is assigned only after PE object/materialization preflight, then
 copied through the bounded capture token into the Direct Arena source. The
-capture-only queue profile owns 2,048 4-KiB pages (8 MiB) and permits one
-512-page segmented source; normal capture-off and streaming selection retain
-their existing bounds.
+capture-only queue profile owns 2,048 4-KiB pages (8 MiB). EventSerial/default
+capture retains its existing 512-page queue admission representation; only an
+authenticated token+event-ordinal capture event in the queue-immutable
+`DXMT9_RENDER_IDENTITY_MODE=segment` mode applies a call-local planner bound of
+at most 64 pages in one SegmentSerial source. Startup/non-capture raws and
+capture-off remain 512 pages/source and one source. A canonical event whose
+physical payload exceeds that planner bound is partitioned into ordered source rows through the value-owned
+Arena batch lease; descriptor, payload, control, and Ready publication are one
+all-or-nothing transaction, and pre-effect failure aborts the complete batch
+without widening a source. Normal capture-off and streaming selection retain
+their existing bounds. Planner, descriptor, or builder rejection during
+admission or replay setup, before the command loop's first semantic effect,
+aborts the complete batch and selects v2 EventSerial exactly once; this
+includes a failed capture-identity arm after source ranges were predeclared.
+A typed `RecoverableFailure` after replay begins is fail-stop and must not
+recursively replay EventSerial, preserving exactly-once semantic effects and
+Presenter ownership.
 
 The r65 full-frame provider output is non-degenerate but is not promotion
 evidence: it differs from the captured output at 139 pixels with maximum RGB
@@ -1482,6 +1531,30 @@ rejection. The hermetic bundle fixture pins validate → project/materialize →
 fresh provider invocation. This closes the model/native/hermetic seam only;
 the prior r66 GT2 evidence remains the production `FULL_SNAPSHOT` run, so no
 default-delta wild GT2 oracle claim follows.
+
+The 2026-08-23 r17 capture at
+`experiments/output/render-tape-gt2-identity-v2-r17-producer-wait/`
+supersedes that last limitation for the bounded sparse projection. Capture
+reserve returns instead of wedging, and the published 1,083-event bundle binds
+147 completed production source segments, 162 pass ranges, and all 43 expected
+event settlements to one capture-authority v2 sidecar. `executable-project`
+selects event ordinal 899, records 0 through 18. Those 19 indexed Draws cross
+the exact source boundary from ordinal/seqId 13908 to 13909 while remaining in
+one authenticated pass. The atomically published derived bundle contains one
+Clear, 19 indexed Draws, one Present, 20 definitions, and 65 mutations. Its
+event digest is `484adb56b9301795a5ecacb41d34732935174c9ceb8a0675f36b96dfb3e9ac85`;
+two additional fresh strict provider processes reproduce non-degenerate output
+SHA-256 `f47603010a15169cd994415882dc6fe0537befd3653d59518bc4ade2ab99e586`
+with zero GPU command-buffer errors.
+
+This is bounded projection evidence, not full-frame promotion. One replay of
+the complete r17 capture produces matching source/output SHA-256
+`56ec70e97e24b946185c6f065d39cee19eefcd2d5feae4df00c086dd4701bc11`
+but differs from the captured source/output oracle at 15,193 pixels, maximum
+RGB delta 27, and total RGB delta 23,987. The strict SHA and pixel-envelope
+gates therefore reject it. The implementation contains only the v2 identity
+reader/writer; the retained version-1 mutation test is solely a fail-closed
+`invalid-header` regression pin and does not constitute a legacy v1 lane.
 
 ### 8.5 Profile relationship and migration
 

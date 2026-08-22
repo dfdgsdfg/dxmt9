@@ -231,6 +231,22 @@ void noteWorkerIdleWait(std::uint64_t nanoseconds) {
   dxmt9::perf::countOffloadWorkerIdleWaitNs(nanoseconds);
 }
 
+bool replayOffloadObservabilityEnabled() noexcept {
+  return dxmt9::perf::enabled();
+}
+
+void notePushWaitEnter() {
+  dxmt9::perf::enterOffloadPushWait();
+}
+
+void notePushWaitExit() {
+  dxmt9::perf::exitOffloadPushWait();
+}
+
+void noteReplayInflightRaw(bool inFlight) {
+  dxmt9::perf::recordOffloadReplayInflightRaw(inFlight);
+}
+
 bool prepareOffloadChunk(
     std::span<const std::byte> blob,
     const CommandChunkEnvelope& envelope,
@@ -619,8 +635,16 @@ bool drainDeferredReplay(D9CDevice* d, const char* site) {
     return !queue.stopped() && !d->replayOffload->failed();
   }
   dxmt9::perf::countOffloadDrainFenceWait();
+  const bool schedulingObservabilityEnabled =
+      replayOffloadObservabilityEnabled();
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::enterOffloadDrainWait();
+  }
   const auto waitStart = std::chrono::steady_clock::now();
   queue.waitDrained();
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::exitOffloadDrainWait();
+  }
   const auto elapsed = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStart).count());

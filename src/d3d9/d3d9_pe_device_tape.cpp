@@ -228,6 +228,11 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
                 }
                 const HRESULT flushHr = flushPendingCommandChunk(
                     PeRecorderFlushReason::Child);
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture alias_pending_flush_end "
+                    "hr=0x%08x disposition=%s",
+                    static_cast<unsigned>(flushHr),
+                    SUCCEEDED(flushHr) ? "completed" : "failed");
                 if (FAILED(flushHr)) {
                     markRenderTapeInvalidOnce(
                         "alias_pending_flush_failed", &object);
@@ -736,6 +741,7 @@ dxmt9::d3d9::RenderTapeBlockMutationStatus D3D9DeviceImpl::recordRenderTapeLinea
 
 bool D3D9DeviceImpl::produceRenderTapeBootstrap(
     dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
+    dxmt9DeviceInfoLog("render_tape_capture bootstrap_begin");
     if (!renderTapeRegistry_) {
         dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
         return false;
@@ -849,6 +855,10 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             }
         }
         seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
+        dxmt9DeviceInfoLog(
+            "render_tape_capture bootstrap_overlay_complete "
+            "records=%u handles=%u bytes=%zu",
+            overlay.recordCount, overlay.handleCount, overlay.blob.size());
 
         std::vector<const RenderTapeLiveObject *> objects;
         objects.reserve(renderTapeRegistry_->objects.size());
@@ -1043,6 +1053,10 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 missing.expectedTightBytesValid ? 1 : 0);
             return false;
         }
+        dxmt9DeviceInfoLog(
+            "render_tape_capture bootstrap_closure_complete "
+            "handles=%zu live_objects=%zu closure=%zu",
+            bootstrapHandles.size(), objects.size(), closure.size());
         for (const auto *object : objects) {
             if (!dxmt9::d3d9::renderTapeBootstrapClosureContains(
                     closure, object->identity)) {
@@ -1279,6 +1293,11 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 seed.oracleAttachments.size());
             return false;
         }
+        dxmt9DeviceInfoLog(
+            "render_tape_capture bootstrap_complete objects=%zu "
+            "mutations=%zu blobs=%zu oracle_attachments=%zu",
+            seed.objects.size(), seed.mutations.size(), seed.blobs.size(),
+            seed.oracleAttachments.size());
         return true;
     } catch (...) {
         dxmt9DeviceInfoLog(
@@ -1712,6 +1731,11 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         ++renderTapeNextCaptureToken_;
     }
     renderTapeActiveCaptureToken_ = renderTapeNextCaptureToken_;
+    dxmt9DeviceInfoLog(
+        "render_tape_capture arm_complete token=%llu objects=%zu "
+        "mutations=%zu blobs=%zu",
+        static_cast<unsigned long long>(renderTapeActiveCaptureToken_),
+        seed.objects.size(), seed.mutations.size(), seed.blobs.size());
     return true;
 }
 
@@ -2811,6 +2835,15 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
         identityResult.sourceCount == 0u ||
         identityResult.rangeCount == 0u ||
         identityResult.reserved0 != 0u ||
+        identityResult.reserved1 != 0u ||
+        identityResult.reserved2 != 0u ||
+        identityResult.settlementCount == 0u ||
+        identityResult.eventOrdinal == 0u ||
+        identityResult.settlementSourceOrdinal == 0u ||
+        identityResult.settlementSeqId == 0u ||
+        identityResult.settlementEntrySize !=
+            sizeof(D9CRenderTapeIdentitySettlementEntry) ||
+        identityResult.settlementTableOffset == 0u ||
         identityResult.byteCount >
             std::numeric_limits<std::size_t>::max()) {
         abortRenderTapeCapture("identity_query");
@@ -2833,7 +2866,15 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
         copiedIdentity.sourceCount != identityResult.sourceCount ||
         copiedIdentity.rangeCount != identityResult.rangeCount ||
         copiedIdentity.captureToken != identityResult.captureToken ||
-        copiedIdentity.byteCount != identityResult.byteCount) {
+        copiedIdentity.byteCount != identityResult.byteCount ||
+        copiedIdentity.eventOrdinal != identityResult.eventOrdinal ||
+        copiedIdentity.settlementSourceOrdinal !=
+            identityResult.settlementSourceOrdinal ||
+        copiedIdentity.settlementSeqId != identityResult.settlementSeqId ||
+        copiedIdentity.settlementCount != identityResult.settlementCount ||
+        copiedIdentity.settlementEntrySize != identityResult.settlementEntrySize ||
+        copiedIdentity.settlementTableOffset != identityResult.settlementTableOffset ||
+        copiedIdentity.reserved1 != 0u || copiedIdentity.reserved2 != 0u) {
         abortRenderTapeCapture("identity_copy");
         return;
     }
@@ -2842,7 +2883,10 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
                 sizeof(D9CRenderTapeIdentitySourceEntry) ||
         static_cast<std::size_t>(copiedIdentity.rangeCount) >
             std::numeric_limits<std::size_t>::max() /
-                sizeof(D9CRenderTapeIdentityRangeEntry)) {
+                sizeof(D9CRenderTapeIdentityRangeEntry) ||
+        static_cast<std::size_t>(copiedIdentity.settlementCount) >
+            std::numeric_limits<std::size_t>::max() /
+                sizeof(D9CRenderTapeIdentitySettlementEntry)) {
         abortRenderTapeCapture("identity_layout");
         return;
     }
@@ -2852,16 +2896,30 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
     const std::size_t rangeBytes =
         static_cast<std::size_t>(copiedIdentity.rangeCount) *
         sizeof(D9CRenderTapeIdentityRangeEntry);
-    if (sourceBytes > identityBytes.size() ||
-        rangeBytes != identityBytes.size() - sourceBytes) {
+    if (sourceBytes > std::numeric_limits<std::size_t>::max() - rangeBytes) {
+        abortRenderTapeCapture("identity_layout");
+        return;
+    }
+    const std::size_t sourceAndRangeBytes = sourceBytes + rangeBytes;
+    const std::size_t settlementBytes =
+        static_cast<std::size_t>(copiedIdentity.settlementCount) *
+        sizeof(D9CRenderTapeIdentitySettlementEntry);
+    if (sourceAndRangeBytes > std::numeric_limits<std::size_t>::max() -
+                                  settlementBytes ||
+        sourceBytes > identityBytes.size() ||
+        rangeBytes > identityBytes.size() - sourceBytes ||
+        copiedIdentity.settlementTableOffset != sourceAndRangeBytes ||
+        settlementBytes != identityBytes.size() - sourceAndRangeBytes) {
         abortRenderTapeCapture("identity_layout");
         return;
     }
     std::vector<dxmt9::d3d9::RenderTapeIdentitySource> identitySources;
     std::vector<dxmt9::d3d9::RenderTapeIdentityRange> identityRanges;
+    std::vector<D9CRenderTapeIdentitySettlementEntry> identitySettlements;
     try {
         identitySources.resize(copiedIdentity.sourceCount);
         identityRanges.resize(copiedIdentity.rangeCount);
+        identitySettlements.resize(copiedIdentity.settlementCount);
     } catch (...) {
         abortRenderTapeCapture("identity_allocation");
         return;
@@ -2873,9 +2931,18 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
     std::memcpy(identitySources.data(), identityBytes.data(), sourceBytes);
     std::memcpy(identityRanges.data(), identityBytes.data() + sourceBytes,
                 rangeBytes);
+    std::memcpy(identitySettlements.data(),
+                identityBytes.data() + sourceBytes + rangeBytes,
+                settlementBytes);
     if (renderTapeCapture_->attachCaptureIdentity(
             renderTapeActiveCaptureToken_, capturedPresentOrdinal,
-            identitySources, identityRanges) !=
+            identitySources, identityRanges,
+            dxmt9::d3d9::RenderTapeIdentityEventSettlement{
+                .eventOrdinal = copiedIdentity.eventOrdinal,
+                .sourceOrdinal = copiedIdentity.settlementSourceOrdinal,
+                .seqId = copiedIdentity.settlementSeqId,
+                .count = 1u,
+            }, identitySettlements) !=
         dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
         const auto& identityValidation =
             renderTapeCapture_->identityValidationResult();

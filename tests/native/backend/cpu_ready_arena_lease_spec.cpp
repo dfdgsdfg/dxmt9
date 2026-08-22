@@ -2,6 +2,8 @@
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -9,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 namespace dxmt9 {
@@ -48,9 +51,64 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.stop_ = true;
   }
 
+  static void stopCpuReadyTape(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.cpuReadyTape_.stopAdmission();
+  }
+
+  static void stopAfterCompatibilityFlush(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = true;
+  }
+
+  static bool injectCompletedSettlement(
+      CommandQueue& queue, core::CpuReadyTape::ArenaGroupSettlement settlement) {
+    std::lock_guard lock(queue.mutex_);
+    auto* ledger = queue.queueLifecycle_.completedArenaGroupSettlementLedger();
+    if (!ledger->append(settlement) ||
+        !queue.queueLifecycle_.drainCompletedArenaGroupSettlementsLocked(
+            settlement.tailSeqId)) {
+      return false;
+    }
+    queue.finishCv_.notify_all();
+    return true;
+  }
+
+  static void forceNextBatchRollbackFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaRollbackFailure_ = true;
+  }
+
+  static void armBatchPlannerObservation(CommandQueue& queue,
+                                         bool forceInvalid) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyObserveNextCpuReadyArenaPlanner_ = true;
+    queue.testOnlyCpuReadyArenaPlannerInvocationCount_ = 0;
+    queue.testOnlyCpuReadyArenaPlannerValid_ = false;
+    queue.testOnlyForceNextCpuReadyArenaPlannerInvalid_ = forceInvalid;
+  }
+
+  static std::uint32_t batchPlannerInvocationCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyCpuReadyArenaPlannerInvocationCount_;
+  }
+
+  static bool batchPlannerValid(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyCpuReadyArenaPlannerValid_;
+  }
+
   static std::size_t readyCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.readyCount();
+  }
+
+  static CommandQueue::CpuReadyArenaFailureSnapshot activeFailure(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.arenaBuildContext_
+        ? queue.arenaBuildContext_->firstFailure()
+        : CommandQueue::CpuReadyArenaFailureSnapshot{};
   }
 
   static bool activeFlushDeferred(CommandQueue& queue) {
@@ -94,6 +152,46 @@ struct CommandQueueArenaLeaseTestAccess {
                                         std::size_t index) {
     std::lock_guard lock(queue.mutex_);
     return queue.slots_[index];
+  }
+
+  static void enableArenaAdmissionWaitObservation(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlySchedulingWaitObservationEnabled_ = true;
+    queue.testOnlyArenaAdmissionWaitEntries_ = 0;
+    queue.testOnlyArenaAdmissionPredicateEvaluations_ = 0;
+  }
+
+  static bool waitForArenaAdmissionPredicateEvaluations(
+      CommandQueue& queue, std::uint64_t expected) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.sessionReleaseCv_.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return queue.testOnlyArenaAdmissionPredicateEvaluations_ >= expected;
+        });
+  }
+
+  static std::array<std::uint64_t, 2> arenaAdmissionWaitObservations(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return {queue.testOnlyArenaAdmissionWaitEntries_,
+            queue.testOnlyArenaAdmissionPredicateEvaluations_};
+  }
+
+  static void setControlStateAndWake(
+      CommandQueue& queue, std::size_t index,
+      core::ChunkSlot::State state) {
+    {
+      std::lock_guard lock(queue.mutex_);
+      queue.slots_[index] = {};
+      queue.slots_[index].state = state;
+    }
+    queue.writeCv_.notify_all();
+  }
+
+  static bool waitForArenaAdmission(
+      CommandQueue& queue,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) {
+    return queue.waitForCpuReadyArenaAdmission(layouts);
   }
 
   static bool admissionIsFullyVisible(
@@ -559,6 +657,8 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     check(active &&
               pressure.status ==
                   CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure &&
+              pressure.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::None &&
               !pressure,
           "typed begin must expose an overlapping transaction as pressure");
   }
@@ -568,6 +668,74 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
     check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped,
           "typed begin must distinguish a stopped queue");
+    check(stopped.stopReason ==
+              CommandQueue::CpuReadyArenaBeginStopReason::QueueAlreadyStopped,
+          "typed begin must retain the queue-already-stopped reason");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::stopCpuReadyTape(queue);
+    const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CpuReadyTapeAlreadyStopped,
+          "typed begin must distinguish a stopped CpuReadyTape");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::ensureEmptyLegacyWriter(queue);
+    CommandQueueArenaLeaseTestAccess::stopAfterCompatibilityFlush(queue);
+    const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CompatibilityFlushStopped,
+          "typed begin must distinguish a stop during compatibility flush");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::setStopped(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      QueueAlreadyStopped,
+          "batch begin must associate queue-already-stopped with its return");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::stopCpuReadyTape(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CpuReadyTapeAlreadyStopped,
+          "batch begin must associate tape-stopped with its return");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const std::array layouts{layout};
+    CommandQueueArenaLeaseTestAccess::ensureEmptyLegacyWriter(queue);
+    CommandQueueArenaLeaseTestAccess::stopAfterCompatibilityFlush(queue);
+    const auto stopped = queue.beginCpuReadyArenaSources(1, layouts);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              stopped.stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CompatibilityFlushStopped,
+          "batch begin must associate compatibility stop with its return");
+  }
+  check(sizeof(CommandQueue::CpuReadyArenaBeginResult) ==
+            sizeof(CommandQueue::CpuReadyArenaBeginResultLayoutBaseline),
+        "typed begin stop reason must fit the existing result padding");
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    const auto invalid = queue.beginCpuReadyArenaSource(0, layout);
+    check(invalid.stopReason ==
+              CommandQueue::CpuReadyArenaBeginStopReason::None,
+          "non-stopped begin results must carry no stop reason");
   }
   {
     CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
@@ -849,6 +1017,354 @@ void testPresentAppendAbortRemovesStashedTokenOnce() {
   queue.unregisterPresenter(presentId);
 }
 
+void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto begin = queue.beginCpuReadyArenaSources(123, layouts);
+    check(begin.has_value(), "batch lease admission must succeed");
+    check(!begin->selectSourceSegment(1, 0),
+          "selecting a later source before its predecessor is selected fails");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto begin = queue.beginCpuReadyArenaSources(124, layouts);
+    check(begin.has_value(), "second batch lease admission must succeed");
+    check(begin->selectSourceSegment(0, 0),
+          "first source accepts its local segment zero");
+    check(begin->selectSourceSegment(1, 0),
+          "second source converts local segment zero to the next global edge");
+    check(!begin->selectSourceSegment(1, 2),
+          "out-of-range source-local segment fails closed");
+  }
+}
+
+void testBatchAdmissionWaitRequiresEveryContiguousControlSlot() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  const std::array layouts{layout, layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 1u, ChunkSlot::State::Writing);
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 2u, ChunkSlot::State::Writing);
+  const auto pressured = queue.beginCpuReadyArenaSources(130u, layouts);
+  check(pressured.status ==
+            CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure,
+        "batch begin rejects when the first control is free but a later "
+        "required control is occupied");
+
+  CommandQueueArenaLeaseTestAccess::enableArenaAdmissionWaitObservation(queue);
+  std::atomic<bool> returned{false};
+  std::atomic<bool> admitted{false};
+  std::thread waiter([&] {
+    admitted.store(
+        CommandQueueArenaLeaseTestAccess::waitForArenaAdmission(queue, layouts),
+        std::memory_order_release);
+    returned.store(true, std::memory_order_release);
+  });
+  check(CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionPredicateEvaluations(queue, 1u) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 1u} &&
+            !returned.load(std::memory_order_acquire),
+        "batch waiter enters once and parks on the occupied contiguous suffix");
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 1u, ChunkSlot::State::Free);
+  check(CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionPredicateEvaluations(queue, 2u) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 2u} &&
+            !returned.load(std::memory_order_acquire),
+        "freeing only one later control rechecks once and parks without a "
+        "begin/wait retry spin");
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 2u, ChunkSlot::State::Free);
+  waiter.join();
+  check(returned.load(std::memory_order_acquire) &&
+            admitted.load(std::memory_order_acquire) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 3u},
+        "batch waiter returns only after every required contiguous control is "
+        "free, with one wait entry and no retry loop");
+
+  auto begin = queue.beginCpuReadyArenaSources(130u, layouts);
+  check(begin.has_value(),
+        "the exact control predicate that released the waiter admits the batch");
+}
+
+void testCountOneSettlementRequiresExactIdentityTuple() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using Settlement = core::CpuReadyTape::ArenaGroupSettlement;
+  constexpr Settlement expected{
+      .rawOrdinal = 71u,
+      .buildGeneration = 9u,
+      .firstSourceOrdinal = 13u,
+      .tailSeqId = 47u,
+      .sourceCount = 1u,
+      .hasPresent = false,
+  };
+  const auto wait = [&](Settlement query, bool stopAfter) {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    check(CommandQueueArenaLeaseTestAccess::injectCompletedSettlement(
+              queue, expected),
+          "count-one settlement must be recorded and drained");
+    if (stopAfter) {
+      CommandQueueArenaLeaseTestAccess::setStopped(queue);
+    }
+    return queue.waitForCpuReadyEventSettlement(
+        query.rawOrdinal, query.buildGeneration, query.firstSourceOrdinal,
+        query.tailSeqId, query.sourceCount);
+  };
+  check(wait(expected, true),
+        "count-one wait must require the complete settlement tuple");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal + 1u,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "raw ordinal mutation must not pass a tail-only wait");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration + 1u,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "build generation mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal + 1u,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "first source mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId + 1u,
+                         .sourceCount = expected.sourceCount}, true),
+        "tail mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = 2u}, true),
+        "source count mutation must not pass settlement");
+}
+
+void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(126, layouts);
+  check(begin.has_value(), "cross-source capture admission must succeed");
+  check(begin->beginCaptureIdentity(2u),
+        "batch capture identity must reserve the complete event range");
+
+  const auto first = materializedSubmission(Handle{11}, 7, 9);
+  const auto second = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{first};
+  check(begin->selectSourceSegment(0, 0),
+        "first source local segment must be selected");
+  check(begin->captureNextCommandRecord(0),
+        "first source anchor must be recorded before append");
+  queue.submitDrawRunBatch(submissions);
+  submissions[0] = second;
+  check(begin->selectSourceSegment(1, 0),
+        "second source local segment must be selected in order");
+  check(begin->captureNextCommandRecord(1),
+        "second source anchor must be recorded before append");
+  queue.submitDrawRunBatch(submissions);
+  constexpr std::array firstRecords{0u, 1u};
+  constexpr std::array recordCounts{1u, 1u};
+  check(begin->setCaptureSourceRanges(firstRecords, recordCounts),
+        "capture ranges must cover both source rows contiguously");
+  check(!begin->setCaptureSourceRanges(firstRecords, recordCounts) &&
+            !begin->beginCaptureIdentity(2u),
+        "batch capture range and identity setup must each be exactly once");
+
+  CommandQueue::CpuReadyCaptureIdentityBatch identity{};
+  check(begin->publishBatch({}, &identity),
+        "production batch publish must seal and atomically publish");
+  check(identity.valid() && identity.segments.size() == 2u,
+        "batch publication must return both authenticated segments");
+  check(identity.segments[0].ranges.size() == 1u &&
+            identity.segments[1].ranges.size() == 1u &&
+            identity.segments[0].ranges[0].logicalPassId != 0u &&
+            identity.segments[0].ranges[0].logicalPassId ==
+                identity.segments[1].ranges[0].logicalPassId,
+        "same-pass cross-source rows must carry one nonzero logical pass");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
+        "cross-source publication must expose both Ready entries together");
+}
+
+void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(128, layouts);
+  check(begin.has_value(), "no-capture batch admission must succeed");
+  const auto submission = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "no-capture first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "no-capture second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, false);
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::Published,
+        "no-capture SegmentSerial batch must run the event-wide proof");
+  check(CommandQueueArenaLeaseTestAccess::batchPlannerInvocationCount(queue) ==
+            1u &&
+            CommandQueueArenaLeaseTestAccess::batchPlannerValid(queue),
+        "no-capture planner must be invoked exactly once and validate the "
+        "complete source window");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
+        "successful no-capture proof must publish both Ready rows atomically");
+}
+
+void testBatchPlannerRejectionRollsBackBeforeEffects() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(129, layouts);
+  check(begin.has_value(), "planner rejection admission must succeed");
+  const auto submission = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "planner rejection first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "planner rejection second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, true);
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "planner rejection must select pre-effect EventSerial fallback");
+  check(CommandQueueArenaLeaseTestAccess::batchPlannerInvocationCount(queue) ==
+            1u &&
+            !CommandQueueArenaLeaseTestAccess::batchPlannerValid(queue),
+        "forced invalid planner result must be observed exactly once");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::residentSources(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(queue) == 1u &&
+            CommandQueueArenaLeaseTestAccess::writeIndex(queue) == 0u &&
+            !queue.cpuReadyArenaPoisoned(),
+        "planner rejection must leave zero Ready/resident entries, restored "
+        "cursors, and no poison");
+}
+
+void testBatchBuilderFailureRollsBackForEventSerialFallback() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(127, layouts);
+  check(begin.has_value(), "builder failure admission must succeed");
+  const auto submission = materializedSubmission(Handle{12}, 8, 10);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "builder failure first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "builder failure second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  // The one-command source capacity makes this append reject the active
+  // builder before publication; the batch must still have zero Ready rows.
+  queue.submitDrawRunBatch(submissions);
+  const auto publishStatus = begin->publishBatchWithStatus({}, nullptr);
+  check(publishStatus ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "pre-effect builder rejection must rollback for EventSerial fallback");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::residentSources(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(queue) == 1u &&
+            CommandQueueArenaLeaseTestAccess::writeIndex(queue) == 0u &&
+            !queue.cpuReadyArenaPoisoned(),
+        "builder rollback must restore cursors, residency, zero Ready, and "
+        "leave the queue unpoisoned");
+}
+
+void testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(129, layouts);
+  check(begin.has_value(), "failure-retention admission must succeed");
+  const auto submission = materializedSubmission(Handle{17}, 8, 10);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "failure-retention first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "failure-retention second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  queue.submitDrawRunBatch(submissions);
+  const auto first = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
+  check(first.failureClass ==
+            CommandQueue::CpuReadyArenaFailureClass::Append &&
+            first.source == 1u && first.segment == 0u &&
+            first.plannedPages == layout.segments[0].layout.pageCount &&
+            first.actualCommands == 1u,
+        "organic append failure coordinates: class=" +
+            std::to_string(static_cast<unsigned>(first.failureClass)) +
+            " source=" + std::to_string(first.source) +
+            " segment=" + std::to_string(first.segment) +
+            " planned=" + std::to_string(first.plannedPages) +
+            " actual=" + std::to_string(first.actualCommands));
+  queue.submitDrawRunBatch(submissions);
+  const auto retained = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
+  check(retained.failureClass == first.failureClass &&
+            retained.source == first.source && retained.segment == first.segment &&
+            retained.plannedPages == first.plannedPages &&
+            retained.actualCommands == first.actualCommands,
+        "a later failure must not overwrite the first typed failure record");
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "retained organic append failure must take the pre-effect rollback");
+}
+
+void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  CommandQueueArenaLeaseTestAccess::forceNextBatchRollbackFailure(queue);
+  const auto begin = queue.beginCpuReadyArenaSources(125, layouts);
+  check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Corrupt &&
+            !begin && queue.cpuReadyArenaPoisoned(),
+        "guarded rollback failure must fail-stop instead of reporting a "
+        "recoverable EventSerial fallback");
+}
+
 }  // namespace
 
 int main() {
@@ -864,6 +1380,15 @@ int main() {
     testCaptureIdentityUsesExactRawRangesAndPreReorderPasses();
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
+    testBatchLeaseUsesSourceLocalSegmentCoordinates();
+    testBatchAdmissionWaitRequiresEveryContiguousControlSlot();
+    testCountOneSettlementRequiresExactIdentityTuple();
+    testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
+    testBatchPublishRunsEventProofWithoutCaptureSidecar();
+    testBatchPlannerRejectionRollsBackBeforeEffects();
+    testBatchBuilderFailureRollsBackForEventSerialFallback();
+    testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures();
+    testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

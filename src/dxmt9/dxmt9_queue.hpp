@@ -16,6 +16,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -274,6 +275,49 @@ struct QueueCompletionSource {
   }
   bool completionIdentityValid() const noexcept {
     return seqId != 0u && (locatorBacked() || receiptBacked());
+  }
+};
+
+// Fixed-capacity value ledger for completed SegmentSerial event tails. The
+// consumer must drain this ledger; an unconsumed producer cannot grow it
+// without bound and fails closed on overflow. Tail seqIds are monotonic so a
+// wrapped/ABA publication cannot masquerade as a newer event settlement.
+struct ArenaGroupSettlementLedger {
+  static constexpr std::size_t kCapacity = 128u;
+  std::array<CpuReadyTape::ArenaGroupSettlement, kCapacity> entries{};
+  std::size_t head = 0;
+  std::size_t count = 0;
+  std::uint64_t lastAppendedTailSeqId = 0;
+  std::uint64_t lastConsumedTailSeqId = 0;
+
+  bool append(CpuReadyTape::ArenaGroupSettlement settlement) noexcept {
+    if (!settlement.valid() || count == kCapacity ||
+        settlement.tailSeqId <= lastAppendedTailSeqId) {
+      return false;
+    }
+    entries[(head + count) % kCapacity] = settlement;
+    ++count;
+    lastAppendedTailSeqId = settlement.tailSeqId;
+    return true;
+  }
+
+  bool consume(CpuReadyTape::ArenaGroupSettlement& settlement) noexcept {
+    if (count == 0) {
+      return false;
+    }
+    settlement = entries[head];
+    if (!settlement.valid() || settlement.tailSeqId <= lastConsumedTailSeqId) {
+      return false;
+    }
+    entries[head] = {};
+    head = (head + 1u) % kCapacity;
+    --count;
+    lastConsumedTailSeqId = settlement.tailSeqId;
+    return true;
+  }
+
+  const CpuReadyTape::ArenaGroupSettlement* front() const noexcept {
+    return count == 0 ? nullptr : &entries[head];
   }
 };
 
@@ -764,6 +808,18 @@ void traceQueueSlotsEvent(const char* event,
  */
 class QueueLifecycleController {
  public:
+  // Failure-only provenance for lifecycle poison.  The source-location
+  // strings point at static compiler literals; publication is one-shot and
+  // never participates in normal queue payloads or transition records.
+  struct PoisonOriginSnapshot {
+    const char* file = nullptr;
+    const char* function = nullptr;
+    std::uint32_t line = 0;
+    std::uint32_t column = 0;
+
+    bool valid() const noexcept { return file != nullptr && line != 0; }
+  };
+
   struct SubmissionBinding {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
@@ -774,6 +830,8 @@ class QueueLifecycleController {
     std::atomic<u64>* nextSeqId = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
     std::deque<u64>* completedPresentSeqQueue = nullptr;
+    ArenaGroupSettlementLedger*
+        completedArenaGroupSettlements = nullptr;
     size_t* inflightCount = nullptr;
     // Atomic only so the map DISCARD fast path can read the GPU watermark
     // without `mutex` (design T2c). This controller is the SOLE writer
@@ -878,8 +936,21 @@ class QueueLifecycleController {
   // callers already own SubmissionBinding::mutex; completion-thread callers
   // must use the unlocked entry point so Tape/admission/stop mutation remains
   // serialized by the scheduling owner.
-  void poisonTapeFailureLocked() noexcept;
-  void poisonTapeFailure() noexcept;
+  void poisonTapeFailureLocked(
+      std::source_location location = std::source_location::current()) noexcept;
+  void poisonTapeFailure(
+      std::source_location location = std::source_location::current()) noexcept;
+  PoisonOriginSnapshot firstPoisonOrigin() const noexcept {
+    if (!firstPoisonOriginPublished_.load(std::memory_order_acquire)) {
+      return {};
+    }
+    return {
+        .file = firstPoisonOriginFile_.load(std::memory_order_relaxed),
+        .function = firstPoisonOriginFunction_.load(std::memory_order_relaxed),
+        .line = firstPoisonOriginLine_.load(std::memory_order_relaxed),
+        .column = firstPoisonOriginColumn_.load(std::memory_order_relaxed),
+    };
+  }
   // Encoded-head retention for pending session tails. Sources must already be
   // dequeued into Encoding state; this records their completion identity
   // without making them ready-visible or GPU-complete.
@@ -910,9 +981,20 @@ class QueueLifecycleController {
                            u64 seqId);
   // TLA+: FinishDequeue, and PresentComplete for eligible present seq IDs.
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
+  // Consume value-owned SegmentSerial event settlement only once its tail has
+  // crossed the queue completion waterline.
+  bool drainCompletedArenaGroupSettlementsLocked(u64 completedSeqId) noexcept;
+  bool hasCompletedArenaGroupSettlement(
+      u64 rawOrdinal, u64 buildGeneration, u64 firstSourceOrdinal,
+      u64 tailSeqId, std::uint32_t sourceCount) const noexcept;
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
+  // Reclaim every completed FIFO owner at or below the published completion
+  // waterline. A valid SegmentSerial head may remain resident until its tail
+  // completes; stale, corrupt, or skipped non-group heads still fail-stop.
+  bool reclaimCompletedTapeHeadsThrough(std::unique_lock<std::mutex>& lock,
+                                        u64 completedSeqId);
   // TLA+: ReclaimFree.
   bool reclaimCompletedTapeHead(std::unique_lock<std::mutex>& lock, u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
@@ -925,6 +1007,10 @@ class QueueLifecycleController {
   // A pending session must be allowed to submit without the final Present tail
   // when the producer is blocked on a sequence it owns.
   bool producerSequenceWaitActive();
+  // Exact highest ordered fence currently owned by producer-side sequence
+  // waits. Zero means no producer wait is active.
+  u64 producerSequenceWaitTargetSeqId();
+  void waitForProducerSequenceWaitTargetForTest(u64 targetSeqId);
   // Queue-local observation for a compatibility writer blocked either on a
   // free control/Tape reservation or on the GPU-inflight publication cap.
   // This is a diagnostic/wakeup signal only. The Tape-gated session lane must
@@ -1048,7 +1134,26 @@ class QueueLifecycleController {
   size_t tentativeReadyPrefixCount_ = 0;
   std::uint64_t cpuReadyCapacityProgressGeneration_ = 0;
   PostEncodeCompletionLedger postEncodeCompletionLedger_{};
+  ArenaGroupSettlementLedger completedArenaGroupSettlements_{};
+  std::uint64_t completedEventSettlementCount_ = 0;
+  std::uint64_t completedEventTailSeqId_ = 0;
+  std::optional<CpuReadyTape::ArenaGroupSettlement>
+      lastCompletedEventSettlement_{};
+  std::array<CpuReadyTape::ArenaGroupSettlement,
+             ArenaGroupSettlementLedger::kCapacity>
+      completedEventSettlementHistory_{};
+  std::size_t completedEventSettlementHistoryHead_ = 0;
+  std::size_t completedEventSettlementHistoryCount_ = 0;
   std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
+  // These fields are touched only when fail-stop poison is requested.  Keep
+  // them outside SubmissionBinding and all transition/payload structures so
+  // normal queue hot paths retain their existing shape.
+  std::atomic<bool> firstPoisonOriginClaimed_{false};
+  std::atomic<bool> firstPoisonOriginPublished_{false};
+  std::atomic<const char*> firstPoisonOriginFile_{nullptr};
+  std::atomic<const char*> firstPoisonOriginFunction_{nullptr};
+  std::atomic<std::uint32_t> firstPoisonOriginLine_{0};
+  std::atomic<std::uint32_t> firstPoisonOriginColumn_{0};
 
  public:
   // Records that have been committed to Metal and are awaiting GPU completion.
@@ -1097,6 +1202,19 @@ class QueueLifecycleController {
   // processed, false after the controller-owned pending-stop latch is set and
   // the queue is empty.
   bool processOnePendingCompletion();
+  ArenaGroupSettlementLedger* completedArenaGroupSettlementLedger() noexcept {
+    return &completedArenaGroupSettlements_;
+  }
+  std::uint64_t completedEventSettlementCount() const noexcept {
+    return completedEventSettlementCount_;
+  }
+  std::uint64_t completedEventTailSeqId() const noexcept {
+    return completedEventTailSeqId_;
+  }
+  const std::optional<CpuReadyTape::ArenaGroupSettlement>&
+  lastCompletedEventSettlement() const noexcept {
+    return lastCompletedEventSettlement_;
+  }
   // CPU-only specs use this to exercise the completion-watcher expansion
   // path without manufacturing a fake Objective-C command-buffer handle.
   // Production submissions enter the same pending queue through submit().
@@ -1130,6 +1248,7 @@ class QueueLifecycleController {
       nullptr;
   bool completionWaitActive_ = false;
   std::uint32_t producerSequenceWaitDepth_ = 0;
+  u64 producerSequenceWaitTargetSeqId_ = 0;
   std::uint32_t producerWriterPressureDepth_ = 0;
   std::uint64_t completionWaitEnqueues_ = 0;
   std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};

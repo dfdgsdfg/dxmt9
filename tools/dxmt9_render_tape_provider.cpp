@@ -1,5 +1,6 @@
 #include "device_c_render_tape_provider.hpp"
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_identity.hpp"
 
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_scheduling.hpp"
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -71,21 +73,135 @@ std::string digestHex(const RenderTapeDigest& digest) {
   return result;
 }
 
+const char* identityAuthorityName(std::uint32_t authority) noexcept {
+  switch (static_cast<RenderTapeIdentityAuthority>(authority)) {
+  case RenderTapeIdentityAuthority::Capture: return "capture";
+  case RenderTapeIdentityAuthority::ProviderReplay: return "provider-replay";
+  case RenderTapeIdentityAuthority::DerivedProjection:
+    return "derived-projection";
+  }
+  return "rejected";
+}
+
+RenderTapeBlobCatalogue makeIdentityCatalogue(
+    std::span<const RenderTapeProviderBlob> blobs) {
+  RenderTapeBlobCatalogue catalogue;
+  catalogue.blobs.reserve(blobs.size());
+  for (const auto& blob : blobs) {
+    catalogue.blobs.push_back(RenderTapeBlob{
+        .digest = blob.digest,
+        .size = blob.bytes.size(),
+        .verified = 1u,
+    });
+  }
+  return catalogue;
+}
+
 void printResult(const FrameTapeReplayResult& result,
                  std::string_view requestedPartitionMode,
                  std::string_view resolvedPartitionMode,
                  const dxmt9::perf::RenderTapeParallelJoinSnapshot& counters,
                  bool sourceOracleRequested = false,
                  bool sourceOracleMatched = false,
-                 bool sourceOracleExactMatched = false) {
+                 bool sourceOracleExactMatched = false,
+                 const RenderTapeIdentityView* identity = nullptr,
+                 std::string_view identityError = {}) {
   const auto& validity = result.validity;
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
-  std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v1\",";
+  std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v2\",";
   std::cout << "\"archive_policy\":\"disabled\",";
   std::cout << "\"partition_mode\":{\"requested\":\""
             << requestedPartitionMode << "\",\"resolved\":\""
             << resolvedPartitionMode << "\"},";
+  std::cout << "\"identity_evidence\":{";
+  if (identity) {
+    const auto authority = static_cast<RenderTapeIdentityAuthority>(
+        identity->header.authority);
+    const bool capture = authority == RenderTapeIdentityAuthority::Capture;
+    const bool derived = authority ==
+        RenderTapeIdentityAuthority::DerivedProjection;
+    const bool providerReplay = authority ==
+        RenderTapeIdentityAuthority::ProviderReplay;
+    const bool queueSettled = capture && !identity->settlements.empty();
+    // ProviderReplay rows describe an untrusted input sidecar, not this
+    // process's queue completion.  Keep provenance visible, but expose no
+    // completion or settlement evidence without an invocation-bound nonce.
+    const std::size_t evidenceSettlementCount =
+        providerReplay ? 0u : identity->settlements.size();
+    const std::uint32_t evidenceTableCount =
+        providerReplay ? 0u : identity->header.settlementCount;
+    std::cout << "\"authority\":\""
+              << identityAuthorityName(identity->header.authority)
+              << "\",\"source_count\":" << identity->sources.size()
+              << ",\"segment_count\":" << identity->sources.size()
+              << ",\"provenance_segment_count\":" << identity->sources.size()
+              << ",\"completed_segment_count\":"
+              << (queueSettled ? identity->sources.size() : 0u)
+              << ",\"completion_evidence\":\""
+              << (capture ? (queueSettled ? "queue-tail-fenced" : "none")
+                          : derived ? "not-queue-authenticated"
+                                    : "process-local-unverified")
+              << "\""
+              << ",\"settlement_count\":"
+              << evidenceSettlementCount << ",\"settlement_table_count\":"
+              << evidenceTableCount << ",\"segments\":[";
+    for (std::size_t index = 0; index < identity->sources.size(); ++index) {
+      if (index != 0u) std::cout << ',';
+      const auto& source = identity->sources[index];
+      std::cout << "{\"segment_index\":" << index
+                << ",\"event_ordinal\":" << source.eventOrdinal
+                << ",\"source_ordinal\":" << source.sourceOrdinal
+                << ",\"seq_id\":" << source.seqId
+                << ",\"first_record\":" << source.firstRecord
+                << ",\"record_count\":" << source.recordCount << "}";
+    }
+    std::cout << "],\"event_settlement_table\":[";
+    if (capture) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
+      if (index != 0u) std::cout << ',';
+      const auto& settlement = identity->settlements[index];
+      std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                << ",\"raw_ordinal\":" << settlement.rawOrdinal
+                << ",\"build_generation\":" << settlement.buildGeneration
+                << ",\"first_source_ordinal\":"
+                << settlement.firstSourceOrdinal << ",\"tail_seq_id\":"
+                << settlement.tailSeqId << ",\"source_count\":"
+                << settlement.sourceCount << "}";
+    }
+    std::cout << "],\"derived_settlement_table\":[";
+    if (derived) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
+      if (index != 0u) std::cout << ',';
+      const auto& settlement = identity->settlements[index];
+      std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                << ",\"raw_ordinal\":" << settlement.rawOrdinal
+                << ",\"build_generation\":" << settlement.buildGeneration
+                << ",\"first_source_ordinal\":"
+                << settlement.firstSourceOrdinal << ",\"tail_seq_id\":"
+                << settlement.tailSeqId << ",\"source_count\":"
+                << settlement.sourceCount << "}";
+    }
+    std::cout << "],\"final_event_settlement\":";
+    if (!capture || identity->settlements.empty()) {
+      std::cout << "null";
+    } else {
+      const auto& settlement = identity->settlements.back();
+      std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                << ",\"tail_seq_id\":" << settlement.tailSeqId
+                << ",\"source_count\":" << settlement.sourceCount << "}";
+    }
+    std::cout << ",\"derived_sidecar\":" << (derived ? "true" : "false");
+  } else {
+    std::cout << "\"authority\":\"rejected\",\"source_count\":0"
+                 ",\"segment_count\":0,\"provenance_segment_count\":0"
+                 ",\"completed_segment_count\":0"
+                 ",\"completion_evidence\":\"none\""
+                 ",\"settlement_count\":0,\"settlement_table_count\":0"
+                 ",\"segments\":[],\"event_settlement_table\":[]"
+                 ",\"derived_settlement_table\":[]"
+                 ",\"final_event_settlement\":null,\"derived_sidecar\":false";
+  }
+  std::cout << ",\"rejected\":" << (identityError.empty() ? "false" : "true")
+            << ",\"rejection_reason\":\"" << identityError << "\"},";
   std::cout << "\"parallel_counters\":{";
   std::cout << "\"selected\":" << counters.selected << ',';
   std::cout << "\"children\":" << counters.children << ',';
@@ -256,7 +372,8 @@ void usage() {
                " [--expected-source-rgba <path>]"
                " [--output-rgba <path>]"
                " [--output-source-rgba <path>]"
-               " [--partition-mode identity|serial|parallel]\n";
+               " [--partition-mode identity|serial|parallel]"
+               " [--identity <identity-v2.bin>]\n";
 }
 
 } // namespace
@@ -273,6 +390,7 @@ int main(int argc, char** argv) {
     std::string expectedSourcePath;
     std::string outputPath;
     std::string sourceOutputPath;
+    std::string identityPath;
     std::string partitionMode = "identity";
     bool partitionModeSpecified = false;
     for (int index = 3; index < argc; ++index) {
@@ -321,6 +439,12 @@ int main(int argc, char** argv) {
           return 2;
         }
         sourceOutputPath = argv[++index];
+      } else if (option == "--identity" && identityPath.empty()) {
+        if (index + 1 >= argc) {
+          usage();
+          return 2;
+        }
+        identityPath = argv[++index];
       } else {
         usage();
         return 2;
@@ -342,15 +466,34 @@ int main(int argc, char** argv) {
     }
 
     const auto preflight = preflightRenderTapeIdentity(tape, blobs);
+    std::optional<RenderTapeIdentityView> identity;
+    std::string identityError;
+    if (!identityPath.empty()) {
+      const auto sidecar = readFile(identityPath);
+      identity.emplace();
+      const auto identityValidation = validateRenderTapeIdentity(
+          tape, makeIdentityCatalogue(blobs), sidecar, &*identity);
+      if (!identityValidation.valid()) {
+        identityError = renderTapeIdentityStatusName(identityValidation.status);
+        identity.reset();
+      }
+    }
     const bool sourceOracleRequested = !expectedSourcePath.empty();
     const auto partitionConfig =
         dxmt9::render::resolveRenderPartitionConfig(partitionMode.c_str());
     const std::string_view resolvedPartitionMode =
         dxmt9::render::partitionModeName(partitionConfig.resolved);
+    if (!identityPath.empty() && !identityError.empty()) {
+      printResult(preflight, partitionMode, resolvedPartitionMode,
+                  dxmt9::perf::RenderTapeParallelJoinSnapshot{},
+                  sourceOracleRequested, false, false, nullptr, identityError);
+      return 1;
+    }
     if (!preflight.complete()) {
       printResult(preflight, partitionMode, resolvedPartitionMode,
                   dxmt9::perf::RenderTapeParallelJoinSnapshot{},
-                  sourceOracleRequested, false);
+                  sourceOracleRequested, false, false,
+                  identity ? &*identity : nullptr, identityError);
       return 1;
     }
 
@@ -365,7 +508,8 @@ int main(int argc, char** argv) {
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
       printResult(failure, partitionMode, resolvedPartitionMode,
                   dxmt9::perf::RenderTapeParallelJoinSnapshot{},
-                  sourceOracleRequested, false);
+                  sourceOracleRequested, false, false,
+                  identity ? &*identity : nullptr, identityError);
       return 1;
     }
     const D9CPresentParams params{
@@ -385,7 +529,8 @@ int main(int argc, char** argv) {
       failure.status = FrameTapeReplayStatus::ObjectCreationFailed;
       printResult(failure, partitionMode, resolvedPartitionMode,
                   dxmt9::perf::RenderTapeParallelJoinSnapshot{},
-                  sourceOracleRequested, false);
+                  sourceOracleRequested, false, false,
+                  identity ? &*identity : nullptr, identityError);
       return 1;
     }
     auto result = replayRenderTapeIdentity(device, tape, blobs);
@@ -429,7 +574,8 @@ int main(int argc, char** argv) {
     }
     printResult(result, partitionMode, resolvedPartitionMode, parallelCounters,
                 sourceOracleRequested, sourceOracleMatched,
-                sourceOracleExactMatched);
+                sourceOracleExactMatched, identity ? &*identity : nullptr,
+                identityError);
     return result.complete() && sourceOracleMatched ? 0 : 1;
   } catch (const std::exception& error) {
     std::cerr << "dxmt9-render-tape-provider: " << error.what() << '\n';

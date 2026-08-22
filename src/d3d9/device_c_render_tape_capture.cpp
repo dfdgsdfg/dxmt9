@@ -752,7 +752,9 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::completePresent(
 RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
     std::uint64_t captureToken, std::uint64_t presentOrdinal,
     std::span<const RenderTapeIdentitySource> sources,
-    std::span<const RenderTapeIdentityRange> ranges) {
+    std::span<const RenderTapeIdentityRange> ranges,
+    RenderTapeIdentityEventSettlement settlement,
+    std::span<const D9CRenderTapeIdentitySettlementEntry> settlements) {
   identityValidationResult_ = {};
   if (state_ != RenderTapeCaptureState::Sealed || captureToken == 0u ||
       presentOrdinal == 0u || sources.empty() || ranges.empty() ||
@@ -760,15 +762,52 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
     return RenderTapeCaptureStatus::InvalidState;
   }
   try {
+    if (settlements.empty()) {
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
+    std::vector<RenderTapeIdentitySettlement> sidecarSettlements;
+    sidecarSettlements.reserve(settlements.size());
+    for (const auto& item : settlements) {
+      sidecarSettlements.push_back(RenderTapeIdentitySettlement{
+          .eventOrdinal = item.eventOrdinal,
+          .rawOrdinal = item.rawOrdinal,
+          .buildGeneration = item.buildGeneration,
+          .firstSourceOrdinal = item.firstSourceOrdinal,
+          .tailSeqId = item.tailSeqId,
+          .sourceCount = item.sourceCount,
+          .reserved0 = item.reserved0,
+      });
+    }
+    if (!validateRenderTapeIdentitySettlements(sources, sidecarSettlements)) {
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
     auto identity = buildRenderTapeIdentity(
         sealedArtifact_, catalogue_, captureToken, presentOrdinal,
         captureToken, RenderTapeIdentityAuthority::Capture, sources, ranges,
-        &identityValidationResult_);
+        &identityValidationResult_, sidecarSettlements);
     if (identity.empty()) {
       abortInternal();
       return RenderTapeCaptureStatus::ValidationFailed;
     }
+    const auto& finalIdentitySettlement = sidecarSettlements.back();
+    if (settlement.count != 1u || settlement.eventOrdinal == 0u ||
+        settlement.sourceOrdinal == 0u || settlement.seqId == 0u ||
+        finalIdentitySettlement.eventOrdinal != settlement.eventOrdinal ||
+        finalIdentitySettlement.tailSeqId != settlement.seqId ||
+        finalIdentitySettlement.sourceCount == 0u ||
+        finalIdentitySettlement.firstSourceOrdinal == 0u ||
+        sources.back().eventOrdinal != settlement.eventOrdinal ||
+        sources.back().sourceOrdinal != settlement.sourceOrdinal ||
+        sources.back().seqId != settlement.seqId) {
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
     publicationBundle_.identity = std::move(identity);
+    publicationBundle_.identitySettlement = settlement;
+    publicationBundle_.identitySettlements.assign(settlements.begin(),
+                                                  settlements.end());
     return RenderTapeCaptureStatus::Complete;
   } catch (...) {
     abortInternal();

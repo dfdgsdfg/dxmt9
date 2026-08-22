@@ -211,6 +211,7 @@ def main() -> int:
             "validity",
             "coverage",
             "conservation",
+            "identity_evidence",
             "intervals",
         )
         assert all(

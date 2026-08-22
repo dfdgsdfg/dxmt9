@@ -2575,8 +2575,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     chunkHasPresentRecord(chunk);
                 bool presentMirrorReserved = false;
                 if (capturePresent) {
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture captured_present_reserve_begin "
+                        "token=%llu",
+                        static_cast<unsigned long long>(
+                            renderTapeActiveCaptureToken_));
                     const HRESULT reserveHr = hr32(
                         dxmt9c_device_reserve_render_tape_present_capture(dev_));
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture captured_present_reserve_end "
+                        "token=%llu hr=0x%08x disposition=%s",
+                        static_cast<unsigned long long>(
+                            renderTapeActiveCaptureToken_),
+                        static_cast<unsigned>(reserveHr),
+                        SUCCEEDED(reserveHr) ? "reserved" : "failed");
                     if (SUCCEEDED(reserveHr)) {
                         presentMirrorReserved = true;
                     } else {

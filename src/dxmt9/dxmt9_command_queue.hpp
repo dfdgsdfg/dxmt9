@@ -367,7 +367,8 @@ class CommandQueue {
   // the lifecycle controller but starts no Metal objects or worker threads.
   struct ArenaLeaseTestQueueTag {};
   CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits,
-               WMT::Reference<WMT::CommandQueue> queue = {});
+               WMT::Reference<WMT::CommandQueue> queue = {},
+               render::RenderPartitionConfig renderPartitionConfig = {});
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -421,17 +422,20 @@ class CommandQueue {
   // Cold, capture-only ownership copied from the exact Direct-Arena source
   // before it becomes visible to the encode thread.  Raw-record ranges are
   // expressed in the PE CommandChunk coordinate space; DAG indices and pass
-  // kinds come from the source's immutable pre-reorder FrameGraph.
+  // kinds come from the event-wide authenticated FrameGraph after the
+  // production pass-coalesce proof; segment edges do not create new passes.
   struct CpuReadyCapturePassRange {
     std::uint32_t firstRecord = 0;
     std::uint32_t recordCount = 0;
     std::uint32_t dagPassIndex = 0;
     std::uint32_t passKind = 0;
+    std::uint64_t logicalPassId = 0;
   };
 
   struct CpuReadyCaptureIdentity {
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
+    std::uint32_t firstRecord = 0;
     std::uint32_t recordCount = 0;
     std::vector<CpuReadyCapturePassRange> ranges{};
 
@@ -439,6 +443,48 @@ class CommandQueue {
       return sourceOrdinal != 0 && seqId != 0 && recordCount != 0 &&
              !ranges.empty();
     }
+  };
+
+  struct CpuReadyCaptureIdentityBatch {
+    std::vector<CpuReadyCaptureIdentity> segments{};
+
+    bool valid() const noexcept {
+      return segments.size() > 1u &&
+             std::all_of(segments.begin(), segments.end(),
+                         [](const auto& segment) { return segment.valid(); });
+    }
+  };
+
+  enum class CpuReadyArenaPublishStatus : std::uint8_t {
+    Published,
+    RecoverableFailure,
+    FailStopped,
+  };
+
+  enum class CpuReadyArenaFailureClass : std::uint8_t {
+    None,
+    BuilderInitialization,
+    ContextInvalid,
+    Append,
+    CaptureRanges,
+    SegmentSelection,
+    ActiveArenaRejected,
+    InjectedBuilder,
+    InjectedRollback,
+    InjectedPostSemanticPublish,
+    PayloadSeal,
+    Planner,
+    CaptureProjection,
+    SnapshotValidation,
+    Abort,
+  };
+
+  struct CpuReadyArenaFailureSnapshot {
+    CpuReadyArenaFailureClass failureClass = CpuReadyArenaFailureClass::None;
+    std::uint32_t source = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t segment = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t plannedPages = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t actualCommands = std::numeric_limits<std::uint32_t>::max();
   };
 
   // Move-only capability for one replay-thread-owned direct arena source.
@@ -461,6 +507,10 @@ class CommandQueue {
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
     std::uint64_t seqId() const noexcept { return ticket_.seqId; }
     bool selectSegment(std::size_t segmentIndex) noexcept;
+    // Selects a physical segment in the bounded SegmentSerial batch.  The
+    // legacy selectSegment(global) spelling remains valid for EventSerial.
+    bool selectSourceSegment(std::size_t sourceIndex,
+                             std::size_t segmentIndex) noexcept;
     bool beginCaptureIdentity(std::uint32_t recordCount) noexcept;
     bool captureNextCommandRecord(std::uint32_t recordIndex) noexcept;
     bool captureNextDrawRecords(
@@ -468,32 +518,73 @@ class CommandQueue {
     bool publish(
         std::span<const core::ChunkHandleEntry> resources = {},
         CpuReadyCaptureIdentity* captureIdentity = nullptr) noexcept;
+    bool publishBatch(
+        std::span<const core::ChunkHandleEntry> resources,
+        CpuReadyCaptureIdentityBatch* captureIdentity) noexcept;
+    CpuReadyArenaPublishStatus publishBatchWithStatus(
+        std::span<const core::ChunkHandleEntry> resources,
+        CpuReadyCaptureIdentityBatch* captureIdentity) noexcept;
+    bool setCaptureSourceRanges(
+        std::span<const std::uint32_t> firstRecords,
+        std::span<const std::uint32_t> recordCounts) noexcept;
+    // Explicit pre-effect rollback point for a recoverable capture seam.
+    // The caller must invoke this before retrying the raw event.
+    // Returns true only when the pre-effect batch rollback restored all
+    // reservations. A false result is terminal; the caller must not retry.
+    bool abortForFallback() noexcept;
 
    private:
     friend class CommandQueue;
     CpuReadyArenaBuildLease(
         CommandQueue& queue,
         core::CpuReadyPublicationTicket ticket,
-        std::size_t controlIndex) noexcept
-        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex) {}
+        std::size_t controlIndex, bool batch = false) noexcept
+        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex),
+          batch_(batch) {}
 
-    void abort() noexcept;
+    void abort(bool failStop = true) noexcept;
 
     CommandQueue* queue_ = nullptr;
     core::CpuReadyPublicationTicket ticket_{};
     std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
+    bool batch_ = false;
   };
 
   enum class CpuReadyArenaBeginStatus : std::uint8_t {
     Ready,
     TemporaryPressure,
+    RecoverableFailure,
     Stopped,
     Corrupt,
     Invalid,
   };
 
+  enum class CpuReadyArenaBeginStopReason : std::uint8_t {
+    None,
+    QueueAlreadyStopped,
+    CompatibilityFlushStopped,
+    CpuReadyTapeAlreadyStopped,
+  };
+
+  struct CpuReadyArenaBeginDiagnostic {
+    core::metalqueue::QueueLifecycleController::PoisonOriginSnapshot
+        poisonOrigin{};
+  };
+
+  enum class CpuReadyArenaBatchAbortStatus : std::uint8_t {
+    RolledBack,
+    FailStopped,
+    RollbackFailed,
+    NoActiveBatch,
+  };
+
   struct CpuReadyArenaBeginResult {
     CpuReadyArenaBeginStatus status = CpuReadyArenaBeginStatus::Invalid;
+    // Kept beside status so it occupies the status-alignment padding.  This
+    // is part of the returned value, never a queue-global sidecar: callers
+    // must retain the reason associated with this exact admission attempt.
+    CpuReadyArenaBeginStopReason stopReason =
+        CpuReadyArenaBeginStopReason::None;
     std::optional<CpuReadyArenaBuildLease> lease{};
 
     bool has_value() const noexcept { return lease.has_value(); }
@@ -508,6 +599,18 @@ class CommandQueue {
     }
   };
 
+  // Layout baseline for the pre-diagnostic return value.  The reason field
+  // above must fit in existing padding and never enlarge this ABI-local
+  // native result type.
+  struct CpuReadyArenaBeginResultLayoutBaseline {
+    CpuReadyArenaBeginStatus status = CpuReadyArenaBeginStatus::Invalid;
+    std::optional<CpuReadyArenaBuildLease> lease{};
+  };
+  static_assert(
+      sizeof(CpuReadyArenaBeginResult) ==
+          sizeof(CpuReadyArenaBeginResultLayoutBaseline),
+      "CpuReadyArenaBeginResult diagnostics must fit existing padding");
+
   struct CpuReadyArenaPlanLimits {
     std::size_t pageSize = 0;
     std::size_t maxOrdinaryPagesPerSegment = 64;
@@ -519,6 +622,9 @@ class CommandQueue {
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout) noexcept;
+  CpuReadyArenaBeginResult beginCpuReadyArenaSources(
+      std::uint64_t rawOrdinal,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
   CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
     const auto& values = cpuReadyTape_.config().values();
     return {
@@ -528,9 +634,22 @@ class CommandQueue {
         .maxPagesPerSource = values.maxPagesPerSource,
     };
   }
+  bool segmentSerialEnabled() const noexcept {
+    return renderPartitionConfig_.sourceIdentity.resolved ==
+           render::SourceIdentityMode::SegmentSerial;
+  }
   void rejectActiveCpuReadyArenaSource() noexcept;
   bool cpuReadyArenaPoisoned() const noexcept {
     return arenaBuildPoisoned_.load(std::memory_order_acquire);
+  }
+  CpuReadyArenaFailureSnapshot peekCpuReadyArenaFailure() noexcept;
+  CpuReadyArenaFailureSnapshot takeCpuReadyArenaFailure() noexcept;
+  CpuReadyArenaBeginDiagnostic cpuReadyArenaBeginDiagnostic() noexcept;
+  // A publish/proof failure after replayResolvedChunk has applied semantic
+  // effects cannot take the pre-effect EventSerial retry. The caller marks
+  // this queue fail-stop before returning the typed chunk failure.
+  void failStopCpuReadyArena() noexcept {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
   }
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
@@ -548,6 +667,8 @@ class CommandQueue {
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
   bool waitForCpuReadyArenaAdmission(
       const core::ArenaSourcePayloadLayout& layout) noexcept;
+  bool waitForCpuReadyArenaAdmission(
+      std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
 
   // Ordered-control synchronization for the CPU-ready session lane. The
   // caller supplies only backend release semantics and the raw-stream fence;
@@ -824,8 +945,10 @@ class CommandQueue {
   // release; it finalizes only on ordered fences —
   // Present tail, non-appendable/semantic source, session-source cap or
   // preflight failure, producer sequence wait, initializer-wait boundary, and
-  // shutdown drain. Admission and writer pressure only wake deterministic
-  // lease/boundary re-evaluation and never select a submission fence.
+  // shutdown drain. Admission and writer pressure never post a submission
+  // fence. When a denied first lease and live Arena admission form a cycle,
+  // the coordinator may execute one exact already-resident ordinary Direct
+  // FIFO head serially; another escape requires capacity-generation progress.
   void runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted);
   std::optional<core::metalqueue::QueueSubmissionRecord>
   encodeCpuReadySessionSource(
@@ -1033,6 +1156,15 @@ class CommandQueue {
   std::uint64_t sessionReleaseCoveredRawOrdinal_ = 0;
   std::uint64_t sessionReleaseCoveredSeqId_ = 0;
   std::size_t cpuReadyCapacityWaiterCount_ = 0;
+  // Native-only deterministic wait-entry observation. Production never sets
+  // the gate; the counters let the production-loop fixture synchronize on the
+  // two condition-variable boundaries without sleep or polling.
+  bool testOnlySchedulingWaitObservationEnabled_ = false;
+  std::uint64_t testOnlyArenaAdmissionWaitEntries_ = 0;
+  std::uint64_t testOnlyArenaAdmissionPredicateEvaluations_ = 0;
+  std::uint64_t testOnlyFirstLeaseWaitEntries_ = 0;
+  bool testOnlyPauseAfterFirstLeaseRetry_ = false;
+  bool testOnlyPausedAfterFirstLeaseRetry_ = false;
   bool stop_ = true;
 
  private:
@@ -1042,6 +1174,8 @@ class CommandQueue {
 
   void noteInitializerPendingUploads() noexcept;
   void requestSchedulingStopLocked() noexcept;
+  bool cpuReadyArenaControlSlotsFreeLocked(
+      std::size_t requiredSlots) const noexcept;
   void notifySchedulingTerminalWaiters(
       render::SchedulingTerminalDisposition disposition) noexcept;
 
@@ -1057,8 +1191,103 @@ class CommandQueue {
           initialBackBuffer(initialBackBuffer),
           ownerThread(std::this_thread::get_id()) {
       if (!initializeBuilders(tape)) {
+        noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
         failed.store(true, std::memory_order_relaxed);
       }
+    }
+
+    ArenaBuildContext(
+        const core::CpuReadyTape::ArenaBatchReservation& batch,
+        std::span<const std::size_t> selectedControlIndices,
+        std::span<const core::ArenaSourcePayloadLayout> sourceLayouts,
+        core::CpuReadyTape& tape, core::Handle initialBackBuffer) noexcept
+        : reservation(batch.reservations[0]),
+          controlIndex(selectedControlIndices[0]),
+          layout(sourceLayouts[0]),
+          batchMode(true),
+          sourceCount(batch.count),
+          batchRawHighWaterBefore(batch.rawHighWaterBefore),
+          batchSourceHighWaterBefore(batch.sourceHighWaterBefore),
+          batchSeqHighWaterBefore(batch.seqHighWaterBefore),
+          batchSourceTailBefore(batch.sourceTailBefore),
+          batchPageTailBefore(batch.pageTailBefore),
+          batchResidentCountBefore(batch.residentCountBefore),
+          batchOccupiedPagesBefore(batch.occupiedPagesBefore),
+          batchReadyCountBefore(batch.readyCountBefore),
+          batchReadyReservationsBefore(batch.readyReservationsBefore),
+          initialBackBuffer(initialBackBuffer),
+          ownerThread(std::this_thread::get_id()) {
+      for (std::size_t source = 0; source < sourceCount; ++source) {
+        batchReservations[source] = batch.reservations[source];
+        batchControlIndices[source] = selectedControlIndices[source];
+        batchLayouts[source] = sourceLayouts[source];
+      }
+      if (!initializeBatchBuilders(tape)) {
+        noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
+        failed.store(true, std::memory_order_relaxed);
+      }
+    }
+
+    void noteFailure(CpuReadyArenaFailureClass failureClass,
+                     std::size_t source = std::numeric_limits<std::size_t>::max(),
+                     std::size_t segment = std::numeric_limits<std::size_t>::max(),
+                     std::size_t plannedPages = std::numeric_limits<std::size_t>::max(),
+                     std::size_t actualCommands = std::numeric_limits<std::size_t>::max()) noexcept {
+      bool expected = false;
+      if (!firstFailureClaimed.compare_exchange_strong(
+              expected, true, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        return;
+      }
+      firstFailureSource.store(static_cast<std::uint32_t>(source),
+                               std::memory_order_relaxed);
+      firstFailureSegment.store(static_cast<std::uint32_t>(segment),
+                                std::memory_order_relaxed);
+      firstFailurePlannedPages.store(static_cast<std::uint32_t>(plannedPages),
+                                     std::memory_order_relaxed);
+      firstFailureActualCommands.store(
+          static_cast<std::uint32_t>(actualCommands),
+          std::memory_order_relaxed);
+      // Readers acquire the class only after all coordinates are complete.
+      firstFailureClass.store(static_cast<std::uint8_t>(failureClass),
+                              std::memory_order_release);
+    }
+
+    CpuReadyArenaFailureSnapshot firstFailure() const noexcept {
+      return {
+          .failureClass = static_cast<CpuReadyArenaFailureClass>(
+              firstFailureClass.load(std::memory_order_acquire)),
+          .source = firstFailureSource.load(std::memory_order_acquire),
+          .segment = firstFailureSegment.load(std::memory_order_acquire),
+          .plannedPages =
+              firstFailurePlannedPages.load(std::memory_order_acquire),
+          .actualCommands =
+              firstFailureActualCommands.load(std::memory_order_acquire),
+      };
+    }
+
+    std::size_t activeSourceIndex() const noexcept {
+      return batchMode ? activeSource : 0u;
+    }
+
+    std::size_t activeSegmentIndex() const noexcept { return activeSegment; }
+
+    std::size_t plannedActivePages() const noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount
+            ? batchLayouts[activeSource].segments[activeSegment].layout.pageCount
+            : std::numeric_limits<std::size_t>::max();
+      }
+      return activeSegment < layout.segmentCount
+          ? layout.segments[activeSegment].layout.pageCount
+          : std::numeric_limits<std::size_t>::max();
+    }
+
+    std::size_t actualActiveCommands() const noexcept {
+      const auto* assembler = activeAssembler();
+      return assembler ? assembler->commandCount()
+                       : std::numeric_limits<std::size_t>::max();
     }
 
     bool initializeBuilders(core::CpuReadyTape& tape) noexcept {
@@ -1082,15 +1311,74 @@ class CommandQueue {
       return true;
     }
 
-    core::ArenaSourcePayloadBuilder* activeBuilder() noexcept {
-      return activeSegment < layout.segmentCount && builders[activeSegment]
-          ? &*builders[activeSegment]
+    core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchAssemblers[activeSource][activeSegment]
+            ? &*batchAssemblers[activeSource][activeSegment]
+            : nullptr;
+      }
+      return activeSegment < layout.segmentCount && assemblers[activeSegment]
+          ? &*assemblers[activeSegment]
           : nullptr;
     }
 
-    core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
+    const core::ArenaSourcePayloadAssembler* activeAssembler() const noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchAssemblers[activeSource][activeSegment]
+            ? &*batchAssemblers[activeSource][activeSegment]
+            : nullptr;
+      }
       return activeSegment < layout.segmentCount && assemblers[activeSegment]
           ? &*assemblers[activeSegment]
+          : nullptr;
+    }
+
+    bool initializeBatchBuilders(core::CpuReadyTape& tape) noexcept {
+      if (sourceCount == 0 || sourceCount > batchReservations.size()) {
+        return false;
+      }
+      for (std::size_t source = 0; source < sourceCount; ++source) {
+        const auto& sourceLayout = batchLayouts[source];
+        const auto& sourceReservation = batchReservations[source];
+        if (!sourceLayout.valid() ||
+            sourceReservation.arenaPayloadCount != sourceLayout.segmentCount) {
+          return false;
+        }
+        for (std::size_t segment = 0; segment < sourceLayout.segmentCount;
+             ++segment) {
+          auto memory = tape.writableArenaSegment(sourceReservation.ticket,
+                                                  segment);
+          if (!sourceReservation.arenaPayloads[segment] ||
+              memory.size() != sourceLayout.segments[segment].layout.usedBytes) {
+            return false;
+          }
+          batchBuilders[source][segment].emplace(
+              *sourceReservation.arenaPayloads[segment],
+              sourceLayout.segments[segment].layout, memory);
+          if (!batchBuilders[source][segment]->good()) {
+            return false;
+          }
+          batchAssemblers[source][segment].emplace(
+              *batchBuilders[source][segment]);
+        }
+      }
+      return true;
+    }
+
+    core::ArenaSourcePayloadBuilder* activeBuilder() noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchBuilders[activeSource][activeSegment]
+            ? &*batchBuilders[activeSource][activeSegment]
+            : nullptr;
+      }
+      return activeSegment < layout.segmentCount && builders[activeSegment]
+          ? &*builders[activeSegment]
           : nullptr;
     }
 
@@ -1102,10 +1390,52 @@ class CommandQueue {
     std::array<std::optional<core::ArenaSourcePayloadAssembler>,
                core::kMaxArenaSourcePayloadSegments> assemblers{};
     std::size_t activeSegment = 0;
+    bool hasSelectedSegment = false;
+    bool batchMode = false;
+    std::size_t sourceCount = 1;
+    std::size_t activeSource = 0;
+    std::uint64_t batchRawHighWaterBefore = 0;
+    std::uint64_t batchSourceHighWaterBefore = 0;
+    std::uint64_t batchSeqHighWaterBefore = 0;
+    std::size_t batchSourceTailBefore = 0;
+    std::size_t batchPageTailBefore = 0;
+    std::size_t batchResidentCountBefore = 0;
+    std::size_t batchOccupiedPagesBefore = 0;
+    std::size_t batchReadyCountBefore = 0;
+    std::size_t batchReadyReservationsBefore = 0;
+    std::array<core::CpuReadyTape::Reservation,
+               core::CpuReadyTape::kMaxArenaBatchSources>
+        batchReservations{};
+    std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        batchControlIndices{};
+    std::array<core::ArenaSourcePayloadLayout,
+               core::CpuReadyTape::kMaxArenaBatchSources>
+        batchLayouts{};
+    std::array<
+        std::array<std::optional<core::ArenaSourcePayloadBuilder>,
+                   core::kMaxArenaSourcePayloadSegments>,
+        core::CpuReadyTape::kMaxArenaBatchSources>
+        batchBuilders{};
+    std::array<
+        std::array<std::optional<core::ArenaSourcePayloadAssembler>,
+                   core::kMaxArenaSourcePayloadSegments>,
+        core::CpuReadyTape::kMaxArenaBatchSources>
+        batchAssemblers{};
     core::Handle initialBackBuffer{};
     std::thread::id ownerThread{};
     std::atomic<bool> failed{false};
     std::atomic<bool> publishing{false};
+    std::atomic<bool> firstFailureClaimed{false};
+    std::atomic<std::uint8_t> firstFailureClass{
+        static_cast<std::uint8_t>(CpuReadyArenaFailureClass::None)};
+    std::atomic<std::uint32_t> firstFailureSource{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailureSegment{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailurePlannedPages{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailureActualCommands{
+        std::numeric_limits<std::uint32_t>::max()};
     core::Handle pendingBackBuffer{};
     bool updatesBackBuffer = false;
     // Before Ready publication the Presenter registry owns any stashed token,
@@ -1124,6 +1454,12 @@ class CommandQueue {
       std::uint32_t lastRecord = 0;
     };
     std::uint32_t captureRecordCount = 0;
+    bool captureIdentityBegun = false;
+    std::size_t captureSourceRangeCount = 0;
+    std::array<std::uint32_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        captureSourceFirstRecords{};
+    std::array<std::uint32_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        captureSourceRecordCounts{};
     std::vector<std::uint32_t> captureNextRawRecords{};
     std::vector<CaptureCommandAnchor> captureCommandAnchors{};
 
@@ -1147,14 +1483,36 @@ class CommandQueue {
       return ActiveArenaAppendResult::Inactive;
     }
     auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+    // Structural admission corruption cannot be recovered by the batch
+    // capability: a missing context, wrong owner, or concurrent publication
+    // poisons the queue and fails closed even when a batch was requested.
     if (!context || context->ownerThread != std::this_thread::get_id() ||
-        context->failed.load(std::memory_order_acquire) ||
-        context->publishing.load(std::memory_order_acquire) ||
-        !append(*context)) {
+        context->publishing.load(std::memory_order_acquire)) {
       if (context) {
+        context->noteFailure(
+            CpuReadyArenaFailureClass::ContextInvalid,
+            context->activeSourceIndex(), context->activeSegmentIndex(),
+            context->plannedActivePages(), context->actualActiveCommands());
         context->failed.store(true, std::memory_order_release);
       }
       arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return ActiveArenaAppendResult::Failed;
+    }
+    const bool batch = context->batchMode;
+    if (context->failed.load(std::memory_order_acquire) ||
+        !append(*context)) {
+      context->noteFailure(
+          CpuReadyArenaFailureClass::Append, context->activeSourceIndex(),
+          context->activeSegmentIndex(), context->plannedActivePages(),
+          context->actualActiveCommands());
+      context->failed.store(true, std::memory_order_release);
+      // SegmentSerial owns a whole-event rollback capability.  Keep the
+      // queue healthy until publishCpuReadyArenaBatch performs the guarded
+      // rollback; poisoning here would turn a pre-effect append rejection
+      // into an unrecoverable device loss and prevent EventSerial retry.
+      if (!batch) {
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
+      }
       return ActiveArenaAppendResult::Failed;
     }
     return ActiveArenaAppendResult::Appended;
@@ -1186,6 +1544,25 @@ class CommandQueue {
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
       std::size_t segmentIndex) noexcept;
+  bool selectCpuReadyArenaSourceSegment(
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex, std::size_t sourceIndex,
+      std::size_t segmentIndex) noexcept;
+  CpuReadyArenaPublishStatus publishCpuReadyArenaBatch(
+      core::CpuReadyPublicationTicket ticket,
+      std::span<const core::ChunkHandleEntry> resources,
+      CpuReadyCaptureIdentityBatch* captureIdentity = nullptr) noexcept;
+ public:
+  // Capture-only fence: returns only after the exact raw/generation group
+  // tail has been consumed by QueueLifecycle's completion settlement ledger.
+  bool waitForCpuReadyEventSettlement(
+      std::uint64_t rawOrdinal, std::uint64_t buildGeneration,
+      std::uint64_t firstSourceOrdinal, std::uint64_t tailSeqId,
+      std::uint32_t sourceCount) noexcept;
+ private:
+  CpuReadyArenaBatchAbortStatus abortCpuReadyArenaBatch(
+      core::CpuReadyPublicationTicket ticket,
+      bool failStop = true) noexcept;
   bool publishCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
@@ -1196,6 +1573,7 @@ class CommandQueue {
       std::size_t controlIndex) noexcept;
 
   std::optional<ArenaBuildContext> arenaBuildContext_{};
+  CpuReadyArenaFailureSnapshot lastCpuReadyArenaFailure_{};
   std::atomic<ArenaBuildContext*> activeArenaBuild_{nullptr};
   std::atomic<bool> arenaAdmissionActive_{false};
   std::atomic<bool> arenaBuildPoisoned_{false};
@@ -1205,6 +1583,31 @@ class CommandQueue {
   // preflight, restore the exact tentative prefix, then return from the
   // manually-driven encode loop. Never set by production.
   bool testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+  // Native observability pin: make the compatibility-writing-slot flush
+  // return a typed Stopped result before arena reserve. Never set by
+  // production callers.
+  bool testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+  // Native rollback pin: force the pre-effect builder rejection seam and
+  // perturb nextSeqId_ so the guarded abort must fail-stop, never recover.
+  bool testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
+  // Native routing pin: fail one batch builder before any semantic replay so
+  // the production caller must take the complete EventSerial retry exactly
+  // once. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
+  // Native routing pin: make beginCaptureIdentity fail after ranges are
+  // predeclared, before replay effects. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_ = false;
+  // Native routing pin: make batch publication recoverably fail after
+  // replayResolvedChunk has run, proving the caller fail-stops instead of
+  // recursively replaying semantic effects. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = false;
+  // Native planner seam: tests may observe one event-wide planner result or
+  // force that result invalid before any Ready/resource effect. These fields
+  // are never armed by production callers.
+  bool testOnlyObserveNextCpuReadyArenaPlanner_ = false;
+  std::uint32_t testOnlyCpuReadyArenaPlannerInvocationCount_ = 0;
+  bool testOnlyCpuReadyArenaPlannerValid_ = false;
+  bool testOnlyForceNextCpuReadyArenaPlannerInvalid_ = false;
   bool testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyOverrideLiveActiveRenderInstance_ = false;

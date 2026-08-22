@@ -32,9 +32,10 @@ static_assert(offsetof(D9CRenderTapePresentCaptureResult, height) == 8u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, format) == 12u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, byteCount) == 16u);
 static_assert(offsetof(D9CRenderTapePresentCaptureResult, sha256) == 24u);
-static_assert(sizeof(D9CRenderTapeIdentityCaptureResult) == 32u);
+static_assert(sizeof(D9CRenderTapeIdentityCaptureResult) == 80u);
 static_assert(sizeof(D9CRenderTapeIdentitySourceEntry) == 48u);
 static_assert(sizeof(D9CRenderTapeIdentityRangeEntry) == 48u);
+static_assert(sizeof(D9CRenderTapeIdentitySettlementEntry) == 48u);
 static_assert(std::is_standard_layout_v<D9CRenderTapeIdentityCaptureResult>);
 static_assert(std::is_standard_layout_v<D9CRenderTapeIdentitySourceEntry>);
 static_assert(std::is_standard_layout_v<D9CRenderTapeIdentityRangeEntry>);
@@ -1514,9 +1515,23 @@ void testCompletePresentPublishesExactlyOneTape() {
       .dagPassIndex = 0u,
       .passKind = 4u,
   };
+  const D9CRenderTapeIdentitySettlementEntry settlementEntry{
+      .eventOrdinal = 4u,
+      .rawOrdinal = 4u,
+      .buildGeneration = 1u,
+      .firstSourceOrdinal = 1u,
+      .tailSeqId = 1u,
+      .sourceCount = 1u,
+      .reserved0 = 0u,
+  };
   check(session.attachCaptureIdentity(
             7u, 4u, std::span(&identitySource, 1u),
-            std::span(&identityRange, 1u)) ==
+            std::span(&identityRange, 1u),
+            RenderTapeIdentityEventSettlement{.eventOrdinal = 4u,
+                                               .sourceOrdinal = 1u,
+                                               .seqId = 1u,
+                                               .count = 1u},
+            std::span(&settlementEntry, 1u)) ==
             RenderTapeCaptureStatus::Complete &&
             !session.publicationBundle().identity.empty(),
         "sealed capture attaches one validated authoritative identity sidecar");
@@ -1545,6 +1560,46 @@ void testCompletePresentPublishesExactlyOneTape() {
             std::as_bytes(std::span(&attachment, 1u))) ==
             RenderTapeCaptureStatus::InvalidState,
         "second Present cannot publish another interval");
+}
+
+void testSettlementRowsBindExactSourceSubset() {
+  const std::array sources{
+      RenderTapeIdentitySource{.eventOrdinal = 9u, .sourceOrdinal = 11u,
+                               .seqId = 101u},
+      RenderTapeIdentitySource{.eventOrdinal = 9u, .sourceOrdinal = 12u,
+                               .seqId = 102u},
+      RenderTapeIdentitySource{.eventOrdinal = 10u, .sourceOrdinal = 13u,
+                               .seqId = 103u},
+  };
+  const std::array valid{
+      RenderTapeIdentitySettlement{.eventOrdinal = 9u,
+                                   .rawOrdinal = 9u,
+                                   .buildGeneration = 1u,
+                                   .firstSourceOrdinal = 11u,
+                                   .tailSeqId = 102u,
+                                   .sourceCount = 2u},
+      RenderTapeIdentitySettlement{.eventOrdinal = 10u,
+                                   .rawOrdinal = 10u,
+                                   .buildGeneration = 1u,
+                                   .firstSourceOrdinal = 13u,
+                                   .tailSeqId = 103u,
+                                   .sourceCount = 1u},
+  };
+  check(validateRenderTapeIdentitySettlements(sources, valid),
+        "valid settlements bind complete contiguous event source groups");
+
+  auto swapped = valid;
+  swapped[0].firstSourceOrdinal = 12u;
+  check(!validateRenderTapeIdentitySettlements(sources, swapped),
+        "swapped source settlement fails closed");
+  auto foreign = valid;
+  foreign[1].eventOrdinal = 77u;
+  check(!validateRenderTapeIdentitySettlements(sources, foreign),
+        "foreign event settlement fails closed");
+  auto truncated = valid;
+  truncated[0].sourceCount = 1u;
+  check(!validateRenderTapeIdentitySettlements(sources, truncated),
+        "truncated settlement coverage fails closed");
 }
 
 void testSequenceCaptureDefersSealUntilSecondPresent() {
@@ -3681,6 +3736,10 @@ void testPresentCaptureResultAbiAndOneShotCancellation() {
         "encoded mirror ticket is consumed exactly once and is not cancelled");
 }
 
+// Model binding for RenderTapeIdentitySegments.tla's SettlementExact and
+// RecordPartition predicates: the positive split deliberately uses source
+// ordinals/seq IDs 51/53 and 61/66, while every swapped, truncated, foreign,
+// or pass-metadata mutation fails before completion evidence is exposed.
 void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   RenderTapeProductionIdentityLedger ledger;
   const std::array ranges{
@@ -3693,6 +3752,13 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   };
   check(ledger.append(7u, 11u, 21u, 31u, 5u, ranges),
         "identity ledger accepts one exact source coverage");
+  check(ledger.registerExpectedSettlement(7u, 11u, 11u, 1u, 21u, 31u, 1u),
+        "identity ledger registers the exact event tail");
+  D9CRenderTapeIdentityCaptureResult premature{};
+  check(!ledger.copy(7u, premature, {}),
+        "identity ledger withholds evidence before completion");
+  check(ledger.completeSettlement(7u, 11u),
+        "identity ledger exposes completion only after the fence");
 
   D9CRenderTapeIdentityCaptureResult query{};
   check(ledger.copy(7u, query, {}) &&
@@ -3700,7 +3766,8 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
             query.sourceCount == 1u && query.rangeCount == 2u &&
             query.captureToken == 7u &&
             query.byteCount == sizeof(D9CRenderTapeIdentitySourceEntry) +
-                                   2u * sizeof(D9CRenderTapeIdentityRangeEntry),
+                                   2u * sizeof(D9CRenderTapeIdentityRangeEntry) +
+                                   sizeof(D9CRenderTapeIdentitySettlementEntry),
         "zero-capacity query reports the exact immutable table extent");
   std::vector<std::byte> bytes(query.byteCount);
   D9CRenderTapeIdentityCaptureResult copied{};
@@ -3732,7 +3799,8 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   check(!ledger.copy(7u, rejected, {}),
         "a failed join cannot be mistaken for an authoritative sidecar");
   check(ledger.append(8u, 12u, 22u, 32u, 5u, ranges) &&
-            ledger.copy(8u, query, {}),
+            ledger.registerExpectedSettlement(8u, 12u, 12u, 2u, 22u, 32u, 1u) &&
+            ledger.completeSettlement(8u, 12u) && ledger.copy(8u, query, {}),
         "a newer capture token resets stale failed state deterministically");
 
   RenderTapeProductionIdentityLedger splitLedger;
@@ -3750,11 +3818,32 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
       .passKind = 1u,
       .logicalPassId = 7001u,
   };
+  RenderTapeProductionIdentityLedger truncatedSettlement;
+  check(truncatedSettlement.append(9u, 41u, 51u, 61u, 0u, 2u,
+                                   std::span(&firstFragment, 1u)) &&
+            truncatedSettlement.append(9u, 41u, 53u, 66u, 2u, 3u,
+                                       std::span(&secondFragment, 1u)),
+        "settlement exact-group negative fixture appends both source rows");
+  check(!truncatedSettlement.registerExpectedSettlement(
+             9u, 41u, 41u, 3u, 51u, 51u, 1u),
+        "settlement cannot claim only the first row of a same-event group");
+  RenderTapeProductionIdentityLedger foreignFirst;
+  check(foreignFirst.append(9u, 41u, 51u, 61u, 0u, 2u,
+                            std::span(&firstFragment, 1u)) &&
+            foreignFirst.append(9u, 41u, 53u, 66u, 2u, 3u,
+                                std::span(&secondFragment, 1u)),
+        "settlement foreign-first negative fixture appends both rows");
+  check(!foreignFirst.registerExpectedSettlement(
+             9u, 41u, 41u, 3u, 53u, 66u, 1u),
+        "settlement cannot rebind a group to a later source ordinal");
   check(splitLedger.append(9u, 41u, 51u, 61u, 0u, 2u,
                            std::span(&firstFragment, 1u)) &&
-            splitLedger.append(9u, 41u, 52u, 62u, 2u, 3u,
+            splitLedger.append(9u, 41u, 53u, 66u, 2u, 3u,
                                std::span(&secondFragment, 1u)),
         "v2 ledger accepts contiguous same-event source fragments");
+  check(splitLedger.registerExpectedSettlement(9u, 41u, 41u, 3u, 51u, 66u, 2u) &&
+            splitLedger.completeSettlement(9u, 41u),
+        "split ledger settles only its complete tail without assuming +1 IDs");
   check(splitLedger.copy(9u, query, {}) && query.sourceCount == 2u &&
             query.rangeCount == 2u,
         "split ledger exposes both authoritative source rows");
@@ -3798,7 +3887,10 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
                 10u, 42u, 62u, 72u, 2u, 3u,
                 std::span(&inferredSecond, 1u)),
         "split ledger accepts fragments without an asserted pass join");
-  check(unauthenticatedSplit.copy(10u, query, {}),
+  check(unauthenticatedSplit.registerExpectedSettlement(
+            10u, 42u, 42u, 4u, 61u, 72u, 2u) &&
+            unauthenticatedSplit.completeSettlement(10u, 42u) &&
+            unauthenticatedSplit.copy(10u, query, {}),
         "unauthenticated split remains queryable");
   std::vector<std::byte> unauthenticatedBytes(query.byteCount);
   check(unauthenticatedSplit.copy(10u, copied, unauthenticatedBytes),
@@ -4432,6 +4524,7 @@ int main(int argc, char** argv) {
     testProducedByCapturedPassCaptureEndToEnd();
     testProducedDefinitionTemporalOrderAndAliasJournal();
     testCompletePresentPublishesExactlyOneTape();
+    testSettlementRowsBindExactSourceSubset();
     testSequenceCaptureDefersSealUntilSecondPresent();
     testValidationFailurePreservesEventAndChunkLocation();
     testObjectDefineValidationDetailTruthTable();

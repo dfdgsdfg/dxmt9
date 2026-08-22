@@ -510,6 +510,44 @@ int32_t commitChunkFail(const char* reason,
   return hr;
 }
 
+const char* cpuReadyArenaFailureClassName(
+    dxmt9::CommandQueue::CpuReadyArenaFailureClass failureClass) noexcept {
+  using Failure = dxmt9::CommandQueue::CpuReadyArenaFailureClass;
+  switch (failureClass) {
+  case Failure::None: return "none";
+  case Failure::BuilderInitialization: return "builder_initialization";
+  case Failure::ContextInvalid: return "context_invalid";
+  case Failure::Append: return "append";
+  case Failure::CaptureRanges: return "capture_ranges";
+  case Failure::SegmentSelection: return "segment_selection";
+  case Failure::ActiveArenaRejected: return "active_arena_rejected";
+  case Failure::InjectedBuilder: return "injected_builder";
+  case Failure::InjectedRollback: return "injected_rollback";
+  case Failure::InjectedPostSemanticPublish:
+    return "injected_post_semantic_publish";
+  case Failure::PayloadSeal: return "payload_seal";
+  case Failure::Planner: return "planner";
+  case Failure::CaptureProjection: return "capture_projection";
+  case Failure::SnapshotValidation: return "snapshot_validation";
+  case Failure::Abort: return "abort";
+  }
+  return "unknown";
+}
+
+const char* cpuReadyArenaBeginStopReasonName(
+    dxmt9::CommandQueue::CpuReadyArenaBeginStopReason reason) noexcept {
+  using Reason = dxmt9::CommandQueue::CpuReadyArenaBeginStopReason;
+  switch (reason) {
+  case Reason::None: return "none";
+  case Reason::QueueAlreadyStopped: return "queue_already_stopped";
+  case Reason::CompatibilityFlushStopped:
+    return "compatibility_flush_stopped";
+  case Reason::CpuReadyTapeAlreadyStopped:
+    return "cpu_ready_tape_already_stopped";
+  }
+  return "unknown";
+}
+
 // The fat-packet applier chain lived here: applyDrawPacketStateViaIface,
 // applyDrawPacketStateDirect, applyDrawPacketState, timedApplyDrawPacketState and
 // applyDrawPrimitivePacket, plus validateDrawPacketStateDelta and
@@ -1099,7 +1137,15 @@ int32_t replayResolvedChunk(
     bool pacedByPresentOrdinal,
     dxmt9::CommandQueue::CpuReadyArenaBuildLease* arenaLease = nullptr,
     std::span<const dxmt9::d3d9::CpuReadySegmentPlan> arenaSegments = {},
-    bool containsOrderedControls = false) {
+    bool containsOrderedControls = false,
+    std::span<const dxmt9::d3d9::CpuReadySourcePlan> arenaSources = {},
+    bool* preEffectFailure = nullptr) {
+  if (preEffectFailure) {
+    // The arena lease is still pre-effect until the command loop starts.
+    // Setup/anchor/descriptor failures therefore have one guarded rollback
+    // boundary; the caller may retry EventSerial only while this remains true.
+    *preEffectFailure = true;
+  }
   const auto bytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
       raw.recordBlob.size());
@@ -1180,7 +1226,10 @@ int32_t replayResolvedChunk(
     }
     if (captureIdentity &&
         !arenaLease->beginCaptureIdentity(raw.recordCount)) {
-      captureIdentity = false;
+      if (preEffectFailure) {
+        *preEffectFailure = true;
+      }
+      return commitChunkFail("chunk-capture-identity-begin");
     }
   }
   const auto flushPendingDrawSubmissions = [&]() {
@@ -1205,13 +1254,63 @@ int32_t replayResolvedChunk(
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
       raw.bufferSnapshotsCaptured);
   std::size_t activeSegment = 0;
+  std::size_t activeSource = 0;
+  std::size_t activeSourceSegment = 0;
   if ((!arenaLease && !arenaSegments.empty()) ||
       (arenaLease && arenaSegments.empty()) ||
-      (arenaLease && !arenaLease->selectSegment(0))) {
+      (arenaLease && arenaSources.empty() && !arenaLease->selectSegment(0)) ||
+      (arenaLease && !arenaSources.empty() &&
+       !arenaLease->selectSourceSegment(0, 0))) {
     return commitChunkFail("chunk-replay-segment-initial");
   }
+  if (preEffectFailure) {
+    *preEffectFailure = false;
+  }
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
-    if (arenaLease && activeSegment + 1u < arenaSegments.size()) {
+    if (arenaLease && !arenaSources.empty()) {
+      if (activeSource >= arenaSources.size()) {
+        return commitChunkFail("chunk-replay-source-range");
+      }
+      const auto* source = &arenaSources[activeSource];
+      if (activeSource + 1u < arenaSources.size()) {
+        const std::size_t nextSourceFirst =
+            arenaSources[activeSource + 1u].firstRecordIndex;
+        if (index > nextSourceFirst) {
+          flushPendingDrawSubmissions();
+          return commitChunkFail("chunk-replay-source-edge",
+                                 static_cast<std::uint32_t>(index));
+        }
+        if (index == nextSourceFirst) {
+          flushPendingDrawSubmissions();
+          ++activeSource;
+          activeSourceSegment = 0;
+          if (!arenaLease->selectSourceSegment(activeSource, 0)) {
+            return commitChunkFail("chunk-replay-source-select",
+                                   static_cast<std::uint32_t>(index));
+          }
+          source = &arenaSources[activeSource];
+        }
+      }
+      if (activeSourceSegment + 1u < source->segmentCount) {
+        const auto nextFirst = arenaSegments[source->firstSegmentIndex +
+                                              activeSourceSegment + 1u]
+                                   .firstRecordIndex;
+        if (index > nextFirst) {
+          flushPendingDrawSubmissions();
+          return commitChunkFail("chunk-replay-segment-edge",
+                                 static_cast<std::uint32_t>(index));
+        }
+        if (index == nextFirst) {
+          flushPendingDrawSubmissions();
+          ++activeSourceSegment;
+          if (!arenaLease->selectSourceSegment(activeSource,
+                                               activeSourceSegment)) {
+            return commitChunkFail("chunk-replay-segment-select",
+                                   static_cast<std::uint32_t>(index));
+          }
+        }
+      }
+    } else if (arenaLease && activeSegment + 1u < arenaSegments.size()) {
       const std::size_t nextFirstRecord =
           arenaSegments[activeSegment + 1u].firstRecordIndex;
       if (index > nextFirstRecord) {
@@ -1311,8 +1410,14 @@ int32_t replayResolvedChunk(
   if (!pendingDrawSubmissions.empty() || !pendingDrawRecordIndices.empty()) {
     return commitChunkFail("chunk-replay-identity-draw-flush");
   }
-  if (arenaLease && activeSegment + 1u != arenaSegments.size()) {
+  if (arenaLease && arenaSources.empty() &&
+      activeSegment + 1u != arenaSegments.size()) {
     return commitChunkFail("chunk-replay-segment-incomplete");
+  }
+  if (arenaLease && !arenaSources.empty() &&
+      (activeSource + 1u != arenaSources.size() ||
+       activeSourceSegment + 1u != arenaSources.back().segmentCount)) {
+    return commitChunkFail("chunk-replay-source-incomplete");
   }
   dxmt9::perf::countChunkAdmit();
   return dxmt9::core::D3D_OK;
@@ -1481,9 +1586,21 @@ void markLegacyResources(D9CDevice* device,
 int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
-                             bool allowDirectArena) {
+                             bool allowDirectArena,
+                             bool forceEventSerial = false,
+                             bool reportOffloadReplayStage = false) {
+  // 64 pages is a capture planner/source-grouping bound, not queue storage
+  // capacity. It applies only after the PE bridge has authenticated this raw
+  // item to a capture token and event ordinal; startup/non-capture raws use
+  // the queue's established 512-page/source EventSerial admission.
+  constexpr std::size_t kCaptureSegmentSerialPagesPerSource = 64u;
   const bool captureIdentityRequested =
       raw.renderTapeCaptureToken != 0u && raw.renderTapeEventOrdinal != 0u;
+  const bool segmentSerialRequested =
+      device && !forceEventSerial && device->dev().upperDevice() &&
+      device->dev().upperDevice()->queue().segmentSerialEnabled();
+  const bool captureSegmentSerialRequested =
+      captureIdentityRequested && segmentSerialRequested;
   std::uint32_t capturePlanReason = std::numeric_limits<std::uint32_t>::max();
   const auto failCaptureIdentity = [&](const char* reason) {
     if (raw.renderTapeCaptureToken != 0u) {
@@ -1509,6 +1626,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // planning or repeated marking.
     markLegacyResources(device, raw);
     if (captureIdentityRequested) failCaptureIdentity("planning-disabled");
+    if (reportOffloadReplayStage) {
+      dxmt9::perf::recordOffloadReplayStage(
+          dxmt9::perf::OffloadReplayStage::Encode);
+    }
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
@@ -1521,6 +1642,12 @@ int32_t replayPlannedChunk(D9CDevice* device,
   const auto limits = queue
       ? queue->cpuReadyArenaPlanLimits()
       : dxmt9::CommandQueue::CpuReadyArenaPlanLimits{};
+  const std::size_t plannerMaxPagesPerSource =
+      captureSegmentSerialRequested
+          ? kCaptureSegmentSerialPagesPerSource
+          : (limits.maxPagesPerSource == 0
+                 ? std::numeric_limits<std::uint32_t>::max()
+                 : limits.maxPagesPerSource);
   const auto plan = dxmt9::d3d9::planCpuReadyChunk(
       imported, raw.replaySeq,
       dxmt9::d3d9::CpuReadyPlanOptions{
@@ -1528,16 +1655,56 @@ int32_t replayPlannedChunk(D9CDevice* device,
           .maxOrdinaryPagesPerSegment =
               limits.maxOrdinaryPagesPerSegment,
           .maxSegmentsPerSource = limits.maxSegmentsPerSource,
-          .maxPagesPerSource = limits.maxPagesPerSource == 0
-                                   ? std::numeric_limits<std::uint32_t>::max()
-                                   : limits.maxPagesPerSource,
-          .maxPages = limits.maxPagesPerSource == 0
-                          ? std::numeric_limits<std::uint32_t>::max()
-                          : limits.maxPagesPerSource,
+          .maxPagesPerSource = plannerMaxPagesPerSource,
+          .maxPages = plannerMaxPagesPerSource,
+          .maxSourcesPerChunk = captureSegmentSerialRequested
+              ? dxmt9::core::CpuReadyTape::kMaxArenaBatchSources
+              : 1,
       });
+  if (reportOffloadReplayStage) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Encode);
+  }
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
+  const auto logAdmissionFailure = [&](std::uint32_t beginStatus,
+                                       dxmt9::CommandQueue::
+                                           CpuReadyArenaBeginStopReason
+                                               stopReason) {
+    if (!queue) {
+      return;
+    }
+    const std::size_t plannedPages =
+        plan.arenaLayout.has_value()
+            ? plan.arenaLayout->pageCount
+            : (plan.sources.empty() ? 0u
+                                    : plan.sources.front().arenaLayout.pageCount);
+    // Read the one-shot poison origin once on this failure-only path.  The
+    // stop reason comes from the exact returned begin result below, never a
+    // mutable queue-global value that a later admission can overwrite.
+    const auto poisonOrigin = queue->cpuReadyArenaBeginDiagnostic().poisonOrigin;
+    dxmt9::util::logf(
+        dxmt9::util::LogLevel::Warn, "dxmt9-device",
+        "cpu_ready_arena_admission begin_status=%u raw=%llu records=%u "
+        "capture=%u sources=%zu segments=%zu planner_pages=%zu "
+        "planner_page_bound=%zu queue_page_bound=%zu stop_reason=%s "
+        "poison_origin=%s:%u poison_function=%s",
+        beginStatus, static_cast<unsigned long long>(raw.replaySeq),
+        raw.recordCount, captureIdentityRequested ? 1u : 0u,
+        plan.sourceCount, plan.segmentCount, plannedPages,
+        plannerMaxPagesPerSource, limits.maxPagesPerSource,
+        cpuReadyArenaBeginStopReasonName(stopReason),
+        poisonOrigin.file ? poisonOrigin.file : "none", poisonOrigin.line,
+        poisonOrigin.function ? poisonOrigin.function : "none");
+  };
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:
+    if (captureSegmentSerialRequested) {
+      // Checked planner/descriptor rejection is still pre-effect.  Retry the
+      // complete event through the bounded v2 EventSerial planner before
+      // treating the event as terminally malformed.
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
     if (captureIdentityRequested) failCaptureIdentity("planner-reject");
     dxmt9::perf::countCpuReadySessionDisposition(
         dxmt9::perf::CpuReadySessionDisposition::Invalid);
@@ -1564,6 +1731,15 @@ int32_t replayPlannedChunk(D9CDevice* device,
     break;
   }
 
+  // Ordered-control records are coordinator-side and never children of a
+  // projected pass. A captured event containing one must stay one EventSerial
+  // source; deciding this here keeps the fallback pre-effect and preserves
+  // its raw ordering.
+  if (captureSegmentSerialRequested && plan.containsOrderedControls) {
+    return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                              allowDirectArena, /*forceEventSerial=*/true);
+  }
+
   if (!allowDirectArena) {
     // Inline execution (including synchronous Readback) still needs the
     // ordered-control plan and release hooks when the Tape gate is enabled.
@@ -1575,7 +1751,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
         plan.containsOrderedControls);
   }
 
-  if (!queue || !plan.arenaLayout.has_value()) {
+  if (!queue || (!plan.arenaLayout.has_value() && plan.sources.empty()) ||
+      (!segmentSerialRequested && captureIdentityRequested &&
+       !plan.arenaLayout.has_value())) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
     if (captureIdentityRequested) failCaptureIdentity("queue-or-layout-missing");
@@ -1583,42 +1761,173 @@ int32_t replayPlannedChunk(D9CDevice* device,
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
+  std::array<dxmt9::core::ArenaSourcePayloadLayout,
+             dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+      sourceLayouts{};
+  const bool segmentSerial = captureSegmentSerialRequested &&
+      plan.sourceCount > 1;
+  const std::size_t sourceCount = segmentSerial ? plan.sourceCount : 1;
+  if (segmentSerial) {
+    for (std::size_t i = 0; i < sourceCount; ++i) {
+      sourceLayouts[i] = plan.sources[i].arenaLayout;
+    }
+  } else {
+    sourceLayouts[0] = *plan.arenaLayout;
+  }
   dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
   while (true) {
-    begin = queue->beginCpuReadyArenaSource(plan.rawOrdinal,
-                                            *plan.arenaLayout);
+    begin = segmentSerial
+        ? queue->beginCpuReadyArenaSources(
+              plan.rawOrdinal, std::span(sourceLayouts).first(sourceCount))
+        : queue->beginCpuReadyArenaSource(plan.rawOrdinal, sourceLayouts[0]);
     if (begin.status !=
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
     }
-    if (!queue->waitForCpuReadyArenaAdmission(*plan.arenaLayout)) {
+    const auto waitLayouts = std::span(sourceLayouts).first(sourceCount);
+    if (!queue->waitForCpuReadyArenaAdmission(waitLayouts)) {
       return commitChunkFail("chunk-arena-pressure-stopped");
     }
   }
   if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
       !begin.has_value()) {
+    logAdmissionFailure(static_cast<std::uint32_t>(begin.status),
+                        begin.stopReason);
+    if (segmentSerial && begin.status ==
+            dxmt9::CommandQueue::CpuReadyArenaBeginStatus::RecoverableFailure) {
+      // Admission and builder construction happen before replay invokes any
+      // semantic sink.  The recoverable batch abort restored all Tape and
+      // queue cursors, so EventSerial v2 may own this raw event exactly once.
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
     // Oversize was classified by the structural planner. Any remaining
     // admission failure is queue terminal/corruption, not a legacy fallback.
     return commitChunkFail("chunk-arena-admission");
   }
 
   auto lease = std::move(*begin);
+  if (captureIdentityRequested && segmentSerial) {
+    std::array<std::uint32_t,
+               dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+        firstRecords{};
+    std::array<std::uint32_t,
+               dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+        recordCounts{};
+    for (std::size_t source = 0; source < sourceCount; ++source) {
+      firstRecords[source] = plan.sources[source].firstRecordIndex;
+      recordCounts[source] = plan.sources[source].recordCount;
+    }
+    if (!lease.setCaptureSourceRanges(
+            std::span(firstRecords).first(sourceCount),
+            std::span(recordCounts).first(sourceCount))) {
+      if (!lease.abortForFallback()) {
+        queue->failStopCpuReadyArena();
+        return commitChunkFail("chunk-capture-ranges-rollback");
+      }
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
+  }
+  bool preEffectFailure = false;
   const int32_t hr = replayResolvedChunk(
       device, raw, pacedByPresentOrdinal, &lease,
-      std::span(plan.segments).first(plan.segmentCount));
+      std::span(plan.segments).first(plan.segmentCount), false,
+      segmentSerial ? std::span(plan.sources) :
+                       std::span<const dxmt9::d3d9::CpuReadySourcePlan>{},
+      &preEffectFailure);
   if (failed(hr)) {
+    if (preEffectFailure && segmentSerial) {
+      if (!lease.abortForFallback()) {
+        queue->failStopCpuReadyArena();
+        return commitChunkFail("chunk-capture-identity-rollback");
+      }
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
     // Lease destruction performs the two-phase fail-stop abort. Replaying the
     // raw chunk through Legacy here would duplicate already-applied semantics.
     if (captureIdentityRequested) failCaptureIdentity("arena-replay");
     return hr;
   }
+  const auto admissionTicket = lease.ticket();
   dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
-  if (!lease.publish(raw.resourceEntries,
-                     captureIdentityRequested ? &captureIdentity : nullptr)) {
+  dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
+  const auto publishStatus = segmentSerial
+      ? lease.publishBatchWithStatus(
+            raw.resourceEntries,
+            captureIdentityRequested ? &captureBatch : nullptr)
+      : (lease.publish(raw.resourceEntries,
+                       captureIdentityRequested ? &captureIdentity : nullptr)
+             ? dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published
+             : dxmt9::CommandQueue::CpuReadyArenaPublishStatus::FailStopped);
+  if (publishStatus ==
+      dxmt9::CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure) {
+    // replayResolvedChunk has already applied D3D semantics and may have
+    // touched presenter/Metal state. Recoverable is therefore no longer a
+    // legal EventSerial fallback boundary: poison and fail-stop rather than
+    // replaying this raw event a second time.
+    queue->failStopCpuReadyArena();
+    const auto failure = queue->peekCpuReadyArenaFailure();
+    if (failure.failureClass !=
+        dxmt9::CommandQueue::CpuReadyArenaFailureClass::None) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-device",
+          "cpu_ready_arena post_replay_publish_failure raw=%llu "
+          "records=%u class=%s source=%u segment=%u "
+          "planned_pages=%u actual_commands=%u",
+          static_cast<unsigned long long>(raw.replaySeq), raw.recordCount,
+          cpuReadyArenaFailureClassName(failure.failureClass),
+          failure.source, failure.segment, failure.plannedPages,
+          failure.actualCommands);
+    }
+    if (captureIdentityRequested) failCaptureIdentity("arena-publish-after-effects");
+    return commitChunkFail("chunk-arena-publish-after-effects");
+  }
+  if (publishStatus !=
+      dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published) {
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
   }
-  if (captureIdentityRequested) {
+  if (captureIdentityRequested && segmentSerial) {
+    if (captureBatch.segments.empty()) {
+      failCaptureIdentity("event-settlement-metadata");
+      return dxmt9::core::D3D_OK;
+    }
+    for (const auto& segment : captureBatch.segments) {
+      std::vector<dxmt9::d3d9::RenderTapeProductionPassRange> ranges;
+      try {
+        ranges.reserve(segment.ranges.size());
+        for (const auto& range : segment.ranges) {
+          ranges.push_back(dxmt9::d3d9::RenderTapeProductionPassRange{
+              .firstRecord = range.firstRecord,
+              .recordCount = range.recordCount,
+              .dagPassIndex = range.dagPassIndex,
+              .passKind = range.passKind,
+              .logicalPassId = range.logicalPassId,
+          });
+        }
+      } catch (...) {
+        failCaptureIdentity("range-allocation");
+        return dxmt9::core::D3D_OK;
+      }
+      if (!device->renderTapeIdentityCapture.append(
+              raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+              segment.sourceOrdinal, segment.seqId, segment.firstRecord,
+              segment.recordCount, ranges)) {
+        failCaptureIdentity("snapshot-or-ledger-append");
+        break;
+      }
+    }
+    if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
+            raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+            raw.replaySeq, admissionTicket.buildGeneration,
+            captureBatch.segments.front().sourceOrdinal,
+            captureBatch.segments.back().seqId,
+            static_cast<std::uint32_t>(captureBatch.segments.size()))) {
+      failCaptureIdentity("event-settlement");
+    }
+  } else if (captureIdentityRequested) {
     std::vector<dxmt9::d3d9::RenderTapeProductionPassRange> ranges;
     try {
       ranges.reserve(captureIdentity.ranges.size());
@@ -1638,8 +1947,14 @@ int32_t replayPlannedChunk(D9CDevice* device,
         !device->renderTapeIdentityCapture.append(
             raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
             captureIdentity.sourceOrdinal, captureIdentity.seqId,
-            captureIdentity.recordCount, ranges)) {
+            captureIdentity.firstRecord, captureIdentity.recordCount,
+            ranges)) {
       failCaptureIdentity("snapshot-or-ledger-append");
+    } else if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
+                   raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+                   raw.replaySeq, admissionTicket.buildGeneration,
+                   admissionTicket.sourceOrdinal, admissionTicket.seqId, 1u)) {
+      failCaptureIdentity("event-settlement");
     }
   }
   return dxmt9::core::D3D_OK;
@@ -1656,10 +1971,20 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
+  const bool schedulingObservabilityEnabled = dxmt9::perf::enabled();
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Plan);
+  }
   const auto replayCpuStart = std::chrono::steady_clock::now();
   const int32_t hr = replayPlannedChunk(
       d, chunk, /*pacedByPresentOrdinal=*/true,
-      /*allowDirectArena=*/true);
+      /*allowDirectArena=*/true, /*forceEventSerial=*/false,
+      schedulingObservabilityEnabled);
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Done);
+  }
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   if (failed(hr)) {
     dxmt9::perf::countCommandChunkReject();

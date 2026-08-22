@@ -136,6 +136,20 @@ def main() -> int:
             "present_ordinal": 6,
             "sources": 1,
             "ranges": 1,
+            "completed_segment_count": 0,
+            "completion_evidence": "none",
+            "settlement_count": 0,
+            "settlement_table_count": 0,
+            "segments": [{
+                "segment_index": 0,
+                "event_ordinal": 6,
+                "source_ordinal": 101,
+                "seq_id": 501,
+                "first_record": 0,
+                "record_count": 4,
+            }],
+            "event_settlement_table": [],
+            "final_event_settlement": None,
         }
         projected_events = pathlib.Path(root) / "projected.bin"
         materialized = json.loads(run(
@@ -192,7 +206,7 @@ def main() -> int:
             "'output_oracle_matched':has_expected,"
             "'oracle_mode':'strict' if has_expected else 'rejected',"
             "'output_non_degenerate':True,'output_bytes':len(pixels),'output_sha256':sha}\n"
-            "result={'schema':'dxmt9.render_tape.provider_replay.v1',"
+            "result={'schema':'dxmt9.render_tape.provider_replay.v2',"
             "'archive_policy':'disabled','profile':'frame-tape','status':'complete',"
             "'failed_event':4294967295,"
             "'requirements':{'output_width':2,'output_height':1,'output_format':21},"
@@ -274,7 +288,10 @@ def main() -> int:
             "executable_projection": True,
             "source_full_frame_oracle_copied": False,
         }
-        assert "identity" not in manifest["components"]
+        assert manifest["components"]["identity"]["schema"] == (
+            "dxmt9.render_tape.identity.v2"
+        )
+        assert (output_bundle / "identity.bin").is_file()
         assert (output_bundle / "output.rgba").read_bytes() == pixels
         assert not list(pathlib.Path(root).glob(".projected-bundle.staging-*"))
 
@@ -352,6 +369,80 @@ def main() -> int:
         assert len(real_replay["warmup_runs"]) == 1
         assert len(real_replay["runs"]) == 2
         assert real_replay["runs"][0] == real_replay["runs"][1]
+        evidence = real_replay["runs"][0]["identity_evidence"]
+        assert evidence["authority"] == "derived-projection"
+        assert evidence["derived_sidecar"] is True
+        assert evidence["segment_count"] == evidence["provenance_segment_count"]
+        assert evidence["completed_segment_count"] == 0
+        assert evidence["completion_evidence"] == "not-queue-authenticated"
+        assert evidence["settlement_count"] == evidence["settlement_table_count"]
+        assert evidence["settlement_count"] == 1
+        assert len(evidence["segments"]) == evidence["segment_count"]
+        assert all(
+            row["source_ordinal"] > 0 and row["seq_id"] > 0
+            for row in evidence["segments"]
+        )
+        assert evidence["event_settlement_table"] == []
+        assert len(evidence["derived_settlement_table"]) == 1
+        assert evidence["final_event_settlement"] is None
+
+        # A ProviderReplay sidecar is structurally valid but is not bound to
+        # this process's queue.  Non-empty rows must never become completion
+        # evidence in either identity CLI or provider output.
+        provider_replay_identity = pathlib.Path(root) / (
+            "provider-replay-identity.bin"
+        )
+        provider_replay_bytes = bytearray(
+            (provider_source / "identity.bin").read_bytes()
+        )
+        # RenderTapeIdentityHeader::authority is the fifth u32 after the
+        # source/range table offsets (offset 104 in the v2 fixed header).
+        provider_replay_bytes[104:108] = (2).to_bytes(4, "little")
+        provider_replay_identity.write_bytes(provider_replay_bytes)
+        provider_identity = json.loads(run(
+            tool, "identity", provider_events, provider_replay_identity,
+            "--verified-blob", f"{seed_sha}:16",
+        ).stdout)
+        assert provider_identity["authority"] == 2
+        assert provider_identity["completed_segment_count"] == 0
+        assert provider_identity["completion_evidence"] == (
+            "process-local-unverified"
+        )
+        assert provider_identity["settlement_count"] == 0
+        assert provider_identity["settlement_table_count"] == 0
+        assert provider_identity["event_settlement_table"] == []
+        assert provider_identity["final_event_settlement"] is None
+        provider_replay = run(
+            provider, "replay", provider_events,
+            "--identity", provider_replay_identity,
+            "--blob", provider_source / "seed.bin",
+        )
+        provider_evidence = json.loads(provider_replay.stdout)["identity_evidence"]
+        assert provider_evidence["authority"] == "provider-replay"
+        assert provider_evidence["completed_segment_count"] == 0
+        assert provider_evidence["completion_evidence"] == (
+            "process-local-unverified"
+        )
+        assert provider_evidence["settlement_count"] == 0
+        assert provider_evidence["settlement_table_count"] == 0
+        assert provider_evidence["event_settlement_table"] == []
+        assert provider_evidence["final_event_settlement"] is None
+
+        retired_v1 = pathlib.Path(root) / "retired-v1-identity.bin"
+        retired_bytes = bytearray((provider_source / "identity.bin").read_bytes())
+        retired_bytes[72:76] = (1).to_bytes(4, "little")
+        retired_v1.write_bytes(retired_bytes)
+        retired = run(
+            provider, "replay", provider_events,
+            "--identity", retired_v1,
+            "--blob", provider_source / "seed.bin", check=False,
+        )
+        assert retired.returncode != 0
+        retired_result = json.loads(retired.stdout)
+        assert retired_result["identity_evidence"]["rejected"] is True
+        assert retired_result["identity_evidence"]["rejection_reason"] == (
+            "invalid-header"
+        )
 
         damaged_identity = pathlib.Path(root) / "damaged-identity.bin"
         damaged = bytearray(identity.read_bytes())

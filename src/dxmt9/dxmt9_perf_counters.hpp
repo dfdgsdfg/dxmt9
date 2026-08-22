@@ -18,6 +18,8 @@ struct ParallelPassAdapterDecision;
 }  // namespace dxmt9::encoders
 
 namespace dxmt9::render {
+enum class FirstLeaseCapacityWaitAction : std::uint8_t;
+enum class FirstLeaseReadyHeadEligibility : std::uint8_t;
 enum class PartitionExecutionMode : std::uint8_t;
 enum class PartitionModeRequest : std::uint8_t;
 }  // namespace dxmt9::render
@@ -25,6 +27,63 @@ enum class PartitionModeRequest : std::uint8_t;
 namespace dxmt9::perf {
 
 bool enabled();
+
+enum class OffloadReplayStage : std::uint8_t {
+  Done = 0,
+  Plan = 1,
+  ArenaAdmission = 2,
+  Encode = 3,
+};
+
+struct SchedulingProgressFrontierSnapshot {
+  std::uint64_t cpuReadyFirstLeaseWaitEnter = 0;
+  std::uint64_t cpuReadyFirstLeaseWaitCurrent = 0;
+  std::uint64_t cpuReadyFirstLeaseActionRetryGeneration = 0;
+  std::uint64_t cpuReadyFirstLeaseActionPressureSerial = 0;
+  std::uint64_t cpuReadyFirstLeaseActionProducerWaitSerial = 0;
+  std::uint64_t cpuReadyFirstLeaseActionStop = 0;
+  std::uint64_t cpuReadyFirstLeaseWaitNoAdmissionPressure = 0;
+  std::uint64_t cpuReadyFirstLeaseWaitCreditExhausted = 0;
+  std::uint64_t cpuReadyFirstLeaseIneligibleNonArena = 0;
+  std::uint64_t cpuReadyFirstLeaseIneligiblePresent = 0;
+  std::uint64_t cpuReadyFirstLeaseIneligibleOrdinaryCapacity = 0;
+  std::uint64_t cpuReadyFirstLeaseIneligibleHighWater = 0;
+  std::uint64_t cpuReadyFirstLeaseCreditRearmed = 0;
+  std::uint64_t cpuReadyFirstLeaseObservedGeneration = 0;
+  std::uint64_t cpuReadyFirstLeaseCurrentGeneration = 0;
+  std::uint64_t cpuReadyFirstLeaseHeadSeq = 0;
+  std::uint64_t cpuReadyFirstLeaseHeadSourceOrdinal = 0;
+  std::uint64_t cpuReadyArenaAdmissionWaitEnter = 0;
+  std::uint64_t cpuReadyArenaAdmissionWaitCurrent = 0;
+  std::uint64_t cpuReadyArenaAdmissionExitRetry = 0;
+  std::uint64_t cpuReadyArenaAdmissionExitStop = 0;
+  std::uint64_t offloadDrainWaitCurrent = 0;
+  std::uint64_t offloadPushWaitCurrent = 0;
+  std::uint64_t offloadReplayInflightRaw = 0;
+  std::uint64_t offloadReplayStage = 0;
+};
+
+void recordCpuReadyFirstLeaseEligibility(
+    render::FirstLeaseReadyHeadEligibility eligibility);
+void enterCpuReadyFirstLeaseWait(
+    bool admissionPressure, bool serialProgressAvailable,
+    std::uint64_t observedGeneration, std::uint64_t currentGeneration,
+    std::uint64_t headSeq, std::uint64_t headSourceOrdinal);
+void updateCpuReadyFirstLeaseWaitGenerations(
+    std::uint64_t observedGeneration, std::uint64_t currentGeneration);
+void exitCpuReadyFirstLeaseWait(
+    render::FirstLeaseCapacityWaitAction action);
+void countCpuReadyFirstLeaseCreditRearmed();
+void enterCpuReadyArenaAdmissionWait();
+void exitCpuReadyArenaAdmissionWait(bool retry);
+void enterOffloadDrainWait();
+void exitOffloadDrainWait();
+void enterOffloadPushWait();
+void exitOffloadPushWait();
+void recordOffloadReplayInflightRaw(bool inFlight);
+void recordOffloadReplayStage(OffloadReplayStage stage);
+SchedulingProgressFrontierSnapshot snapshotSchedulingProgressFrontier();
+void reportSchedulingProgressThreshold();
 
 enum class PipelineKind : std::uint8_t {
   Draw,

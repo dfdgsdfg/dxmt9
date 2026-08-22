@@ -853,7 +853,25 @@ typedef struct D9CRenderTapeIdentityCaptureResult {
     uint32_t reserved0;
     uint64_t captureToken;
     uint64_t byteCount;
+    uint64_t eventOrdinal;
+    uint64_t settlementSourceOrdinal;
+    uint64_t settlementSeqId;
+    uint32_t settlementCount;
+    uint32_t reserved1;
+    uint32_t settlementEntrySize;
+    uint32_t reserved2;
+    uint64_t settlementTableOffset;
 } D9CRenderTapeIdentityCaptureResult;
+
+typedef struct D9CRenderTapeIdentitySettlementEntry {
+    uint64_t eventOrdinal;
+    uint64_t rawOrdinal;
+    uint64_t buildGeneration;
+    uint64_t firstSourceOrdinal;
+    uint64_t tailSeqId;
+    uint32_t sourceCount;
+    uint32_t reserved0;
+} D9CRenderTapeIdentitySettlementEntry;
 
 typedef struct D9CRenderTapeIdentitySourceEntry {
     uint64_t eventOrdinal;

@@ -61,7 +61,10 @@ bool renderTapePublisherCaptureEnabled() noexcept {
 
 render::RenderPartitionConfig renderPartitionConfig() noexcept {
   const char* value = std::getenv("DXMT9_RENDER_PARTITION_MODE");
-  return render::resolveRenderPartitionConfig(value);
+  auto config = render::resolveRenderPartitionConfig(value);
+  config.sourceIdentity = render::resolveSourceIdentityConfig(
+      std::getenv("DXMT9_RENDER_IDENTITY_MODE"));
+  return config;
 }
 
 // M6 — sampled once at device init and logged so triage on a bug report

@@ -742,6 +742,10 @@ void segmentedSourcesPreserveRawRangesAndTailOwnership() {
               source.firstSegmentIndex == i && source.arenaLayout.pageCount <= 64,
           "each segmented source owns one complete bounded Arena layout");
   }
+  check(plan.sources[0].arenaLayout.pageCount +
+                plan.sources[1].arenaLayout.pageCount > 64u,
+        "an event larger than one 64-page source is split into multiple "
+        "SegmentSerial sources");
   check(plan.sources[0].firstRecordIndex == 0u &&
             plan.sources[0].recordCount == 2u &&
             plan.sources[1].firstRecordIndex == 2u &&
@@ -802,6 +806,38 @@ void sourcePlansScalePastPhysicalEightBlockCompatibilityBound() {
             plan.sources[1].firstRecordIndex == 8u &&
             plan.sources[1].recordCount == 1u,
         "the first source accepts the complete 512-page grouping and the ninth block becomes a successor source");
+}
+
+void sourcePlansRespectCaptureSourcePageBound() {
+  const auto exact40Rects = clearRectCountForSegmentPages(40, true);
+  const std::array records{
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      fixture.view(), 243,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 1,
+       .maxPagesPerSource = 64,
+       .maxSourcesPerChunk = 2});
+  check(plan.directArenaCandidate() && plan.segmentCount == 2 &&
+            plan.sourceCount == 2 && !plan.arenaLayout.has_value(),
+        "capture-sized physical segments split into bounded sources instead "
+        "of widening one source");
+  check(plan.sources[0].segmentCount == 1 &&
+            plan.sources[0].arenaLayout.pageCount <= 64u &&
+            plan.sources[1].segmentCount == 1 &&
+            plan.sources[1].arenaLayout.pageCount <= 64u &&
+            plan.sources[1].firstSegmentIndex == 1u &&
+            plan.sources[1].firstRecordIndex == 2u &&
+            plan.sources[1].recordCount == 3u,
+        "the capture source cap is exact: each 40-page physical segment "
+        "remains independently bounded");
 }
 
 void presentTailIsAOrderedDirectSegment() {
@@ -923,6 +959,7 @@ int main() {
     segmentedSourcesPreserveRawRangesAndTailOwnership();
     segmentedPresentTailStaysInFinalSource();
     sourcePlansScalePastPhysicalEightBlockCompatibilityBound();
+    sourcePlansRespectCaptureSourcePageBound();
     presentTailIsAOrderedDirectSegment();
     nonFinalOrRepeatedPresentFallsBackAsOneSource();
     oversizeAndOverflowFallbackBeforeReplay();

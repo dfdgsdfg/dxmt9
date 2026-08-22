@@ -1,6 +1,7 @@
 #include "../../../src/dxmt9/dxmt9_cpu_ready_tape.hpp"
 #include "../../../src/dxmt9/dxmt9_source_semantics.hpp"
 #include "../../../src/dxmt9/render/deferred_terminal_suffix.hpp"
+#include "../../../src/dxmt9/render/encode_scheduling_progress.hpp"
 #include "../../../src/dxmt9/render/encode_session_admission.hpp"
 
 #include <array>
@@ -698,6 +699,57 @@ void productionPageCapacityLeavesExactSuccessorHeadroom() {
   };
   check(policy.valid(),
         "session cap plus exact successor headroom fills page high-water");
+}
+
+void firstLeaseOrdinaryShapeExcludesWrapPadding() {
+  ChunkSlot slot{};
+  appendDraw(slot, 0x20);
+  auto semantic = summarize(slot);
+  semantic.pageCount = 64u;
+  auto wrapped = candidate(1u, 1u, semantic);
+  wrapped.reservationPages = 127u;
+
+  const auto view =
+      dxmt9::render::firstLeaseReadyHeadCapacityViewFor(wrapped);
+  check(view.ordinaryShape.pages == 64u &&
+            view.fullReservation.pages == 127u &&
+            view.ordinaryShape.bytes == view.fullReservation.bytes &&
+            dxmt9::render::sessionCapacityFor(wrapped) ==
+                view.fullReservation &&
+            dxmt9::render::sessionPhysicalResidencyCapacityFor(wrapped).pages ==
+                127u,
+        "typed first-lease view separates semantic payload pages from the "
+        "unchanged full reservation/high-water charge");
+
+  auto ordinaryDirect = view.ordinaryShape;
+  auto highWater = view.fullReservation;
+  const auto classify = [&] {
+    return dxmt9::render::classifyFirstLeaseReadyHeadEligibility({
+        .arena = true,
+        .present = false,
+        .fitsOrdinaryCapacity = dxmt9::render::sessionCapacityFitsWithin(
+            view.ordinaryShape, ordinaryDirect),
+        .fitsHighWater = dxmt9::render::sessionCapacityFitsWithin(
+            view.fullReservation, highWater),
+    });
+  };
+  check(classify() ==
+            dxmt9::render::FirstLeaseReadyHeadEligibility::Eligible,
+        "wrap-padded max-payload source is ordinary-shape eligible while its "
+        "full reservation passes high-water");
+
+  highWater.pages = 126u;
+  check(classify() ==
+            dxmt9::render::FirstLeaseReadyHeadEligibility::HighWater,
+        "ordinary payload eligibility cannot bypass the independent full "
+        "reservation high-water proof");
+
+  highWater = view.fullReservation;
+  ordinaryDirect.pages = 63u;
+  check(classify() ==
+            dxmt9::render::FirstLeaseReadyHeadEligibility::OrdinaryCapacity,
+        "payload shape above ordinaryDirect remains ineligible even when the "
+        "full reservation fits high-water");
 }
 
 void capacityRejectionObservationDistinguishesAxesAndWrapPadding() {
@@ -1509,6 +1561,7 @@ int main() {
     capacityRejectionObservationDistinguishesAxesAndWrapPadding();
     leaseHeadroomAndCapGroupingAreDeterministic();
     productionPageCapacityLeavesExactSuccessorHeadroom();
+    firstLeaseOrdinaryShapeExcludesWrapPadding();
     continuationIsConservativeAndRouteAsymmetric();
     multiSourceWindowPreflightIsStrictAndTransactional();
     retirementSplitsResidencyCreditFromEncodedWorkCap();

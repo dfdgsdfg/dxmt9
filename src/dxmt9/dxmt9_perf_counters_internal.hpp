@@ -337,6 +337,27 @@ struct Counters {
   std::atomic<std::uint64_t> cpuReadySessionLeasePeak{0};
   std::atomic<std::uint64_t> cpuReadySessionLeaseAcquisitions{0};
   std::atomic<std::uint64_t> cpuReadySessionLeaseDenials{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseWaitEnter{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseWaitCurrent{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseActionRetryGeneration{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseActionPressureSerial{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseActionProducerWaitSerial{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseActionStop{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseWaitNoAdmissionPressure{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseWaitCreditExhausted{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseIneligibleNonArena{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseIneligiblePresent{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseIneligibleOrdinaryCapacity{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseIneligibleHighWater{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseCreditRearmed{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseObservedGeneration{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseCurrentGeneration{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseHeadSeq{0};
+  std::atomic<std::uint64_t> cpuReadyFirstLeaseHeadSourceOrdinal{0};
+  std::atomic<std::uint64_t> cpuReadyArenaAdmissionWaitEnter{0};
+  std::atomic<std::uint64_t> cpuReadyArenaAdmissionWaitCurrent{0};
+  std::atomic<std::uint64_t> cpuReadyArenaAdmissionExitRetry{0};
+  std::atomic<std::uint64_t> cpuReadyArenaAdmissionExitStop{0};
   std::atomic<std::uint64_t> cpuReadySessionLeaseReservedSources{0};
   std::atomic<std::uint64_t> cpuReadySessionLeaseReservedPages{0};
   std::atomic<std::uint64_t> cpuReadySessionLeaseReservedBytes{0};
@@ -1832,6 +1853,10 @@ struct Counters {
   // Drain-fence prologue (drainDeferredReplay).
   std::atomic<std::uint64_t> offloadDrainFenceWaits{0};
   std::atomic<std::uint64_t> offloadDrainFenceWaitNs{0};
+  std::atomic<std::uint64_t> offloadDrainWaitCurrent{0};
+  std::atomic<std::uint64_t> offloadPushWaitCurrent{0};
+  std::atomic<std::uint64_t> offloadReplayInflightRaw{0};
+  std::atomic<std::uint64_t> offloadReplayStage{0};
   // Offload backpressure attribution: app-thread commit wall (entry to
   // offload-branch return, incl. push/ordinal waits), producer push waits
   // against the bounded raw queue, and worker pop-idle time.

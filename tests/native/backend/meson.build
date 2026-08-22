@@ -294,6 +294,13 @@ test('dxmt9-cpu-ready-session-join-spec',
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
 
+test('dxmt9-cpu-ready-session-join-p0-composition-spec',
+     cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_SESSION_JOIN_P0_COMPOSITION_CASE=1',
+     ])
+
 test('dxmt9-cpu-ready-session-join-perf-off-spec',
      cpu_ready_session_join_spec,
      env: dxmt9_native_test_env_vars + [

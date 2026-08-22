@@ -252,11 +252,14 @@ The raw queue supplies one already assigned `rawOrdinal` and `seqId` per PE
 event. After all required bounded capacity is reserved, the single replay
 worker assigns global `sourceOrdinal` and segment `seqId` values in strict
 event/segment order and publishes a compact `PublicationTicket`. The ticket,
-not any payload block, is visible while construction continues. EventSerial
-mode fixes one source identity for the event. SegmentSerial mode fixes the
-complete ordered event-to-segment mapping; all segment identities are published
-or aborted together and are never reused. No segment may become Ready alone,
-and a later event cannot bypass an earlier event group.
+not any payload block, is visible while construction continues. v2 `EventSerial`
+fixes one source identity for the event and remains the compatibility path even
+when v2 `SegmentSerial` is requested but cannot be proved. SegmentSerial fixes
+the complete ordered event-to-segment mapping; all segment identities are
+published or aborted together and are never reused. The retired
+`dxmt9.render_tape.identity.v1` sidecar is rejected before staging or provider
+effects and is never reinterpreted as EventSerial. No segment may become Ready
+alone, and a later event cannot bypass an earlier event group.
 
 ```mermaid
 stateDiagram-v2
@@ -331,6 +334,72 @@ The protocol is:
    callbacks/resources, and encoded-work identity. Ineligible or legacy
    identities retain the same two-phase operation after Metal completion.
 
+### 3.2.1 v2 identity groups and settlement
+
+`EventSerial` and `SegmentSerial` are identity projections over one PE event;
+they are not aliases for physical Arena blocks. v2 EventSerial has exactly one
+identity entry for the complete event record range. v2 SegmentSerial has a
+bounded ordered group:
+
+| Value | Contract |
+|---|---|
+| Event group | One raw FIFO event ordinal, one generation-stamped group lease, one capture token, and one complete event-local record partition. |
+| Segment identity | One contiguous non-empty record range, one `segmentIndex` derived from group position, one `sourceOrdinal`, one `seqId`, one retention lifetime, and one completion source. |
+| Physical block | Storage only; it carries no independent source identity, completion, DAG, or pass boundary. |
+| Event settlement | A value-owned final status published only after every segment receipt settles in flattened FIFO order. |
+
+The group lease is acquired under the tape metadata lock before any segment is
+constructed. It reserves the aggregate descriptor, identity-slot, page/block,
+retention, resource-mark, publication-control, and session-headroom vectors for
+all segments. The lease stores the event ordinal, segment count, exact record
+ranges, and the next identity pair. Assignment walks `(eventOrdinal,
+segmentIndex)` in order and increments `sourceOrdinal` and `seqId` once per
+segment. A failed checked sum, limit, generation, or resource claim restores
+all cursors and releases the whole lease; no partially assigned identity is
+observable.
+
+The group follows one lifecycle transaction:
+
+```mermaid
+flowchart LR
+  L[Acquire event-group lease] --> W[Write every segment]
+  W --> S[Seal all ranges, marks, and summaries]
+  S --> R[Publish one Ready group]
+  R --> E[Replay segmentIndex order]
+  E --> C[Settle each seqId once]
+  C --> F[Settle event after final segment]
+  F --> Q[Reclaim pages/resources at shared watermarks]
+  W --> A[Abort whole group before effects]
+  S --> A
+  A --> B[EventSerial v2 fallback]
+```
+
+`Ready` is a group state, not a segment state. The encode coordinator may
+consume the group through one `EncodeSession`; it must preserve segment order,
+natural FIFO completion registration, and the complete event record coverage.
+FrameGraph builds one DAG over the event view. A pass and its action ledger may
+continue over an adjacent identity edge only when the membership pieces are
+contiguous and agree on pass identity, attachment/sample shape, exact hazards,
+and load/store semantics. An identity edge is never itself a DAG, logical-pass,
+command-buffer, or submission boundary.
+
+Each segment registers one generation-checked completion receipt. The finish
+thread settles receipts in flattened event/segment order and emits event
+settlement only after the final segment. For a resource referenced by several
+segments, the retention and use stamp use the greatest applicable segment
+watermark. Page runs, publication controls, and group-lease credits remain
+owned until every receipt is activated, settled, and detached; an early segment
+completion cannot reclaim storage needed by a later segment. Duplicate, stale,
+or ABA receipts fail before callbacks, resource-watermark advancement, or
+reclaim.
+
+If v2 SegmentSerial validation fails before receipt activation, child/segment
+creation, or any Metal effect, the coordinator discards the group and replays
+the complete PE event through v2 EventSerial with the same record order and
+Presenter/pass/action/resource contracts. After that effect boundary, failure
+is fail-stop and cannot publish a mixed group or partially fall back. v1 is
+never a fallback.
+
 ### 3.3 Capacity and Back-Pressure
 
 Hard capacities are fixed at queue creation for source descriptors, pages/bytes,
@@ -344,6 +413,15 @@ dimension closes admission it remains closed until ordered reclaim takes that
 dimension to or below its low watermark; the same head candidate is then
 re-evaluated. This hysteresis and FIFO head-of-line rule make admission
 independent of timing and worker scheduling.
+
+SegmentSerial admission passes the complete bounded layout span into both begin
+and wait. `cpuReadyArenaControlSlotsFreeLocked` is their single control-capacity
+predicate: it checks every required slot in the contiguous ring range beginning
+at `writeIndex`. The wait remains one condition-variable interval; a wake with
+only a prefix free re-evaluates and parks again, while the one-source overload
+delegates with a span of length one. Batch Tape waiting uses the batch admission
+probe, so a later layout is validated and the request is never projected through
+the first layout alone.
 
 Before the first source of a streaming session becomes `Represented`, the
 coordinator acquires one generation-stamped `SessionCapacityLease`. The lease
@@ -374,7 +452,22 @@ claim exceeds headroom. Multiple writers or a writer without the exact
 tail/publication identity invalidate the snapshot. That structural failure or
 checked-add overflow poisons the queue before the capacity-generation wait.
 Only a valid unavailable-capacity denial may wait for a later
-capacity-releasing generation.
+capacity-releasing generation. The shared
+`classifyFirstLeaseCapacityWait` action gives generation progress priority over
+pressure. With no generation change, one live Arena admission waiter may spend
+one local serial-progress token at most once for each exact denied
+`(seqId, sourceOrdinal)` non-Present Direct Arena Ready head, only after
+`FirstLeaseReadyHeadCapacityView::ordinaryShape` proves
+the semantic payload-page shape against `ordinaryDirect` and
+`fullReservation` independently proves payload plus circular-wrap padding
+against high-water. Lease and physical-retirement accounting also retain
+`fullReservation`; the typed view does not transfer, forgive, or double-count
+padding ownership. The consumed identity remains unavailable even if the
+capacity generation changes. When standalone execution advances the FIFO, a
+different Ready identity owns a distinct finite token and may make further
+progress in the same capacity generation; the fixed Ready/source bounds limit
+the episode, and no identity may execute twice. A generation change still wins
+classification priority over pressure.
 
 The physical byte credit is a typed
 scheduler-owned Tape charge, not a universal physical-memory measure and not
@@ -412,13 +505,16 @@ A capacity wait cannot own a resource needed by completion. In particular:
 - finish-thread completion and ordered reclaim do not run on the replay worker;
 - the replay worker holds no scheduling, queue, resource-pool, or raw-queue lock
   while waiting;
-- a session opens only after its fixed lease is available; and
-- live admission or raw-writer pressure may wake a progress re-evaluation but
-  cannot post a release event or choose a submission boundary.
+- a session opens only after its fixed lease is available;
+- live pressure cannot post a release event; and
+- the denied-first-lease exception submits at most one exact already-resident
+  ordinary Direct head through the existing standalone serial path, preserving
+  SegmentSerial group identity and tail settlement without reserving capacity.
 
-Temporary pressure therefore delays lease acquisition or new publication but
-cannot delay the completion/reclaim transition that clears it and cannot alter
-the session grouping produced from identical source summaries and configuration.
+Temporary pressure therefore cannot delay the completion/reclaim transition
+that clears it. The bounded exception can only make the proven head a singleton;
+capacity-generation timing cannot append that head, enlarge later grouping, or
+re-arm another exception without an intervening reclaim transition.
 
 ### 3.4 Scoped Replay Drain
 
@@ -1500,8 +1596,9 @@ select pass actions or publish pass-end sidecars.
 Required scheduling counters include:
 
 - requested and resolved source-delivery, partition-execution, and segment-
-  execution provider modes, including default, legacy-alias, parse-rejection,
-  capability-fallback, and per-pass lane-selection reasons;
+  execution provider modes plus EventSerial/SegmentSerial identity mode,
+  including default, legacy-alias, parse-rejection, capability-fallback,
+  complete-event fallback, and per-pass lane-selection reasons;
 - CPU-ready source/page/byte/retention/ticket current and peak occupancy,
   per-dimension high-water closes and low-water reopen/reclaim wakeups;
 - admission wait time/count, head candidate dimensions, wrap padding,
@@ -1519,7 +1616,9 @@ Required scheduling counters include:
   open-session park/wake count and duration, render-continuation allow/reject
   reason, and release-event reason/fence/watermark;
 - raw replay ordinal, published global `sourceOrdinal`, published `seqId`,
-  source-qualified command attribution, completion watermark, and reclaim
+  source-qualified command attribution, event-group and segment counts,
+  group-lease reserve/abort, exact identity assignment, per-segment completion,
+  final event settlement, shared-resource completion watermark, and page reclaim
   watermark;
 - identity/explicit partition counts, draws and cost per range, planner CPU
   time, validation fallback, and parallel eligibility/rejection;
@@ -1531,7 +1630,7 @@ Promotion uses the ordered gates in `R-BACK-2.50`. Moving a wait between
 counters or saturating a new bounded queue is not overlap progress.
 `admissionPressureRelease` and `rawWriterPressureRelease` are forbidden steady-
 state release reasons; any nonzero pressure-created release fails promotion.
-The current provider default remains `compatibility + identity + off` until
+The current provider default remains `compatibility + event + identity + off` until
 those gates pass. Promoting another default must not make an already supported
 provider mode unreachable. Treating the Arena as unconditional or deleting a
 fallback is a provider-lifecycle decision, not a storage-only refactor.
@@ -1562,6 +1661,86 @@ new parallel-lane work should be limited to keeping the seam compiling and
 verified; repeated performance matrices on producer-paced workloads are not
 evidence and should not be scheduled.
 
+### Capture and first-lease diagnostic frontier
+
+`R-BACK-2.82` is observation-only. PE capture breadcrumbs are emitted only
+inside an enabled capture lifecycle. `bootstrap_overlay_complete` follows
+successful overlay seal and validation; `bootstrap_closure_complete` follows
+successful generation-qualified closure construction; `bootstrap_complete`
+follows complete seed construction; and `arm_complete` follows accepted arm,
+interval start, object/mutation seed replay, and capture-token assignment. The
+next Present separately brackets `captured_present_reserve_begin/end`; its
+existing identity attachment and publisher call remain the settlement and
+closure authorities. `alias_pending_flush_end` records both success and failure
+before the replacement path recurses or aborts.
+
+The backend diagnostic binds directly to two production classifiers:
+
+| Frontier | Production authority | Observation |
+|---|---|---|
+| First-lease eligibility | `classifyFirstLeaseReadyHeadEligibility` | exact non-Arena, Present, ordinary-capacity, and high-water disqualifiers |
+| First-lease action | `classifyFirstLeaseCapacityWait` | wait, retry-generation, admission-pressure-serial, producer-wait-serial, stop, plus no-pressure and exhausted-credit wait causes |
+| Arena admission | `classifyCpuReadyAdmissionGate` | wait enter/current and retry/stop exit |
+| Replay drain | `ReplayOffloadQueue` plus `ReplayOffloadWorker` | drain/push waiter gauges, raw in-flight, and `plan`/`arena_admission`/`encode`/`done` stage |
+
+All values are stored only under `DXMT_PERF_COUNTERS`. The existing
+`SchedulingProgressWatchdog` sampler emits the compact frontier snapshot when
+an obligation crosses `DXMT9_SCHEDULING_PROGRESS_WATCHDOG_MS`; reporting does
+not depend on the Present-count periodic reporter and does not add a recovery
+edge.
+
+The GT2 identity-v2 r14 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r14-frontier/r14-console.log`
+reached `bootstrap_complete` and `arm_complete`, then stopped after
+`captured_present_reserve_begin`. Its frontier held one replay raw in
+ArenaAdmission and one denied first lease at seq/source 6978 with observed and
+current generation 13965, while Arena admission enter/retry grew by tens of
+millions and ordinary-capacity ineligibility reached 30. This is the concrete
+counterexample for the two projections above: the wait saw the first control as
+free while a later batch control remained occupied, and wrap padding made a
+max-payload Ready head fail the payload-shape ordinary test. The bounded fixes
+add no release event, capacity, or ownership transition; no new wild run is
+claimed here.
+
+The follow-up GT2 identity-v2 r15 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r15-post-progress-fix/r15-console.log`
+also completed bootstrap/arm and reached `captured_present_reserve_begin`, then
+held a stable frontier for more than 30 seconds. The denied first-lease head was
+seq/source 7204 at unchanged observed/current generation 14416; one admission
+waiter had 122 enters and 121 retry exits, replay raw one remained in
+ArenaAdmission with pending publication 7205..7234, pressure-serial was 113,
+credit-exhausted was 42, and both ordinary/high-water ineligibility counters
+were zero. This confirms the r14 batch and wrap-shape fixes and isolates the
+remaining defect: the generation-scoped escape credit could not rearm after the
+FIFO head changed within the same generation. The bounded repair above changes
+only the token key from capacity generation to exact Ready-head identity; it
+adds no capacity, release event, ownership/lifetime transition, or eligibility
+relaxation. No post-fix wild run is claimed here.
+
+The GT2 identity-v2 r16 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r16-exact-head/r16-console.log`
+shows the post-admission suffix missed by r15. Capture reserve had drained replay
+and cleared Arena admission, yet the first lease remained parked at seq/source
+7060 with observed/current generation 14057, `producerSequenceWait` active,
+`arena_admission_wait_current=0`, replay in-flight/stage zero, and
+`no_admission_pressure=409`. The classifier now consumes the queue's exact
+`waitForSequence` target: only fresh eligible FIFO heads covered by that target
+may take the separately attributed producer-wait standalone action. The
+31-source production composition registers the real replay drain, directly
+invokes the real queue `waitForSequence` path, and proves one Present, seven
+admission escapes, the remaining 23 producer-fence escapes, explicit completion
+through the fence, and the later `D3DERR_NOTAVAILABLE` reserve disposition with
+exact CV/count conservation and no pressure release, session widening, or
+capacity-generation transition. The r17 follow-up under
+`experiments/output/render-tape-gt2-identity-v2-r17-producer-wait/` binds the
+repair through the actual capture reserve path: reserve begins and ends with a
+reserved disposition, the final snapshot records 672 producer-wait standalone
+actions with no current first-lease or Arena-admission waiter, and the run
+publishes a capture-authority v2 sidecar with 147 completed source segments and
+43 settlement rows. No watchdog or GPU error is present. This is progress and
+identity evidence only; the full-frame provider oracle mismatch prevents a
+promotion claim.
+
 ## 10. Verification Mapping
 
 | Contract | Evidence |
@@ -1569,7 +1748,7 @@ evidence and should not be scheduled.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure; the production join spec covers Ready over admission pressure. `CpuReadySessionProgress` and `SessionCapacityLease` model bounded value ownership, writer publication, Park/Join/StaleFailOpen/Drain, charge-once, and exact-successor-over-pressure safety/liveness; `dxmt9-verify-tla` is green. |
+| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |

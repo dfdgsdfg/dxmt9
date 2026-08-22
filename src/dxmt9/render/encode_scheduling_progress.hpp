@@ -13,7 +13,9 @@ struct CpuReadyAdmissionGate {
   bool poisoned = false;
   bool arenaBuildActive = false;
   bool arenaBuildContextPresent = false;
-  bool controlSlotFree = false;
+  // For a SegmentSerial batch this is the conjunction over every required
+  // contiguous control slot, not only the slot at writeIndex.
+  bool controlSlotsFree = false;
   bool reserveStillPressured = true;
 };
 
@@ -29,16 +31,106 @@ constexpr CpuReadyAdmissionAction classifyCpuReadyAdmissionGate(
     return CpuReadyAdmissionAction::Stop;
   }
   if (!gate.arenaBuildActive && !gate.arenaBuildContextPresent &&
-      gate.controlSlotFree && !gate.reserveStillPressured) {
+      gate.controlSlotsFree && !gate.reserveStillPressured) {
     return CpuReadyAdmissionAction::RetryAdmission;
   }
   return CpuReadyAdmissionAction::Wait;
 }
 
-constexpr bool firstLeaseCapacityWaitDone(
-    bool stopped, std::uint64_t observedGeneration,
-    std::uint64_t currentGeneration) noexcept {
-  return stopped || currentGeneration != observedGeneration;
+enum class FirstLeaseCapacityWaitAction : std::uint8_t {
+  Wait,
+  RetryLease,
+  ExecuteOneSourceSerialForAdmissionPressure,
+  ExecuteOneSourceSerialForProducerSequenceWait,
+  Stop,
+};
+
+enum class FirstLeaseReadyHeadEligibility : std::uint8_t {
+  Eligible,
+  NonArena,
+  Present,
+  OrdinaryCapacity,
+  HighWater,
+};
+
+struct FirstLeaseReadyHeadState {
+  bool arena = false;
+  bool present = false;
+  bool fitsOrdinaryCapacity = false;
+  bool fitsHighWater = false;
+};
+
+constexpr FirstLeaseReadyHeadEligibility
+classifyFirstLeaseReadyHeadEligibility(
+    FirstLeaseReadyHeadState state) noexcept {
+  if (!state.arena) {
+    return FirstLeaseReadyHeadEligibility::NonArena;
+  }
+  if (state.present) {
+    return FirstLeaseReadyHeadEligibility::Present;
+  }
+  if (!state.fitsOrdinaryCapacity) {
+    return FirstLeaseReadyHeadEligibility::OrdinaryCapacity;
+  }
+  if (!state.fitsHighWater) {
+    return FirstLeaseReadyHeadEligibility::HighWater;
+  }
+  return FirstLeaseReadyHeadEligibility::Eligible;
+}
+
+struct FirstLeaseReadyHeadIdentity {
+  std::uint64_t seqId = 0;
+  std::uint64_t sourceOrdinal = 0;
+
+  constexpr bool valid() const noexcept {
+    return seqId != 0 && sourceOrdinal != 0;
+  }
+
+  constexpr bool operator==(const FirstLeaseReadyHeadIdentity&) const noexcept =
+      default;
+};
+
+struct FirstLeaseCapacityWaitState {
+  bool stopped = false;
+  bool admissionPressure = false;
+  std::uint64_t producerSequenceWaitTargetSeqId = 0;
+  bool readyHeadOwnsOrdinaryDirectCapacity = false;
+  FirstLeaseReadyHeadIdentity readyHead{};
+  FirstLeaseReadyHeadIdentity lastSerialProgressHead{};
+  std::uint64_t observedGeneration = 0;
+  std::uint64_t currentGeneration = 0;
+};
+
+// A capacity generation always gets the first retry: it may make the complete
+// fixed lease available without changing grouping. Admission pressure may use
+// one exact already-resident ordinary Direct head only once per denied Ready
+// identity. After admission clears, an ordered producer sequence wait may use
+// the same bounded escape only while its exact target covers the FIFO head.
+// FIFO head advance may expose another finite escape without waiting for a
+// physical-capacity generation; the same identity cannot execute twice. These
+// actions create no SessionReleaseEvent and reserve no new Tape capacity.
+constexpr FirstLeaseCapacityWaitAction classifyFirstLeaseCapacityWait(
+    FirstLeaseCapacityWaitState state) noexcept {
+  if (state.stopped) {
+    return FirstLeaseCapacityWaitAction::Stop;
+  }
+  if (state.currentGeneration != state.observedGeneration) {
+    return FirstLeaseCapacityWaitAction::RetryLease;
+  }
+  if (state.admissionPressure && state.readyHeadOwnsOrdinaryDirectCapacity &&
+      state.readyHead.valid() &&
+      state.readyHead != state.lastSerialProgressHead) {
+    return FirstLeaseCapacityWaitAction::
+        ExecuteOneSourceSerialForAdmissionPressure;
+  }
+  if (state.producerSequenceWaitTargetSeqId != 0 &&
+      state.readyHead.seqId <= state.producerSequenceWaitTargetSeqId &&
+      state.readyHeadOwnsOrdinaryDirectCapacity && state.readyHead.valid() &&
+      state.readyHead != state.lastSerialProgressHead) {
+    return FirstLeaseCapacityWaitAction::
+        ExecuteOneSourceSerialForProducerSequenceWait;
+  }
+  return FirstLeaseCapacityWaitAction::Wait;
 }
 
 struct CpuReadySessionWakeState {

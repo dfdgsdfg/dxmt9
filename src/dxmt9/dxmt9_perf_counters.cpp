@@ -4,11 +4,13 @@
 #include "dxmt9_parallel_render_pass.hpp"
 #include "dxmt9_perf_counters_internal.hpp"
 #include "dxmt9_render_scheduling.hpp"
+#include "render/encode_scheduling_progress.hpp"
 
 #include "dxmt9/core.hpp"
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 
@@ -1246,6 +1248,133 @@ void countCpuReadySessionLeaseAcquired(
 
 void countCpuReadySessionLeaseDenied() {
   add(counters().cpuReadySessionLeaseDenials);
+}
+
+void recordCpuReadyFirstLeaseEligibility(
+    render::FirstLeaseReadyHeadEligibility eligibility) {
+  auto& c = counters();
+  switch (eligibility) {
+  case render::FirstLeaseReadyHeadEligibility::Eligible:
+    break;
+  case render::FirstLeaseReadyHeadEligibility::NonArena:
+    add(c.cpuReadyFirstLeaseIneligibleNonArena);
+    break;
+  case render::FirstLeaseReadyHeadEligibility::Present:
+    add(c.cpuReadyFirstLeaseIneligiblePresent);
+    break;
+  case render::FirstLeaseReadyHeadEligibility::OrdinaryCapacity:
+    add(c.cpuReadyFirstLeaseIneligibleOrdinaryCapacity);
+    break;
+  case render::FirstLeaseReadyHeadEligibility::HighWater:
+    add(c.cpuReadyFirstLeaseIneligibleHighWater);
+    break;
+  }
+}
+
+void enterCpuReadyFirstLeaseWait(
+    bool admissionPressure, bool serialProgressAvailable,
+    std::uint64_t observedGeneration, std::uint64_t currentGeneration,
+    std::uint64_t headSeq, std::uint64_t headSourceOrdinal) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.cpuReadyFirstLeaseWaitEnter.fetch_add(1, std::memory_order_relaxed);
+  c.cpuReadyFirstLeaseWaitCurrent.fetch_add(1, std::memory_order_relaxed);
+  if (!admissionPressure) {
+    c.cpuReadyFirstLeaseWaitNoAdmissionPressure.fetch_add(
+        1, std::memory_order_relaxed);
+  } else if (!serialProgressAvailable) {
+    c.cpuReadyFirstLeaseWaitCreditExhausted.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  c.cpuReadyFirstLeaseObservedGeneration.store(
+      observedGeneration, std::memory_order_relaxed);
+  c.cpuReadyFirstLeaseCurrentGeneration.store(
+      currentGeneration, std::memory_order_relaxed);
+  c.cpuReadyFirstLeaseHeadSeq.store(headSeq, std::memory_order_relaxed);
+  c.cpuReadyFirstLeaseHeadSourceOrdinal.store(
+      headSourceOrdinal, std::memory_order_relaxed);
+}
+
+void updateCpuReadyFirstLeaseWaitGenerations(
+    std::uint64_t observedGeneration, std::uint64_t currentGeneration) {
+  auto& c = counters();
+  store(c.cpuReadyFirstLeaseObservedGeneration, observedGeneration);
+  store(c.cpuReadyFirstLeaseCurrentGeneration, currentGeneration);
+}
+
+void exitCpuReadyFirstLeaseWait(
+    render::FirstLeaseCapacityWaitAction action) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  auto current = c.cpuReadyFirstLeaseWaitCurrent.load(
+      std::memory_order_relaxed);
+  while (current != 0u &&
+         !c.cpuReadyFirstLeaseWaitCurrent.compare_exchange_weak(
+             current, current - 1u, std::memory_order_relaxed)) {
+  }
+  c.cpuReadyFirstLeaseHeadSeq.store(0u, std::memory_order_relaxed);
+  c.cpuReadyFirstLeaseHeadSourceOrdinal.store(0u,
+                                               std::memory_order_relaxed);
+  switch (action) {
+  case render::FirstLeaseCapacityWaitAction::RetryLease:
+    c.cpuReadyFirstLeaseActionRetryGeneration.fetch_add(
+        1u, std::memory_order_relaxed);
+    break;
+  case render::FirstLeaseCapacityWaitAction::
+      ExecuteOneSourceSerialForAdmissionPressure:
+    c.cpuReadyFirstLeaseActionPressureSerial.fetch_add(
+        1u, std::memory_order_relaxed);
+    break;
+  case render::FirstLeaseCapacityWaitAction::
+      ExecuteOneSourceSerialForProducerSequenceWait:
+    c.cpuReadyFirstLeaseActionProducerWaitSerial.fetch_add(
+        1u, std::memory_order_relaxed);
+    break;
+  case render::FirstLeaseCapacityWaitAction::Stop:
+    c.cpuReadyFirstLeaseActionStop.fetch_add(1u, std::memory_order_relaxed);
+    break;
+  case render::FirstLeaseCapacityWaitAction::Wait:
+    break;
+  }
+}
+
+void countCpuReadyFirstLeaseCreditRearmed() {
+  add(counters().cpuReadyFirstLeaseCreditRearmed);
+}
+
+void enterCpuReadyArenaAdmissionWait() {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.cpuReadyArenaAdmissionWaitEnter.fetch_add(1u,
+                                               std::memory_order_relaxed);
+  c.cpuReadyArenaAdmissionWaitCurrent.fetch_add(1u,
+                                                 std::memory_order_relaxed);
+}
+
+void exitCpuReadyArenaAdmissionWait(bool retry) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  auto current = c.cpuReadyArenaAdmissionWaitCurrent.load(
+      std::memory_order_relaxed);
+  while (current != 0u &&
+         !c.cpuReadyArenaAdmissionWaitCurrent.compare_exchange_weak(
+             current, current - 1u, std::memory_order_relaxed)) {
+  }
+  if (retry) {
+    c.cpuReadyArenaAdmissionExitRetry.fetch_add(
+        1u, std::memory_order_relaxed);
+  } else {
+    c.cpuReadyArenaAdmissionExitStop.fetch_add(
+        1u, std::memory_order_relaxed);
+  }
 }
 
 void recordCpuReadySessionLeaseUsed(std::uint64_t usedSources,
@@ -6163,6 +6292,53 @@ void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds) {
   add(counters().offloadDrainFenceWaitNs, nanoseconds);
 }
 
+namespace {
+
+void decrementCurrent(std::atomic<std::uint64_t>& counter) {
+  auto current = counter.load(std::memory_order_relaxed);
+  while (current != 0u &&
+         !counter.compare_exchange_weak(
+             current, current - 1u, std::memory_order_relaxed)) {
+  }
+}
+
+}  // namespace
+
+void enterOffloadDrainWait() {
+  if (enabled()) {
+    counters().offloadDrainWaitCurrent.fetch_add(
+        1u, std::memory_order_relaxed);
+  }
+}
+
+void exitOffloadDrainWait() {
+  if (enabled()) {
+    decrementCurrent(counters().offloadDrainWaitCurrent);
+  }
+}
+
+void enterOffloadPushWait() {
+  if (enabled()) {
+    counters().offloadPushWaitCurrent.fetch_add(
+        1u, std::memory_order_relaxed);
+  }
+}
+
+void exitOffloadPushWait() {
+  if (enabled()) {
+    decrementCurrent(counters().offloadPushWaitCurrent);
+  }
+}
+
+void recordOffloadReplayInflightRaw(bool inFlight) {
+  store(counters().offloadReplayInflightRaw, inFlight ? 1u : 0u);
+}
+
+void recordOffloadReplayStage(OffloadReplayStage stage) {
+  store(counters().offloadReplayStage,
+        static_cast<std::uint64_t>(stage));
+}
+
 void countOffloadCommitAppCpuTime(std::uint64_t nanoseconds) {
   add(counters().offloadCommitAppNs, nanoseconds);
 }
@@ -6231,6 +6407,128 @@ void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds) {
 
 void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds) {
   add(counters().offloadWorkerIdleWaitNs, nanoseconds);
+}
+
+SchedulingProgressFrontierSnapshot snapshotSchedulingProgressFrontier() {
+  const auto& c = counters();
+  return {
+      .cpuReadyFirstLeaseWaitEnter =
+          load(c.cpuReadyFirstLeaseWaitEnter),
+      .cpuReadyFirstLeaseWaitCurrent =
+          load(c.cpuReadyFirstLeaseWaitCurrent),
+      .cpuReadyFirstLeaseActionRetryGeneration =
+          load(c.cpuReadyFirstLeaseActionRetryGeneration),
+      .cpuReadyFirstLeaseActionPressureSerial =
+          load(c.cpuReadyFirstLeaseActionPressureSerial),
+      .cpuReadyFirstLeaseActionProducerWaitSerial =
+          load(c.cpuReadyFirstLeaseActionProducerWaitSerial),
+      .cpuReadyFirstLeaseActionStop =
+          load(c.cpuReadyFirstLeaseActionStop),
+      .cpuReadyFirstLeaseWaitNoAdmissionPressure =
+          load(c.cpuReadyFirstLeaseWaitNoAdmissionPressure),
+      .cpuReadyFirstLeaseWaitCreditExhausted =
+          load(c.cpuReadyFirstLeaseWaitCreditExhausted),
+      .cpuReadyFirstLeaseIneligibleNonArena =
+          load(c.cpuReadyFirstLeaseIneligibleNonArena),
+      .cpuReadyFirstLeaseIneligiblePresent =
+          load(c.cpuReadyFirstLeaseIneligiblePresent),
+      .cpuReadyFirstLeaseIneligibleOrdinaryCapacity =
+          load(c.cpuReadyFirstLeaseIneligibleOrdinaryCapacity),
+      .cpuReadyFirstLeaseIneligibleHighWater =
+          load(c.cpuReadyFirstLeaseIneligibleHighWater),
+      .cpuReadyFirstLeaseCreditRearmed =
+          load(c.cpuReadyFirstLeaseCreditRearmed),
+      .cpuReadyFirstLeaseObservedGeneration =
+          load(c.cpuReadyFirstLeaseObservedGeneration),
+      .cpuReadyFirstLeaseCurrentGeneration =
+          load(c.cpuReadyFirstLeaseCurrentGeneration),
+      .cpuReadyFirstLeaseHeadSeq = load(c.cpuReadyFirstLeaseHeadSeq),
+      .cpuReadyFirstLeaseHeadSourceOrdinal =
+          load(c.cpuReadyFirstLeaseHeadSourceOrdinal),
+      .cpuReadyArenaAdmissionWaitEnter =
+          load(c.cpuReadyArenaAdmissionWaitEnter),
+      .cpuReadyArenaAdmissionWaitCurrent =
+          load(c.cpuReadyArenaAdmissionWaitCurrent),
+      .cpuReadyArenaAdmissionExitRetry =
+          load(c.cpuReadyArenaAdmissionExitRetry),
+      .cpuReadyArenaAdmissionExitStop =
+          load(c.cpuReadyArenaAdmissionExitStop),
+      .offloadDrainWaitCurrent = load(c.offloadDrainWaitCurrent),
+      .offloadPushWaitCurrent = load(c.offloadPushWaitCurrent),
+      .offloadReplayInflightRaw = load(c.offloadReplayInflightRaw),
+      .offloadReplayStage = load(c.offloadReplayStage),
+  };
+}
+
+void reportSchedulingProgressThreshold() {
+  if (!enabled()) {
+    return;
+  }
+  const auto s = snapshotSchedulingProgressFrontier();
+  std::fprintf(
+      stderr,
+      "[dxmt9-scheduling-progress] "
+      "cpu_ready_first_lease_wait_enter=%llu "
+      "cpu_ready_first_lease_wait_current=%llu "
+      "cpu_ready_first_lease_action_retry_generation=%llu "
+      "cpu_ready_first_lease_action_pressure_serial=%llu "
+      "cpu_ready_first_lease_action_producer_wait_serial=%llu "
+      "cpu_ready_first_lease_action_stop=%llu "
+      "cpu_ready_first_lease_wait_no_admission_pressure=%llu "
+      "cpu_ready_first_lease_wait_credit_exhausted=%llu "
+      "cpu_ready_first_lease_ineligible_non_arena=%llu "
+      "cpu_ready_first_lease_ineligible_present=%llu "
+      "cpu_ready_first_lease_ineligible_ordinary_capacity=%llu "
+      "cpu_ready_first_lease_ineligible_high_water=%llu "
+      "cpu_ready_first_lease_credit_rearmed=%llu "
+      "cpu_ready_first_lease_observed_generation=%llu "
+      "cpu_ready_first_lease_current_generation=%llu "
+      "cpu_ready_first_lease_head_seq=%llu "
+      "cpu_ready_first_lease_head_source_ordinal=%llu "
+      "cpu_ready_arena_admission_wait_enter=%llu "
+      "cpu_ready_arena_admission_wait_current=%llu "
+      "cpu_ready_arena_admission_exit_retry=%llu "
+      "cpu_ready_arena_admission_exit_stop=%llu "
+      "offload_drain_wait_current=%llu offload_push_wait_current=%llu "
+      "offload_replay_inflight_raw=%llu offload_replay_stage=%llu\n",
+      static_cast<unsigned long long>(s.cpuReadyFirstLeaseWaitEnter),
+      static_cast<unsigned long long>(s.cpuReadyFirstLeaseWaitCurrent),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseActionRetryGeneration),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseActionPressureSerial),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseActionProducerWaitSerial),
+      static_cast<unsigned long long>(s.cpuReadyFirstLeaseActionStop),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseWaitNoAdmissionPressure),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseWaitCreditExhausted),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseIneligibleNonArena),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseIneligiblePresent),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseIneligibleOrdinaryCapacity),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseIneligibleHighWater),
+      static_cast<unsigned long long>(s.cpuReadyFirstLeaseCreditRearmed),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseObservedGeneration),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseCurrentGeneration),
+      static_cast<unsigned long long>(s.cpuReadyFirstLeaseHeadSeq),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseHeadSourceOrdinal),
+      static_cast<unsigned long long>(s.cpuReadyArenaAdmissionWaitEnter),
+      static_cast<unsigned long long>(s.cpuReadyArenaAdmissionWaitCurrent),
+      static_cast<unsigned long long>(s.cpuReadyArenaAdmissionExitRetry),
+      static_cast<unsigned long long>(s.cpuReadyArenaAdmissionExitStop),
+      static_cast<unsigned long long>(s.offloadDrainWaitCurrent),
+      static_cast<unsigned long long>(s.offloadPushWaitCurrent),
+      static_cast<unsigned long long>(s.offloadReplayInflightRaw),
+      static_cast<unsigned long long>(s.offloadReplayStage));
+  std::fflush(stderr);
 }
 
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,

@@ -43,11 +43,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -123,6 +125,98 @@ struct CommandQueueArenaLeaseTestAccess {
   static std::size_t capacityWaiterCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyCapacityWaiterCount_;
+  }
+
+  static std::uint32_t arenaAdmissionWaiterCount(CommandQueue& queue) {
+    return queue.arenaAdmissionWaiterCount_.load(std::memory_order_acquire);
+  }
+
+  static void enableSchedulingWaitObservation(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlySchedulingWaitObservationEnabled_ = true;
+    queue.testOnlyArenaAdmissionWaitEntries_ = 0;
+    queue.testOnlyFirstLeaseWaitEntries_ = 0;
+  }
+
+  static bool waitForArenaAdmissionWaitEntries(
+      CommandQueue& queue, std::uint64_t expected) {
+    std::unique_lock lock(queue.mutex_);
+    queue.sessionReleaseCv_.wait(lock, [&] {
+      return queue.testOnlyArenaAdmissionWaitEntries_ >= expected;
+    });
+    return true;
+  }
+
+  static bool waitForFirstLeaseWaitEntries(
+      CommandQueue& queue, std::uint64_t expected) {
+    std::unique_lock lock(queue.mutex_);
+    queue.sessionReleaseCv_.wait(lock, [&] {
+      return queue.testOnlyFirstLeaseWaitEntries_ >= expected;
+    });
+    return true;
+  }
+
+  static void waitForProducerSequenceWaitTarget(
+      CommandQueue& queue, std::uint64_t targetSeqId) {
+    queue.queueLifecycle_.waitForProducerSequenceWaitTargetForTest(targetSeqId);
+  }
+
+  static void waitForSequence(CommandQueue& queue,
+                              std::uint64_t targetSeqId) {
+    std::unique_lock lock(queue.mutex_);
+    queue.queueLifecycle_.waitForSequence(lock, targetSeqId);
+  }
+
+  static void pauseAfterFirstLeaseRetry(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPauseAfterFirstLeaseRetry_ = true;
+    queue.testOnlyPausedAfterFirstLeaseRetry_ = false;
+  }
+
+  static bool waitForFirstLeaseRetryPause(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.sessionReleaseCv_.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return queue.testOnlyPausedAfterFirstLeaseRetry_;
+        });
+  }
+
+  static void resumeAfterFirstLeaseRetry(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPausedAfterFirstLeaseRetry_ = false;
+    queue.sessionReleaseCv_.notify_all();
+  }
+
+  static bool waitForArenaAdmission(
+      CommandQueue& queue,
+      const core::ArenaSourcePayloadLayout& layout) {
+    return queue.waitForCpuReadyArenaAdmission(layout);
+  }
+
+  static bool waitForArenaAdmission(
+      CommandQueue& queue,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) {
+    return queue.waitForCpuReadyArenaAdmission(layouts);
+  }
+
+  static core::CpuReadyTape::ReserveProbe probeArenaAdmission(
+      CommandQueue& queue,
+      const core::ArenaSourcePayloadLayout& layout) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.probeArenaReserve(layout);
+  }
+
+  static core::CpuReadyTape::ReserveProbe probeArenaAdmission(
+      CommandQueue& queue,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.probeArenaBatchAdmission(layouts);
+  }
+
+  static bool arenaControlSlotsFree(CommandQueue& queue,
+                                    std::size_t requiredSlots) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyArenaControlSlotsFreeLocked(requiredSlots);
   }
 
   static std::uint64_t capacityProgressGeneration(CommandQueue& queue) {
@@ -294,6 +388,8 @@ struct CommandQueueArenaLeaseTestAccess {
     }
     queue.encodeCv_.notify_all();
     queue.writeCv_.notify_all();
+    queue.finishCv_.notify_all();
+    queue.sessionReleaseCv_.notify_all();
   }
 
   static bool postOrderedSubmit(CommandQueue& queue,
@@ -735,10 +831,20 @@ dxmt9::d3d9::RawCommandChunk makeRaw(
 }
 
 struct SessionJoinDevice final : dxmt9::Device {
-  SessionJoinDevice()
-      : queue_(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_,
-               retainedToken<WMT::CommandQueue>(
-                   "session-join-production-queue-token")) {}
+  explicit SessionJoinDevice(bool captureStreaming = false)
+      : queue_(
+            dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_,
+            retainedToken<WMT::CommandQueue>(
+                "session-join-production-queue-token"),
+            captureStreaming
+                ? dxmt9::render::RenderPartitionConfig{
+                      .sourceIdentity =
+                          dxmt9::render::SourceIdentityConfig{
+                              .requested = dxmt9::render::
+                                  SourceIdentityModeRequest::Segment,
+                              .resolved = dxmt9::render::
+                                  SourceIdentityMode::SegmentSerial}}
+                : dxmt9::render::RenderPartitionConfig{}) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return queue_; }
@@ -772,9 +878,33 @@ struct SessionJoinDevice final : dxmt9::Device {
   std::uint64_t nextHandle_ = 1;
 };
 
+SourcePayloadLayout maximal64PageSegment(SourcePayloadCapacity capacity) {
+  constexpr std::size_t kPageSize = 4096u;
+  constexpr std::size_t kMaxPages = 64u;
+  std::size_t acceptedBytes = 0u;
+  std::size_t rejectedBytes = kPageSize * kMaxPages + 1u;
+  std::optional<SourcePayloadLayout> accepted;
+  while (acceptedBytes + 1u < rejectedBytes) {
+    const std::size_t candidateBytes =
+        acceptedBytes + (rejectedBytes - acceptedBytes) / 2u;
+    capacity.drawPayloadBytes = candidateBytes;
+    const auto candidate =
+        makeSourcePayloadLayout(capacity, kPageSize, kMaxPages);
+    if (candidate) {
+      acceptedBytes = candidateBytes;
+      accepted = candidate;
+    } else {
+      rejectedBytes = candidateBytes;
+    }
+  }
+  check(accepted.has_value() && accepted->pageCount == kMaxPages,
+        "capture segment must maximize within the production 64-page bound");
+  return *accepted;
+}
+
 struct RuntimeFixture {
-  RuntimeFixture() {
-    auto upper = std::make_unique<SessionJoinDevice>();
+  explicit RuntimeFixture(bool captureStreaming = false) {
+    auto upper = std::make_unique<SessionJoinDevice>(captureStreaming);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -812,22 +942,103 @@ struct RuntimeFixture {
 
   void publishArenaClearPages(std::uint64_t rawOrdinal,
                               std::size_t pageCount) {
-    SourcePayloadCapacity capacity{};
-    capacity.commandHeaders = 1;
-    capacity.clearRecords = 1;
-    capacity.drawPayloadBytes = (pageCount - 1u) * 4096u;
-    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
-    check(segment.has_value() && segment->pageCount == pageCount,
-          "sized arena clear segment must match its exact page claim");
-    const std::array segments{*segment};
-    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(pageCount != 0u && pageCount <= 512u &&
+              (pageCount <= 64u || pageCount % 64u == 0u),
+          "sized Arena clear source must use bounded 64-page segments");
+    const std::size_t segmentCount =
+        pageCount <= 64u ? 1u : pageCount / 64u;
+    std::array<SourcePayloadLayout, 8> segments{};
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      const std::size_t segmentPages = pageCount <= 64u ? pageCount : 64u;
+      SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = 1;
+      capacity.clearRecords = 1;
+      capacity.drawPayloadBytes = (segmentPages - 1u) * 4096u;
+      const auto segment = pageCount > 64u
+          ? std::optional<SourcePayloadLayout>{
+                maximal64PageSegment(capacity)}
+          : makeSourcePayloadLayout(capacity, 4096, 64);
+      check(segment.has_value() && segment->pageCount == segmentPages,
+            "sized Arena clear segment must match its bounded page claim");
+      segments[i] = *segment;
+    }
+    const auto layout = makeArenaSourcePayloadLayout(
+        std::span(segments).first(segmentCount), 4096, pageCount);
     check(layout.has_value() && layout->pageCount == pageCount,
           "sized arena clear source must match its exact page claim");
     auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
     check(begin.has_value(), "sized arena clear admission must succeed");
     auto lease = std::move(*begin.lease);
-    routing->queue_.submitClear(ClearDesc{});
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      check(lease.selectSegment(i),
+            "sized Arena clear source selects each physical segment");
+      routing->queue_.submitClear(ClearDesc{});
+    }
     check(lease.publish(), "sized arena clear source must publish directly");
+  }
+
+  void publishArenaClearPresentPages(std::uint64_t rawOrdinal,
+                                     std::size_t pageCount) {
+    check(pageCount != 0u && pageCount % 64u == 0u && pageCount <= 512u,
+          "sized Arena Present source must use bounded 64-page segments");
+    const std::size_t segmentCount = pageCount / 64u;
+    std::array<SourcePayloadLayout, 8> segments{};
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = i + 1u == segmentCount ? 2u : 1u;
+      capacity.clearRecords = 1;
+      capacity.presentRecords = i + 1u == segmentCount ? 1u : 0u;
+      const auto segment = maximal64PageSegment(capacity);
+      check(segment.pageCount == 64u,
+            "sized Arena Present segment must claim exactly 64 pages");
+      segments[i] = segment;
+    }
+    const auto layout = makeArenaSourcePayloadLayout(
+        std::span(segments).first(segmentCount), 4096, pageCount);
+    check(layout.has_value() && layout->pageCount == pageCount,
+          "sized Arena Present source must match its exact page claim");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "sized Arena Present admission must succeed");
+    auto lease = std::move(*begin.lease);
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      check(lease.selectSegment(i),
+            "sized Arena Present source selects each physical segment");
+      routing->queue_.submitClear(ClearDesc{});
+      if (i + 1u == segmentCount) {
+        check(routing->queue_.submitPresent(SwapDesc{}) != 0u,
+              "sized Arena Present records one terminal Present");
+      }
+    }
+    check(lease.publish(), "sized Arena Present source publishes directly");
+  }
+
+  void publishArenaClearGroup(std::uint64_t rawOrdinal,
+                              std::size_t sourceCount) {
+    check(sourceCount >= 2u &&
+              sourceCount <= CpuReadyTape::kMaxArenaBatchSources,
+          "SegmentSerial clear group must use the bounded batch size");
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1u;
+    capacity.clearRecords = 1u;
+    const auto segment = maximal64PageSegment(capacity);
+    const std::array sourceSegments{segment};
+    const auto layout = makeArenaSourcePayloadLayout(
+        sourceSegments, 4096u, segment.pageCount);
+    check(layout.has_value() && layout->pageCount == 64u,
+          "SegmentSerial clear source must own one exact 64-page segment");
+    std::array<ArenaSourcePayloadLayout,
+               CpuReadyTape::kMaxArenaBatchSources> layouts{};
+    std::fill_n(layouts.begin(), sourceCount, *layout);
+    auto begin = routing->queue_.beginCpuReadyArenaSources(
+        rawOrdinal, std::span(layouts).first(sourceCount));
+    check(begin.has_value(), "SegmentSerial clear group admission must succeed");
+    for (std::size_t i = 0; i < sourceCount; ++i) {
+      check(begin->selectSourceSegment(i, 0u),
+            "SegmentSerial clear group selects each source exactly once");
+      routing->queue_.submitClear(ClearDesc{});
+    }
+    check(begin->publishBatch({}, nullptr),
+          "SegmentSerial clear group must publish atomically");
   }
 
   void publishArenaDraw(std::uint64_t rawOrdinal) {
@@ -1157,9 +1368,13 @@ snapshotLookaheadSources(
 
 struct ProductionLoopBackendState {
   std::vector<ProductionLoopBackendCall> calls;
+  std::mutex postCommitMutex;
+  std::condition_variable postCommitCv;
+  std::size_t postCommitCount = 0;
   std::atomic<std::size_t> observedBackendCalls{0};
   std::atomic<bool> firstRecordPostCommitRan{false};
   std::atomic<std::size_t> backendCallCountAtFirstRecordSubmit{0};
+  std::function<void(std::size_t)> afterPostCommit;
 };
 
 class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
@@ -1232,6 +1447,24 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         state->backendCallCountAtFirstRecordSubmit.store(
             state->calls.size(), std::memory_order_relaxed);
         state->firstRecordPostCommitRan.store(true, std::memory_order_release);
+      });
+    }
+    if (state_->afterPostCommit) {
+      const auto state = state_;
+      const auto callCount = state_->calls.size();
+      submission.postCommitCallbacks.push_back([state, callCount] {
+        state->afterPostCommit(callCount);
+      });
+    }
+    {
+      const auto state = state_;
+      const auto callCount = state_->calls.size();
+      submission.postCommitCallbacks.push_back([state, callCount] {
+        {
+          std::lock_guard lock(state->postCommitMutex);
+          state->postCommitCount = callCount;
+        }
+        state->postCommitCv.notify_all();
       });
     }
     return submission;
@@ -4187,6 +4420,300 @@ void productionLoopLeaseWaitResumesAfterGpuReclaim() {
         "GPU-reclaim Direct source completes and reclaims normally");
 }
 
+struct P0OffloadAdmissionContext {
+  dxmt9::CommandQueue* queue = nullptr;
+  const dxmt9::core::ArenaSourcePayloadLayout* layouts = nullptr;
+  std::size_t layoutCount = 0;
+  std::atomic<bool> admitted{false};
+};
+
+std::atomic<P0OffloadAdmissionContext*> p0OffloadAdmissionContext{nullptr};
+
+std::int32_t replayP0OffloadAdmission(
+    D9CDevice*, dxmt9::d3d9::RawCommandChunk&) {
+  auto* context = p0OffloadAdmissionContext.load(std::memory_order_acquire);
+  if (!context || !context->queue || !context->layouts ||
+      context->layoutCount == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const bool admitted =
+      dxmt9::CommandQueueArenaLeaseTestAccess::waitForArenaAdmission(
+          *context->queue,
+          std::span(context->layouts, context->layoutCount));
+  context->admitted.store(admitted, std::memory_order_release);
+  dxmt9::perf::recordOffloadReplayStage(
+      dxmt9::perf::OffloadReplayStage::Done);
+  return D3D_OK;
+}
+
+void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
+  RuntimeFixture fixture(/*captureStreaming=*/true);
+  auto& queue = fixture.routing->queue_;
+  const auto frontierBefore =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+
+  fixture.publishArenaClearPresentPages(1u, 64u);
+  constexpr std::array<std::size_t, 4> groupSizes{8u, 8u, 8u, 6u};
+  std::uint64_t rawOrdinal = 2u;
+  for (const auto groupSize : groupSizes) {
+    fixture.publishArenaClearGroup(rawOrdinal++, groupSize);
+  }
+  const auto sourcesBefore =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  const auto statsBefore =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(sourcesBefore.size() == dxmt9::kMaxQueuedChunks &&
+            sourcesBefore.front().hasPresent &&
+            statsBefore.readyFifoEntries == dxmt9::kMaxQueuedChunks &&
+            statsBefore.residentPages == dxmt9::kMaxQueuedChunks * 64u,
+        "changed-head fixture fills the production control ring with one "
+        "Present and thirty grouped SegmentSerial sources");
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto segment = makeSourcePayloadLayout(capacity, 4096u, 64u);
+  check(segment.has_value() && segment->pageCount == 1u,
+        "changed-head waiter uses one-page bounded source layouts");
+  const std::array sourceSegments{*segment};
+  const auto layout = makeArenaSourcePayloadLayout(
+      sourceSegments, 4096u, 64u);
+  check(layout.has_value() && layout->pageCount == 1u,
+        "changed-head waiter owns valid one-page batch members");
+  std::array<ArenaSourcePayloadLayout,
+             CpuReadyTape::kMaxArenaBatchSources> waitLayouts{};
+  std::fill(waitLayouts.begin(), waitLayouts.end(), *layout);
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableSchedulingWaitObservation(queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::atomic<bool> captureReturned{false};
+  std::atomic<std::int32_t> captureResult{D3D_OK};
+  std::mutex captureReturnMutex;
+  std::condition_variable captureReturnCv;
+  std::thread captureThread;
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  struct ThreadGuard {
+    RuntimeFixture& fixture;
+    dxmt9::CommandQueue& queue;
+    std::thread& capture;
+    std::thread& encode;
+    ~ThreadGuard() {
+      if (capture.joinable() || encode.joinable()) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      }
+      if (fixture.cDevice->replayOffload) {
+        fixture.cDevice->replayOffload->stop();
+      }
+      if (capture.joinable()) {
+        capture.join();
+      }
+      if (encode.joinable()) {
+        encode.join();
+      }
+      p0OffloadAdmissionContext.store(nullptr, std::memory_order_release);
+    }
+  } threadGuard{fixture, queue, captureThread, encodeThread};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            waitForFirstLeaseWaitEntries(queue, 1u),
+        "grouped ring reaches the real denied-first-lease wait before "
+        "admission pressure");
+
+  const std::uint64_t unchangedGeneration =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          capacityProgressGeneration(queue);
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::arenaControlSlotsFree(
+            queue, waitLayouts.size()),
+        "the unchanged-generation frontier starts with wrapped occupied "
+        "control slots");
+  fixture.cDevice->replayOffload =
+      std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>(
+          replayP0OffloadAdmission);
+  P0OffloadAdmissionContext offloadContext{
+      .queue = &queue,
+      .layouts = waitLayouts.data(),
+      .layoutCount = waitLayouts.size(),
+  };
+  p0OffloadAdmissionContext.store(&offloadContext,
+                                   std::memory_order_release);
+  fixture.cDevice->replayOffload->queue().
+      enableDrainWaitObservationForTest();
+  backendState->afterPostCommit = [&](std::size_t callCount) {
+    if (callCount != waitLayouts.size()) {
+      return;
+    }
+    fixture.cDevice->replayOffload->queue().
+        waitForDrainWaitEntriesForTest(1u);
+    fixture.cDevice->replayOffload->queue().waitForDrainedForTest();
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        waitForProducerSequenceWaitTarget(queue, sourcesBefore.back().seqId);
+  };
+  const std::array offloadRecords{clearRecord()};
+  auto offloadRaw = makeRaw(makeWireFixture(offloadRecords), rawOrdinal);
+  check(fixture.cDevice->replayOffload->queue().push(
+            std::move(offloadRaw)),
+        "changed-head composition enqueues one real replay-offload raw");
+  captureThread = std::thread([&] {
+    fixture.cDevice->replayOffload->queue().waitDrained();
+    dxmt9::CommandQueueArenaLeaseTestAccess::waitForSequence(
+        queue, sourcesBefore.back().seqId);
+    captureResult.store(
+        dxmt9c_device_reserve_render_tape_present_capture(
+            fixture.cDevice.get()),
+        std::memory_order_release);
+    {
+      std::lock_guard lock(captureReturnMutex);
+      captureReturned.store(true, std::memory_order_release);
+    }
+    captureReturnCv.notify_all();
+  });
+  check(fixture.cDevice->replayOffload->queue().
+            waitForDrainWaitEntriesForTest(1u),
+        "capture-boundary-shaped replay drain parks on the exact in-flight "
+        "admission raw");
+  fixture.cDevice->replayOffload->start(fixture.cDevice.get());
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionWaitEntries(queue, 1u),
+        "eight-source admission enters the real production wait and wakes "
+        "the denied-first-lease coordinator");
+
+  const bool replayDrained = fixture.cDevice->replayOffload->queue().
+      waitForDrainedForTest();
+  {
+    std::unique_lock lock(backendState->postCommitMutex);
+    backendState->postCommitCv.wait(lock, [&] {
+      return backendState->postCommitCount == sourcesBefore.size();
+    });
+  }
+  const auto frontierAtDrain =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+  const auto admissionEscapes =
+      frontierAtDrain.cpuReadyFirstLeaseActionPressureSerial -
+      frontierBefore.cpuReadyFirstLeaseActionPressureSerial;
+  const auto producerWaitEscapes =
+      frontierAtDrain.cpuReadyFirstLeaseActionProducerWaitSerial -
+      frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial;
+  const auto serialEscapes = admissionEscapes + producerWaitEscapes;
+  const auto identityRearms =
+      frontierAtDrain.cpuReadyFirstLeaseCreditRearmed -
+      frontierBefore.cpuReadyFirstLeaseCreditRearmed;
+  const auto admissionRetryExits =
+      frontierAtDrain.cpuReadyArenaAdmissionExitRetry -
+      frontierBefore.cpuReadyArenaAdmissionExitRetry;
+  check(replayDrained && offloadContext.admitted.load(
+                            std::memory_order_acquire) &&
+            !captureReturned.load(std::memory_order_acquire) &&
+            admissionEscapes == waitLayouts.size() - 1u &&
+            producerWaitEscapes ==
+                sourcesBefore.size() - waitLayouts.size() &&
+            identityRearms + 1u == admissionEscapes &&
+            admissionRetryExits == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::
+                    capacityProgressGeneration(queue) == unchangedGeneration,
+        "seven admission escapes and the remaining producer-fence suffix "
+        "advance without a capacity-generation transition");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            arenaControlSlotsFree(queue, waitLayouts.size()) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::probeArenaAdmission(
+                queue, waitLayouts) ==
+                dxmt9::core::CpuReadyTape::ReserveProbe::Ready &&
+            frontierAtDrain.cpuReadyFirstLeaseIneligibleOrdinaryCapacity ==
+                frontierBefore.cpuReadyFirstLeaseIneligibleOrdinaryCapacity &&
+            frontierAtDrain.cpuReadyFirstLeaseIneligibleHighWater ==
+                frontierBefore.cpuReadyFirstLeaseIneligibleHighWater &&
+            frontierAtDrain.cpuReadyFirstLeaseWaitCreditExhausted ==
+                frontierBefore.cpuReadyFirstLeaseWaitCreditExhausted,
+        "the complete production batch predicate becomes Ready only through "
+        "eligible exact-head drains, without capacity or credit exhaustion");
+  check(backendState->calls.size() == sourcesBefore.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, sourcesBefore) &&
+            backendState->calls.front().seqId == sourcesBefore.front().seqId,
+        "backend calls conserve one older Present plus all thirty escapes");
+  for (std::size_t i = 0; i < serialEscapes; ++i) {
+    const auto& call = backendState->calls[i + 1u];
+    check(call.seqId == sourcesBefore[i + 1u].seqId &&
+              call.session == 0u && !call.deferSessionFinalization,
+          "each changed Ready identity executes once in FIFO order through "
+          "the standalone serial path");
+  }
+
+  std::size_t completedSources = 0;
+  for (const auto& source : sourcesBefore) {
+    completedSources +=
+        dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, std::span(&source, 1u));
+  }
+  check(completedSources == sourcesBefore.size(),
+        "explicit completion reaches the ordered producer fence exactly");
+  {
+    std::unique_lock lock(captureReturnMutex);
+    captureReturnCv.wait(lock, [&] {
+      return captureReturned.load(std::memory_order_acquire);
+    });
+  }
+  check(captureResult.load(std::memory_order_acquire) ==
+            dxmt9::core::D3DERR_NOTAVAILABLE,
+        "reserve disposition follows the completed presenter-less fixture "
+        "boundary");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  captureThread.join();
+  encodeThread.join();
+  fixture.cDevice->replayOffload->stop();
+  p0OffloadAdmissionContext.store(nullptr, std::memory_order_release);
+  const auto frontierAfter =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+  const auto waitEnters = frontierAfter.cpuReadyFirstLeaseWaitEnter -
+      frontierBefore.cpuReadyFirstLeaseWaitEnter;
+  const auto waitExits =
+      frontierAfter.cpuReadyFirstLeaseActionRetryGeneration -
+          frontierBefore.cpuReadyFirstLeaseActionRetryGeneration +
+      frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
+          frontierBefore.cpuReadyFirstLeaseActionPressureSerial +
+      frontierAfter.cpuReadyFirstLeaseActionProducerWaitSerial -
+          frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial +
+      frontierAfter.cpuReadyFirstLeaseActionStop -
+          frontierBefore.cpuReadyFirstLeaseActionStop;
+  const auto stopExits =
+      frontierAfter.cpuReadyFirstLeaseActionStop -
+      frontierBefore.cpuReadyFirstLeaseActionStop;
+  check(waitEnters == waitExits &&
+            frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
+                    frontierBefore.cpuReadyFirstLeaseActionPressureSerial ==
+                admissionEscapes &&
+            frontierAfter.cpuReadyFirstLeaseActionProducerWaitSerial -
+                    frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial ==
+                producerWaitEscapes &&
+            stopExits <= 1u &&
+            frontierAfter.cpuReadyFirstLeaseActionRetryGeneration ==
+                frontierBefore.cpuReadyFirstLeaseActionRetryGeneration &&
+            frontierAfter.cpuReadyArenaAdmissionWaitEnter -
+                    frontierBefore.cpuReadyArenaAdmissionWaitEnter ==
+                1u &&
+            frontierAfter.cpuReadyArenaAdmissionExitRetry -
+                    frontierBefore.cpuReadyArenaAdmissionExitRetry ==
+                1u &&
+            frontierAfter.cpuReadyFirstLeaseWaitCurrent == 0u &&
+            frontierAfter.cpuReadyArenaAdmissionWaitCurrent == 0u &&
+            frontierAfter.offloadDrainWaitCurrent == 0u &&
+            frontierAfter.offloadReplayInflightRaw == 0u,
+        "changed-head wait/action, admission, drain, and replay counters "
+        "remain exactly conserved at terminal handoff");
+  const auto statsAfter =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(statsAfter.residentSources == 0u &&
+            statsAfter.residentPages == 0u &&
+            statsAfter.readyFifoEntries == 0u,
+        "producer-fence completion reclaims the full bounded composition");
+}
+
 void productionLoopLeaseWaitResumesAfterInlineReclaim() {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
@@ -5671,6 +6198,10 @@ int main() {
       productionLoopPlansFreshRepeatedSourceWindow();
       return 0;
     }
+    if (std::getenv("DXMT9_SESSION_JOIN_P0_COMPOSITION_CASE")) {
+      productionLoopChangedHeadRearmsPressureEscapeWithinGeneration();
+      return 0;
+    }
     sessionSourcePolicyClassifiesLegacyAndArena();
     neutralPrefixSelectorAdmitsMixedCandidates();
     arenaSessionCarryAcrossSourcesSharesOneCommandBuffer();
@@ -5703,6 +6234,7 @@ int main() {
     productionLoopBoundsNineReadySourcesToFirstPlanningWindow();
     productionLoopCarriesActivePassAcrossBoundedWindowEdge();
     productionLoopPlansPrefixBeforePresentBoundary();
+    productionLoopChangedHeadRearmsPressureEscapeWithinGeneration();
     productionLoopLeaseWaitResumesAfterGpuReclaim();
     productionLoopLeaseWaitResumesAfterInlineReclaim();
     productionLoopCreditsExactReadyAndWritingSuccessor();

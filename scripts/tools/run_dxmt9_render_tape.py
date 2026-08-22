@@ -19,7 +19,7 @@ IDENTITY_NAME = "identity.bin"
 IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v2"
 MAX_REPLAY_RUNS = 64
 PARALLEL_VERIFY_RUNS = 2
-PROVIDER_SCHEMA = "dxmt9.render_tape.provider_replay.v1"
+PROVIDER_SCHEMA = "dxmt9.render_tape.provider_replay.v2"
 PARALLEL_COUNTER_FIELDS = (
     "selected",
     "children",
@@ -204,6 +204,7 @@ def run_provider_replay(
     expected_source: Optional[pathlib.Path] = None,
     output_path: Optional[pathlib.Path] = None,
     partition_mode: Optional[str] = None,
+    identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     arguments = [str(provider), "replay", str(events)]
     for path in blob_paths:
@@ -216,6 +217,8 @@ def run_provider_replay(
         arguments.extend(("--output-rgba", str(output_path)))
     if partition_mode is not None:
         arguments.extend(("--partition-mode", partition_mode))
+    if identity is not None:
+        arguments.extend(("--identity", str(identity)))
     completed = subprocess.run(
         arguments,
         check=False,
@@ -362,6 +365,7 @@ def replay_identity(result: dict[str, Any]) -> dict[str, Any]:
             "validity",
             "coverage",
             "conservation",
+            "identity_evidence",
             "intervals",
         )
     }
@@ -377,6 +381,7 @@ def replay_with_policy(
     expected_output: Optional[pathlib.Path] = None,
     partition_mode: Optional[str] = None,
     expected_source: Optional[pathlib.Path] = None,
+    identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     if warmup < 0 or repeat < 1 or warmup + repeat > MAX_REPLAY_RUNS:
         raise SystemExit(
@@ -388,6 +393,7 @@ def replay_with_policy(
             provider, events, blob_paths, expected_output,
             expected_source=expected_source,
             partition_mode=partition_mode,
+            identity=identity,
         )
         if not provider_oracle_accepts(result, require_non_degenerate):
             result["oracle_accepted"] = False
@@ -408,6 +414,7 @@ def replay_with_policy(
             provider, events, blob_paths, expected_output,
             expected_source=expected_source,
             partition_mode=partition_mode,
+            identity=identity,
         )
         if not provider_oracle_accepts(last_result, require_non_degenerate):
             last_result["oracle_accepted"] = False
@@ -926,6 +933,7 @@ def provider_replay(args: argparse.Namespace) -> int:
         expected_output,
         args.partition_mode,
         source_oracle,
+        identity,
     )
     validity = result.get("validity", {})
     output_oracle = bool(
@@ -1057,6 +1065,7 @@ def parallel_verify(args: argparse.Namespace) -> int:
                     expected_output=expected_output,
                     expected_source=source_oracle,
                     partition_mode="identity",
+                    identity=identity,
                 )
             )
         for _ in range(PARALLEL_VERIFY_RUNS):
@@ -1068,6 +1077,7 @@ def parallel_verify(args: argparse.Namespace) -> int:
                     expected_output=expected_output,
                     expected_source=source_oracle,
                     partition_mode="parallel",
+                    identity=identity,
                 )
             )
     except SystemExit as error:
@@ -1211,6 +1221,7 @@ def run_native_materialize(
     first_record: int,
     record_count: int,
     output_sha256: Optional[str] = None,
+    output_identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     arguments = [
         str(validator), "materialize", str(events), str(identity), str(output),
@@ -1220,6 +1231,8 @@ def run_native_materialize(
     ]
     if output_sha256 is not None:
         arguments.extend(("--output-sha256", output_sha256))
+    if output_identity is not None:
+        arguments.extend(("--output-identity", str(output_identity)))
     for reference in blob_refs:
         arguments.extend(("--verified-blob", reference))
     completed = subprocess.run(arguments, check=False, text=True, capture_output=True)
@@ -1232,6 +1245,8 @@ def run_native_materialize(
         raise RuntimeError("native projection materializer emitted invalid JSON") from error
     if not output.is_file():
         raise RuntimeError("native projection materializer emitted no tape")
+    if output_identity is not None and not output_identity.is_file():
+        raise RuntimeError("native projection materializer emitted no identity")
     return result
 
 
@@ -1241,14 +1256,16 @@ def projection_provider_run(
     blob_paths: list[pathlib.Path],
     output: pathlib.Path,
     expected: Optional[pathlib.Path] = None,
+    identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     result = run_provider_replay(
-        provider, events, blob_paths, expected_output=expected, output_path=output
+        provider, events, blob_paths, expected_output=expected, output_path=output,
+        identity=identity,
     )
     validity = result.get("validity", {})
     if (
         result.get("provider_exit_code") != 0
-        or result.get("schema") != "dxmt9.render_tape.provider_replay.v1"
+        or result.get("schema") != PROVIDER_SCHEMA
         or result.get("archive_policy") != "disabled"
         or result.get("status") != "complete"
         or validity.get("structurally_valid") is not True
@@ -1291,9 +1308,11 @@ def executable_project(args: argparse.Namespace) -> int:
     try:
         with bundle_transaction(output) as staging:
             candidate = staging / "candidate.events.bin"
+            candidate_identity = staging / "candidate.identity.bin"
             native = run_native_materialize(
                 args.validator, events, identity, candidate, blob_refs,
                 args.command_event_ordinal, args.first_record, args.record_count,
+                output_identity=candidate_identity,
             )
             referenced = native.get("referenced_blobs")
             if not isinstance(referenced, list) or any(
@@ -1316,10 +1335,12 @@ def executable_project(args: argparse.Namespace) -> int:
             first_output = staging / "candidate-1.rgba"
             second_output = staging / "candidate-2.rgba"
             first = projection_provider_run(
-                args.provider, candidate, projected_blobs, first_output
+                args.provider, candidate, projected_blobs, first_output,
+                identity=candidate_identity,
             )
             second = projection_provider_run(
-                args.provider, candidate, projected_blobs, second_output
+                args.provider, candidate, projected_blobs, second_output,
+                identity=candidate_identity,
             )
             if (first_output.read_bytes() != second_output.read_bytes() or
                     replay_identity(first) != replay_identity(second)):
@@ -1327,10 +1348,12 @@ def executable_project(args: argparse.Namespace) -> int:
             projected_digest = digest(first_output)
 
             final_events = staging / EVENTS_NAME
+            final_identity = staging / IDENTITY_NAME
             final_native = run_native_materialize(
                 args.validator, events, identity, final_events, blob_refs,
                 args.command_event_ordinal, args.first_record, args.record_count,
                 projected_digest,
+                output_identity=final_identity,
             )
             if final_native.get("referenced_blobs") != referenced:
                 raise RuntimeError("final oracle rewrite changed projection closure")
@@ -1339,12 +1362,14 @@ def executable_project(args: argparse.Namespace) -> int:
             os.replace(first_output, output_oracle)
             second_output.unlink()
             candidate.unlink()
+            candidate_identity.unlink()
             final_runs = []
             for index in range(2):
                 repeated = staging / f"final-{index}.rgba"
                 result = projection_provider_run(
                     args.provider, final_events, projected_blobs, repeated,
                     output_oracle,
+                    identity=final_identity,
                 )
                 if repeated.read_bytes() != output_oracle.read_bytes():
                     raise RuntimeError("strict projected provider repeat changed bytes")
@@ -1389,6 +1414,12 @@ def executable_project(args: argparse.Namespace) -> int:
                         "path": EVENTS_NAME,
                         "bytes": final_events.stat().st_size,
                         "sha256": digest(final_events),
+                    },
+                    "identity": {
+                        "path": IDENTITY_NAME,
+                        "bytes": final_identity.stat().st_size,
+                        "sha256": digest(final_identity),
+                        "schema": IDENTITY_SCHEMA,
                     },
                     "blobs": blob_components,
                     "output_oracle": {

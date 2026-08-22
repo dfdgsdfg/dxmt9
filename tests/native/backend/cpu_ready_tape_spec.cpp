@@ -7,6 +7,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,6 +23,19 @@ struct CpuReadyTapeTestAccess {
 
   static void forceReadyCount(CpuReadyTape& tape, std::size_t count) {
     tape.readyCount_ = count;
+  }
+
+  static void clearGroupIdentity(CpuReadyTape& tape,
+                                 CpuReadyTape::SourceRef source) {
+    auto* entry = tape.resolveEntry(source.id, source.storage);
+    entry->groupRawOrdinal = 0;
+  }
+
+  static void duplicateGroupIndex(CpuReadyTape& tape,
+                                  CpuReadyTape::SourceRef source,
+                                  std::uint32_t index) {
+    auto* entry = tape.resolveEntry(source.id, source.storage);
+    entry->groupSourceIndex = index;
   }
 };
 
@@ -339,13 +353,17 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
             captureValues.maxPagesPerSource == 512u &&
             captureValues.highWaterPages == 2048u &&
             captureValues.lowWaterPages == 1024u,
-        "capture streaming admits the complete eight-segment source while "
-        "retaining bounded page watermarks");
+        "EventSerial capture retains its 2048-page arena and 512-page "
+        "source representation");
   check(dxmt9::render::worstCaseNonWrappingReservationPages(
             captureValues.maxPagesPerSource) == 1023u &&
             captureValues.highWaterPages - 1023u == 1025u,
-        "capture streaming leaves a fixed session prefix after reserving one "
-        "maximum non-wrapping successor");
+        "EventSerial capture retains its existing maximum non-wrapping "
+        "source reservation");
+  check(captureValues.pageCount == 2048u &&
+            captureValues.maxPagesPerSource == 512u,
+        "SegmentSerial selection does not lower queue admission capacity; "
+        "the authenticated capture planner owns its 64-page source bound");
 
   bool overflowRejected = false;
   try {
@@ -1036,6 +1054,440 @@ void strictArenaDoesNotConsumeCompatibilityCapacity() {
         "the filled compatibility lane remains independently bounded");
 }
 
+void batchArenaAdmissionIsAtomicAndSharesRawIdentity() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "batch source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 77, 1, 1, 9);
+  check(batch.has_value() && batch->count == 2u,
+        "two-source batch reserves in one transaction");
+  check(batch->reservations[0].ticket.rawOrdinal == 77u &&
+            batch->reservations[1].ticket.rawOrdinal == 77u &&
+            batch->reservations[0].ticket.seqId == 1u &&
+            batch->reservations[1].ticket.seqId == 2u,
+        "one raw event receives contiguous source and sequence identities");
+  check(tape.leaseAcquisitionCapacitySnapshot().valid,
+        "capacity snapshot accepts a bounded strict Writing batch");
+  publishMinimalArena(tape, batch->reservations[0], segment);
+  publishMinimalArena(tape, batch->reservations[1], segment);
+  const std::array<std::size_t, 2> controls{0u, 1u};
+  check(tape.sealAndPublishArenaBatch(
+            *batch, controls) && tape.readyCount() == 2u,
+        "batch seal commits both Ready entries together");
+}
+
+void batchArenaPartialCompletionHoldsGroupCreditUntilTail() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "group-hold source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 78, 1, 1, 10);
+  check(batch.has_value(), "group-hold batch reserves both sources");
+  for (const auto& reservation : batch->reservations) {
+    if (!reservation) {
+      break;
+    }
+    publishMinimalArena(tape, reservation, segment);
+  }
+  const std::array<std::size_t, 2> controls{0u, 1u};
+  check(tape.sealAndPublishArenaBatch(*batch, controls),
+        "group-hold batch publishes atomically");
+  std::array<CpuReadyTape::ReadyEntry, 2> ready{};
+  check(tape.copyReadyPrefix(ready) == 2u &&
+            tape.representReadyPrefix(ready) &&
+            tape.transitionAll(
+                std::array<CpuReadyTape::SourceRef, 2>{
+                    ready[0].source, ready[1].source},
+                CpuReadyTape::State::Represented,
+                CpuReadyTape::State::Submitted),
+        "group-hold sources enter one submitted FIFO group");
+  const auto residentBefore = tape.residentCount();
+  const auto pagesBefore = tape.stats().residentPages;
+  check(tape.complete(ready[0].source.id, ready[0].source.storage) &&
+            !tape.beginReclaim(ready[0].source.id, ready[0].source.storage) &&
+            tape.residentCount() == residentBefore &&
+            tape.stats().residentPages == pagesBefore,
+        "segment zero settles without releasing group page/control credit");
+  check(tape.complete(ready[1].source.id, ready[1].source.storage) &&
+            tape.beginReclaim(ready[0].source.id, ready[0].source.storage),
+        "tail settlement unlocks FIFO group reclaim");
+  auto firstOwner = tape.detachReclaimingArenaOwner(
+      ready[0].source.id, ready[0].source.storage);
+  check(firstOwner.has_value(), "group head reclaim detaches once");
+  firstOwner->destroy();
+  check(tape.finishArenaReclaim(ready[0].source.id, ready[0].source.storage,
+                                std::move(*firstOwner)) &&
+            tape.beginReclaim(ready[1].source.id, ready[1].source.storage),
+        "group head release leaves tail reclaimable exactly once");
+  auto tailOwner = tape.detachReclaimingArenaOwner(
+      ready[1].source.id, ready[1].source.storage);
+  check(tailOwner.has_value(), "group tail reclaim detaches once");
+  tailOwner->destroy();
+  check(tape.finishArenaReclaim(ready[1].source.id, ready[1].source.storage,
+                                std::move(*tailOwner)) &&
+            tape.residentCount() == 0u,
+        "group tail release clears the final shared credit");
+}
+
+void batchArenaThreeSourceWrapAndAbaStayFailClosed() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 4, 1)};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "three-source group layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 79, 1, 1, 11);
+  check(batch.has_value(), "three-source group reserves atomically");
+  for (std::size_t i = 0; i < batch->count; ++i) {
+    publishMinimalArena(tape, batch->reservations[i], segment);
+  }
+  const std::array<std::size_t, 3> controls{0u, 1u, 2u};
+  check(tape.sealAndPublishArenaBatch(*batch, controls),
+        "three-source group publishes atomically");
+  std::array<CpuReadyTape::ReadyEntry, 3> ready{};
+  check(tape.copyReadyPrefix(ready) == ready.size() &&
+            tape.representReadyPrefix(ready) &&
+            tape.transitionAll(
+                std::array<CpuReadyTape::SourceRef, 3>{
+                    ready[0].source, ready[1].source, ready[2].source},
+                CpuReadyTape::State::Represented,
+                CpuReadyTape::State::Submitted),
+        "three-source group enters submitted state");
+  check(tape.complete(ready[0].source.id, ready[0].source.storage) &&
+            !tape.beginReclaim(ready[0].source.id, ready[0].source.storage) &&
+            tape.complete(ready[1].source.id, ready[1].source.storage) &&
+            !tape.beginReclaim(ready[0].source.id, ready[0].source.storage) &&
+            tape.complete(ready[2].source.id, ready[2].source.storage) &&
+            tape.beginReclaim(ready[0].source.id, ready[0].source.storage),
+        "three-source group requires its future tail before reclaim");
+  const auto settlement = tape.takeCompletedArenaGroupSettlement(
+      ready[2].source);
+  check(settlement.has_value() && !settlement->hasPresent &&
+            settlement->tailSeqId == ready[2].seqId &&
+            settlement->sourceCount == 3u &&
+            !tape.takeCompletedArenaGroupSettlement(ready[2].source),
+        "a non-Present event emits one value-owned tail settlement exactly once");
+  const auto reclaim = [&](const CpuReadyTape::SourceRef source) {
+    auto owner = tape.detachReclaimingArenaOwner(source.id, source.storage);
+    check(owner.has_value(), "three-source reclaim detaches current owner");
+    owner->destroy();
+    check(tape.finishArenaReclaim(source.id, source.storage,
+                                  std::move(*owner)),
+          "three-source reclaim finishes current owner");
+  };
+  reclaim(ready[0].source);
+  check(tape.beginReclaim(ready[1].source.id, ready[1].source.storage),
+        "three-source reclaim advances to source one");
+  reclaim(ready[1].source);
+  check(tape.beginReclaim(ready[2].source.id, ready[2].source.storage),
+        "three-source reclaim advances to tail");
+  reclaim(ready[2].source);
+
+  const auto oldTicket = batch->reservations[0].ticket;
+  const auto publishSingle = [&](std::uint64_t raw,
+                                 std::uint64_t sourceOrdinal,
+                                 std::uint64_t seqId,
+                                 std::uint64_t generation) {
+    auto reservation = tape.reserve(
+        *sourceLayout, CpuReadyAdmissionIdentity{
+                           .rawOrdinal = raw,
+                           .sourceOrdinal = sourceOrdinal,
+                           .seqId = seqId,
+                           .buildGeneration = generation});
+    check(reservation.has_value(), "wrapped single source reserves");
+    publishMinimalArena(tape, *reservation, segment);
+    check(tape.sealAndPublish(reservation->ticket,
+                              reservation->id.index, sourceLayout->usedBytes),
+          "wrapped single source publishes");
+    std::array<CpuReadyTape::ReadyEntry, 1> one{};
+    check(tape.copyReadyPrefix(one) == 1u && tape.representReadyPrefix(one) &&
+              tape.transition(one[0].source.id, one[0].source.storage,
+                              CpuReadyTape::State::Represented,
+                              CpuReadyTape::State::Submitted),
+          "wrapped single source enters submitted state");
+    return std::pair{*reservation, one[0].source};
+  };
+  const auto wrappedFirst = publishSingle(80, 4, 4, 12);
+  check(tape.complete(wrappedFirst.second.id, wrappedFirst.second.storage) &&
+            tape.beginReclaim(wrappedFirst.second.id,
+                              wrappedFirst.second.storage),
+        "first wrapped source reclaims");
+  reclaim(wrappedFirst.second);
+  const auto wrappedSecond = publishSingle(81, 5, 5, 13);
+  check(!tape.beginReclaim(oldTicket.id, oldTicket.storage),
+        "old generation cannot reclaim an ABA-reused source slot");
+  check(tape.complete(wrappedSecond.second.id, wrappedSecond.second.storage) &&
+            tape.beginReclaim(wrappedSecond.second.id,
+                              wrappedSecond.second.storage),
+        "second wrapped source remains independently reclaimable");
+  reclaim(wrappedSecond.second);
+}
+
+void batchArenaGroupMetadataRejectsMissingAndDuplicateMembers() {
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "metadata fixture layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout, *sourceLayout};
+  const auto buildSubmitted = [&](CpuReadyTape& tape, std::uint64_t raw) {
+    auto batch = tape.reserveArenaBatch(layouts, raw, 1, 1, raw);
+    check(batch.has_value(), "metadata fixture reserves group");
+    for (std::size_t i = 0; i < batch->count; ++i) {
+      publishMinimalArena(tape, batch->reservations[i], segment);
+    }
+    check(tape.sealAndPublishArenaBatch(
+              *batch, std::array<std::size_t, 3>{0u, 1u, 2u}),
+          "metadata fixture publishes group");
+    std::array<CpuReadyTape::ReadyEntry, 3> ready{};
+    check(tape.copyReadyPrefix(ready) == 3u && tape.representReadyPrefix(ready) &&
+              tape.transitionAll(
+                  std::array<CpuReadyTape::SourceRef, 3>{
+                      ready[0].source, ready[1].source, ready[2].source},
+                  CpuReadyTape::State::Represented,
+                  CpuReadyTape::State::Submitted),
+          "metadata fixture submits group");
+    return ready;
+  };
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 4, 1)};
+    const auto ready = buildSubmitted(tape, 91);
+    dxmt9::core::CpuReadyTapeTestAccess::clearGroupIdentity(
+        tape, ready[2].source);
+    check(tape.complete(ready[0].source.id, ready[0].source.storage) &&
+              tape.complete(ready[1].source.id, ready[1].source.storage) &&
+              !tape.beginReclaim(ready[0].source.id, ready[0].source.storage),
+          "missing future group member fails closed before reclaim");
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 4, 1)};
+    const auto ready = buildSubmitted(tape, 92);
+    dxmt9::core::CpuReadyTapeTestAccess::duplicateGroupIndex(
+        tape, ready[2].source, 1u);
+    check(tape.complete(ready[0].source.id, ready[0].source.storage) &&
+              tape.complete(ready[1].source.id, ready[1].source.storage) &&
+              tape.complete(ready[2].source.id, ready[2].source.storage) &&
+              !tape.beginReclaim(ready[0].source.id, ready[0].source.storage),
+          "duplicate group index fails closed before reclaim");
+  }
+}
+
+void batchArenaLateFailureAndCapacityLeaveNoReadyPrefix() {
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "late-failure layout validates");
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 88, 1, 1, 10);
+    check(batch.has_value(), "late-failure batch reserves Writing entries");
+    publishMinimalArena(tape, batch->reservations[0], segment);
+    const std::array<std::size_t, 2> controls{0u, 1u};
+    check(!tape.sealAndPublishArenaBatch(*batch, controls) &&
+              tape.readyCount() == 0u,
+          "late structural failure cannot expose a partial Ready prefix");
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "batch abort detaches every source");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "batch abort rolls back the detached source");
+    }
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 90, 1, 1, 10);
+    check(batch.has_value(), "identity-forgery batch reserves");
+    publishMinimalArena(tape, batch->reservations[0], segment);
+    publishMinimalArena(tape, batch->reservations[1], segment);
+    const auto originalTicket = batch->reservations[1].ticket;
+    batch->reservations[1].ticket.seqId += 9u;
+    const std::array<std::size_t, 2> controls{0u, 0u};
+    check(!tape.sealAndPublishArenaBatch(*batch, controls) &&
+              tape.readyCount() == 0u,
+          "mixed identity or duplicate controls cannot partially publish");
+    batch->reservations[1].ticket = originalTicket;
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "forged batch remains abortable");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "forged batch abort completes");
+    }
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(2, 8, 8)};
+    const std::array oversized{*sourceLayout, *sourceLayout, *sourceLayout};
+    const auto before = tape.stats().readyFifoEntries;
+    check(!tape.reserveArenaBatch(oversized, 99, 1, 1, 11) &&
+              tape.readyCount() == 0u &&
+              tape.stats().readyFifoEntries == before &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
+          "aggregate page capacity failure leaves no Ready entry");
+    const std::array overflowLayouts{*sourceLayout, *sourceLayout};
+    check(!tape.reserveArenaBatch(overflowLayouts, 100,
+              std::numeric_limits<std::uint64_t>::max(), 1, 12),
+          "source ordinal tail overflow is rejected before reservation");
+    check(!tape.reserveArenaBatch(
+              std::array{*sourceLayout}, 100,
+              1, std::numeric_limits<std::uint64_t>::max(), 12) &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
+          "exclusive sequence tail max/count-one overflow is rejected");
+    check(!tape.reserveArenaBatch(
+              std::array{*sourceLayout, *sourceLayout}, 100,
+              1, std::numeric_limits<std::uint64_t>::max() - 1u, 12) &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
+          "exclusive sequence tail max-minus-one/count-two overflow is "
+          "rejected");
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 101, 1, 1, 13);
+    check(batch.has_value(), "recoverable rollback batch reserves");
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "recoverable rollback detaches source");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "recoverable rollback finishes source");
+    }
+    auto forged = *batch;
+    ++forged.sourceTailBefore;
+    check(!tape.restoreArenaBatchHighWaters(forged) &&
+              tape.restoreArenaBatchHighWaters(*batch) &&
+              tape.readyCount() == 0u && tape.residentCount() == 0u &&
+              tape.reserveArenaBatch(layouts, 101, 1, 1, 14).has_value(),
+          "pre-effect rollback restores raw/source/seq admission cursors");
+  }
+}
+
+void batchCapacitySnapshotOrdersWrappedWritingRing() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(16, 4, 4)};
+  std::array<CpuReadyTape::Reservation, 3> legacySources{};
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto source = tape.reserve();
+    check(source.has_value(), "wrap fixture reserves legacy source");
+    legacySources[i] = *source;
+    source->payload->appendClear({});
+    check(tape.sealAndPublish(source->ticket, i + 1u, i + 1u, i),
+          "wrap fixture publishes legacy source");
+    std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+    check(tape.copyReadyPrefix(ready) == 1u &&
+              tape.representReadyPrefix(ready),
+          "wrap fixture represents legacy source");
+  }
+  for (std::size_t i = 0; i < 2; ++i) {
+    auto* detached = tape.beginPostEncodeLegacyRetire(
+        legacySources[i].id, legacySources[i].storage);
+    check(detached != nullptr, "wrap fixture detaches old source");
+    detached->clearCommands();
+    detached->seqId = 0;
+    check(tape.finishReclaim(legacySources[i].id, legacySources[i].storage),
+          "wrap fixture reclaims old source");
+  }
+  const auto layout = makeMinimalArenaLayout();
+  const std::array segmentLayouts{layout};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "wrap batch layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 10, 10, 10, 10);
+  check(batch.has_value() && batch->reservations[0].id.index == 3u &&
+            batch->reservations[1].id.index == 0u,
+        "batch reservation crosses the source ring boundary");
+  check(tape.leaseAcquisitionCapacitySnapshot().valid,
+        "wrapped multi-Writing snapshot remains valid");
+  for (std::size_t i = batch->count; i != 0; --i) {
+    auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+    check(owner.has_value(), "wrapped batch abort detaches source");
+    owner->destroy();
+    check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                std::move(*owner)),
+          "wrapped batch abort reclaims source");
+  }
+}
+
+// Model binding for RenderTapeIdentitySegments.tla's two-phase abort:
+// detach the entire newest suffix first, then destroy owners out of lock,
+// and finish only in reverse-tail order.  No Ready row is visible during the
+// detached/reclaiming window and the exact pre-admission high waters can be
+// restored only after every owner has finished.
+void batchAbortDetachesSuffixBeforeReverseFinish() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 1)};
+  const auto segment = makeMinimalArenaLayout();
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      std::array{segment}, 4096, 8);
+  check(sourceLayout.has_value(), "two-phase model source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 111, 41, 61, 17);
+  check(batch.has_value(), "two-phase model fixture reserves its group");
+
+  std::array<std::optional<CpuReadyTape::DetachedArenaOwner>, 3> owners{};
+  for (std::size_t i = batch->count; i != 0; --i) {
+    auto detached = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+    check(detached.has_value(),
+          "two-phase model fixture detaches the newest suffix in order");
+    owners[i - 1].emplace(std::move(*detached));
+  }
+  check(tape.readyCount() == 0u && tape.residentCount() == batch->count,
+        "all detached/reclaiming members remain resident with zero Ready");
+
+  for (auto& owner : owners) {
+    check(owner.has_value(), "all detached owners are retained for destruction");
+    owner->destroy();
+    check(owner->destroyed(),
+          "all detached owners may be destroyed before any finish");
+  }
+  for (std::size_t i = batch->count; i != 0; --i) {
+    check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                std::move(*owners[i - 1])),
+          "two-phase finish is strict reverse-tail order");
+  }
+  check(tape.restoreArenaBatchHighWaters(*batch) &&
+            tape.readyCount() == 0u && tape.residentCount() == 0u &&
+            tape.reserveArenaBatch(layouts, 111, 41, 61, 18).has_value(),
+        "successful two-phase abort restores exact high waters and cursors");
+
+  CpuReadyTape wrongOrder{makeSeparatedPayloadConfig(8, 8, 1)};
+  auto wrongBatch = wrongOrder.reserveArenaBatch(layouts, 112, 41, 61, 19);
+  check(wrongBatch.has_value(), "wrong-order fixture reserves its group");
+  std::array<std::optional<CpuReadyTape::DetachedArenaOwner>, 3> wrongOwners{};
+  for (std::size_t i = wrongBatch->count; i != 0; --i) {
+    auto detached = wrongOrder.beginArenaAbort(
+        wrongBatch->reservations[i - 1].ticket);
+    check(detached.has_value(), "wrong-order fixture detaches its suffix");
+    wrongOwners[i - 1].emplace(std::move(*detached));
+  }
+  for (auto& owner : wrongOwners) {
+    check(owner.has_value(), "wrong-order fixture retains detached owners");
+    owner->destroy();
+    check(owner->destroyed(),
+          "wrong-order fixture destroys all detached owners");
+  }
+  check(!wrongOrder.finishArenaAbort(wrongBatch->reservations[0].ticket,
+                                     std::move(*wrongOwners[0])) &&
+            wrongOrder.readyCount() == 0u && wrongOrder.residentCount() != 0u,
+        "stale/wrong-order finish is rejected without exposing Ready");
+}
+
 void segmentedArenaPublishesAndReclaimsAsOneSource() {
   CpuReadyTape tape{makeSeparatedPayloadConfig()};
   const auto segment = makeMinimalArenaLayout();
@@ -1568,6 +2020,13 @@ int main() {
     strictAdmissionIdentitySurvivesAbort();
     strictSealRequiresExactTapeOwnedBinding();
     strictArenaDoesNotConsumeCompatibilityCapacity();
+    batchArenaAdmissionIsAtomicAndSharesRawIdentity();
+    batchArenaPartialCompletionHoldsGroupCreditUntilTail();
+    batchArenaThreeSourceWrapAndAbaStayFailClosed();
+    batchArenaGroupMetadataRejectsMissingAndDuplicateMembers();
+    batchArenaLateFailureAndCapacityLeaveNoReadyPrefix();
+    batchCapacitySnapshotOrdersWrappedWritingRing();
+    batchAbortDetachesSuffixBeforeReverseFinish();
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     postEncodeRetirementFinishesBeforeGpuCompletion();

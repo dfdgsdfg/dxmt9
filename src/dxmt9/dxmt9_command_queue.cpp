@@ -19,6 +19,8 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "framegraph/fg_builder.hpp"
+#include "framegraph/fg_multi_source_planner.hpp"
+#include "framegraph/fg_optimizer.hpp"
 #include "util/log/log.hpp"
 #include <algorithm>
 #include <array>
@@ -769,11 +771,17 @@ CommandQueue::CommandQueue(InertTestQueueTag,
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits,
-                           WMT::Reference<WMT::CommandQueue> queue)
-    : cpuReadyTape_(core::CpuReadyTapeConfig::queueSessionStreaming(
-          kCommandChunkCount)),
-      cpuReadySessionLaneEnabled_(false), queue_(std::move(queue)),
-      queueView_(queue_.handle), limits_(limits) {
+                           WMT::Reference<WMT::CommandQueue> queue,
+                           render::RenderPartitionConfig renderPartitionConfig)
+    : cpuReadyTape_(renderPartitionConfig.sourceIdentity.resolved ==
+                            render::SourceIdentityMode::SegmentSerial
+                        ? core::CpuReadyTapeConfig::queueCaptureStreaming(
+                              kCommandChunkCount)
+                        : core::CpuReadyTapeConfig::queueSessionStreaming(
+                              kCommandChunkCount)),
+      cpuReadySessionLaneEnabled_(false),
+      renderPartitionConfig_(renderPartitionConfig),
+      queue_(std::move(queue)), queueView_(queue_.handle), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
 }
@@ -3626,14 +3634,35 @@ CommandQueue::CpuReadyArenaBuildLease::~CpuReadyArenaBuildLease() {
   abort();
 }
 
+CommandQueue::CpuReadyArenaFailureSnapshot
+CommandQueue::peekCpuReadyArenaFailure() noexcept {
+  std::lock_guard lock(mutex_);
+  return lastCpuReadyArenaFailure_;
+}
+
+CommandQueue::CpuReadyArenaFailureSnapshot
+CommandQueue::takeCpuReadyArenaFailure() noexcept {
+  std::lock_guard lock(mutex_);
+  const auto failure = lastCpuReadyArenaFailure_;
+  lastCpuReadyArenaFailure_ = {};
+  return failure;
+}
+
+CommandQueue::CpuReadyArenaBeginDiagnostic
+CommandQueue::cpuReadyArenaBeginDiagnostic() noexcept {
+  std::lock_guard lock(mutex_);
+  return {.poisonOrigin = queueLifecycle_.firstPoisonOrigin()};
+}
+
 CommandQueue::CpuReadyArenaBuildLease::CpuReadyArenaBuildLease(
     CpuReadyArenaBuildLease&& other) noexcept
     : queue_(other.queue_),
       ticket_(other.ticket_),
-      controlIndex_(other.controlIndex_) {
+      controlIndex_(other.controlIndex_), batch_(other.batch_) {
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.batch_ = false;
 }
 
 CommandQueue::CpuReadyArenaBuildLease&
@@ -3646,9 +3675,11 @@ CommandQueue::CpuReadyArenaBuildLease::operator=(
   queue_ = other.queue_;
   ticket_ = other.ticket_;
   controlIndex_ = other.controlIndex_;
+  batch_ = other.batch_;
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.batch_ = false;
   return *this;
 }
 
@@ -3660,17 +3691,105 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   }
   auto* queue = queue_;
   const auto ticket = ticket_;
-  if (!queue->publishCpuReadyArenaSource(
-          ticket, controlIndex_, resources, captureIdentity)) {
+  const bool published = batch_
+      ? queue->publishCpuReadyArenaBatch(ticket, resources, nullptr) ==
+            CpuReadyArenaPublishStatus::Published
+      : queue->publishCpuReadyArenaSource(
+            ticket, controlIndex_, resources, captureIdentity);
+  if (!published) {
     queue_ = nullptr;
     ticket_ = {};
     controlIndex_ = std::numeric_limits<std::size_t>::max();
+    batch_ = false;
     return false;
   }
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
   return true;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::publishBatch(
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
+  return publishBatchWithStatus(resources, captureIdentity) ==
+         CpuReadyArenaPublishStatus::Published;
+}
+
+CommandQueue::CpuReadyArenaPublishStatus
+CommandQueue::CpuReadyArenaBuildLease::publishBatchWithStatus(
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
+  if (!queue_ || !batch_) {
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  auto* queue = queue_;
+  const auto ticket = ticket_;
+  const auto status = queue->publishCpuReadyArenaBatch(
+      ticket, resources, captureIdentity);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
+  return status;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::setCaptureSourceRanges(
+    std::span<const std::uint32_t> firstRecords,
+    std::span<const std::uint32_t> recordCounts) noexcept {
+  if (!queue_ || !batch_ || firstRecords.size() != recordCounts.size()) {
+    return false;
+  }
+  auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  // Existing callers may arm command anchors before declaring the batch's
+  // source ranges; production capture declares ranges first. Both are
+  // pre-publication setup states. Declaration remains exactly once and is
+  // rejected only after a prior range declaration; command anchors are
+  // independently validated against the eventual ranges at publication.
+  if (!context || context->reservation.ticket != ticket_ ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->captureSourceRangeCount != 0u ||
+      firstRecords.size() != context->sourceCount) {
+    return false;
+  }
+  std::uint64_t cursor = 0;
+  for (std::size_t i = 0; i < firstRecords.size(); ++i) {
+    if (recordCounts[i] == 0u || firstRecords[i] != cursor ||
+        cursor > std::numeric_limits<std::uint32_t>::max() - recordCounts[i]) {
+      context->noteFailure(CpuReadyArenaFailureClass::CaptureRanges, i, 0u);
+      context->failed.store(true, std::memory_order_release);
+      return false;
+    }
+    cursor += recordCounts[i];
+  }
+  context->captureSourceRangeCount = firstRecords.size();
+  for (std::size_t i = 0; i < firstRecords.size(); ++i) {
+    context->captureSourceFirstRecords[i] = firstRecords[i];
+    context->captureSourceRecordCounts[i] = recordCounts[i];
+  }
+  context->captureRecordCount = static_cast<std::uint32_t>(cursor);
+  return true;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::abortForFallback() noexcept {
+  if (!queue_) {
+    return false;
+  }
+  bool rolledBack = false;
+  if (batch_) {
+    // A pre-effect retry must release reservations without poisoning the
+    // queue; post-effect callers use the default fail-stop abort path.
+    rolledBack = queue_->abortCpuReadyArenaBatch(ticket_, false) ==
+                 CpuReadyArenaBatchAbortStatus::RolledBack;
+  } else {
+    queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  }
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
+  return rolledBack;
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
@@ -3679,11 +3798,25 @@ bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
     return false;
   }
   auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  // Batch capture predeclares its source ranges before replay so publication
+  // can validate the complete event atomically.  That metadata owns the
+  // expected record count, but it must not prevent this later call from
+  // arming the per-command anchors used while replay builds the sources.
+  const bool predeclaredBatchCapture =
+      context && context->captureSourceRangeCount != 0u &&
+      context->captureRecordCount == recordCount &&
+      !context->captureIdentityBegun &&
+      context->captureCommandAnchors.empty() &&
+      context->captureNextRawRecords.empty();
   if (!context || context->reservation.ticket != ticket_ ||
       context->controlIndex != controlIndex_ ||
       context->ownerThread != std::this_thread::get_id() ||
-      context->captureEnabled() ||
+      (context->captureEnabled() && !predeclaredBatchCapture) ||
       context->failed.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (queue_->testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_) {
+    queue_->testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_ = false;
     return false;
   }
   try {
@@ -3692,6 +3825,7 @@ bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
   } catch (...) {
     return false;
   }
+  context->captureIdentityBegun = true;
   context->captureRecordCount = recordCount;
   return true;
 }
@@ -3711,6 +3845,7 @@ bool CommandQueue::CpuReadyArenaBuildLease::captureNextDrawRecords(
   return context && context->reservation.ticket == ticket_ &&
          context->controlIndex == controlIndex_ &&
          context->ownerThread == std::this_thread::get_id() &&
+         context->captureIdentityBegun &&
          !context->failed.load(std::memory_order_acquire) &&
          context->setCaptureNextRawRecords(recordIndices);
 }
@@ -3721,14 +3856,25 @@ bool CommandQueue::CpuReadyArenaBuildLease::selectSegment(
                        ticket_, controlIndex_, segmentIndex);
 }
 
-void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
+bool CommandQueue::CpuReadyArenaBuildLease::selectSourceSegment(
+    std::size_t sourceIndex, std::size_t segmentIndex) noexcept {
+  return queue_ && queue_->selectCpuReadyArenaSourceSegment(
+                       ticket_, controlIndex_, sourceIndex, segmentIndex);
+}
+
+void CommandQueue::CpuReadyArenaBuildLease::abort(bool failStop) noexcept {
   if (!queue_) {
     return;
   }
-  queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  if (batch_) {
+    queue_->abortCpuReadyArenaBatch(ticket_, failStop);
+  } else {
+    queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  }
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
 }
 
 CommandQueue::CpuReadyArenaBeginResult
@@ -3760,7 +3906,8 @@ CommandQueue::beginCpuReadyArenaSource(
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_source", /*skipHold=*/true);
   if (stop_) {
-    return {.status = CpuReadyArenaBeginStatus::Stopped};
+    return {.status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
@@ -3772,8 +3919,15 @@ CommandQueue::beginCpuReadyArenaSource(
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::SemanticBoundary);
         });
+    if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
+      testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      stop_ = true;
+    }
     if (stop_) {
-      return {.status = CpuReadyArenaBeginStatus::Stopped};
+      return {
+          .status = CpuReadyArenaBeginStatus::Stopped,
+          .stopReason =
+              CpuReadyArenaBeginStopReason::CompatibilityFlushStopped};
     }
     if (writingSlot_) {
       return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -3792,7 +3946,9 @@ CommandQueue::beginCpuReadyArenaSource(
   case core::CpuReadyTape::ReserveProbe::TemporaryPressure:
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   case core::CpuReadyTape::ReserveProbe::Stopped:
-    return {.status = CpuReadyArenaBeginStatus::Stopped};
+    return {
+        .status = CpuReadyArenaBeginStatus::Stopped,
+        .stopReason = CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped};
   case core::CpuReadyTape::ReserveProbe::Corrupt:
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   case core::CpuReadyTape::ReserveProbe::InvalidRequest:
@@ -3838,6 +3994,7 @@ CommandQueue::beginCpuReadyArenaSource(
       *reservation, controlIndex, layout, cpuReadyTape_, currentBackBuffer_);
   auto* context = &*arenaBuildContext_;
   if (context->failed.load(std::memory_order_relaxed)) {
+    context->noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
     context->failed.store(true, std::memory_order_release);
     lock.unlock();
     abortCpuReadyArenaSource(reservation->ticket, controlIndex);
@@ -3852,8 +4009,200 @@ CommandQueue::beginCpuReadyArenaSource(
   };
 }
 
+CommandQueue::CpuReadyArenaBeginResult
+CommandQueue::beginCpuReadyArenaSources(
+    std::uint64_t rawOrdinal,
+    std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept {
+  if (rawOrdinal == 0 || layouts.empty() ||
+      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
+    return {.status = CpuReadyArenaBeginStatus::Invalid};
+  }
+  for (const auto& layout : layouts) {
+    if (!layout.valid() ||
+        layout.pageCount > cpuReadyTape_.config().values().maxPagesPerSource) {
+      return {.status = CpuReadyArenaBeginStatus::Invalid};
+    }
+  }
+  if (arenaBuildPoisoned_.load(std::memory_order_acquire)) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
+  if (stop_) {
+    return {.status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
+  }
+  if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+      arenaBuildContext_.has_value()) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  if (writingSlot_) {
+    (void)queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::SemanticBoundary);
+        });
+    if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
+      testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      stop_ = true;
+    }
+    if (stop_) {
+      return {
+          .status = CpuReadyArenaBeginStatus::Stopped,
+          .stopReason =
+              CpuReadyArenaBeginStopReason::CompatibilityFlushStopped};
+    }
+    if (writingSlot_) {
+      return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+    }
+  }
+  if (writeIndex_ >= slots_.size() ||
+      layouts.size() > slots_.size()) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  if (!cpuReadyArenaControlSlotsFreeLocked(layouts.size())) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+      controls{};
+  for (std::size_t i = 0; i < layouts.size(); ++i) {
+    controls[i] = (writeIndex_ + i) % slots_.size();
+  }
+  const std::uint64_t firstSeqId =
+      nextSeqId_.load(std::memory_order_relaxed);
+  std::uint64_t exclusiveSeqTail = 0;
+  if (firstSeqId == 0 ||
+      !core::CpuReadyTape::checkedExclusiveSeqTail(
+          firstSeqId, layouts.size(), exclusiveSeqTail)) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  const std::uint64_t generation = nextArenaBuildGeneration_++;
+  const std::uint64_t buildGeneration = generation == 0
+      ? nextArenaBuildGeneration_++
+      : generation;
+  auto batch = cpuReadyTape_.reserveArenaBatch(
+      layouts, rawOrdinal, firstSeqId, firstSeqId, buildGeneration);
+  if (!batch) {
+    // reserveArenaBatch performs one aggregate preflight over every source.
+    // Do not probe layouts.front(): a later-source descriptor or allocator
+    // failure must not be relabeled as recoverable pressure (or hidden as a
+    // first-source success) when deciding whether the complete raw event may
+    // take the v2 EventSerial fallback.
+    recordCpuReadyTapeStats(cpuReadyTape_);
+    switch (cpuReadyTape_.lastArenaBatchReserveFailure()) {
+      case core::CpuReadyTape::ArenaBatchReserveFailure::TemporaryPressure:
+        return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Recoverable:
+        // The aggregate transaction rejected before exposing any Writing or
+        // Ready entry; v2 EventSerial may retry the complete raw event.
+        return {.status = CpuReadyArenaBeginStatus::RecoverableFailure};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Stopped:
+        return {
+            .status = CpuReadyArenaBeginStatus::Stopped,
+            .stopReason =
+                CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Invalid:
+        return {.status = CpuReadyArenaBeginStatus::Invalid};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Corrupt:
+      case core::CpuReadyTape::ArenaBatchReserveFailure::None:
+        return {.status = CpuReadyArenaBeginStatus::Corrupt};
+    }
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  for (std::size_t i = 0; i < layouts.size(); ++i) {
+    auto& control = slots_[controls[i]];
+    control.state = core::ChunkSlot::State::Writing;
+    control.seqId = 0;
+    control.sourceId = batch->reservations[i].id;
+    control.storage = batch->reservations[i].storage;
+    control.payload = nullptr;
+  }
+  nextSeqId_.store(exclusiveSeqTail, std::memory_order_release);
+  arenaAdmissionActive_.store(true, std::memory_order_release);
+  arenaBuildContext_.emplace(*batch,
+                             std::span(controls).first(layouts.size()),
+                             layouts, cpuReadyTape_, currentBackBuffer_);
+  auto* context = &*arenaBuildContext_;
+  if (testOnlyForceNextCpuReadyArenaBuilderFailure_) {
+    testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::InjectedBuilder,
+                         context->activeSourceIndex(),
+                         context->activeSegmentIndex(),
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    context->failed.store(true, std::memory_order_release);
+  }
+  if (testOnlyForceNextCpuReadyArenaRollbackFailure_) {
+    testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::InjectedRollback,
+                         context->activeSourceIndex(),
+                         context->activeSegmentIndex(),
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    context->failed.store(true, std::memory_order_release);
+    // Deliberately invalidate the guarded next-sequence tail proof.  This is
+    // a native-only fault pin for the no-fallback rollback-failure branch.
+    nextSeqId_.fetch_add(1, std::memory_order_acq_rel);
+  }
+  if (context->failed.load(std::memory_order_relaxed)) {
+    context->noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
+    context->failed.store(true, std::memory_order_release);
+    lock.unlock();
+    const auto abortStatus = abortCpuReadyArenaBatch(
+        batch->reservations[0].ticket, /*failStop=*/false);
+    return {.status = abortStatus == CpuReadyArenaBatchAbortStatus::RolledBack
+                              ? CpuReadyArenaBeginStatus::RecoverableFailure
+                              : CpuReadyArenaBeginStatus::Corrupt};
+  }
+  // SegmentSerial admission owns one contiguous progress obligation per
+  // source.  Record every identity while the batch is still pre-effect; the
+  // Present bit is deliberately deferred to publication because only the
+  // final source can carry the event's Present tail.
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    schedulingProgressWatchdog_.noteAccepted(
+        context->batchReservations[i].ticket.seqId, false);
+  }
+  activeArenaBuild_.store(context, std::memory_order_release);
+  lock.unlock();
+  return {.status = CpuReadyArenaBeginStatus::Ready,
+          .lease = CpuReadyArenaBuildLease(
+              *this, batch->reservations[0].ticket, controls[0], true)};
+}
+
 bool CommandQueue::waitForCpuReadyArenaAdmission(
     const core::ArenaSourcePayloadLayout& layout) noexcept {
+  return waitForCpuReadyArenaAdmission(
+      std::span<const core::ArenaSourcePayloadLayout>(&layout, 1u));
+}
+
+bool CommandQueue::cpuReadyArenaControlSlotsFreeLocked(
+    std::size_t requiredSlots) const noexcept {
+  if (writeIndex_ >= slots_.size() || requiredSlots == 0u ||
+      requiredSlots > slots_.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < requiredSlots; ++i) {
+    const std::size_t controlIndex = (writeIndex_ + i) % slots_.size();
+    if (slots_[controlIndex].state != core::ChunkSlot::State::Free) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CommandQueue::waitForCpuReadyArenaAdmission(
+    std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept {
+  if (layouts.empty() ||
+      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
+    return false;
+  }
+  const bool schedulingObservabilityEnabled = perf::enabled();
+  if (schedulingObservabilityEnabled) {
+    perf::enterCpuReadyArenaAdmissionWait();
+    perf::recordOffloadReplayStage(perf::OffloadReplayStage::ArenaAdmission);
+  }
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
   const auto waitStarted = std::chrono::steady_clock::now();
   const auto qmxBegin = queueMutexProbeBegin();
@@ -3863,19 +4212,30 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   // parked, so only the acquire-wait for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(
       qmxBegin, "wait_for_cpu_ready_arena_admission-cv", /*skipHold=*/true);
+  if (testOnlySchedulingWaitObservationEnabled_) {
+    ++testOnlyArenaAdmissionWaitEntries_;
+    testOnlyArenaAdmissionPredicateEvaluations_ = 0;
+    sessionReleaseCv_.notify_all();
+  }
   // Wake a parked Tape-gated encode session for deterministic re-evaluation.
   // This live pressure observation carries no release fence.
   encodeCv_.notify_one();
   while (true) {
-    const bool controlSlotFree = writeIndex_ < slots_.size() &&
-        slots_[writeIndex_].state == core::ChunkSlot::State::Free;
+    const bool controlSlotsFree =
+        cpuReadyArenaControlSlotsFreeLocked(layouts.size());
     bool reserveStillPressured = true;
     if (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
-        !arenaBuildContext_.has_value() && controlSlotFree) {
-      reserveStillPressured =
-          cpuReadyTape_.probeArenaReserve(layout) ==
+        !arenaBuildContext_.has_value() && controlSlotsFree) {
+      const auto reserveProbe = layouts.size() == 1u
+          ? cpuReadyTape_.probeArenaReserve(layouts.front())
+          : cpuReadyTape_.probeArenaBatchAdmission(layouts);
+      reserveStillPressured = reserveProbe ==
           core::CpuReadyTape::ReserveProbe::TemporaryPressure;
       recordCpuReadyTapeStats(cpuReadyTape_);
+    }
+    if (testOnlySchedulingWaitObservationEnabled_) {
+      ++testOnlyArenaAdmissionPredicateEvaluations_;
+      sessionReleaseCv_.notify_all();
     }
     const auto action = render::classifyCpuReadyAdmissionGate({
         .stopped = stop_,
@@ -3883,7 +4243,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
         .arenaBuildActive =
             arenaAdmissionActive_.load(std::memory_order_relaxed),
         .arenaBuildContextPresent = arenaBuildContext_.has_value(),
-        .controlSlotFree = controlSlotFree,
+        .controlSlotsFree = controlSlotsFree,
         .reserveStillPressured = reserveStillPressured,
     });
     if (action != render::CpuReadyAdmissionAction::Wait) {
@@ -3894,6 +4254,10 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   const bool admitted = !stop_ &&
       !arenaBuildPoisoned_.load(std::memory_order_acquire);
   arenaAdmissionWaiterCount_.fetch_sub(1, std::memory_order_acq_rel);
+  if (schedulingObservabilityEnabled) {
+    perf::exitCpuReadyArenaAdmissionWait(admitted);
+    perf::recordOffloadReplayStage(perf::OffloadReplayStage::Encode);
+  }
   perf::countCpuReadyTapeAdmissionWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStarted).count()));
@@ -3910,19 +4274,127 @@ bool CommandQueue::selectCpuReadyArenaSegment(
       context->ownerThread != std::this_thread::get_id() ||
       context->failed.load(std::memory_order_acquire) ||
       context->publishing.load(std::memory_order_acquire) ||
-      segmentIndex >= context->layout.segmentCount ||
-      (segmentIndex != context->activeSegment &&
-       segmentIndex != context->activeSegment + 1u) ||
-      !context->builders[segmentIndex] ||
-      !context->assemblers[segmentIndex]) {
+      (!context->batchMode && segmentIndex >= context->layout.segmentCount) ||
+      (!context->batchMode &&
+       (segmentIndex != context->activeSegment &&
+        segmentIndex != context->activeSegment + 1u)) ||
+      (!context->batchMode && (!context->builders[segmentIndex] ||
+                               !context->assemblers[segmentIndex]))) {
     if (context) {
+      context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                           context->activeSourceIndex(), segmentIndex,
+                           context->plannedActivePages(),
+                           context->actualActiveCommands());
       context->failed.store(true, std::memory_order_release);
     }
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     return false;
   }
+  if (!context->hasSelectedSegment && segmentIndex != 0u) {
+    context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                         context->activeSourceIndex(), segmentIndex,
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  if (context->batchMode) {
+    std::size_t source = 0;
+    std::size_t local = segmentIndex;
+    while (source < context->sourceCount &&
+           local >= context->batchLayouts[source].segmentCount) {
+      local -= context->batchLayouts[source].segmentCount;
+      ++source;
+    }
+    const std::size_t previousGlobal =
+        context->activeSource == 0 ? context->activeSegment
+                                    : [&]() {
+                                        std::size_t value = 0;
+                                        for (std::size_t i = 0;
+                                             i < context->activeSource; ++i) {
+                                          value += context->batchLayouts[i]
+                                                       .segmentCount;
+                                        }
+                                        return value + context->activeSegment;
+                                      }();
+    if (source >= context->sourceCount ||
+        (context->hasSelectedSegment &&
+         segmentIndex != previousGlobal &&
+         segmentIndex != previousGlobal + 1u) ||
+        !context->batchBuilders[source][local] ||
+        !context->batchAssemblers[source][local]) {
+      context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                           source, local, context->plannedActivePages(),
+                           context->actualActiveCommands());
+      context->failed.store(true, std::memory_order_release);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return false;
+    }
+    context->activeSource = source;
+    context->activeSegment = local;
+    context->hasSelectedSegment = true;
+    return true;
+  }
   context->activeSegment = segmentIndex;
+  context->hasSelectedSegment = true;
   return true;
+}
+
+bool CommandQueue::selectCpuReadyArenaSourceSegment(
+    core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+    std::size_t sourceIndex, std::size_t segmentIndex) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || !context->batchMode || sourceIndex >= context->sourceCount ||
+      segmentIndex >= context->batchLayouts[sourceIndex].segmentCount) {
+    if (context) {
+      context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                           sourceIndex, segmentIndex,
+                           context->plannedActivePages(),
+                           context->actualActiveCommands());
+      context->failed.store(true, std::memory_order_release);
+    }
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  if (!context->hasSelectedSegment) {
+    if (sourceIndex != 0u || segmentIndex != 0u) {
+      context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                           sourceIndex, segmentIndex,
+                           context->plannedActivePages(),
+                           context->actualActiveCommands());
+      context->failed.store(true, std::memory_order_release);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return false;
+    }
+  } else if (sourceIndex != context->activeSource &&
+             !(sourceIndex == context->activeSource + 1u &&
+               context->activeSegment + 1u ==
+                   context->batchLayouts[context->activeSource].segmentCount &&
+               segmentIndex == 0u)) {
+    context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                         sourceIndex, segmentIndex,
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  if (sourceIndex == context->activeSource &&
+      segmentIndex > context->activeSegment + 1u) {
+    context->noteFailure(CpuReadyArenaFailureClass::SegmentSelection,
+                         sourceIndex, segmentIndex,
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  std::size_t globalSegment = segmentIndex;
+  for (std::size_t i = 0; i < sourceIndex; ++i) {
+    globalSegment += context->batchLayouts[i].segmentCount;
+  }
+  return selectCpuReadyArenaSegment(ticket, controlIndex, globalSegment);
 }
 
 bool CommandQueue::ArenaBuildContext::setCaptureNextRawRecords(
@@ -3993,6 +4465,11 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
   }
   auto* context = activeArenaBuild_.load(std::memory_order_acquire);
   if (context) {
+    context->noteFailure(CpuReadyArenaFailureClass::ActiveArenaRejected,
+                         context->activeSourceIndex(),
+                         context->activeSegmentIndex(),
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
     context->failed.store(true, std::memory_order_release);
   }
   arenaBuildPoisoned_.store(true, std::memory_order_release);
@@ -4301,6 +4778,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
       if (capturedValid) {
         captured.sourceOrdinal = ticket.sourceOrdinal;
         captured.seqId = ticket.seqId;
+        captured.firstRecord = 0u;
         captured.recordCount = context->captureRecordCount;
         std::uint32_t nextRecord = 0u;
         for (std::size_t commandIndex = 0;
@@ -4326,6 +4804,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
           if (!captured.ranges.empty() &&
               captured.ranges.back().dagPassIndex == passIndex &&
               captured.ranges.back().passKind == passKind &&
+              captured.ranges.back().logicalPassId ==
+                  static_cast<std::uint64_t>(passIndex) + 1u &&
               captured.ranges.back().firstRecord +
                       captured.ranges.back().recordCount ==
                   nextRecord) {
@@ -4336,6 +4816,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
                 .recordCount = endRecord - nextRecord,
                 .dagPassIndex = passIndex,
                 .passKind = passKind,
+                .logicalPassId = static_cast<std::uint64_t>(passIndex) + 1u,
             });
           }
           nextRecord = endRecord;
@@ -4471,6 +4952,563 @@ bool CommandQueue::publishCpuReadyArenaSource(
     *captureIdentity = std::move(captured);
   }
   return true;
+}
+
+CommandQueue::CpuReadyArenaPublishStatus
+CommandQueue::publishCpuReadyArenaBatch(
+    core::CpuReadyPublicationTicket ticket,
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || !context->batchMode || context->reservation.ticket != ticket ||
+      context->ownerThread != std::this_thread::get_id()) {
+    abortCpuReadyArenaBatch(ticket);
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  const auto rememberFailure = [&]() noexcept {
+    std::lock_guard lock(mutex_);
+    lastCpuReadyArenaFailure_ = context->firstFailure();
+  };
+  if (context->failed.load(std::memory_order_acquire)) {
+    rememberFailure();
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
+  }
+  bool forcedPostSemanticFailure = false;
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "publish_cpu_ready_arena_batch_phase1", /*skipHold=*/true);
+    if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
+        activeArenaBuild_.load(std::memory_order_relaxed) != context) {
+      lock.unlock();
+      abortCpuReadyArenaBatch(ticket);
+      return CpuReadyArenaPublishStatus::FailStopped;
+    }
+    for (std::size_t i = 0; i < context->sourceCount; ++i) {
+      const auto index = context->batchControlIndices[i];
+      const auto& reservation = context->batchReservations[i];
+      if (index >= slots_.size() ||
+          slots_[index].state != core::ChunkSlot::State::Writing ||
+          slots_[index].sourceId != reservation.id ||
+          slots_[index].storage != reservation.storage) {
+        lock.unlock();
+        abortCpuReadyArenaBatch(ticket);
+        return CpuReadyArenaPublishStatus::FailStopped;
+      }
+    }
+    if (testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_) {
+      testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = false;
+      forcedPostSemanticFailure = true;
+      context->noteFailure(CpuReadyArenaFailureClass::InjectedPostSemanticPublish,
+                           context->activeSourceIndex(),
+                           context->activeSegmentIndex(),
+                           context->plannedActivePages(),
+                           context->actualActiveCommands());
+      context->failed.store(true, std::memory_order_release);
+    }
+    context->publishing.store(true, std::memory_order_release);
+  }
+  if (forcedPostSemanticFailure) {
+    rememberFailure();
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
+  }
+  CpuReadyCaptureIdentityBatch captured{};
+  bool payloadSealed = true;
+  bool eventPlanValid = false;
+  bool capturedValid = false;
+  // These are deliberately owned by this call.  The planner and optional
+  // capture sidecar both consume the same value-owned source views; no view
+  // can outlive the pre-effect proof.
+  std::vector<framegraph::MultiSourcePlanningSource> sources;
+  std::vector<core::ArenaSourcePayloadChain> chains;
+  std::uint32_t commandBase = 0;
+  const auto rollbackPreEffect = [&](CpuReadyArenaFailureClass failureClass,
+                                     std::size_t source =
+                                         std::numeric_limits<std::size_t>::max(),
+                                     std::size_t segment =
+                                         std::numeric_limits<std::size_t>::max()) noexcept {
+    if (source == std::numeric_limits<std::size_t>::max()) {
+      source = context->activeSourceIndex();
+    }
+    if (segment == std::numeric_limits<std::size_t>::max()) {
+      segment = context->activeSegmentIndex();
+    }
+    context->noteFailure(failureClass, source, segment,
+                         context->plannedActivePages(),
+                         context->actualActiveCommands());
+    rememberFailure();
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
+  };
+  try {
+    for (std::size_t source = 0; source < context->sourceCount; ++source) {
+      const auto& layout = context->batchLayouts[source];
+      for (std::size_t segment = 0; segment < layout.segmentCount;
+           ++segment) {
+        if (!context->batchBuilders[source][segment] ||
+            !context->batchBuilders[source][segment]->publish()) {
+          context->noteFailure(CpuReadyArenaFailureClass::PayloadSeal,
+                               source, segment,
+                               context->plannedActivePages(),
+                               context->actualActiveCommands());
+          payloadSealed = false;
+          break;
+        }
+      }
+      if (!payloadSealed) break;
+    }
+    if (payloadSealed) {
+      sources.resize(context->sourceCount);
+      chains.resize(context->sourceCount);
+      for (std::size_t source = 0; source < context->sourceCount; ++source) {
+        std::array<const core::ArenaSourcePayloadBlock*,
+                   core::kMaxArenaSourcePayloadSegments>
+            blocks{};
+        for (std::size_t segment = 0;
+             segment < context->batchLayouts[source].segmentCount; ++segment) {
+          blocks[segment] =
+              context->batchReservations[source].arenaPayloads[segment];
+        }
+        if (!chains[source].initialize(std::span(blocks).first(
+                context->batchLayouts[source].segmentCount))) {
+          context->noteFailure(CpuReadyArenaFailureClass::PayloadSeal,
+                               source, 0u, context->plannedActivePages(),
+                               context->actualActiveCommands());
+          payloadSealed = false;
+          break;
+        }
+        sources[source].payload = core::SourcePayloadView(chains[source]);
+        if (!sources[source].payload.valid() ||
+            commandBase > std::numeric_limits<std::uint32_t>::max() -
+                               sources[source].payload.commandCount()) {
+          context->noteFailure(CpuReadyArenaFailureClass::PayloadSeal,
+                               source, 0u, context->plannedActivePages(),
+                               context->actualActiveCommands());
+          payloadSealed = false;
+          break;
+        }
+        commandBase += static_cast<std::uint32_t>(
+            sources[source].payload.commandCount());
+      }
+      if (payloadSealed) {
+        // SegmentSerial admission always gets the same event-wide proof,
+        // regardless of whether an identity sidecar was requested.
+        eventPlanValid = framegraph::planMultiSourcePassCoalesceReplay(
+                             sources)
+                             .valid();
+        if (!eventPlanValid) {
+          context->noteFailure(CpuReadyArenaFailureClass::Planner,
+                               context->activeSourceIndex(),
+                               context->activeSegmentIndex(),
+                               context->plannedActivePages(),
+                               context->actualActiveCommands());
+        }
+        if (testOnlyForceNextCpuReadyArenaPlannerInvalid_) {
+          testOnlyForceNextCpuReadyArenaPlannerInvalid_ = false;
+          eventPlanValid = false;
+        }
+        if (testOnlyObserveNextCpuReadyArenaPlanner_) {
+          ++testOnlyCpuReadyArenaPlannerInvocationCount_;
+          testOnlyCpuReadyArenaPlannerValid_ = eventPlanValid;
+          testOnlyObserveNextCpuReadyArenaPlanner_ = false;
+        }
+      }
+    }
+    if (payloadSealed && eventPlanValid && captureIdentity &&
+        context->captureSourceRangeCount == context->sourceCount &&
+        context->captureRecordCount != 0u &&
+        !context->captureCommandAnchors.empty() &&
+        context->captureNextRawRecords.empty()) {
+      capturedValid = true;
+      framegraph::FrameGraph graph;
+      capturedValid = capturedValid &&
+          framegraph::buildMultiSourceFrameGraph(sources, graph);
+      if (capturedValid) {
+        // Use the same production pass-coalesce proof as replay planning.
+        // Merely matching attachment fields at a source edge is not enough:
+        // the optimizer also proves intervening hazards, semantic controls,
+        // and flush boundaries before folding two PassNodes.
+        framegraph::OptimizerOptions options{};
+        options.passcoalesce = true;
+        framegraph::OptimizerStats stats{};
+        framegraph::runOptimizer(graph, options, nullptr, &stats);
+      }
+      std::vector<std::uint32_t> commandPass;
+      std::vector<std::uint64_t> passIds;
+      if (capturedValid) {
+        commandPass.assign(commandBase,
+                           std::numeric_limits<std::uint32_t>::max());
+        passIds.resize(graph.passes.size());
+        std::uint64_t nextPassId = 1u;
+        for (std::size_t passIndex = 0; passIndex < graph.passes.size();
+             ++passIndex) {
+          const auto& pass = graph.passes[passIndex];
+          if (pass.commands.first > graph.commands.size() ||
+              pass.commands.count > graph.commands.size() - pass.commands.first) {
+            capturedValid = false;
+            break;
+          }
+          if (passIds[passIndex] == 0u) passIds[passIndex] = nextPassId++;
+          for (std::size_t local = 0; local < pass.commands.count; ++local) {
+            const auto command =
+                graph.commands[pass.commands.first + local].command_index;
+            if (command >= commandPass.size() || commandPass[command] !=
+                                                     std::numeric_limits<std::uint32_t>::max()) {
+              capturedValid = false;
+              break;
+            }
+            commandPass[command] = static_cast<std::uint32_t>(passIndex);
+          }
+          if (!capturedValid) break;
+        }
+        capturedValid = capturedValid && std::none_of(
+            commandPass.begin(), commandPass.end(), [](std::uint32_t value) {
+              return value == std::numeric_limits<std::uint32_t>::max();
+            });
+      }
+      if (capturedValid) {
+        captured.segments.resize(context->sourceCount);
+        std::size_t anchorIndex = 0;
+        for (std::size_t source = 0; source < context->sourceCount; ++source) {
+          const auto first = context->captureSourceFirstRecords[source];
+          const auto count = context->captureSourceRecordCounts[source];
+          const auto end = static_cast<std::uint64_t>(first) + count;
+          auto& identity = captured.segments[source];
+          identity.sourceOrdinal = context->batchReservations[source]
+                                       .ticket.sourceOrdinal;
+          identity.seqId = context->batchReservations[source].ticket.seqId;
+          identity.firstRecord = first;
+          identity.recordCount = count;
+          std::uint32_t cursor = first;
+          while (anchorIndex < context->captureCommandAnchors.size()) {
+            const auto& anchor = context->captureCommandAnchors[anchorIndex];
+            if (anchor.firstRecord < first) {
+              ++anchorIndex;
+              continue;
+            }
+            if (anchor.firstRecord >= end || anchor.lastRecord >= end ||
+                anchor.lastRecord < anchor.firstRecord) break;
+            const auto command = static_cast<std::uint32_t>(
+                anchorIndex - std::size_t(0));
+            if (command >= commandPass.size()) {
+              capturedValid = false;
+              break;
+            }
+            const auto passIndex = commandPass[command];
+            if (passIndex >= graph.passes.size() ||
+                anchor.firstRecord < cursor) {
+              capturedValid = false;
+              break;
+            }
+            // Each source owns a contiguous raw-record range.  Its final
+            // command anchor must cover any trailing non-emitting records up
+            // to that source boundary; using only the event's final anchor
+            // here made a valid multi-source identity projection fail when a
+            // source ended before the event's final command.
+            const bool lastForSource =
+                anchorIndex + 1u == context->captureCommandAnchors.size() ||
+                context->captureCommandAnchors[anchorIndex + 1u]
+                        .firstRecord >= end;
+            const std::uint32_t endRecord = lastForSource
+                ? static_cast<std::uint32_t>(end)
+                : static_cast<std::uint32_t>(
+                      std::min<std::uint64_t>(
+                          end, static_cast<std::uint64_t>(anchor.lastRecord) + 1u));
+            if (endRecord <= cursor) {
+              capturedValid = false;
+              break;
+            }
+            const auto passKind = static_cast<std::uint32_t>(
+                graph.passes[passIndex].kind) + 1u;
+            if (!identity.ranges.empty() &&
+                identity.ranges.back().logicalPassId == passIds[passIndex] &&
+                identity.ranges.back().dagPassIndex == passIndex &&
+                identity.ranges.back().passKind == passKind &&
+                identity.ranges.back().firstRecord +
+                        identity.ranges.back().recordCount == cursor) {
+              identity.ranges.back().recordCount += endRecord - cursor;
+            } else {
+              identity.ranges.push_back(CpuReadyCapturePassRange{
+                  .firstRecord = cursor,
+                  .recordCount = endRecord - cursor,
+                  .dagPassIndex = static_cast<std::uint32_t>(passIndex),
+                  .passKind = passKind,
+                  .logicalPassId = passIds[passIndex],
+              });
+            }
+            cursor = endRecord;
+            ++anchorIndex;
+          }
+          if (cursor != end) capturedValid = false;
+          if (!capturedValid) break;
+        }
+        capturedValid = capturedValid && captured.valid();
+      }
+    } else if (captureIdentity) {
+      capturedValid = false;
+    }
+  } catch (...) {
+    payloadSealed = false;
+    capturedValid = false;
+  }
+  if (!payloadSealed || !eventPlanValid ||
+      (captureIdentity && !capturedValid)) {
+    return rollbackPreEffect(
+        !payloadSealed ? CpuReadyArenaFailureClass::PayloadSeal
+        : !eventPlanValid ? CpuReadyArenaFailureClass::Planner
+                          : CpuReadyArenaFailureClass::CaptureProjection);
+  }
+  for (std::size_t source = 0; source < context->sourceCount; ++source) {
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      const core::SourcePayloadView payloadView(
+          *context->batchReservations[source].arenaPayloads[segment]);
+      if (!payloadView.valid() ||
+          !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
+        return rollbackPreEffect(CpuReadyArenaFailureClass::SnapshotValidation,
+                                 source, segment);
+      }
+    }
+  }
+  for (std::size_t source = 0; source < context->sourceCount; ++source) {
+    markChunkResourcesWithExactSeq(
+        pool_, resources, context->batchReservations[source].ticket.seqId);
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      markArenaSourceResources(
+          pool_, core::SourcePayloadView(
+                     *context->batchReservations[source].arenaPayloads[segment]),
+          context->batchReservations[source].ticket.seqId);
+    }
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "publish_cpu_ready_arena_batch_phase3", /*skipHold=*/true);
+  if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
+      activeArenaBuild_.load(std::memory_order_relaxed) != context ||
+      !context->publishing.load(std::memory_order_acquire) ||
+      context->failed.load(std::memory_order_acquire)) {
+    lock.unlock();
+    abortCpuReadyArenaBatch(ticket);
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+      controlIndices{};
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    controlIndices[i] = context->batchControlIndices[i];
+  }
+  if (!cpuReadyTape_.sealAndPublishArenaBatch(
+          core::CpuReadyTape::ArenaBatchReservation{
+              .reservations = context->batchReservations,
+              .count = context->sourceCount},
+          std::span(controlIndices).first(context->sourceCount))) {
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaBatch(ticket);
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  const std::size_t last = context->sourceCount - 1u;
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    auto& control = slots_[controlIndices[i]];
+    control.seqId = context->batchReservations[i].ticket.seqId;
+    control.state = core::ChunkSlot::State::Pending;
+  }
+  lastCommittedSeqId_ = context->batchReservations[last].ticket.seqId;
+  inflightCount_ += context->sourceCount;
+  writeIndex_ = (controlIndices[last] + 1u) % slots_.size();
+  if (context->updatesBackBuffer) {
+    currentBackBuffer_ = context->pendingBackBuffer;
+  }
+  const bool hasPublishedPresent = context->presentAppended;
+  const auto publishedSeq = context->batchReservations[last].ticket.seqId;
+  const auto presentDesc = context->pendingPresentDesc;
+  const auto presentPolicy = context->pendingPresentBoundaryPolicy;
+  const bool flushAfterPublication = context->flushAfterPublication;
+  context->presentTokenStashed = false;
+  // Keep progress conservation source-granular while preserving the event
+  // boundary: only the final SegmentSerial source may publish Present.
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    schedulingProgressWatchdog_.notePublished(
+        context->batchReservations[i].ticket.seqId,
+        hasPublishedPresent && i + 1u == context->sourceCount);
+  }
+  activeArenaBuild_.store(nullptr, std::memory_order_release);
+  arenaBuildContext_.reset();
+  arenaAdmissionActive_.store(false, std::memory_order_release);
+  recordCpuReadyTapeStats(cpuReadyTape_);
+  queueLifecycle_.noteCpuReadyCapacityProgress();
+  lock.unlock();
+  writeCv_.notify_all();
+  if (hasPublishedPresent) {
+    if (presentPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+      PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+      drainDeferredPresentBoundary();
+    }
+    applyPublishedPresentBoundary(publishedSeq, presentDesc, presentPolicy);
+  }
+  if (flushAfterPublication) {
+    submitFlush();
+  }
+  if (captureIdentity && capturedValid) {
+    *captureIdentity = std::move(captured);
+  }
+  return CpuReadyArenaPublishStatus::Published;
+}
+
+bool CommandQueue::waitForCpuReadyEventSettlement(
+    std::uint64_t rawOrdinal, std::uint64_t buildGeneration,
+    std::uint64_t firstSourceOrdinal, std::uint64_t tailSeqId,
+    std::uint32_t sourceCount) noexcept {
+  if (rawOrdinal == 0u || buildGeneration == 0u ||
+      firstSourceOrdinal == 0u || tailSeqId == 0u || sourceCount == 0u) {
+    return false;
+  }
+  std::unique_lock lock(mutex_);
+  const auto settled = [&] {
+    return queueLifecycle_.hasCompletedArenaGroupSettlement(
+        rawOrdinal, buildGeneration, firstSourceOrdinal, tailSeqId,
+        sourceCount);
+  };
+  finishCv_.wait(lock, [&] { return stop_ || settled(); });
+  return settled();
+}
+
+CommandQueue::CpuReadyArenaBatchAbortStatus
+CommandQueue::abortCpuReadyArenaBatch(
+    core::CpuReadyPublicationTicket ticket, bool failStop) noexcept {
+  std::array<std::optional<core::CpuReadyTape::DetachedArenaOwner>,
+             core::CpuReadyTape::kMaxArenaBatchSources>
+      owners{};
+  std::size_t count = 0;
+  bool rollbackFailed = false;
+  bool detachFailed = false;
+  bool finishFailed = false;
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources> controls{};
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_detach");
+    if (!arenaBuildContext_ || !arenaBuildContext_->batchMode ||
+        arenaBuildContext_->reservation.ticket != ticket) {
+      return CpuReadyArenaBatchAbortStatus::NoActiveBatch;
+    }
+    auto& context = *arenaBuildContext_;
+    count = context.sourceCount;
+    for (std::size_t i = 0; i < count; ++i) {
+      controls[i] = context.batchControlIndices[i];
+    }
+    activeArenaBuild_.store(nullptr, std::memory_order_release);
+    context.noteFailure(CpuReadyArenaFailureClass::Abort,
+                        context.activeSourceIndex(),
+                        context.activeSegmentIndex(),
+                        context.plannedActivePages(),
+                        context.actualActiveCommands());
+    context.failed.store(true, std::memory_order_release);
+    for (std::size_t i = count; i != 0; --i) {
+      auto detached = cpuReadyTape_.beginArenaAbort(
+          context.batchReservations[i - 1].ticket);
+      if (!detached) {
+        detachFailed = true;
+        break;
+      }
+      owners[i - 1].emplace(std::move(*detached));
+    }
+    if (failStop) {
+      stop_ = true;
+      cpuReadyTape_.stopAdmission();
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+    }
+  }
+  for (std::size_t i = count; i != 0; --i) {
+    if (owners[i - 1]) {
+      owners[i - 1]->destroy();
+    }
+  }
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::lock_guard lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_finish");
+    if (arenaBuildContext_) {
+      for (std::size_t i = count; i != 0; --i) {
+        if (owners[i - 1]) {
+          if (!cpuReadyTape_.finishArenaAbort(
+              arenaBuildContext_->batchReservations[i - 1].ticket,
+              std::move(*owners[i - 1]))) {
+            finishFailed = true;
+          }
+        } else if (detachFailed) {
+          finishFailed = true;
+        }
+        if (!detachFailed && !finishFailed && controls[i - 1] < slots_.size()) {
+          slots_[controls[i - 1]] = {};
+        }
+      }
+      rollbackFailed = detachFailed || finishFailed;
+      if (!failStop && !rollbackFailed) {
+        std::uint64_t nextSeqTail = 0;
+        if (!core::CpuReadyTape::checkedExclusiveSeqTail(
+                ticket.seqId, count, nextSeqTail) ||
+            nextSeqId_.load(std::memory_order_acquire) != nextSeqTail) {
+          rollbackFailed = true;
+        }
+      }
+      if (!failStop && !rollbackFailed) {
+        rollbackFailed = !cpuReadyTape_.restoreArenaBatchHighWaters(
+            core::CpuReadyTape::ArenaBatchReservation{
+                .reservations = arenaBuildContext_->batchReservations,
+                .count = count,
+                .rawHighWaterBefore =
+                    arenaBuildContext_->batchRawHighWaterBefore,
+                .sourceHighWaterBefore =
+                    arenaBuildContext_->batchSourceHighWaterBefore,
+                .seqHighWaterBefore =
+                    arenaBuildContext_->batchSeqHighWaterBefore,
+                .sourceTailBefore =
+                    arenaBuildContext_->batchSourceTailBefore,
+                .pageTailBefore = arenaBuildContext_->batchPageTailBefore,
+                .residentCountBefore =
+                    arenaBuildContext_->batchResidentCountBefore,
+                .occupiedPagesBefore =
+                    arenaBuildContext_->batchOccupiedPagesBefore,
+                .readyCountBefore =
+                    arenaBuildContext_->batchReadyCountBefore,
+                .readyReservationsBefore =
+                    arenaBuildContext_->batchReadyReservationsBefore,
+            });
+        if (!rollbackFailed) {
+          nextSeqId_.store(ticket.seqId, std::memory_order_release);
+        }
+      }
+      if (rollbackFailed && !failStop) {
+        stop_ = true;
+        cpuReadyTape_.stopAdmission();
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
+      }
+      arenaBuildContext_.reset();
+    }
+    arenaAdmissionActive_.store(false, std::memory_order_release);
+    recordCpuReadyTapeStats(cpuReadyTape_);
+  }
+  if (failStop || rollbackFailed) {
+    notifySchedulingTerminalWaiters(
+        render::SchedulingTerminalDisposition::DeviceLoss);
+    return rollbackFailed
+               ? CpuReadyArenaBatchAbortStatus::RollbackFailed
+               : CpuReadyArenaBatchAbortStatus::FailStopped;
+  } else {
+    writeCv_.notify_all();
+    return CpuReadyArenaBatchAbortStatus::RolledBack;
+  }
 }
 
 void CommandQueue::abortCpuReadyArenaSource(
@@ -5614,6 +6652,8 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .nextSeqId = &nextSeqId_,
       .completedSeqQueue = &completedSeqQueue_,
       .completedPresentSeqQueue = &completedPresentSeqQueue_,
+      .completedArenaGroupSettlements =
+          queueLifecycle_.completedArenaGroupSettlementLedger(),
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
       .presentCompletedSeqId = &presentCompletedSeqId_,

@@ -985,6 +985,20 @@ bool QueueLifecycleController::producerSequenceWaitActive() {
   return producerSequenceWaitDepth_ != 0;
 }
 
+u64 QueueLifecycleController::producerSequenceWaitTargetSeqId() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  return producerSequenceWaitDepth_ == 0 ? 0 : producerSequenceWaitTargetSeqId_;
+}
+
+void QueueLifecycleController::waitForProducerSequenceWaitTargetForTest(
+    u64 targetSeqId) {
+  std::unique_lock lock(pendingCompletionMutex_);
+  pendingCompletionCv_.wait(lock, [&] {
+    return producerSequenceWaitDepth_ != 0 &&
+        producerSequenceWaitTargetSeqId_ == targetSeqId;
+  });
+}
+
 bool QueueLifecycleController::producerWriterPressureActive() {
   std::lock_guard lock(pendingCompletionMutex_);
   return producerWriterPressureDepth_ != 0;
@@ -1314,7 +1328,23 @@ void QueueLifecycleController::noteCpuReadyCapacityProgress() noexcept {
   }
 }
 
-void QueueLifecycleController::poisonTapeFailureLocked() noexcept {
+void QueueLifecycleController::poisonTapeFailureLocked(
+    std::source_location location) noexcept {
+  bool expected = false;
+  if (firstPoisonOriginClaimed_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    firstPoisonOriginFile_.store(location.file_name(),
+                                 std::memory_order_relaxed);
+    firstPoisonOriginFunction_.store(location.function_name(),
+                                     std::memory_order_relaxed);
+    firstPoisonOriginLine_.store(static_cast<std::uint32_t>(location.line()),
+                                 std::memory_order_relaxed);
+    firstPoisonOriginColumn_.store(
+        static_cast<std::uint32_t>(location.column()),
+        std::memory_order_relaxed);
+    firstPoisonOriginPublished_.store(true, std::memory_order_release);
+  }
   // Lifecycle callers hold the queue scheduling mutex while mutating the
   // tape. Stop both admission surfaces under the same contract so a release
   // build cannot admit new work after a failed lifecycle mutation.
@@ -1358,13 +1388,14 @@ void QueueLifecycleController::poisonTapeFailureLocked() noexcept {
   }
 }
 
-void QueueLifecycleController::poisonTapeFailure() noexcept {
+void QueueLifecycleController::poisonTapeFailure(
+    std::source_location location) noexcept {
   if (submissionBinding_.mutex) {
     std::lock_guard lock(*submissionBinding_.mutex);
-    poisonTapeFailureLocked();
+    poisonTapeFailureLocked(location);
     return;
   }
-  poisonTapeFailureLocked();
+  poisonTapeFailureLocked(location);
 }
 
 void QueueLifecycleController::requestPendingCompletionStop() noexcept {
@@ -2734,11 +2765,70 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   return true;
 }
 
+bool QueueLifecycleController::drainCompletedArenaGroupSettlementsLocked(
+    u64 completedSeqId) noexcept {
+  // The completion watcher appends a group result before publishing its
+  // source sequence to completedSeqQueue. Keep the value-owned result private
+  // until the finish thread has consumed the group's tail, so the event
+  // waterline cannot lead the source FIFO.
+  for (;;) {
+    const auto* front = completedArenaGroupSettlements_.front();
+    if (!front || front->tailSeqId > completedSeqId) {
+      return true;
+    }
+    CpuReadyTape::ArenaGroupSettlement settlement;
+    if (completedEventSettlementCount_ ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        !completedArenaGroupSettlements_.consume(settlement) ||
+        settlement.tailSeqId <= completedEventTailSeqId_) {
+      return false;
+    }
+    completedEventTailSeqId_ = settlement.tailSeqId;
+    lastCompletedEventSettlement_ = settlement;
+    if (completedEventSettlementHistoryCount_ <
+        completedEventSettlementHistory_.size()) {
+      completedEventSettlementHistory_[
+          (completedEventSettlementHistoryHead_ +
+           completedEventSettlementHistoryCount_) %
+          completedEventSettlementHistory_.size()] = settlement;
+      ++completedEventSettlementHistoryCount_;
+    } else {
+      completedEventSettlementHistory_[completedEventSettlementHistoryHead_] =
+          settlement;
+      completedEventSettlementHistoryHead_ =
+          (completedEventSettlementHistoryHead_ + 1u) %
+          completedEventSettlementHistory_.size();
+    }
+    ++completedEventSettlementCount_;
+  }
+}
+
+bool QueueLifecycleController::hasCompletedArenaGroupSettlement(
+    u64 rawOrdinal, u64 buildGeneration, u64 firstSourceOrdinal,
+    u64 tailSeqId, std::uint32_t sourceCount) const noexcept {
+  for (std::size_t i = 0; i < completedEventSettlementHistoryCount_; ++i) {
+    const auto& value = completedEventSettlementHistory_[
+        (completedEventSettlementHistoryHead_ + i) %
+        completedEventSettlementHistory_.size()];
+    if (value.rawOrdinal == rawOrdinal &&
+        value.buildGeneration == buildGeneration &&
+        value.firstSourceOrdinal == firstSourceOrdinal &&
+        value.tailSeqId == tailSeqId && value.sourceCount == sourceCount) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& lock,
                                                   const std::function<void(u64)>& onAfterFinish) {
   // TLA+: FinishDequeue followed by ReclaimFree.
   u64 seqId = 0;
   if (!drainCompletedSequence(lock, seqId)) {
+    return false;
+  }
+  if (!drainCompletedArenaGroupSettlementsLocked(seqId)) {
+    poisonTapeFailureLocked();
     return false;
   }
   // SEGMENT-HOLD: bracket only this function's OWN bookkeeping -- the head
@@ -2750,20 +2840,9 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
-  const auto head = submissionBinding_.cpuReadyTape->oldestResident();
-  if (head && head->seqId < seqId) {
-    poisonTapeFailureLocked();
-    dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
-                                          qmxSegStart);
-    return false;
-  }
   dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                         qmxSegStart);
-  // Inline completion already performed its two-phase reclaim before making
-  // this sequence visible. An absent head or a newer head therefore requires
-  // no second reclaim; an equal GPU-completed head is reclaimed here.
-  if (head && head->seqId == seqId &&
-      !reclaimCompletedTapeHead(lock, seqId)) {
+  if (!reclaimCompletedTapeHeadsThrough(lock, seqId)) {
     return false;
   }
   qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
@@ -2774,6 +2853,49 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                         qmxSegStart);
   return true;
+}
+
+bool QueueLifecycleController::reclaimCompletedTapeHeadsThrough(
+    std::unique_lock<std::mutex>& lock,
+    u64 completedSeqId) {
+  DXMT_ASSERT(lock.owns_lock());
+  for (;;) {
+    const auto head = submissionBinding_.cpuReadyTape->oldestResident();
+    if (!head || head->seqId > completedSeqId) {
+      return true;
+    }
+    const auto status = submissionBinding_.cpuReadyTape->reclaimStatus(
+        head->source.id, head->source.storage);
+    if (head->state != CpuReadyTape::State::Completed ||
+        status.disposition == CpuReadyTape::ReclaimDisposition::Invalid) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    if (status.disposition ==
+        CpuReadyTape::ReclaimDisposition::AwaitingGroupCompletion) {
+      // A flattened group may legitimately hold an older completed head while
+      // later segment receipts are still in flight. Once the group's own tail
+      // waterline has passed, the same state is no longer deferral: it means a
+      // completion locator was lost or corrupted and must remain fail-stop.
+      if (!status.grouped() ||
+          status.groupTailSeqId <= completedSeqId) {
+        poisonTapeFailureLocked();
+        return false;
+      }
+      return true;
+    }
+    // The only legal older resident is a grouped source held for a tail that
+    // has now completed. An ungrouped or already-past-tail head is a skipped
+    // FIFO owner and retains the historical fail-stop behavior.
+    if (head->seqId < completedSeqId &&
+        (!status.grouped() || status.groupTailSeqId < completedSeqId)) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    if (!reclaimCompletedTapeHead(lock, head->seqId)) {
+      return false;
+    }
+  }
 }
 
 bool QueueLifecycleController::reclaimCompletedTapeHead(
@@ -2898,7 +3020,10 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
     {
       std::lock_guard pendingLock(pendingCompletionMutex_);
       ++producerSequenceWaitDepth_;
+      producerSequenceWaitTargetSeqId_ =
+          std::max(producerSequenceWaitTargetSeqId_, targetSeqId);
     }
+    pendingCompletionCv_.notify_all();
     if (encodeCv) {
       encodeCv->notify_one();
     }
@@ -2912,7 +3037,11 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
       if (producerSequenceWaitDepth_ > 0) {
         --producerSequenceWaitDepth_;
       }
+      if (producerSequenceWaitDepth_ == 0) {
+        producerSequenceWaitTargetSeqId_ = 0;
+      }
     }
+    pendingCompletionCv_.notify_all();
     if (encodeCv) {
       encodeCv->notify_one();
     }
@@ -3812,6 +3941,23 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     if (!completed) {
       poisonTapeFailureLocked();
       return false;
+    }
+    if (binding.completedArenaGroupSettlements) {
+      for (const auto& source : completionSources) {
+        if (source.receiptBacked()) {
+          continue;
+        }
+        const auto settlement =
+            binding.cpuReadyTape->takeCompletedArenaGroupSettlement(
+                source.source);
+        if (!settlement) {
+          continue;
+        }
+        if (!binding.completedArenaGroupSettlements->append(*settlement)) {
+          poisonTapeFailureLocked();
+          return false;
+        }
+      }
     }
     for (const auto& source : completionSources) {
       if (!source.receiptBacked()) {

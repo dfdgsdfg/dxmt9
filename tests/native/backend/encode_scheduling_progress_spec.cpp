@@ -60,6 +60,22 @@ struct SchedulingProgressTestAccess {
     queue.queueLifecycle_.poisonTapeFailure();
   }
 
+  static core::metalqueue::QueueLifecycleController::PoisonOriginSnapshot
+  poisonWithLocations(CommandQueue& queue,
+                      std::uint_least32_t& firstLine,
+                      std::uint_least32_t& firstColumn,
+                      const char*& firstFile,
+                      const char*& firstFunction) {
+    const auto first = std::source_location::current();
+    firstLine = first.line();
+    firstColumn = first.column();
+    firstFile = first.file_name();
+    firstFunction = first.function_name();
+    queue.queueLifecycle_.poisonTapeFailure(first);
+    queue.queueLifecycle_.poisonTapeFailure(std::source_location::current());
+    return queue.queueLifecycle_.firstPoisonOrigin();
+  }
+
   static void abort(CommandQueue& queue) {
     queue.abortCpuReadyArenaSource({}, queue.slots_.size());
   }
@@ -110,13 +126,13 @@ void admissionTruthTable() {
         .poisoned = (bits & 2u) != 0,
         .arenaBuildActive = (bits & 4u) != 0,
         .arenaBuildContextPresent = (bits & 8u) != 0,
-        .controlSlotFree = (bits & 16u) != 0,
+        .controlSlotsFree = (bits & 16u) != 0,
         .reserveStillPressured = (bits & 32u) != 0,
     };
     const auto expected = gate.stopped || gate.poisoned
         ? CpuReadyAdmissionAction::Stop
         : !gate.arenaBuildActive && !gate.arenaBuildContextPresent &&
-                gate.controlSlotFree && !gate.reserveStillPressured
+                gate.controlSlotsFree && !gate.reserveStillPressured
             ? CpuReadyAdmissionAction::RetryAdmission
             : CpuReadyAdmissionAction::Wait;
     check(classifyCpuReadyAdmissionGate(gate) == expected,
@@ -124,16 +140,146 @@ void admissionTruthTable() {
   }
 }
 
-void capacityGenerationTruthTable() {
-  using dxmt9::render::firstLeaseCapacityWaitDone;
-  for (bool stopped : {false, true}) {
-    for (std::uint64_t observed : {0ull, 1ull, 7ull}) {
-      for (std::uint64_t current : {0ull, 1ull, 7ull}) {
-        check(firstLeaseCapacityWaitDone(stopped, observed, current) ==
-                  (stopped || observed != current),
-              "first-lease generation truth table drifted");
-      }
-    }
+void firstLeaseCapacityWaitTruthTable() {
+  using namespace dxmt9::render;
+  for (std::uint32_t bits = 0; bits < 16u; ++bits) {
+    const FirstLeaseReadyHeadState head{
+        .arena = (bits & 1u) != 0,
+        .present = (bits & 2u) != 0,
+        .fitsOrdinaryCapacity = (bits & 4u) != 0,
+        .fitsHighWater = (bits & 8u) != 0,
+    };
+    const auto expected = !head.arena
+        ? FirstLeaseReadyHeadEligibility::NonArena
+        : head.present
+            ? FirstLeaseReadyHeadEligibility::Present
+            : !head.fitsOrdinaryCapacity
+                ? FirstLeaseReadyHeadEligibility::OrdinaryCapacity
+                : !head.fitsHighWater
+                    ? FirstLeaseReadyHeadEligibility::HighWater
+                    : FirstLeaseReadyHeadEligibility::Eligible;
+    check(classifyFirstLeaseReadyHeadEligibility(head) == expected,
+          "first-lease ready-head eligibility priority drifted");
+  }
+  for (std::uint32_t bits = 0; bits < 128u; ++bits) {
+    const bool readyHeadValid = (bits & 4u) != 0;
+    const bool sameConsumedHead = (bits & 8u) != 0;
+    const FirstLeaseReadyHeadIdentity readyHead = readyHeadValid
+        ? FirstLeaseReadyHeadIdentity{.seqId = 11u, .sourceOrdinal = 13u}
+        : FirstLeaseReadyHeadIdentity{};
+    const FirstLeaseCapacityWaitState state{
+        .stopped = (bits & 1u) != 0,
+        .admissionPressure = (bits & 2u) != 0,
+        .producerSequenceWaitTargetSeqId =
+            (bits & 64u) != 0 ? 11u : 0u,
+        .readyHeadOwnsOrdinaryDirectCapacity = (bits & 16u) != 0,
+        .readyHead = readyHead,
+        .lastSerialProgressHead = sameConsumedHead
+            ? readyHead
+            : FirstLeaseReadyHeadIdentity{
+                  .seqId = 10u, .sourceOrdinal = 12u},
+        .observedGeneration = 7u,
+        .currentGeneration = (bits & 32u) != 0 ? 8u : 7u,
+    };
+    const auto expected = state.stopped
+        ? FirstLeaseCapacityWaitAction::Stop
+        : state.currentGeneration != state.observedGeneration
+            ? FirstLeaseCapacityWaitAction::RetryLease
+            : state.admissionPressure &&
+                    state.readyHeadOwnsOrdinaryDirectCapacity &&
+                    state.readyHead.valid() &&
+                    state.readyHead != state.lastSerialProgressHead
+                ? FirstLeaseCapacityWaitAction::
+                      ExecuteOneSourceSerialForAdmissionPressure
+                : state.producerSequenceWaitTargetSeqId >=
+                              state.readyHead.seqId &&
+                          state.readyHeadOwnsOrdinaryDirectCapacity &&
+                          state.readyHead.valid() &&
+                          state.readyHead != state.lastSerialProgressHead
+                    ? FirstLeaseCapacityWaitAction::
+                          ExecuteOneSourceSerialForProducerSequenceWait
+                    : FirstLeaseCapacityWaitAction::Wait;
+    check(classifyFirstLeaseCapacityWait(state) == expected,
+          "first-lease capacity-wait action truth table drifted");
+  }
+
+  FirstLeaseCapacityWaitState identity{
+      .admissionPressure = true,
+      .readyHeadOwnsOrdinaryDirectCapacity = true,
+      .readyHead = {.seqId = 11u, .sourceOrdinal = 13u},
+      .observedGeneration = 7u,
+      .currentGeneration = 7u,
+  };
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::
+                ExecuteOneSourceSerialForAdmissionPressure,
+        "one eligible denied head consumes its exact serial token");
+  identity.lastSerialProgressHead = identity.readyHead;
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::Wait,
+        "one denied Ready identity cannot consume a second serial token");
+  identity.readyHead = {.seqId = 12u, .sourceOrdinal = 14u};
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::
+                ExecuteOneSourceSerialForAdmissionPressure,
+        "FIFO head advance rearms one exact serial token in the same "
+        "capacity generation");
+  identity.currentGeneration = 8u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::RetryLease,
+        "an explicit generation transition retries before serial progress");
+  identity.observedGeneration = 8u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::
+                ExecuteOneSourceSerialForAdmissionPressure,
+        "generation retry does not consume the changed head's serial token");
+
+  identity.admissionPressure = false;
+  identity.producerSequenceWaitTargetSeqId = 12u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::
+                ExecuteOneSourceSerialForProducerSequenceWait,
+        "an ordered producer fence covers one fresh eligible FIFO head");
+  identity.producerSequenceWaitTargetSeqId = 11u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::Wait,
+        "a producer fence fails closed beyond its exact ordered target");
+
+  constexpr std::array ineligibleStates{
+      FirstLeaseReadyHeadState{.arena = false,
+                               .present = false,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = true,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = false,
+                               .fitsOrdinaryCapacity = false,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = false,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = false},
+  };
+  constexpr std::array expectedIneligible{
+      FirstLeaseReadyHeadEligibility::NonArena,
+      FirstLeaseReadyHeadEligibility::Present,
+      FirstLeaseReadyHeadEligibility::OrdinaryCapacity,
+      FirstLeaseReadyHeadEligibility::HighWater,
+  };
+  identity.producerSequenceWaitTargetSeqId = identity.readyHead.seqId;
+  for (std::size_t i = 0; i < ineligibleStates.size(); ++i) {
+    const auto sibling =
+        classifyFirstLeaseReadyHeadEligibility(ineligibleStates[i]);
+    check(sibling == expectedIneligible[i],
+          "the exact ineligible sibling must retain its disposition");
+    identity.readyHeadOwnsOrdinaryDirectCapacity =
+        sibling == FirstLeaseReadyHeadEligibility::Eligible;
+    check(classifyFirstLeaseCapacityWait(identity) ==
+              FirstLeaseCapacityWaitAction::Wait,
+          "each ineligible sibling preserves the exact-head token");
   }
 }
 
@@ -419,12 +565,51 @@ void watchdogRejectsStaleStoresAcrossCapacityReuse() {
         "watchdog reuse stress exercised a current generation");
 }
 
+void watchdogConservesSegmentSerialProgressPerSource() {
+  dxmt9::SchedulingProgressWatchdog watchdog(
+      /*enabled=*/true, /*thresholdMs=*/1000,
+      /*startSamplerThread=*/false);
+  constexpr std::array seqIds{41ull, 42ull, 43ull};
+  for (const auto seqId : seqIds) {
+    watchdog.noteAccepted(seqId, false);
+  }
+  watchdog.notePublished(seqIds[0], false);
+  watchdog.notePublished(seqIds[1], false);
+  watchdog.notePublished(seqIds[2], true);
+
+  for (std::size_t i = 0; i < seqIds.size(); ++i) {
+    const auto snapshot = watchdog.slotSnapshotForTest(seqIds[i]);
+    check(snapshot.tracked && snapshot.identity == seqIds[i] &&
+              snapshot.phase == dxmt9::SchedulingProgressPhase::Published &&
+              (snapshot.flags & dxmt9::SchedulingProgressAccepted) != 0,
+          "SegmentSerial publishes progress for every contiguous source");
+    const bool hasPresent =
+        (snapshot.flags & dxmt9::SchedulingProgressHasPresent) != 0;
+    check(hasPresent == (i + 1u == seqIds.size()),
+          "SegmentSerial reserves Present progress for the final source");
+  }
+}
+
+void poisonOriginPublishesFirstCallsiteOnce() {
+  auto queue = makeSchedulingQueue();
+  std::uint_least32_t firstLine = 0;
+  std::uint_least32_t firstColumn = 0;
+  const char* firstFile = nullptr;
+  const char* firstFunction = nullptr;
+  const auto origin = dxmt9::SchedulingProgressTestAccess::poisonWithLocations(
+      queue, firstLine, firstColumn, firstFile, firstFunction);
+  check(origin.valid() && origin.file == firstFile &&
+            origin.function == firstFunction && origin.line == firstLine &&
+            origin.column == firstColumn,
+        "QueueLifecycleController retains the first typed poison origin");
+}
+
 }  // namespace
 
 int main() {
   try {
     admissionTruthTable();
-    capacityGenerationTruthTable();
+    firstLeaseCapacityWaitTruthTable();
     sessionWakeTruthTables();
     initializerTransitionTruthTable();
     terminalFanoutTruthTable();
@@ -432,6 +617,8 @@ int main() {
     watchdogPerfOffDoesZeroWork();
     watchdogUsesBoundedGenerationSafeSlots();
     watchdogRejectsStaleStoresAcrossCapacityReuse();
+    watchdogConservesSegmentSerialProgressPerSource();
+    poisonOriginPublishesFirstCallsiteOnce();
     std::cout << "encode scheduling progress spec: ok\n";
     return 0;
   } catch (const std::exception& error) {

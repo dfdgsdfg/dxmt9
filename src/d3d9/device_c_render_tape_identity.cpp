@@ -30,6 +30,61 @@ RenderTapeIdentityValidationResult failure(
 
 } // namespace
 
+bool validateRenderTapeIdentitySettlements(
+    std::span<const RenderTapeIdentitySource> sources,
+    std::span<const RenderTapeIdentitySettlement> settlements) noexcept {
+  if (settlements.empty()) return true;
+  try {
+    std::vector<bool> covered(sources.size(), false);
+    std::uint64_t priorEvent = 0u;
+    for (const auto& settlement : settlements) {
+      if (settlement.eventOrdinal == 0u ||
+          settlement.eventOrdinal <= priorEvent ||
+          settlement.rawOrdinal == 0u || settlement.buildGeneration == 0u ||
+          settlement.firstSourceOrdinal == 0u || settlement.tailSeqId == 0u ||
+          settlement.sourceCount == 0u || settlement.reserved0 != 0u) {
+        return false;
+      }
+      priorEvent = settlement.eventOrdinal;
+
+      std::size_t first = sources.size();
+      for (std::size_t index = 0; index < sources.size(); ++index) {
+        if (sources[index].eventOrdinal == settlement.eventOrdinal &&
+            sources[index].sourceOrdinal == settlement.firstSourceOrdinal) {
+          first = index;
+          break;
+        }
+      }
+      if (first == sources.size() ||
+          settlement.sourceCount > sources.size() - first) {
+        return false;
+      }
+      const std::size_t count = settlement.sourceCount;
+      for (std::size_t offset = 0; offset < count; ++offset) {
+        const std::size_t index = first + offset;
+        const auto& source = sources[index];
+        if (covered[index] || source.eventOrdinal != settlement.eventOrdinal ||
+            source.sourceOrdinal == 0u || source.seqId == 0u) {
+          return false;
+        }
+        if (offset != 0u &&
+            (source.sourceOrdinal <= sources[index - 1u].sourceOrdinal ||
+             source.seqId <= sources[index - 1u].seqId)) {
+          return false;
+        }
+        covered[index] = true;
+        if (offset + 1u == count && source.seqId != settlement.tailSeqId) {
+          return false;
+        }
+      }
+    }
+    return std::all_of(covered.begin(), covered.end(),
+                       [](bool value) { return value; });
+  } catch (...) {
+    return false;
+  }
+}
+
 RenderTapeIdentityValidationResult validateRenderTapeIdentity(
     std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue& verifiedCatalogue,
@@ -52,21 +107,31 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
       header.sourceEntrySize != sizeof(RenderTapeIdentitySource) ||
       header.rangeEntrySize != sizeof(RenderTapeIdentityRange) ||
       header.reserved0 != 0u ||
+      header.settlementEntrySize != sizeof(RenderTapeIdentitySettlement) ||
+      header.reserved1 != 0u ||
+      header.settlementCount > kMaxRenderTapeIdentitySettlements ||
       (header.authority != static_cast<std::uint32_t>(
                                RenderTapeIdentityAuthority::Capture) &&
        header.authority != static_cast<std::uint32_t>(
-                               RenderTapeIdentityAuthority::ProviderReplay))) {
+                               RenderTapeIdentityAuthority::ProviderReplay) &&
+       header.authority != static_cast<std::uint32_t>(
+                               RenderTapeIdentityAuthority::DerivedProjection))) {
     return failure(RenderTapeIdentityStatus::InvalidHeader);
   }
   const std::uint64_t sourceBytes =
       static_cast<std::uint64_t>(header.sourceCount) * sizeof(RenderTapeIdentitySource);
   const std::uint64_t rangeBytes =
       static_cast<std::uint64_t>(header.rangeCount) * sizeof(RenderTapeIdentityRange);
+  const std::uint64_t settlementBytes = static_cast<std::uint64_t>(
+      header.settlementCount) * sizeof(RenderTapeIdentitySettlement);
   const std::uint64_t expectedRangeOffset = sizeof(header) + sourceBytes;
-  const std::uint64_t expectedBytes = expectedRangeOffset + rangeBytes;
+  const std::uint64_t expectedSettlementOffset = expectedRangeOffset + rangeBytes;
+  const std::uint64_t expectedBytes = expectedSettlementOffset + settlementBytes;
   if (header.sourceTableOffset != sizeof(header) ||
       header.rangeTableOffset != expectedRangeOffset ||
+      header.settlementTableOffset != expectedSettlementOffset ||
       expectedRangeOffset > std::numeric_limits<std::uint32_t>::max() ||
+      expectedSettlementOffset > std::numeric_limits<std::uint32_t>::max() ||
       expectedBytes != sidecar.size()) {
     return failure(RenderTapeIdentityStatus::InvalidLayout);
   }
@@ -81,9 +146,11 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
 
   std::vector<RenderTapeIdentitySource> sources;
   std::vector<RenderTapeIdentityRange> ranges;
+  std::vector<RenderTapeIdentitySettlement> settlements;
   try {
     sources.resize(header.sourceCount);
     ranges.resize(header.rangeCount);
+    settlements.resize(header.settlementCount);
     if (!sources.empty()) {
       std::memcpy(sources.data(), sidecar.data() + header.sourceTableOffset,
                   sources.size() * sizeof(sources[0]));
@@ -91,6 +158,11 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
     if (!ranges.empty()) {
       std::memcpy(ranges.data(), sidecar.data() + header.rangeTableOffset,
                   ranges.size() * sizeof(ranges[0]));
+    }
+    if (!settlements.empty()) {
+      std::memcpy(settlements.data(),
+                  sidecar.data() + header.settlementTableOffset,
+                  settlements.size() * sizeof(settlements[0]));
     }
   } catch (...) {
     return failure(RenderTapeIdentityStatus::AllocationFailed);
@@ -196,11 +268,15 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
   if (sourceIndex != sources.size() || expectedFirstRange != ranges.size()) {
     return failure(RenderTapeIdentityStatus::SourceCoverageMismatch, sourceIndex);
   }
+  if (!validateRenderTapeIdentitySettlements(sources, settlements)) {
+    return failure(RenderTapeIdentityStatus::InvalidFrameIdentity);
+  }
   result.status = RenderTapeIdentityStatus::Valid;
   if (out) {
     out->header = header;
     out->sources = std::move(sources);
     out->ranges = std::move(ranges);
+    out->settlements = std::move(settlements);
   }
   return result;
 }
@@ -212,7 +288,8 @@ std::vector<std::byte> buildRenderTapeIdentity(
     std::uint64_t captureToken, RenderTapeIdentityAuthority authority,
     std::span<const RenderTapeIdentitySource> sources,
     std::span<const RenderTapeIdentityRange> ranges,
-    RenderTapeIdentityValidationResult* validationResult) {
+    RenderTapeIdentityValidationResult* validationResult,
+    std::span<const RenderTapeIdentitySettlement> settlements) {
   if (validationResult) *validationResult = {};
   if (sources.size() > std::numeric_limits<std::uint32_t>::max() ||
       ranges.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -224,7 +301,19 @@ std::vector<std::byte> buildRenderTapeIdentity(
           (std::numeric_limits<std::uint32_t>::max() -
            sizeof(RenderTapeIdentityHeader) -
            sources.size() * sizeof(RenderTapeIdentitySource)) /
-              sizeof(RenderTapeIdentityRange)) {
+              sizeof(RenderTapeIdentityRange) ||
+      settlements.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return {};
+  }
+  if (settlements.size() > kMaxRenderTapeIdentitySettlements) return {};
+  const auto sourceBytes = sources.size() * sizeof(RenderTapeIdentitySource);
+  const auto rangeBytes = ranges.size() * sizeof(RenderTapeIdentityRange);
+  const auto settlementOffset = sizeof(RenderTapeIdentityHeader) + sourceBytes +
+                                rangeBytes;
+  if (settlementOffset > std::numeric_limits<std::uint32_t>::max() ||
+      settlements.size() >
+          (std::numeric_limits<std::uint32_t>::max() - settlementOffset) /
+              sizeof(RenderTapeIdentitySettlement)) {
     return {};
   }
   RenderTapeIdentityHeader header{
@@ -242,9 +331,13 @@ std::vector<std::byte> buildRenderTapeIdentity(
           sources.size() * sizeof(RenderTapeIdentitySource)),
       .rangeCount = static_cast<std::uint32_t>(ranges.size()),
       .authority = static_cast<std::uint32_t>(authority),
+      .settlementEntrySize = sizeof(RenderTapeIdentitySettlement),
+      .settlementTableOffset = static_cast<std::uint32_t>(settlementOffset),
+      .settlementCount = static_cast<std::uint32_t>(settlements.size()),
   };
   std::vector<std::byte> bytes(
-      header.rangeTableOffset + ranges.size() * sizeof(RenderTapeIdentityRange));
+      header.settlementTableOffset +
+      settlements.size() * sizeof(RenderTapeIdentitySettlement));
   std::memcpy(bytes.data(), &header, sizeof(header));
   if (!sources.empty()) {
     std::memcpy(bytes.data() + header.sourceTableOffset, sources.data(),
@@ -253,6 +346,10 @@ std::vector<std::byte> buildRenderTapeIdentity(
   if (!ranges.empty()) {
     std::memcpy(bytes.data() + header.rangeTableOffset, ranges.data(),
                 ranges.size_bytes());
+  }
+  if (!settlements.empty()) {
+    std::memcpy(bytes.data() + header.settlementTableOffset, settlements.data(),
+                settlements.size_bytes());
   }
   const auto validation = validateRenderTapeIdentity(
       tape, verifiedCatalogue, bytes);
@@ -267,23 +364,83 @@ bool renderTapeIdentityOwnsSelection(
     std::uint64_t* logicalPassId) noexcept {
   if (recordCount == 0u) return false;
   const auto end = static_cast<std::uint64_t>(firstRecord) + recordCount;
+  bool found = false;
+  std::uint64_t selectedPass = 0u;
+  std::uint32_t selectedDagPass = 0u;
+  std::uint32_t selectedPassKind = 0u;
+  std::uint32_t cursor = firstRecord;
   for (const auto& source : identity.sources) {
     const auto sourceEnd = static_cast<std::uint64_t>(source.firstRecord) +
                            source.recordCount;
     if (source.eventOrdinal != eventOrdinal ||
-        firstRecord < source.firstRecord || end > sourceEnd) {
+        end <= source.firstRecord || firstRecord >= sourceEnd) {
       continue;
     }
+    const auto pieceBegin = std::max<std::uint32_t>(cursor, source.firstRecord);
+    const auto pieceEnd = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(end, sourceEnd));
+    if (pieceBegin != cursor) {
+      return false;
+    }
+    std::uint32_t pieceCursor = pieceBegin;
     for (std::uint32_t local = 0u; local < source.rangeCount; ++local) {
       const auto& range = identity.ranges[source.firstRange + local];
       const auto rangeEnd = static_cast<std::uint64_t>(range.firstRecord) +
                             range.recordCount;
-      if (firstRecord >= range.firstRecord && end <= rangeEnd) {
-        if (logicalPassId) *logicalPassId = range.logicalPassId;
-        return true;
+      if (rangeEnd <= pieceCursor) continue;
+      if (range.firstRecord > pieceCursor || range.firstRecord >= pieceEnd) {
+        break;
       }
+      if (!found) {
+        selectedPass = range.logicalPassId;
+        selectedDagPass = range.dagPassIndex;
+        selectedPassKind = range.passKind;
+        found = true;
+      } else if (range.logicalPassId != selectedPass ||
+                 range.dagPassIndex != selectedDagPass ||
+                 range.passKind != selectedPassKind) {
+        return false;
+      }
+      pieceCursor = static_cast<std::uint32_t>(
+          std::min<std::uint64_t>(rangeEnd, pieceEnd));
+      if (pieceCursor == pieceEnd) break;
+    }
+    if (pieceCursor != pieceEnd) {
+      return false;
+    }
+    cursor = pieceEnd;
+    if (cursor == end) {
+      if (logicalPassId) *logicalPassId = selectedPass;
+      return found;
+    }
+    if (sourceEnd < end) {
+      continue;
     }
     return false;
+  }
+  return false;
+}
+
+bool renderTapeIdentityLocateRecord(
+    const RenderTapeIdentityView& identity, std::uint64_t eventOrdinal,
+    std::uint32_t recordIndex, RenderTapeIdentitySource* sourceOut,
+    RenderTapeIdentityRange* rangeOut) noexcept {
+  for (const auto& source : identity.sources) {
+    if (source.eventOrdinal != eventOrdinal ||
+        recordIndex < source.firstRecord ||
+        recordIndex - source.firstRecord >= source.recordCount) {
+      continue;
+    }
+    for (std::uint32_t local = 0u; local < source.rangeCount; ++local) {
+      const auto& range = identity.ranges[source.firstRange + local];
+      if (recordIndex < range.firstRecord ||
+          recordIndex - range.firstRecord >= range.recordCount) {
+        continue;
+      }
+      if (sourceOut) *sourceOut = source;
+      if (rangeOut) *rangeOut = range;
+      return true;
+    }
   }
   return false;
 }
@@ -347,6 +504,13 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
     captureToken_ = captureToken;
     nextLogicalPassId_ = 1u;
     failed_ = false;
+    settled_ = false;
+    settledEventOrdinal_ = 0u;
+    settledSourceOrdinal_ = 0u;
+    settledSeqId_ = 0u;
+    settlementCount_ = 0u;
+    settlementCompleted_.fill(false);
+    completedSettlementCount_ = 0u;
     sources_.clear();
     ranges_.clear();
   }
@@ -466,6 +630,111 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
   return true;
 }
 
+bool RenderTapeProductionIdentityLedger::registerExpectedSettlement(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal,
+    std::uint64_t rawOrdinal, std::uint64_t buildGeneration,
+    std::uint64_t firstSourceOrdinal, std::uint64_t tailSeqId,
+    std::uint32_t sourceCount) noexcept {
+  if (captureToken == 0u || eventOrdinal == 0u || rawOrdinal == 0u ||
+      buildGeneration == 0u || firstSourceOrdinal == 0u || tailSeqId == 0u ||
+      sourceCount == 0u) {
+    fail(captureToken);
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  const bool alreadySettled = std::any_of(
+      settlements_.begin(), settlements_.begin() + settlementCount_,
+      [&](const auto& settlement) {
+        return settlement.eventOrdinal == eventOrdinal;
+      });
+  if (captureToken_ != captureToken || failed_ ||
+      settlementCount_ >= kMaxRenderTapeIdentitySettlements ||
+      alreadySettled || sources_.empty() ||
+      sources_.back().eventOrdinal != eventOrdinal) {
+    failed_ = true;
+    return false;
+  }
+  const auto first = std::find_if(
+      sources_.begin(), sources_.end(), [&](const auto& source) {
+        return source.eventOrdinal == eventOrdinal &&
+               source.sourceOrdinal == firstSourceOrdinal;
+      });
+  const auto eventFirst = std::find_if(
+      sources_.begin(), sources_.end(), [&](const auto& source) {
+        return source.eventOrdinal == eventOrdinal;
+      });
+  if (first == sources_.end() || first != eventFirst ||
+      static_cast<std::size_t>(std::distance(sources_.begin(), first)) +
+              sourceCount != sources_.size()) {
+    failed_ = true;
+    return false;
+  }
+  const auto tail = first + (sourceCount - 1u);
+  for (auto source = first; source != sources_.end(); ++source) {
+    if (source->eventOrdinal != eventOrdinal ||
+        source->captureToken != captureToken) {
+      failed_ = true;
+      return false;
+    }
+  }
+  if (tail->seqId != tailSeqId) {
+    failed_ = true;
+    return false;
+  }
+  settlements_[settlementCount_++] = D9CRenderTapeIdentitySettlementEntry{
+      .eventOrdinal = eventOrdinal,
+      .rawOrdinal = rawOrdinal,
+      .buildGeneration = buildGeneration,
+      .firstSourceOrdinal = firstSourceOrdinal,
+      .tailSeqId = tailSeqId,
+      .sourceCount = sourceCount,
+      .reserved0 = 0u,
+  };
+  settled_ = true;
+  settledEventOrdinal_ = eventOrdinal;
+  settledSourceOrdinal_ = sources_.back().sourceOrdinal;
+  settledSeqId_ = sources_.back().seqId;
+  return true;
+}
+
+bool RenderTapeProductionIdentityLedger::completeSettlement(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal) noexcept {
+  std::lock_guard lock(mutex_);
+  if (captureToken_ != captureToken || failed_) return false;
+  for (std::size_t i = 0; i < settlementCount_; ++i) {
+    if (settlements_[i].eventOrdinal != eventOrdinal) continue;
+    if (settlementCompleted_[i]) return false;
+    settlementCompleted_[i] = true;
+    ++completedSettlementCount_;
+    return true;
+  }
+  return false;
+}
+
+bool RenderTapeProductionIdentityLedger::expectedTail(
+    std::uint64_t captureToken,
+    D9CRenderTapeIdentitySettlementEntry& out) const noexcept {
+  std::lock_guard lock(mutex_);
+  if (captureToken_ != captureToken || failed_ || settlementCount_ == 0u) {
+    return false;
+  }
+  out = settlements_[settlementCount_ - 1u];
+  return true;
+}
+
+bool RenderTapeProductionIdentityLedger::markAllSettled(
+    std::uint64_t captureToken) noexcept {
+  std::lock_guard lock(mutex_);
+  if (captureToken_ != captureToken || failed_) return false;
+  for (std::size_t i = 0; i < settlementCount_; ++i) {
+    if (!settlementCompleted_[i]) {
+      settlementCompleted_[i] = true;
+      ++completedSettlementCount_;
+    }
+  }
+  return completedSettlementCount_ == settlementCount_;
+}
+
 void RenderTapeProductionIdentityLedger::fail(
     std::uint64_t captureToken) noexcept {
   std::lock_guard lock(mutex_);
@@ -474,6 +743,13 @@ void RenderTapeProductionIdentityLedger::fail(
     nextLogicalPassId_ = 1u;
     sources_.clear();
     ranges_.clear();
+    settled_ = false;
+    settledEventOrdinal_ = 0u;
+    settledSourceOrdinal_ = 0u;
+    settledSeqId_ = 0u;
+    settlementCount_ = 0u;
+    settlementCompleted_.fill(false);
+    completedSettlementCount_ = 0u;
   }
   failed_ = true;
 }
@@ -487,6 +763,8 @@ bool RenderTapeProductionIdentityLedger::copy(
   std::lock_guard lock(mutex_);
   if (captureToken == 0u || captureToken_ != captureToken || failed_ ||
       sources_.empty() || ranges_.empty() ||
+      !settled_ || completedSettlementCount_ != settlementCount_ ||
+      settledEventOrdinal_ == 0u ||
       sources_.size() > std::numeric_limits<std::uint32_t>::max() ||
       ranges_.size() > std::numeric_limits<std::uint32_t>::max()) {
     return false;
@@ -495,15 +773,27 @@ bool RenderTapeProductionIdentityLedger::copy(
       sources_.size() * sizeof(D9CRenderTapeIdentitySourceEntry);
   const std::uint64_t rangeBytes =
       ranges_.size() * sizeof(D9CRenderTapeIdentityRangeEntry);
-  if (sourceBytes > std::numeric_limits<std::uint64_t>::max() - rangeBytes) {
+  const std::uint64_t settlementBytes = settlementCount_ *
+      sizeof(D9CRenderTapeIdentitySettlementEntry);
+  if (sourceBytes > std::numeric_limits<std::uint64_t>::max() - rangeBytes ||
+      sourceBytes + rangeBytes >
+          std::numeric_limits<std::uint64_t>::max() - settlementBytes) {
     return false;
   }
-  const std::uint64_t byteCount = sourceBytes + rangeBytes;
+  const std::uint64_t byteCount = sourceBytes + rangeBytes + settlementBytes;
   out.status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE;
   out.sourceCount = static_cast<std::uint32_t>(sources_.size());
   out.rangeCount = static_cast<std::uint32_t>(ranges_.size());
   out.captureToken = captureToken;
   out.byteCount = byteCount;
+  out.eventOrdinal = settledEventOrdinal_;
+  out.settlementSourceOrdinal = settledSourceOrdinal_;
+  out.settlementSeqId = settledSeqId_;
+  out.settlementCount = static_cast<std::uint32_t>(settlementCount_);
+  out.reserved1 = 0u;
+  out.settlementEntrySize = sizeof(D9CRenderTapeIdentitySettlementEntry);
+  out.reserved2 = 0u;
+  out.settlementTableOffset = sourceBytes + rangeBytes;
   if (bytes.empty()) {
     return true;
   }
@@ -513,6 +803,8 @@ bool RenderTapeProductionIdentityLedger::copy(
   }
   std::memcpy(bytes.data(), sources_.data(), sourceBytes);
   std::memcpy(bytes.data() + sourceBytes, ranges_.data(), rangeBytes);
+  std::memcpy(bytes.data() + sourceBytes + rangeBytes, settlements_.data(),
+              settlementBytes);
   return true;
 }
 

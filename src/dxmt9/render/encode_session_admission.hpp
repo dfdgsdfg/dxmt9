@@ -299,6 +299,18 @@ struct SessionAdmissionResult {
 
 SessionCapacityVector sessionCapacityFor(
     const SessionAdmissionCandidate& candidate) noexcept;
+
+// The pressure escape has two independent page proofs. ordinaryShape names
+// semantic payload shape and deliberately excludes circular wrap padding;
+// fullReservation retains the physical reservation charge used by high-water
+// and lease accounting.
+struct FirstLeaseReadyHeadCapacityView {
+  SessionCapacityVector ordinaryShape{};
+  SessionCapacityVector fullReservation{};
+};
+
+FirstLeaseReadyHeadCapacityView firstLeaseReadyHeadCapacityViewFor(
+    const SessionAdmissionCandidate& candidate) noexcept;
 SessionCapacityVector sessionPhysicalResidencyCapacityFor(
     const SessionAdmissionCandidate& candidate) noexcept;
 bool retireSessionAdmissionResidency(
@@ -412,6 +424,8 @@ static_assert(std::is_trivially_copyable_v<SessionResidencyByteCharge>);
 static_assert(std::is_standard_layout_v<SessionResidencyByteCharge>);
 static_assert(std::is_trivially_copyable_v<SessionCapacityVector>);
 static_assert(std::is_standard_layout_v<SessionCapacityVector>);
+static_assert(std::is_trivially_copyable_v<FirstLeaseReadyHeadCapacityView>);
+static_assert(std::is_standard_layout_v<FirstLeaseReadyHeadCapacityView>);
 static_assert(
     std::is_trivially_copyable_v<SessionCapacityRejectionObservation>);
 static_assert(std::is_standard_layout_v<SessionCapacityRejectionObservation>);
