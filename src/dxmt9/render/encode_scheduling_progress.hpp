@@ -13,7 +13,9 @@ struct CpuReadyAdmissionGate {
   bool poisoned = false;
   bool arenaBuildActive = false;
   bool arenaBuildContextPresent = false;
-  bool controlSlotFree = false;
+  // For a SegmentSerial batch this is the conjunction over every required
+  // contiguous control slot, not only the slot at writeIndex.
+  bool controlSlotsFree = false;
   bool reserveStillPressured = true;
 };
 
@@ -29,7 +31,7 @@ constexpr CpuReadyAdmissionAction classifyCpuReadyAdmissionGate(
     return CpuReadyAdmissionAction::Stop;
   }
   if (!gate.arenaBuildActive && !gate.arenaBuildContextPresent &&
-      gate.controlSlotFree && !gate.reserveStillPressured) {
+      gate.controlSlotsFree && !gate.reserveStillPressured) {
     return CpuReadyAdmissionAction::RetryAdmission;
   }
   return CpuReadyAdmissionAction::Wait;

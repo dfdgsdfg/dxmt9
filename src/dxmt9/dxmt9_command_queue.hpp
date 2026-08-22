@@ -667,6 +667,8 @@ class CommandQueue {
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
   bool waitForCpuReadyArenaAdmission(
       const core::ArenaSourcePayloadLayout& layout) noexcept;
+  bool waitForCpuReadyArenaAdmission(
+      std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
 
   // Ordered-control synchronization for the CPU-ready session lane. The
   // caller supplies only backend release semantics and the raw-stream fence;
@@ -1159,6 +1161,7 @@ class CommandQueue {
   // two condition-variable boundaries without sleep or polling.
   bool testOnlySchedulingWaitObservationEnabled_ = false;
   std::uint64_t testOnlyArenaAdmissionWaitEntries_ = 0;
+  std::uint64_t testOnlyArenaAdmissionPredicateEvaluations_ = 0;
   std::uint64_t testOnlyFirstLeaseWaitEntries_ = 0;
   bool testOnlyPauseAfterFirstLeaseRetry_ = false;
   bool testOnlyPausedAfterFirstLeaseRetry_ = false;
@@ -1171,6 +1174,8 @@ class CommandQueue {
 
   void noteInitializerPendingUploads() noexcept;
   void requestSchedulingStopLocked() noexcept;
+  bool cpuReadyArenaControlSlotsFreeLocked(
+      std::size_t requiredSlots) const noexcept;
   void notifySchedulingTerminalWaiters(
       render::SchedulingTerminalDisposition disposition) noexcept;
 

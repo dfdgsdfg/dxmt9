@@ -348,6 +348,16 @@ SessionCapacityVector sessionCapacityFor(
   };
 }
 
+FirstLeaseReadyHeadCapacityView firstLeaseReadyHeadCapacityViewFor(
+    const SessionAdmissionCandidate& candidate) noexcept {
+  auto ordinaryShape = sessionCapacityFor(candidate);
+  ordinaryShape.pages = candidate.semantic.pageCount;
+  return {
+      .ordinaryShape = ordinaryShape,
+      .fullReservation = sessionCapacityFor(candidate),
+  };
+}
+
 SessionCapacityVector sessionPhysicalResidencyCapacityFor(
     const SessionAdmissionCandidate& candidate) noexcept {
   return {

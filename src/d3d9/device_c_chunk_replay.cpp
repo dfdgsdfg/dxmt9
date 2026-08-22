@@ -1784,7 +1784,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
     }
-    if (!queue->waitForCpuReadyArenaAdmission(sourceLayouts[0])) {
+    const auto waitLayouts = std::span(sourceLayouts).first(sourceCount);
+    if (!queue->waitForCpuReadyArenaAdmission(waitLayouts)) {
       return commitChunkFail("chunk-arena-pressure-stopped");
     }
   }

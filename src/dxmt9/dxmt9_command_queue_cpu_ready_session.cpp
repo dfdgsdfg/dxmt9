@@ -972,17 +972,20 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     };
                     leaseDeniedReadyHeadSourceOrdinal =
                         candidate.metadata.sourceOrdinal;
+                    const auto readyHeadCapacity =
+                        render::firstLeaseReadyHeadCapacityViewFor(admission);
                     leaseDeniedReadyHeadEligibility =
                         render::classifyFirstLeaseReadyHeadEligibility({
                             .arena = candidate.payload.isArena(),
                             .present = candidate.hasPresent,
                             .fitsOrdinaryCapacity =
                                 render::sessionCapacityFitsWithin(
-                                    capacity,
+                                    readyHeadCapacity.ordinaryShape,
                                     capacityPolicy.ordinaryDirect),
                             .fitsHighWater =
                                 render::sessionCapacityFitsWithin(
-                                    capacity, capacityPolicy.highWater),
+                                    readyHeadCapacity.fullReservation,
+                                    capacityPolicy.highWater),
                         });
                     if (schedulingObservabilityEnabled) {
                       perf::recordCpuReadyFirstLeaseEligibility(

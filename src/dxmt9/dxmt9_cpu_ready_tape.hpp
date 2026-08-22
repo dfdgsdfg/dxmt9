@@ -628,9 +628,8 @@ class CpuReadyTape {
   static bool checkedExclusiveSeqTail(std::uint64_t firstSeqId,
                                       std::size_t count,
                                       std::uint64_t& exclusiveTail) noexcept {
-    if (count > std::numeric_limits<std::uint64_t>::max()) {
-      return false;
-    }
+    static_assert(std::numeric_limits<std::size_t>::digits <=
+                  std::numeric_limits<std::uint64_t>::digits);
     const auto count64 = static_cast<std::uint64_t>(count);
     if (firstSeqId > std::numeric_limits<std::uint64_t>::max() - count64) {
       return false;
@@ -976,6 +975,30 @@ class CpuReadyTape {
       stopAdmission();
     }
     return probe;
+  }
+
+  // The batch reserve path reports TemporaryPressure only while a previously
+  // closed Arena pressure dimension remains latched. Other aggregate batch
+  // failures are recoverable/corrupt begin results and must be retried there,
+  // not turned into an admission wait. Validate every source so the wait gate
+  // never projects a multi-source request through layouts.front().
+  ReserveProbe probeArenaBatchAdmission(
+      std::span<const ArenaSourcePayloadLayout> layouts) const noexcept {
+    if (layouts.empty() || layouts.size() > kMaxArenaBatchSources) {
+      return ReserveProbe::InvalidRequest;
+    }
+    for (const auto& layout : layouts) {
+      if (!layout.valid() ||
+          layout.pageCount > config_.values().maxPagesPerSource) {
+        return ReserveProbe::InvalidRequest;
+      }
+    }
+    if (stopped_) {
+      return ReserveProbe::Stopped;
+    }
+    return (closedPressureDimensions_ & ~kPressureCompatibility) != 0
+        ? ReserveProbe::TemporaryPressure
+        : ReserveProbe::Ready;
   }
 
   ReserveProbe probeReserve(std::size_t pageCount,

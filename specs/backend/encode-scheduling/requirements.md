@@ -469,9 +469,16 @@ exceeds the ordinary segment limit. These are independent validated limits,
 not aliases for one capacity. Admission reserves all descriptors, blocks, and
 pages for the head source transactionally before construction. It uses fixed
 high/low watermarks and FIFO head-of-line ordering. Only the replay worker may
-wait for tape admission; the encode
-coordinator may park an open session for future publication but must never wait
-while holding the scheduling lock or for free capacity after a release event
+wait for tape admission. A multi-source SegmentSerial request must wait on the
+complete source-layout batch and the same predicate used by begin: every
+required control slot from the current write index is free as one contiguous
+ring range, no Arena build is active, and Tape pressure has cleared. A free
+first control must not release the waiter while any later required control is
+occupied. The waiter must park on the queue condition variable without polling
+or re-entering the begin/wait loop until that complete predicate or terminal
+stop holds. The single-source API retains the same one-layout behavior. The
+encode coordinator may park an open session for future publication but must
+never wait while holding the scheduling lock or for free capacity after a release event
 from `R-BACK-2.44`; the finish thread never waits for publication or capacity.
 Admission and session representation must obey the capacity-credit and headroom
 contract in `R-BACK-2.65`; live pressure must not submit a represented prefix or
@@ -669,10 +676,14 @@ admission pressure is not a release reason and must not post a
 `SessionReleaseEvent`. If an Arena admission waiter appears while the first
 lease is denied by older unavailable residency, the coordinator may execute
 exactly one FIFO Ready source through the existing standalone serial path only
-when the denied identity is unchanged, the source is a non-Present Direct
-Arena source that already owns its complete physical residency, and its charge
-fits both `ordinaryDirect` and the admission high-water vector. This bounded
-escape acquires no lease, reserves no capacity, opens no session, and remains
+when the denied identity is unchanged, the source is a non-Present Direct Arena
+source that already owns its complete physical residency, its semantic payload
+shape fits `ordinaryDirect`, and its complete physical reservation fits the
+admission high-water vector. `ordinaryDirect.pages` compares payload pages
+without circular-wrap padding; the independent high-water, lease, retirement,
+and completion accounts retain payload plus wrap-padding pages and the complete
+byte/descriptor/ticket charge. This bounded escape acquires no lease, reserves
+no capacity, opens no session, and remains
 unavailable again until a capacity-generation transition. It may reduce that
 exact source to a singleton submission; GPU timing must not append it to a
 session, widen any later group, fabricate completion, or re-arm another escape

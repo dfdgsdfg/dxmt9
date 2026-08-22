@@ -126,13 +126,13 @@ void admissionTruthTable() {
         .poisoned = (bits & 2u) != 0,
         .arenaBuildActive = (bits & 4u) != 0,
         .arenaBuildContextPresent = (bits & 8u) != 0,
-        .controlSlotFree = (bits & 16u) != 0,
+        .controlSlotsFree = (bits & 16u) != 0,
         .reserveStillPressured = (bits & 32u) != 0,
     };
     const auto expected = gate.stopped || gate.poisoned
         ? CpuReadyAdmissionAction::Stop
         : !gate.arenaBuildActive && !gate.arenaBuildContextPresent &&
-                gate.controlSlotFree && !gate.reserveStillPressured
+                gate.controlSlotsFree && !gate.reserveStillPressured
             ? CpuReadyAdmissionAction::RetryAdmission
             : CpuReadyAdmissionAction::Wait;
     check(classifyCpuReadyAdmissionGate(gate) == expected,

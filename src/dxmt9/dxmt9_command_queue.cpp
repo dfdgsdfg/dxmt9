@@ -4062,13 +4062,13 @@ CommandQueue::beginCpuReadyArenaSources(
       layouts.size() > slots_.size()) {
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
+  if (!cpuReadyArenaControlSlotsFreeLocked(layouts.size())) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
   std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
       controls{};
   for (std::size_t i = 0; i < layouts.size(); ++i) {
     controls[i] = (writeIndex_ + i) % slots_.size();
-    if (slots_[controls[i]].state != core::ChunkSlot::State::Free) {
-      return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
-    }
   }
   const std::uint64_t firstSeqId =
       nextSeqId_.load(std::memory_order_relaxed);
@@ -4173,6 +4173,31 @@ CommandQueue::beginCpuReadyArenaSources(
 
 bool CommandQueue::waitForCpuReadyArenaAdmission(
     const core::ArenaSourcePayloadLayout& layout) noexcept {
+  return waitForCpuReadyArenaAdmission(
+      std::span<const core::ArenaSourcePayloadLayout>(&layout, 1u));
+}
+
+bool CommandQueue::cpuReadyArenaControlSlotsFreeLocked(
+    std::size_t requiredSlots) const noexcept {
+  if (writeIndex_ >= slots_.size() || requiredSlots == 0u ||
+      requiredSlots > slots_.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < requiredSlots; ++i) {
+    const std::size_t controlIndex = (writeIndex_ + i) % slots_.size();
+    if (slots_[controlIndex].state != core::ChunkSlot::State::Free) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CommandQueue::waitForCpuReadyArenaAdmission(
+    std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept {
+  if (layouts.empty() ||
+      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
+    return false;
+  }
   const bool schedulingObservabilityEnabled = perf::enabled();
   if (schedulingObservabilityEnabled) {
     perf::enterCpuReadyArenaAdmissionWait();
@@ -4189,21 +4214,28 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
       qmxBegin, "wait_for_cpu_ready_arena_admission-cv", /*skipHold=*/true);
   if (testOnlySchedulingWaitObservationEnabled_) {
     ++testOnlyArenaAdmissionWaitEntries_;
+    testOnlyArenaAdmissionPredicateEvaluations_ = 0;
     sessionReleaseCv_.notify_all();
   }
   // Wake a parked Tape-gated encode session for deterministic re-evaluation.
   // This live pressure observation carries no release fence.
   encodeCv_.notify_one();
   while (true) {
-    const bool controlSlotFree = writeIndex_ < slots_.size() &&
-        slots_[writeIndex_].state == core::ChunkSlot::State::Free;
+    const bool controlSlotsFree =
+        cpuReadyArenaControlSlotsFreeLocked(layouts.size());
     bool reserveStillPressured = true;
     if (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
-        !arenaBuildContext_.has_value() && controlSlotFree) {
-      reserveStillPressured =
-          cpuReadyTape_.probeArenaReserve(layout) ==
+        !arenaBuildContext_.has_value() && controlSlotsFree) {
+      const auto reserveProbe = layouts.size() == 1u
+          ? cpuReadyTape_.probeArenaReserve(layouts.front())
+          : cpuReadyTape_.probeArenaBatchAdmission(layouts);
+      reserveStillPressured = reserveProbe ==
           core::CpuReadyTape::ReserveProbe::TemporaryPressure;
       recordCpuReadyTapeStats(cpuReadyTape_);
+    }
+    if (testOnlySchedulingWaitObservationEnabled_) {
+      ++testOnlyArenaAdmissionPredicateEvaluations_;
+      sessionReleaseCv_.notify_all();
     }
     const auto action = render::classifyCpuReadyAdmissionGate({
         .stopped = stop_,
@@ -4211,7 +4243,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
         .arenaBuildActive =
             arenaAdmissionActive_.load(std::memory_order_relaxed),
         .arenaBuildContextPresent = arenaBuildContext_.has_value(),
-        .controlSlotFree = controlSlotFree,
+        .controlSlotsFree = controlSlotsFree,
         .reserveStillPressured = reserveStillPressured,
     });
     if (action != render::CpuReadyAdmissionAction::Wait) {

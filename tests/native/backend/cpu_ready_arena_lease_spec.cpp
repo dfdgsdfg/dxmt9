@@ -2,6 +2,8 @@
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -9,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 namespace dxmt9 {
@@ -149,6 +152,46 @@ struct CommandQueueArenaLeaseTestAccess {
                                         std::size_t index) {
     std::lock_guard lock(queue.mutex_);
     return queue.slots_[index];
+  }
+
+  static void enableArenaAdmissionWaitObservation(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlySchedulingWaitObservationEnabled_ = true;
+    queue.testOnlyArenaAdmissionWaitEntries_ = 0;
+    queue.testOnlyArenaAdmissionPredicateEvaluations_ = 0;
+  }
+
+  static bool waitForArenaAdmissionPredicateEvaluations(
+      CommandQueue& queue, std::uint64_t expected) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.sessionReleaseCv_.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return queue.testOnlyArenaAdmissionPredicateEvaluations_ >= expected;
+        });
+  }
+
+  static std::array<std::uint64_t, 2> arenaAdmissionWaitObservations(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return {queue.testOnlyArenaAdmissionWaitEntries_,
+            queue.testOnlyArenaAdmissionPredicateEvaluations_};
+  }
+
+  static void setControlStateAndWake(
+      CommandQueue& queue, std::size_t index,
+      core::ChunkSlot::State state) {
+    {
+      std::lock_guard lock(queue.mutex_);
+      queue.slots_[index] = {};
+      queue.slots_[index].state = state;
+    }
+    queue.writeCv_.notify_all();
+  }
+
+  static bool waitForArenaAdmission(
+      CommandQueue& queue,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) {
+    return queue.waitForCpuReadyArenaAdmission(layouts);
   }
 
   static bool admissionIsFullyVisible(
@@ -999,6 +1042,68 @@ void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
   }
 }
 
+void testBatchAdmissionWaitRequiresEveryContiguousControlSlot() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  const std::array layouts{layout, layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 1u, ChunkSlot::State::Writing);
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 2u, ChunkSlot::State::Writing);
+  const auto pressured = queue.beginCpuReadyArenaSources(130u, layouts);
+  check(pressured.status ==
+            CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure,
+        "batch begin rejects when the first control is free but a later "
+        "required control is occupied");
+
+  CommandQueueArenaLeaseTestAccess::enableArenaAdmissionWaitObservation(queue);
+  std::atomic<bool> returned{false};
+  std::atomic<bool> admitted{false};
+  std::thread waiter([&] {
+    admitted.store(
+        CommandQueueArenaLeaseTestAccess::waitForArenaAdmission(queue, layouts),
+        std::memory_order_release);
+    returned.store(true, std::memory_order_release);
+  });
+  check(CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionPredicateEvaluations(queue, 1u) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 1u} &&
+            !returned.load(std::memory_order_acquire),
+        "batch waiter enters once and parks on the occupied contiguous suffix");
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 1u, ChunkSlot::State::Free);
+  check(CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionPredicateEvaluations(queue, 2u) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 2u} &&
+            !returned.load(std::memory_order_acquire),
+        "freeing only one later control rechecks once and parks without a "
+        "begin/wait retry spin");
+
+  CommandQueueArenaLeaseTestAccess::setControlStateAndWake(
+      queue, 2u, ChunkSlot::State::Free);
+  waiter.join();
+  check(returned.load(std::memory_order_acquire) &&
+            admitted.load(std::memory_order_acquire) &&
+            CommandQueueArenaLeaseTestAccess::arenaAdmissionWaitObservations(
+                queue) == std::array<std::uint64_t, 2>{1u, 3u},
+        "batch waiter returns only after every required contiguous control is "
+        "free, with one wait entry and no retry loop");
+
+  auto begin = queue.beginCpuReadyArenaSources(130u, layouts);
+  check(begin.has_value(),
+        "the exact control predicate that released the waiter admits the batch");
+}
+
 void testCountOneSettlementRequiresExactIdentityTuple() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -1276,6 +1381,7 @@ int main() {
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();
+    testBatchAdmissionWaitRequiresEveryContiguousControlSlot();
     testCountOneSettlementRequiresExactIdentityTuple();
     testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
     testBatchPublishRunsEventProofWithoutCaptureSidecar();

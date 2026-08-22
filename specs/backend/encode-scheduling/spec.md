@@ -414,6 +414,15 @@ dimension to or below its low watermark; the same head candidate is then
 re-evaluated. This hysteresis and FIFO head-of-line rule make admission
 independent of timing and worker scheduling.
 
+SegmentSerial admission passes the complete bounded layout span into both begin
+and wait. `cpuReadyArenaControlSlotsFreeLocked` is their single control-capacity
+predicate: it checks every required slot in the contiguous ring range beginning
+at `writeIndex`. The wait remains one condition-variable interval; a wake with
+only a prefix free re-evaluates and parks again, while the one-source overload
+delegates with a span of length one. Batch Tape waiting uses the batch admission
+probe, so a later layout is validated and the request is never projected through
+the first layout alone.
+
 Before the first source of a streaming session becomes `Represented`, the
 coordinator acquires one generation-stamped `SessionCapacityLease`. The lease
 reserves a fixed physical-residency vector and a separate `successorHeadroom`
@@ -447,8 +456,12 @@ capacity-releasing generation. The shared
 `classifyFirstLeaseCapacityWait` action gives generation progress priority over
 pressure. With no generation change, one live Arena admission waiter may spend
 one local serial-progress credit on the exact denied non-Present Direct Arena
-Ready head only after the production charge proves `ordinaryDirect` and
-high-water ownership. The next denial parks until another capacity generation;
+Ready head only after `FirstLeaseReadyHeadCapacityView::ordinaryShape` proves
+the semantic payload-page shape against `ordinaryDirect` and
+`fullReservation` independently proves payload plus circular-wrap padding
+against high-water. Lease and physical-retirement accounting also retain
+`fullReservation`; the typed view does not transfer, forgive, or double-count
+padding ownership. The next denial parks until another capacity generation;
 it cannot repeatedly drain the Ready FIFO from one pressure episode.
 
 The physical byte credit is a typed
@@ -1670,6 +1683,19 @@ All values are stored only under `DXMT_PERF_COUNTERS`. The existing
 an obligation crosses `DXMT9_SCHEDULING_PROGRESS_WATCHDOG_MS`; reporting does
 not depend on the Present-count periodic reporter and does not add a recovery
 edge.
+
+The GT2 identity-v2 r14 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r14-frontier/r14-console.log`
+reached `bootstrap_complete` and `arm_complete`, then stopped after
+`captured_present_reserve_begin`. Its frontier held one replay raw in
+ArenaAdmission and one denied first lease at seq/source 6978 with observed and
+current generation 13965, while Arena admission enter/retry grew by tens of
+millions and ordinary-capacity ineligibility reached 30. This is the concrete
+counterexample for the two projections above: the wait saw the first control as
+free while a later batch control remained occupied, and wrap padding made a
+max-payload Ready head fail the payload-shape ordinary test. The bounded fixes
+add no release event, capacity, or ownership transition; no new wild run is
+claimed here.
 
 ## 10. Verification Mapping
 

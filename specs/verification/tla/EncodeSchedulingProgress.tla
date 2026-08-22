@@ -12,8 +12,9 @@
  *
  * FirstLeaseWaitAction is the model-code truth-table binding for
  * classifyFirstLeaseCapacityWait. OrdinaryDirectSources denotes non-Present
- * Direct Arena Ready heads whose already-owned charge fits both ordinaryDirect
- * and highWater. The ExecuteOneSourceSerial action leaves openSession
+ * Direct Arena Ready heads whose semantic payload shape fits ordinaryDirect
+ * while their complete physical reservation, including wrap padding, fits
+ * highWater. The ExecuteOneSourceSerial action leaves openSession
  * unchanged, so pressure cannot create or enlarge a represented session or
  * its release event.
  *
