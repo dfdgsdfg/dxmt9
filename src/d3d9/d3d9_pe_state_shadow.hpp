@@ -727,11 +727,6 @@ struct PeHotStateShadow {
         transformShadow.clear();
     }
 
-    bool renderStateEquals(std::uint32_t state, std::uint32_t value) const noexcept {
-        std::uint32_t shadowValue = 0;
-        return renderStateShadow.get(state, shadowValue) && shadowValue == value;
-    }
-
     // --- Typed accessors (R-PE-TYPED-SLOTS) ---------------------------------
     // Additive views over the exact same storage the untyped fields above
     // use (renderStateShadow, pendingRenderStates, stateBlockRenderStateRestore,
