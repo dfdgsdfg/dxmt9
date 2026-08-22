@@ -9,6 +9,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -61,11 +62,22 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.testOnlyForceNextCpuReadyArenaBuilderFailure_ = true;
   }
 
+  static void forceNextCaptureIdentityBeginFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_ = true;
+  }
+
+  static void forceNextPostSemanticPublishFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = true;
+  }
+
   static std::uint32_t admissionWaiterCount(CommandQueue& queue) {
     return queue.arenaAdmissionWaiterCount_.load(std::memory_order_acquire);
   }
 
-  static CompletionResult consumeOne(CommandQueue& queue) {
+  static CompletionResult consumeOne(CommandQueue& queue,
+                                     bool deferFinish = false) {
     using namespace core::metalqueue;
     CompletionResult result{};
     ReadySlotSnapshot source{};
@@ -122,12 +134,17 @@ struct CommandQueueArenaLeaseTestAccess {
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
     result.completed = queue.queueLifecycle_.processOnePendingCompletion();
-    {
+    if (!deferFinish) {
       std::unique_lock lock(queue.mutex_);
       result.reclaimed = result.completed &&
           queue.queueLifecycle_.runFinishIteration(lock);
     }
     return result;
+  }
+
+  static bool finishIteration(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.queueLifecycle_.runFinishIteration(lock);
   }
 };
 
@@ -246,6 +263,30 @@ RecordSpec clearRecord(std::uint32_t rectCount = 0) {
   return record;
 }
 
+std::size_t clearRectCountForPlannerPages(std::size_t targetPages) {
+  for (std::size_t rectCount = 0;
+       rectCount <= targetPages * 4096u / sizeof(D9CRect) + 1024u;
+       ++rectCount) {
+    dxmt9::core::SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1;
+    capacity.clearRecords = 1;
+    capacity.clearRects = rectCount;
+    capacity.drawUniformPayloadLookupHeads = 8;
+    capacity.drawUniformPayloadLookupTails = 8;
+    capacity.drawUniformVertexConstantsLookupHeads = 8;
+    capacity.drawUniformVertexConstantsLookupTails = 8;
+    capacity.drawUniformPixelConstantsLookupHeads = 8;
+    capacity.drawUniformPixelConstantsLookupTails = 8;
+    const auto layout = dxmt9::core::makeSourcePayloadLayout(
+        capacity, 4096u, std::numeric_limits<std::uint32_t>::max());
+    check(layout.has_value(), "planner clear boundary layout must build");
+    if (layout->pageCount == targetPages) {
+      return rectCount;
+    }
+  }
+  throw TestFailure("planner clear page boundary must be reachable");
+}
+
 RecordSpec presentRecord() {
   return {
       .type = D9C_COMMAND_RECORD_PRESENT,
@@ -326,7 +367,8 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
 }
 
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
-                                      std::uint64_t rawOrdinal) {
+                                      std::uint64_t rawOrdinal,
+                                      bool captureIdentity = false) {
   dxmt9::d3d9::WireObjectRegistry registry;
   dxmt9::d3d9::RawCommandChunk raw;
   const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
@@ -335,6 +377,10 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
   check(prepared, "production raw chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
   raw.cpuReadyTapePlanningEnabled = true;
+  if (captureIdentity) {
+    raw.renderTapeCaptureToken = 0xfeedu;
+    raw.renderTapeEventOrdinal = rawOrdinal;
+  }
   return raw;
 }
 
@@ -490,6 +536,143 @@ void directRawPublishesAndCompletesArenaSource() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
             fixture.routing->queue_) == 0,
         "completed Direct source must release Tape residency");
+}
+
+void ordinarySegmentConfiguredRawKeepsOneSourceAt512Pages() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  const auto rects = clearRectCountForPlannerPages(20);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects), presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 2);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr == D3D_OK, "non-captured startup raw must replay successfully");
+  check(fixture.routing->clearCalls == 5u && fixture.routing->presentCalls == 1u,
+        "non-captured startup raw must apply all clears and Present once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+              fixture.routing->queue_) == 1u,
+        "non-captured startup raw must publish one source");
+  check(fixture.routing->queue_.cpuReadyArenaPlanLimits().maxPagesPerSource ==
+            512u,
+        "non-captured SegmentSerial startup raw must retain the 512-page "
+        "queue bound");
+}
+
+void capturedLargeRawPublishesTwoAuthenticatedSources() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  const auto rects = clearRectCountForPlannerPages(20);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects),
+                           presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 4, /*captureIdentity=*/true);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr == D3D_OK, "captured large raw must replay successfully");
+  check(fixture.routing->clearCalls == 5u && fixture.routing->presentCalls == 1u,
+        "captured large raw must preserve one-pass clear/present counts");
+  const auto readySources = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+      fixture.routing->queue_);
+  check(readySources >= 2u,
+        "captured event larger than 64 pages must publish multiple Ready sources "
+        "(got " + std::to_string(readySources) + ")");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+              fixture.routing->queue_) == readySources + 1u &&
+            !fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "captured SegmentSerial publication must consume all source seqs without "
+        "poison");
+  std::vector<dxmt9::CommandQueueArenaLeaseTestAccess::CompletionResult>
+      completions;
+  completions.reserve(readySources);
+  for (std::size_t i = 0; i < readySources; ++i) {
+    completions.push_back(dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+        fixture.routing->queue_, /*deferFinish=*/true));
+  }
+  for (std::size_t i = 0;
+       i < readySources + 1u &&
+       dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+           fixture.routing->queue_) != 0u;
+       ++i) {
+    (void)dxmt9::CommandQueueArenaLeaseTestAccess::finishIteration(
+        fixture.routing->queue_);
+  }
+  check(fixture.routing->queue_.waitForCpuReadyEventSettlement(
+            /*rawOrdinal=*/4u, /*buildGeneration=*/1u,
+            /*firstSourceOrdinal=*/1u, /*tailSeqId=*/readySources,
+            static_cast<std::uint32_t>(readySources)),
+        "captured SegmentSerial group must expose exact final settlement");
+  const bool completionsValid =
+      std::all_of(completions.begin(), completions.end(),
+                  [](const auto& completion) {
+                    return completion.arena && completion.submitted &&
+                        completion.completed;
+                  }) &&
+      std::all_of(completions.begin(), completions.end() - 1,
+                  [](const auto& completion) {
+                    return !completion.finalPresent;
+                  }) &&
+      completions.back().finalPresent && completions.front().seqId == 1u &&
+      completions.back().seqId == readySources &&
+      dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+          fixture.routing->queue_) == 0u;
+  if (!completionsValid) {
+    std::string details = "captured SegmentSerial completion mismatch:";
+    for (const auto& completion : completions) {
+      details += " [seq=" + std::to_string(completion.seqId) +
+          " arena=" + std::to_string(completion.arena) +
+          " submitted=" + std::to_string(completion.submitted) +
+          " completed=" + std::to_string(completion.completed) +
+          " reclaimed=" + std::to_string(completion.reclaimed) +
+          " final=" + std::to_string(completion.finalPresent) +
+          " segments=" + std::to_string(completion.arenaSegmentCount) +
+          " cmds=" + std::to_string(completion.commandCount) + "]";
+    }
+    details += " resident=" + std::to_string(
+        dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+            fixture.routing->queue_));
+    throw TestFailure(details);
+  }
+}
+
+void mixedSourceLeaseSelectionPreservesSourceOrder() {
+  // This is the queue API coordinate-contract pin: a hand-built source may
+  // contain multiple physical segments, even though the production planner's
+  // current equal 64-page source/segment bounds commonly emit one segment per
+  // source for canonical replay. The capturedLargeRaw test above is the
+  // production replayRawChunk multi-source pin; this test does not claim that
+  // production fixture exercises a mixed source shape.
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto segment = makeSourcePayloadLayout(
+      capacity, fixture.routing->queue_.cpuReadyArenaPlanLimits().pageSize,
+      fixture.routing->queue_.cpuReadyArenaPlanLimits()
+          .maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "mixed-source selection segment must build");
+  const std::array firstSourceSegments{*segment, *segment};
+  const auto firstSource = makeArenaSourcePayloadLayout(
+      firstSourceSegments, fixture.routing->queue_.cpuReadyArenaPlanLimits()
+                               .pageSize,
+      fixture.routing->queue_.cpuReadyArenaPlanLimits().maxPagesPerSource);
+  const std::array secondSourceSegments{*segment};
+  const auto secondSource = makeArenaSourcePayloadLayout(
+      secondSourceSegments, fixture.routing->queue_.cpuReadyArenaPlanLimits()
+                                .pageSize,
+      fixture.routing->queue_.cpuReadyArenaPlanLimits().maxPagesPerSource);
+  check(firstSource.has_value() && secondSource.has_value(),
+        "mixed-source selection layouts must build");
+  const std::array layouts{*firstSource, *secondSource};
+  auto begin = fixture.routing->queue_.beginCpuReadyArenaSources(44u, layouts);
+  check(begin.has_value(), "mixed-source selection batch must admit");
+  check(begin->selectSourceSegment(0u, 0u) &&
+            begin->selectSourceSegment(0u, 1u) &&
+            begin->selectSourceSegment(1u, 0u),
+        "source-local segment selection must cross a multi-segment source "
+        "only at its exact next source edge");
+  begin->abortForFallback();
 }
 
 void providerResolvedEntryRoutesExistingClearPresent() {
@@ -659,17 +842,19 @@ void postSemanticDirectFailureDoesNotFallback() {
 void batchBuilderFailureRetriesCompleteEventSerialExactlyOnce() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/true);
-  // Two jumbo GPU records exceed the per-source page bound together, so the
-  // planner admits two SegmentSerial sources.  The native seam rejects the
+  // Two bounded GPU records exceed the 64-page source bound together, so the
+  // planner admits two SegmentSerial sources. The native seam rejects the
   // batch builder before semantic replay; production routing must roll back
   // that whole admission and replay the raw event once through EventSerial.
-  const std::array records{clearRecord(17000), clearRecord(17000),
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects),
                            presentRecord()};
-  auto raw = makeRaw(makeWireFixture(records), 1);
+  auto raw = makeRaw(makeWireFixture(records), 1, /*captureIdentity=*/true);
   dxmt9::CommandQueueArenaLeaseTestAccess::forceNextBatchBuilderFailure(
       fixture.routing->queue_);
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
-  check(hr == D3D_OK && fixture.routing->clearCalls == 2u &&
+  check(hr == D3D_OK && fixture.routing->clearCalls == 3u &&
             fixture.routing->presentCalls == 1u,
         "batch builder rejection must retry the complete raw event once in "
         "EventSerial order");
@@ -679,6 +864,49 @@ void batchBuilderFailureRetriesCompleteEventSerialExactlyOnce() {
                 fixture.routing->queue_) == 2u &&
             !fixture.routing->queue_.cpuReadyArenaPoisoned(),
         "EventSerial retry must leave one ordered Ready source and no poison");
+}
+
+void captureIdentityBeginFailureRetriesCompleteEventSerialExactlyOnce() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects), presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 5, /*captureIdentity=*/true);
+  dxmt9::CommandQueueArenaLeaseTestAccess::forceNextCaptureIdentityBeginFailure(
+      fixture.routing->queue_);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr == D3D_OK && fixture.routing->clearCalls == 3u &&
+            fixture.routing->presentCalls == 1u,
+        "capture identity begin rejection must retry the complete raw event "
+        "once before semantic effects");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == 2u &&
+            !fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "capture identity begin rollback must leave one EventSerial Ready "
+        "source and an unpoisoned queue");
+}
+
+void postSemanticBatchPublishFailureFailsStopsWithoutRetry() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects),
+                           presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 3, /*captureIdentity=*/true);
+  dxmt9::CommandQueueArenaLeaseTestAccess::forceNextPostSemanticPublishFailure(
+      fixture.routing->queue_);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr < 0 && fixture.routing->clearCalls == 3u &&
+            fixture.routing->presentCalls == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture.routing->queue_) == 0u &&
+            fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "post-semantic publish failure must fail-stop without EventSerial "
+        "retry or duplicate semantic effects");
 }
 
 void workerPressureWaitResumesAfterActiveLeasePublishes() {
@@ -747,12 +975,17 @@ int main() {
   try {
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
+    ordinarySegmentConfiguredRawKeepsOneSourceAt512Pages();
+    capturedLargeRawPublishesTwoAuthenticatedSources();
+    mixedSourceLeaseSelectionPreservesSourceOrder();
     providerResolvedEntryRoutesExistingClearPresent();
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();
     batchBuilderFailureRetriesCompleteEventSerialExactlyOnce();
+    captureIdentityBeginFailureRetriesCompleteEventSerialExactlyOnce();
+    postSemanticBatchPublishFailureFailsStopsWithoutRetry();
     workerPressureWaitResumesAfterActiveLeasePublishes();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_production_routing_spec failed: "

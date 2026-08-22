@@ -975,9 +975,13 @@ unsupported control, resource-mark failure, or capacity overflow must reject
 the whole group and route the complete PE event through v2 EventSerial. The
 fallback must preserve the same event record order, Presenter ownership,
 logical-pass actions, resource marks, and completion semantics. After receipt
-activation, encoder/child creation, or any Metal effect, failure is fail-stop:
-partial rollback, orphan segment completion, mixed event fallback, and a second
-publication are forbidden. `EventSerial` remains reachable when SegmentSerial
+activation, encoder/child creation, or any Metal effect, failure is fail-stop;
+in particular, a typed `RecoverableFailure` returned by batch publication after
+`replayResolvedChunk` has begun is no longer a fallback boundary and must be
+converted to fail-stop without recursively replaying EventSerial. This keeps
+semantic effects exactly once; partial rollback, orphan segment completion,
+mixed event fallback, and a second publication are forbidden. `EventSerial`
+remains reachable when SegmentSerial
 is unset, unsupported, malformed, or rejected; no fallback may revive v1.
 
 **R-BACK-2.81** Closure of the bounded SegmentSerial lane requires the ordered

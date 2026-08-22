@@ -910,14 +910,24 @@ must gate before metadata collection or allocation. The PE must finish any
 capture-only object/materialization preflight before assigning the final event
 ordinal and submitting the chunk, so later inserted journal events cannot move
 an ordinal already copied by the provider. Capture may select a larger bounded
-Arena profile: EventSerial/default capture retains its 512-page source bound,
-while the queue-immutable `DXMT9_RENDER_IDENTITY_MODE=segment` profile retains
-the same 2,048-page (8 MiB) Arena and bounds each SegmentSerial source to 64
-pages. Events exceeding that bound are admitted only as an ordered atomic Arena
+Arena profile: EventSerial/default capture retains its 512-page queue admission
+bound, while only an authenticated token+event-ordinal capture event in the
+queue-immutable `DXMT9_RENDER_IDENTITY_MODE=segment` profile applies the
+call-local 64-page-per-source SegmentSerial planner bound over the same
+2,048-page (8 MiB) Arena. Startup/non-capture raws and capture-off remain
+512 pages/source and one source. Events exceeding that planner bound are
+admitted only as an ordered atomic Arena
 batch, with all payload, descriptor, control, and Ready entries published
 together or aborted together; an indivisible over-bound layout is rejected
 rather than widened. This profile must be selected only when both capture and
 the publisher are active and must not change normal renderer admission. A
+planner, descriptor, or builder rejection during admission or replay setup,
+before the command loop's first semantic effect, must abort the complete batch
+and select the v2 EventSerial fallback exactly once. This includes a failed
+capture-identity arm after source ranges were predeclared. A typed
+`RecoverableFailure` after replay has begun is no longer a
+fallback boundary: it must fail-stop without recursively replaying EventSerial,
+so semantic effects and Presenter ownership remain exactly once. A
 provider-replay sidecar may be labelled
 authoritative only for the exact replay process that emitted it; an offline
 ordinal-derived mapping is not authoritative and must not satisfy this

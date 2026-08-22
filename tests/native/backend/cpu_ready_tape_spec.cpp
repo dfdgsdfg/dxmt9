@@ -311,8 +311,6 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
   const auto streaming = CpuReadyTapeConfig::queueSessionStreaming(32);
   const auto capture = CpuReadyTapeConfig::queueCaptureStreaming(32);
-  const auto captureSegment =
-      CpuReadyTapeConfig::queueCaptureStreaming(32, true);
   const auto& legacy = compatibility.values();
   const auto& session = streaming.values();
   const auto& captureValues = capture.values();
@@ -362,14 +360,10 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
             captureValues.highWaterPages - 1023u == 1025u,
         "EventSerial capture retains its existing maximum non-wrapping "
         "source reservation");
-  check(captureSegment.values().pageCount == 2048u &&
-            captureSegment.values().maxPagesPerSource == 64u &&
-            captureSegment.values().highWaterPages == 2048u &&
-            captureSegment.values().lowWaterPages == 1024u &&
-            dxmt9::render::worstCaseNonWrappingReservationPages(
-                captureSegment.values().maxPagesPerSource) == 127u,
-        "explicit SegmentSerial capture keeps the 2048-page arena while "
-        "bounding each source to 64 pages");
+  check(captureValues.pageCount == 2048u &&
+            captureValues.maxPagesPerSource == 512u,
+        "SegmentSerial selection does not lower queue admission capacity; "
+        "the authenticated capture planner owns its 64-page source bound");
 
   bool overflowRejected = false;
   try {

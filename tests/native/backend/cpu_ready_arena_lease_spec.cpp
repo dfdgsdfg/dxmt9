@@ -999,6 +999,9 @@ void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
   constexpr std::array recordCounts{1u, 1u};
   check(begin->setCaptureSourceRanges(firstRecords, recordCounts),
         "capture ranges must cover both source rows contiguously");
+  check(!begin->setCaptureSourceRanges(firstRecords, recordCounts) &&
+            !begin->beginCaptureIdentity(2u),
+        "batch capture range and identity setup must each be exactly once");
 
   CommandQueue::CpuReadyCaptureIdentityBatch identity{};
   check(begin->publishBatch({}, &identity),

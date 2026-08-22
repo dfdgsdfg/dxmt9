@@ -1471,14 +1471,22 @@ capture-authority sidecar validates exact command/record coverage. The final
 event ordinal is assigned only after PE object/materialization preflight, then
 copied through the bounded capture token into the Direct Arena source. The
 capture-only queue profile owns 2,048 4-KiB pages (8 MiB). EventSerial/default
-capture retains its existing 512-page source representation; the queue-immutable
-`DXMT9_RENDER_IDENTITY_MODE=segment` mode permits at most 64 pages in one
-SegmentSerial source. A canonical event whose physical payload exceeds that
-per-source bound is partitioned into ordered source rows through the value-owned
+capture retains its existing 512-page queue admission representation; only an
+authenticated token+event-ordinal capture event in the queue-immutable
+`DXMT9_RENDER_IDENTITY_MODE=segment` mode applies a call-local planner bound of
+at most 64 pages in one SegmentSerial source. Startup/non-capture raws and
+capture-off remain 512 pages/source and one source. A canonical event whose
+physical payload exceeds that planner bound is partitioned into ordered source rows through the value-owned
 Arena batch lease; descriptor, payload, control, and Ready publication are one
 all-or-nothing transaction, and pre-effect failure aborts the complete batch
 without widening a source. Normal capture-off and streaming selection retain
-their existing bounds.
+their existing bounds. Planner, descriptor, or builder rejection during
+admission or replay setup, before the command loop's first semantic effect,
+aborts the complete batch and selects v2 EventSerial exactly once; this
+includes a failed capture-identity arm after source ranges were predeclared.
+A typed `RecoverableFailure` after replay begins is fail-stop and must not
+recursively replay EventSerial, preserving exactly-once semantic effects and
+Presenter ownership.
 
 The r65 full-frame provider output is non-degenerate but is not promotion
 evidence: it differs from the captured output at 139 pixels with maximum RGB

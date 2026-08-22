@@ -503,7 +503,9 @@ class CommandQueue {
         std::span<const std::uint32_t> recordCounts) noexcept;
     // Explicit pre-effect rollback point for a recoverable capture seam.
     // The caller must invoke this before retrying the raw event.
-    void abortForFallback() noexcept;
+    // Returns true only when the pre-effect batch rollback restored all
+    // reservations. A false result is terminal; the caller must not retry.
+    bool abortForFallback() noexcept;
 
    private:
     friend class CommandQueue;
@@ -514,7 +516,7 @@ class CommandQueue {
         : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex),
           batch_(batch) {}
 
-    void abort() noexcept;
+    void abort(bool failStop = true) noexcept;
 
     CommandQueue* queue_ = nullptr;
     core::CpuReadyPublicationTicket ticket_{};
@@ -584,6 +586,12 @@ class CommandQueue {
   void rejectActiveCpuReadyArenaSource() noexcept;
   bool cpuReadyArenaPoisoned() const noexcept {
     return arenaBuildPoisoned_.load(std::memory_order_acquire);
+  }
+  // A publish/proof failure after replayResolvedChunk has applied semantic
+  // effects cannot take the pre-effect EventSerial retry. The caller marks
+  // this queue fail-stop before returning the typed chunk failure.
+  void failStopCpuReadyArena() noexcept {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
   }
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
@@ -1285,6 +1293,7 @@ class CommandQueue {
       std::uint32_t lastRecord = 0;
     };
     std::uint32_t captureRecordCount = 0;
+    bool captureIdentityBegun = false;
     std::size_t captureSourceRangeCount = 0;
     std::array<std::uint32_t, core::CpuReadyTape::kMaxArenaBatchSources>
         captureSourceFirstRecords{};
@@ -1411,6 +1420,13 @@ class CommandQueue {
   // the production caller must take the complete EventSerial retry exactly
   // once. Never set by production.
   bool testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
+  // Native routing pin: make beginCaptureIdentity fail after ranges are
+  // predeclared, before replay effects. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_ = false;
+  // Native routing pin: make batch publication recoverably fail after
+  // replayResolvedChunk has run, proving the caller fail-stops instead of
+  // recursively replaying semantic effects. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = false;
   // Native planner seam: tests may observe one event-wide planner result or
   // force that result invalid before any Ready/resource effect. These fields
   // are never armed by production callers.

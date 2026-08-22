@@ -544,9 +544,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                            render::RenderPartitionConfig renderPartitionConfig)
     : cpuReadyTape_(renderTapePublisherCaptureEnabled
                         ? core::CpuReadyTapeConfig::queueCaptureStreaming(
-                              kCommandChunkCount,
-                              renderPartitionConfig.sourceIdentity.resolved ==
-                                  render::SourceIdentityMode::SegmentSerial)
+                              kCommandChunkCount)
                     : cpuReadySessionLaneEnabled
                         ? core::CpuReadyTapeConfig::queueSessionStreaming(
                               kCommandChunkCount)
@@ -775,8 +773,12 @@ CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits,
                            WMT::Reference<WMT::CommandQueue> queue,
                            render::RenderPartitionConfig renderPartitionConfig)
-    : cpuReadyTape_(core::CpuReadyTapeConfig::queueSessionStreaming(
-          kCommandChunkCount)),
+    : cpuReadyTape_(renderPartitionConfig.sourceIdentity.resolved ==
+                            render::SourceIdentityMode::SegmentSerial
+                        ? core::CpuReadyTapeConfig::queueCaptureStreaming(
+                              kCommandChunkCount)
+                        : core::CpuReadyTapeConfig::queueSessionStreaming(
+                              kCommandChunkCount)),
       cpuReadySessionLaneEnabled_(false),
       renderPartitionConfig_(renderPartitionConfig),
       queue_(std::move(queue)), queueView_(queue_.handle), limits_(limits) {
@@ -3720,8 +3722,14 @@ bool CommandQueue::CpuReadyArenaBuildLease::setCaptureSourceRanges(
     return false;
   }
   auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  // Existing callers may arm command anchors before declaring the batch's
+  // source ranges; production capture declares ranges first. Both are
+  // pre-publication setup states. Declaration remains exactly once and is
+  // rejected only after a prior range declaration; command anchors are
+  // independently validated against the eventual ranges at publication.
   if (!context || context->reservation.ticket != ticket_ ||
       context->ownerThread != std::this_thread::get_id() ||
+      context->captureSourceRangeCount != 0u ||
       firstRecords.size() != context->sourceCount) {
     return false;
   }
@@ -3743,8 +3751,24 @@ bool CommandQueue::CpuReadyArenaBuildLease::setCaptureSourceRanges(
   return true;
 }
 
-void CommandQueue::CpuReadyArenaBuildLease::abortForFallback() noexcept {
-  abort();
+bool CommandQueue::CpuReadyArenaBuildLease::abortForFallback() noexcept {
+  if (!queue_) {
+    return false;
+  }
+  bool rolledBack = false;
+  if (batch_) {
+    // A pre-effect retry must release reservations without poisoning the
+    // queue; post-effect callers use the default fail-stop abort path.
+    rolledBack = queue_->abortCpuReadyArenaBatch(ticket_, false) ==
+                 CpuReadyArenaBatchAbortStatus::RolledBack;
+  } else {
+    queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  }
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
+  return rolledBack;
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
@@ -3753,11 +3777,25 @@ bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
     return false;
   }
   auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  // Batch capture predeclares its source ranges before replay so publication
+  // can validate the complete event atomically.  That metadata owns the
+  // expected record count, but it must not prevent this later call from
+  // arming the per-command anchors used while replay builds the sources.
+  const bool predeclaredBatchCapture =
+      context && context->captureSourceRangeCount != 0u &&
+      context->captureRecordCount == recordCount &&
+      !context->captureIdentityBegun &&
+      context->captureCommandAnchors.empty() &&
+      context->captureNextRawRecords.empty();
   if (!context || context->reservation.ticket != ticket_ ||
       context->controlIndex != controlIndex_ ||
       context->ownerThread != std::this_thread::get_id() ||
-      context->captureEnabled() ||
+      (context->captureEnabled() && !predeclaredBatchCapture) ||
       context->failed.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (queue_->testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_) {
+    queue_->testOnlyForceNextCpuReadyArenaCaptureIdentityBeginFailure_ = false;
     return false;
   }
   try {
@@ -3766,6 +3804,7 @@ bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
   } catch (...) {
     return false;
   }
+  context->captureIdentityBegun = true;
   context->captureRecordCount = recordCount;
   return true;
 }
@@ -3785,6 +3824,7 @@ bool CommandQueue::CpuReadyArenaBuildLease::captureNextDrawRecords(
   return context && context->reservation.ticket == ticket_ &&
          context->controlIndex == controlIndex_ &&
          context->ownerThread == std::this_thread::get_id() &&
+         context->captureIdentityBegun &&
          !context->failed.load(std::memory_order_acquire) &&
          context->setCaptureNextRawRecords(recordIndices);
 }
@@ -3801,12 +3841,12 @@ bool CommandQueue::CpuReadyArenaBuildLease::selectSourceSegment(
                        ticket_, controlIndex_, sourceIndex, segmentIndex);
 }
 
-void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
+void CommandQueue::CpuReadyArenaBuildLease::abort(bool failStop) noexcept {
   if (!queue_) {
     return;
   }
   if (batch_) {
-    queue_->abortCpuReadyArenaBatch(ticket_);
+    queue_->abortCpuReadyArenaBatch(ticket_, failStop);
   } else {
     queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
   }
@@ -4800,6 +4840,7 @@ CommandQueue::publishCpuReadyArenaBatch(
                ? CpuReadyArenaPublishStatus::RecoverableFailure
                : CpuReadyArenaPublishStatus::FailStopped;
   }
+  bool forcedPostSemanticFailure = false;
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
@@ -4823,7 +4864,18 @@ CommandQueue::publishCpuReadyArenaBatch(
         return CpuReadyArenaPublishStatus::FailStopped;
       }
     }
+    if (testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_) {
+      testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = false;
+      forcedPostSemanticFailure = true;
+      context->failed.store(true, std::memory_order_release);
+    }
     context->publishing.store(true, std::memory_order_release);
+  }
+  if (forcedPostSemanticFailure) {
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
   }
   CpuReadyCaptureIdentityBatch captured{};
   bool payloadSealed = true;
