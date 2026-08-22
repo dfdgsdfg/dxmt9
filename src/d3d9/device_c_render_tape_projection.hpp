@@ -30,6 +30,14 @@ struct RenderTapeProjectionLocator {
   std::uint32_t sourceEventIndex = kRenderTapeProjectionNoIndex;
   std::uint32_t recordIndex = kRenderTapeProjectionNoIndex;
   std::uint32_t recordType = 0u;
+  // Authenticated SegmentSerial ownership. These remain zero for the
+  // identity-free structural planner and are populated by the identity-bound
+  // materializer before any output is built.
+  std::uint64_t sourceOrdinal = 0u;
+  std::uint64_t seqId = 0u;
+  std::uint64_t logicalPassId = 0u;
+  std::uint32_t dagPassIndex = 0u;
+  std::uint32_t passKind = 0u;
 };
 
 struct RenderTapeProjectionObject {
@@ -158,6 +166,12 @@ struct RenderTapeProjectionBundleResult {
   RenderTapeIdentityValidationResult identityValidation{};
   std::uint64_t logicalPassId = 0u;
   std::vector<std::byte> bytes{};
+  // Fresh v2 identity bound to `bytes`; the capture sidecar is never reused
+  // because materialization changes the tape digest and event ordinals.
+  std::vector<std::byte> identity{};
+  // Exactly one derived tail settlement for this materialized event; this is
+  // provenance, never Capture authority.
+  RenderTapeIdentityEventSettlement identitySettlement{};
   std::vector<RenderTapeDigest> referencedBlobDigests{};
 
   bool valid() const noexcept {

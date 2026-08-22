@@ -1485,6 +1485,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
                              bool forceEventSerial = false) {
   const bool captureIdentityRequested =
       raw.renderTapeCaptureToken != 0u && raw.renderTapeEventOrdinal != 0u;
+  const bool segmentSerialRequested =
+      device && !forceEventSerial && device->dev().upperDevice() &&
+      device->dev().upperDevice()->queue().segmentSerialEnabled();
   std::uint32_t capturePlanReason = std::numeric_limits<std::uint32_t>::max();
   const auto failCaptureIdentity = [&](const char* reason) {
     if (raw.renderTapeCaptureToken != 0u) {
@@ -1535,14 +1538,11 @@ int32_t replayPlannedChunk(D9CDevice* device,
           .maxPages = limits.maxPagesPerSource == 0
                           ? std::numeric_limits<std::uint32_t>::max()
                           : limits.maxPagesPerSource,
-          .maxSourcesPerChunk = queue && !captureIdentityRequested &&
-                  !forceEventSerial && queue->segmentSerialEnabled()
+          .maxSourcesPerChunk = segmentSerialRequested
               ? dxmt9::core::CpuReadyTape::kMaxArenaBatchSources
               : 1,
       });
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
-  const bool segmentSerialRequested = queue && !forceEventSerial &&
-      !captureIdentityRequested && queue->segmentSerialEnabled();
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:
     if (segmentSerialRequested) {
@@ -1578,6 +1578,16 @@ int32_t replayPlannedChunk(D9CDevice* device,
     break;
   }
 
+  // Ordered-control records are coordinator-side and never children of a
+  // projected pass. A captured event containing one must stay one EventSerial
+  // source; deciding this here keeps the fallback pre-effect and preserves
+  // its raw ordering.
+  if (captureIdentityRequested && segmentSerialRequested &&
+      plan.containsOrderedControls) {
+    return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                              allowDirectArena, /*forceEventSerial=*/true);
+  }
+
   if (!allowDirectArena) {
     // Inline execution (including synchronous Readback) still needs the
     // ordered-control plan and release hooks when the Tape gate is enabled.
@@ -1590,7 +1600,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
 
   if (!queue || (!plan.arenaLayout.has_value() && plan.sources.empty()) ||
-      (captureIdentityRequested && !plan.arenaLayout.has_value())) {
+      (!segmentSerialRequested && captureIdentityRequested &&
+       !plan.arenaLayout.has_value())) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
     if (captureIdentityRequested) failCaptureIdentity("queue-or-layout-missing");
@@ -1602,7 +1613,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
              dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
       sourceLayouts{};
   const bool segmentSerial = queue->segmentSerialEnabled() &&
-      !forceEventSerial && !captureIdentityRequested && plan.sourceCount > 1;
+      !forceEventSerial && plan.sourceCount > 1;
   const std::size_t sourceCount = segmentSerial ? plan.sourceCount : 1;
   if (segmentSerial) {
     for (std::size_t i = 0; i < sourceCount; ++i) {
@@ -1641,6 +1652,25 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
 
   auto lease = std::move(*begin);
+  if (captureIdentityRequested && segmentSerial) {
+    std::array<std::uint32_t,
+               dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+        firstRecords{};
+    std::array<std::uint32_t,
+               dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+        recordCounts{};
+    for (std::size_t source = 0; source < sourceCount; ++source) {
+      firstRecords[source] = plan.sources[source].firstRecordIndex;
+      recordCounts[source] = plan.sources[source].recordCount;
+    }
+    if (!lease.setCaptureSourceRanges(
+            std::span(firstRecords).first(sourceCount),
+            std::span(recordCounts).first(sourceCount))) {
+      lease.abortForFallback();
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
+  }
   const int32_t hr = replayResolvedChunk(
       device, raw, pacedByPresentOrdinal, &lease,
       std::span(plan.segments).first(plan.segmentCount));
@@ -1650,13 +1680,57 @@ int32_t replayPlannedChunk(D9CDevice* device,
     if (captureIdentityRequested) failCaptureIdentity("arena-replay");
     return hr;
   }
+  const auto admissionTicket = lease.ticket();
   dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
-  if (!lease.publish(raw.resourceEntries,
-                     captureIdentityRequested ? &captureIdentity : nullptr)) {
+  dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
+  const bool published = segmentSerial
+      ? lease.publishBatch(raw.resourceEntries,
+                           captureIdentityRequested ? &captureBatch : nullptr)
+      : lease.publish(raw.resourceEntries,
+                      captureIdentityRequested ? &captureIdentity : nullptr);
+  if (!published) {
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
   }
-  if (captureIdentityRequested) {
+  if (captureIdentityRequested && segmentSerial) {
+    if (captureBatch.segments.empty()) {
+      failCaptureIdentity("event-settlement-metadata");
+      return dxmt9::core::D3D_OK;
+    }
+    for (const auto& segment : captureBatch.segments) {
+      std::vector<dxmt9::d3d9::RenderTapeProductionPassRange> ranges;
+      try {
+        ranges.reserve(segment.ranges.size());
+        for (const auto& range : segment.ranges) {
+          ranges.push_back(dxmt9::d3d9::RenderTapeProductionPassRange{
+              .firstRecord = range.firstRecord,
+              .recordCount = range.recordCount,
+              .dagPassIndex = range.dagPassIndex,
+              .passKind = range.passKind,
+              .logicalPassId = range.logicalPassId,
+          });
+        }
+      } catch (...) {
+        failCaptureIdentity("range-allocation");
+        return dxmt9::core::D3D_OK;
+      }
+      if (!device->renderTapeIdentityCapture.append(
+              raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+              segment.sourceOrdinal, segment.seqId, segment.firstRecord,
+              segment.recordCount, ranges)) {
+        failCaptureIdentity("snapshot-or-ledger-append");
+        break;
+      }
+    }
+    if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
+            raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+            raw.replaySeq, admissionTicket.buildGeneration,
+            captureBatch.segments.front().sourceOrdinal,
+            captureBatch.segments.back().seqId,
+            static_cast<std::uint32_t>(captureBatch.segments.size()))) {
+      failCaptureIdentity("event-settlement");
+    }
+  } else if (captureIdentityRequested) {
     std::vector<dxmt9::d3d9::RenderTapeProductionPassRange> ranges;
     try {
       ranges.reserve(captureIdentity.ranges.size());
@@ -1676,8 +1750,14 @@ int32_t replayPlannedChunk(D9CDevice* device,
         !device->renderTapeIdentityCapture.append(
             raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
             captureIdentity.sourceOrdinal, captureIdentity.seqId,
-            captureIdentity.recordCount, ranges)) {
+            captureIdentity.firstRecord, captureIdentity.recordCount,
+            ranges)) {
       failCaptureIdentity("snapshot-or-ledger-append");
+    } else if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
+                   raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+                   raw.replaySeq, admissionTicket.buildGeneration,
+                   admissionTicket.sourceOrdinal, admissionTicket.seqId, 1u)) {
+      failCaptureIdentity("event-settlement");
     }
   }
   return dxmt9::core::D3D_OK;

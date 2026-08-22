@@ -89,6 +89,8 @@ struct RenderTapePublicationBundle {
   // Optional authoritative scheduling/pass identity. Capture currently leaves
   // this empty until the bounded production metadata join is available.
   std::vector<std::byte> identity{};
+  RenderTapeIdentityEventSettlement identitySettlement{};
+  std::vector<D9CRenderTapeIdentitySettlementEntry> identitySettlements{};
   // Captured presentation output is an authoritative comparison sidecar, not
   // a replay input and therefore not part of the immutable blob catalogue.
   std::vector<std::byte> outputOracle{};
@@ -203,7 +205,9 @@ public:
   RenderTapeCaptureStatus attachCaptureIdentity(
       std::uint64_t captureToken, std::uint64_t presentOrdinal,
       std::span<const RenderTapeIdentitySource> sources,
-      std::span<const RenderTapeIdentityRange> ranges);
+      std::span<const RenderTapeIdentityRange> ranges,
+      RenderTapeIdentityEventSettlement settlement = {},
+      std::span<const D9CRenderTapeIdentitySettlementEntry> settlements = {});
   const RenderTapeIdentityValidationResult& identityValidationResult() const
       noexcept {
     return identityValidationResult_;

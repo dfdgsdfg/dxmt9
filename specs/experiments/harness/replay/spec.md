@@ -1043,6 +1043,26 @@ payload span, or registry address is serialized. Projection treats the sidecar
 as a capability: absence or mismatch fails before it creates a staging
 directory or invokes a provider.
 
+The v2 header also carries a bounded event-settlement table after the source
+and membership tables. Its `settlementEntrySize`, `settlementTableOffset`, and
+`settlementCount` describe the exact remaining bytes; each row carries the
+event ordinal, raw ordinal, build generation, first source ordinal, tail
+`seqId`, and source count. A capture result is COMPLETE only after the final
+group-tail completion fence authenticates every expected row, and the
+provider/CLI exposes the rows and count as evidence (the final row is a
+summary, never a substitute for the table). Production drains settlement
+evidence into this bounded table; it does not retain an unbounded completion
+deque.
+
+Projection materialization creates a fresh digest-bound sidecar with authority
+`DerivedProjection`, source-qualified segment rows, and a value-owned derived
+settlement row. This authority describes only the new materialized bytes; it
+is not capture or queue-completion evidence and is never accepted where an
+executable-project input requires `Capture`. The provider CLI rejects v1 and
+malformed controls before effects, and reports authority, source/sequence
+segment rows, completed segment count, settlement table/count, and final event
+settlement explicitly.
+
 The production capture-side identity join is implemented and remains bounded.
 The schema and validator accept provider-emitted identity only when it is
 explicitly scoped to the exact replay process that observed the production

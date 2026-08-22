@@ -632,6 +632,35 @@ DeferredTerminalSuffixPlan classifyDeferredTerminalSuffixReplay(
 
 }  // namespace
 
+bool buildMultiSourceFrameGraph(
+    std::span<const MultiSourcePlanningSource> sources,
+    FrameGraph& out) noexcept {
+  out.reset();
+  std::size_t totalCommands = 0;
+  if (!validateSources(sources, totalCommands)) {
+    return false;
+  }
+  try {
+    std::uint32_t commandBase = 0;
+    for (const auto& source : sources) {
+      const FrameGraph sourceGraph = buildFrameGraph(source.payload,
+                                                     commandBase);
+      if (!appendSourceGraph(out, sourceGraph, commandBase) ||
+          source.payload.commandCount() >
+              std::numeric_limits<u32>::max() - commandBase) {
+        out.reset();
+        return false;
+      }
+      commandBase += static_cast<u32>(source.payload.commandCount());
+    }
+    inferCombinedHazards(out);
+    return true;
+  } catch (...) {
+    out.reset();
+    return false;
+  }
+}
+
 MultiSourceReplayValidation validateMultiSourceReplayPermutation(
     std::span<const MultiSourcePlanningSource> sources,
     std::span<const RetainedSourceCommandLocator> commands) {

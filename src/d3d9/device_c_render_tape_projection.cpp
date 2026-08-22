@@ -811,6 +811,21 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
       result.status = RenderTapeProjectionBundleStatus::SelectionOutsidePass;
       return result;
     }
+    for (auto& locator : result.projection.selectedLocators) {
+      RenderTapeIdentitySource sourceIdentity{};
+      RenderTapeIdentityRange rangeIdentity{};
+      if (!renderTapeIdentityLocateRecord(
+              identity, locator.eventOrdinal, locator.recordIndex,
+              &sourceIdentity, &rangeIdentity)) {
+        result.status = RenderTapeProjectionBundleStatus::SelectionOutsidePass;
+        return result;
+      }
+      locator.sourceOrdinal = sourceIdentity.sourceOrdinal;
+      locator.seqId = sourceIdentity.seqId;
+      locator.logicalPassId = rangeIdentity.logicalPassId;
+      locator.dagPassIndex = rangeIdentity.dagPassIndex;
+      locator.passKind = rangeIdentity.passKind;
+    }
 
     ImportedRenderTapeView tape;
     if (!importPrevalidatedRenderTape(source, tape)) {
@@ -891,6 +906,9 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
         builder.appendRawEvent(type, event.payload);
       }
     }
+    // Render Tape ordinals are one-based after seal(); eventCount() is the
+    // zero-based pending-event index.
+    const auto projectedCommandOrdinal = builder.eventCount() + 1u;
     builder.appendCommandChunk(commandEnvelope, commandChunk);
 
     RenderTapePresentCompleteHeader completion{};
@@ -915,8 +933,9 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
       result.status = RenderTapeProjectionBundleStatus::ClosureFailure;
       return result;
     }
+    const auto projectedPresentOrdinal = builder.eventCount();
     builder.appendPresentComplete(
-        builder.eventCount(), 1u,
+        projectedPresentOrdinal, 1u,
         outputDigestValidity, outputDigest, attachments);
     result.bytes = builder.seal();
     const auto validation = validateRenderTape(
@@ -928,6 +947,169 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
       result.referencedBlobDigests.clear();
       return result;
     }
+    // Rebind a complete identity sidecar to the materialized bytes.  The
+    // source locators are retained for provenance, but the sidecar's digest,
+    // command-event ordinal, and event-local coverage are all newly issued.
+    std::vector<RenderTapeIdentitySource> reboundSources;
+    std::vector<RenderTapeIdentityRange> reboundRanges;
+    if (result.projection.selectedLocators.empty()) {
+      result.status = RenderTapeProjectionBundleStatus::SelectionOutsidePass;
+      result.bytes.clear();
+      return result;
+    }
+    std::uint64_t nextCoordinatorPass = result.logicalPassId;
+    for (const auto& locator : result.projection.selectedLocators) {
+      if (locator.logicalPassId == 0u ||
+          nextCoordinatorPass == std::numeric_limits<std::uint64_t>::max() ||
+          locator.sourceOrdinal == 0u || locator.seqId == 0u) {
+        result.status = RenderTapeProjectionBundleStatus::SelectionOutsidePass;
+        result.bytes.clear();
+        return result;
+      }
+      nextCoordinatorPass = std::max(nextCoordinatorPass,
+                                     locator.logicalPassId);
+    }
+    if (nextCoordinatorPass > std::numeric_limits<std::uint64_t>::max() - 2u) {
+      result.status = RenderTapeProjectionBundleStatus::AllocationFailed;
+      result.bytes.clear();
+      return result;
+    }
+    const std::uint64_t clearPassId = nextCoordinatorPass + 1u;
+    const std::uint64_t presentPassId = nextCoordinatorPass + 2u;
+    try {
+      std::size_t selectedBegin = 0u;
+      while (selectedBegin < result.projection.selectedLocators.size()) {
+        const auto& first = result.projection.selectedLocators[selectedBegin];
+        std::size_t selectedEnd = selectedBegin + 1u;
+        while (selectedEnd < result.projection.selectedLocators.size() &&
+               result.projection.selectedLocators[selectedEnd].sourceOrdinal ==
+                   first.sourceOrdinal &&
+               result.projection.selectedLocators[selectedEnd].seqId ==
+                   first.seqId) {
+          ++selectedEnd;
+        }
+        const auto sourceIndex = static_cast<std::uint32_t>(
+            reboundSources.size());
+        const auto firstRange = static_cast<std::uint32_t>(reboundRanges.size());
+        const bool firstSource = selectedBegin == 0u;
+        const bool lastSource =
+            selectedEnd == result.projection.selectedLocators.size();
+        const std::uint32_t firstRecord =
+            firstSource ? 0u : static_cast<std::uint32_t>(selectedBegin + 1u);
+        const std::uint32_t prefix = firstSource ? 1u : 0u;
+        const std::uint32_t suffix = lastSource ? 1u : 0u;
+        const auto selectedCount = static_cast<std::uint32_t>(
+            selectedEnd - selectedBegin);
+        if (selectedBegin > std::numeric_limits<std::uint32_t>::max() - 1u ||
+            selectedCount > std::numeric_limits<std::uint32_t>::max() -
+                                 prefix - suffix) {
+          result.status = RenderTapeProjectionBundleStatus::AllocationFailed;
+          result.bytes.clear();
+          return result;
+        }
+        if (firstSource) {
+          reboundRanges.push_back(RenderTapeIdentityRange{
+              .eventOrdinal = projectedCommandOrdinal,
+              .sourceOrdinal = first.sourceOrdinal,
+              .seqId = first.seqId,
+              .logicalPassId = clearPassId,
+              .firstRecord = 0u,
+              .recordCount = 1u,
+              .dagPassIndex = 0u,
+              .passKind = 1u,
+          });
+        }
+        for (std::size_t index = selectedBegin; index < selectedEnd;
+             ++index) {
+          const auto& locator = result.projection.selectedLocators[index];
+          const auto record = static_cast<std::uint32_t>(index + 1u);
+          if (!reboundRanges.empty() &&
+              reboundRanges.back().sourceOrdinal == locator.sourceOrdinal &&
+              reboundRanges.back().seqId == locator.seqId &&
+              reboundRanges.back().logicalPassId == locator.logicalPassId &&
+              reboundRanges.back().dagPassIndex == locator.dagPassIndex &&
+              reboundRanges.back().passKind == locator.passKind &&
+              reboundRanges.back().firstRecord +
+                      reboundRanges.back().recordCount == record) {
+            ++reboundRanges.back().recordCount;
+          } else {
+            reboundRanges.push_back(RenderTapeIdentityRange{
+                .eventOrdinal = projectedCommandOrdinal,
+                .sourceOrdinal = locator.sourceOrdinal,
+                .seqId = locator.seqId,
+                .logicalPassId = locator.logicalPassId,
+                .firstRecord = record,
+                .recordCount = 1u,
+                .dagPassIndex = locator.dagPassIndex,
+                .passKind = locator.passKind,
+            });
+          }
+        }
+        if (lastSource) {
+          reboundRanges.push_back(RenderTapeIdentityRange{
+              .eventOrdinal = projectedCommandOrdinal,
+              .sourceOrdinal = first.sourceOrdinal,
+              .seqId = first.seqId,
+              .logicalPassId = presentPassId,
+              .firstRecord = static_cast<std::uint32_t>(selectedEnd + 1u),
+              .recordCount = 1u,
+              .dagPassIndex = 0u,
+              .passKind = 1u,
+          });
+        }
+        reboundSources.push_back(RenderTapeIdentitySource{
+            .eventOrdinal = projectedCommandOrdinal,
+            .sourceOrdinal = first.sourceOrdinal,
+            .seqId = first.seqId,
+            .captureToken = identity.header.captureToken,
+            .firstRecord = firstRecord,
+            .recordCount = static_cast<std::uint32_t>(
+                prefix + selectedCount + suffix),
+            .firstRange = firstRange,
+            .rangeCount = static_cast<std::uint32_t>(reboundRanges.size()) -
+                          firstRange,
+        });
+        selectedBegin = selectedEnd;
+        (void)sourceIndex;
+      }
+      const auto& tailLocator = result.projection.selectedLocators.back();
+      const std::array<RenderTapeIdentitySettlement, 1u>
+          reboundSettlements{{RenderTapeIdentitySettlement{
+              .eventOrdinal = projectedCommandOrdinal,
+              // DerivedProjection is not queue settlement evidence. These
+              // value-owned coordinates identify the materialized event and
+              // are intentionally scoped to the fresh sidecar generation.
+              .rawOrdinal = projectedCommandOrdinal,
+              .buildGeneration = 1u,
+              .firstSourceOrdinal = reboundSources.front().sourceOrdinal,
+              .tailSeqId = tailLocator.seqId,
+              .sourceCount = static_cast<std::uint32_t>(reboundSources.size()),
+              .reserved0 = 0u,
+          }}};
+      result.identity = buildRenderTapeIdentity(
+          result.bytes, verifiedCatalogue, identity.header.frameId,
+          projectedPresentOrdinal, identity.header.captureToken,
+          RenderTapeIdentityAuthority::DerivedProjection, reboundSources,
+          reboundRanges, &result.identityValidation, reboundSettlements);
+    } catch (...) {
+      result.status = RenderTapeProjectionBundleStatus::AllocationFailed;
+      result.bytes.clear();
+      result.identity.clear();
+      return result;
+    }
+    if (result.identity.empty() || !result.identityValidation.valid()) {
+      result.status = RenderTapeProjectionBundleStatus::OutputValidationFailed;
+      result.bytes.clear();
+      result.identity.clear();
+      return result;
+    }
+    const auto& tailLocator = result.projection.selectedLocators.back();
+    result.identitySettlement = RenderTapeIdentityEventSettlement{
+        .eventOrdinal = projectedCommandOrdinal,
+        .sourceOrdinal = tailLocator.sourceOrdinal,
+        .seqId = tailLocator.seqId,
+        .count = 1u,
+    };
     result.status = RenderTapeProjectionBundleStatus::Valid;
     return result;
   } catch (...) {

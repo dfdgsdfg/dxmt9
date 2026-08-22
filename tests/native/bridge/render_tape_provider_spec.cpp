@@ -3083,9 +3083,20 @@ void writeProjectionFixture(const std::filesystem::path& directory) {
                               .dagPassIndex = 2u,
                               .passKind = 1u},
   };
+  const std::array settlements{
+      RenderTapeIdentitySettlement{
+          .eventOrdinal = 7u,
+          .rawOrdinal = 7u,
+          .buildGeneration = 1u,
+          .firstSourceOrdinal = 101u,
+          .tailSeqId = 503u,
+          .sourceCount = 3u,
+      },
+  };
   const auto identity = buildRenderTapeIdentity(
       fixture.tape, catalogue, 42u, 7u, 77u,
-      RenderTapeIdentityAuthority::Capture, sources, ranges);
+      RenderTapeIdentityAuthority::Capture, sources, ranges, nullptr,
+      settlements);
   check(!identity.empty(), "projection provider identity must build");
 
   std::ofstream events(directory / "events.bin", std::ios::binary);

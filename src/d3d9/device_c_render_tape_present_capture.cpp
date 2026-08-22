@@ -334,6 +334,20 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture(
     out->status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED;
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  D9CRenderTapeIdentitySettlementEntry expectedTail{};
+  auto upper = device->dev().upperDevice();
+  if (!upper ||
+      !device->renderTapeIdentityCapture.expectedTail(captureToken,
+                                                      expectedTail) ||
+      !upper->queue().waitForCpuReadyEventSettlement(
+          expectedTail.rawOrdinal, expectedTail.buildGeneration,
+          expectedTail.firstSourceOrdinal, expectedTail.tailSeqId,
+          expectedTail.sourceCount) ||
+      !device->renderTapeIdentityCapture.markAllSettled(captureToken)) {
+    *out = {};
+    out->status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   const auto output = capacity == 0u
       ? std::span<std::byte>{}
       : std::span(static_cast<std::byte*>(bytes),

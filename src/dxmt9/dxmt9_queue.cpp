@@ -2754,8 +2754,39 @@ bool QueueLifecycleController::drainCompletedArenaGroupSettlementsLocked(
     }
     completedEventTailSeqId_ = settlement.tailSeqId;
     lastCompletedEventSettlement_ = settlement;
+    if (completedEventSettlementHistoryCount_ <
+        completedEventSettlementHistory_.size()) {
+      completedEventSettlementHistory_[
+          (completedEventSettlementHistoryHead_ +
+           completedEventSettlementHistoryCount_) %
+          completedEventSettlementHistory_.size()] = settlement;
+      ++completedEventSettlementHistoryCount_;
+    } else {
+      completedEventSettlementHistory_[completedEventSettlementHistoryHead_] =
+          settlement;
+      completedEventSettlementHistoryHead_ =
+          (completedEventSettlementHistoryHead_ + 1u) %
+          completedEventSettlementHistory_.size();
+    }
     ++completedEventSettlementCount_;
   }
+}
+
+bool QueueLifecycleController::hasCompletedArenaGroupSettlement(
+    u64 rawOrdinal, u64 buildGeneration, u64 firstSourceOrdinal,
+    u64 tailSeqId, std::uint32_t sourceCount) const noexcept {
+  for (std::size_t i = 0; i < completedEventSettlementHistoryCount_; ++i) {
+    const auto& value = completedEventSettlementHistory_[
+        (completedEventSettlementHistoryHead_ + i) %
+        completedEventSettlementHistory_.size()];
+    if (value.rawOrdinal == rawOrdinal &&
+        value.buildGeneration == buildGeneration &&
+        value.firstSourceOrdinal == firstSourceOrdinal &&
+        value.tailSeqId == tailSeqId && value.sourceCount == sourceCount) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& lock,

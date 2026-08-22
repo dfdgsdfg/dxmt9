@@ -958,6 +958,9 @@ class QueueLifecycleController {
   // Consume value-owned SegmentSerial event settlement only once its tail has
   // crossed the queue completion waterline.
   bool drainCompletedArenaGroupSettlementsLocked(u64 completedSeqId) noexcept;
+  bool hasCompletedArenaGroupSettlement(
+      u64 rawOrdinal, u64 buildGeneration, u64 firstSourceOrdinal,
+      u64 tailSeqId, std::uint32_t sourceCount) const noexcept;
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
@@ -1101,6 +1104,11 @@ class QueueLifecycleController {
   std::uint64_t completedEventTailSeqId_ = 0;
   std::optional<CpuReadyTape::ArenaGroupSettlement>
       lastCompletedEventSettlement_{};
+  std::array<CpuReadyTape::ArenaGroupSettlement,
+             ArenaGroupSettlementLedger::kCapacity>
+      completedEventSettlementHistory_{};
+  std::size_t completedEventSettlementHistoryHead_ = 0;
+  std::size_t completedEventSettlementHistoryCount_ = 0;
   std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
 
  public:

@@ -19,6 +19,8 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "framegraph/fg_builder.hpp"
+#include "framegraph/fg_multi_source_planner.hpp"
+#include "framegraph/fg_optimizer.hpp"
 #include "util/log/log.hpp"
 #include <algorithm>
 #include <array>
@@ -3664,7 +3666,7 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   auto* queue = queue_;
   const auto ticket = ticket_;
   const bool published = batch_
-      ? queue->publishCpuReadyArenaBatch(ticket, resources)
+      ? queue->publishCpuReadyArenaBatch(ticket, resources, nullptr)
       : queue->publishCpuReadyArenaSource(
             ticket, controlIndex_, resources, captureIdentity);
   if (!published) {
@@ -3679,6 +3681,57 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   controlIndex_ = std::numeric_limits<std::size_t>::max();
   batch_ = false;
   return true;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::publishBatch(
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
+  if (!queue_ || !batch_) {
+    return false;
+  }
+  auto* queue = queue_;
+  const auto ticket = ticket_;
+  const bool published = queue->publishCpuReadyArenaBatch(
+      ticket, resources, captureIdentity);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
+  return published;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::setCaptureSourceRanges(
+    std::span<const std::uint32_t> firstRecords,
+    std::span<const std::uint32_t> recordCounts) noexcept {
+  if (!queue_ || !batch_ || firstRecords.size() != recordCounts.size()) {
+    return false;
+  }
+  auto* context = queue_->activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || context->reservation.ticket != ticket_ ||
+      context->ownerThread != std::this_thread::get_id() ||
+      firstRecords.size() != context->sourceCount) {
+    return false;
+  }
+  std::uint64_t cursor = 0;
+  for (std::size_t i = 0; i < firstRecords.size(); ++i) {
+    if (recordCounts[i] == 0u || firstRecords[i] != cursor ||
+        cursor > std::numeric_limits<std::uint32_t>::max() - recordCounts[i]) {
+      context->failed.store(true, std::memory_order_release);
+      return false;
+    }
+    cursor += recordCounts[i];
+  }
+  context->captureSourceRangeCount = firstRecords.size();
+  for (std::size_t i = 0; i < firstRecords.size(); ++i) {
+    context->captureSourceFirstRecords[i] = firstRecords[i];
+    context->captureSourceRecordCounts[i] = recordCounts[i];
+  }
+  context->captureRecordCount = static_cast<std::uint32_t>(cursor);
+  return true;
+}
+
+void CommandQueue::CpuReadyArenaBuildLease::abortForFallback() noexcept {
+  abort();
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::beginCaptureIdentity(
@@ -4537,6 +4590,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
       if (capturedValid) {
         captured.sourceOrdinal = ticket.sourceOrdinal;
         captured.seqId = ticket.seqId;
+        captured.firstRecord = 0u;
         captured.recordCount = context->captureRecordCount;
         std::uint32_t nextRecord = 0u;
         for (std::size_t commandIndex = 0;
@@ -4562,6 +4616,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
           if (!captured.ranges.empty() &&
               captured.ranges.back().dagPassIndex == passIndex &&
               captured.ranges.back().passKind == passKind &&
+              captured.ranges.back().logicalPassId ==
+                  static_cast<std::uint64_t>(passIndex) + 1u &&
               captured.ranges.back().firstRecord +
                       captured.ranges.back().recordCount ==
                   nextRecord) {
@@ -4572,6 +4628,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
                 .recordCount = endRecord - nextRecord,
                 .dagPassIndex = passIndex,
                 .passKind = passKind,
+                .logicalPassId = static_cast<std::uint64_t>(passIndex) + 1u,
             });
           }
           nextRecord = endRecord;
@@ -4711,7 +4768,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
 
 bool CommandQueue::publishCpuReadyArenaBatch(
     core::CpuReadyPublicationTicket ticket,
-    std::span<const core::ChunkHandleEntry> resources) noexcept {
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
   auto* context = activeArenaBuild_.load(std::memory_order_acquire);
   if (!context || !context->batchMode || context->reservation.ticket != ticket ||
       context->ownerThread != std::this_thread::get_id() ||
@@ -4743,6 +4801,196 @@ bool CommandQueue::publishCpuReadyArenaBatch(
       }
     }
     context->publishing.store(true, std::memory_order_release);
+  }
+  CpuReadyCaptureIdentityBatch captured{};
+  bool capturedValid = captureIdentity == nullptr;
+  try {
+    for (std::size_t source = 0; source < context->sourceCount; ++source) {
+      const auto& layout = context->batchLayouts[source];
+      for (std::size_t segment = 0; segment < layout.segmentCount;
+           ++segment) {
+        if (!context->batchBuilders[source][segment] ||
+            !context->batchBuilders[source][segment]->publish()) {
+          capturedValid = false;
+          break;
+        }
+      }
+      if (!capturedValid && captureIdentity) break;
+    }
+    if (captureIdentity && capturedValid &&
+        context->captureSourceRangeCount == context->sourceCount &&
+        context->captureRecordCount != 0u &&
+        !context->captureCommandAnchors.empty() &&
+        context->captureNextRawRecords.empty()) {
+      std::vector<framegraph::MultiSourcePlanningSource> sources;
+      std::vector<core::ArenaSourcePayloadChain> chains(context->sourceCount);
+      sources.resize(context->sourceCount);
+      std::vector<std::uint32_t> commandBases(context->sourceCount);
+      std::uint32_t commandBase = 0;
+      for (std::size_t source = 0; source < context->sourceCount; ++source) {
+        std::array<const core::ArenaSourcePayloadBlock*,
+                   core::kMaxArenaSourcePayloadSegments>
+            blocks{};
+        for (std::size_t segment = 0;
+             segment < context->batchLayouts[source].segmentCount; ++segment) {
+          blocks[segment] =
+              context->batchReservations[source].arenaPayloads[segment];
+        }
+        if (!chains[source].initialize(std::span(blocks).first(
+                context->batchLayouts[source].segmentCount))) {
+          capturedValid = false;
+          break;
+        }
+        sources[source].payload = core::SourcePayloadView(chains[source]);
+        if (!sources[source].payload.valid() ||
+            commandBase > std::numeric_limits<std::uint32_t>::max() -
+                               sources[source].payload.commandCount()) {
+          capturedValid = false;
+          break;
+        }
+        commandBases[source] = commandBase;
+        commandBase += static_cast<std::uint32_t>(
+            sources[source].payload.commandCount());
+      }
+      framegraph::FrameGraph graph;
+      capturedValid = capturedValid &&
+          framegraph::buildMultiSourceFrameGraph(sources, graph);
+      if (capturedValid) {
+        // Use the same production pass-coalesce proof as replay planning.
+        // Merely matching attachment fields at a source edge is not enough:
+        // the optimizer also proves intervening hazards, semantic controls,
+        // and flush boundaries before folding two PassNodes.
+        framegraph::OptimizerOptions options{};
+        options.passcoalesce = true;
+        framegraph::OptimizerStats stats{};
+        framegraph::runOptimizer(graph, options, nullptr, &stats);
+      }
+      std::vector<std::uint32_t> commandPass;
+      std::vector<std::uint64_t> passIds;
+      if (capturedValid) {
+        commandPass.assign(commandBase,
+                           std::numeric_limits<std::uint32_t>::max());
+        passIds.resize(graph.passes.size());
+        std::uint64_t nextPassId = 1u;
+        for (std::size_t passIndex = 0; passIndex < graph.passes.size();
+             ++passIndex) {
+          const auto& pass = graph.passes[passIndex];
+          if (pass.commands.first > graph.commands.size() ||
+              pass.commands.count > graph.commands.size() - pass.commands.first) {
+            capturedValid = false;
+            break;
+          }
+          std::size_t passSource = context->sourceCount;
+          if (pass.commands.count != 0u) {
+            const auto command =
+                graph.commands[pass.commands.first].command_index;
+            for (std::size_t source = 0; source < context->sourceCount;
+                 ++source) {
+              const auto count = static_cast<std::uint32_t>(
+                  sources[source].payload.commandCount());
+              if (command >= commandBases[source] &&
+                  command - commandBases[source] < count) {
+                passSource = source;
+                break;
+              }
+            }
+          }
+          (void)passSource;
+          if (passIds[passIndex] == 0u) passIds[passIndex] = nextPassId++;
+          for (std::size_t local = 0; local < pass.commands.count; ++local) {
+            const auto command =
+                graph.commands[pass.commands.first + local].command_index;
+            if (command >= commandPass.size() || commandPass[command] !=
+                                                     std::numeric_limits<std::uint32_t>::max()) {
+              capturedValid = false;
+              break;
+            }
+            commandPass[command] = static_cast<std::uint32_t>(passIndex);
+          }
+          if (!capturedValid) break;
+        }
+        capturedValid = capturedValid && std::none_of(
+            commandPass.begin(), commandPass.end(), [](std::uint32_t value) {
+              return value == std::numeric_limits<std::uint32_t>::max();
+            });
+      }
+      if (capturedValid) {
+        captured.segments.resize(context->sourceCount);
+        std::size_t anchorIndex = 0;
+        for (std::size_t source = 0; source < context->sourceCount; ++source) {
+          const auto first = context->captureSourceFirstRecords[source];
+          const auto count = context->captureSourceRecordCounts[source];
+          const auto end = static_cast<std::uint64_t>(first) + count;
+          auto& identity = captured.segments[source];
+          identity.sourceOrdinal = context->batchReservations[source]
+                                       .ticket.sourceOrdinal;
+          identity.seqId = context->batchReservations[source].ticket.seqId;
+          identity.firstRecord = first;
+          identity.recordCount = count;
+          std::uint32_t cursor = first;
+          while (anchorIndex < context->captureCommandAnchors.size()) {
+            const auto& anchor = context->captureCommandAnchors[anchorIndex];
+            if (anchor.firstRecord < first) {
+              ++anchorIndex;
+              continue;
+            }
+            if (anchor.firstRecord >= end || anchor.lastRecord >= end ||
+                anchor.lastRecord < anchor.firstRecord) break;
+            const auto command = static_cast<std::uint32_t>(
+                anchorIndex - std::size_t(0));
+            if (command >= commandPass.size()) {
+              capturedValid = false;
+              break;
+            }
+            const auto passIndex = commandPass[command];
+            if (passIndex >= graph.passes.size() ||
+                anchor.firstRecord < cursor) {
+              capturedValid = false;
+              break;
+            }
+            const auto endRecord = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(end,
+                    static_cast<std::uint64_t>(anchor.lastRecord) + 1u));
+            if (endRecord <= cursor) {
+              capturedValid = false;
+              break;
+            }
+            const auto passKind = static_cast<std::uint32_t>(
+                graph.passes[passIndex].kind) + 1u;
+            if (!identity.ranges.empty() &&
+                identity.ranges.back().logicalPassId == passIds[passIndex] &&
+                identity.ranges.back().dagPassIndex == passIndex &&
+                identity.ranges.back().passKind == passKind &&
+                identity.ranges.back().firstRecord +
+                        identity.ranges.back().recordCount == cursor) {
+              identity.ranges.back().recordCount += endRecord - cursor;
+            } else {
+              identity.ranges.push_back(CpuReadyCapturePassRange{
+                  .firstRecord = cursor,
+                  .recordCount = endRecord - cursor,
+                  .dagPassIndex = static_cast<std::uint32_t>(passIndex),
+                  .passKind = passKind,
+                  .logicalPassId = passIds[passIndex],
+              });
+            }
+            cursor = endRecord;
+            ++anchorIndex;
+          }
+          if (cursor != end) capturedValid = false;
+          if (!capturedValid) break;
+        }
+        capturedValid = capturedValid && captured.valid();
+      }
+    } else if (captureIdentity) {
+      capturedValid = false;
+    }
+  } catch (...) {
+    capturedValid = false;
+  }
+  if (captureIdentity && !capturedValid) {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaBatch(ticket);
+    return false;
   }
   for (std::size_t source = 0; source < context->sourceCount; ++source) {
     for (std::size_t segment = 0;
@@ -4836,6 +5084,27 @@ bool CommandQueue::publishCpuReadyArenaBatch(
     submitFlush();
   }
   return true;
+}
+
+bool CommandQueue::waitForCpuReadyEventSettlement(
+    std::uint64_t rawOrdinal, std::uint64_t buildGeneration,
+    std::uint64_t firstSourceOrdinal, std::uint64_t tailSeqId,
+    std::uint32_t sourceCount) noexcept {
+  if (rawOrdinal == 0u || buildGeneration == 0u ||
+      firstSourceOrdinal == 0u || tailSeqId == 0u || sourceCount == 0u) {
+    return false;
+  }
+  std::unique_lock lock(mutex_);
+  const auto settled = [&] {
+    if (sourceCount == 1u) {
+      return completedSeqId_.load(std::memory_order_relaxed) >= tailSeqId;
+    }
+    return queueLifecycle_.hasCompletedArenaGroupSettlement(
+        rawOrdinal, buildGeneration, firstSourceOrdinal, tailSeqId,
+        sourceCount);
+  };
+  finishCv_.wait(lock, [&] { return stop_ || settled(); });
+  return settled();
 }
 
 CommandQueue::CpuReadyArenaBatchAbortStatus

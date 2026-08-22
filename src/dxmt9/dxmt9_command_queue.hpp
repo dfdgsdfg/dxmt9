@@ -427,17 +427,29 @@ class CommandQueue {
     std::uint32_t recordCount = 0;
     std::uint32_t dagPassIndex = 0;
     std::uint32_t passKind = 0;
+    std::uint64_t logicalPassId = 0;
   };
 
   struct CpuReadyCaptureIdentity {
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
+    std::uint32_t firstRecord = 0;
     std::uint32_t recordCount = 0;
     std::vector<CpuReadyCapturePassRange> ranges{};
 
     bool valid() const noexcept {
       return sourceOrdinal != 0 && seqId != 0 && recordCount != 0 &&
              !ranges.empty();
+    }
+  };
+
+  struct CpuReadyCaptureIdentityBatch {
+    std::vector<CpuReadyCaptureIdentity> segments{};
+
+    bool valid() const noexcept {
+      return segments.size() > 1u &&
+             std::all_of(segments.begin(), segments.end(),
+                         [](const auto& segment) { return segment.valid(); });
     }
   };
 
@@ -472,6 +484,15 @@ class CommandQueue {
     bool publish(
         std::span<const core::ChunkHandleEntry> resources = {},
         CpuReadyCaptureIdentity* captureIdentity = nullptr) noexcept;
+    bool publishBatch(
+        std::span<const core::ChunkHandleEntry> resources,
+        CpuReadyCaptureIdentityBatch* captureIdentity) noexcept;
+    bool setCaptureSourceRanges(
+        std::span<const std::uint32_t> firstRecords,
+        std::span<const std::uint32_t> recordCounts) noexcept;
+    // Explicit pre-effect rollback point for a recoverable capture seam.
+    // The caller must invoke this before retrying the raw event.
+    void abortForFallback() noexcept;
 
    private:
     friend class CommandQueue;
@@ -1253,6 +1274,11 @@ class CommandQueue {
       std::uint32_t lastRecord = 0;
     };
     std::uint32_t captureRecordCount = 0;
+    std::size_t captureSourceRangeCount = 0;
+    std::array<std::uint32_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        captureSourceFirstRecords{};
+    std::array<std::uint32_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        captureSourceRecordCounts{};
     std::vector<std::uint32_t> captureNextRawRecords{};
     std::vector<CaptureCommandAnchor> captureCommandAnchors{};
 
@@ -1321,7 +1347,16 @@ class CommandQueue {
       std::size_t segmentIndex) noexcept;
   bool publishCpuReadyArenaBatch(
       core::CpuReadyPublicationTicket ticket,
-      std::span<const core::ChunkHandleEntry> resources) noexcept;
+      std::span<const core::ChunkHandleEntry> resources,
+      CpuReadyCaptureIdentityBatch* captureIdentity = nullptr) noexcept;
+ public:
+  // Capture-only fence: returns only after the exact raw/generation group
+  // tail has been consumed by QueueLifecycle's completion settlement ledger.
+  bool waitForCpuReadyEventSettlement(
+      std::uint64_t rawOrdinal, std::uint64_t buildGeneration,
+      std::uint64_t firstSourceOrdinal, std::uint64_t tailSeqId,
+      std::uint32_t sourceCount) noexcept;
+ private:
   CpuReadyArenaBatchAbortStatus abortCpuReadyArenaBatch(
       core::CpuReadyPublicationTicket ticket,
       bool failStop = true) noexcept;

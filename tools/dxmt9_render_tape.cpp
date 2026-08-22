@@ -291,6 +291,7 @@ void usage() {
                "       dxmt9-render-tape materialize <tape.bin> "
                "<identity.bin> <output.bin> --command-event-ordinal <ordinal> "
                "--first-record <index> --record-count <count> "
+               "[--output-identity <identity-v2.bin>] "
                "[--output-sha256 <digest>] "
                "[--verified-blob <sha256>:<bytes>]...\n";
 }
@@ -568,6 +569,7 @@ int main(int argc, char** argv) {
     const char* inputPath = argv[2];
     const char* identityPath = nullptr;
     const char* outputPath = nullptr;
+    const char* outputIdentityPath = nullptr;
     int optionStart = 3;
     if (command == "reduce") {
       if (argc < 5) {
@@ -648,6 +650,10 @@ int main(int argc, char** argv) {
                  i + 1 < argc && decodeDigest(argv[i + 1], outputDigest)) {
         hasOutputDigest = true;
         i += 2;
+      } else if (command == "materialize" &&
+                 option == "--output-identity" && i + 1 < argc) {
+        outputIdentityPath = argv[i + 1];
+        i += 2;
       } else {
         usage();
         return 2;
@@ -709,7 +715,21 @@ int main(int argc, char** argv) {
                 << view.header.frameId << ",\"present_ordinal\":"
                 << view.header.presentOrdinal << ",\"sources\":"
                 << view.sources.size() << ",\"ranges\":"
-                << view.ranges.size() << "}\n";
+                << view.ranges.size() << ",\"completed_segment_count\":"
+                << view.sources.size() << ",\"settlement_count\":"
+                << view.settlements.size() << ",\"settlement_table_count\":"
+                << view.header.settlementCount << ",\"segments\":[";
+      for (std::size_t index = 0u; index < view.sources.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& source = view.sources[index];
+        std::cout << "{\"segment_index\":" << index
+                  << ",\"event_ordinal\":" << source.eventOrdinal
+                  << ",\"source_ordinal\":" << source.sourceOrdinal
+                  << ",\"seq_id\":" << source.seqId
+                  << ",\"first_record\":" << source.firstRecord
+                  << ",\"record_count\":" << source.recordCount << "}";
+      }
+      std::cout << "]}\n";
       return 0;
     }
 
@@ -739,6 +759,9 @@ int main(int argc, char** argv) {
         return 1;
       }
       writeFile(outputPath, projection.bytes);
+      if (outputIdentityPath) {
+        writeFile(outputIdentityPath, projection.identity);
+      }
       std::cout << "{\"schema\":\"dxmt9.render_tape.v2\","
                    "\"profile\":\"frame-tape\",\"status\":\"valid\","
                    "\"logical_pass_id\":"

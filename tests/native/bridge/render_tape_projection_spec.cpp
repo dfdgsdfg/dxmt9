@@ -973,7 +973,8 @@ void identityTruthTableAndMalformedInputs() {
   std::uint64_t splitPass = 0u;
   check(renderTapeIdentityOwnsSelection(splitView, 6u, 2u, 2u, &splitPass) &&
             splitPass == 9001u &&
-            !renderTapeIdentityOwnsSelection(splitView, 6u, 1u, 3u),
+            renderTapeIdentityOwnsSelection(splitView, 6u, 1u, 3u, &splitPass) &&
+            splitPass == 9001u,
         "event-local selection resolves through the second source fragment");
 
   malformed = split;
@@ -991,6 +992,17 @@ void identityTruthTableAndMalformedInputs() {
   check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
             RenderTapeIdentityStatus::PassIdentityMismatch,
         "cross-fragment logical pass metadata is authenticated");
+  RenderTapeIdentityView differentPassView;
+  malformed = split;
+  sidecarAt<RenderTapeIdentityRange>(
+      malformed, sizeof(RenderTapeIdentityHeader) +
+                     2u * sizeof(RenderTapeIdentitySource) +
+                     sizeof(RenderTapeIdentityRange)).logicalPassId = 9010u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed,
+                                   &differentPassView)
+                .valid() &&
+            !renderTapeIdentityOwnsSelection(differentPassView, 6u, 1u, 3u),
+        "cross-segment selection rejects a different logical pass");
 }
 
 void executableProjectionMaterializesCanonicalBundle() {
@@ -1011,6 +1023,46 @@ void executableProjectionMaterializesCanonicalBundle() {
             materialized.referencedBlobDigests.size() == 2u &&
             validateRenderTape(materialized.bytes, blobs).valid(),
         "executable projection conserves pass and exact blob closure");
+  RenderTapeIdentityView reboundView;
+  const auto reboundValidation = validateRenderTapeIdentity(
+      materialized.bytes, blobs, materialized.identity, &reboundView);
+  RenderTapeIdentityHeader originalHeader{};
+  std::memcpy(&originalHeader, identity.data(), sizeof(originalHeader));
+  check(reboundValidation.valid() &&
+            reboundView.header.authority == static_cast<std::uint32_t>(
+                RenderTapeIdentityAuthority::DerivedProjection) &&
+            reboundView.header.eventsDigest !=
+                originalHeader.eventsDigest &&
+            materialized.identitySettlement.count == 1u &&
+            materialized.identitySettlement.eventOrdinal ==
+                reboundView.sources.back().eventOrdinal,
+        "projection binds a fresh derived identity to the materialized digest");
+  const auto splitIdentity = makeSplitIdentity(tape);
+  auto crossSelector = selector();
+  crossSelector.firstRecordIndex = 1u;
+  crossSelector.recordCount = 2u;
+  const auto crossMaterialized = materializeRenderTapeProjectionBundle(
+      tape, blobs, splitIdentity, crossSelector);
+  check(crossMaterialized.valid() &&
+            crossMaterialized.projection.selectedLocators.size() == 2u &&
+            crossMaterialized.projection.selectedLocators[0].sourceOrdinal ==
+                101u &&
+            crossMaterialized.projection.selectedLocators[1].sourceOrdinal ==
+                102u &&
+            crossMaterialized.projection.selectedLocators[1].seqId == 502u,
+        "same-pass cross-segment projection retains source-qualified locators");
+  auto differentPass = splitIdentity;
+  auto& differentPassRange = sidecarAt<RenderTapeIdentityRange>(
+      differentPass, sizeof(RenderTapeIdentityHeader) +
+                         2u * sizeof(RenderTapeIdentitySource) +
+                         sizeof(RenderTapeIdentityRange));
+  differentPassRange.logicalPassId = 9010u;
+  differentPassRange.dagPassIndex = 9u;
+  const auto rejectedCrossPass = materializeRenderTapeProjectionBundle(
+      tape, blobs, differentPass, crossSelector);
+  check(rejectedCrossPass.status ==
+            RenderTapeProjectionBundleStatus::SelectionOutsidePass,
+        "different-pass cross-segment selection rejects before materialization");
   ImportedRenderTapeView projected;
   check(importPrevalidatedRenderTape(materialized.bytes, projected) &&
             projected.header.profile == kRenderTapeProfileFrame,
@@ -1041,9 +1093,9 @@ void executableProjectionMaterializesCanonicalBundle() {
                            D9C_COMMAND_RECORD_PRESENT},
         "projected command executes Clear, selected Draw range, then Present");
 
-  const auto splitIdentity = makeIdentity(tape, true);
+  const auto splitPassIdentity = makeIdentity(tape, true);
   check(materializeRenderTapeProjectionBundle(
-            tape, blobs, splitIdentity, selector()).status ==
+            tape, blobs, splitPassIdentity, selector()).status ==
             RenderTapeProjectionBundleStatus::SelectionOutsidePass,
         "draw range crossing a frozen pass boundary fails before effects");
   auto mismatched = identity;

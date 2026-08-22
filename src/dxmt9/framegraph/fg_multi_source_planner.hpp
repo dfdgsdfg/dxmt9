@@ -22,6 +22,14 @@ struct MultiSourcePlanningSource {
   core::SourcePayloadView payload{};
 };
 
+// Builds one event-wide DAG over the immutable source window.  Command and
+// pass indices are rebased into one graph and hazards are re-inferred after
+// all rows have been appended; callers must not substitute source-local
+// graphs when authenticating a pass that crosses a source boundary.
+bool buildMultiSourceFrameGraph(
+    std::span<const MultiSourcePlanningSource> sources,
+    FrameGraph& out) noexcept;
+
 // Borrowed call-local input for the exact deferred terminal-suffix lane. The
 // payload must never be copied into the returned proof; source identity and
 // command ranges below are the only values that may survive planning.
