@@ -650,9 +650,34 @@ bool RenderTapeProductionIdentityLedger::registerExpectedSettlement(
   if (captureToken_ != captureToken || failed_ ||
       settlementCount_ >= kMaxRenderTapeIdentitySettlements ||
       alreadySettled || sources_.empty() ||
-      sources_.back().eventOrdinal != eventOrdinal ||
-      sources_.back().sourceOrdinal < firstSourceOrdinal ||
-      sources_.back().seqId != tailSeqId) {
+      sources_.back().eventOrdinal != eventOrdinal) {
+    failed_ = true;
+    return false;
+  }
+  const auto first = std::find_if(
+      sources_.begin(), sources_.end(), [&](const auto& source) {
+        return source.eventOrdinal == eventOrdinal &&
+               source.sourceOrdinal == firstSourceOrdinal;
+      });
+  const auto eventFirst = std::find_if(
+      sources_.begin(), sources_.end(), [&](const auto& source) {
+        return source.eventOrdinal == eventOrdinal;
+      });
+  if (first == sources_.end() || first != eventFirst ||
+      static_cast<std::size_t>(std::distance(sources_.begin(), first)) +
+              sourceCount != sources_.size()) {
+    failed_ = true;
+    return false;
+  }
+  const auto tail = first + (sourceCount - 1u);
+  for (auto source = first; source != sources_.end(); ++source) {
+    if (source->eventOrdinal != eventOrdinal ||
+        source->captureToken != captureToken) {
+      failed_ = true;
+      return false;
+    }
+  }
+  if (tail->seqId != tailSeqId) {
     failed_ = true;
     return false;
   }

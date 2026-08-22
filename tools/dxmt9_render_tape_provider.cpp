@@ -118,15 +118,17 @@ void printResult(const FrameTapeReplayResult& result,
   if (identity) {
     const bool derived = identity->header.authority == static_cast<std::uint32_t>(
         RenderTapeIdentityAuthority::DerivedProjection);
+    const bool queueSettled = !derived && !identity->settlements.empty();
     std::cout << "\"authority\":\""
               << identityAuthorityName(identity->header.authority)
               << "\",\"source_count\":" << identity->sources.size()
               << ",\"segment_count\":" << identity->sources.size()
               << ",\"provenance_segment_count\":" << identity->sources.size()
               << ",\"completed_segment_count\":"
-              << (derived ? 0u : identity->sources.size())
+              << (queueSettled ? identity->sources.size() : 0u)
               << ",\"completion_evidence\":\""
-              << (derived ? "not-queue-authenticated" : "queue-tail-fenced")
+              << (derived ? "not-queue-authenticated"
+                          : queueSettled ? "queue-tail-fenced" : "none")
               << "\""
               << ",\"settlement_count\":"
               << identity->settlements.size() << ",\"settlement_table_count\":"

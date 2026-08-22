@@ -3814,14 +3814,32 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
       .passKind = 1u,
       .logicalPassId = 7001u,
   };
+  RenderTapeProductionIdentityLedger truncatedSettlement;
+  check(truncatedSettlement.append(9u, 41u, 51u, 61u, 0u, 2u,
+                                   std::span(&firstFragment, 1u)) &&
+            truncatedSettlement.append(9u, 41u, 53u, 66u, 2u, 3u,
+                                       std::span(&secondFragment, 1u)),
+        "settlement exact-group negative fixture appends both source rows");
+  check(!truncatedSettlement.registerExpectedSettlement(
+             9u, 41u, 41u, 3u, 51u, 51u, 1u),
+        "settlement cannot claim only the first row of a same-event group");
+  RenderTapeProductionIdentityLedger foreignFirst;
+  check(foreignFirst.append(9u, 41u, 51u, 61u, 0u, 2u,
+                            std::span(&firstFragment, 1u)) &&
+            foreignFirst.append(9u, 41u, 53u, 66u, 2u, 3u,
+                                std::span(&secondFragment, 1u)),
+        "settlement foreign-first negative fixture appends both rows");
+  check(!foreignFirst.registerExpectedSettlement(
+             9u, 41u, 41u, 3u, 53u, 66u, 1u),
+        "settlement cannot rebind a group to a later source ordinal");
   check(splitLedger.append(9u, 41u, 51u, 61u, 0u, 2u,
                            std::span(&firstFragment, 1u)) &&
-            splitLedger.append(9u, 41u, 52u, 62u, 2u, 3u,
+            splitLedger.append(9u, 41u, 53u, 66u, 2u, 3u,
                                std::span(&secondFragment, 1u)),
         "v2 ledger accepts contiguous same-event source fragments");
-  check(splitLedger.registerExpectedSettlement(9u, 41u, 41u, 3u, 51u, 62u, 2u) &&
+  check(splitLedger.registerExpectedSettlement(9u, 41u, 41u, 3u, 51u, 66u, 2u) &&
             splitLedger.completeSettlement(9u, 41u),
-        "split ledger settles only its complete tail");
+        "split ledger settles only its complete tail without assuming +1 IDs");
   check(splitLedger.copy(9u, query, {}) && query.sourceCount == 2u &&
             query.rangeCount == 2u,
         "split ledger exposes both authoritative source rows");

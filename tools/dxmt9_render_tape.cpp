@@ -709,6 +709,12 @@ int main(int argc, char** argv) {
                   << " range=" << validation.failedRange << '\n';
         return 1;
       }
+      const bool derived = view.header.authority == static_cast<std::uint32_t>(
+          RenderTapeIdentityAuthority::DerivedProjection);
+      const bool queueSettled = !derived && !view.settlements.empty();
+      const char* completionEvidence = derived
+          ? "not-queue-authenticated"
+          : queueSettled ? "queue-tail-fenced" : "none";
       std::cout << "{\"schema\":\"" << kRenderTapeIdentitySchema
                 << "\",\"valid\":true,\"authority\":"
                 << view.header.authority << ",\"frame_id\":"
@@ -716,7 +722,9 @@ int main(int argc, char** argv) {
                 << view.header.presentOrdinal << ",\"sources\":"
                 << view.sources.size() << ",\"ranges\":"
                 << view.ranges.size() << ",\"completed_segment_count\":"
-                << view.sources.size() << ",\"settlement_count\":"
+                << (queueSettled ? view.sources.size() : 0u)
+                << ",\"completion_evidence\":\""
+                << completionEvidence << "\",\"settlement_count\":"
                 << view.settlements.size() << ",\"settlement_table_count\":"
                 << view.header.settlementCount << ",\"segments\":[";
       for (std::size_t index = 0u; index < view.sources.size(); ++index) {

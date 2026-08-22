@@ -1313,18 +1313,25 @@ class CommandQueue {
       return ActiveArenaAppendResult::Inactive;
     }
     auto* context = activeArenaBuild_.load(std::memory_order_acquire);
-    const bool batch = context && context->batchMode;
+    // Structural admission corruption cannot be recovered by the batch
+    // capability: a missing context, wrong owner, or concurrent publication
+    // poisons the queue and fails closed even when a batch was requested.
     if (!context || context->ownerThread != std::this_thread::get_id() ||
-        context->failed.load(std::memory_order_acquire) ||
-        context->publishing.load(std::memory_order_acquire) ||
-        !append(*context)) {
+        context->publishing.load(std::memory_order_acquire)) {
       if (context) {
         context->failed.store(true, std::memory_order_release);
       }
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return ActiveArenaAppendResult::Failed;
+    }
+    const bool batch = context->batchMode;
+    if (context->failed.load(std::memory_order_acquire) ||
+        !append(*context)) {
+      context->failed.store(true, std::memory_order_release);
       // SegmentSerial owns a whole-event rollback capability.  Keep the
       // queue healthy until publishCpuReadyArenaBatch performs the guarded
-      // rollback; poisoning here would turn a pre-effect failure into an
-      // unrecoverable device loss and prevent EventSerial retry.
+      // rollback; poisoning here would turn a pre-effect append rejection
+      // into an unrecoverable device loss and prevent EventSerial retry.
       if (!batch) {
         arenaBuildPoisoned_.store(true, std::memory_order_release);
       }

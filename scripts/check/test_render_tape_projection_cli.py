@@ -136,7 +136,8 @@ def main() -> int:
             "present_ordinal": 6,
             "sources": 1,
             "ranges": 1,
-            "completed_segment_count": 1,
+            "completed_segment_count": 0,
+            "completion_evidence": "none",
             "settlement_count": 0,
             "settlement_table_count": 0,
             "segments": [{
