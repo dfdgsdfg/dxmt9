@@ -83,8 +83,16 @@ composition registers the real replay drain, directly invokes the real queue
 producer-fence escapes, explicit completion through the fence, and the later
 `D3DERR_NOTAVAILABLE` reserve disposition without sleeps, polling, timeouts,
 admission release, session widening, or a pre-completion capacity transition.
-Actual reserve-path binding remains r17 evidence. No post-fix wild run or
-promotion evidence is claimed.
+The follow-up r17 run at
+`experiments/output/render-tape-gt2-identity-v2-r17-producer-wait/` binds the
+same repair through the actual capture reserve path. Reserve reaches
+`captured_present_reserve_end ... disposition=reserved`; the final scheduling
+snapshot reports 672 producer-wait standalone actions, zero current first-lease
+wait, zero Arena admission waiter, and no watchdog or GPU error. The published
+v2 bundle authenticates 147 source segments and all 43 event-settlement rows.
+This closes the r16 progress counterexample, but it is not a Tape promotion
+claim: full-frame provider replay remains outside the pixel envelope, as
+recorded in the replay-harness gap.
 
 | Area | Status | Current evidence | Missing implementation or evidence |
 |---|---|---|---|

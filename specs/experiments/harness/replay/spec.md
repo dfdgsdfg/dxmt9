@@ -1532,6 +1532,30 @@ fresh provider invocation. This closes the model/native/hermetic seam only;
 the prior r66 GT2 evidence remains the production `FULL_SNAPSHOT` run, so no
 default-delta wild GT2 oracle claim follows.
 
+The 2026-08-23 r17 capture at
+`experiments/output/render-tape-gt2-identity-v2-r17-producer-wait/`
+supersedes that last limitation for the bounded sparse projection. Capture
+reserve returns instead of wedging, and the published 1,083-event bundle binds
+147 completed production source segments, 162 pass ranges, and all 43 expected
+event settlements to one capture-authority v2 sidecar. `executable-project`
+selects event ordinal 899, records 0 through 18. Those 19 indexed Draws cross
+the exact source boundary from ordinal/seqId 13908 to 13909 while remaining in
+one authenticated pass. The atomically published derived bundle contains one
+Clear, 19 indexed Draws, one Present, 20 definitions, and 65 mutations. Its
+event digest is `484adb56b9301795a5ecacb41d34732935174c9ceb8a0675f36b96dfb3e9ac85`;
+two additional fresh strict provider processes reproduce non-degenerate output
+SHA-256 `f47603010a15169cd994415882dc6fe0537befd3653d59518bc4ade2ab99e586`
+with zero GPU command-buffer errors.
+
+This is bounded projection evidence, not full-frame promotion. One replay of
+the complete r17 capture produces matching source/output SHA-256
+`56ec70e97e24b946185c6f065d39cee19eefcd2d5feae4df00c086dd4701bc11`
+but differs from the captured source/output oracle at 15,193 pixels, maximum
+RGB delta 27, and total RGB delta 23,987. The strict SHA and pixel-envelope
+gates therefore reject it. The implementation contains only the v2 identity
+reader/writer; the retained version-1 mutation test is solely a fail-closed
+`invalid-header` regression pin and does not constitute a legacy v1 lane.
+
 ### 8.5 Profile relationship and migration
 
 The current mini replay is the `draw-slice` implementation, not deprecated

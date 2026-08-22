@@ -789,9 +789,23 @@ int main(int argc, char** argv) {
       if (!projection.valid()) {
         std::cerr << "render tape materialization failed status="
                   << renderTapeProjectionBundleStatusName(projection.status)
+                  << " projection="
+                  << renderTapeProjectionStatusName(
+                         projection.projection.status)
                   << " identity="
                   << renderTapeIdentityStatusName(
                          projection.identityValidation.status)
+                  << " validation="
+                  << renderTapeValidationStatusName(
+                         projection.projection.sourceValidation.status)
+                  << " event="
+                  << projection.projection.sourceValidation.failedEventIndex
+                  << " event_type="
+                  << projection.projection.sourceValidation.failedEventType
+                  << " incomplete_reason="
+                  << renderTapeIncompleteFrameReasonName(
+                         projection.projection.sourceValidation
+                             .incompleteFrameReason)
                   << " chunk_status="
                   << static_cast<std::uint32_t>(
                          projection.projection.sourceValidation.chunkStatus)

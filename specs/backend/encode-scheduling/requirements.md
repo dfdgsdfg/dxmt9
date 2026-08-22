@@ -1038,10 +1038,11 @@ identity assignment, pass/DAG continuity, per-segment completion, final event
 settlement, shared resource/page watermarks, and EventSerial fallback; native
 truth-table and fake-backend tests must bind those predicates to the production
 helpers; and a GT2 identity-v2 capture/replay run must authenticate v2
-EventSerial and a non-vacuous SegmentSerial attempt. The current GT2 r65/r66
-identity-v2 captures in the replay spec prove capture-authority v2 coverage,
-but do not by themselves prove production SegmentSerial admission, shared
-watermark reclamation, or performance. Promotion additionally requires paired
+EventSerial and a non-vacuous SegmentSerial attempt. GT2 r17 proves production
+SegmentSerial admission, exact 147-segment capture identity, 43 ordered event
+settlements, and a two-segment executable projection; r65/r66 remain historical
+single-source and FULL_SNAPSHOT evidence. These runs do not prove performance
+or promotion. Promotion additionally requires paired
 GT2 visual/locality/no-gputrace results with zero GPU errors, repeated identity
 and segment evidence, then the cross-workload gates; until then the Tape and
 SegmentSerial selectors remain default-off and EventSerial remains reachable.

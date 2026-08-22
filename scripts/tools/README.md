@@ -238,10 +238,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `dxmt9.render_tape.bundle.v2` envelope, authenticate identity/output
   components, run structural validation/inspection/provider replay, or
   materialize and strictly oracle an executable Draw-range projection through
-  fresh provider processes. Current production projection captures must set
-  `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` so the selected first Draw is a complete,
-  independently executable start state; default sparse-delta folding is still
-  fail-closed. Use `DXMT9_RENDER_TAPE_SKIP_PRESENTS=N` to select a later GT
+  fresh provider processes. The materializer folds the canonical BootstrapState
+  and ordered sparse deltas through the selected first Draw; the old
+  `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` capture requirement is retired. Incomplete
+  sparse coverage still fails closed. Use `DXMT9_RENDER_TAPE_SKIP_PRESENTS=N`
+  to select a later GT
   interval, then run `executable-project` with the identity-proven command event
   ordinal and record range. The command performs two oracle-free provider runs,
   installs the agreed output, and requires two additional strict fresh-process
