@@ -95,8 +95,8 @@ wraps both, so the numbers above already include the doubling.
 >
 > | probe | predicate | file |
 > |---|---|---|
-> | FFP | `!softwareVertexProcessing_ \|\| vs_ != nullptr` | `d3d9_pe_device.cpp:4518` |
-> | programmable | `!softwareVertexProcessing_ \|\| !vs_` | `d3d9_pe_device.cpp:5124` |
+> | FFP | `!softwareVertexProcessing_ \|\| vs_ != nullptr` | `src/d3d9/d3d9_pe_device_swvp.cpp` `describeSoftwareFfpDrawTarget` |
+> | programmable | `!softwareVertexProcessing_ \|\| !vs_` | `src/d3d9/d3d9_pe_device_swvp.cpp` `describeSoftwareProgrammableDrawTarget` |
 >
 > Hoisting the FFP test into the programmable probe returns `S_FALSE` for every
 > draw with a bound vertex shader — on a genuine SWVP device that silently
@@ -131,7 +131,7 @@ is chosen should be pinned by one.
 >
 > | escape | site | affects |
 > |---|---|---|
-> | `applySoftwareInstanceStreamOffsets` returns `D3DERR_INVALIDCALL` on 64-bit overflow of `streamOff_ + element*streamStr_` | `d3d9_pe_device.cpp:5114` | all four **non-UP** probes, instanced draws only |
+> | `applySoftwareInstanceStreamOffsets` returns `D3DERR_INVALIDCALL` on 64-bit overflow of `streamOff_ + element*streamStr_` | `src/d3d9/d3d9_pe_device_swvp.cpp` `applySoftwareInstanceStreamOffsets` | all four **non-UP** probes, instanced draws only |
 > | `readSoftwareFfpAdjustedIndices` propagates a failing `Unlock()` | `d3d9_pe_device.cpp:~5434` | the two indexed probes |
 >
 > The commit therefore implies the non-indexed probes have *no* behaviour

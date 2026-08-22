@@ -95,10 +95,10 @@ a `file:line` anchor checked against the live tree.
 | 6 formerly-unhandled D3DDECLUSAGE values → generic programmable VS semantics; 6 non-default D3DDECLMETHOD values → explicit safe-reject + perf counter | A.4/A.5 | `src/dxmt9/dxmt9_shader_decoder.cpp:83,89,121-126,134-158,1335`; `shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly`, `testNonDefaultDeclMethodsRejectCleanly` |
 | `AlphaCmpCaps` sourced from `alphaCmpCaps` | C.7 | `src/d3d9/device_c_format_utils.cpp:295`; `src/d3d9/d3d9_pe_factory.cpp:268` |
 | `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel populated (stable FNV-1a) | C.9 | `src/d3d9/core_factory.cpp:276-299,303-327` |
-| `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device.cpp:2203-2226` |
+| `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus` |
 | `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState` | B.10#1 | `src/dxmt9/dxmt9_draw_encoder.mm:556-564` |
 | `D3DLIGHT_POINT` / `D3DLIGHT_SPOT` FFP lighting (Position/Range/Atten/Theta/Phi) | B.5/B.10#5 | `src/dxmt9/dxmt9_ffp_shaders.cpp:168-284` |
-| `D3DGAMMARAMP` real impl + PE shadow + unix bridge | B.9/D.* | `src/d3d9/d3d9_pe_device.cpp:578-612,2244-2261` |
+| `D3DGAMMARAMP` real impl + PE shadow + unix bridge | B.9/D.* | `src/d3d9/d3d9_pe_device.cpp:578-612 (citation unresolved — could not verify against source history),2244-2261` |
 | `INTZ` vendor format accepted | C.5 | `src/d3d9/device_c_format_utils.cpp:85` |
 | `R8G8B8` mapped (not Unsupported) | C.7 | `src/d3d9/device_c_format_utils.cpp:50` |
 | `D9CCaps::adapterOrdinal` assigned from adapter index | C.12#8 | `src/d3d9/device_c_factory.cpp:217` |
@@ -408,40 +408,40 @@ deferred.
 
 | Type | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|
-| FLOAT1 | 0 | ✅ | dxmt9_ffp_shaders.hpp:43; dxmt9_ffp_shaders.cpp:20, 115; d3d9_pe_device.cpp:276 | d3d9_conformance_visual_misc.c | ProcessVertices FLOAT1 TEXCOORD7 readback covers PE declaration decode |
-| FLOAT2 | 1 | ✅ | dxmt9_ffp_shaders.hpp:44; dxmt9_ffp_shaders.cpp:22, 117; d3d9_pe_device.cpp:277 | shader_argbuf_binding_value_spec.cpp:608; d3d9_conformance_query_stateblock.c:385 | |
-| FLOAT3 | 2 | ✅ | dxmt9_ffp_shaders.hpp:45; dxmt9_ffp_shaders.cpp:24, 119; d3d9_pe_device.cpp:278 | backend_pipeline_key_spec.cpp:450; d3d9_conformance_query_stateblock.c:375 | |
-| FLOAT4 | 3 | ✅ | dxmt9_ffp_shaders.hpp:46; dxmt9_ffp_shaders.cpp:26, 121; d3d9_pe_device.cpp:279 | core_ffp_state_key_spec.cpp:182; d3d9_conformance_device.c:750 | |
-| D3DCOLOR | 4 | ✅ | dxmt9_ffp_shaders.hpp:47; dxmt9_ffp_shaders.cpp:28; d3d9_pe_device.cpp:280 | backend_key_descriptor_spec.cpp:163; d3d9_conformance_device.c:615 | swizzled BGRA→RGBA on load |
-| UBYTE4 | 5 | ✅ | dxmt9_ffp_shaders.hpp:48; dxmt9_ffp_shaders.cpp:29; d3d9_pe_device.cpp:281 | shader_transform_spec.cpp:1559; d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover raw integer PE decode; BLENDINDICES path covers programmable generic input |
-| SHORT2 | 6 | ✅ | dxmt9_ffp_shaders.hpp:49; dxmt9_ffp_shaders.cpp:31; d3d9_pe_device.cpp:282 | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD readback covers raw integer PE decode |
-| SHORT4 | 7 | ✅ | dxmt9_ffp_shaders.hpp:50; dxmt9_ffp_shaders.cpp:38; d3d9_pe_device.cpp:283 | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover raw integer PE decode |
-| UBYTE4N | 8 | ✅ | dxmt9_ffp_shaders.hpp:51; dxmt9_ffp_shaders.cpp:30; d3d9_pe_device.cpp:284 | d3d9_conformance_visual_misc.c:828,853 | ProcessVertices TEXCOORD4 and NORMAL readbacks cover PE decode |
-| SHORT2N | 9 | ✅ | dxmt9_ffp_shaders.hpp:52; dxmt9_ffp_shaders.cpp:32; d3d9_pe_device.cpp:285 | d3d9_conformance_visual_misc.c:786 | ProcessVertices TEXCOORD readback covers PE decode |
-| SHORT4N | 10 | ✅ | dxmt9_ffp_shaders.hpp:53; dxmt9_ffp_shaders.cpp:39; d3d9_pe_device.cpp:286 | shader_transform_spec.cpp:1560, 1572; d3d9_conformance_visual_misc.c:807 | ProcessVertices TEXCOORD4 readback covers PE decode |
-| USHORT2N | 11 | ✅ | dxmt9_ffp_shaders.hpp:54; dxmt9_ffp_shaders.cpp:33; d3d9_pe_device.cpp:287 | d3d9_conformance_visual_misc.c:793 | ProcessVertices TEXCOORD readback covers PE decode |
-| USHORT4N | 12 | ✅ | dxmt9_ffp_shaders.hpp:55; dxmt9_ffp_shaders.cpp:40; d3d9_pe_device.cpp:288 | d3d9_conformance_visual_misc.c:814 | ProcessVertices TEXCOORD4 readback covers PE decode |
-| UDEC3 | 13 | ✅ | dxmt9_ffp_shaders.hpp:56; dxmt9_ffp_shaders.cpp:34; d3d9_pe_device.cpp:289 | shader_transform_spec.cpp:testVs30VertexDeclarationUDec3Load; d3d9_conformance_visual_misc.c | size known; programmable VS declaration load path and ProcessVertices TEXCOORD4/NORMAL readbacks covered |
-| DEC3N | 14 | ✅ | dxmt9_ffp_shaders.hpp:57; dxmt9_ffp_shaders.cpp:35; d3d9_pe_device.cpp:290 | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover PE decode |
-| FLOAT16_2 | 15 | ✅ | dxmt9_ffp_shaders.hpp:58; dxmt9_ffp_shaders.cpp:36; d3d9_pe_device.cpp:291 | shader_transform_spec.cpp:1561; d3d9_conformance_visual_misc.c:800 | ProcessVertices TEXCOORD readback covers PE decode |
-| FLOAT16_4 | 16 | ✅ | dxmt9_ffp_shaders.hpp:59; dxmt9_ffp_shaders.cpp:41; d3d9_pe_device.cpp:292 | d3d9_conformance_visual_misc.c:821 | ProcessVertices TEXCOORD4 readback covers PE decode |
-| UNUSED | 17 | ✅ | d3d9_pe_device.cpp:293, 311, 314, 423 | d3d9_conformance_device.c:848 | sentinel; size=0 |
+| FLOAT1 | 0 | ✅ | dxmt9_ffp_shaders.hpp:43; dxmt9_ffp_shaders.cpp:20, 115; `src/d3d9/d3d9_pe_device_impl.hpp` `fvfToVertexElements` | d3d9_conformance_visual_misc.c | ProcessVertices FLOAT1 TEXCOORD7 readback covers PE declaration decode |
+| FLOAT2 | 1 | ✅ | dxmt9_ffp_shaders.hpp:44; dxmt9_ffp_shaders.cpp:22, 117; `src/d3d9/d3d9_pe_device_impl.hpp` `fvfToVertexElements` | shader_argbuf_binding_value_spec.cpp:608; d3d9_conformance_query_stateblock.c:385 | |
+| FLOAT3 | 2 | ✅ | dxmt9_ffp_shaders.hpp:45; dxmt9_ffp_shaders.cpp:24, 119; `src/d3d9/d3d9_pe_device_impl.hpp` `fvfToVertexElements` | backend_pipeline_key_spec.cpp:450; d3d9_conformance_query_stateblock.c:375 | |
+| FLOAT4 | 3 | ✅ | dxmt9_ffp_shaders.hpp:46; dxmt9_ffp_shaders.cpp:26, 121; `src/d3d9/d3d9_pe_device_impl.hpp` `fvfToVertexElements` | core_ffp_state_key_spec.cpp:182; d3d9_conformance_device.c:750 | |
+| D3DCOLOR | 4 | ✅ | dxmt9_ffp_shaders.hpp:47; dxmt9_ffp_shaders.cpp:28; d3d9_pe_device.cpp:280 (citation unresolved — could not verify against source history) | backend_key_descriptor_spec.cpp:163; d3d9_conformance_device.c:615 | swizzled BGRA→RGBA on load |
+| UBYTE4 | 5 | ✅ | dxmt9_ffp_shaders.hpp:48; dxmt9_ffp_shaders.cpp:29; d3d9_pe_device.cpp:281 (citation unresolved — could not verify against source history) | shader_transform_spec.cpp:1559; d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover raw integer PE decode; BLENDINDICES path covers programmable generic input |
+| SHORT2 | 6 | ✅ | dxmt9_ffp_shaders.hpp:49; dxmt9_ffp_shaders.cpp:31; d3d9_pe_device.cpp:282 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD readback covers raw integer PE decode |
+| SHORT4 | 7 | ✅ | dxmt9_ffp_shaders.hpp:50; dxmt9_ffp_shaders.cpp:38; d3d9_pe_device.cpp:283 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover raw integer PE decode |
+| UBYTE4N | 8 | ✅ | dxmt9_ffp_shaders.hpp:51; dxmt9_ffp_shaders.cpp:30; d3d9_pe_device.cpp:284 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c:828,853 | ProcessVertices TEXCOORD4 and NORMAL readbacks cover PE decode |
+| SHORT2N | 9 | ✅ | dxmt9_ffp_shaders.hpp:52; dxmt9_ffp_shaders.cpp:32; d3d9_pe_device.cpp:285 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c:786 | ProcessVertices TEXCOORD readback covers PE decode |
+| SHORT4N | 10 | ✅ | dxmt9_ffp_shaders.hpp:53; dxmt9_ffp_shaders.cpp:39; d3d9_pe_device.cpp:286 (citation unresolved — could not verify against source history) | shader_transform_spec.cpp:1560, 1572; d3d9_conformance_visual_misc.c:807 | ProcessVertices TEXCOORD4 readback covers PE decode |
+| USHORT2N | 11 | ✅ | dxmt9_ffp_shaders.hpp:54; dxmt9_ffp_shaders.cpp:33; d3d9_pe_device.cpp:287 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c:793 | ProcessVertices TEXCOORD readback covers PE decode |
+| USHORT4N | 12 | ✅ | dxmt9_ffp_shaders.hpp:55; dxmt9_ffp_shaders.cpp:40; d3d9_pe_device.cpp:288 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c:814 | ProcessVertices TEXCOORD4 readback covers PE decode |
+| UDEC3 | 13 | ✅ | dxmt9_ffp_shaders.hpp:56; dxmt9_ffp_shaders.cpp:34; d3d9_pe_device.cpp:289 (citation unresolved — could not verify against source history) | shader_transform_spec.cpp:testVs30VertexDeclarationUDec3Load; d3d9_conformance_visual_misc.c | size known; programmable VS declaration load path and ProcessVertices TEXCOORD4/NORMAL readbacks covered |
+| DEC3N | 14 | ✅ | dxmt9_ffp_shaders.hpp:57; dxmt9_ffp_shaders.cpp:35; d3d9_pe_device.cpp:290 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c | ProcessVertices TEXCOORD4 and NORMAL readbacks cover PE decode |
+| FLOAT16_2 | 15 | ✅ | dxmt9_ffp_shaders.hpp:58; dxmt9_ffp_shaders.cpp:36; d3d9_pe_device.cpp:291 (citation unresolved — could not verify against source history) | shader_transform_spec.cpp:1561; d3d9_conformance_visual_misc.c:800 | ProcessVertices TEXCOORD readback covers PE decode |
+| FLOAT16_4 | 16 | ✅ | dxmt9_ffp_shaders.hpp:59; dxmt9_ffp_shaders.cpp:41; d3d9_pe_device.cpp:292 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c:821 | ProcessVertices TEXCOORD4 readback covers PE decode |
+| UNUSED | 17 | ✅ | d3d9_pe_device.cpp:293 (citation unresolved — could not verify against source history), 311, 314, 423 | d3d9_conformance_device.c:848 | sentinel; size=0 |
 
 ### A.4 D3DDECLUSAGE
 
 | Usage | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|
-| POSITION | 0 | ✅ | dxmt9_ffp_shaders.hpp:60; dxmt9_ffp_shaders.cpp:260; d3d9_pe_device.cpp:343, 353 | core_spec_fixtures.hpp:207; core_shader_translator_spec.cpp:251 | |
-| BLENDWEIGHT | 1 | ✅ | dxmt9_ffp_shaders.hpp:61; dxmt9_ffp_shaders.cpp:282; d3d9_pe_device.cpp:371 | shader_transform_spec.cpp:418 | |
+| POSITION | 0 | ✅ | dxmt9_ffp_shaders.hpp:60; dxmt9_ffp_shaders.cpp:260; d3d9_pe_device.cpp:343 (citation unresolved — could not verify against source history), 353 | core_spec_fixtures.hpp:207; core_shader_translator_spec.cpp:251 | |
+| BLENDWEIGHT | 1 | ✅ | dxmt9_ffp_shaders.hpp:61; dxmt9_ffp_shaders.cpp:282; d3d9_pe_device.cpp:371 (citation unresolved — could not verify against source history) | shader_transform_spec.cpp:418 | |
 | BLENDINDICES | 2 | ✅ | dxmt9_ffp_shaders.hpp:62; dxmt9_ffp_shaders.cpp:287 | shader_transform_spec.cpp:419 | |
-| NORMAL | 3 | ✅ | dxmt9_ffp_shaders.hpp:63; dxmt9_ffp_shaders.cpp:274; d3d9_pe_device.cpp:378 | shader_argbuf_binding_value_spec.cpp:482 | |
-| PSIZE | 4 | ✅ | dxmt9_ffp_shaders.hpp:64; dxmt9_ffp_shaders.cpp:278; d3d9_pe_device.cpp:384 | d3d9_conformance_visual_misc.c | ProcessVertices declaration and FVF programmable source readbacks cover PE decode; destination FVF/declaration readbacks cover fixed-function passthrough and programmable PSIZE output |
-| TEXCOORD | 5 | ✅ | dxmt9_ffp_shaders.hpp:65; dxmt9_ffp_shaders.cpp:291; d3d9_pe_device.cpp:413 | core_shader_translator_spec.cpp:254 | |
+| NORMAL | 3 | ✅ | dxmt9_ffp_shaders.hpp:63; dxmt9_ffp_shaders.cpp:274; d3d9_pe_device.cpp:378 (citation unresolved — could not verify against source history) | shader_argbuf_binding_value_spec.cpp:482 | |
+| PSIZE | 4 | ✅ | dxmt9_ffp_shaders.hpp:64; dxmt9_ffp_shaders.cpp:278; d3d9_pe_device.cpp:384 (citation unresolved — could not verify against source history) | d3d9_conformance_visual_misc.c | ProcessVertices declaration and FVF programmable source readbacks cover PE decode; destination FVF/declaration readbacks cover fixed-function passthrough and programmable PSIZE output |
+| TEXCOORD | 5 | ✅ | dxmt9_ffp_shaders.hpp:65; dxmt9_ffp_shaders.cpp:291; d3d9_pe_device.cpp:413 (citation unresolved — could not verify against source history) | core_shader_translator_spec.cpp:254 | |
 | TANGENT | 6 | ✅ | dxmt9_ffp_shaders.hpp:66; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |
 | BINORMAL | 7 | ✅ | dxmt9_ffp_shaders.hpp:67; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly | programmable VS accepts as a generic vin[] semantic; FFP treats it as an extra non-FFP element |
 | TESSFACTOR | 8 | ✅ | dxmt9_ffp_shaders.hpp:68; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly; d3d9_conformance_visual_misc.c | programmable VS accepts as a generic vin[] semantic; ProcessVertices reads it as a generic programmable source, with no fixed-function tessellation lowering |
-| POSITIONT | 9 | ✅ | dxmt9_ffp_shaders.hpp:69; dxmt9_ffp_shaders.cpp:254; d3d9_pe_device.cpp:348 | core_ffp_state_key_spec.cpp:183; d3d9_conformance_device.c:751 | XYZRHW pre-transformed |
-| COLOR | 10 | ✅ | dxmt9_ffp_shaders.hpp:70; dxmt9_ffp_shaders.cpp:266; d3d9_pe_device.cpp:390 | core_spec_fixtures.hpp:209; backend_key_descriptor_spec.cpp:167 | usage_index 0=diffuse, 1=specular |
+| POSITIONT | 9 | ✅ | dxmt9_ffp_shaders.hpp:69; dxmt9_ffp_shaders.cpp:254; d3d9_pe_device.cpp:348 (citation unresolved — could not verify against source history) | core_ffp_state_key_spec.cpp:183; d3d9_conformance_device.c:751 | XYZRHW pre-transformed |
+| COLOR | 10 | ✅ | dxmt9_ffp_shaders.hpp:70; dxmt9_ffp_shaders.cpp:266; d3d9_pe_device.cpp:390 (citation unresolved — could not verify against source history) | core_spec_fixtures.hpp:209; backend_key_descriptor_spec.cpp:167 | usage_index 0=diffuse, 1=specular |
 | FOG | 11 | ✅ | dxmt9_ffp_shaders.hpp:71; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly; d3d9_conformance_visual_misc.c | programmable VS accepts as a generic vin[] semantic; ProcessVertices reads it as a generic programmable source, while FFP fog still uses render-state/uniform path |
 | DEPTH | 12 | ✅ | dxmt9_ffp_shaders.hpp:72; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly; d3d9_conformance_visual_misc.c | programmable VS accepts as a generic vin[] semantic; ProcessVertices reads it as a generic programmable source |
 | SAMPLE | 13 | ✅ | dxmt9_ffp_shaders.hpp:73; dxmt9_shader_decoder.cpp:isSupportedDeclUsage; decodeVertexShaderInputLayout | shader_bytecode_validation_spec.cpp:testGenericDeclUsagesDecodeCleanly; d3d9_conformance_visual_misc.c | programmable VS accepts as a generic vin[] semantic; ProcessVertices reads it as a generic programmable source |
@@ -456,7 +456,7 @@ explicitly instead of being silently treated as direct vertex fetches.
 
 | Method | Code | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|
-| DEFAULT | 0 | ✅ | d3d9_pe_device.cpp:342, 347, 352, 359, 370, 412, 420 | backend_key_descriptor_spec.cpp:164 (kD3DDeclMethodDefault); d3d9_conformance_query_stateblock.c:375 | only method ever consumed |
+| DEFAULT | 0 | ✅ | d3d9_pe_device.cpp:342 (citation unresolved — could not verify against source history), 347, 352, 359, 370, 412, 420 | backend_key_descriptor_spec.cpp:164 (kD3DDeclMethodDefault); d3d9_conformance_query_stateblock.c:375 | only method ever consumed |
 | PARTIALU | 1 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject; N-patch/tessellator method has no Metal lowering |
 | PARTIALV | 2 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
 | CROSSUV | 3 | 🔵 | dxmt9_shader_decoder.cpp:isSupportedDeclMethod; translateD3DBytecodeToSpirv | shader_bytecode_validation_spec.cpp:testNonDefaultDeclMethodsRejectCleanly | explicit safe-reject |
@@ -933,7 +933,7 @@ Source anchors used throughout:
 - `src/d3d9/device_c_format_utils.cpp:275-351` — `fillCCaps` (D9CCaps <- core DeviceCaps).
 - `src/d3d9/core_present.cpp:10-140` — present-parameter validation + normalization.
 - `src/d3d9/core_factory.cpp:251-285` — `getAdapterIdentifier` / `getAdapterDisplayMode` / `enumAdapterModes`.
-- `src/d3d9/d3d9_pe_device.cpp:4725-4747` — `IDirect3DDevice9::GetRasterStatus` synthetic scanline impl.
+- `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus` — `IDirect3DDevice9::GetRasterStatus` synthetic scanline impl.
 
 ### C.1 D3DFORMAT — Standard color/alpha (UNKNOWN .. A16B16G16R16)
 
@@ -947,10 +947,10 @@ Source anchors used throughout:
 | X1R5G5B5 | 24 | OK | OK | OK | warn | -> `BGR5A1Unorm` (treated as A1R5G5B5; alpha forced opaque); allowed CheckDeviceFormat adapter format. |
 | A1R5G5B5 | 25 | OK | OK | OK | warn | -> `BGR5A1Unorm`. |
 | A4R4G4B4 | 26 | OK | OK | OK | warn | -> `ABGR4Unorm`. |
-| R3G3B2 | 27 | NO | NO | NO | NO | absent from `Format` enum; `fmtFromD3D` returns Unknown; only referenced as a fallback case in `userMemoryBytesPerPixel` (`d3d9_pe_device.cpp:203` returns 1). |
+| R3G3B2 | 27 | NO | NO | NO | NO | absent from `Format` enum; `fmtFromD3D` returns Unknown; only referenced as a fallback case in `userMemoryBytesPerPixel` (`d3d9_pe_device.cpp:203` (citation unresolved — could not verify against source history) returns 1). |
 | A8 | 28 | OK | OK | OK | warn | -> `A8Unorm`. |
 | A8R3G3B2 | 29 | NO | NO | NO | NO | absent from `Format` enum and `fmtFromD3D`. |
-| X4R4G4B4 | 30 | NO | NO | NO | NO | absent from `Format` enum; referenced only by `userMemoryBytesPerPixel` -> 2 (`d3d9_pe_device.cpp:195`, `d3d9_pe_device_child_surface.cpp:211`). No core mapping; CheckDeviceFormat returns NOTAVAILABLE. |
+| X4R4G4B4 | 30 | NO | NO | NO | NO | absent from `Format` enum; referenced only by `userMemoryBytesPerPixel` -> 2 (`d3d9_pe_device.cpp:195` (citation unresolved — could not verify against source history), `d3d9_pe_device_child_surface.cpp:211`). No core mapping; CheckDeviceFormat returns NOTAVAILABLE. |
 | A2B10G10R10 | 31 | OK | maybe | OK | OK | -> `BGR10A2Unorm`, `FormatClass::Optional` gated on `BackendLimits::supportsBgr10A2`; falsy default Mac8 limits route to NOTAVAILABLE (`core_format_caps_spec.cpp:72`). |
 | A8B8G8R8 | 32 | OK | OK | OK | OK | -> `RGBA8Unorm`. |
 | X8B8G8R8 | 33 | OK | OK | OK | warn | -> `RGBA8Unorm`. |
@@ -1132,7 +1132,7 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 
 Anchor: `include/dxmt9/core_constants.hpp:751-765` (core), `include/dxmt9/device_c.h:57-72` (`D9CPresentParams`),
 `src/d3d9/core_present.cpp:10-140` (validate / normalize), `src/d3d9/d3d9_pe_factory.cpp:73-98, 117-134`
-(D3D <-> D9C), `src/d3d9/d3d9_pe_device.cpp:1995-2010, 4197-4214` (Reset / ResetEx round-trip).
+(D3D <-> D9C), `src/d3d9/d3d9_pe_device.cpp:1995-2010 (citation unresolved — could not verify against source history), 4197-4214` (Reset / ResetEx round-trip).
 
 | Field | defined in `core::PresentParameters` | defined in `D9CPresentParams` | runtime-use | test | Notes |
 |---|---|---|---|---|---|
@@ -1187,7 +1187,7 @@ Anchor: `include/dxmt9/core_constants.hpp:854-864`, `include/dxmt9/device_c.h:80
 
 ### C.11 D3DRASTER_STATUS
 
-Anchor: `src/d3d9/d3d9_pe_device.cpp:10686`, no core-side model; `tests/conformance/d3d9/d3d9_conformance_device.c:3147-3175`,
+Anchor: `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus`, no core-side model; `tests/conformance/d3d9/d3d9_conformance_device.c:3147-3175`,
 `tests/conformance/d3d9/d3d9_device_misc.cpp:174-175`.
 
 | Field | defined | mapped | runtime-use | test | Notes |
@@ -1295,8 +1295,8 @@ Source anchors are absolute paths in this repo. Source files referenced:
 
 | Method | PE-side | unix-side | conformance | native | Source | Notes |
 |---|---|---|---|---|---|---|
-| QueryInterface | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_factory.cpp:355`, `d3d9_pe_device.cpp:1763`, `d3d9_pe_device_child_surface.cpp:433/796/1060/1270/1381` | tested via `test_factory_base_vs_ex_qi`, `test_ex_created_normal_device_qi`, `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `core_device_com_spec.cpp` |
-| AddRef | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_factory.cpp:347`, `d3d9_pe_device.cpp:1759`, `d3d9_pe_device_child_surface.cpp:426/789/1053/1263/1374`, `d3d9_pe_device_child_buffer.cpp:131/282`, `d3d9_pe_device_child_misc.cpp:75/148/334/458`, `d3d9_pe_device_child_shader.cpp:32/93` | Reference counting verified by `test_private_data_iunknown_ownership_smoke`, `test_resource_get_device_wrapper_policy` |
+| QueryInterface | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_factory.cpp:355`, `src/d3d9/d3d9_pe_device_impl.hpp` `QueryInterface`, `d3d9_pe_device_child_surface.cpp:433/796/1060/1270/1381` | tested via `test_factory_base_vs_ex_qi`, `test_ex_created_normal_device_qi`, `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `core_device_com_spec.cpp` |
+| AddRef | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_factory.cpp:347`, `src/d3d9/d3d9_pe_device_impl.hpp` `AddRef`, `d3d9_pe_device_child_surface.cpp:426/789/1053/1263/1374`, `d3d9_pe_device_child_buffer.cpp:131/282`, `d3d9_pe_device_child_misc.cpp:75/148/334/458`, `d3d9_pe_device_child_shader.cpp:32/93` | Reference counting verified by `test_private_data_iunknown_ownership_smoke`, `test_resource_get_device_wrapper_policy` |
 | Release | ✅ | ❌ | ✅ | ✅ | same files | matches AddRef sites; pair-tested in resource lifecycle suite |
 
 ### D.2 IDirect3D9 (14 methods)
@@ -1332,145 +1332,145 @@ Source anchors are absolute paths in this repo. Source files referenced:
 
 | Method | PE-side | unix-side | conformance | native | Source | Notes |
 |---|---|---|---|---|---|---|
-| QueryInterface | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_device.cpp:1763` | `test_ex_created_normal_device_qi` |
-| AddRef | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_device.cpp:1759` | shared lifecycle |
-| Release | ✅ | ❌ | ✅ | ✅ | `d3d9_pe_device.cpp:1760` | shared lifecycle |
-| TestCooperativeLevel | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:1787` | `dxmt9c_device_test_cooperative_level`; T2 device-lost gate (2026-05-08); `test_reset_lockable_backbuffer_policy` |
-| GetAvailableTextureMem | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:1797` | PE-side pseudo-budget shadow (2 GiB sentinel, strictly-decreasing); `test_base_vidmem_accounting_policy`, `test_ex_vidmem_accounting_policy` |
-| EvictManagedResources | 🟡 | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:1811` | returns S_OK; `test_visual_evict_managed_resources_policy` |
-| GetDirect3D | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:1813` | factory AddRef; `test_device_parent_caps_getter_policy` |
-| GetDeviceCaps | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:1821` | `dxmt9c_device_get_caps`; `test_limits`, `core_format_caps_spec` |
-| GetDisplayMode | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1848` | via swapchain; `test_device_display_mode_adapter_format` |
-| GetCreationParameters | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:1871` | PE shadow; `test_device_creation_parameters_policy` |
-| SetCursorProperties | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10332` | validates surface (A8R8G8B8 + POT); cursor behavior remains shadow-only and `CursorCaps` is clear |
-| SetCursorPosition | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10354` | logs only; no WindowServer integration |
-| ShowCursor | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10360` | gated on `cursorSurfaceSet_`; toggles shadow only and `CursorCaps` is clear |
-| CreateAdditionalSwapChain | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1920` | `test_additional_swapchain_backbuffer_bounds` |
-| GetSwapChain | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1962` | `dxmt9c_device_get_swap_chain`; `test_swapchain_backbuffer_getter_policy` |
-| GetNumberOfSwapChains | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1987` | `test_additional_swapchain_backbuffer_bounds` |
-| Reset | ⚠️ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:1991` | T2 (2026-05-08): viewport/scissor reset, releaseAllBound, deviceNotReset gate; `test_reset_lockable_backbuffer_policy`, `test_reset_fullscreen_focus_window_policy`, `test_swapchain_multisample_reset`, `d3d9_reset_lost.cpp` |
-| Present | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:2051` | T2 device-lost gate; chunk barrier flush + `D9C_COMMAND_RECORD_PRESENT`; many visual tests |
-| GetBackBuffer | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2095` | bounds-check matches Wine; `test_swapchain_backbuffer_getter_policy` |
-| GetRasterStatus | ⚠️ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4725` | `test_device_raster_status_bounds` |
-| SetDialogBoxMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:2156` | logs only, returns S_OK |
-| SetGammaRamp | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:10728` | updates PE shadow state and forwards the ramp through D9C for presenter application; `core_d3d9_gamma_ramp_spec` |
-| GetGammaRamp | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4778` | PE gamma shadow readback plus unix presenter application; `core_d3d9_gamma_ramp_spec` |
-| CreateTexture | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2170` | T4 (2026-05-08): D3D9Ex SYSTEMMEM 1-mip alias; `test_ex_user_memory_lock_identity`, `core_d3d9_miptree_layout_spec` |
-| CreateVolumeTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2216` | `test_volume_mipmap_level_desc_policy` |
-| CreateCubeTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2237` | `test_cube_texture_face_desc_parity` |
-| CreateVertexBuffer | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2258` | `test_vertex_buffer_alignment`, `test_vertex_buffer_desc_binding_policy`, `test_vb_lock_flags` |
-| CreateIndexBuffer | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2280` | `test_index_buffer_desc_binding_policy` |
-| CreateRenderTarget | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2303` | `test_create_rt_ds_failure_policy`, `test_invalid_multisample_render_target_quality` |
-| CreateDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2357` | `test_create_rt_ds_failure_policy`, `test_visual_depth_stencil_init_policy` |
-| UpdateSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2391` | `test_visual_update_surface_policy`, `test_mipmap_surface_update_lock_policy` |
-| UpdateTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2473` | `test_update_texture_pool_copy_2d`; P8/A8P8 shadow copy in `dxmt9-core-device-com-spec` |
-| GetRenderTargetData | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2504` | `test_get_render_target_data_policy` |
+| QueryInterface | ✅ | ❌ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `QueryInterface` | `test_ex_created_normal_device_qi` |
+| AddRef | ✅ | ❌ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `AddRef` | shared lifecycle |
+| Release | ✅ | ❌ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `Release` | shared lifecycle |
+| TestCooperativeLevel | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `TestCooperativeLevel` | `dxmt9c_device_test_cooperative_level`; T2 device-lost gate (2026-05-08); `test_reset_lockable_backbuffer_policy` |
+| GetAvailableTextureMem | ⚠️ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetAvailableTextureMem` | PE-side pseudo-budget shadow (2 GiB sentinel, strictly-decreasing); `test_base_vidmem_accounting_policy`, `test_ex_vidmem_accounting_policy` |
+| EvictManagedResources | 🟡 | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `EvictManagedResources` | returns S_OK; `test_visual_evict_managed_resources_policy` |
+| GetDirect3D | ✅ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetDirect3D` | factory AddRef; `test_device_parent_caps_getter_policy` |
+| GetDeviceCaps | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetDeviceCaps` | `dxmt9c_device_get_caps`; `test_limits`, `core_format_caps_spec` |
+| GetDisplayMode | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetDisplayMode` | via swapchain; `test_device_display_mode_adapter_format` |
+| GetCreationParameters | ✅ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetCreationParameters` | PE shadow; `test_device_creation_parameters_policy` |
+| SetCursorProperties | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetCursorProperties` | validates surface (A8R8G8B8 + POT); cursor behavior remains shadow-only and `CursorCaps` is clear |
+| SetCursorPosition | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetCursorPosition` | logs only; no WindowServer integration |
+| ShowCursor | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ShowCursor` | gated on `cursorSurfaceSet_`; toggles shadow only and `CursorCaps` is clear |
+| CreateAdditionalSwapChain | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateAdditionalSwapChain` | `test_additional_swapchain_backbuffer_bounds` |
+| GetSwapChain | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetSwapChain` | `dxmt9c_device_get_swap_chain`; `test_swapchain_backbuffer_getter_policy` |
+| GetNumberOfSwapChains | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetNumberOfSwapChains` | `test_additional_swapchain_backbuffer_bounds` |
+| Reset | ⚠️ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `Reset` | T2 (2026-05-08): viewport/scissor reset, releaseAllBound, deviceNotReset gate; `test_reset_lockable_backbuffer_policy`, `test_reset_fullscreen_focus_window_policy`, `test_swapchain_multisample_reset`, `d3d9_reset_lost.cpp` |
+| Present | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_impl.hpp` `Present` | T2 device-lost gate; chunk barrier flush + `D9C_COMMAND_RECORD_PRESENT`; many visual tests |
+| GetBackBuffer | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetBackBuffer` | bounds-check matches Wine; `test_swapchain_backbuffer_getter_policy` |
+| GetRasterStatus | ⚠️ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus` | `test_device_raster_status_bounds` |
+| SetDialogBoxMode | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetDialogBoxMode` | logs only, returns S_OK |
+| SetGammaRamp | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetGammaRamp` | updates PE shadow state and forwards the ramp through D9C for presenter application; `core_d3d9_gamma_ramp_spec` |
+| GetGammaRamp | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetGammaRamp` | PE gamma shadow readback plus unix presenter application; `core_d3d9_gamma_ramp_spec` |
+| CreateTexture | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateTexture` | T4 (2026-05-08): D3D9Ex SYSTEMMEM 1-mip alias; `test_ex_user_memory_lock_identity`, `core_d3d9_miptree_layout_spec` |
+| CreateVolumeTexture | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateVolumeTexture` | `test_volume_mipmap_level_desc_policy` |
+| CreateCubeTexture | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateCubeTexture` | `test_cube_texture_face_desc_parity` |
+| CreateVertexBuffer | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateVertexBuffer` | `test_vertex_buffer_alignment`, `test_vertex_buffer_desc_binding_policy`, `test_vb_lock_flags` |
+| CreateIndexBuffer | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateIndexBuffer` | `test_index_buffer_desc_binding_policy` |
+| CreateRenderTarget | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateRenderTarget` | `test_create_rt_ds_failure_policy`, `test_invalid_multisample_render_target_quality` |
+| CreateDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateDepthStencilSurface` | `test_create_rt_ds_failure_policy`, `test_visual_depth_stencil_init_policy` |
+| UpdateSurface | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `UpdateSurface` | `test_visual_update_surface_policy`, `test_mipmap_surface_update_lock_policy` |
+| UpdateTexture | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `UpdateTexture` | `test_update_texture_pool_copy_2d`; P8/A8P8 shadow copy in `dxmt9-core-device-com-spec` |
+| GetRenderTargetData | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRenderTargetData` | `test_get_render_target_data_policy` |
 | GetFrontBufferData | ✅ | ✅ | ⚠️ | ❌ | `d3d9_pe_device.cpp` | delegates to the selected swap chain and synchronously copies its present-source image into SYSTEMMEM; multisampled sources resolve first. WindowServer-composited desktop capture remains out of scope; Wine visual re-run still needed. |
-| StretchRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2543` | `test_visual_blit_format_conversion_policy` |
-| ColorFill | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2573` | `test_visual_colorfill_format_policy` |
-| CreateOffscreenPlainSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2606` | T4 shared-handle SYSTEMMEM 1-mip alias; `test_visual_offscreen_surface_creation_policy`, `test_ex_user_memory_*` |
-| SetRenderTarget | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2651` | `core_device_com_spec` validates index bound + mismatch |
-| GetRenderTarget | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2682` | shared with `core_device_com_spec` |
-| SetDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2714` | `test_visual_depth_stencil_init_policy` |
-| GetDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2753` | |
-| BeginScene | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:2777` | T2 device-lost gate; `test_scene_invalid_transitions` |
-| EndScene | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:2785` | T2 device-lost gate; `test_scene_invalid_transitions` |
-| Clear | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:2797` | T2 device-lost gate; `test_visual_clear_*`, `test_visual_depth_buffer_clear_policy` |
-| SetTransform | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2848` | T1: stateblock record path; `test_stateblock_transform_capture_apply`, `core_d3d9_multiply_transform_spec`, `state_draw_transform_spec` |
-| GetTransform | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2920` | `test_stateblock_transform_capture_apply` |
-| MultiplyTransform | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2933` | T1: tracks under Begin/End; `test_stateblock_multiply_transform_capture`, `core_d3d9_multiply_transform_spec` |
-| SetViewport | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2966` | `test_viewport_scissor_state_getters` |
-| GetViewport | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2983` | `test_viewport_scissor_state_getters` |
-| SetMaterial | ✅ | ✅ | ❌ | ❌ | `d3d9_pe_device.cpp:3019` | exercised via visual lighting tests indirectly |
-| GetMaterial | ✅ | ✅ | ❌ | ❌ | `d3d9_pe_device.cpp:3029` | |
-| SetLight | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3038` | `test_light_enable_state`, `test_visual_lighting_render_state_policy` |
-| GetLight | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3075` | `test_light_enable_state` |
-| LightEnable | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3102` | `test_light_enable_state` |
-| GetLightEnable | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3127` | `test_light_enable_state` |
-| SetClipPlane | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3146` | `test_clip_plane_state_getters` |
-| GetClipPlane | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3159` | `test_clip_plane_state_getters` |
-| SetRenderState | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3181` | `dxmt9c_device_set_render_state`; `test_visual_*_render_state_policy`, `core_state.cpp` |
-| GetRenderState | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3213` | |
-| CreateStateBlock | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3226` | `test_stateblock_invalid_type_recording_invalid_calls`, `core_stateblock_restore_spec` |
-| BeginStateBlock | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3242` | T1 + C5 (2026-05-10 `a4252db`); `core_device_com_spec` |
-| EndStateBlock | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:3260` | T1; `core_device_com_spec` |
-| SetClipStatus | 🟡 | ❌ | ✅ | ✅ | `d3d9_pe_device.cpp:5897` | accepts non-null without storing; no hardware clip-status accumulation |
-| GetClipStatus | 🟡 | ❌ | ✅ | ✅ | `d3d9_pe_device.cpp:5907` | returns defined all-visible default |
-| GetTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3557` | `test_get_set_texture` |
-| SetTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3532` | `test_get_set_texture` |
-| GetTextureStageState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3364` | `test_texture_stage_states` |
-| SetTextureStageState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3335` | `test_texture_stage_states`, `test_visual_bumpenvmap_tss_policy` |
-| GetSamplerState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3408` | `test_sampler_state_edges` |
-| SetSamplerState | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3380` | `test_sampler_state_edges` |
-| ValidateDevice | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:6260` | writes `*pPasses=1`, returns S_OK without real validation |
-| SetPaletteEntries | ⚠️ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:5623` | PE shadow plus active-palette upload to bound palettized textures; `test_set_palette_roundtrip`, `test_palette_*_policy`, `test_visual_p8_texture_sampler_policy`, `dxmt9-core-device-com-spec` |
-| GetPaletteEntries | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4000` | mirrors shadow |
-| SetCurrentTexturePalette | ⚠️ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:5660` | PE shadow plus bound palettized texture re-expansion; `test_palette_current_entry_isolation`, `test_visual_p8_texture_sampler_policy`, `dxmt9-core-device-com-spec` |
-| GetCurrentTexturePalette | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:4019` | |
-| SetScissorRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2996` | `test_viewport_scissor_state_getters` |
-| GetScissorRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3009` | |
-| SetSoftwareVertexProcessing | ⚠️ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:6922` | mutable PE shadow plus mixed-VP runtime SetSoftwareVertexProcessing(TRUE) FFP and programmable-VS render-target readbacks and limited lighting-disabled fixed-function FVF XYZ/XYZ+PSIZE, FVF XYZB4 unindexed, XYZB5 LASTBETA_UBYTE4 indexed, and stream-0 declaration BLENDWEIGHT/BLENDINDICES vertex-blend DrawPrimitiveUP/DrawIndexedPrimitiveUP plus bound DrawPrimitive/DrawIndexedPrimitive, and split stream0 POSITION/COLOR + stream1 BLENDWEIGHT/BLENDINDICES bound DrawPrimitive/DrawIndexedPrimitive, lighting-enabled FVF XYZ+NORMAL, simple programmable VS FVF, stream-0 POSITION/COLOR declaration UP plus SHORT4N POSITION/COLOR declaration UP, stream-0 POSITION/COLOR/TANGENT declaration fixed-function DrawPrimitiveUP plus programmable DrawPrimitiveUP and bound draw, split stream0 POSITION/COLOR + stream2 TANGENT bound draw/indexed draw, split POSITION/COLOR declaration-stream bound draw plus stream1 INSTANCEDATA color draw and stream0 INDEXEDDATA two-instance, non-1 INSTANCEDATA divider, and fixed-function/programmable line-strip and strip/fan expansion DrawPrimitive/DrawIndexedPrimitive expansion, nonzero-minVertex/BaseVertex indexed CPU transform paths, fixed-function UP non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) and bound non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) plus programmable VS UP non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) and bound non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) render-target readbacks, and bound ps_2_0 constant-color pixel-shader readbacks for FFP and programmable-VS SWVP DrawPrimitiveUP plus bound DrawPrimitive/DrawIndexedPrimitive, with stream0 restoration pinned after SWVP DrawPrimitiveUP and bidirectional FFP/programmable SWVP state-transition readbacks; `test_visual_mvp_software_vp_policy` |
-| GetSoftwareVertexProcessing | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:6927` | |
-| SetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:6931` | returns S_OK; N-patch unsupported |
-| GetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:6937` | returns 0.0 |
-| DrawPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:7427` | T2 device-lost gate; many visual tests + `state_draw_transform_spec`, `core_d3d9_multiply_transform_spec` |
-| DrawIndexedPrimitive | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:7467` | `test_visual_max_index16_draw_policy`, `test_null_stream_shader_draw_policy` |
-| DrawPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:7521` | many visual tests |
-| DrawIndexedPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:7559` | many visual tests |
-| ProcessVertices | ⚠️ | ✅ | ✅ | PE singleton | `d3d9_pe_device.cpp:7606` | device-lost gate plus fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching diffuse/specular/texcoord/PSIZE passthrough for FVF and simple source/destination declarations, directional/point (including range/attenuation)/spot fixed-function lighting with cone rejection/falloff plus normalized declaration NORMAL decode into destination diffuse, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, and spot specular into destination specular, supported source attributes split across bound streams, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration slots, and FLOAT3/raw integer/normalized NORMAL/TANGENT/BINORMAL plus BLENDWEIGHT/BLENDINDICES inputs for simple programmable shaders plus FVF NORMAL/SPECULAR/XYZB input plus fixed-function D3DVBF_3WEIGHTS D3DFVF_XYZB4 unindexed and D3DFVF_XYZB5 LASTBETA_UBYTE4 indexed vertex-blend readbacks and FVF TEX2 mixed TEXCOORDSIZE1/TEXCOORDSIZE3 fixed-function and programmable ProcessVertices readback and raw integer/normalized/half/D3DCOLOR/UDEC3/DEC3N TEXCOORD decode; `SrcStart`/`DestIndex` placement, `D3DPV_DONOTCOPYDATA` flag acceptance, and `D3DRS_CLIPPING=FALSE` depth clamp are covered; limited programmable VS path executes DCL/DEFI/DEFB/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/NRM/RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP/M3x2/M3x3/M3x4/M4x3/M4x4 plus 2D TEXLDL vertex texture sampling with sampler ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL/SetLOD mip-clamp handling, and P8/A8P8 palette-expanded backing over PE vertex shader float/integer/bool constants, accepts `_PARTIALPRECISION` destination modifiers and `_SATURATE` output clamping, covers programmable PSIZE output, and covers D3DSPSM source modifiers and simple IF/IFC/ELSE/ENDIF over bool constants, DEFB/CONSTBOOL branch selection through SetVertexShaderConstantB, REP/LOOP counts with LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, BREAK/BREAKC, and CALL/CALLNZ/LABEL/RET and SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards while preserving source FLOAT4 POSITION / XYZW w and decoding SHORT4N POSITION declarations on fixed-function and programmable ProcessVertices paths plus fixed-function and programmable SWVP DrawPrimitiveUP readbacks; unsupported shader/broader declaration variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` covers vs_1_1 implicit input and RASTOUT/ATTROUT/TEXCRDOUT output readback, M4x4/MOV, fixed-function directional/point (including range/attenuation)/spot lighting with cone rejection/falloff plus normalized declaration NORMAL decode, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, plus spot specular, destination PSIZE FVF/declaration readbacks, fixed-function D3DVBF_3WEIGHTS D3DFVF_XYZB4 unindexed and D3DFVF_XYZB5 LASTBETA_UBYTE4 indexed vertex-blend readbacks, FVF TEX2 mixed TEXCOORDSIZE1/TEXCOORDSIZE3 readbacks, programmable COLOR1/specular source and destination readback, MAD/MOV, NRM/DP3/DP4/MUL/ADD vector math, SLT/SGE/MIN/MAX/LRP/CND/CMP compare-select math, RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP scalar-cross/transcendent math and M3x2 matrix math, 2D TEXLDL vertex texture sampler readback with ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL, and P8/A8P8 palette-expanded vertex texture sampling including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback, `_PARTIALPRECISION`, `_SATURATE` output clamping, D3DSPSM source modifiers, DEFI/CONSTINT REP/LOOP counts, DEFB/CONSTBOOL IF branch selection through SetVertexShaderConstantB, LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration readbacks, `SHORT2`/`SHORT2N`/`USHORT2N`/`FLOAT16_2` and D3DCOLOR TEXCOORD decode readbacks plus `SHORT4`/`SHORT4N`/`USHORT4N`/`FLOAT16_4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` TEXCOORD FLOAT4 destination readbacks, `SHORT4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` NORMAL decode readbacks, BREAK/BREAKC, CALL/CALLNZ/LABEL/RET, SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards, and simple IF/IFC/ELSE/ENDIF flow-control, NORMAL/TANGENT/BINORMAL/BLENDWEIGHT/BLENDINDICES input arithmetic, including D3DCOLOR BLENDINDICES and normalized UBYTE4N BLENDWEIGHT declaration readbacks, FVF NORMAL/SPECULAR/XYZB input arithmetic, FLOAT4 POSITION MOV, flag/offset handling, and extra source-attribute paths |
-| CreateVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3629` | `test_vertex_declaration_fvf_policy`, `test_unused_declaration_type` |
-| SetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3661` | `test_fvf_decl_management`, `test_vdecl_apply` |
-| GetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3682` | `test_fvf_decl_management` |
-| SetFVF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3607` | `test_fvf_decl_management`, `test_vertex_declaration_fvf_policy` |
-| GetFVF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3624` | |
-| CreateVertexShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3690` | `test_get_set_vertex_shader`, `test_unsupported_shaders`, `test_shader_unsupported_stage_variants`, `test_ex_shader_validation_policy` |
-| SetVertexShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3709` | `test_get_set_vertex_shader` |
-| GetVertexShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3720` | `test_get_set_vertex_shader` |
-| SetVertexShaderConstantF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3765` | `test_vertex_shader_constant`, `test_shader_constant_apply`, `test_shader_constant_stateblock_cross_stage` |
-| GetVertexShaderConstantF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3776` | |
-| SetVertexShaderConstantI | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3782` | |
-| GetVertexShaderConstantI | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3791` | |
-| SetVertexShaderConstantB | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3797` | |
-| GetVertexShaderConstantB | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3806` | |
-| SetStreamSource | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3814` | `test_set_stream_source_state`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_null_layout_policy`, `test_stream_source_zero_stride_policy` |
-| GetStreamSource | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3845` | `test_set_stream_source_state` |
+| StretchRect | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `StretchRect` | `test_visual_blit_format_conversion_policy` |
+| ColorFill | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ColorFill` | `test_visual_colorfill_format_policy` |
+| CreateOffscreenPlainSurface | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateOffscreenPlainSurface` | T4 shared-handle SYSTEMMEM 1-mip alias; `test_visual_offscreen_surface_creation_policy`, `test_ex_user_memory_*` |
+| SetRenderTarget | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetRenderTarget` | `core_device_com_spec` validates index bound + mismatch |
+| GetRenderTarget | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRenderTarget` | shared with `core_device_com_spec` |
+| SetDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetDepthStencilSurface` | `test_visual_depth_stencil_init_policy` |
+| GetDepthStencilSurface | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetDepthStencilSurface` | |
+| BeginScene | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_impl.hpp` `BeginScene` | T2 device-lost gate; `test_scene_invalid_transitions` |
+| EndScene | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_impl.hpp` `EndScene` | T2 device-lost gate; `test_scene_invalid_transitions` |
+| Clear | ✅ | ✅ | ✅ | ⚠️ | `src/d3d9/d3d9_pe_device_impl.hpp` `Clear` | T2 device-lost gate; `test_visual_clear_*`, `test_visual_depth_buffer_clear_policy` |
+| SetTransform | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetTransform` | T1: stateblock record path; `test_stateblock_transform_capture_apply`, `core_d3d9_multiply_transform_spec`, `state_draw_transform_spec` |
+| GetTransform | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetTransform` | `test_stateblock_transform_capture_apply` |
+| MultiplyTransform | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `MultiplyTransform` | T1: tracks under Begin/End; `test_stateblock_multiply_transform_capture`, `core_d3d9_multiply_transform_spec` |
+| SetViewport | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetViewport` | `test_viewport_scissor_state_getters` |
+| GetViewport | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetViewport` | `test_viewport_scissor_state_getters` |
+| SetMaterial | ✅ | ✅ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetMaterial` | exercised via visual lighting tests indirectly |
+| GetMaterial | ✅ | ✅ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetMaterial` | |
+| SetLight | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetLight` | `test_light_enable_state`, `test_visual_lighting_render_state_policy` |
+| GetLight | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetLight` | `test_light_enable_state` |
+| LightEnable | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `LightEnable` | `test_light_enable_state` |
+| GetLightEnable | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetLightEnable` | `test_light_enable_state` |
+| SetClipPlane | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetClipPlane` | `test_clip_plane_state_getters` |
+| GetClipPlane | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetClipPlane` | `test_clip_plane_state_getters` |
+| SetRenderState | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetRenderState` | `dxmt9c_device_set_render_state`; `test_visual_*_render_state_policy`, `core_state.cpp` |
+| GetRenderState | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRenderState` | |
+| CreateStateBlock | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateStateBlock` | `test_stateblock_invalid_type_recording_invalid_calls`, `core_stateblock_restore_spec` |
+| BeginStateBlock | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `BeginStateBlock` | T1 + C5 (2026-05-10 `a4252db`); `core_device_com_spec` |
+| EndStateBlock | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `EndStateBlock` | T1; `core_device_com_spec` |
+| SetClipStatus | 🟡 | ❌ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetClipStatus` | accepts non-null without storing; no hardware clip-status accumulation |
+| GetClipStatus | 🟡 | ❌ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetClipStatus` | returns defined all-visible default |
+| GetTexture | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetTexture` | `test_get_set_texture` |
+| SetTexture | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetTexture` | `test_get_set_texture` |
+| GetTextureStageState | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetTextureStageState` | `test_texture_stage_states` |
+| SetTextureStageState | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetTextureStageState` | `test_texture_stage_states`, `test_visual_bumpenvmap_tss_policy` |
+| GetSamplerState | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetSamplerState` | `test_sampler_state_edges` |
+| SetSamplerState | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetSamplerState` | `test_sampler_state_edges` |
+| ValidateDevice | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ValidateDevice` | writes `*pPasses=1`, returns S_OK without real validation |
+| SetPaletteEntries | ⚠️ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetPaletteEntries` | PE shadow plus active-palette upload to bound palettized textures; `test_set_palette_roundtrip`, `test_palette_*_policy`, `test_visual_p8_texture_sampler_policy`, `dxmt9-core-device-com-spec` |
+| GetPaletteEntries | ⚠️ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetPaletteEntries` | mirrors shadow |
+| SetCurrentTexturePalette | ⚠️ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetCurrentTexturePalette` | PE shadow plus bound palettized texture re-expansion; `test_palette_current_entry_isolation`, `test_visual_p8_texture_sampler_policy`, `dxmt9-core-device-com-spec` |
+| GetCurrentTexturePalette | ✅ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetCurrentTexturePalette` | |
+| SetScissorRect | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetScissorRect` | `test_viewport_scissor_state_getters` |
+| GetScissorRect | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetScissorRect` | |
+| SetSoftwareVertexProcessing | ⚠️ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetSoftwareVertexProcessing` | mutable PE shadow plus mixed-VP runtime SetSoftwareVertexProcessing(TRUE) FFP and programmable-VS render-target readbacks and limited lighting-disabled fixed-function FVF XYZ/XYZ+PSIZE, FVF XYZB4 unindexed, XYZB5 LASTBETA_UBYTE4 indexed, and stream-0 declaration BLENDWEIGHT/BLENDINDICES vertex-blend DrawPrimitiveUP/DrawIndexedPrimitiveUP plus bound DrawPrimitive/DrawIndexedPrimitive, and split stream0 POSITION/COLOR + stream1 BLENDWEIGHT/BLENDINDICES bound DrawPrimitive/DrawIndexedPrimitive, lighting-enabled FVF XYZ+NORMAL, simple programmable VS FVF, stream-0 POSITION/COLOR declaration UP plus SHORT4N POSITION/COLOR declaration UP, stream-0 POSITION/COLOR/TANGENT declaration fixed-function DrawPrimitiveUP plus programmable DrawPrimitiveUP and bound draw, split stream0 POSITION/COLOR + stream2 TANGENT bound draw/indexed draw, split POSITION/COLOR declaration-stream bound draw plus stream1 INSTANCEDATA color draw and stream0 INDEXEDDATA two-instance, non-1 INSTANCEDATA divider, and fixed-function/programmable line-strip and strip/fan expansion DrawPrimitive/DrawIndexedPrimitive expansion, nonzero-minVertex/BaseVertex indexed CPU transform paths, fixed-function UP non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) and bound non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) plus programmable VS UP non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) and bound non-indexed/indexed (including INDEX16/INDEX32 simple indexed readbacks) render-target readbacks, and bound ps_2_0 constant-color pixel-shader readbacks for FFP and programmable-VS SWVP DrawPrimitiveUP plus bound DrawPrimitive/DrawIndexedPrimitive, with stream0 restoration pinned after SWVP DrawPrimitiveUP and bidirectional FFP/programmable SWVP state-transition readbacks; `test_visual_mvp_software_vp_policy` |
+| GetSoftwareVertexProcessing | ✅ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetSoftwareVertexProcessing` | |
+| SetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetNPatchMode` | returns S_OK; N-patch unsupported |
+| GetNPatchMode | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetNPatchMode` | returns 0.0 |
+| DrawPrimitive | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `DrawPrimitive` | T2 device-lost gate; many visual tests + `state_draw_transform_spec`, `core_d3d9_multiply_transform_spec` |
+| DrawIndexedPrimitive | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_impl.hpp` `DrawIndexedPrimitive` | `test_visual_max_index16_draw_policy`, `test_null_stream_shader_draw_policy` |
+| DrawPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `DrawPrimitiveUP` | many visual tests |
+| DrawIndexedPrimitiveUP | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `DrawIndexedPrimitiveUP` | many visual tests |
+| ProcessVertices | ⚠️ | ✅ | ✅ | PE singleton | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ProcessVertices` | device-lost gate plus fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform with matching diffuse/specular/texcoord/PSIZE passthrough for FVF and simple source/destination declarations, directional/point (including range/attenuation)/spot fixed-function lighting with cone rejection/falloff plus normalized declaration NORMAL decode into destination diffuse, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, and spot specular into destination specular, supported source attributes split across bound streams, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration slots, and FLOAT3/raw integer/normalized NORMAL/TANGENT/BINORMAL plus BLENDWEIGHT/BLENDINDICES inputs for simple programmable shaders plus FVF NORMAL/SPECULAR/XYZB input plus fixed-function D3DVBF_3WEIGHTS D3DFVF_XYZB4 unindexed and D3DFVF_XYZB5 LASTBETA_UBYTE4 indexed vertex-blend readbacks and FVF TEX2 mixed TEXCOORDSIZE1/TEXCOORDSIZE3 fixed-function and programmable ProcessVertices readback and raw integer/normalized/half/D3DCOLOR/UDEC3/DEC3N TEXCOORD decode; `SrcStart`/`DestIndex` placement, `D3DPV_DONOTCOPYDATA` flag acceptance, and `D3DRS_CLIPPING=FALSE` depth clamp are covered; limited programmable VS path executes DCL/DEFI/DEFB/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/NRM/RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP/M3x2/M3x3/M3x4/M4x3/M4x4 plus 2D TEXLDL vertex texture sampling with sampler ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL/SetLOD mip-clamp handling, and P8/A8P8 palette-expanded backing over PE vertex shader float/integer/bool constants, accepts `_PARTIALPRECISION` destination modifiers and `_SATURATE` output clamping, covers programmable PSIZE output, and covers D3DSPSM source modifiers and simple IF/IFC/ELSE/ENDIF over bool constants, DEFB/CONSTBOOL branch selection through SetVertexShaderConstantB, REP/LOOP counts with LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, BREAK/BREAKC, and CALL/CALLNZ/LABEL/RET and SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards while preserving source FLOAT4 POSITION / XYZW w and decoding SHORT4N POSITION declarations on fixed-function and programmable ProcessVertices paths plus fixed-function and programmable SWVP DrawPrimitiveUP readbacks; unsupported shader/broader declaration variants return `D3DERR_INVALIDCALL`; `test_visual_process_vertices_xyzhw_policy` covers vs_1_1 implicit input and RASTOUT/ATTROUT/TEXCRDOUT output readback, M4x4/MOV, fixed-function directional/point (including range/attenuation)/spot lighting with cone rejection/falloff plus normalized declaration NORMAL decode, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, plus spot specular, destination PSIZE FVF/declaration readbacks, fixed-function D3DVBF_3WEIGHTS D3DFVF_XYZB4 unindexed and D3DFVF_XYZB5 LASTBETA_UBYTE4 indexed vertex-blend readbacks, FVF TEX2 mixed TEXCOORDSIZE1/TEXCOORDSIZE3 readbacks, programmable COLOR1/specular source and destination readback, MAD/MOV, NRM/DP3/DP4/MUL/ADD vector math, SLT/SGE/MIN/MAX/LRP/CND/CMP compare-select math, RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP scalar-cross/transcendent math and M3x2 matrix math, 2D TEXLDL vertex texture sampler readback with ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL, and P8/A8P8 palette-expanded vertex texture sampling including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback, `_PARTIALPRECISION`, `_SATURATE` output clamping, D3DSPSM source modifiers, DEFI/CONSTINT REP/LOOP counts, DEFB/CONSTBOOL IF branch selection through SetVertexShaderConstantB, LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration readbacks, `SHORT2`/`SHORT2N`/`USHORT2N`/`FLOAT16_2` and D3DCOLOR TEXCOORD decode readbacks plus `SHORT4`/`SHORT4N`/`USHORT4N`/`FLOAT16_4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` TEXCOORD FLOAT4 destination readbacks, `SHORT4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` NORMAL decode readbacks, BREAK/BREAKC, CALL/CALLNZ/LABEL/RET, SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards, and simple IF/IFC/ELSE/ENDIF flow-control, NORMAL/TANGENT/BINORMAL/BLENDWEIGHT/BLENDINDICES input arithmetic, including D3DCOLOR BLENDINDICES and normalized UBYTE4N BLENDWEIGHT declaration readbacks, FVF NORMAL/SPECULAR/XYZB input arithmetic, FLOAT4 POSITION MOV, flag/offset handling, and extra source-attribute paths |
+| CreateVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateVertexDeclaration` | `test_vertex_declaration_fvf_policy`, `test_unused_declaration_type` |
+| SetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetVertexDeclaration` | `test_fvf_decl_management`, `test_vdecl_apply` |
+| GetVertexDeclaration | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetVertexDeclaration` | `test_fvf_decl_management` |
+| SetFVF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetFVF` | `test_fvf_decl_management`, `test_vertex_declaration_fvf_policy` |
+| GetFVF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetFVF` | |
+| CreateVertexShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateVertexShader` | `test_get_set_vertex_shader`, `test_unsupported_shaders`, `test_shader_unsupported_stage_variants`, `test_ex_shader_validation_policy` |
+| SetVertexShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetVertexShader` | `test_get_set_vertex_shader` |
+| GetVertexShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetVertexShader` | `test_get_set_vertex_shader` |
+| SetVertexShaderConstantF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetVertexShaderConstantF` | `test_vertex_shader_constant`, `test_shader_constant_apply`, `test_shader_constant_stateblock_cross_stage` |
+| GetVertexShaderConstantF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetVertexShaderConstantF` | |
+| SetVertexShaderConstantI | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetVertexShaderConstantI` | |
+| GetVertexShaderConstantI | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetVertexShaderConstantI` | |
+| SetVertexShaderConstantB | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetVertexShaderConstantB` | |
+| GetVertexShaderConstantB | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetVertexShaderConstantB` | |
+| SetStreamSource | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetStreamSource` | `test_set_stream_source_state`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_null_layout_policy`, `test_stream_source_zero_stride_policy` |
+| GetStreamSource | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetStreamSource` | `test_set_stream_source_state` |
 | SetStreamSourceFreq | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp`; `core_state.cpp`; `dxmt9_draw_encoder.mm` | All 16 frequencies reach canonical draw state and state blocks; stream-0 INDEXEDDATA sets Metal instance count and INSTANCEDATA streams use `instance_id / divider`. Native gates: core_device_lifecycle, state_draw_transform, core_stateblock_restore, shader_transform, encode_draw_recorder. |
-| GetStreamSourceFreq | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3887` | `test_stream_source_frequency_state` |
-| SetIndices | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3898` | |
-| GetIndices | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3905` | |
-| CreatePixelShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3911` | `test_get_set_pixel_shader`, `test_unsupported_shaders`, `test_visual_vface_pixel_shader_create_policy` |
-| SetPixelShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3929` | `test_get_set_pixel_shader` |
-| GetPixelShader | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3936` | `test_get_set_pixel_shader` |
-| SetPixelShaderConstantF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3940` | `test_pixel_shader_constant`, `test_shader_constant_apply` |
-| GetPixelShaderConstantF | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3949` | |
-| SetPixelShaderConstantI | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3955` | |
-| GetPixelShaderConstantI | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3964` | |
-| SetPixelShaderConstantB | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3970` | |
-| GetPixelShaderConstantB | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3979` | |
-| DrawRectPatch | ❌ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8580` | returns `D3DERR_INVALIDCALL` (patch tessellation unsupported) |
-| DrawTriPatch | ❌ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8581` | returns `D3DERR_INVALIDCALL` |
-| DeletePatch | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8582` | returns S_OK |
-| CreateQuery | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8588` | `test_query_get_data_size_policy`, `d3d9_queries.cpp` |
+| GetStreamSourceFreq | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetStreamSourceFreq` | `test_stream_source_frequency_state` |
+| SetIndices | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetIndices` | |
+| GetIndices | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetIndices` | |
+| CreatePixelShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreatePixelShader` | `test_get_set_pixel_shader`, `test_unsupported_shaders`, `test_visual_vface_pixel_shader_create_policy` |
+| SetPixelShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetPixelShader` | `test_get_set_pixel_shader` |
+| GetPixelShader | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetPixelShader` | `test_get_set_pixel_shader` |
+| SetPixelShaderConstantF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetPixelShaderConstantF` | `test_pixel_shader_constant`, `test_shader_constant_apply` |
+| GetPixelShaderConstantF | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetPixelShaderConstantF` | |
+| SetPixelShaderConstantI | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetPixelShaderConstantI` | |
+| GetPixelShaderConstantI | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetPixelShaderConstantI` | |
+| SetPixelShaderConstantB | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `SetPixelShaderConstantB` | |
+| GetPixelShaderConstantB | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetPixelShaderConstantB` | |
+| DrawRectPatch | ❌ | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `DrawRectPatch` | returns `D3DERR_INVALIDCALL` (patch tessellation unsupported) |
+| DrawTriPatch | ❌ | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `DrawTriPatch` | returns `D3DERR_INVALIDCALL` |
+| DeletePatch | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `DeletePatch` | returns S_OK |
+| CreateQuery | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateQuery` | `test_query_get_data_size_policy`, `d3d9_queries.cpp` |
 
 ### D.5 IDirect3DDevice9Ex (15 additional methods)
 
 | Method | PE-side | unix-side | conformance | native | Source | Notes |
 |---|---|---|---|---|---|---|
-| SetConvolutionMonoKernel | ❌ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8612` | `return E_NOTIMPL` |
-| ComposeRects | ❌ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8613` | `return E_NOTIMPL` |
-| PresentEx | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8339` | T2 device-lost gate; `test_visual_swapchain_flip_present_policy` indirect |
-| GetGPUThreadPriority | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8357` | writes `*p=0` + S_OK |
-| SetGPUThreadPriority | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8361` | S_OK |
-| WaitForVBlank | ✅ | ✅ | ❌ | ❌ | `d3d9_pe_device.cpp:8366` | `dxmt9c_device_wait_for_vblank` |
-| CheckResourceResidency | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:8370` | S_OK |
-| SetMaximumFrameLatency | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8377` | range [1..30] validated; `test_ex_frame_latency_state` |
-| GetMaximumFrameLatency | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:8385` | PE shadow read; `test_ex_frame_latency_state` |
-| CheckDeviceState | ✅ | ✅ | ❌ | ❌ | `d3d9_pe_device.cpp:8392` | `dxmt9c_device_check_device_state` |
-| CreateRenderTargetEx | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8397` | delegates to CreateRenderTarget; `test_create_rt_ds_failure_policy` |
-| CreateOffscreenPlainSurfaceEx | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8409` | T4 shared-handle SYSTEMMEM 1-mip alias; `test_ex_user_memory_*` |
-| CreateDepthStencilSurfaceEx | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8420` | `test_create_depth_stencil_surface_ex` |
-| ResetEx | ⚠️ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8434` | T2 (2026-05-08): viewport/scissor reset, `deviceNotReset_=false`; `test_ex_create_reset_mode_validation` |
-| GetDisplayModeEx | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:8504` | `test_display_mode_ex_size_filter_smoke` |
+| SetConvolutionMonoKernel | ❌ | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetConvolutionMonoKernel` | `return E_NOTIMPL` |
+| ComposeRects | ❌ | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ComposeRects` | `return E_NOTIMPL` |
+| PresentEx | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_impl.hpp` `PresentEx` | T2 device-lost gate; `test_visual_swapchain_flip_present_policy` indirect |
+| GetGPUThreadPriority | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetGPUThreadPriority` | writes `*p=0` + S_OK |
+| SetGPUThreadPriority | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetGPUThreadPriority` | S_OK |
+| WaitForVBlank | ✅ | ✅ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `WaitForVBlank` | `dxmt9c_device_wait_for_vblank` |
+| CheckResourceResidency | 🟡 | ❌ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CheckResourceResidency` | S_OK |
+| SetMaximumFrameLatency | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `SetMaximumFrameLatency` | range [1..30] validated; `test_ex_frame_latency_state` |
+| GetMaximumFrameLatency | ✅ | ❌ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetMaximumFrameLatency` | PE shadow read; `test_ex_frame_latency_state` |
+| CheckDeviceState | ✅ | ✅ | ❌ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CheckDeviceState` | `dxmt9c_device_check_device_state` |
+| CreateRenderTargetEx | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateRenderTargetEx` | delegates to CreateRenderTarget; `test_create_rt_ds_failure_policy` |
+| CreateOffscreenPlainSurfaceEx | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateOffscreenPlainSurfaceEx` | T4 shared-handle SYSTEMMEM 1-mip alias; `test_ex_user_memory_*` |
+| CreateDepthStencilSurfaceEx | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `CreateDepthStencilSurfaceEx` | `test_create_depth_stencil_surface_ex` |
+| ResetEx | ⚠️ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `ResetEx` | T2 (2026-05-08): viewport/scissor reset, `deviceNotReset_=false`; `test_ex_create_reset_mode_validation` |
+| GetDisplayModeEx | ✅ | ✅ | ✅ | ❌ | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetDisplayModeEx` | `test_display_mode_ex_size_filter_smoke` |
 
 ### D.6 IDirect3DResource9 (base — 8 methods per derived class)
 

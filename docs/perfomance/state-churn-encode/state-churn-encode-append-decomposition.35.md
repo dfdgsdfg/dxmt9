@@ -33,7 +33,7 @@ remain open in the [Render Tape gap](../../../specs/experiments/gap.md).
 **Design facts worth keeping.** (1) The entry fast path folds four per-call
 diagnostic gates (call tracking == recorder stats, decimation N, VS
 const-range probe, debug-log level) into one process-constant bool; every
-member was verified read-once (`d3d9_pe_device.cpp:117-172`,
+member was verified read-once (`src/d3d9/d3d9_pe_device_impl.hpp` (`dxmt9PeRecorderStatsEnabled`, `dxmt9PeCallTrackingEnabled`, `dxmt9PerfVsConstSetterRangeEnabled`, `dxmt9PeConstSetterSlowPathRequired`),
 `d3d9_pe_decimated_scope.hpp:26-33`, `log.cpp:106-123`). With any diagnostic
 enabled, the verbatim old body runs as a noinline slow path, so the
 `dxmt9-core-device-com-spec` phase-offset pins hold unchanged. (2) The

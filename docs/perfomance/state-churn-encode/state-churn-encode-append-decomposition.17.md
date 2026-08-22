@@ -59,7 +59,7 @@ conclusion does not depend on it.
 
 **Retraction of the first-draft lead — the `4.9 KB/record` figure was a
 counter artifact, not wire volume.** A source investigation
-(`d3d9_pe_device.cpp:10234-10298`, `:10401-10454`, `:10201-10231`) shows
+(`d3d9_pe_device.cpp:10234-10298` (citation unresolved — could not verify against source history), `:10401-10454`, `:10201-10231`) shows
 `append_drawidx_bytes` sums the caller's `sizeHint`, and for DrawIndexed that
 is the frozen constant `kLegacyDrawIndexedPrimitiveSizeHint = 4920` —
 deliberately preserved so chunk-seal cadence stays bit-identical to the

@@ -80,7 +80,7 @@ wrong. The current record is **not** a function of `{shadow, bindings}` alone.
 Four distinct input classes feed it.
 
 **(a) COM pointer members.** `buildDrawPrimitivePacket`
-(`d3d9_pe_device.cpp:3867-4103`, 237 lines, 6 call sites at `:9329`, `:9389`,
+(`src/d3d9/d3d9_pe_device_impl.hpp` `populateBindingView`, 237 lines, 6 call sites at `:9329`, `:9389`,
 `:9527`, `:9627`, `:10000`, `:10139`) reads `textures_`, `streamSrc_`,
 `streamOff_`, `streamStr_`, `vs_`, `ps_`, `vdecl_`, `dsSurface_`, `fvf_`, and
 `currentRtWireHandles()` / `currentRtExplicitMask()`, translating each through
@@ -289,7 +289,7 @@ was. Three things sit outside it and need their own gates:
 1. **Where chunks are cut.** `appendCommandRecordDirect`'s capacity precheck
    compares the **legacy record size** against V2 payload bytes:
    `payloadBytesBefore + bytes > maxBytes`, where `bytes` is the ~4.9 KB legacy
-   record and `payloadBytes()` is the V2 arena (`d3d9_pe_device.cpp:9182-9184`).
+   record and `payloadBytes()` is the V2 arena (`d3d9_pe_device.cpp:9182-9184` (citation unresolved — could not verify against source history)).
    Delete the legacy format and that input is gone, so chunk seal cadence
    changes — and a per-record byte diff cannot see it. **Decision: preserve
    current cadence.** The precheck keeps consuming a size estimate with the same
@@ -430,7 +430,7 @@ producer runs, and never for APPLY_STATE. §3 now specifies two functions.
 Reviewed adversarially on 2026-07-29 against the source. Five claims in the
 first draft were confirmed defective and are corrected above: the
 `{shadow, bindings}` purity model (missed the constant shadow, UP payloads, and
-the destination-chunk retention dependency at `d3d9_pe_device.cpp:9462-9477`);
+the destination-chunk retention dependency at `src/d3d9/d3d9_pe_device_tape.cpp` `materializeRenderTapeObjectForReference`);
 the `4.3%` arithmetic (a category error — the census means are per-append over
 all appends); the claim that byte identity is a complete oracle (chunk seal
 cadence, retention side effects, failure paths sit outside it); the Phase 1c

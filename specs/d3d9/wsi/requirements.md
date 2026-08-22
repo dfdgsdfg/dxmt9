@@ -153,7 +153,7 @@ NOT silently change any D3D9 `Lock` / `GetRenderTargetData` HRESULT, MUST
 NOT zero-fill caller buffers, and MUST NOT emit a per-call warning in any
 log level. There is no `framebufferOnly` branch on the D3D9 Lock / readback
 code paths (`src/d3d9/d3d9_pe_device_child_surface.cpp:397` for `LockRect`;
-`src/d3d9/d3d9_pe_device.cpp:2426` and `src/d3d9/core_surface.cpp:354` for
+`src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRenderTargetData` and `src/d3d9/core_surface.cpp:354` for
 `GetRenderTargetData`). Whether the present-side optimisation observably
 changes any D3D9-visible behavior on a future Metal release is currently
 not under test; the contract is "no D3D9-visible side effect today" and any

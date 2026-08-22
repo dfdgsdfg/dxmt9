@@ -20,7 +20,7 @@
 - Emitted V2 sections require strictly ascending slot order per section (`orderedSlot`, `src/d3d9/d3d9_pe_chunk_v2_draw.cpp:190`), spans alive across the append that consumes them, and `valid <= 1`.
 - The V2 emitters (`appendSparseRecordV2`, `appendApplyStateV2`, `appendSetConstantsV2`, `appendClearV2`, `appendPresentV2`, `appendStretchRectV2`, `appendColorFillV2`) do not change.
 - **Every append keeps going through the `appendCommandRecordDirect` envelope.** Its mutex, `commandChunkNegotiated_` gate, CapacityPre and CapacityPost flushes, and telemetry (`recordPeChunkInterAppendGap`, `peV2AppendDecimatedStats_`, `peAppendTypeCounts_`, `recordPeAppendCpu`, `notePeChunkAppendBoundary`, `logPeRecordMilestoneAfterPresent`) must survive every task. Chunk seal cadence therefore cannot drift.
-- `DXMT9_PE_INLINE_CONST_DELTA` is **off by default** (`d3d9_pe_device.cpp:112-115`). The default draw path emits standalone SET_CONST records via `flushPendingConsts()` before the draw. Do not move constant folding into the draw record on the default path.
+- `DXMT9_PE_INLINE_CONST_DELTA` is **off by default** (`src/d3d9/d3d9_pe_device_impl.hpp` `dxmt9PeInlineConstDeltaEnabled`). The default draw path emits standalone SET_CONST records via `flushPendingConsts()` before the draw. Do not move constant folding into the draw record on the default path.
 - `git diff --check` clean before every commit.
 - Do not create `specs/**/plan.md` (gitignored).
 
@@ -482,7 +482,7 @@ struct PeBindingView {
 };
 
 // (d) Destination-chunk history, consumed by addChunkContextSections only.
-// Mirrors what d3d9_pe_device.cpp:9462-9484 computes today.
+// Mirrors what `src/d3d9/d3d9_pe_device_tape.cpp` `materializeRenderTapeObjectForReference` computes today.
 // submittedIndexBufferWire holds the POINTER-valued wire, as
 // d9cWireHandleValue(toWireHandle(rawIBuf(indexBuf_))) does at :9401-9406 --
 // not an objectId. Comparing the wrong one makes every indexed draw re-emit
@@ -583,7 +583,7 @@ output storage sized to the V2 section caps."
 ## Task 3: The `appendRecordV2` seam
 
 **Files:**
-- Modify: `src/d3d9/d3d9_pe_device.cpp:9160-9275` (`appendCommandRecordDirect`)
+- Modify: `src/d3d9/d3d9_pe_device.cpp:9160-9275` (citation unresolved — could not verify against source history) (`appendCommandRecordDirect`)
 
 **Interfaces:**
 - Consumes: nothing.
@@ -717,7 +717,7 @@ keeps chunk seal cadence fixed."
 
 **Files:**
 - Create: `src/d3d9/d3d9_pe_producer.hpp` / `.cpp`
-- Modify: `src/d3d9/d3d9_pe_device.cpp:3867-4103` (remove) and the 6 call sites at `:9329`, `:9389`, `:9527`, `:9627`, `:10000`, `:10139`
+- Modify: `src/d3d9/d3d9_pe_device_impl.hpp` `populateBindingView` (remove) and the 6 call sites at `:9329`, `:9389`, `:9527`, `:9627`, `:10000`, `:10139`
 - Modify: `src/d3d9/meson.build` (`dxmt9_pe_core_srcs`, near `:51`); `tests/native/bridge/meson.build`
 
 **Interfaces:**
@@ -736,7 +736,7 @@ keeps chunk seal cadence fixed."
   }
   ```
   `PeDecimatedScopeStats` is at **global scope** (`d3d9_pe_stats_decimation.hpp:17`);
-  `peDrawPacketDecimatedStats_` is that type (`d3d9_pe_device.cpp:3428`).
+  `peDrawPacketDecimatedStats_` is that type (`src/d3d9/d3d9_pe_device_impl.hpp` `peDrawPacketDecimatedStats_`).
 
 **This task has no native test coverage, and that is a known, accepted gap.**
 No meson test compiles `d3d9_pe_device.cpp` — `src/d3d9/meson.build:66` gates
@@ -747,7 +747,7 @@ substitute gates are Step 4 and Step 5. Do not skip either.
 
 - [ ] **Step 1: Move the body, resolving five things renaming does not cover**
 
-Create the header and TU, and move `d3d9_pe_device.cpp:3867-4103` into
+Create the header and TU, and move `src/d3d9/d3d9_pe_device_impl.hpp` `populateBindingView` into
 `buildDrawPacketFromViews`. The straightforward renames are `peState_.X` →
 `shadow.X` and `peDrawPacketDecimatedStats_` → `stats`.
 
@@ -1026,7 +1026,7 @@ noteWireIdentityGetterCall counter."
 ## Task 6: Emit constant records directly as V2
 
 **Files:**
-- Modify: `src/d3d9/d3d9_pe_device.cpp:9705-9730` — `appendSetConstRecord`
+- Modify: `src/d3d9/d3d9_pe_device_impl.hpp` `appendSetConstRecord`
 - Modify: `src/d3d9/d3d9_pe_chunk_v2_draw.cpp:894-913` — remove the six constant cases
 
 **Interfaces:**
@@ -1169,7 +1169,7 @@ path, its telemetry, and seal cadence are all untouched."
 - Create: `tests/native/bridge/pe_producer_differential_spec.cpp`
 - Modify: `tests/native/bridge/meson.build`
 - Modify: `src/d3d9/d3d9_pe_producer.hpp` / `.cpp` — add `buildSparseStateV2`
-- Modify: `src/d3d9/d3d9_pe_device.cpp:10000` — the APPLY_STATE site
+- Modify: `src/d3d9/d3d9_pe_device.cpp:10000` (citation unresolved — could not verify against source history) — the APPLY_STATE site
 - Modify: `src/d3d9/d3d9_pe_chunk_v2_draw.cpp` — remove the APPLY_STATE case
 
 **Interfaces:**
@@ -1563,7 +1563,7 @@ value. Confirmed failing against a stub first."
 
 **Files:**
 - Modify: `src/d3d9/d3d9_pe_producer.hpp` / `.cpp` — add `addChunkContextSections`
-- Modify: `src/d3d9/d3d9_pe_device.cpp:9329`, `:9389`, and the helpers at `:9462-9484`
+- Modify: `src/d3d9/d3d9_pe_device.cpp:9329` (citation unresolved — could not verify against source history), `:9389`, and the helpers at `:9462-9484`
 - Modify: `tests/native/bridge/pe_producer_differential_spec.cpp`
 - Modify: `src/d3d9/d3d9_pe_chunk_v2_draw.cpp` — remove the two draw cases
 
@@ -1719,7 +1719,7 @@ it its own differential fixtures (retained / not-retained x known / unknown).
 `populateBindingView` deliberately fills a stream slot only when its pending
 bit is set (that masking is what kept the Task 4 cost regression out). But
 stream re-emission needs *every currently bound* stream: production reads a
-separately captured `currentDrawStreamSources()` (`d3d9_pe_device.cpp:9292`,
+separately captured `currentDrawStreamSources()` (`d3d9_pe_device.cpp:9292` (citation unresolved — could not verify against source history),
 `:9352`), not the view. A non-pending view slot holds whatever the last build
 that touched it left there, which coincides with the current binding in steady
 state but not after `clearPeStateTracking()` / `Reset`, which clears
@@ -1736,7 +1736,7 @@ which before writing the function; do not let it read stale view slots.
 `(void)constants;`. That is correct for APPLY_STATE because
 `chunkBarrierFlush` always calls `flushPendingConsts()` first. But the draw
 sites **skip** that flush under `DXMT9_PE_INLINE_CONST_DELTA=1`
-(`d3d9_pe_device.cpp:9280`, `:9342`) and fold the dirty ranges into the record
+(`src/d3d9/d3d9_pe_device_impl.hpp` (`appendDrawPrimitiveRecord`, `appendDrawIndexedPrimitiveRecord`), `:9342`) and fold the dirty ranges into the record
 instead — and the fold writes into `packet.constDeltaSections` of a fat packet
 that will not exist once these sites migrate. Wiring a draw site to the current
 producer under that env drops the constants silently.
@@ -1853,7 +1853,7 @@ void indexBufferKnownUnchanged() {
   f.params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   f.chunk.indexBufferKnown = true;
-  // POINTER-valued wire, matching d3d9_pe_device.cpp:9401-9406. Using an
+  // POINTER-valued wire, matching `src/d3d9/d3d9_pe_device_impl.hpp` `appendDrawIndexedPrimitiveRecord`. Using an
   // objectId here would let a producer that compares the wrong field pass.
   f.chunk.submittedIndexBufferWire = wireValueOf(f.bindings.indexBuffer);
   requireLanesAgree(f);
@@ -1993,7 +1993,7 @@ including the pointer-valued index-buffer wire comparison."
 ## Task 9: Migrate `drawUP` and `drawidxUP`
 
 **Files:**
-- Modify: `src/d3d9/d3d9_pe_device.cpp:9527`, `:9627`
+- Modify: `src/d3d9/d3d9_pe_device.cpp:9527` (citation unresolved — could not verify against source history), `:9627`
 - Modify: `tests/native/bridge/pe_producer_differential_spec.cpp`
 - Modify: `src/d3d9/d3d9_pe_chunk_v2_draw.cpp` — remove the two UP cases and `appendLegacySparseRecord` / `populateLegacySparseState`
 

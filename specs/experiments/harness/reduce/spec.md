@@ -159,7 +159,7 @@ reconciled count throughout this document:
 | `RENDER_PASS_REENTRY_PREFIX` | `[dxmt9-perf-render-pass-reentry ` | `dxmt9_draw_encoder.mm:5753` | `DXMT9_PERF_RENDER_PASS_REENTRY_TOP` (`dxmt9_draw_encoder.mm:5404` direct `std::getenv`) | `probe` (`run_3dmark05_perf_probe.sh:4229`) |
 | `FRAME_PREFIX` | `[dxmt9-perf-frame ` | `dxmt9_perf_counters.cpp:10146` | `DXMT9_PERF_FRAME_SAMPLING` (`dxmt9_perf_counters.cpp:9315-9318` direct `std::getenv`) | `probe` (`run_3dmark05_perf_probe.sh:4233`) |
 | `ARGBUF_DELTA_SOURCE_PREFIX` | `[dxmt9-perf-argbuf-payload-delta-source ` | `dxmt9_draw_encoder.mm:15064,15076` | `DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE` (`dxmt9_draw_encoder.mm:4995` direct `std::getenv`) | **no owner today** — see note below |
-| `VS_CONST_SETTER_RANGE_PREFIX` | `[dxmt9-perf-vs-const-setter-range ` | `d3d9_pe_device.cpp:3783,3811` | `DXMT9_PERF_VS_CONST_SETTER_RANGE` (`d3d9_pe_device.cpp:93` `dxmt9::util::getenvFlag`) | `probe` (`--probe-vs-const-setter-range` → `run_3dmark05_perf_probe.sh:4249`) |
+| `VS_CONST_SETTER_RANGE_PREFIX` | `[dxmt9-perf-vs-const-setter-range ` | `src/d3d9/d3d9_pe_device_diag.cpp` `logVsConstSetterRangePerf` | `DXMT9_PERF_VS_CONST_SETTER_RANGE` (`src/d3d9/d3d9_pe_device_impl.hpp` `dxmt9PerfVsConstSetterRangeEnabled`) | `probe` (`--probe-vs-const-setter-range` → `run_3dmark05_perf_probe.sh:4249`) |
 
 **`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE` has no `probe` wrapper flag
 today.** Per R-HARN-REDUCE-6.3, this was checked rather than assumed:
