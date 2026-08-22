@@ -14,7 +14,7 @@
  * classifyFirstLeaseCapacityWait. OrdinaryDirectSources denotes non-Present
  * Direct Arena Ready heads whose semantic payload shape fits ordinaryDirect
  * while their complete physical reservation, including wrap padding, fits
- * highWater. The ExecuteOneSourceSerial action leaves openSession
+ * highWater. The admission and producer-fence serial actions leave openSession
  * unchanged, so pressure cannot create or enlarge a represented session or
  * its release event. The consumed token is the exact denied Ready identity,
  * not the capacity generation: FIFO head advance can expose another bounded
@@ -96,15 +96,20 @@ AdmissionControlDeficit ==
     THEN Cardinality({2, 3} \ pressureEscaped)
     ELSE 0
 
+ProducerSequenceWaitTarget ==
+  IF SeedDeniedFirstLeaseCycle /\ replayDrainReturned /\
+       MaxSources \notin released
+    THEN MaxSources
+    ELSE 0
+
 Init ==
   /\ phase = IF SeedDeniedFirstLeaseCycle
        THEN [s \in Sources |->
                IF s = 1 THEN "Submitted"
-               ELSE IF s \in {2, 3} THEN "Ready"
-               ELSE "Unaccepted"]
+               ELSE "Ready"]
        ELSE [s \in Sources |-> "Unaccepted"]
-  /\ nextAccept = IF SeedDeniedFirstLeaseCycle THEN 4 ELSE 1
-  /\ accepted = IF SeedDeniedFirstLeaseCycle THEN {1, 2, 3} ELSE {}
+  /\ nextAccept = IF SeedDeniedFirstLeaseCycle THEN MaxSources + 1 ELSE 1
+  /\ accepted = IF SeedDeniedFirstLeaseCycle THEN Sources ELSE {}
   /\ released = {}
   /\ presentBearing = IF SeedDeniedFirstLeaseCycle THEN {1} ELSE {}
   /\ presentSubmitted = IF SeedDeniedFirstLeaseCycle THEN {1} ELSE {}
@@ -251,6 +256,8 @@ EncodeReadySource ==
   /\ terminal = "Running"
   /\ ~encoderParked
   /\ firstLeaseParked = 0
+  /\ ProducerSequenceWaitTarget = 0
+  /\ (~SeedDeniedFirstLeaseCycle \/ AdmissionControlDeficit # 0)
   /\ (~SeedDeniedFirstLeaseCycle \/ ~arenaAdmissionPressure \/
         AdmissionControlDeficit = 0)
   /\ AtPhase("Ready") # {}
@@ -349,7 +356,7 @@ GpuSettleHead ==
   /\ Head(gpuQueue) \notin gpuSettled
   (* The seeded older residency is deliberately unavailable: its settlement
      becomes reachable only after the queue makes the bounded serial step. *)
-  /\ (~SeedDeniedFirstLeaseCycle \/ Cardinality(pressureEscaped) >= 2 \/
+  /\ (~SeedDeniedFirstLeaseCycle \/ Cardinality(pressureEscaped) >= 3 \/
         terminal # "Running")
   /\ LET s == Head(gpuQueue) IN
        /\ gpuSettled' = gpuSettled \cup {s}
@@ -488,14 +495,22 @@ FirstLeaseWaitAction ==
   IF terminal # "Running" THEN "Stop"
   ELSE IF capacityGeneration # firstLeaseObservedGeneration THEN "RetryLease"
   ELSE IF arenaAdmissionPressure /\
+          AdmissionControlDeficit # 0 /\
           firstLeaseParked \in OrdinaryDirectSources /\
           firstLeaseParked \notin pressureEscaped /\
           firstLeaseParked \in AtPhase("Ready")
-       THEN "ExecuteOneSourceSerial"
+       THEN "ExecuteAdmissionSerial"
+  ELSE IF ProducerSequenceWaitTarget # 0 /\
+          firstLeaseParked <= ProducerSequenceWaitTarget /\
+          firstLeaseParked \in OrdinaryDirectSources /\
+          firstLeaseParked \notin pressureEscaped /\
+          firstLeaseParked \in AtPhase("Ready")
+       THEN "ExecuteProducerWaitSerial"
   ELSE "Wait"
 
 BeginArenaAdmissionPressure ==
   /\ terminal = "Running"
+  /\ replayInFlight
   /\ firstLeaseParked # 0
   /\ ~arenaAdmissionPressure
   /\ arenaAdmissionPressure' = TRUE
@@ -515,8 +530,9 @@ BeginArenaAdmissionPressure ==
   /\ replayDrainReturned' = replayDrainReturned
   /\ replayObservedCapacityGeneration' = replayObservedCapacityGeneration
 
-PressureSerialEscape ==
-  /\ FirstLeaseWaitAction = "ExecuteOneSourceSerial"
+StandaloneSerialEscape ==
+  /\ FirstLeaseWaitAction \in
+       {"ExecuteAdmissionSerial", "ExecuteProducerWaitSerial"}
   /\ LET s == firstLeaseParked IN
        /\ s = Oldest(AtPhase("Ready"))
        /\ s \notin presentBearing
@@ -539,11 +555,14 @@ PressureSerialEscape ==
 
 AdvanceDeniedReadyHead ==
   /\ terminal = "Running"
-  /\ arenaAdmissionPressure
+  /\ ((arenaAdmissionPressure /\ AdmissionControlDeficit # 0) \/
+       ProducerSequenceWaitTarget # 0)
   /\ firstLeaseParked = 0
   /\ AtPhase("Ready") # {}
   /\ LET s == Oldest(AtPhase("Ready")) IN
        /\ s \in OrdinaryDirectSources
+       /\ ((arenaAdmissionPressure /\ AdmissionControlDeficit # 0) \/
+            s <= ProducerSequenceWaitTarget)
        /\ s \notin pressureEscaped
        /\ firstLeaseParked' = s
   /\ firstLeaseObservedGeneration' = capacityGeneration
@@ -663,7 +682,7 @@ PreserveFirstLease ==
 Next ==
   \/ BaseNext /\ PreserveFirstLease
   \/ BeginArenaAdmissionPressure
-  \/ PressureSerialEscape
+  \/ StandaloneSerialEscape
   \/ AdvanceDeniedReadyHead
   \/ ReturnReplayDrain
   \/ WakeFirstLeaseWaiter
@@ -688,7 +707,7 @@ QueueFairness ==
   /\ WF_vars(TerminalSkipPresent /\ PreserveFirstLease)
   /\ WF_vars(TerminalReleaseDrained /\ PreserveFirstLease)
   /\ WF_vars(BeginArenaAdmissionPressure)
-  /\ WF_vars(PressureSerialEscape)
+  /\ WF_vars(StandaloneSerialEscape)
   /\ WF_vars(AdvanceDeniedReadyHead)
   /\ WF_vars(ReturnReplayDrain)
   /\ WF_vars(WakeFirstLeaseWaiter)
@@ -706,7 +725,7 @@ TypeOK ==
   /\ MaxSessionLen \in Nat \ {0}
   /\ MaxPresentOutstanding \in Nat \ {0}
   /\ SeedDeniedFirstLeaseCycle \in BOOLEAN
-  /\ SeedDeniedFirstLeaseCycle => MaxSources >= 3
+  /\ SeedDeniedFirstLeaseCycle => MaxSources >= 4
   /\ OrdinaryDirectSources \subseteq Sources
   /\ phase \in [Sources -> Phases]
   /\ nextAccept \in 1 .. (MaxSources + 1)
@@ -807,8 +826,9 @@ EncoderLostWakeupFreedom ==
 
 FirstLeaseWaitActionEnabled ==
   firstLeaseParked # 0 /\ FirstLeaseWaitAction # "Wait" =>
-    \/ FirstLeaseWaitAction = "ExecuteOneSourceSerial" /\
-         ENABLED PressureSerialEscape
+    \/ FirstLeaseWaitAction \in
+         {"ExecuteAdmissionSerial", "ExecuteProducerWaitSerial"} /\
+         ENABLED StandaloneSerialEscape
     \/ FirstLeaseWaitAction \in {"RetryLease", "Stop"} /\
          ENABLED WakeFirstLeaseWaiter
 
@@ -878,7 +898,8 @@ EligiblePressureCycleLeadsToDrainReturn ==
 
 PressureEscapeConsumesOnlyEligibleHead ==
   [][(pressureEscaped' # pressureEscaped) =>
-      /\ FirstLeaseWaitAction = "ExecuteOneSourceSerial"
+      /\ FirstLeaseWaitAction \in
+           {"ExecuteAdmissionSerial", "ExecuteProducerWaitSerial"}
       /\ firstLeaseParked = Oldest(AtPhase("Ready"))
       /\ firstLeaseParked \in OrdinaryDirectSources
       /\ firstLeaseParked \notin pressureEscaped
@@ -897,5 +918,23 @@ ChangedHeadRearmsWithoutCapacityGeneration ==
       (2 \in pressureEscaped /\ 3 \in AtPhase("Ready") /\
          capacityGeneration = 0
         ~> 3 \in pressureEscaped /\ capacityGeneration = 0))
+
+PostAdmissionCaptureBoundaryProgress ==
+  SeedDeniedFirstLeaseCycle =>
+    ([] (terminal = "Running") =>
+      (replayDrainReturned /\ MaxSources \in AtPhase("Ready") /\
+         capacityGeneration = 0
+        ~> MaxSources \in pressureEscaped /\ capacityGeneration = 0))
+
+ProducerFenceEscapeIsExact ==
+  [][(FirstLeaseWaitAction = "ExecuteProducerWaitSerial") =>
+      /\ ~arenaAdmissionPressure
+      /\ ProducerSequenceWaitTarget # 0
+      /\ firstLeaseParked <= ProducerSequenceWaitTarget
+      /\ firstLeaseParked = Oldest(AtPhase("Ready"))]_vars
+
+CaptureBoundaryReturnsAfterFence ==
+  SeedDeniedFirstLeaseCycle =>
+    (replayDrainReturned ~> MaxSources \in released)
 
 ====

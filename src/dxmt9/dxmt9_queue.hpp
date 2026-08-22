@@ -1007,6 +1007,10 @@ class QueueLifecycleController {
   // A pending session must be allowed to submit without the final Present tail
   // when the producer is blocked on a sequence it owns.
   bool producerSequenceWaitActive();
+  // Exact highest ordered fence currently owned by producer-side sequence
+  // waits. Zero means no producer wait is active.
+  u64 producerSequenceWaitTargetSeqId();
+  void waitForProducerSequenceWaitTargetForTest(u64 targetSeqId);
   // Queue-local observation for a compatibility writer blocked either on a
   // free control/Tape reservation or on the GPU-inflight publication cap.
   // This is a diagnostic/wakeup signal only. The Tape-gated session lane must
@@ -1244,6 +1248,7 @@ class QueueLifecycleController {
       nullptr;
   bool completionWaitActive_ = false;
   std::uint32_t producerSequenceWaitDepth_ = 0;
+  u64 producerSequenceWaitTargetSeqId_ = 0;
   std::uint32_t producerWriterPressureDepth_ = 0;
   std::uint64_t completionWaitEnqueues_ = 0;
   std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};

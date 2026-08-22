@@ -40,6 +40,7 @@ struct SchedulingProgressFrontierSnapshot {
   std::uint64_t cpuReadyFirstLeaseWaitCurrent = 0;
   std::uint64_t cpuReadyFirstLeaseActionRetryGeneration = 0;
   std::uint64_t cpuReadyFirstLeaseActionPressureSerial = 0;
+  std::uint64_t cpuReadyFirstLeaseActionProducerWaitSerial = 0;
   std::uint64_t cpuReadyFirstLeaseActionStop = 0;
   std::uint64_t cpuReadyFirstLeaseWaitNoAdmissionPressure = 0;
   std::uint64_t cpuReadyFirstLeaseWaitCreditExhausted = 0;

@@ -66,6 +66,26 @@ before the complete real batch-control predicate becomes Ready. This is a
 diagnosis and bounded native/formal repair only; no post-fix wild result or
 promotion evidence is claimed.
 
+### GT2 identity-v2 r16 post-admission capture-boundary counterexample
+
+`experiments/output/render-tape-gt2-identity-v2-r16-exact-head/r16-console.log`
+confirms that r15 unlocked the eight-control admission, then isolates the
+remaining suffix: replay in-flight/stage and Arena admission current were zero,
+but capture remained blocked with the first lease at seq/source 7060,
+observed/current generation 14057, and `no_admission_pressure=409`. The missing
+semantic pressure was the ordered producer `waitForSequence` fence. The bounded
+repair publishes that exact target and permits only covered, eligible, fresh
+ordinary Direct Arena FIFO identities to use a separately counted standalone
+escape; consumption still follows reservation commit, restore remains eligible,
+and stale, ineligible, or beyond-target heads fail closed. A real 31-source
+composition registers the real replay drain, directly invokes the real queue
+`waitForSequence` path, and pins one Present, seven admission escapes, 23
+producer-fence escapes, explicit completion through the fence, and the later
+`D3DERR_NOTAVAILABLE` reserve disposition without sleeps, polling, timeouts,
+admission release, session widening, or a pre-completion capacity transition.
+Actual reserve-path binding remains r17 evidence. No post-fix wild run or
+promotion evidence is claimed.
+
 | Area | Status | Current evidence | Missing implementation or evidence |
 |---|---|---|---|
 | CPU-ready publication boundary (`R-BACK-2.35`–`2.41`) | Direct/StateOnly routing and serial arena consumption implemented behind default-off promotion gate | Commit admission fixes the cutover decision once per raw entry. Gate-off preserves the historical synchronous combined resource-mark/backing-capture operation, worker Legacy replay without planning, and the compatibility publication cap of `kMaxQueuedChunks` GPU-inflight sources. With `DXMT9_CPU_READY_TAPE=1`, admission instead persists the validated raw blob, resolved objects, deduplicated resource identities, captured buffer backings, wrapper retention, and raw residency; the replay worker then plans each complete raw chunk once. `StateOnly` replays without a ticket or mark, eligible Direct chunks acquire a sized strict Tape lease, construct typed arena payload in place, and apply exact `seqId` marks before Ready visibility; planned Legacy/Inline mark before replay, and post-semantic Direct failure is fail-stop with no semantic fallback. Only the replay worker may wait for Direct admission pressure. `SourcePayloadView` carries both legacy and arena payloads through the common backend and serial partition cursor; DCE holds an arena successor without exposing it to the legacy proof window, and with the gate on the encode thread runs the Tape session lane (`runCpuReadySessionEncodeLoop`), which admits Arena sources into shared-session submissions with exact Tape completion identity instead of forcing one-source standalone submissions. Native evidence covers Direct planner-to-publish-to-consume-to-completion/reclaim, StateOnly/no-ticket, pressure wakeup, post-semantic fail-stop, compatibility inflight backpressure, and process-separated gate-off synchronous combined admission. | Keep the runtime gate default off until `R-BACK-2.50` formal/equivalence, wild visual/locality, and no-gputrace overlap/performance gates pass. Quantify whether direct construction reduces producer/replay cost without increasing command-buffer or render-pass shape. Sources exceeding the streaming source/page/segment hard caps and synchronous Inline paths intentionally retain compatibility payload construction; TriangleFan worst-case sizing is covered by Direct planning. Production multi-segment-plus-Present FrameGraph/session/Presenter evidence, explicit production partition subdivision, parallel render encoding, and Metal 4 segmentation remain separate work; cross-source session admission for both source kinds is tracked in the EncodeSession row below. |

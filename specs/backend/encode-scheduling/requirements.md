@@ -691,7 +691,15 @@ execute twice; the fixed Ready/source bounds therefore bound total escapes in
 one pressure episode. A capacity-generation transition keeps retry priority
 and does not erase a consumed identity token. The escape may reduce that exact
 source to a singleton submission; GPU timing must not append it to a session,
-widen any later group, fabricate completion, or re-arm the same identity. A
+widen any later group, fabricate completion, or re-arm the same identity. The
+same exact-identity standalone mechanism may also run after admission clears
+when a producer `waitForSequence` fence is active, but only for an eligible FIFO
+head whose `seqId` is at or below the exact ordered target. Admission pressure
+and producer-fence escapes have distinct actions and counters. The identity is
+consumed only after reservation commit; every pre-commit restore retains its
+eligibility, while stale, ineligible, or beyond-target identities fail closed.
+The producer-fence action creates no admission release, session widening,
+lease/capacity transition, or new capture target. A
 SegmentSerial source retains its atomically
 published event-group metadata, FIFO execution, per-segment completion, and
 tail settlement; the escape cannot expose a Writing group member or alter
@@ -1050,7 +1058,8 @@ pinned until its ordered flush and bootstrap ownership complete.
 
 When `DXMT_PERF_COUNTERS` is enabled, the denied-first-lease production
 classifier and its eligibility predicate must expose wait enter/current,
-generation retry, pressure-serial, stop, no-admission-pressure, exhausted-
+generation retry, admission-pressure-serial, producer-wait-serial, stop,
+no-admission-pressure, exhausted-
 credit, non-Arena, Present, ordinary-capacity, high-water, and credit-rearm
 counts, plus observed/current capacity generation and exact Ready-head `seqId`
 and `sourceOrdinal` gauges. The Arena admission gate must expose enter/current

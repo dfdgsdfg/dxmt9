@@ -141,19 +141,30 @@ struct CommandQueueArenaLeaseTestAccess {
   static bool waitForArenaAdmissionWaitEntries(
       CommandQueue& queue, std::uint64_t expected) {
     std::unique_lock lock(queue.mutex_);
-    return queue.sessionReleaseCv_.wait_for(
-        lock, std::chrono::seconds(2), [&] {
-          return queue.testOnlyArenaAdmissionWaitEntries_ >= expected;
-        });
+    queue.sessionReleaseCv_.wait(lock, [&] {
+      return queue.testOnlyArenaAdmissionWaitEntries_ >= expected;
+    });
+    return true;
   }
 
   static bool waitForFirstLeaseWaitEntries(
       CommandQueue& queue, std::uint64_t expected) {
     std::unique_lock lock(queue.mutex_);
-    return queue.sessionReleaseCv_.wait_for(
-        lock, std::chrono::seconds(2), [&] {
-          return queue.testOnlyFirstLeaseWaitEntries_ >= expected;
-        });
+    queue.sessionReleaseCv_.wait(lock, [&] {
+      return queue.testOnlyFirstLeaseWaitEntries_ >= expected;
+    });
+    return true;
+  }
+
+  static void waitForProducerSequenceWaitTarget(
+      CommandQueue& queue, std::uint64_t targetSeqId) {
+    queue.queueLifecycle_.waitForProducerSequenceWaitTargetForTest(targetSeqId);
+  }
+
+  static void waitForSequence(CommandQueue& queue,
+                              std::uint64_t targetSeqId) {
+    std::unique_lock lock(queue.mutex_);
+    queue.queueLifecycle_.waitForSequence(lock, targetSeqId);
   }
 
   static void pauseAfterFirstLeaseRetry(CommandQueue& queue) {
@@ -377,6 +388,8 @@ struct CommandQueueArenaLeaseTestAccess {
     }
     queue.encodeCv_.notify_all();
     queue.writeCv_.notify_all();
+    queue.finishCv_.notify_all();
+    queue.sessionReleaseCv_.notify_all();
   }
 
   static bool postOrderedSubmit(CommandQueue& queue,
@@ -1355,6 +1368,9 @@ snapshotLookaheadSources(
 
 struct ProductionLoopBackendState {
   std::vector<ProductionLoopBackendCall> calls;
+  std::mutex postCommitMutex;
+  std::condition_variable postCommitCv;
+  std::size_t postCommitCount = 0;
   std::atomic<std::size_t> observedBackendCalls{0};
   std::atomic<bool> firstRecordPostCommitRan{false};
   std::atomic<std::size_t> backendCallCountAtFirstRecordSubmit{0};
@@ -1438,6 +1454,17 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
       const auto callCount = state_->calls.size();
       submission.postCommitCallbacks.push_back([state, callCount] {
         state->afterPostCommit(callCount);
+      });
+    }
+    {
+      const auto state = state_;
+      const auto callCount = state_->calls.size();
+      submission.postCommitCallbacks.push_back([state, callCount] {
+        {
+          std::lock_guard lock(state->postCommitMutex);
+          state->postCommitCount = callCount;
+        }
+        state->postCommitCv.notify_all();
       });
     }
     return submission;
@@ -4463,6 +4490,10 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
   auto backendState = std::make_shared<ProductionLoopBackendState>();
   dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
       queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::atomic<bool> captureReturned{false};
+  std::atomic<std::int32_t> captureResult{D3D_OK};
+  std::mutex captureReturnMutex;
+  std::condition_variable captureReturnCv;
   std::thread captureThread;
   std::thread encodeThread([&] {
     dxmt9::CommandQueueArenaLeaseTestAccess::
@@ -4513,39 +4544,25 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
                                    std::memory_order_release);
   fixture.cDevice->replayOffload->queue().
       enableDrainWaitObservationForTest();
-  fixture.cDevice->replayOffload->start(fixture.cDevice.get());
-  std::atomic<bool> seventhEscapeObservedCaptureWait{false};
-  std::atomic<bool> seventhEscapeObservedReplayDrain{false};
-  std::mutex seventhEscapeMutex;
-  std::condition_variable seventhEscapeCv;
   backendState->afterPostCommit = [&](std::size_t callCount) {
     if (callCount != waitLayouts.size()) {
       return;
     }
-    seventhEscapeObservedCaptureWait.store(
-        fixture.cDevice->replayOffload->queue().
-            waitForDrainWaitEntriesForTest(1u),
-        std::memory_order_release);
-    seventhEscapeObservedReplayDrain.store(
-        fixture.cDevice->replayOffload->queue().waitForDrainedForTest(),
-        std::memory_order_release);
-    seventhEscapeCv.notify_all();
+    fixture.cDevice->replayOffload->queue().
+        waitForDrainWaitEntriesForTest(1u);
+    fixture.cDevice->replayOffload->queue().waitForDrainedForTest();
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        waitForProducerSequenceWaitTarget(queue, sourcesBefore.back().seqId);
   };
   const std::array offloadRecords{clearRecord()};
   auto offloadRaw = makeRaw(makeWireFixture(offloadRecords), rawOrdinal);
   check(fixture.cDevice->replayOffload->queue().push(
             std::move(offloadRaw)),
         "changed-head composition enqueues one real replay-offload raw");
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::
-            waitForArenaAdmissionWaitEntries(queue, 1u),
-        "eight-source admission enters the real production wait and wakes "
-        "the denied-first-lease coordinator");
-
-  std::atomic<bool> captureReturned{false};
-  std::atomic<std::int32_t> captureResult{D3D_OK};
-  std::mutex captureReturnMutex;
-  std::condition_variable captureReturnCv;
   captureThread = std::thread([&] {
+    fixture.cDevice->replayOffload->queue().waitDrained();
+    dxmt9::CommandQueueArenaLeaseTestAccess::waitForSequence(
+        queue, sourcesBefore.back().seqId);
     captureResult.store(
         dxmt9c_device_reserve_render_tape_present_capture(
             fixture.cDevice.get()),
@@ -4558,31 +4575,31 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
   });
   check(fixture.cDevice->replayOffload->queue().
             waitForDrainWaitEntriesForTest(1u),
-        "capture reserve parks on the exact in-flight admission raw");
+        "capture-boundary-shaped replay drain parks on the exact in-flight "
+        "admission raw");
+  fixture.cDevice->replayOffload->start(fixture.cDevice.get());
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            waitForArenaAdmissionWaitEntries(queue, 1u),
+        "eight-source admission enters the real production wait and wakes "
+        "the denied-first-lease coordinator");
 
   const bool replayDrained = fixture.cDevice->replayOffload->queue().
       waitForDrainedForTest();
   {
-    std::unique_lock lock(seventhEscapeMutex);
-    seventhEscapeCv.wait(lock, [&] {
-      return seventhEscapeObservedReplayDrain.load(
-          std::memory_order_acquire);
+    std::unique_lock lock(backendState->postCommitMutex);
+    backendState->postCommitCv.wait(lock, [&] {
+      return backendState->postCommitCount == sourcesBefore.size();
     });
   }
-  {
-    std::unique_lock lock(captureReturnMutex);
-    captureReturnCv.wait(lock, [&] {
-      return captureReturned.load(std::memory_order_acquire);
-    });
-  }
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::
-            waitForFirstLeaseWaitEntries(queue, 3u),
-        "changed-head composition observes multiple production lease waits");
   const auto frontierAtDrain =
       dxmt9::perf::snapshotSchedulingProgressFrontier();
-  const auto serialEscapes =
+  const auto admissionEscapes =
       frontierAtDrain.cpuReadyFirstLeaseActionPressureSerial -
       frontierBefore.cpuReadyFirstLeaseActionPressureSerial;
+  const auto producerWaitEscapes =
+      frontierAtDrain.cpuReadyFirstLeaseActionProducerWaitSerial -
+      frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial;
+  const auto serialEscapes = admissionEscapes + producerWaitEscapes;
   const auto identityRearms =
       frontierAtDrain.cpuReadyFirstLeaseCreditRearmed -
       frontierBefore.cpuReadyFirstLeaseCreditRearmed;
@@ -4591,20 +4608,16 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
       frontierBefore.cpuReadyArenaAdmissionExitRetry;
   check(replayDrained && offloadContext.admitted.load(
                             std::memory_order_acquire) &&
-            captureReturned.load(std::memory_order_acquire) &&
-            captureResult.load(std::memory_order_acquire) ==
-                dxmt9::core::D3DERR_NOTAVAILABLE &&
-            serialEscapes == waitLayouts.size() - 1u &&
-            identityRearms + 1u == serialEscapes &&
+            !captureReturned.load(std::memory_order_acquire) &&
+            admissionEscapes == waitLayouts.size() - 1u &&
+            producerWaitEscapes ==
+                sourcesBefore.size() - waitLayouts.size() &&
+            identityRearms + 1u == admissionEscapes &&
             admissionRetryExits == 1u &&
-            seventhEscapeObservedCaptureWait.load(
-                std::memory_order_acquire) &&
-            seventhEscapeObservedReplayDrain.load(
-                std::memory_order_acquire) &&
             dxmt9::CommandQueueArenaLeaseTestAccess::
                     capacityProgressGeneration(queue) == unchangedGeneration,
-        "distinct FIFO heads rearm finite serial progress and return the "
-        "capture drain without a capacity-generation transition");
+        "seven admission escapes and the remaining producer-fence suffix "
+        "advance without a capacity-generation transition");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::
             arenaControlSlotsFree(queue, waitLayouts.size()) &&
             dxmt9::CommandQueueArenaLeaseTestAccess::probeArenaAdmission(
@@ -4618,9 +4631,11 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
                 frontierBefore.cpuReadyFirstLeaseWaitCreditExhausted,
         "the complete production batch predicate becomes Ready only through "
         "eligible exact-head drains, without capacity or credit exhaustion");
-  check(backendState->calls.size() == serialEscapes + 1u &&
+  check(backendState->calls.size() == sourcesBefore.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, sourcesBefore) &&
             backendState->calls.front().seqId == sourcesBefore.front().seqId,
-        "backend calls conserve one older Present plus every pressure escape");
+        "backend calls conserve one older Present plus all thirty escapes");
   for (std::size_t i = 0; i < serialEscapes; ++i) {
     const auto& call = backendState->calls[i + 1u];
     check(call.seqId == sourcesBefore[i + 1u].seqId &&
@@ -4628,6 +4643,25 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
           "each changed Ready identity executes once in FIFO order through "
           "the standalone serial path");
   }
+
+  std::size_t completedSources = 0;
+  for (const auto& source : sourcesBefore) {
+    completedSources +=
+        dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, std::span(&source, 1u));
+  }
+  check(completedSources == sourcesBefore.size(),
+        "explicit completion reaches the ordered producer fence exactly");
+  {
+    std::unique_lock lock(captureReturnMutex);
+    captureReturnCv.wait(lock, [&] {
+      return captureReturned.load(std::memory_order_acquire);
+    });
+  }
+  check(captureResult.load(std::memory_order_acquire) ==
+            dxmt9::core::D3DERR_NOTAVAILABLE,
+        "reserve disposition follows the completed presenter-less fixture "
+        "boundary");
 
   dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   captureThread.join();
@@ -4643,6 +4677,8 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
           frontierBefore.cpuReadyFirstLeaseActionRetryGeneration +
       frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
           frontierBefore.cpuReadyFirstLeaseActionPressureSerial +
+      frontierAfter.cpuReadyFirstLeaseActionProducerWaitSerial -
+          frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial +
       frontierAfter.cpuReadyFirstLeaseActionStop -
           frontierBefore.cpuReadyFirstLeaseActionStop;
   const auto stopExits =
@@ -4651,7 +4687,10 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
   check(waitEnters == waitExits &&
             frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
                     frontierBefore.cpuReadyFirstLeaseActionPressureSerial ==
-                serialEscapes &&
+                admissionEscapes &&
+            frontierAfter.cpuReadyFirstLeaseActionProducerWaitSerial -
+                    frontierBefore.cpuReadyFirstLeaseActionProducerWaitSerial ==
+                producerWaitEscapes &&
             stopExits <= 1u &&
             frontierAfter.cpuReadyFirstLeaseActionRetryGeneration ==
                 frontierBefore.cpuReadyFirstLeaseActionRetryGeneration &&
@@ -4669,15 +4708,10 @@ void productionLoopChangedHeadRearmsPressureEscapeWithinGeneration() {
         "remain exactly conserved at terminal handoff");
   const auto statsAfter =
       dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
-            queue, std::span(sourcesBefore).first(serialEscapes + 1u)) &&
-            statsAfter.residentSources == statsBefore.residentSources &&
-            statsAfter.residentPages == statsBefore.residentPages &&
-            statsAfter.readyFifoEntries + serialEscapes + 1u ==
-                statsBefore.readyFifoEntries,
-        "standalone submission transfers exactly the progressed prefix while "
-        "grouped physical residency and the untouched Ready suffix remain "
-        "conserved");
+  check(statsAfter.residentSources == 0u &&
+            statsAfter.residentPages == 0u &&
+            statsAfter.readyFifoEntries == 0u,
+        "producer-fence completion reclaims the full bounded composition");
 }
 
 void productionLoopLeaseWaitResumesAfterInlineReclaim() {

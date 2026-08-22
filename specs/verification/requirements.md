@@ -141,7 +141,11 @@ admission progress for R-BACK-2.44, R-BACK-2.60, and R-BACK-2.65: all stores are
 bounded, back-pressure cannot hide a consumed visible prefix, every represented
 source submits or is restored in FIFO order once an ordered semantic or
 fixed-cap release event occurs, and admission pressure cannot block completion
-progress required to release that pressure. Producer quiescence without such an
+progress required to release that pressure. After admission clears, a producer
+sequence wait may authorize only exact eligible FIFO heads at or below its
+ordered target, with distinct attribution, commit-time identity consumption,
+restore eligibility, and no pressure-created release, capacity, or session
+transition. Producer quiescence without such an
 event has no liveness obligation. Liveness claims are under weak fairness for
 enabled replay-worker, encode-coordinator, Metal-completion, and finish-thread
 actions. The model must represent descriptor and page generations,

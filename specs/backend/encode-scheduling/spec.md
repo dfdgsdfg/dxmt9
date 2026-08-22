@@ -1679,7 +1679,7 @@ The backend diagnostic binds directly to two production classifiers:
 | Frontier | Production authority | Observation |
 |---|---|---|
 | First-lease eligibility | `classifyFirstLeaseReadyHeadEligibility` | exact non-Arena, Present, ordinary-capacity, and high-water disqualifiers |
-| First-lease action | `classifyFirstLeaseCapacityWait` | wait, retry-generation, pressure-serial, stop, plus no-pressure and exhausted-credit wait causes |
+| First-lease action | `classifyFirstLeaseCapacityWait` | wait, retry-generation, admission-pressure-serial, producer-wait-serial, stop, plus no-pressure and exhausted-credit wait causes |
 | Arena admission | `classifyCpuReadyAdmissionGate` | wait enter/current and retry/stop exit |
 | Replay drain | `ReplayOffloadQueue` plus `ReplayOffloadWorker` | drain/push waiter gauges, raw in-flight, and `plan`/`arena_admission`/`encode`/`done` stage |
 
@@ -1717,6 +1717,23 @@ only the token key from capacity generation to exact Ready-head identity; it
 adds no capacity, release event, ownership/lifetime transition, or eligibility
 relaxation. No post-fix wild run is claimed here.
 
+The GT2 identity-v2 r16 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r16-exact-head/r16-console.log`
+shows the post-admission suffix missed by r15. Capture reserve had drained replay
+and cleared Arena admission, yet the first lease remained parked at seq/source
+7060 with observed/current generation 14057, `producerSequenceWait` active,
+`arena_admission_wait_current=0`, replay in-flight/stage zero, and
+`no_admission_pressure=409`. The classifier now consumes the queue's exact
+`waitForSequence` target: only fresh eligible FIFO heads covered by that target
+may take the separately attributed producer-wait standalone action. The
+31-source production composition registers the real replay drain, directly
+invokes the real queue `waitForSequence` path, and proves one Present, seven
+admission escapes, the remaining 23 producer-fence escapes, explicit completion
+through the fence, and the later `D3DERR_NOTAVAILABLE` reserve disposition with
+exact CV/count conservation and no pressure release, session widening, or
+capacity-generation transition. Binding this repair through the actual capture
+reserve path remains r17 work; no post-fix wild run or promotion claim is made.
+
 ## 10. Verification Mapping
 
 | Contract | Evidence |
@@ -1724,7 +1741,7 @@ relaxation. No post-fix wild run is claimed here.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills the Tape with older unavailable residency plus a Ready suffix, drives a real multi-source replay-offload batch into Arena admission while capture reserve waits for its drain, and proves the shared first-lease classifier executes at least two distinct eligible ordinary-Direct FIFO heads standalone in one unchanged capacity generation until the complete control predicate becomes Ready. Exact-head at-most-once tokens, FIFO submission, ownership conservation, admission retry, and drain return are pinned through production predicates and condition variables. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. `CpuReadySessionProgress` and `SessionCapacityLease` retain their detailed ownership refinements; seeded `EncodeSchedulingProgress` composes replay-in-flight, drain wait, denied first lease, two exact-identity serial escapes, unchanged-generation head advance, FIFO completion, and drain-return liveness. |
+| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs; actual reserve-path binding remains r17 evidence. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |

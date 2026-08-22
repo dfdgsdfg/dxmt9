@@ -306,6 +306,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"cpu_ready_first_lease_wait_current", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseWaitCurrent, nullptr, nullptr, 0.0},
     {"cpu_ready_first_lease_action_retry_generation", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseActionRetryGeneration, nullptr, nullptr, 0.0},
     {"cpu_ready_first_lease_action_pressure_serial", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseActionPressureSerial, nullptr, nullptr, 0.0},
+    {"cpu_ready_first_lease_action_producer_wait_serial", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseActionProducerWaitSerial, nullptr, nullptr, 0.0},
     {"cpu_ready_first_lease_action_stop", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseActionStop, nullptr, nullptr, 0.0},
     {"cpu_ready_first_lease_wait_no_admission_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseWaitNoAdmissionPressure, nullptr, nullptr, 0.0},
     {"cpu_ready_first_lease_wait_credit_exhausted", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyFirstLeaseWaitCreditExhausted, nullptr, nullptr, 0.0},

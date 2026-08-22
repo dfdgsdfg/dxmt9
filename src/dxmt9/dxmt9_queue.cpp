@@ -985,6 +985,20 @@ bool QueueLifecycleController::producerSequenceWaitActive() {
   return producerSequenceWaitDepth_ != 0;
 }
 
+u64 QueueLifecycleController::producerSequenceWaitTargetSeqId() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  return producerSequenceWaitDepth_ == 0 ? 0 : producerSequenceWaitTargetSeqId_;
+}
+
+void QueueLifecycleController::waitForProducerSequenceWaitTargetForTest(
+    u64 targetSeqId) {
+  std::unique_lock lock(pendingCompletionMutex_);
+  pendingCompletionCv_.wait(lock, [&] {
+    return producerSequenceWaitDepth_ != 0 &&
+        producerSequenceWaitTargetSeqId_ == targetSeqId;
+  });
+}
+
 bool QueueLifecycleController::producerWriterPressureActive() {
   std::lock_guard lock(pendingCompletionMutex_);
   return producerWriterPressureDepth_ != 0;
@@ -3006,7 +3020,10 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
     {
       std::lock_guard pendingLock(pendingCompletionMutex_);
       ++producerSequenceWaitDepth_;
+      producerSequenceWaitTargetSeqId_ =
+          std::max(producerSequenceWaitTargetSeqId_, targetSeqId);
     }
+    pendingCompletionCv_.notify_all();
     if (encodeCv) {
       encodeCv->notify_one();
     }
@@ -3020,7 +3037,11 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
       if (producerSequenceWaitDepth_ > 0) {
         --producerSequenceWaitDepth_;
       }
+      if (producerSequenceWaitDepth_ == 0) {
+        producerSequenceWaitTargetSeqId_ = 0;
+      }
     }
+    pendingCompletionCv_.notify_all();
     if (encodeCv) {
       encodeCv->notify_one();
     }

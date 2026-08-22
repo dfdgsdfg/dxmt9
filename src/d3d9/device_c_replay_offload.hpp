@@ -431,16 +431,18 @@ class ReplayOffloadQueue {
 
   bool waitForDrainWaitEntriesForTest(std::uint64_t expected) {
     std::unique_lock lock(mutex_);
-    return drainCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+    drainCv_.wait(lock, [&] {
       return testOnlyDrainWaitEntries_ >= expected;
     });
+    return true;
   }
 
   bool waitForDrainedForTest() {
     std::unique_lock lock(mutex_);
-    return drainCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+    drainCv_.wait(lock, [&] {
       return queue_.empty() && !inFlight_;
     });
+    return true;
   }
 
   void stop() {

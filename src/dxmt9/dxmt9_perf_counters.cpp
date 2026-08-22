@@ -1324,8 +1324,14 @@ void exitCpuReadyFirstLeaseWait(
     c.cpuReadyFirstLeaseActionRetryGeneration.fetch_add(
         1u, std::memory_order_relaxed);
     break;
-  case render::FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial:
+  case render::FirstLeaseCapacityWaitAction::
+      ExecuteOneSourceSerialForAdmissionPressure:
     c.cpuReadyFirstLeaseActionPressureSerial.fetch_add(
+        1u, std::memory_order_relaxed);
+    break;
+  case render::FirstLeaseCapacityWaitAction::
+      ExecuteOneSourceSerialForProducerSequenceWait:
+    c.cpuReadyFirstLeaseActionProducerWaitSerial.fetch_add(
         1u, std::memory_order_relaxed);
     break;
   case render::FirstLeaseCapacityWaitAction::Stop:
@@ -6414,6 +6420,8 @@ SchedulingProgressFrontierSnapshot snapshotSchedulingProgressFrontier() {
           load(c.cpuReadyFirstLeaseActionRetryGeneration),
       .cpuReadyFirstLeaseActionPressureSerial =
           load(c.cpuReadyFirstLeaseActionPressureSerial),
+      .cpuReadyFirstLeaseActionProducerWaitSerial =
+          load(c.cpuReadyFirstLeaseActionProducerWaitSerial),
       .cpuReadyFirstLeaseActionStop =
           load(c.cpuReadyFirstLeaseActionStop),
       .cpuReadyFirstLeaseWaitNoAdmissionPressure =
@@ -6464,6 +6472,7 @@ void reportSchedulingProgressThreshold() {
       "cpu_ready_first_lease_wait_current=%llu "
       "cpu_ready_first_lease_action_retry_generation=%llu "
       "cpu_ready_first_lease_action_pressure_serial=%llu "
+      "cpu_ready_first_lease_action_producer_wait_serial=%llu "
       "cpu_ready_first_lease_action_stop=%llu "
       "cpu_ready_first_lease_wait_no_admission_pressure=%llu "
       "cpu_ready_first_lease_wait_credit_exhausted=%llu "
@@ -6488,6 +6497,8 @@ void reportSchedulingProgressThreshold() {
           s.cpuReadyFirstLeaseActionRetryGeneration),
       static_cast<unsigned long long>(
           s.cpuReadyFirstLeaseActionPressureSerial),
+      static_cast<unsigned long long>(
+          s.cpuReadyFirstLeaseActionProducerWaitSerial),
       static_cast<unsigned long long>(s.cpuReadyFirstLeaseActionStop),
       static_cast<unsigned long long>(
           s.cpuReadyFirstLeaseWaitNoAdmissionPressure),

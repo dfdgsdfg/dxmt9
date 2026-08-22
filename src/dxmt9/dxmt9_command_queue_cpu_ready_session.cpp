@@ -243,10 +243,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   render::EncodeSessionAdmissionState pendingAdmission{};
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
-  render::FirstLeaseReadyHeadIdentity firstLeasePressureSerialConsumedHead{};
+  render::FirstLeaseReadyHeadIdentity firstLeaseStandaloneConsumedHead{};
   render::FirstLeaseReadyHeadIdentity firstLeaseCreditRearmObservedHead{};
-  render::FirstLeaseReadyHeadIdentity firstLeasePressureSerialPendingHead{};
-  std::optional<QueueCompletionSource> pressureSerialSource;
+  render::FirstLeaseReadyHeadIdentity firstLeaseStandalonePendingHead{};
+  std::optional<QueueCompletionSource> standaloneSerialSource;
   const bool terminalSuffixJoinEnabled =
       deferredTerminalSuffixJoinEnabled(backend_.get());
   const auto& tapeValues = cpuReadyTape_.config().values();
@@ -814,7 +814,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         render::FirstLeaseReadyHeadEligibility::NonArena;
     std::uint64_t leaseDeniedReadyHeadSourceOrdinal = 0;
     bool invalidCapacitySnapshot = false;
-    bool invalidPressureSerialSource = false;
+    bool invalidStandaloneSerialSource = false;
     bool selectionAcquiredLease = false;
     std::uint64_t selectionLeaseGeneration = 0;
     std::array<render::SessionCapacityVector, kCommandChunkCount>
@@ -844,11 +844,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   break;
                 }
                 if (exactReplaySingleSource) {
-                  if (pressureSerialSource.has_value() &&
-                      (candidate.source != pressureSerialSource->source ||
-                       candidate.slotIndex != pressureSerialSource->slotIndex ||
-                       candidate.seqId != pressureSerialSource->seqId)) {
-                    invalidPressureSerialSource = true;
+                  if (standaloneSerialSource.has_value() &&
+                      (candidate.source != standaloneSerialSource->source ||
+                       candidate.slotIndex != standaloneSerialSource->slotIndex ||
+                       candidate.seqId != standaloneSerialSource->seqId)) {
+                    invalidStandaloneSerialSource = true;
                     return std::size_t{0};
                   }
                   return std::size_t{1};
@@ -1034,8 +1034,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
-      if (invalidPressureSerialSource) {
-        // The pressure escape requires the exact Ready identity observed at
+      if (invalidStandaloneSerialSource) {
+        // The standalone escape requires the exact Ready identity observed at
         // denial. Identity drift is structural corruption, not another
         // capacity transition or permission to select a different head.
         queueLifecycle_.poisonTapeFailureLocked();
@@ -1060,15 +1060,15 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 .seqId = leaseDeniedSeqId,
                 .sourceOrdinal = leaseDeniedReadyHeadSourceOrdinal,
             };
-        const bool firstLeasePressureSerialProgressAvailable =
+        const bool firstLeaseStandaloneProgressAvailable =
             leaseDeniedReadyHead.valid() &&
-            leaseDeniedReadyHead != firstLeasePressureSerialConsumedHead;
+            leaseDeniedReadyHead != firstLeaseStandaloneConsumedHead;
         if (schedulingObservabilityEnabled &&
             arenaAdmissionWaiterCount_.load(std::memory_order_acquire) != 0u &&
             leaseDeniedReadyHeadEligibility ==
                 render::FirstLeaseReadyHeadEligibility::Eligible &&
-            firstLeasePressureSerialConsumedHead.valid() &&
-            firstLeasePressureSerialProgressAvailable &&
+            firstLeaseStandaloneConsumedHead.valid() &&
+            firstLeaseStandaloneProgressAvailable &&
             firstLeaseCreditRearmObservedHead != leaseDeniedReadyHead) {
           firstLeaseCreditRearmObservedHead = leaseDeniedReadyHead;
           perf::countCpuReadyFirstLeaseCreditRearmed();
@@ -1086,12 +1086,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               .stopped = stop_,
               .admissionPressure = arenaAdmissionWaiterCount_.load(
                   std::memory_order_acquire) != 0u,
+              .producerSequenceWaitTargetSeqId =
+                  queueLifecycle_.producerSequenceWaitTargetSeqId(),
               .readyHeadOwnsOrdinaryDirectCapacity =
                   leaseDeniedReadyHeadEligibility ==
                   render::FirstLeaseReadyHeadEligibility::Eligible,
               .readyHead = leaseDeniedReadyHead,
               .lastSerialProgressHead =
-                  firstLeasePressureSerialConsumedHead,
+                  firstLeaseStandaloneConsumedHead,
               .observedGeneration = observedCapacityProgress,
               .currentGeneration = currentGeneration,
           });
@@ -1099,7 +1101,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         if (schedulingObservabilityEnabled) {
           perf::enterCpuReadyFirstLeaseWait(
               arenaAdmissionWaiterCount_.load(std::memory_order_acquire) != 0u,
-              firstLeasePressureSerialProgressAvailable,
+              firstLeaseStandaloneProgressAvailable,
               observedCapacityProgress,
               queueLifecycle_.cpuReadyCapacityProgressGeneration(),
               leaseDeniedSeqId, leaseDeniedReadyHeadSourceOrdinal);
@@ -1131,12 +1133,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         if (waitAction == render::FirstLeaseCapacityWaitAction::Stop) {
           return;
         }
-        if (waitAction ==
-            render::FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial) {
+        if (waitAction == render::FirstLeaseCapacityWaitAction::
+                              ExecuteOneSourceSerialForAdmissionPressure ||
+            waitAction == render::FirstLeaseCapacityWaitAction::
+                              ExecuteOneSourceSerialForProducerSequenceWait) {
           DXMT_ASSERT(leaseDeniedReadySource.source.valid());
-          pressureSerialSource = leaseDeniedReadySource;
+          standaloneSerialSource = leaseDeniedReadySource;
           exactReplaySingleSource = true;
-          firstLeasePressureSerialPendingHead = leaseDeniedReadyHead;
+          firstLeaseStandalonePendingHead = leaseDeniedReadyHead;
         } else {
           DXMT_ASSERT(waitAction ==
                       render::FirstLeaseCapacityWaitAction::RetryLease);
@@ -1252,11 +1256,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
-      const bool abandonedPressureSerial =
-          firstLeasePressureSerialPendingHead.valid();
-      pressureSerialSource.reset();
-      firstLeasePressureSerialPendingHead = {};
-      exactReplaySingleSource = !abandonedPressureSerial;
+      const bool abandonedStandaloneSerial =
+          firstLeaseStandalonePendingHead.valid();
+      standaloneSerialSource.reset();
+      firstLeaseStandalonePendingHead = {};
+      exactReplaySingleSource = !abandonedStandaloneSerial;
       if (testOnlyRestore) {
         return;
       }
@@ -1486,8 +1490,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             queueLifecycle_.poisonTapeFailureLocked();
             return;
           }
-          pressureSerialSource.reset();
-          firstLeasePressureSerialPendingHead = {};
+          standaloneSerialSource.reset();
+          firstLeaseStandalonePendingHead = {};
           if (testOnlyPauseAfterStaleMultiSourcePlannerRestore_) {
             testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
             testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = true;
@@ -1533,20 +1537,19 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
-      const bool abandonedPressureSerial =
-          firstLeasePressureSerialPendingHead.valid();
-      pressureSerialSource.reset();
-      firstLeasePressureSerialPendingHead = {};
-      exactReplaySingleSource = !abandonedPressureSerial;
+      const bool abandonedStandaloneSerial =
+          firstLeaseStandalonePendingHead.valid();
+      standaloneSerialSource.reset();
+      firstLeaseStandalonePendingHead = {};
+      exactReplaySingleSource = !abandonedStandaloneSerial;
       continue;
     }
-    if (firstLeasePressureSerialPendingHead.valid()) {
-      firstLeasePressureSerialConsumedHead =
-          firstLeasePressureSerialPendingHead;
-      firstLeasePressureSerialPendingHead = {};
+    if (firstLeaseStandalonePendingHead.valid()) {
+      firstLeaseStandaloneConsumedHead = firstLeaseStandalonePendingHead;
+      firstLeaseStandalonePendingHead = {};
     }
     exactReplaySingleSource = false;
-    pressureSerialSource.reset();
+    standaloneSerialSource.reset();
     const auto unchargeSelectedCapacity =
         [&](std::size_t sourceIndex) {
           if (sourceIndex >= count ||
