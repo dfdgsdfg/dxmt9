@@ -60,6 +60,7 @@ dxmt9_pe_core_srcs = files(
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
   'd3d9_pe_device_swvp.cpp',
+  'd3d9_pe_device_diag.cpp',
   'd3d9_pe_process_vertices.cpp',
   'd3d9_pe_producer.cpp',
   'd3d9_pe_render_tape_publisher.cpp',
