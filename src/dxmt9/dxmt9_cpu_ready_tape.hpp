@@ -458,6 +458,18 @@ class CpuReadyTape {
     }
   };
 
+  // A bounded admission transaction.  Reservations remain Writing until the
+  // caller seals the complete batch; no Ready entry is exposed per source.
+  static constexpr std::size_t kMaxArenaBatchSources = 8;
+  struct ArenaBatchReservation {
+    std::array<Reservation, kMaxArenaBatchSources> reservations{};
+    std::size_t count = 0;
+
+    bool valid() const noexcept {
+      return count != 0 && count <= reservations.size();
+    }
+  };
+
   struct SourceRef {
     CpuReadySourceId id{};
     CpuReadyStorageRef storage{};
@@ -652,6 +664,8 @@ class CpuReadyTape {
     std::size_t writingCount = 0;
     std::size_t writingIndex = kInvalidIndex;
     LeaseCapacityClaim writingClaim{};
+    std::array<std::size_t, kMaxArenaBatchSources> writingIndices{};
+    std::array<LeaseCapacityClaim, kMaxArenaBatchSources> writingClaims{};
     for (std::size_t i = 0; i < capacity(); ++i) {
       const auto& entry = entries_[i];
       if (entry.state == State::Free || entry.state == State::Ready) {
@@ -664,12 +678,12 @@ class CpuReadyTape {
       }
       if (entry.state == State::Writing) {
         ++writingCount;
-        if (writingCount != 1) {
+        if (writingCount > writingIndices.size()) {
           result.valid = false;
           return result;
         }
-        writingIndex = i;
-        writingClaim = claim;
+        writingIndices[writingCount - 1u] = i;
+        writingClaims[writingCount - 1u] = claim;
         continue;
       }
       if (!addLeaseCapacityClaim(result.olderUnavailable, claim)) {
@@ -678,6 +692,8 @@ class CpuReadyTape {
       }
     }
     if (writingCount == 1) {
+      writingIndex = writingIndices[0];
+      writingClaim = writingClaims[0];
       const auto& entry = entries_[writingIndex];
       if (!orderedTailWritingEntryValid(writingIndex, entry)) {
         result.valid = false;
@@ -693,6 +709,32 @@ class CpuReadyTape {
           },
           .claim = writingClaim,
       };
+    } else if (writingCount > 1) {
+      // SegmentSerial admission pins several strict Writing entries before
+      // any Ready publication.  They are unavailable to encode as a group,
+      // but must not make the historical exactly-one Writing snapshot
+      // spuriously invalid.
+      for (std::size_t i = 0; i < writingCount; ++i) {
+        const auto index = writingIndices[i];
+        const auto& entry = entries_[index];
+        if (!entry.strictAdmission || index !=
+                (sourceTail_ + capacity() - writingCount + i) % capacity() ||
+            entry.rawOrdinal != entries_[writingIndices[0]].rawOrdinal ||
+            entry.buildGeneration !=
+                entries_[writingIndices[0]].buildGeneration ||
+            entry.sourceOrdinal !=
+                entries_[writingIndices[0]].sourceOrdinal + i ||
+            entry.seqId != entries_[writingIndices[0]].seqId + i ||
+            !entry.readyPublicationReserved) {
+          result.valid = false;
+          return result;
+        }
+        if (!addLeaseCapacityClaim(result.olderUnavailable,
+                                   writingClaims[i])) {
+          result.valid = false;
+          return result;
+        }
+      }
     }
     return result;
   }
@@ -945,6 +987,279 @@ class CpuReadyTape {
         .buildGeneration = identity.buildGeneration,
     };
     return reservation;
+  }
+
+  // Reserves every source in one bounded transaction.  This deliberately does
+  // not call the single-source reserve() path: that path advances the raw
+  // high-water on every source and therefore cannot represent one raw event
+  // with several source identities.
+  std::optional<ArenaBatchReservation> reserveArenaBatch(
+      std::span<const ArenaSourcePayloadLayout> layouts,
+      std::uint64_t rawOrdinal, std::uint64_t firstSourceOrdinal,
+      std::uint64_t firstSeqId, std::uint64_t buildGeneration) noexcept {
+    if (layouts.empty() || layouts.size() > kMaxArenaBatchSources ||
+        rawOrdinal == 0 || firstSourceOrdinal == 0 || firstSeqId == 0 ||
+        buildGeneration == 0 || compatibilityWritingCount_ != 0 ||
+        strictWritingActive_ || rawOrdinal <= rawOrdinalHighWater_ ||
+        firstSourceOrdinal <= sourceOrdinalHighWater_ ||
+        firstSeqId <= seqIdHighWater_) {
+      return std::nullopt;
+    }
+    if (stopped_ ||
+        (closedPressureDimensions_ & ~kPressureCompatibility) != 0) {
+      return std::nullopt;
+    }
+    if (layouts.size() - 1u >
+            std::numeric_limits<std::uint64_t>::max() - firstSourceOrdinal ||
+        layouts.size() - 1u >
+            std::numeric_limits<std::uint64_t>::max() - firstSeqId) {
+      return std::nullopt;
+    }
+    const auto& values = config_.values();
+    if (layouts.size() > values.highWaterSources -
+                             std::min(residentCount_, values.highWaterSources) ||
+        layouts.size() > values.highWaterReady -
+                             std::min(readyPublicationReservations_,
+                                      values.highWaterReady)) {
+      return std::nullopt;
+    }
+    std::size_t aggregatePages = occupiedPages_;
+    std::size_t simulatedPageTail = pageTail_;
+    std::array<std::size_t, kMaxArenaBatchSources> simulatedFirstPages{};
+    std::array<std::size_t, kMaxArenaBatchSources> simulatedPadding{};
+    for (std::size_t i = 0; i < layouts.size(); ++i) {
+      const auto& layout = layouts[i];
+      if (!layout.valid() || layout.pageCount > values.maxPagesPerSource ||
+          layout.pageCount > values.pageCount) {
+        return std::nullopt;
+      }
+      const std::size_t entryIndex = (sourceTail_ + i) % capacity();
+      const auto& entry = entries_[entryIndex];
+      if (entry.state != State::Free) {
+        return std::nullopt;
+      }
+      for (std::size_t segment = 0; segment < layout.segmentCount;
+           ++segment) {
+        if (arenaOwner(entryIndex, segment).constructed) {
+          return std::nullopt;
+        }
+      }
+      const std::size_t padding =
+          simulatedPageTail + layout.pageCount > values.pageCount
+          ? values.pageCount - simulatedPageTail
+          : 0;
+      if (padding > values.highWaterPages -
+                        std::min(aggregatePages, values.highWaterPages) ||
+          layout.pageCount > values.highWaterPages -
+                                  std::min(aggregatePages + padding,
+                                           values.highWaterPages)) {
+        return std::nullopt;
+      }
+      if (aggregatePages > std::numeric_limits<std::size_t>::max() -
+                                padding - layout.pageCount) {
+        return std::nullopt;
+      }
+      aggregatePages += padding + layout.pageCount;
+      const std::size_t firstPage = padding != 0 ? 0 : simulatedPageTail;
+      for (std::size_t page = 0; page < padding; ++page) {
+        if (pages_[simulatedPageTail + page].allocated) {
+          return std::nullopt;
+        }
+      }
+      for (std::size_t page = 0; page < layout.pageCount; ++page) {
+        if (pages_[firstPage + page].allocated) {
+          return std::nullopt;
+        }
+      }
+      for (std::size_t prior = 0; prior < i; ++prior) {
+        const auto overlaps = [](std::size_t aFirst, std::size_t aCount,
+                                 std::size_t bFirst,
+                                 std::size_t bCount) noexcept {
+          return aFirst < bFirst + bCount && bFirst < aFirst + aCount;
+        };
+        if (overlaps(firstPage, layout.pageCount,
+                     simulatedFirstPages[prior], layouts[prior].pageCount) ||
+            (padding != 0 &&
+             overlaps(0, padding, simulatedFirstPages[prior],
+                      layouts[prior].pageCount)) ||
+            (simulatedPadding[prior] != 0 &&
+             overlaps(firstPage, layout.pageCount, 0,
+                      simulatedPadding[prior]))) {
+          return std::nullopt;
+        }
+      }
+      simulatedFirstPages[i] = firstPage;
+      simulatedPadding[i] = padding;
+      simulatedPageTail = (firstPage + layout.pageCount) % values.pageCount;
+      // The conservative aggregate check catches capacity exhaustion before
+      // any allocator mutation; exact wrap/page overlap is rechecked below by
+      // reserveStorageImpl and rolled back as one transaction if needed.
+      if (aggregatePages > values.highWaterPages) {
+        return std::nullopt;
+      }
+    }
+    ArenaBatchReservation result{};
+    for (std::size_t i = 0; i < layouts.size(); ++i) {
+      auto reservation = reserveStorageImpl(
+          layouts[i].pageCount, PayloadKind::Arena, layouts[i].segmentCount);
+      if (!reservation) {
+        for (std::size_t j = result.count; j != 0; --j) {
+          auto detached = beginArenaAbort(
+              result.reservations[j - 1].ticket);
+          if (!detached) {
+            stopAdmission();
+            return std::nullopt;
+          }
+          detached->destroy();
+          (void)finishArenaAbort(result.reservations[j - 1].ticket,
+                                 std::move(*detached));
+        }
+        strictWritingActive_ = false;
+        return std::nullopt;
+      }
+      auto* entry = resolveEntry(reservation->id, reservation->storage);
+      if (!entry) {
+        stopAdmission();
+        return std::nullopt;
+      }
+      entry->strictAdmission = true;
+      entry->plannedBytes = layouts[i].usedBytes;
+      entry->rawOrdinal = rawOrdinal;
+      entry->sourceOrdinal = firstSourceOrdinal + i;
+      entry->seqId = firstSeqId + i;
+      entry->buildGeneration = buildGeneration;
+      entry->arenaPayloadCount = layouts[i].segmentCount;
+      for (std::size_t segment = 0; segment < layouts[i].segmentCount;
+           ++segment) {
+        entry->arenaExtents[segment] = Entry::ArenaExtent{
+            .byteOffset = layouts[i].segments[segment].byteOffset,
+            .byteCount = layouts[i].segments[segment].layout.usedBytes,
+        };
+      }
+      reservation->ticket = CpuReadyPublicationTicket{
+          .id = reservation->id,
+          .storage = reservation->storage,
+          .rawOrdinal = rawOrdinal,
+          .sourceOrdinal = firstSourceOrdinal + i,
+          .seqId = firstSeqId + i,
+          .buildGeneration = buildGeneration,
+      };
+      result.reservations[i] = *reservation;
+      ++result.count;
+    }
+    // Consume the event ordinal exactly once, and expose the contiguous tail
+    // identities only after every Writing entry has been constructed.
+    rawOrdinalHighWater_ = rawOrdinal;
+    sourceOrdinalHighWater_ = firstSourceOrdinal + layouts.size() - 1u;
+    seqIdHighWater_ = firstSeqId + layouts.size() - 1u;
+    strictWritingActive_ = true;
+    return result;
+  }
+
+  // All structural and payload checks happen before the first Ready state is
+  // written.  The individual seal operation is then deterministic and cannot
+  // encounter pressure because ready capacity was preflighted as a batch.
+  bool sealAndPublishArenaBatch(
+      const ArenaBatchReservation& batch,
+      std::span<const std::size_t> controlIndices) noexcept {
+    if (!batch.valid() || controlIndices.size() != batch.count ||
+        batch.count > config_.values().readyFifoCount ||
+        readyCount_ > config_.values().readyFifoCount - batch.count) {
+      noteStaleReject();
+      return false;
+    }
+    const auto& first = batch.reservations[0].ticket;
+    if (!first.strictIdentityValid()) {
+      noteStaleReject();
+      return false;
+    }
+    std::array<SourceSemanticSummary, kMaxArenaBatchSources> semantics{};
+    std::array<std::size_t, kMaxArenaBatchSources> usedBytes{};
+    for (std::size_t i = 0; i < batch.count; ++i) {
+      const auto& reservation = batch.reservations[i];
+      const auto& current = reservation.ticket;
+      auto* entry = resolveEntry(reservation.id, reservation.storage);
+      if (i > std::numeric_limits<std::uint64_t>::max() - first.sourceOrdinal ||
+          i > std::numeric_limits<std::uint64_t>::max() - first.seqId) {
+        noteStaleReject();
+        return false;
+      }
+      if (!entry || entry->state != State::Writing ||
+          !entry->strictAdmission || !entry->readyPublicationReserved ||
+          !reservation.ticket.hasAdmissionIdentity() ||
+          controlIndices[i] == kInvalidIndex ||
+          reservation.ticket.id != reservation.id ||
+          reservation.ticket.storage != reservation.storage ||
+          current.rawOrdinal != first.rawOrdinal ||
+          current.buildGeneration != first.buildGeneration ||
+          current.sourceOrdinal != first.sourceOrdinal + i ||
+          current.seqId != first.seqId + i) {
+        noteStaleReject();
+        return false;
+      }
+      for (std::size_t prior = 0; prior < i; ++prior) {
+        if (controlIndices[prior] == controlIndices[i]) {
+          noteStaleReject();
+          return false;
+        }
+      }
+      const auto reservedStorage = storageSpan(reservation.storage);
+      const auto plannedStorage = reservedStorage.first(entry->plannedBytes);
+      std::array<const ArenaSourcePayloadBlock*,
+                 kMaxArenaSourcePayloadSegments> payloads{};
+      for (std::size_t segment = 0; segment < entry->arenaPayloadCount;
+           ++segment) {
+        const auto extent = entry->arenaExtents[segment];
+        if (extent.byteOffset > plannedStorage.size() ||
+            extent.byteCount > plannedStorage.size() - extent.byteOffset) {
+          noteStaleReject();
+          return false;
+        }
+        const auto& owner = arenaOwner(reservation.id.index, segment);
+        const auto* payload = owner.constructed ? owner.payload() : nullptr;
+        if (!payload || !payload->published() ||
+            !payload->boundTo(std::span<const std::byte>(
+                plannedStorage.subspan(extent.byteOffset, extent.byteCount)))) {
+          noteStaleReject();
+          return false;
+        }
+        payloads[segment] = payload;
+      }
+      if (!entry->arenaChain.initialize(
+              std::span(payloads).first(entry->arenaPayloadCount))) {
+        noteStaleReject();
+        return false;
+      }
+      usedBytes[i] = entry->plannedBytes;
+      const SourcePayloadView payloadView = entry->arenaPayloadCount == 1
+          ? SourcePayloadView(*payloads[0])
+          : SourcePayloadView(entry->arenaChain);
+      semantics[i] = makeSealedSemanticSummary(
+          payloadView, usedBytes[i], reservation.storage.pageCount);
+    }
+    // From this point onward every operation is assignment/ring advancement
+    // against already validated storage; it cannot fail or expose a partial
+    // Ready prefix.
+    for (std::size_t i = 0; i < batch.count; ++i) {
+      auto* entry = resolveEntry(batch.reservations[i].id,
+                                  batch.reservations[i].storage);
+      entry->usedBytes = usedBytes[i];
+      entry->semantic = semantics[i];
+      entry->state = State::Ready;
+      readyFifo_[readyTail_] = ReadyEntry{
+          .source = SourceRef{.id = batch.reservations[i].id,
+                              .storage = batch.reservations[i].storage},
+          .controlIndex = controlIndices[i],
+          .seqId = entry->seqId,
+          .metadata = metadataForEntry(*entry),
+          .semantic = entry->semantic,
+      };
+      readyTail_ = (readyTail_ + 1u) % config_.values().readyFifoCount;
+      ++readyCount_;
+    }
+    stats_.readyFifoEntries = readyCount_;
+    strictWritingActive_ = false;
+    return true;
   }
 
   std::span<std::byte> writableStorage(

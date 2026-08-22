@@ -469,6 +469,16 @@ void canonicalPartitionSelectorResolvesQueueImmutableModes() {
             invalid.resolved == PartitionExecutionMode::IdentitySerial &&
             invalid.fallback == PartitionModeFallback::InvalidValue,
         "empty or invalid requests fail closed to identity");
+  const auto event = dxmt9::render::resolveSourceIdentityConfig("event");
+  const auto segment = dxmt9::render::resolveSourceIdentityConfig("segment");
+  const auto badSource =
+      dxmt9::render::resolveSourceIdentityConfig("unexpected");
+  check(event.resolved == dxmt9::render::SourceIdentityMode::EventSerial &&
+            segment.resolved == dxmt9::render::SourceIdentityMode::SegmentSerial &&
+            badSource.resolved ==
+                dxmt9::render::SourceIdentityMode::EventSerial &&
+            badSource.fallback == PartitionModeFallback::InvalidValue,
+        "bounded source identity selector defaults and fails closed");
 }
 
 void identityTraversesMixedSourceOrder() {

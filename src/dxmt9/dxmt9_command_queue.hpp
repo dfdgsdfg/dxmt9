@@ -461,6 +461,10 @@ class CommandQueue {
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
     std::uint64_t seqId() const noexcept { return ticket_.seqId; }
     bool selectSegment(std::size_t segmentIndex) noexcept;
+    // Selects a physical segment in the bounded SegmentSerial batch.  The
+    // legacy selectSegment(global) spelling remains valid for EventSerial.
+    bool selectSourceSegment(std::size_t sourceIndex,
+                             std::size_t segmentIndex) noexcept;
     bool beginCaptureIdentity(std::uint32_t recordCount) noexcept;
     bool captureNextCommandRecord(std::uint32_t recordIndex) noexcept;
     bool captureNextDrawRecords(
@@ -474,14 +478,16 @@ class CommandQueue {
     CpuReadyArenaBuildLease(
         CommandQueue& queue,
         core::CpuReadyPublicationTicket ticket,
-        std::size_t controlIndex) noexcept
-        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex) {}
+        std::size_t controlIndex, bool batch = false) noexcept
+        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex),
+          batch_(batch) {}
 
     void abort() noexcept;
 
     CommandQueue* queue_ = nullptr;
     core::CpuReadyPublicationTicket ticket_{};
     std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
+    bool batch_ = false;
   };
 
   enum class CpuReadyArenaBeginStatus : std::uint8_t {
@@ -519,6 +525,9 @@ class CommandQueue {
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout) noexcept;
+  CpuReadyArenaBeginResult beginCpuReadyArenaSources(
+      std::uint64_t rawOrdinal,
+      std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
   CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
     const auto& values = cpuReadyTape_.config().values();
     return {
@@ -527,6 +536,10 @@ class CommandQueue {
         .maxSegmentsPerSource = core::kMaxArenaSourcePayloadSegments,
         .maxPagesPerSource = values.maxPagesPerSource,
     };
+  }
+  bool segmentSerialEnabled() const noexcept {
+    return renderPartitionConfig_.sourceIdentity.resolved ==
+           render::SourceIdentityMode::SegmentSerial;
   }
   void rejectActiveCpuReadyArenaSource() noexcept;
   bool cpuReadyArenaPoisoned() const noexcept {
@@ -1061,6 +1074,27 @@ class CommandQueue {
       }
     }
 
+    ArenaBuildContext(
+        const core::CpuReadyTape::ArenaBatchReservation& batch,
+        std::span<const std::size_t> selectedControlIndices,
+        std::span<const core::ArenaSourcePayloadLayout> sourceLayouts,
+        core::CpuReadyTape& tape, core::Handle initialBackBuffer) noexcept
+        : reservation(batch.reservations[0]),
+          controlIndex(selectedControlIndices[0]),
+          layout(sourceLayouts[0]),
+          initialBackBuffer(initialBackBuffer),
+          ownerThread(std::this_thread::get_id()), batchMode(true),
+          sourceCount(batch.count) {
+      for (std::size_t source = 0; source < sourceCount; ++source) {
+        batchReservations[source] = batch.reservations[source];
+        batchControlIndices[source] = selectedControlIndices[source];
+        batchLayouts[source] = sourceLayouts[source];
+      }
+      if (!initializeBatchBuilders(tape)) {
+        failed.store(true, std::memory_order_relaxed);
+      }
+    }
+
     bool initializeBuilders(core::CpuReadyTape& tape) noexcept {
       if (!layout.valid() ||
           reservation.arenaPayloadCount != layout.segmentCount) {
@@ -1082,15 +1116,61 @@ class CommandQueue {
       return true;
     }
 
-    core::ArenaSourcePayloadBuilder* activeBuilder() noexcept {
-      return activeSegment < layout.segmentCount && builders[activeSegment]
-          ? &*builders[activeSegment]
+    core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchAssemblers[activeSource][activeSegment]
+            ? &*batchAssemblers[activeSource][activeSegment]
+            : nullptr;
+      }
+      return activeSegment < layout.segmentCount && assemblers[activeSegment]
+          ? &*assemblers[activeSegment]
           : nullptr;
     }
 
-    core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
-      return activeSegment < layout.segmentCount && assemblers[activeSegment]
-          ? &*assemblers[activeSegment]
+    bool initializeBatchBuilders(core::CpuReadyTape& tape) noexcept {
+      if (sourceCount == 0 || sourceCount > batchReservations.size()) {
+        return false;
+      }
+      for (std::size_t source = 0; source < sourceCount; ++source) {
+        const auto& sourceLayout = batchLayouts[source];
+        const auto& sourceReservation = batchReservations[source];
+        if (!sourceLayout.valid() ||
+            sourceReservation.arenaPayloadCount != sourceLayout.segmentCount) {
+          return false;
+        }
+        for (std::size_t segment = 0; segment < sourceLayout.segmentCount;
+             ++segment) {
+          auto memory = tape.writableArenaSegment(sourceReservation.ticket,
+                                                  segment);
+          if (!sourceReservation.arenaPayloads[segment] ||
+              memory.size() != sourceLayout.segments[segment].layout.usedBytes) {
+            return false;
+          }
+          batchBuilders[source][segment].emplace(
+              *sourceReservation.arenaPayloads[segment],
+              sourceLayout.segments[segment].layout, memory);
+          if (!batchBuilders[source][segment]->good()) {
+            return false;
+          }
+          batchAssemblers[source][segment].emplace(
+              *batchBuilders[source][segment]);
+        }
+      }
+      return true;
+    }
+
+    core::ArenaSourcePayloadBuilder* activeBuilder() noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchBuilders[activeSource][activeSegment]
+            ? &*batchBuilders[activeSource][activeSegment]
+            : nullptr;
+      }
+      return activeSegment < layout.segmentCount && builders[activeSegment]
+          ? &*builders[activeSegment]
           : nullptr;
     }
 
@@ -1102,6 +1182,27 @@ class CommandQueue {
     std::array<std::optional<core::ArenaSourcePayloadAssembler>,
                core::kMaxArenaSourcePayloadSegments> assemblers{};
     std::size_t activeSegment = 0;
+    bool batchMode = false;
+    std::size_t sourceCount = 1;
+    std::size_t activeSource = 0;
+    std::array<core::CpuReadyTape::Reservation,
+               core::CpuReadyTape::kMaxArenaBatchSources>
+        batchReservations{};
+    std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+        batchControlIndices{};
+    std::array<core::ArenaSourcePayloadLayout,
+               core::CpuReadyTape::kMaxArenaBatchSources>
+        batchLayouts{};
+    std::array<
+        std::array<std::optional<core::ArenaSourcePayloadBuilder>,
+                   core::kMaxArenaSourcePayloadSegments>,
+        core::CpuReadyTape::kMaxArenaBatchSources>
+        batchBuilders{};
+    std::array<
+        std::array<std::optional<core::ArenaSourcePayloadAssembler>,
+                   core::kMaxArenaSourcePayloadSegments>,
+        core::CpuReadyTape::kMaxArenaBatchSources>
+        batchAssemblers{};
     core::Handle initialBackBuffer{};
     std::thread::id ownerThread{};
     std::atomic<bool> failed{false};
@@ -1186,6 +1287,15 @@ class CommandQueue {
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
       std::size_t segmentIndex) noexcept;
+  bool selectCpuReadyArenaSourceSegment(
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex, std::size_t sourceIndex,
+      std::size_t segmentIndex) noexcept;
+  bool publishCpuReadyArenaBatch(
+      core::CpuReadyPublicationTicket ticket,
+      std::span<const core::ChunkHandleEntry> resources) noexcept;
+  void abortCpuReadyArenaBatch(
+      core::CpuReadyPublicationTicket ticket) noexcept;
   bool publishCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,

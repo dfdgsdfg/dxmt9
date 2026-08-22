@@ -849,6 +849,31 @@ void testPresentAppendAbortRemovesStashedTokenOnce() {
   queue.unregisterPresenter(presentId);
 }
 
+void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto begin = queue.beginCpuReadyArenaSources(123, layouts);
+    check(begin.has_value(), "batch lease admission must succeed");
+    check(!begin->selectSourceSegment(1, 0),
+          "selecting a later source before its predecessor is complete fails");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto begin = queue.beginCpuReadyArenaSources(124, layouts);
+    check(begin.has_value(), "second batch lease admission must succeed");
+    check(begin->selectSourceSegment(0, 0),
+          "first source accepts its local segment zero");
+    check(begin->selectSourceSegment(1, 0),
+          "second source converts local segment zero to the next global edge");
+    check(!begin->selectSourceSegment(1, 2),
+          "out-of-range source-local segment fails closed");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -864,6 +889,7 @@ int main() {
     testCaptureIdentityUsesExactRawRangesAndPreReorderPasses();
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
+    testBatchLeaseUsesSourceLocalSegmentCoordinates();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

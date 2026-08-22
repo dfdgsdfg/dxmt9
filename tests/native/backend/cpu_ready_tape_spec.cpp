@@ -1036,6 +1036,95 @@ void strictArenaDoesNotConsumeCompatibilityCapacity() {
         "the filled compatibility lane remains independently bounded");
 }
 
+void batchArenaAdmissionIsAtomicAndSharesRawIdentity() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "batch source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 77, 1, 1, 9);
+  check(batch.has_value() && batch->count == 2u,
+        "two-source batch reserves in one transaction");
+  check(batch->reservations[0].ticket.rawOrdinal == 77u &&
+            batch->reservations[1].ticket.rawOrdinal == 77u &&
+            batch->reservations[0].ticket.seqId == 1u &&
+            batch->reservations[1].ticket.seqId == 2u,
+        "one raw event receives contiguous source and sequence identities");
+  check(tape.leaseAcquisitionCapacitySnapshot().valid,
+        "capacity snapshot accepts a bounded strict Writing batch");
+  publishMinimalArena(tape, batch->reservations[0], segment);
+  publishMinimalArena(tape, batch->reservations[1], segment);
+  const std::array<std::size_t, 2> controls{0u, 1u};
+  check(tape.sealAndPublishArenaBatch(
+            *batch, controls) && tape.readyCount() == 2u,
+        "batch seal commits both Ready entries together");
+}
+
+void batchArenaLateFailureAndCapacityLeaveNoReadyPrefix() {
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "late-failure layout validates");
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 88, 1, 1, 10);
+    check(batch.has_value(), "late-failure batch reserves Writing entries");
+    publishMinimalArena(tape, batch->reservations[0], segment);
+    const std::array<std::size_t, 2> controls{0u, 1u};
+    check(!tape.sealAndPublishArenaBatch(*batch, controls) &&
+              tape.readyCount() == 0u,
+          "late structural failure cannot expose a partial Ready prefix");
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "batch abort detaches every source");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "batch abort rolls back the detached source");
+    }
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 90, 1, 1, 10);
+    check(batch.has_value(), "identity-forgery batch reserves");
+    publishMinimalArena(tape, batch->reservations[0], segment);
+    publishMinimalArena(tape, batch->reservations[1], segment);
+    const auto originalTicket = batch->reservations[1].ticket;
+    batch->reservations[1].ticket.seqId += 9u;
+    const std::array<std::size_t, 2> controls{0u, 0u};
+    check(!tape.sealAndPublishArenaBatch(*batch, controls) &&
+              tape.readyCount() == 0u,
+          "mixed identity or duplicate controls cannot partially publish");
+    batch->reservations[1].ticket = originalTicket;
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "forged batch remains abortable");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "forged batch abort completes");
+    }
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(2, 8, 8)};
+    const std::array oversized{*sourceLayout, *sourceLayout, *sourceLayout};
+    const auto before = tape.stats().readyFifoEntries;
+    check(!tape.reserveArenaBatch(oversized, 99, 1, 1, 11) &&
+              tape.readyCount() == 0u &&
+              tape.stats().readyFifoEntries == before,
+          "aggregate page capacity failure leaves no Ready entry");
+    const std::array overflowLayouts{*sourceLayout, *sourceLayout};
+    check(!tape.reserveArenaBatch(overflowLayouts, 100,
+              std::numeric_limits<std::uint64_t>::max(), 1, 12),
+          "source ordinal tail overflow is rejected before reservation");
+  }
+}
+
 void segmentedArenaPublishesAndReclaimsAsOneSource() {
   CpuReadyTape tape{makeSeparatedPayloadConfig()};
   const auto segment = makeMinimalArenaLayout();
@@ -1568,6 +1657,8 @@ int main() {
     strictAdmissionIdentitySurvivesAbort();
     strictSealRequiresExactTapeOwnedBinding();
     strictArenaDoesNotConsumeCompatibilityCapacity();
+    batchArenaAdmissionIsAtomicAndSharesRawIdentity();
+    batchArenaLateFailureAndCapacityLeaveNoReadyPrefix();
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     postEncodeRetirementFinishesBeforeGpuCompletion();

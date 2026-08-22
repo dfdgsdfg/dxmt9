@@ -3630,10 +3630,11 @@ CommandQueue::CpuReadyArenaBuildLease::CpuReadyArenaBuildLease(
     CpuReadyArenaBuildLease&& other) noexcept
     : queue_(other.queue_),
       ticket_(other.ticket_),
-      controlIndex_(other.controlIndex_) {
+      controlIndex_(other.controlIndex_), batch_(other.batch_) {
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.batch_ = false;
 }
 
 CommandQueue::CpuReadyArenaBuildLease&
@@ -3646,9 +3647,11 @@ CommandQueue::CpuReadyArenaBuildLease::operator=(
   queue_ = other.queue_;
   ticket_ = other.ticket_;
   controlIndex_ = other.controlIndex_;
+  batch_ = other.batch_;
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.batch_ = false;
   return *this;
 }
 
@@ -3660,16 +3663,21 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   }
   auto* queue = queue_;
   const auto ticket = ticket_;
-  if (!queue->publishCpuReadyArenaSource(
-          ticket, controlIndex_, resources, captureIdentity)) {
+  const bool published = batch_
+      ? queue->publishCpuReadyArenaBatch(ticket, resources)
+      : queue->publishCpuReadyArenaSource(
+            ticket, controlIndex_, resources, captureIdentity);
+  if (!published) {
     queue_ = nullptr;
     ticket_ = {};
     controlIndex_ = std::numeric_limits<std::size_t>::max();
+    batch_ = false;
     return false;
   }
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
   return true;
 }
 
@@ -3721,14 +3729,25 @@ bool CommandQueue::CpuReadyArenaBuildLease::selectSegment(
                        ticket_, controlIndex_, segmentIndex);
 }
 
+bool CommandQueue::CpuReadyArenaBuildLease::selectSourceSegment(
+    std::size_t sourceIndex, std::size_t segmentIndex) noexcept {
+  return queue_ && queue_->selectCpuReadyArenaSourceSegment(
+                       ticket_, controlIndex_, sourceIndex, segmentIndex);
+}
+
 void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
   if (!queue_) {
     return;
   }
-  queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  if (batch_) {
+    queue_->abortCpuReadyArenaBatch(ticket_);
+  } else {
+    queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  }
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
+  batch_ = false;
 }
 
 CommandQueue::CpuReadyArenaBeginResult
@@ -3852,6 +3871,105 @@ CommandQueue::beginCpuReadyArenaSource(
   };
 }
 
+CommandQueue::CpuReadyArenaBeginResult
+CommandQueue::beginCpuReadyArenaSources(
+    std::uint64_t rawOrdinal,
+    std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept {
+  if (rawOrdinal == 0 || layouts.empty() ||
+      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
+    return {.status = CpuReadyArenaBeginStatus::Invalid};
+  }
+  for (const auto& layout : layouts) {
+    if (!layout.valid() ||
+        layout.pageCount > cpuReadyTape_.config().values().maxPagesPerSource) {
+      return {.status = CpuReadyArenaBeginStatus::Invalid};
+    }
+  }
+  if (arenaBuildPoisoned_.load(std::memory_order_acquire)) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
+  if (stop_) {
+    return {.status = CpuReadyArenaBeginStatus::Stopped};
+  }
+  if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+      arenaBuildContext_.has_value()) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  if (writingSlot_) {
+    (void)queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::SemanticBoundary);
+        });
+    if (stop_) {
+      return {.status = CpuReadyArenaBeginStatus::Stopped};
+    }
+    if (writingSlot_) {
+      return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+    }
+  }
+  if (writeIndex_ >= slots_.size() ||
+      layouts.size() > slots_.size()) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+      controls{};
+  for (std::size_t i = 0; i < layouts.size(); ++i) {
+    controls[i] = (writeIndex_ + i) % slots_.size();
+    if (slots_[controls[i]].state != core::ChunkSlot::State::Free) {
+      return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+    }
+  }
+  const std::uint64_t firstSeqId =
+      nextSeqId_.load(std::memory_order_relaxed);
+  if (firstSeqId == 0 ||
+      firstSeqId > std::numeric_limits<std::uint64_t>::max() - layouts.size()) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  const std::uint64_t generation = nextArenaBuildGeneration_++;
+  const std::uint64_t buildGeneration = generation == 0
+      ? nextArenaBuildGeneration_++
+      : generation;
+  auto batch = cpuReadyTape_.reserveArenaBatch(
+      layouts, rawOrdinal, firstSeqId, firstSeqId, buildGeneration);
+  if (!batch) {
+    recordCpuReadyTapeStats(cpuReadyTape_);
+    const auto probe = cpuReadyTape_.probeArenaReserve(layouts.front());
+    return {.status = probe == core::CpuReadyTape::ReserveProbe::TemporaryPressure
+                          ? CpuReadyArenaBeginStatus::TemporaryPressure
+                          : CpuReadyArenaBeginStatus::Corrupt};
+  }
+  for (std::size_t i = 0; i < layouts.size(); ++i) {
+    auto& control = slots_[controls[i]];
+    control.state = core::ChunkSlot::State::Writing;
+    control.seqId = 0;
+    control.sourceId = batch->reservations[i].id;
+    control.storage = batch->reservations[i].storage;
+    control.payload = nullptr;
+  }
+  nextSeqId_.store(firstSeqId + layouts.size(), std::memory_order_release);
+  arenaAdmissionActive_.store(true, std::memory_order_release);
+  arenaBuildContext_.emplace(*batch,
+                             std::span(controls).first(layouts.size()),
+                             layouts, cpuReadyTape_, currentBackBuffer_);
+  auto* context = &*arenaBuildContext_;
+  if (context->failed.load(std::memory_order_relaxed)) {
+    context->failed.store(true, std::memory_order_release);
+    lock.unlock();
+    abortCpuReadyArenaBatch(batch->reservations[0].ticket);
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  activeArenaBuild_.store(context, std::memory_order_release);
+  lock.unlock();
+  return {.status = CpuReadyArenaBeginStatus::Ready,
+          .lease = CpuReadyArenaBuildLease(
+              *this, batch->reservations[0].ticket, controls[0], true)};
+}
+
 bool CommandQueue::waitForCpuReadyArenaAdmission(
     const core::ArenaSourcePayloadLayout& layout) noexcept {
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
@@ -3910,19 +4028,85 @@ bool CommandQueue::selectCpuReadyArenaSegment(
       context->ownerThread != std::this_thread::get_id() ||
       context->failed.load(std::memory_order_acquire) ||
       context->publishing.load(std::memory_order_acquire) ||
-      segmentIndex >= context->layout.segmentCount ||
-      (segmentIndex != context->activeSegment &&
-       segmentIndex != context->activeSegment + 1u) ||
-      !context->builders[segmentIndex] ||
-      !context->assemblers[segmentIndex]) {
+      (!context->batchMode && segmentIndex >= context->layout.segmentCount) ||
+      (!context->batchMode &&
+       (segmentIndex != context->activeSegment &&
+        segmentIndex != context->activeSegment + 1u)) ||
+      (!context->batchMode && (!context->builders[segmentIndex] ||
+                               !context->assemblers[segmentIndex]))) {
     if (context) {
       context->failed.store(true, std::memory_order_release);
     }
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     return false;
   }
+  if (context->batchMode) {
+    std::size_t source = 0;
+    std::size_t local = segmentIndex;
+    while (source < context->sourceCount &&
+           local >= context->batchLayouts[source].segmentCount) {
+      local -= context->batchLayouts[source].segmentCount;
+      ++source;
+    }
+    const std::size_t previousGlobal =
+        context->activeSource == 0 ? context->activeSegment
+                                    : [&]() {
+                                        std::size_t value = 0;
+                                        for (std::size_t i = 0;
+                                             i < context->activeSource; ++i) {
+                                          value += context->batchLayouts[i]
+                                                       .segmentCount;
+                                        }
+                                        return value + context->activeSegment;
+                                      }();
+    if (source >= context->sourceCount || segmentIndex != previousGlobal &&
+            segmentIndex != previousGlobal + 1u ||
+        !context->batchBuilders[source][local] ||
+        !context->batchAssemblers[source][local]) {
+      context->failed.store(true, std::memory_order_release);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return false;
+    }
+    context->activeSource = source;
+    context->activeSegment = local;
+    return true;
+  }
   context->activeSegment = segmentIndex;
   return true;
+}
+
+bool CommandQueue::selectCpuReadyArenaSourceSegment(
+    core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+    std::size_t sourceIndex, std::size_t segmentIndex) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || !context->batchMode || sourceIndex >= context->sourceCount ||
+      segmentIndex >= context->batchLayouts[sourceIndex].segmentCount) {
+    if (context) {
+      context->failed.store(true, std::memory_order_release);
+    }
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  if (sourceIndex != context->activeSource &&
+      !(sourceIndex == context->activeSource + 1u &&
+        context->activeSegment + 1u ==
+            context->batchLayouts[context->activeSource].segmentCount &&
+        segmentIndex == 0u)) {
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  if (sourceIndex == context->activeSource &&
+      segmentIndex > context->activeSegment + 1u) {
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  std::size_t globalSegment = segmentIndex;
+  for (std::size_t i = 0; i < sourceIndex; ++i) {
+    globalSegment += context->batchLayouts[i].segmentCount;
+  }
+  return selectCpuReadyArenaSegment(ticket, controlIndex, globalSegment);
 }
 
 bool CommandQueue::ArenaBuildContext::setCaptureNextRawRecords(
@@ -4471,6 +4655,194 @@ bool CommandQueue::publishCpuReadyArenaSource(
     *captureIdentity = std::move(captured);
   }
   return true;
+}
+
+bool CommandQueue::publishCpuReadyArenaBatch(
+    core::CpuReadyPublicationTicket ticket,
+    std::span<const core::ChunkHandleEntry> resources) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || !context->batchMode || context->reservation.ticket != ticket ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->failed.load(std::memory_order_acquire)) {
+    abortCpuReadyArenaBatch(ticket);
+    return false;
+  }
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "publish_cpu_ready_arena_batch_phase1", /*skipHold=*/true);
+    if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
+        activeArenaBuild_.load(std::memory_order_relaxed) != context) {
+      lock.unlock();
+      abortCpuReadyArenaBatch(ticket);
+      return false;
+    }
+    for (std::size_t i = 0; i < context->sourceCount; ++i) {
+      const auto index = context->batchControlIndices[i];
+      const auto& reservation = context->batchReservations[i];
+      if (index >= slots_.size() ||
+          slots_[index].state != core::ChunkSlot::State::Writing ||
+          slots_[index].sourceId != reservation.id ||
+          slots_[index].storage != reservation.storage) {
+        lock.unlock();
+        abortCpuReadyArenaBatch(ticket);
+        return false;
+      }
+    }
+    context->publishing.store(true, std::memory_order_release);
+  }
+  for (std::size_t source = 0; source < context->sourceCount; ++source) {
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      const core::SourcePayloadView payloadView(
+          *context->batchReservations[source].arenaPayloads[segment]);
+      if (!payloadView.valid() ||
+          !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
+        abortCpuReadyArenaBatch(ticket);
+        return false;
+      }
+    }
+    markChunkResourcesWithExactSeq(
+        pool_, resources, context->batchReservations[source].ticket.seqId);
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      markArenaSourceResources(
+          pool_, core::SourcePayloadView(
+                     *context->batchReservations[source].arenaPayloads[segment]),
+          context->batchReservations[source].ticket.seqId);
+    }
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "publish_cpu_ready_arena_batch_phase3", /*skipHold=*/true);
+  if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
+      activeArenaBuild_.load(std::memory_order_relaxed) != context ||
+      !context->publishing.load(std::memory_order_acquire) ||
+      context->failed.load(std::memory_order_acquire)) {
+    lock.unlock();
+    abortCpuReadyArenaBatch(ticket);
+    return false;
+  }
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
+      controlIndices{};
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    controlIndices[i] = context->batchControlIndices[i];
+  }
+  if (!cpuReadyTape_.sealAndPublishArenaBatch(
+          core::CpuReadyTape::ArenaBatchReservation{
+              .reservations = context->batchReservations,
+              .count = context->sourceCount},
+          std::span(controlIndices).first(context->sourceCount))) {
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaBatch(ticket);
+    return false;
+  }
+  const std::size_t last = context->sourceCount - 1u;
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    auto& control = slots_[controlIndices[i]];
+    control.seqId = context->batchReservations[i].ticket.seqId;
+    control.state = core::ChunkSlot::State::Pending;
+  }
+  lastCommittedSeqId_ = context->batchReservations[last].ticket.seqId;
+  inflightCount_ += context->sourceCount;
+  writeIndex_ = (controlIndices[last] + 1u) % slots_.size();
+  if (context->updatesBackBuffer) {
+    currentBackBuffer_ = context->pendingBackBuffer;
+  }
+  const bool hasPublishedPresent = context->presentAppended;
+  const auto publishedSeq = context->batchReservations[last].ticket.seqId;
+  const auto presentDesc = context->pendingPresentDesc;
+  const auto presentPolicy = context->pendingPresentBoundaryPolicy;
+  const bool flushAfterPublication = context->flushAfterPublication;
+  context->presentTokenStashed = false;
+  activeArenaBuild_.store(nullptr, std::memory_order_release);
+  arenaBuildContext_.reset();
+  arenaAdmissionActive_.store(false, std::memory_order_release);
+  recordCpuReadyTapeStats(cpuReadyTape_);
+  queueLifecycle_.noteCpuReadyCapacityProgress();
+  schedulingProgressWatchdog_.notePublished(
+      publishedSeq, hasPublishedPresent);
+  lock.unlock();
+  writeCv_.notify_all();
+  if (hasPublishedPresent) {
+    if (presentPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+      PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+      drainDeferredPresentBoundary();
+    }
+    applyPublishedPresentBoundary(publishedSeq, presentDesc, presentPolicy);
+  }
+  if (flushAfterPublication) {
+    submitFlush();
+  }
+  return true;
+}
+
+void CommandQueue::abortCpuReadyArenaBatch(
+    core::CpuReadyPublicationTicket ticket) noexcept {
+  std::array<std::optional<core::CpuReadyTape::DetachedArenaOwner>,
+             core::CpuReadyTape::kMaxArenaBatchSources>
+      owners{};
+  std::size_t count = 0;
+  std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources> controls{};
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_detach");
+    if (!arenaBuildContext_ || !arenaBuildContext_->batchMode ||
+        arenaBuildContext_->reservation.ticket != ticket) {
+      return;
+    }
+    auto& context = *arenaBuildContext_;
+    count = context.sourceCount;
+    for (std::size_t i = 0; i < count; ++i) {
+      controls[i] = context.batchControlIndices[i];
+    }
+    activeArenaBuild_.store(nullptr, std::memory_order_release);
+    context.failed.store(true, std::memory_order_release);
+    for (std::size_t i = count; i != 0; --i) {
+      auto detached = cpuReadyTape_.beginArenaAbort(
+          context.batchReservations[i - 1].ticket);
+      if (!detached) {
+        cpuReadyTape_.stopAdmission();
+        break;
+      }
+      owners[i - 1].emplace(std::move(*detached));
+    }
+    stop_ = true;
+    cpuReadyTape_.stopAdmission();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+  }
+  for (std::size_t i = count; i != 0; --i) {
+    if (owners[i - 1]) {
+      owners[i - 1]->destroy();
+    }
+  }
+  {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::lock_guard lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_finish");
+    if (arenaBuildContext_) {
+      for (std::size_t i = count; i != 0; --i) {
+        if (owners[i - 1]) {
+          (void)cpuReadyTape_.finishArenaAbort(
+              arenaBuildContext_->batchReservations[i - 1].ticket,
+              std::move(*owners[i - 1]));
+        }
+        if (controls[i - 1] < slots_.size()) {
+          slots_[controls[i - 1]] = {};
+        }
+      }
+      arenaBuildContext_.reset();
+    }
+    arenaAdmissionActive_.store(false, std::memory_order_release);
+    recordCpuReadyTapeStats(cpuReadyTape_);
+  }
+  notifySchedulingTerminalWaiters(
+      render::SchedulingTerminalDisposition::DeviceLoss);
 }
 
 void CommandQueue::abortCpuReadyArenaSource(

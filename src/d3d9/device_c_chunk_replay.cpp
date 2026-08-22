@@ -1534,6 +1534,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
           .maxPages = limits.maxPagesPerSource == 0
                           ? std::numeric_limits<std::uint32_t>::max()
                           : limits.maxPagesPerSource,
+          .maxSourcesPerChunk = queue && !captureIdentityRequested &&
+                  queue->segmentSerialEnabled()
+              ? dxmt9::core::CpuReadyTape::kMaxArenaBatchSources
+              : 1,
       });
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
   switch (plan.lane) {
@@ -1575,7 +1579,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
         plan.containsOrderedControls);
   }
 
-  if (!queue || !plan.arenaLayout.has_value()) {
+  if (!queue || (!plan.arenaLayout.has_value() && plan.sources.empty()) ||
+      (captureIdentityRequested && !plan.arenaLayout.has_value())) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
     if (captureIdentityRequested) failCaptureIdentity("queue-or-layout-missing");
@@ -1583,15 +1588,30 @@ int32_t replayPlannedChunk(D9CDevice* device,
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
+  std::array<dxmt9::core::ArenaSourcePayloadLayout,
+             dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
+      sourceLayouts{};
+  const bool segmentSerial = queue->segmentSerialEnabled() &&
+      !captureIdentityRequested && plan.sourceCount > 1;
+  const std::size_t sourceCount = segmentSerial ? plan.sourceCount : 1;
+  if (segmentSerial) {
+    for (std::size_t i = 0; i < sourceCount; ++i) {
+      sourceLayouts[i] = plan.sources[i].arenaLayout;
+    }
+  } else {
+    sourceLayouts[0] = *plan.arenaLayout;
+  }
   dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
   while (true) {
-    begin = queue->beginCpuReadyArenaSource(plan.rawOrdinal,
-                                            *plan.arenaLayout);
+    begin = segmentSerial
+        ? queue->beginCpuReadyArenaSources(
+              plan.rawOrdinal, std::span(sourceLayouts).first(sourceCount))
+        : queue->beginCpuReadyArenaSource(plan.rawOrdinal, sourceLayouts[0]);
     if (begin.status !=
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
     }
-    if (!queue->waitForCpuReadyArenaAdmission(*plan.arenaLayout)) {
+    if (!queue->waitForCpuReadyArenaAdmission(sourceLayouts[0])) {
       return commitChunkFail("chunk-arena-pressure-stopped");
     }
   }

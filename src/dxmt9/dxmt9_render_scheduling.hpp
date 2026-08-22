@@ -26,14 +26,48 @@ enum class PartitionModeFallback : std::uint8_t {
   InvalidValue,
 };
 
+enum class SourceIdentityMode : std::uint8_t { EventSerial, SegmentSerial };
+enum class SourceIdentityModeRequest : std::uint8_t {
+  Default,
+  Event,
+  Segment,
+  Invalid,
+};
+
+struct SourceIdentityConfig {
+  SourceIdentityModeRequest requested = SourceIdentityModeRequest::Default;
+  SourceIdentityMode resolved = SourceIdentityMode::EventSerial;
+  PartitionModeFallback fallback = PartitionModeFallback::None;
+  friend constexpr bool operator==(const SourceIdentityConfig&,
+                                   const SourceIdentityConfig&) = default;
+};
+
 struct RenderPartitionConfig {
   PartitionModeRequest requested = PartitionModeRequest::Default;
   PartitionExecutionMode resolved = PartitionExecutionMode::IdentitySerial;
   PartitionModeFallback fallback = PartitionModeFallback::None;
+  SourceIdentityConfig sourceIdentity{};
 
   friend constexpr bool operator==(const RenderPartitionConfig&,
                                    const RenderPartitionConfig&) = default;
 };
+
+constexpr SourceIdentityConfig resolveSourceIdentityConfig(
+    const char* value) noexcept {
+  if (!value) {
+    return {};
+  }
+  const std::string_view selected(value);
+  if (selected == "event") {
+    return {.requested = SourceIdentityModeRequest::Event};
+  }
+  if (selected == "segment") {
+    return {.requested = SourceIdentityModeRequest::Segment,
+            .resolved = SourceIdentityMode::SegmentSerial};
+  }
+  return {.requested = SourceIdentityModeRequest::Invalid,
+          .fallback = PartitionModeFallback::InvalidValue};
+}
 
 constexpr RenderPartitionConfig resolveRenderPartitionConfig(
     const char* value) noexcept {
