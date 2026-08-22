@@ -85,6 +85,31 @@ root (`install_heroic_wine.sh`, or `stage_builtin_pe_dlls()` in
 `run_d3d9_conformance.py`). Verifying the wrong copy's hash reads exactly like
 success.
 
+## Rule: a worktree is not an isolation boundary for repo-global state
+
+Parallel work happens in `git worktree` checkouts, which isolate the *working
+tree* and nothing else. Several things an agent reaches for are shared across
+every worktree and every concurrent session, and each has already caused a real
+incident here:
+
+| Shared thing | Incident |
+|---|---|
+| **The stash list** | Twice on 2026-08-22. `git stash` on an already-clean tree stashes nothing and returns 0; the following `git stash pop` then applies the repo's *oldest* stash — in both cases a July WIP entry from unrelated work — onto current master, with conflicts. The pop conflicting is what saved the entry; a clean pop would have silently dropped it. |
+| **The Wine root** | A conformance bisect left the last-measured commit's `d3d9.dll` staged in `$WINE_ROOT`, so the next run silently measured it (see the staging rule above). |
+| **`tmp/` outputs** | `run_d3d9_conformance.py --output` is one fixed path every run overwrites, which is why runs now archive to `experiments/output/conformance-<UTC>/`. |
+
+**Rules:**
+
+- Do not use `git stash` in this repository. To compare against another commit,
+  use a detached checkout or a second worktree. If a pop conflicts
+  unexpectedly, `git reset --hard HEAD` clears the failed application without
+  losing the entry — then check `git stash list` before doing anything else.
+- Never assume a bare `stash@{0}` is yours. Multiple sessions and seven
+  long-lived entries share that stack.
+- Before trusting any measurement, confirm which artifacts it actually loaded
+  (`.staged-build.json`, `result.json:staged_build`) rather than which ones you
+  built.
+
 ## CI
 
 `.github/workflows/ci.yml` runs the host unit build + `meson test` on
