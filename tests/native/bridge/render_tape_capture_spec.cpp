@@ -3736,6 +3736,10 @@ void testPresentCaptureResultAbiAndOneShotCancellation() {
         "encoded mirror ticket is consumed exactly once and is not cancelled");
 }
 
+// Model binding for RenderTapeIdentitySegments.tla's SettlementExact and
+// RecordPartition predicates: the positive split deliberately uses source
+// ordinals/seq IDs 51/53 and 61/66, while every swapped, truncated, foreign,
+// or pass-metadata mutation fails before completion evidence is exposed.
 void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   RenderTapeProductionIdentityLedger ledger;
   const std::array ranges{

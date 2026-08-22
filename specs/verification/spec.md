@@ -126,17 +126,20 @@ actions, and output pixels. Prior-output loads, arbitrary controls, broader
 provider grammar, unbounded sequences, concurrency, and driver behavior remain
 outside this checker.
 
-The v2 identity-segment lane is a separate refinement obligation. Its required
-bounded model (`RenderTapeIdentitySegments.tla`) must cover one command event
-with multiple ordered source segments, exact event-local record partitioning,
-pass-piece continuity across a segment edge, flattened source/sequence
-monotonicity, and whole-event fail-closed publication. The scheduling models
-must additionally extend `CpuReadySessionProgress.tla`,
-`EncodeSessionCompletion.tla`, and `PostEncodePayloadRetirement.tla` (or
-provide an equivalent composed model) for atomic event-group admission,
-per-segment completion, final event settlement, and shared-resource/page
-watermarks. Until those models and production-predicate native bindings exist,
-v2 identity is a specification/gap item, not verification evidence.
+The v2 identity-segment lane has a bounded refinement in
+`RenderTapeIdentitySegments.tla`. One event is bounded to three authenticated
+source rows and six records: the model proves disjoint/ordered segment ranges,
+pass-piece continuity at source edges, flattened (strictly ordered but not
+numerically adjacent) source/sequence completion, atomic all-row Ready
+publication, and exact full-run settlement registration through the tail seq.
+It also models two-phase newest-suffix abort (all members may be detached and
+held Reclaiming before destruction, then finish strictly reverse-tail), exact
+high-water restoration, one pre-effect EventSerial fallback, post-effect
+fail-stop, shared greatest-dependent resource/page watermarks, final event
+settlement, and reclaim liveness under weak fairness. Native
+`cpu_ready_tape_spec.cpp` and `render_tape_capture_spec.cpp` bind the abort,
+partition, and settlement predicates; Metal/pixels, unbounded provider
+grammar, and GPU completion scheduling remain outside this bounded claim.
 
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
@@ -194,6 +197,8 @@ specs/verification/
     ├── ParallelDrawBinding.cfg
     ├── RenderTapeParallelJoin.tla  Clear/FULL_SNAPSHOT DrawRun/child join/Present refinement
     ├── RenderTapeParallelJoin.cfg
+    ├── RenderTapeIdentitySegments.tla  bounded SegmentSerial event-group admission/abort/completion
+    ├── RenderTapeIdentitySegments.cfg
     ├── PostEncodePayloadRetirement.tla  encode/retire/receipt/completion refinement
     ├── PostEncodePayloadRetirement.cfg
     ├── EncodeSchedulingProgress.tla  composed queue progress and Present obligations
@@ -320,6 +325,7 @@ exercise all structural behaviors while keeping the state space tractable.
 | ConcurrentProgressSignals | `MaxRing` / `MaxFrameLatency` / `MaxSeqId` / `Queries` | 3 / 2 / 6 / `{q1,q2}` | ring=32, latency=2, seq unbounded, queries dynamic |
 | DrawableToken | `MAX_PIDS` / `Drawables` | 2 / `{D1,D2}` | unbounded present-ids, opaque drawables |
 | EncodeSessionCompletion | `MaxSeqId` / `MaxSessionLen` | 5 / 3 | unbounded source seqIds, bounded by `kMaxEncodeSessionSources` and queue ring size |
+| RenderTapeIdentitySegments | `MaxRecords` / `MaxSeqId` / `MaxPassPieces` / `MaxPages` | 6 / 9 / 3 / 3 | one event, three source rows, six records; production ordinals/seqIds and provider grammar unbounded |
 | CpuReadySessionProgress | `MaxSources` / `MaxReady` / `MaxResident` / `MaxBatch` / `MaxSessionLen` / `MaxReleaseEvents` / `MaxReleaseGeneration` / `MaxPressureGeneration` | 2 / 2 / 2 / 2 / 2 / 2 / 2 / 2 | unbounded source ordinals; fixed Tape/Ready/session/release capacities and monotone release/latch generations |
 | EncodeSchedulingProgress | `MaxSources` / `MaxSessionLen` / `MaxPresentOutstanding` | 2 / 2 / 1 | unbounded source seqIds; bounded queue/session storage and runtime Present pacing cap |
 | DceChunkLookahead | `MaxSources` / `MaxInflight` | 4 / 3 | unbounded source seqIds / `kMaxQueuedChunks`; exactly one held lookahead source |
@@ -403,6 +409,7 @@ or reviewing a TLA+ module.
 | `SessionCapacityLease.tla` (`R-BACK-2.65` refinement) | Fixed encoded-work cap plus separate physical-residency vector and complete wrap-aware ordinary-successor reserve; an explicit full-residency Writing startup credits the unique successor once, eligible encoded heads may retire residency without reducing work, the deterministic work-cap candidate remains Ready, and exact predecessor submission is independent of GPU completion | `SessionCapacityLeaseState`, the typed `CpuReadyTape` first-acquisition snapshot, the queue-owned capacity-progress generation, and the command-queue session coordinator | `TypeOK`, `BoundedCapacity`, `LeaseOwnsCompleteHeadroom`, `WritingSuccessorIsUnique`, `CapCandidateStaysReady`, `NoPressureCreatedRelease`, `CapacityWakeMatchesProgress`, `SubmittedGroupsRespectCap`, `ResidencyIsSeparateFromWork` | `CapProgress`, `StartupCapacityWakeProgress`, `StartupDirectLeaseProgress`, `WritingSuccessorStartupProgress`; Writing startup reaches acquire/admit/retire/publish without completion or pressure release, while older submitted residency still waits for reclaim | `tests/native/backend/encode_session_admission_spec.cpp`, `tests/native/backend/cpu_ready_tape_spec.cpp`, `tests/native/backend/cpu_ready_session_join_spec.cpp`, `tests/native/backend/post_encode_payload_retirement_spec.cpp` |
 | `ParallelDrawBinding.tla` | Source-local parallel child binding/order/join refinement (`R-BACK-2.63`, source-local slice of `R-VERIF-2.15`) | `planDrawBindingTransition` / `applyDrawBindingTransition`, `BindingState::lastDrawBindingPayloadIdentity`, pass-wide pipeline-handle ABI preflight, and production child execution in `src/dxmt9/dxmt9_draw_encoder_chunk.mm` | `DrawUsesRequiredUniformGeneration`, `PsoBindingAbiMatchesChildBinding`, one Stage 1-or-Stage 2b ABI per pass, `ChildBindingShadowsAreIsolated`, `DrawsExecuteExactlyOnceInSerialOrder`, `AllChildrenEndBeforeParent`, `CompletionAfterJoinedParent` | `CreatedChildEventuallyJoinedOrFallback`, `ParentAndCompletionProgress` | `tests/native/core/draw_uniforms_dirty_spec.cpp`, `tests/native/backend/parallel_render_pass_spec.cpp`, `tests/native/backend/parallel_draw_binding_metal_spec.mm` (Stage 2b slots 0/3, two concurrently encoded Metal children, additive A→B→A, 100 serial/parallel byte comparisons plus stale-transition negative control) |
 | `ParallelPolicySelection.tla` | Bounded safe-only candidate selection/refinement (`R-BACK-2.68`–`2.75`, `R-VERIF-2.16`–`2.22`) | `validateParallelPassSemanticPlan` / `selectParallelPassCandidate` proof-core predicates and no production call site; native bounded adversarial value tests own exact coverage/arithmetic/selection equivalence | `TypeOK`, `SelectionIsSafe`, `SelectionIsArgmax`, `NoEffectBeforeSelection`, `SerialFallbackHasNoParallelEffect`, `SelectedProofOnlyEffect`, `JoinParentCompletion` | `EventuallySettles`, `SelectedEventuallySettles`, and `SerialEventuallySettles` under weak fairness; bounded invalid-batch serial fallback, benefit-zero skip, selected effect, join, parent end, completion | `tests/native/backend/parallel_render_pass_spec.cpp` |
+| `RenderTapeIdentitySegments.tla` | Bounded SegmentSerial event-group admission, exact six-record partition, pass-piece edge continuity, atomic publish/abort, flattened completion, settlement, watermarks, reclaim, and pre-effect fallback | `CpuReadyTape::reserveArenaBatch` / `beginArenaAbort` / `finishArenaAbort` / `restoreArenaBatchHighWaters`; production identity-ledger exact same-event run/tail registration; `InvalidPlanEventSerial` models plan-validator rejection before reservation while `PreEffectPassMismatchFallback` models a post-reservation abort | `TypeOK`, `RecordPartition`, `PassPieceContinuity`, `FlattenedCompletion`, `AtomicReadyPublication`, `TwoPhaseAbortOrder`, `SettlementExact`, `WatermarkSafety`, `FallbackBeforeEffects`, `FailStopSafety` | `EventuallyTerminal`, `EventuallySettledOrReclaimed` under weak fairness; GPU completion remains environmental | `tests/native/backend/cpu_ready_plan_spec.cpp` plan-validator negatives, `tests/native/backend/cpu_ready_tape_spec.cpp` (`batchAbortDetachesSuffixBeforeReverseFinish`), `tests/native/bridge/render_tape_capture_spec.cpp` exact settlement truth table |
 | `RenderTapeParallelJoin.tla` | Bounded Render Tape identity/ExplicitParallel refinement for one Clear, a `FULL_SNAPSHOT` DrawRun, two child partitions, joined completion, and Present | `device_c_render_tape_provider.*` partition-mode replay and child join; value-level contract for the production provider | `TypeOK`, `SelectionAndPartitionNonVacuous`, `IdentitySerialOrder`, `ChildWorkIsOrderedAndOwned`, `ChildrenJoinInOrder`, `ParallelOutputPreservesSerialOrder`, `SnapshotPrecedesDraw`, `ExactIdentityRefinement` | `ClearProgress`, `SnapshotProgress`, `IdentityProgress`, `WorkerWorkProgress`, `JoinProgress`, `PresentProgress` | Provider CLI `parallel-verify` supplies the fresh-process identity/ExplicitParallel oracle; native provider and Metal tests remain the concrete binding layer |
 | `WireObjectRegistry.tla` | PE → unix canonical stable identity and slot reuse | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*`, `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `KindStable`, `NoReuseWithoutGenerationAdvance`, `NoGenerationWrap` | _(safety model; no fairness property)_ | `tests/native/bridge/chunk_record_registry_spec.cpp`, `tests/native/bridge/chunk_record_validation_spec.cpp` |
 | `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/backend/resource_lifetime_spec.cpp` directly forces LIFO slot reuse, generation advance, stale/wrong-kind rejection, and sibling-slot preservation; bridge registry coverage remains complementary |

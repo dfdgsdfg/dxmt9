@@ -7,6 +7,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1420,6 +1421,69 @@ void batchCapacitySnapshotOrdersWrappedWritingRing() {
   }
 }
 
+// Model binding for RenderTapeIdentitySegments.tla's two-phase abort:
+// detach the entire newest suffix first, then destroy owners out of lock,
+// and finish only in reverse-tail order.  No Ready row is visible during the
+// detached/reclaiming window and the exact pre-admission high waters can be
+// restored only after every owner has finished.
+void batchAbortDetachesSuffixBeforeReverseFinish() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 1)};
+  const auto segment = makeMinimalArenaLayout();
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      std::array{segment}, 4096, 8);
+  check(sourceLayout.has_value(), "two-phase model source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 111, 41, 61, 17);
+  check(batch.has_value(), "two-phase model fixture reserves its group");
+
+  std::array<std::optional<CpuReadyTape::DetachedArenaOwner>, 3> owners{};
+  for (std::size_t i = batch->count; i != 0; --i) {
+    auto detached = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+    check(detached.has_value(),
+          "two-phase model fixture detaches the newest suffix in order");
+    owners[i - 1].emplace(std::move(*detached));
+  }
+  check(tape.readyCount() == 0u && tape.residentCount() == batch->count,
+        "all detached/reclaiming members remain resident with zero Ready");
+
+  for (auto& owner : owners) {
+    check(owner.has_value(), "all detached owners are retained for destruction");
+    owner->destroy();
+    check(owner->destroyed(),
+          "all detached owners may be destroyed before any finish");
+  }
+  for (std::size_t i = batch->count; i != 0; --i) {
+    check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                std::move(*owners[i - 1])),
+          "two-phase finish is strict reverse-tail order");
+  }
+  check(tape.restoreArenaBatchHighWaters(*batch) &&
+            tape.readyCount() == 0u && tape.residentCount() == 0u &&
+            tape.reserveArenaBatch(layouts, 111, 41, 61, 18).has_value(),
+        "successful two-phase abort restores exact high waters and cursors");
+
+  CpuReadyTape wrongOrder{makeSeparatedPayloadConfig(8, 8, 1)};
+  auto wrongBatch = wrongOrder.reserveArenaBatch(layouts, 112, 41, 61, 19);
+  check(wrongBatch.has_value(), "wrong-order fixture reserves its group");
+  std::array<std::optional<CpuReadyTape::DetachedArenaOwner>, 3> wrongOwners{};
+  for (std::size_t i = wrongBatch->count; i != 0; --i) {
+    auto detached = wrongOrder.beginArenaAbort(
+        wrongBatch->reservations[i - 1].ticket);
+    check(detached.has_value(), "wrong-order fixture detaches its suffix");
+    wrongOwners[i - 1].emplace(std::move(*detached));
+  }
+  for (auto& owner : wrongOwners) {
+    check(owner.has_value(), "wrong-order fixture retains detached owners");
+    owner->destroy();
+    check(owner->destroyed(),
+          "wrong-order fixture destroys all detached owners");
+  }
+  check(!wrongOrder.finishArenaAbort(wrongBatch->reservations[0].ticket,
+                                     std::move(*wrongOwners[0])) &&
+            wrongOrder.readyCount() == 0u && wrongOrder.residentCount() != 0u,
+        "stale/wrong-order finish is rejected without exposing Ready");
+}
+
 void segmentedArenaPublishesAndReclaimsAsOneSource() {
   CpuReadyTape tape{makeSeparatedPayloadConfig()};
   const auto segment = makeMinimalArenaLayout();
@@ -1958,6 +2022,7 @@ int main() {
     batchArenaGroupMetadataRejectsMissingAndDuplicateMembers();
     batchArenaLateFailureAndCapacityLeaveNoReadyPrefix();
     batchCapacitySnapshotOrdersWrappedWritingRing();
+    batchAbortDetachesSuffixBeforeReverseFinish();
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     postEncodeRetirementFinishesBeforeGpuCompletion();
