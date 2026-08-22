@@ -2746,7 +2746,9 @@ bool QueueLifecycleController::drainCompletedArenaGroupSettlementsLocked(
       return true;
     }
     CpuReadyTape::ArenaGroupSettlement settlement;
-    if (!completedArenaGroupSettlements_.consume(settlement) ||
+    if (completedEventSettlementCount_ ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        !completedArenaGroupSettlements_.consume(settlement) ||
         settlement.tailSeqId <= completedEventTailSeqId_) {
       return false;
     }

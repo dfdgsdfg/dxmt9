@@ -1150,10 +1150,6 @@ class QueueLifecycleController {
   // processed, false after the controller-owned pending-stop latch is set and
   // the queue is empty.
   bool processOnePendingCompletion();
-  bool consumeCompletedArenaGroupSettlement(
-      CpuReadyTape::ArenaGroupSettlement& settlement) noexcept {
-    return completedArenaGroupSettlements_.consume(settlement);
-  }
   ArenaGroupSettlementLedger* completedArenaGroupSettlementLedger() noexcept {
     return &completedArenaGroupSettlements_;
   }
