@@ -30,6 +30,61 @@ RenderTapeIdentityValidationResult failure(
 
 } // namespace
 
+bool validateRenderTapeIdentitySettlements(
+    std::span<const RenderTapeIdentitySource> sources,
+    std::span<const RenderTapeIdentitySettlement> settlements) noexcept {
+  if (settlements.empty()) return true;
+  try {
+    std::vector<bool> covered(sources.size(), false);
+    std::uint64_t priorEvent = 0u;
+    for (const auto& settlement : settlements) {
+      if (settlement.eventOrdinal == 0u ||
+          settlement.eventOrdinal <= priorEvent ||
+          settlement.rawOrdinal == 0u || settlement.buildGeneration == 0u ||
+          settlement.firstSourceOrdinal == 0u || settlement.tailSeqId == 0u ||
+          settlement.sourceCount == 0u || settlement.reserved0 != 0u) {
+        return false;
+      }
+      priorEvent = settlement.eventOrdinal;
+
+      std::size_t first = sources.size();
+      for (std::size_t index = 0; index < sources.size(); ++index) {
+        if (sources[index].eventOrdinal == settlement.eventOrdinal &&
+            sources[index].sourceOrdinal == settlement.firstSourceOrdinal) {
+          first = index;
+          break;
+        }
+      }
+      if (first == sources.size() ||
+          settlement.sourceCount > sources.size() - first) {
+        return false;
+      }
+      const std::size_t count = settlement.sourceCount;
+      for (std::size_t offset = 0; offset < count; ++offset) {
+        const std::size_t index = first + offset;
+        const auto& source = sources[index];
+        if (covered[index] || source.eventOrdinal != settlement.eventOrdinal ||
+            source.sourceOrdinal == 0u || source.seqId == 0u) {
+          return false;
+        }
+        if (offset != 0u &&
+            (source.sourceOrdinal <= sources[index - 1u].sourceOrdinal ||
+             source.seqId <= sources[index - 1u].seqId)) {
+          return false;
+        }
+        covered[index] = true;
+        if (offset + 1u == count && source.seqId != settlement.tailSeqId) {
+          return false;
+        }
+      }
+    }
+    return std::all_of(covered.begin(), covered.end(),
+                       [](bool value) { return value; });
+  } catch (...) {
+    return false;
+  }
+}
+
 RenderTapeIdentityValidationResult validateRenderTapeIdentity(
     std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue& verifiedCatalogue,
@@ -213,20 +268,8 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
   if (sourceIndex != sources.size() || expectedFirstRange != ranges.size()) {
     return failure(RenderTapeIdentityStatus::SourceCoverageMismatch, sourceIndex);
   }
-  std::uint64_t priorSettlementEvent = 0u;
-  for (std::uint32_t index = 0u; index < settlements.size(); ++index) {
-    const auto& settlement = settlements[index];
-    if (settlement.eventOrdinal == 0u ||
-        settlement.eventOrdinal <= priorSettlementEvent ||
-        settlement.rawOrdinal == 0u || settlement.buildGeneration == 0u ||
-        settlement.firstSourceOrdinal == 0u || settlement.tailSeqId == 0u ||
-        settlement.sourceCount == 0u ||
-        settlement.sourceCount > sources.size() ||
-        settlement.reserved0 != 0u) {
-      return failure(RenderTapeIdentityStatus::InvalidFrameIdentity,
-                     index);
-    }
-    priorSettlementEvent = settlement.eventOrdinal;
+  if (!validateRenderTapeIdentitySettlements(sources, settlements)) {
+    return failure(RenderTapeIdentityStatus::InvalidFrameIdentity);
   }
   result.status = RenderTapeIdentityStatus::Valid;
   if (out) {

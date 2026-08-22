@@ -1562,6 +1562,46 @@ void testCompletePresentPublishesExactlyOneTape() {
         "second Present cannot publish another interval");
 }
 
+void testSettlementRowsBindExactSourceSubset() {
+  const std::array sources{
+      RenderTapeIdentitySource{.eventOrdinal = 9u, .sourceOrdinal = 11u,
+                               .seqId = 101u},
+      RenderTapeIdentitySource{.eventOrdinal = 9u, .sourceOrdinal = 12u,
+                               .seqId = 102u},
+      RenderTapeIdentitySource{.eventOrdinal = 10u, .sourceOrdinal = 13u,
+                               .seqId = 103u},
+  };
+  const std::array valid{
+      RenderTapeIdentitySettlement{.eventOrdinal = 9u,
+                                   .rawOrdinal = 9u,
+                                   .buildGeneration = 1u,
+                                   .firstSourceOrdinal = 11u,
+                                   .tailSeqId = 102u,
+                                   .sourceCount = 2u},
+      RenderTapeIdentitySettlement{.eventOrdinal = 10u,
+                                   .rawOrdinal = 10u,
+                                   .buildGeneration = 1u,
+                                   .firstSourceOrdinal = 13u,
+                                   .tailSeqId = 103u,
+                                   .sourceCount = 1u},
+  };
+  check(validateRenderTapeIdentitySettlements(sources, valid),
+        "valid settlements bind complete contiguous event source groups");
+
+  auto swapped = valid;
+  swapped[0].firstSourceOrdinal = 12u;
+  check(!validateRenderTapeIdentitySettlements(sources, swapped),
+        "swapped source settlement fails closed");
+  auto foreign = valid;
+  foreign[1].eventOrdinal = 77u;
+  check(!validateRenderTapeIdentitySettlements(sources, foreign),
+        "foreign event settlement fails closed");
+  auto truncated = valid;
+  truncated[0].sourceCount = 1u;
+  check(!validateRenderTapeIdentitySettlements(sources, truncated),
+        "truncated settlement coverage fails closed");
+}
+
 void testSequenceCaptureDefersSealUntilSecondPresent() {
   constexpr std::array<std::byte, 4u> firstBytes{
       std::byte{0x10u}, std::byte{0x11u}, std::byte{0x12u}, std::byte{0x13u}};
@@ -4462,6 +4502,7 @@ int main(int argc, char** argv) {
     testProducedByCapturedPassCaptureEndToEnd();
     testProducedDefinitionTemporalOrderAndAliasJournal();
     testCompletePresentPublishesExactlyOneTape();
+    testSettlementRowsBindExactSourceSubset();
     testSequenceCaptureDefersSealUntilSecondPresent();
     testValidationFailurePreservesEventAndChunkLocation();
     testObjectDefineValidationDetailTruthTable();

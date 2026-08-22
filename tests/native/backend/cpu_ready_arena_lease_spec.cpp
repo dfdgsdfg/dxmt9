@@ -879,6 +879,79 @@ void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
   }
 }
 
+void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(126, layouts);
+  check(begin.has_value(), "cross-source capture admission must succeed");
+  check(begin->beginCaptureIdentity(2u),
+        "batch capture identity must reserve the complete event range");
+
+  const auto first = materializedSubmission(Handle{11}, 7, 9);
+  const auto second = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{first};
+  check(begin->selectSourceSegment(0, 0),
+        "first source local segment must be selected");
+  check(begin->captureNextCommandRecord(0),
+        "first source anchor must be recorded before append");
+  queue.submitDrawRunBatch(submissions);
+  submissions[0] = second;
+  check(begin->selectSourceSegment(1, 0),
+        "second source local segment must be selected in order");
+  check(begin->captureNextCommandRecord(1),
+        "second source anchor must be recorded before append");
+  queue.submitDrawRunBatch(submissions);
+  constexpr std::array firstRecords{0u, 1u};
+  constexpr std::array recordCounts{1u, 1u};
+  check(begin->setCaptureSourceRanges(firstRecords, recordCounts),
+        "capture ranges must cover both source rows contiguously");
+
+  CommandQueue::CpuReadyCaptureIdentityBatch identity{};
+  check(begin->publishBatch({}, &identity),
+        "production batch publish must seal and atomically publish");
+  check(identity.valid() && identity.segments.size() == 2u,
+        "batch publication must return both authenticated segments");
+  check(identity.segments[0].ranges.size() == 1u &&
+            identity.segments[1].ranges.size() == 1u &&
+            identity.segments[0].ranges[0].logicalPassId != 0u &&
+            identity.segments[0].ranges[0].logicalPassId ==
+                identity.segments[1].ranges[0].logicalPassId,
+        "same-pass cross-source rows must carry one nonzero logical pass");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
+        "cross-source publication must expose both Ready entries together");
+}
+
+void testBatchBuilderFailureLeavesNoReadyEntries() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(127, layouts);
+  check(begin.has_value(), "builder failure admission must succeed");
+  const auto submission = materializedSubmission(Handle{12}, 8, 10);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "builder failure first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "builder failure second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  // The one-command source capacity makes this append reject the active
+  // builder before publication; the batch must still have zero Ready rows.
+  queue.submitDrawRunBatch(submissions);
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::FailStopped,
+        "post-append builder rejection must fail-stop the complete batch");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u,
+        "builder rejection must not expose a partial Ready entry");
+}
+
 void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -910,6 +983,8 @@ int main() {
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();
+    testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
+    testBatchBuilderFailureLeavesNoReadyEntries();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';

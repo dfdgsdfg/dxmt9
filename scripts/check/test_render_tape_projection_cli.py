@@ -369,7 +369,9 @@ def main() -> int:
         evidence = real_replay["runs"][0]["identity_evidence"]
         assert evidence["authority"] == "derived-projection"
         assert evidence["derived_sidecar"] is True
-        assert evidence["segment_count"] == evidence["completed_segment_count"]
+        assert evidence["segment_count"] == evidence["provenance_segment_count"]
+        assert evidence["completed_segment_count"] == 0
+        assert evidence["completion_evidence"] == "not-queue-authenticated"
         assert evidence["settlement_count"] == evidence["settlement_table_count"]
         assert evidence["settlement_count"] == 1
         assert len(evidence["segments"]) == evidence["segment_count"]
@@ -377,7 +379,9 @@ def main() -> int:
             row["source_ordinal"] > 0 and row["seq_id"] > 0
             for row in evidence["segments"]
         )
-        assert evidence["final_event_settlement"]["tail_seq_id"] > 0
+        assert evidence["event_settlement_table"] == []
+        assert len(evidence["derived_settlement_table"]) == 1
+        assert evidence["final_event_settlement"] is None
 
         retired_v1 = pathlib.Path(root) / "retired-v1-identity.bin"
         retired_bytes = bytearray((provider_source / "identity.bin").read_bytes())

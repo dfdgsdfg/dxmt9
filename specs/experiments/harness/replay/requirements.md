@@ -892,16 +892,18 @@ complete group.
 
 The segment ranges must partition every event's records exactly once in record
 order. Each segment carries an exact range of pass-membership pieces naming the
-frozen pre-reorder `logicalPassId`, DAG pass index, and pass kind. A logical
-pass may cross a segment edge only through contiguous adjacent pieces with
-identical pass identity; the edge itself is not a pass boundary. Missing,
+frozen post-proof `logicalPassId`, optimized DAG pass index, and pass kind.
+EventSerial and SegmentSerial use the same event-wide graph and pass-coalesce
+proof. A logical pass may cross a segment edge only through contiguous adjacent
+pieces with identical proven pass identity; the edge itself is not a pass
+boundary. Missing,
 altered, stale-token, non-monotone, partial, overlapping, inferred,
 process-local, or cross-edge-inconsistent identity rejects the bundle before
 projection or provider effects.
 
 The capture join must copy value identity from the actual
-`ResolvedPublishedSource` and `CpuReadySourceMetadata` plus the FrameGraph that
-owns the command before reorder. It joins that owned value to the PE event
+`ResolvedPublishedSource` and `CpuReadySourceMetadata` plus the event-wide
+FrameGraph that owns the command after the pass-coalesce proof. It joins that owned value to the PE event
 ordinal only through the bounded capture token; it must not retain pointers,
 borrowed spans, slot indices, or registry addresses. Capture-disabled execution
 must gate before metadata collection or allocation. The PE must finish any

@@ -421,7 +421,8 @@ class CommandQueue {
   // Cold, capture-only ownership copied from the exact Direct-Arena source
   // before it becomes visible to the encode thread.  Raw-record ranges are
   // expressed in the PE CommandChunk coordinate space; DAG indices and pass
-  // kinds come from the source's immutable pre-reorder FrameGraph.
+  // kinds come from the event-wide authenticated FrameGraph after the
+  // production pass-coalesce proof; segment edges do not create new passes.
   struct CpuReadyCapturePassRange {
     std::uint32_t firstRecord = 0;
     std::uint32_t recordCount = 0;
@@ -451,6 +452,12 @@ class CommandQueue {
              std::all_of(segments.begin(), segments.end(),
                          [](const auto& segment) { return segment.valid(); });
     }
+  };
+
+  enum class CpuReadyArenaPublishStatus : std::uint8_t {
+    Published,
+    RecoverableFailure,
+    FailStopped,
   };
 
   // Move-only capability for one replay-thread-owned direct arena source.
@@ -485,6 +492,9 @@ class CommandQueue {
         std::span<const core::ChunkHandleEntry> resources = {},
         CpuReadyCaptureIdentity* captureIdentity = nullptr) noexcept;
     bool publishBatch(
+        std::span<const core::ChunkHandleEntry> resources,
+        CpuReadyCaptureIdentityBatch* captureIdentity) noexcept;
+    CpuReadyArenaPublishStatus publishBatchWithStatus(
         std::span<const core::ChunkHandleEntry> resources,
         CpuReadyCaptureIdentityBatch* captureIdentity) noexcept;
     bool setCaptureSourceRanges(
@@ -1345,7 +1355,7 @@ class CommandQueue {
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex, std::size_t sourceIndex,
       std::size_t segmentIndex) noexcept;
-  bool publishCpuReadyArenaBatch(
+  CpuReadyArenaPublishStatus publishCpuReadyArenaBatch(
       core::CpuReadyPublicationTicket ticket,
       std::span<const core::ChunkHandleEntry> resources,
       CpuReadyCaptureIdentityBatch* captureIdentity = nullptr) noexcept;

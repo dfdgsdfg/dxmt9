@@ -779,6 +779,10 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
           .reserved0 = item.reserved0,
       });
     }
+    if (!validateRenderTapeIdentitySettlements(sources, sidecarSettlements)) {
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
     auto identity = buildRenderTapeIdentity(
         sealedArtifact_, catalogue_, captureToken, presentOrdinal,
         captureToken, RenderTapeIdentityAuthority::Capture, sources, ranges,
@@ -787,24 +791,18 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
       abortInternal();
       return RenderTapeCaptureStatus::ValidationFailed;
     }
+    const auto& finalIdentitySettlement = sidecarSettlements.back();
     if (settlement.count != 1u || settlement.eventOrdinal == 0u ||
         settlement.sourceOrdinal == 0u || settlement.seqId == 0u ||
+        finalIdentitySettlement.eventOrdinal != settlement.eventOrdinal ||
+        finalIdentitySettlement.tailSeqId != settlement.seqId ||
+        finalIdentitySettlement.sourceCount == 0u ||
+        finalIdentitySettlement.firstSourceOrdinal == 0u ||
         sources.back().eventOrdinal != settlement.eventOrdinal ||
         sources.back().sourceOrdinal != settlement.sourceOrdinal ||
         sources.back().seqId != settlement.seqId) {
       abortInternal();
       return RenderTapeCaptureStatus::ValidationFailed;
-    }
-    std::uint64_t priorSettlementEvent = 0u;
-    for (const auto& item : settlements) {
-      if (item.eventOrdinal == 0u || item.rawOrdinal == 0u ||
-          item.buildGeneration == 0u || item.firstSourceOrdinal == 0u ||
-          item.tailSeqId == 0u || item.sourceCount == 0u ||
-          item.reserved0 != 0u || item.eventOrdinal <= priorSettlementEvent) {
-        abortInternal();
-        return RenderTapeCaptureStatus::ValidationFailed;
-      }
-      priorSettlementEvent = item.eventOrdinal;
     }
     publicationBundle_.identity = std::move(identity);
     publicationBundle_.identitySettlement = settlement;

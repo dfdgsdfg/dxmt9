@@ -1683,12 +1683,21 @@ int32_t replayPlannedChunk(D9CDevice* device,
   const auto admissionTicket = lease.ticket();
   dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
   dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
-  const bool published = segmentSerial
-      ? lease.publishBatch(raw.resourceEntries,
-                           captureIdentityRequested ? &captureBatch : nullptr)
-      : lease.publish(raw.resourceEntries,
-                      captureIdentityRequested ? &captureIdentity : nullptr);
-  if (!published) {
+  const auto publishStatus = segmentSerial
+      ? lease.publishBatchWithStatus(
+            raw.resourceEntries,
+            captureIdentityRequested ? &captureBatch : nullptr)
+      : (lease.publish(raw.resourceEntries,
+                       captureIdentityRequested ? &captureIdentity : nullptr)
+             ? dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published
+             : dxmt9::CommandQueue::CpuReadyArenaPublishStatus::FailStopped);
+  if (publishStatus ==
+      dxmt9::CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure) {
+    return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                              allowDirectArena, /*forceEventSerial=*/true);
+  }
+  if (publishStatus !=
+      dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published) {
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
   }

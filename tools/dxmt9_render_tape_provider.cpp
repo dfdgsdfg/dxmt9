@@ -116,11 +116,18 @@ void printResult(const FrameTapeReplayResult& result,
             << resolvedPartitionMode << "\"},";
   std::cout << "\"identity_evidence\":{";
   if (identity) {
+    const bool derived = identity->header.authority == static_cast<std::uint32_t>(
+        RenderTapeIdentityAuthority::DerivedProjection);
     std::cout << "\"authority\":\""
               << identityAuthorityName(identity->header.authority)
               << "\",\"source_count\":" << identity->sources.size()
               << ",\"segment_count\":" << identity->sources.size()
-              << ",\"completed_segment_count\":" << identity->sources.size()
+              << ",\"provenance_segment_count\":" << identity->sources.size()
+              << ",\"completed_segment_count\":"
+              << (derived ? 0u : identity->sources.size())
+              << ",\"completion_evidence\":\""
+              << (derived ? "not-queue-authenticated" : "queue-tail-fenced")
+              << "\""
               << ",\"settlement_count\":"
               << identity->settlements.size() << ",\"settlement_table_count\":"
               << identity->header.settlementCount << ",\"segments\":[";
@@ -135,7 +142,19 @@ void printResult(const FrameTapeReplayResult& result,
                 << ",\"record_count\":" << source.recordCount << "}";
     }
     std::cout << "],\"event_settlement_table\":[";
-    for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
+    if (!derived) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
+      if (index != 0u) std::cout << ',';
+      const auto& settlement = identity->settlements[index];
+      std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                << ",\"raw_ordinal\":" << settlement.rawOrdinal
+                << ",\"build_generation\":" << settlement.buildGeneration
+                << ",\"first_source_ordinal\":"
+                << settlement.firstSourceOrdinal << ",\"tail_seq_id\":"
+                << settlement.tailSeqId << ",\"source_count\":"
+                << settlement.sourceCount << "}";
+    }
+    std::cout << "],\"derived_settlement_table\":[";
+    if (derived) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
       if (index != 0u) std::cout << ',';
       const auto& settlement = identity->settlements[index];
       std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
@@ -147,7 +166,7 @@ void printResult(const FrameTapeReplayResult& result,
                 << settlement.sourceCount << "}";
     }
     std::cout << "],\"final_event_settlement\":";
-    if (identity->settlements.empty()) {
+    if (derived || identity->settlements.empty()) {
       std::cout << "null";
     } else {
       const auto& settlement = identity->settlements.back();
@@ -155,15 +174,15 @@ void printResult(const FrameTapeReplayResult& result,
                 << ",\"tail_seq_id\":" << settlement.tailSeqId
                 << ",\"source_count\":" << settlement.sourceCount << "}";
     }
-    std::cout << ",\"derived_sidecar\":"
-              << (identity->header.authority == static_cast<std::uint32_t>(
-                      RenderTapeIdentityAuthority::DerivedProjection)
-                      ? "true" : "false");
+    std::cout << ",\"derived_sidecar\":" << (derived ? "true" : "false");
   } else {
     std::cout << "\"authority\":\"rejected\",\"source_count\":0"
-                 ",\"segment_count\":0,\"completed_segment_count\":0"
+                 ",\"segment_count\":0,\"provenance_segment_count\":0"
+                 ",\"completed_segment_count\":0"
+                 ",\"completion_evidence\":\"none\""
                  ",\"settlement_count\":0,\"settlement_table_count\":0"
                  ",\"segments\":[],\"event_settlement_table\":[]"
+                 ",\"derived_settlement_table\":[]"
                  ",\"final_event_settlement\":null,\"derived_sidecar\":false";
   }
   std::cout << ",\"rejected\":" << (identityError.empty() ? "false" : "true")

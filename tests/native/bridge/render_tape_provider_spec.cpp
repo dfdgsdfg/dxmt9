@@ -3085,12 +3085,28 @@ void writeProjectionFixture(const std::filesystem::path& directory) {
   };
   const std::array settlements{
       RenderTapeIdentitySettlement{
+          .eventOrdinal = 5u,
+          .rawOrdinal = 5u,
+          .buildGeneration = 1u,
+          .firstSourceOrdinal = 101u,
+          .tailSeqId = 501u,
+          .sourceCount = 1u,
+      },
+      RenderTapeIdentitySettlement{
+          .eventOrdinal = 6u,
+          .rawOrdinal = 6u,
+          .buildGeneration = 1u,
+          .firstSourceOrdinal = 102u,
+          .tailSeqId = 502u,
+          .sourceCount = 1u,
+      },
+      RenderTapeIdentitySettlement{
           .eventOrdinal = 7u,
           .rawOrdinal = 7u,
           .buildGeneration = 1u,
-          .firstSourceOrdinal = 101u,
+          .firstSourceOrdinal = 103u,
           .tailSeqId = 503u,
-          .sourceCount = 3u,
+          .sourceCount = 1u,
       },
   };
   const auto identity = buildRenderTapeIdentity(

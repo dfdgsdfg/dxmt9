@@ -203,6 +203,13 @@ private:
   std::vector<D9CRenderTapeIdentityRangeEntry> ranges_{};
 };
 
+// Binds each value-owned settlement row to one and only one contiguous
+// CommandChunk source subset.  An empty table is permitted for structural
+// identities; once rows are present they must cover every source exactly.
+bool validateRenderTapeIdentitySettlements(
+    std::span<const RenderTapeIdentitySource> sources,
+    std::span<const RenderTapeIdentitySettlement> settlements) noexcept;
+
 RenderTapeIdentityValidationResult validateRenderTapeIdentity(
     std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue& verifiedCatalogue,

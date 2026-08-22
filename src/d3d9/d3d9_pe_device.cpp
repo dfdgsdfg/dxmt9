@@ -10392,6 +10392,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             identityResult.rangeCount == 0u ||
             identityResult.reserved0 != 0u ||
             identityResult.reserved1 != 0u ||
+            identityResult.reserved2 != 0u ||
             identityResult.settlementCount == 0u ||
             identityResult.eventOrdinal == 0u ||
             identityResult.settlementSourceOrdinal == 0u ||
@@ -10429,7 +10430,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             copiedIdentity.settlementCount != identityResult.settlementCount ||
             copiedIdentity.settlementEntrySize != identityResult.settlementEntrySize ||
             copiedIdentity.settlementTableOffset != identityResult.settlementTableOffset ||
-            copiedIdentity.reserved1 != 0u) {
+            copiedIdentity.reserved1 != 0u || copiedIdentity.reserved2 != 0u) {
             abortRenderTapeCapture("identity_copy");
             return;
         }
@@ -10438,7 +10439,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     sizeof(D9CRenderTapeIdentitySourceEntry) ||
             static_cast<std::size_t>(copiedIdentity.rangeCount) >
                 std::numeric_limits<std::size_t>::max() /
-                    sizeof(D9CRenderTapeIdentityRangeEntry)) {
+                    sizeof(D9CRenderTapeIdentityRangeEntry) ||
+            static_cast<std::size_t>(copiedIdentity.settlementCount) >
+                std::numeric_limits<std::size_t>::max() /
+                    sizeof(D9CRenderTapeIdentitySettlementEntry)) {
             abortRenderTapeCapture("identity_layout");
             return;
         }
@@ -10448,13 +10452,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const std::size_t rangeBytes =
             static_cast<std::size_t>(copiedIdentity.rangeCount) *
             sizeof(D9CRenderTapeIdentityRangeEntry);
+        if (sourceBytes > std::numeric_limits<std::size_t>::max() - rangeBytes) {
+            abortRenderTapeCapture("identity_layout");
+            return;
+        }
+        const std::size_t sourceAndRangeBytes = sourceBytes + rangeBytes;
         const std::size_t settlementBytes =
             static_cast<std::size_t>(copiedIdentity.settlementCount) *
             sizeof(D9CRenderTapeIdentitySettlementEntry);
-        if (sourceBytes > identityBytes.size() ||
+        if (sourceAndRangeBytes > std::numeric_limits<std::size_t>::max() -
+                                      settlementBytes ||
+            sourceBytes > identityBytes.size() ||
             rangeBytes > identityBytes.size() - sourceBytes ||
-            copiedIdentity.settlementTableOffset != sourceBytes + rangeBytes ||
-            settlementBytes != identityBytes.size() - sourceBytes - rangeBytes) {
+            copiedIdentity.settlementTableOffset != sourceAndRangeBytes ||
+            settlementBytes != identityBytes.size() - sourceAndRangeBytes) {
             abortRenderTapeCapture("identity_layout");
             return;
         }

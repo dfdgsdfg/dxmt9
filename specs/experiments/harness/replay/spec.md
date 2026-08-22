@@ -1031,9 +1031,11 @@ contiguous same-event group, not redundant wire fields. The entries for one
 event must partition the event's records exactly once; the flattened identity
 order is strict by event then segment.
 The membership table partitions each segment's records and pins the frozen
-pre-reorder logical pass ID, DAG pass index, and pass kind. A pass may cross a
-segment edge only through adjacent contiguous membership pieces with the same
-pass identity. Segment edges are not DAG or logical-pass boundaries.
+post-proof logical pass ID, optimized DAG pass index, and pass kind. EventSerial
+and SegmentSerial use the same event-wide source graph and pass-coalesce proof;
+a pass may cross a segment edge only through adjacent contiguous membership
+pieces with the same proven identity. Segment edges are not DAG or logical-pass
+boundaries, and IDs are never inferred from source-local order.
 
 Validation first authenticates both components, then checks exact command-event
 and record coverage, canonical table/range layout, strict source/sequence
@@ -1059,9 +1061,15 @@ Projection materialization creates a fresh digest-bound sidecar with authority
 settlement row. This authority describes only the new materialized bytes; it
 is not capture or queue-completion evidence and is never accepted where an
 executable-project input requires `Capture`. The provider CLI rejects v1 and
-malformed controls before effects, and reports authority, source/sequence
-segment rows, completed segment count, settlement table/count, and final event
-settlement explicitly.
+malformed controls before effects. Its intentionally independent
+`dxmt9.render_tape.provider_replay.v2` output schema reports authority,
+source/sequence segment rows, provenance segment count, and settlement
+table/count; `completed_segment_count`, `event_settlement_table`, and the
+tail-only `final_event_settlement` are queue-completion evidence and therefore
+remain zero/empty/null for `DerivedProjection`. Capture/provider-replay
+authority reports those completion fields only after its authenticated tail
+fence. This v2 provider schema does not revive or reinterpret retired
+identity-v1 artifacts.
 
 The production capture-side identity join is implemented and remains bounded.
 The schema and validator accept provider-emitted identity only when it is

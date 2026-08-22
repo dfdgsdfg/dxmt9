@@ -3666,7 +3666,8 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   auto* queue = queue_;
   const auto ticket = ticket_;
   const bool published = batch_
-      ? queue->publishCpuReadyArenaBatch(ticket, resources, nullptr)
+      ? queue->publishCpuReadyArenaBatch(ticket, resources, nullptr) ==
+            CpuReadyArenaPublishStatus::Published
       : queue->publishCpuReadyArenaSource(
             ticket, controlIndex_, resources, captureIdentity);
   if (!published) {
@@ -3686,18 +3687,26 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
 bool CommandQueue::CpuReadyArenaBuildLease::publishBatch(
     std::span<const core::ChunkHandleEntry> resources,
     CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
+  return publishBatchWithStatus(resources, captureIdentity) ==
+         CpuReadyArenaPublishStatus::Published;
+}
+
+CommandQueue::CpuReadyArenaPublishStatus
+CommandQueue::CpuReadyArenaBuildLease::publishBatchWithStatus(
+    std::span<const core::ChunkHandleEntry> resources,
+    CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
   if (!queue_ || !batch_) {
-    return false;
+    return CpuReadyArenaPublishStatus::FailStopped;
   }
   auto* queue = queue_;
   const auto ticket = ticket_;
-  const bool published = queue->publishCpuReadyArenaBatch(
+  const auto status = queue->publishCpuReadyArenaBatch(
       ticket, resources, captureIdentity);
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
   batch_ = false;
-  return published;
+  return status;
 }
 
 bool CommandQueue::CpuReadyArenaBuildLease::setCaptureSourceRanges(
@@ -4766,7 +4775,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
   return true;
 }
 
-bool CommandQueue::publishCpuReadyArenaBatch(
+CommandQueue::CpuReadyArenaPublishStatus
+CommandQueue::publishCpuReadyArenaBatch(
     core::CpuReadyPublicationTicket ticket,
     std::span<const core::ChunkHandleEntry> resources,
     CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
@@ -4775,7 +4785,7 @@ bool CommandQueue::publishCpuReadyArenaBatch(
       context->ownerThread != std::this_thread::get_id() ||
       context->failed.load(std::memory_order_acquire)) {
     abortCpuReadyArenaBatch(ticket);
-    return false;
+    return CpuReadyArenaPublishStatus::FailStopped;
   }
   {
     const auto qmxBegin = queueMutexProbeBegin();
@@ -4786,7 +4796,7 @@ bool CommandQueue::publishCpuReadyArenaBatch(
         activeArenaBuild_.load(std::memory_order_relaxed) != context) {
       lock.unlock();
       abortCpuReadyArenaBatch(ticket);
-      return false;
+      return CpuReadyArenaPublishStatus::FailStopped;
     }
     for (std::size_t i = 0; i < context->sourceCount; ++i) {
       const auto index = context->batchControlIndices[i];
@@ -4797,13 +4807,20 @@ bool CommandQueue::publishCpuReadyArenaBatch(
           slots_[index].storage != reservation.storage) {
         lock.unlock();
         abortCpuReadyArenaBatch(ticket);
-        return false;
+        return CpuReadyArenaPublishStatus::FailStopped;
       }
     }
     context->publishing.store(true, std::memory_order_release);
   }
   CpuReadyCaptureIdentityBatch captured{};
-  bool capturedValid = captureIdentity == nullptr;
+  bool payloadSealed = true;
+  bool capturedValid = false;
+  const auto rollbackPreEffect = [&]() noexcept {
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
+  };
   try {
     for (std::size_t source = 0; source < context->sourceCount; ++source) {
       const auto& layout = context->batchLayouts[source];
@@ -4811,17 +4828,18 @@ bool CommandQueue::publishCpuReadyArenaBatch(
            ++segment) {
         if (!context->batchBuilders[source][segment] ||
             !context->batchBuilders[source][segment]->publish()) {
-          capturedValid = false;
+          payloadSealed = false;
           break;
         }
       }
-      if (!capturedValid && captureIdentity) break;
+      if (!payloadSealed) break;
     }
-    if (captureIdentity && capturedValid &&
+    if (payloadSealed && captureIdentity &&
         context->captureSourceRangeCount == context->sourceCount &&
         context->captureRecordCount != 0u &&
         !context->captureCommandAnchors.empty() &&
         context->captureNextRawRecords.empty()) {
+      capturedValid = true;
       std::vector<framegraph::MultiSourcePlanningSource> sources;
       std::vector<core::ArenaSourcePayloadChain> chains(context->sourceCount);
       sources.resize(context->sourceCount);
@@ -4880,22 +4898,6 @@ bool CommandQueue::publishCpuReadyArenaBatch(
             capturedValid = false;
             break;
           }
-          std::size_t passSource = context->sourceCount;
-          if (pass.commands.count != 0u) {
-            const auto command =
-                graph.commands[pass.commands.first].command_index;
-            for (std::size_t source = 0; source < context->sourceCount;
-                 ++source) {
-              const auto count = static_cast<std::uint32_t>(
-                  sources[source].payload.commandCount());
-              if (command >= commandBases[source] &&
-                  command - commandBases[source] < count) {
-                passSource = source;
-                break;
-              }
-            }
-          }
-          (void)passSource;
           if (passIds[passIndex] == 0u) passIds[passIndex] = nextPassId++;
           for (std::size_t local = 0; local < pass.commands.count; ++local) {
             const auto command =
@@ -4985,12 +4987,11 @@ bool CommandQueue::publishCpuReadyArenaBatch(
       capturedValid = false;
     }
   } catch (...) {
+    payloadSealed = false;
     capturedValid = false;
   }
-  if (captureIdentity && !capturedValid) {
-    arenaBuildPoisoned_.store(true, std::memory_order_release);
-    abortCpuReadyArenaBatch(ticket);
-    return false;
+  if (!payloadSealed || (captureIdentity && !capturedValid)) {
+    return rollbackPreEffect();
   }
   for (std::size_t source = 0; source < context->sourceCount; ++source) {
     for (std::size_t segment = 0;
@@ -4999,11 +5000,11 @@ bool CommandQueue::publishCpuReadyArenaBatch(
           *context->batchReservations[source].arenaPayloads[segment]);
       if (!payloadView.valid() ||
           !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
-        arenaBuildPoisoned_.store(true, std::memory_order_release);
-        abortCpuReadyArenaBatch(ticket);
-        return false;
+        return rollbackPreEffect();
       }
     }
+  }
+  for (std::size_t source = 0; source < context->sourceCount; ++source) {
     markChunkResourcesWithExactSeq(
         pool_, resources, context->batchReservations[source].ticket.seqId);
     for (std::size_t segment = 0;
@@ -5024,7 +5025,7 @@ bool CommandQueue::publishCpuReadyArenaBatch(
       context->failed.load(std::memory_order_acquire)) {
     lock.unlock();
     abortCpuReadyArenaBatch(ticket);
-    return false;
+    return CpuReadyArenaPublishStatus::FailStopped;
   }
   std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
       controlIndices{};
@@ -5039,7 +5040,7 @@ bool CommandQueue::publishCpuReadyArenaBatch(
     lock.unlock();
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     abortCpuReadyArenaBatch(ticket);
-    return false;
+    return CpuReadyArenaPublishStatus::FailStopped;
   }
   const std::size_t last = context->sourceCount - 1u;
   for (std::size_t i = 0; i < context->sourceCount; ++i) {
@@ -5083,7 +5084,10 @@ bool CommandQueue::publishCpuReadyArenaBatch(
   if (flushAfterPublication) {
     submitFlush();
   }
-  return true;
+  if (captureIdentity && capturedValid) {
+    *captureIdentity = std::move(captured);
+  }
+  return CpuReadyArenaPublishStatus::Published;
 }
 
 bool CommandQueue::waitForCpuReadyEventSettlement(
