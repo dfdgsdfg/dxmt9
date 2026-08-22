@@ -116,9 +116,21 @@ void printResult(const FrameTapeReplayResult& result,
             << resolvedPartitionMode << "\"},";
   std::cout << "\"identity_evidence\":{";
   if (identity) {
-    const bool derived = identity->header.authority == static_cast<std::uint32_t>(
-        RenderTapeIdentityAuthority::DerivedProjection);
-    const bool queueSettled = !derived && !identity->settlements.empty();
+    const auto authority = static_cast<RenderTapeIdentityAuthority>(
+        identity->header.authority);
+    const bool capture = authority == RenderTapeIdentityAuthority::Capture;
+    const bool derived = authority ==
+        RenderTapeIdentityAuthority::DerivedProjection;
+    const bool providerReplay = authority ==
+        RenderTapeIdentityAuthority::ProviderReplay;
+    const bool queueSettled = capture && !identity->settlements.empty();
+    // ProviderReplay rows describe an untrusted input sidecar, not this
+    // process's queue completion.  Keep provenance visible, but expose no
+    // completion or settlement evidence without an invocation-bound nonce.
+    const std::size_t evidenceSettlementCount =
+        providerReplay ? 0u : identity->settlements.size();
+    const std::uint32_t evidenceTableCount =
+        providerReplay ? 0u : identity->header.settlementCount;
     std::cout << "\"authority\":\""
               << identityAuthorityName(identity->header.authority)
               << "\",\"source_count\":" << identity->sources.size()
@@ -127,12 +139,13 @@ void printResult(const FrameTapeReplayResult& result,
               << ",\"completed_segment_count\":"
               << (queueSettled ? identity->sources.size() : 0u)
               << ",\"completion_evidence\":\""
-              << (derived ? "not-queue-authenticated"
-                          : queueSettled ? "queue-tail-fenced" : "none")
+              << (capture ? (queueSettled ? "queue-tail-fenced" : "none")
+                          : derived ? "not-queue-authenticated"
+                                    : "process-local-unverified")
               << "\""
               << ",\"settlement_count\":"
-              << identity->settlements.size() << ",\"settlement_table_count\":"
-              << identity->header.settlementCount << ",\"segments\":[";
+              << evidenceSettlementCount << ",\"settlement_table_count\":"
+              << evidenceTableCount << ",\"segments\":[";
     for (std::size_t index = 0; index < identity->sources.size(); ++index) {
       if (index != 0u) std::cout << ',';
       const auto& source = identity->sources[index];
@@ -144,7 +157,7 @@ void printResult(const FrameTapeReplayResult& result,
                 << ",\"record_count\":" << source.recordCount << "}";
     }
     std::cout << "],\"event_settlement_table\":[";
-    if (!derived) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
+    if (capture) for (std::size_t index = 0; index < identity->settlements.size(); ++index) {
       if (index != 0u) std::cout << ',';
       const auto& settlement = identity->settlements[index];
       std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
@@ -168,7 +181,7 @@ void printResult(const FrameTapeReplayResult& result,
                 << settlement.sourceCount << "}";
     }
     std::cout << "],\"final_event_settlement\":";
-    if (derived || identity->settlements.empty()) {
+    if (!capture || identity->settlements.empty()) {
       std::cout << "null";
     } else {
       const auto& settlement = identity->settlements.back();

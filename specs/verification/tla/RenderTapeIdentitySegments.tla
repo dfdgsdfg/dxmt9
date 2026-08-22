@@ -20,7 +20,7 @@
 ---- MODULE RenderTapeIdentitySegments ----
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
-CONSTANTS MaxRecords, MaxSeqId, MaxPassPieces, MaxPages
+CONSTANTS MaxRecords, MaxSeqId, MaxPassPieces
 
 Sources == 1 .. 3
 Records == 1 .. MaxRecords
@@ -259,15 +259,15 @@ StartAbort ==
     detachedSources, reclaimingSources, destroyedSources,
     reclaimedSources, abortSucceeded, fallbackCount>>
 
-DetachNewest ==
+DetachNewest(attempt) ==
+  /\ attempt \in Sources
   /\ phase = "Detached"
   /\ Len(detachedSources) < Len(SourceOrder)
   /\ LET nextIndex == Len(detachedSources) + 1 IN
-       /\ ReverseSourceOrder[nextIndex] \notin SeqSet(detachedSources)
-       /\ detachedSources' = Append(detachedSources,
-                                      ReverseSourceOrder[nextIndex])
-       /\ reclaimingSources' = Append(reclaimingSources,
-                                      ReverseSourceOrder[nextIndex])
+       /\ attempt = ReverseSourceOrder[nextIndex]
+       /\ attempt \notin SeqSet(detachedSources)
+       /\ detachedSources' = Append(detachedSources, attempt)
+       /\ reclaimingSources' = Append(reclaimingSources, attempt)
        /\ phase' = IF nextIndex = Len(SourceOrder)
                      THEN "Reclaiming" ELSE "Detached"
   /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
@@ -277,13 +277,13 @@ DetachNewest ==
     eventSettlementCount, resourceWatermark, pageWatermark, tailWatermark,
     destroyedSources, reclaimedSources, abortSucceeded, fallbackCount>>
 
-FinishDetachedOwner ==
+FinishDetachedOwner(attempt) ==
+  /\ attempt \in Sources
   /\ phase = "Reclaiming"
   /\ Len(destroyedSources) < Len(SourceOrder)
   /\ LET nextIndex == Len(destroyedSources) + 1 IN
-       /\ ReverseSourceOrder[nextIndex] = reclaimingSources[nextIndex]
-       /\ destroyedSources' = Append(destroyedSources,
-                                      ReverseSourceOrder[nextIndex])
+       /\ attempt = reclaimingSources[nextIndex]
+       /\ destroyedSources' = Append(destroyedSources, attempt)
        /\ phase' = IF nextIndex = Len(SourceOrder)
                      THEN "FallbackEligible" ELSE "Reclaiming"
        /\ rawHighWater' = IF nextIndex = Len(SourceOrder)
@@ -316,10 +316,13 @@ FallbackOnce ==
     detachedSources, reclaimingSources, destroyedSources,
     reclaimedSources, abortSucceeded>>
 
-PoisonWrongDetach ==
+PoisonWrongDetach(attempt) ==
+  /\ attempt \in Sources
   /\ phase = "Detached"
   /\ Len(detachedSources) < Len(SourceOrder)
-  /\ phase' = "Poisoned"
+  /\ LET nextIndex == Len(detachedSources) + 1 IN
+       /\ attempt # ReverseSourceOrder[nextIndex]
+       /\ phase' = "Poisoned"
   /\ readySegments' = {}
   /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
@@ -329,10 +332,13 @@ PoisonWrongDetach ==
     detachedSources, reclaimingSources, destroyedSources, reclaimedSources,
     abortSucceeded, fallbackCount>>
 
-PoisonWrongFinish ==
+PoisonWrongFinish(attempt) ==
+  /\ attempt \in Sources
   /\ phase = "Reclaiming"
   /\ Len(destroyedSources) < Len(SourceOrder)
-  /\ phase' = "Poisoned"
+  /\ LET nextIndex == Len(destroyedSources) + 1 IN
+       /\ attempt # reclaimingSources[nextIndex]
+       /\ phase' = "Poisoned"
   /\ readySegments' = {}
   /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
@@ -342,7 +348,9 @@ PoisonWrongFinish ==
     detachedSources, reclaimingSources, destroyedSources, reclaimedSources,
     abortSucceeded, fallbackCount>>
 
-PoisonPartialAbort ==
+PoisonPartialAbort(fault) ==
+  /\ fault \in BOOLEAN
+  /\ fault
   /\ phase \in {"Detached", "Reclaiming"}
   /\ Len(destroyedSources) < Len(SourceOrder)
   /\ phase' = "Poisoned"
@@ -406,12 +414,12 @@ Next ==
   \/ CompleteSegment
   \/ ReclaimSegment
   \/ StartAbort
-  \/ DetachNewest
-  \/ FinishDetachedOwner
+  \/ (\E attempt \in Sources : DetachNewest(attempt))
+  \/ (\E attempt \in Sources : FinishDetachedOwner(attempt))
   \/ FallbackOnce
-  \/ PoisonWrongDetach
-  \/ PoisonWrongFinish
-  \/ PoisonPartialAbort
+  \/ (\E attempt \in Sources : PoisonWrongDetach(attempt))
+  \/ (\E attempt \in Sources : PoisonWrongFinish(attempt))
+  \/ (\E fault \in BOOLEAN : PoisonPartialAbort(fault))
   \/ PreEffectPassMismatchFallback
   \/ PreEffectPartitionMismatchFallback
   \/ PoisonAfterEffect
@@ -558,8 +566,8 @@ Fairness ==
   /\ WF_vars(CompleteSegment)
   /\ WF_vars(ReclaimSegment)
   /\ WF_vars(StartAbort)
-  /\ WF_vars(DetachNewest)
-  /\ WF_vars(FinishDetachedOwner)
+  /\ WF_vars(\E attempt \in Sources : DetachNewest(attempt))
+  /\ WF_vars(\E attempt \in Sources : FinishDetachedOwner(attempt))
   /\ WF_vars(FallbackOnce)
 
 Spec == Init /\ [][Next]_vars

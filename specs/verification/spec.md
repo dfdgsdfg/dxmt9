@@ -325,7 +325,7 @@ exercise all structural behaviors while keeping the state space tractable.
 | ConcurrentProgressSignals | `MaxRing` / `MaxFrameLatency` / `MaxSeqId` / `Queries` | 3 / 2 / 6 / `{q1,q2}` | ring=32, latency=2, seq unbounded, queries dynamic |
 | DrawableToken | `MAX_PIDS` / `Drawables` | 2 / `{D1,D2}` | unbounded present-ids, opaque drawables |
 | EncodeSessionCompletion | `MaxSeqId` / `MaxSessionLen` | 5 / 3 | unbounded source seqIds, bounded by `kMaxEncodeSessionSources` and queue ring size |
-| RenderTapeIdentitySegments | `MaxRecords` / `MaxSeqId` / `MaxPassPieces` / `MaxPages` | 6 / 9 / 3 / 3 | one event, three source rows, six records; production ordinals/seqIds and provider grammar unbounded |
+| RenderTapeIdentitySegments | `MaxRecords` / `MaxSeqId` / `MaxPassPieces` | 6 / 9 / 3 | one event, three source rows, six records; production ordinals/seqIds and provider grammar unbounded |
 | CpuReadySessionProgress | `MaxSources` / `MaxReady` / `MaxResident` / `MaxBatch` / `MaxSessionLen` / `MaxReleaseEvents` / `MaxReleaseGeneration` / `MaxPressureGeneration` | 2 / 2 / 2 / 2 / 2 / 2 / 2 / 2 | unbounded source ordinals; fixed Tape/Ready/session/release capacities and monotone release/latch generations |
 | EncodeSchedulingProgress | `MaxSources` / `MaxSessionLen` / `MaxPresentOutstanding` | 2 / 2 / 1 | unbounded source seqIds; bounded queue/session storage and runtime Present pacing cap |
 | DceChunkLookahead | `MaxSources` / `MaxInflight` | 4 / 3 | unbounded source seqIds / `kMaxQueuedChunks`; exactly one held lookahead source |

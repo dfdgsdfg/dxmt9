@@ -4825,7 +4825,14 @@ CommandQueue::publishCpuReadyArenaBatch(
   }
   CpuReadyCaptureIdentityBatch captured{};
   bool payloadSealed = true;
+  bool eventPlanValid = false;
   bool capturedValid = false;
+  // These are deliberately owned by this call.  The planner and optional
+  // capture sidecar both consume the same value-owned source views; no view
+  // can outlive the pre-effect proof.
+  std::vector<framegraph::MultiSourcePlanningSource> sources;
+  std::vector<core::ArenaSourcePayloadChain> chains;
+  std::uint32_t commandBase = 0;
   const auto rollbackPreEffect = [&]() noexcept {
     const auto status = abortCpuReadyArenaBatch(ticket, false);
     return status == CpuReadyArenaBatchAbortStatus::RolledBack
@@ -4845,17 +4852,9 @@ CommandQueue::publishCpuReadyArenaBatch(
       }
       if (!payloadSealed) break;
     }
-    if (payloadSealed && captureIdentity &&
-        context->captureSourceRangeCount == context->sourceCount &&
-        context->captureRecordCount != 0u &&
-        !context->captureCommandAnchors.empty() &&
-        context->captureNextRawRecords.empty()) {
-      capturedValid = true;
-      std::vector<framegraph::MultiSourcePlanningSource> sources;
-      std::vector<core::ArenaSourcePayloadChain> chains(context->sourceCount);
+    if (payloadSealed) {
       sources.resize(context->sourceCount);
-      std::vector<std::uint32_t> commandBases(context->sourceCount);
-      std::uint32_t commandBase = 0;
+      chains.resize(context->sourceCount);
       for (std::size_t source = 0; source < context->sourceCount; ++source) {
         std::array<const core::ArenaSourcePayloadBlock*,
                    core::kMaxArenaSourcePayloadSegments>
@@ -4867,20 +4866,33 @@ CommandQueue::publishCpuReadyArenaBatch(
         }
         if (!chains[source].initialize(std::span(blocks).first(
                 context->batchLayouts[source].segmentCount))) {
-          capturedValid = false;
+          payloadSealed = false;
           break;
         }
         sources[source].payload = core::SourcePayloadView(chains[source]);
         if (!sources[source].payload.valid() ||
             commandBase > std::numeric_limits<std::uint32_t>::max() -
                                sources[source].payload.commandCount()) {
-          capturedValid = false;
+          payloadSealed = false;
           break;
         }
-        commandBases[source] = commandBase;
         commandBase += static_cast<std::uint32_t>(
             sources[source].payload.commandCount());
       }
+      if (payloadSealed) {
+        // SegmentSerial admission always gets the same event-wide proof,
+        // regardless of whether an identity sidecar was requested.
+        eventPlanValid = framegraph::planMultiSourcePassCoalesceReplay(
+                             sources)
+                             .valid();
+      }
+    }
+    if (payloadSealed && eventPlanValid && captureIdentity &&
+        context->captureSourceRangeCount == context->sourceCount &&
+        context->captureRecordCount != 0u &&
+        !context->captureCommandAnchors.empty() &&
+        context->captureNextRawRecords.empty()) {
+      capturedValid = true;
       framegraph::FrameGraph graph;
       capturedValid = capturedValid &&
           framegraph::buildMultiSourceFrameGraph(sources, graph);
@@ -5001,7 +5013,8 @@ CommandQueue::publishCpuReadyArenaBatch(
     payloadSealed = false;
     capturedValid = false;
   }
-  if (!payloadSealed || (captureIdentity && !capturedValid)) {
+  if (!payloadSealed || !eventPlanValid ||
+      (captureIdentity && !capturedValid)) {
     return rollbackPreEffect();
   }
   for (std::size_t source = 0; source < context->sourceCount; ++source) {
@@ -5111,9 +5124,6 @@ bool CommandQueue::waitForCpuReadyEventSettlement(
   }
   std::unique_lock lock(mutex_);
   const auto settled = [&] {
-    if (sourceCount == 1u) {
-      return completedSeqId_.load(std::memory_order_relaxed) >= tailSeqId;
-    }
     return queueLifecycle_.hasCompletedArenaGroupSettlement(
         rawOrdinal, buildGeneration, firstSourceOrdinal, tailSeqId,
         sourceCount);

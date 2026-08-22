@@ -48,6 +48,19 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.stop_ = true;
   }
 
+  static bool injectCompletedSettlement(
+      CommandQueue& queue, core::CpuReadyTape::ArenaGroupSettlement settlement) {
+    std::lock_guard lock(queue.mutex_);
+    auto* ledger = queue.queueLifecycle_.completedArenaGroupSettlementLedger();
+    if (!ledger->append(settlement) ||
+        !queue.queueLifecycle_.drainCompletedArenaGroupSettlementsLocked(
+            settlement.tailSeqId)) {
+      return false;
+    }
+    queue.finishCv_.notify_all();
+    return true;
+  }
+
   static void forceNextBatchRollbackFailure(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyForceNextCpuReadyArenaRollbackFailure_ = true;
@@ -879,6 +892,64 @@ void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
   }
 }
 
+void testCountOneSettlementRequiresExactIdentityTuple() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using Settlement = core::CpuReadyTape::ArenaGroupSettlement;
+  constexpr Settlement expected{
+      .rawOrdinal = 71u,
+      .buildGeneration = 9u,
+      .firstSourceOrdinal = 13u,
+      .tailSeqId = 47u,
+      .sourceCount = 1u,
+      .hasPresent = false,
+  };
+  const auto wait = [&](Settlement query, bool stopAfter) {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    check(CommandQueueArenaLeaseTestAccess::injectCompletedSettlement(
+              queue, expected),
+          "count-one settlement must be recorded and drained");
+    if (stopAfter) {
+      CommandQueueArenaLeaseTestAccess::setStopped(queue);
+    }
+    return queue.waitForCpuReadyEventSettlement(
+        query.rawOrdinal, query.buildGeneration, query.firstSourceOrdinal,
+        query.tailSeqId, query.sourceCount);
+  };
+  check(wait(expected, true),
+        "count-one wait must require the complete settlement tuple");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal + 1u,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "raw ordinal mutation must not pass a tail-only wait");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration + 1u,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "build generation mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal + 1u,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = expected.sourceCount}, true),
+        "first source mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId + 1u,
+                         .sourceCount = expected.sourceCount}, true),
+        "tail mutation must not pass settlement");
+  check(!wait(Settlement{.rawOrdinal = expected.rawOrdinal,
+                         .buildGeneration = expected.buildGeneration,
+                         .firstSourceOrdinal = expected.firstSourceOrdinal,
+                         .tailSeqId = expected.tailSeqId,
+                         .sourceCount = 2u}, true),
+        "source count mutation must not pass settlement");
+}
+
 void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -923,6 +994,30 @@ void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
         "same-pass cross-source rows must carry one nonzero logical pass");
   check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
         "cross-source publication must expose both Ready entries together");
+}
+
+void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(128, layouts);
+  check(begin.has_value(), "no-capture batch admission must succeed");
+  const auto submission = materializedSubmission(Handle{11}, 7, 9);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "no-capture first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "no-capture second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::Published,
+        "no-capture SegmentSerial batch must run the event-wide proof");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
+        "successful no-capture proof must publish both Ready rows atomically");
 }
 
 void testBatchBuilderFailureRollsBackForEventSerialFallback() {
@@ -989,7 +1084,9 @@ int main() {
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();
+    testCountOneSettlementRequiresExactIdentityTuple();
     testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
+    testBatchPublishRunsEventProofWithoutCaptureSidecar();
     testBatchBuilderFailureRollsBackForEventSerialFallback();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {

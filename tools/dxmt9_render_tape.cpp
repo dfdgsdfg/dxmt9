@@ -709,12 +709,21 @@ int main(int argc, char** argv) {
                   << " range=" << validation.failedRange << '\n';
         return 1;
       }
-      const bool derived = view.header.authority == static_cast<std::uint32_t>(
-          RenderTapeIdentityAuthority::DerivedProjection);
-      const bool queueSettled = !derived && !view.settlements.empty();
-      const char* completionEvidence = derived
-          ? "not-queue-authenticated"
-          : queueSettled ? "queue-tail-fenced" : "none";
+      const auto authority = static_cast<RenderTapeIdentityAuthority>(
+          view.header.authority);
+      const bool capture = authority == RenderTapeIdentityAuthority::Capture;
+      const bool derived = authority ==
+          RenderTapeIdentityAuthority::DerivedProjection;
+      const bool providerReplay = authority ==
+          RenderTapeIdentityAuthority::ProviderReplay;
+      const bool queueSettled = capture && !view.settlements.empty();
+      const char* completionEvidence = capture
+          ? (queueSettled ? "queue-tail-fenced" : "none")
+          : derived ? "not-queue-authenticated" : "process-local-unverified";
+      const std::size_t evidenceSettlementCount =
+          providerReplay ? 0u : view.settlements.size();
+      const std::uint32_t evidenceTableCount =
+          providerReplay ? 0u : view.header.settlementCount;
       std::cout << "{\"schema\":\"" << kRenderTapeIdentitySchema
                 << "\",\"valid\":true,\"authority\":"
                 << view.header.authority << ",\"frame_id\":"
@@ -725,8 +734,8 @@ int main(int argc, char** argv) {
                 << (queueSettled ? view.sources.size() : 0u)
                 << ",\"completion_evidence\":\""
                 << completionEvidence << "\",\"settlement_count\":"
-                << view.settlements.size() << ",\"settlement_table_count\":"
-                << view.header.settlementCount << ",\"segments\":[";
+                << evidenceSettlementCount << ",\"settlement_table_count\":"
+                << evidenceTableCount << ",\"segments\":[";
       for (std::size_t index = 0u; index < view.sources.size(); ++index) {
         if (index != 0u) std::cout << ',';
         const auto& source = view.sources[index];
@@ -737,7 +746,30 @@ int main(int argc, char** argv) {
                   << ",\"first_record\":" << source.firstRecord
                   << ",\"record_count\":" << source.recordCount << "}";
       }
-      std::cout << "]}\n";
+      std::cout << "],\"event_settlement_table\":[";
+      if (capture) for (std::size_t index = 0u;
+                         index < view.settlements.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& settlement = view.settlements[index];
+        std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                  << ",\"raw_ordinal\":" << settlement.rawOrdinal
+                  << ",\"build_generation\":"
+                  << settlement.buildGeneration
+                  << ",\"first_source_ordinal\":"
+                  << settlement.firstSourceOrdinal
+                  << ",\"tail_seq_id\":" << settlement.tailSeqId
+                  << ",\"source_count\":" << settlement.sourceCount << "}";
+      }
+      std::cout << "],\"final_event_settlement\":";
+      if (!capture || view.settlements.empty()) {
+        std::cout << "null";
+      } else {
+        const auto& settlement = view.settlements.back();
+        std::cout << "{\"event_ordinal\":" << settlement.eventOrdinal
+                  << ",\"tail_seq_id\":" << settlement.tailSeqId
+                  << ",\"source_count\":" << settlement.sourceCount << "}";
+      }
+      std::cout << "}\n";
       return 0;
     }
 
