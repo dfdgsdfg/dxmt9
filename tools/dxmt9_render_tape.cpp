@@ -400,6 +400,11 @@ void writeProjection(const RenderTapeProjectionResult& projection) {
             << ",\"first_record_index\":"
             << projection.selector.firstRecordIndex
             << ",\"record_count\":" << projection.selector.recordCount
+            << "},\"bootstrap\":{\"derived\":true,"
+               "\"selected_record_full_snapshot\":"
+            << (projection.stateFold.selectedRecordWasFullSnapshot
+                    ? "true" : "false")
+            << ",\"coverage_mask\":" << projection.stateFold.coverageMask
             << "},\"boundaries\":{\"clear\":";
   writeLocator(std::cout, projection.clearLocator);
   std::cout << ",\"present\":";
@@ -765,7 +770,15 @@ int main(int argc, char** argv) {
                   << renderTapeValidationStatusName(
                          projection.sourceValidation.status)
                   << " event=" << projection.failedEventIndex
-                  << " record=" << projection.failedRecordIndex << '\n';
+                  << " record=" << projection.failedRecordIndex;
+        if (projection.status == RenderTapeProjectionStatus::StateFoldFailed) {
+          std::cerr << " state_fold="
+                    << renderTapeStateFoldStatusName(
+                           projection.stateFold.status)
+                    << " state_section="
+                    << projection.stateFold.failedSectionKind;
+        }
+        std::cerr << '\n';
         return 1;
       }
       writeProjection(projection);

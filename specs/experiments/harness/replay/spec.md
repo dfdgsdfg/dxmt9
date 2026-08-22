@@ -1094,14 +1094,15 @@ The opt-in executable path is distinct from the readiness JSON above. It loads
 and authenticates a bundle plus `identity.bin`, proves that the requested
 contiguous Draw interval is wholly owned by one frozen logical pass, and calls
 the native materializer. The materializer derives a canonical APPLY_STATE
-bootstrap from the selected `FULL_SNAPSHOT`, retains the nearest coordinator
-Clear before the child and Present after it, and rebuilds only the D9C chunk
-tables required by those records. Selected record payloads and handle identities
-remain exact; only absolute handle indices and canonical offsets change to
-describe the compact chunk. Definitions, recursive alias dependencies,
-immutable payload references, and complete mutations are retained from the
-validated source in ordinal order. The result is validated again before any
-provider process starts.
+bootstrap by folding the canonical `BootstrapState` and every ordered sparse
+state/constant write through the selected first Draw. It retains the nearest
+coordinator Clear before the child and Present after it, and rebuilds only the
+D9C chunk tables required by those records. Selected record payloads and
+handle identities remain exact; only absolute handle indices and canonical
+offsets change to describe the compact chunk. Surviving definitions, recursive
+alias dependencies, immutable payload references, and complete mutations are
+retained from the validated source in ordinal order. The result is validated
+again before any provider process starts.
 
 Projected output is established in two phases inside same-filesystem staging.
 At least two fresh provider processes first execute an otherwise final candidate
@@ -1329,12 +1330,20 @@ R-HARN-REPLAY-7.16 transform. It calls the production Render Tape validator
 with the supplied verified blob catalogue before constructing output, accepts
 only `frame-tape`, and selects one non-empty contiguous record interval from
 one `CommandChunk` named by canonical event ordinal. All selected records must
-be Draw records. The first Draw must carry a command-validator-accepted
-`FULL_SNAPSHOT`, which is the child state anchor; the frame bootstrap is not
-silently inherited as child state. The planner locates a preceding Clear and a
-following Present without adding them to the selected range. The end comparison
-is exclusive, so a Present immediately after the last selected Draw in the same
-command chunk is a valid outside boundary.
+be Draw records. A cold value transform seeds the typed baseline from the
+canonical `BootstrapState`, applies its existing `APPLY_STATE|FULL_SNAPSHOT`
+overlay, then folds `APPLY_STATE`, Draw sparse sections, and standalone
+constant records in exact event/record order through the first selected Draw.
+Repeated keyed state, binding, and overlapping constant ranges use exact
+last-write semantics. It emits one deterministic
+`APPLY_STATE|FULL_SNAPSHOT` bootstrap using the existing D9C v2 section grammar,
+preserves the captured gamma ramp, and adds every surviving
+`(kind, objectId, generation)` handle to projection closure. Complete category
+coverage and live definitions are checked before output construction; an
+unsupported preceding ordered control fails closed. The planner locates a
+preceding Clear and a following Present without adding them to the selected
+range. The end comparison is exclusive, so a Present immediately after the
+last selected Draw in the same command chunk is a valid outside boundary.
 
 The planner walks selected record handle slices in serial order, deduplicates
 only exact `(kind, objectId, generation)` identities, and resolves them against
@@ -1356,6 +1365,8 @@ validation. On success it writes one
 `dxmt9.render_tape.projection.v1` JSON object to stdout with:
 
 - the unchanged source tape SHA-256, byte/event/record counts, and frame profile;
+- derived-bootstrap coverage and whether the selected source Draw was already a
+  `FULL_SNAPSHOT`;
 - canonical Draw, preceding-Clear, and following-Present locators;
 - exact objects, definition locators, initial-content totals, and ordered blob
   references;
@@ -1375,12 +1386,13 @@ This pure selector/conservation transform neither changes replay order nor
 executes stateful rendering, so the formal scheduling layer from
 `agents/rules/rendering_correctness.rules.md` is not applicable to this
 milestone. `dxmt9-render-tape-projection-spec` binds the production validator
-and planner with accepted `Clear -> FULL_SNAPSHOT Draw range -> Present`,
-same-chunk exclusive-end boundary, locator/order/object/blob conservation, and
-fail-closed sequence, non-Draw/coordinator, snapshot, range, definition,
-generation, and seed cases. `dxmt9-render-tape-projection-cli-spec` pins the JSON
-schema/source digest, negative no-output behavior, and absence of unsupported
-selector identities.
+and planner with accepted `Clear -> default-sparse Draw range -> Present`,
+same-chunk exclusive-end boundary, exact fold/locator/order/object/blob
+conservation, and fail-closed sequence, non-Draw/coordinator, category, range,
+definition, generation, and seed cases. `dxmt9-render-tape-projection-cli-spec`
+pins the JSON schema/source digest, negative no-output behavior, absence of
+unsupported selector identities, and fresh production-provider replay of a
+materialized default-delta child.
 
 This projection transform deliberately does not change
 `device_c_render_tape_provider.*` admission grammar. The readiness JSON remains
@@ -1425,8 +1437,8 @@ output, and complete with `source_oracle_mode=pixel-envelope-equivalent`.
 The r66 capture at
 `experiments/render-tapes/gt2-authoritative-full-r66-20260815/`
 `frame-172169875798500-1` uses the existing diagnostic
-`DXMT9_PE_DRAW_FULL_SNAPSHOT=1` producer mode because the bounded projector
-requires a self-contained first Draw. Its identity sidecar validates 64
+`DXMT9_PE_DRAW_FULL_SNAPSHOT=1` producer mode because the bounded projector at
+the time required a self-contained first Draw. Its identity sidecar validates 64
 sources and 77 pass ranges. `executable-project` selects event ordinal 1042,
 records 5 through 50, wholly inside logical pass 64, and atomically publishes
 `experiments/render-tapes/gt2-projected-r66-20260815/`. The projected bundle
@@ -1437,12 +1449,14 @@ two further fresh processes pass the installed strict oracle. The final
 83-event tape SHA-256 is
 `2f3bee4ffbd73ab93bceaab9201e7f35bad61b03afb27a3849c7b39b5d215e83`.
 
-Default delta captures intentionally remain non-projectable until an offline
-state-folding transform can prove a complete child start state from the frame
-bootstrap and every preceding sparse delta. Merely setting `FULL_SNAPSHOT` in
-the projector is invalid because the command validator also requires complete
-texture and stream sections. This is a separate, model-tested extension; it is
-not required for the bounded r66 executable lane.
+Default delta captures now enter this bounded projection lane without
+`DXMT9_PE_DRAW_FULL_SNAPSHOT`. Pure native adversarial coverage pins sparse
+binding overwrite, overlapping standalone constants, full texture/stream
+expansion, generation-qualified closure, deterministic bytes, and pre-effect
+rejection. The hermetic bundle fixture pins validate → project/materialize →
+fresh provider invocation. This closes the model/native/hermetic seam only;
+the prior r66 GT2 evidence remains the production `FULL_SNAPSHOT` run, so no
+default-delta wild GT2 oracle claim follows.
 
 ### 8.5 Profile relationship and migration
 
@@ -1467,9 +1481,9 @@ The completed bounded implementation order is one `frame-tape`, production-
 provider identity, deterministic output/conservation repetition, whole-command
 reducer/bisection, an exactly two-interval `sequence-tape` with a mutation
 across the boundary, production sequence capture, captured identity, and one
-identity-proven executable Draw-range projection. The next increments are
-default sparse-delta start-state folding, broader grammar/interval count, and
-benchmark corpus management. A nominal ten-second capture remains a future
+identity-proven executable Draw-range projection, followed by bounded
+default-sparse start-state folding. The next increments are broader
+grammar/interval count and benchmark corpus management. A nominal ten-second capture remains a future
 corpus-selection policy over complete intervals, not a claim provided by the
 current two-interval profile.
 

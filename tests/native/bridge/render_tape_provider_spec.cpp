@@ -1,5 +1,6 @@
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
+#include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_provider.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
@@ -1226,7 +1227,8 @@ struct TexturedFixture {
                            std::uint16_t extraDrawSection = 0u,
                            std::uint32_t textureFormat = 21u,
                            bool productionVertexDeclaration = false,
-                           bool wrongVertexDeclaration = false) {
+                           bool wrongVertexDeclaration = false,
+                           bool explicitPresentSource = false) {
     if (partialSeed) seed.fill(std::byte{0x55});
     if (wrongVertexDeclaration) declaration[1].usage = 9u;
     const auto seedBytes = partialSeed ? seed.size() / 2u : seed.size();
@@ -1252,6 +1254,10 @@ struct TexturedFixture {
     const auto presentRecord = Record{
         .type = D9C_COMMAND_RECORD_PRESENT,
         .payload = bytesOf(present),
+        .handles = explicitPresentSource
+            ? std::vector<D9CCommandChunkWireHandleEntry>{{
+                  kOutput.kind, kOutput.generation, kOutput.objectId}}
+            : std::vector<D9CCommandChunkWireHandleEntry>{},
     };
     const D9CSurfaceDesc outputDesc{
         .format = 21u,
@@ -1314,7 +1320,9 @@ struct TexturedFixture {
       }
       const auto presentChunk = makeChunk(std::array{presentRecord});
       builder.appendCommandChunk(
-          CommandChunkEnvelope{.recordCount = 1u}, presentChunk);
+          CommandChunkEnvelope{.recordCount = 1u,
+                               .handleCount = explicitPresentSource ? 1u : 0u},
+          presentChunk);
     } else {
       std::vector<Record> records{clearRecord};
       if (!omitDraw) {
@@ -1333,7 +1341,8 @@ struct TexturedFixture {
       const auto combined = makeChunk(records);
       builder.appendCommandChunk(
           CommandChunkEnvelope{
-              .recordCount = static_cast<std::uint32_t>(records.size())},
+              .recordCount = static_cast<std::uint32_t>(records.size()),
+              .handleCount = explicitPresentSource ? 1u : 0u},
           combined);
     }
     builder.appendPresentComplete(
@@ -3013,6 +3022,87 @@ void writeProductionFixture(const std::filesystem::path& directory) {
   check(output.good(), "provider fixture must write events.bin");
 }
 
+void writeProjectionFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "projection provider fixture directory must be created");
+  const TexturedFixture fixture(true, false, false, false, 0u, 21u, false,
+                                false, true);
+  const auto blob = fixture.blob();
+  const RenderTapeBlobCatalogue catalogue{.blobs = {{
+      .digest = blob.digest,
+      .size = blob.bytes.size(),
+      .verified = 1u,
+  }}};
+  const std::array sources{
+      RenderTapeIdentitySource{.eventOrdinal = 5u,
+                               .sourceOrdinal = 101u,
+                               .seqId = 501u,
+                               .captureToken = 77u,
+                               .recordCount = 1u,
+                               .firstRange = 0u,
+                               .rangeCount = 1u},
+      RenderTapeIdentitySource{.eventOrdinal = 6u,
+                               .sourceOrdinal = 102u,
+                               .seqId = 502u,
+                               .captureToken = 77u,
+                               .recordCount = 1u,
+                               .firstRange = 1u,
+                               .rangeCount = 1u},
+      RenderTapeIdentitySource{.eventOrdinal = 7u,
+                               .sourceOrdinal = 103u,
+                               .seqId = 503u,
+                               .captureToken = 77u,
+                               .recordCount = 1u,
+                               .firstRange = 2u,
+                               .rangeCount = 1u},
+  };
+  const std::array ranges{
+      RenderTapeIdentityRange{.eventOrdinal = 5u,
+                              .sourceOrdinal = 101u,
+                              .seqId = 501u,
+                              .logicalPassId = 9000u,
+                              .firstRecord = 0u,
+                              .recordCount = 1u,
+                              .dagPassIndex = 0u,
+                              .passKind = 1u},
+      RenderTapeIdentityRange{.eventOrdinal = 6u,
+                              .sourceOrdinal = 102u,
+                              .seqId = 502u,
+                              .logicalPassId = 9001u,
+                              .firstRecord = 0u,
+                              .recordCount = 1u,
+                              .dagPassIndex = 1u,
+                              .passKind = 1u},
+      RenderTapeIdentityRange{.eventOrdinal = 7u,
+                              .sourceOrdinal = 103u,
+                              .seqId = 503u,
+                              .logicalPassId = 9002u,
+                              .firstRecord = 0u,
+                              .recordCount = 1u,
+                              .dagPassIndex = 2u,
+                              .passKind = 1u},
+  };
+  const auto identity = buildRenderTapeIdentity(
+      fixture.tape, catalogue, 42u, 7u, 77u,
+      RenderTapeIdentityAuthority::Capture, sources, ranges);
+  check(!identity.empty(), "projection provider identity must build");
+
+  std::ofstream events(directory / "events.bin", std::ios::binary);
+  std::ofstream sidecar(directory / "identity.bin", std::ios::binary);
+  std::ofstream seed(directory / "seed.bin", std::ios::binary);
+  check(events.good() && sidecar.good() && seed.good(),
+        "projection provider fixture files must open");
+  events.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  sidecar.write(reinterpret_cast<const char*>(identity.data()),
+                static_cast<std::streamsize>(identity.size()));
+  seed.write(reinterpret_cast<const char*>(fixture.seed.data()),
+             static_cast<std::streamsize>(fixture.seed.size()));
+  check(events.good() && sidecar.good() && seed.good(),
+        "projection provider fixture files must be written");
+}
+
 void writeSequenceFixture(const std::filesystem::path& directory) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
@@ -3134,6 +3224,10 @@ int main(int argc, char** argv) {
       writeProductionFixture(argv[2]);
       return 0;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-projection-fixture") {
+      writeProjectionFixture(argv[2]);
+      return 0;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--write-sequence-fixture") {
       writeSequenceFixture(argv[2]);
       return 0;
@@ -3145,7 +3239,8 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_provider_spec "
           "[--test-event-ordering|--write-production-fixture dir|"
-          "--write-sequence-fixture dir|--write-parallel-fixture dir]");
+          "--write-projection-fixture dir|--write-sequence-fixture dir|"
+          "--write-parallel-fixture dir]");
     eventLevelMutationDrainOrderingIsPinned();
     bufferMutationReplayPlanPinsLockFlagsAndOffset();
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();

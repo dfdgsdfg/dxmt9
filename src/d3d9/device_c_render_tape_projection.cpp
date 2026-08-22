@@ -175,8 +175,7 @@ bool remapProjectionRecordPayload(ProjectionRecordCopy& record,
 
 bool copyProjectionRecord(const ImportedRenderTapeView& tape,
                           const RenderTapeProjectionLocator& locator,
-                          ProjectionRecordCopy& out,
-                          bool bootstrap = false) {
+                          ProjectionRecordCopy& out) {
   if (locator.sourceEventIndex >= tape.events.size()) return false;
   const auto event = tape.event(locator.sourceEventIndex);
   RenderTapeCommandChunkHeader fixed{};
@@ -190,25 +189,11 @@ bool copyProjectionRecord(const ImportedRenderTapeView& tape,
     return false;
   }
   const auto record = chunk.record(locator.recordIndex);
-  out.type = bootstrap ? D9C_COMMAND_RECORD_APPLY_STATE : record.header.type;
+  out.type = record.header.type;
   out.flags = record.header.flags;
   out.oldFirstHandle = record.header.firstHandle;
   out.payload.assign(record.payload.begin(), record.payload.end());
   out.handles.assign(record.handles.begin(), record.handles.end());
-  if (bootstrap) {
-    D9CCommandChunkWireDrawHeader draw{};
-    if (!load(out.payload, 0u, draw)) return false;
-    draw.primitiveType = 0u;
-    draw.baseVertex = 0;
-    draw.minVertex = 0u;
-    draw.numVertices = 0u;
-    draw.startVertex = 0u;
-    draw.startIndex = 0u;
-    draw.primitiveCount = 0u;
-    draw.stride = 0u;
-    draw.indexFormat = 0u;
-    std::memcpy(out.payload.data(), &draw, sizeof(draw));
-  }
   return true;
 }
 
@@ -233,6 +218,8 @@ bool buildProjectionChunk(std::span<ProjectionRecordCopy> copies,
         .payloadSize = static_cast<std::uint32_t>(copy.payload.size()),
         .firstHandle = firstHandle,
         .handleCount = static_cast<std::uint32_t>(copy.handles.size()),
+        .reserved0 = 0u,
+        .reserved1 = 0u,
     });
     handles.insert(handles.end(), copy.handles.begin(), copy.handles.end());
     payload.insert(payload.end(), copy.payload.begin(), copy.payload.end());
@@ -255,6 +242,8 @@ bool buildProjectionChunk(std::span<ProjectionRecordCopy> copies,
       .handleCount = static_cast<std::uint32_t>(handles.size()),
       .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
       .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
+      .reserved0 = 0u,
+      .reserved1 = 0u,
   };
   bytes.assign(payloadArenaOffset + payload.size(), std::byte{0});
   std::memcpy(bytes.data(), &header, sizeof(header));
@@ -399,13 +388,6 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
         result.failedRecordIndex = recordIndex;
         return result;
       }
-      if (recordIndex == selector.firstRecordIndex &&
-          (record.drawHeader.flags &
-           D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) == 0u) {
-        result.status = RenderTapeProjectionStatus::MissingFullSnapshot;
-        result.failedRecordIndex = recordIndex;
-        return result;
-      }
       result.selectedLocators.push_back(RenderTapeProjectionLocator{
           .eventOrdinal = selectedEventView.header.ordinal,
           .sourceEventIndex = selectedEvent,
@@ -421,6 +403,19 @@ RenderTapeProjectionResult projectRenderTapeDrawSlice(
       }
     }
     result.selectedDrawCount = selector.recordCount;
+
+    result.stateFold = foldRenderTapeStateForDraw(
+        source, verifiedCatalogue, selectedEventView.header.ordinal,
+        selector.firstRecordIndex);
+    if (!result.stateFold.valid()) {
+      result.status = RenderTapeProjectionStatus::StateFoldFailed;
+      result.failedEventIndex = result.stateFold.failedEventIndex;
+      result.failedRecordIndex = result.stateFold.failedRecordIndex;
+      return result;
+    }
+    for (const auto& identity : result.stateFold.referencedIdentities) {
+      addIdentity(closure, identity);
+    }
 
     bool foundClear = false;
     bool foundPresent = false;
@@ -746,8 +741,8 @@ const char* renderTapeProjectionStatusName(
   case RenderTapeProjectionStatus::InvalidSelection:
     return "invalid-selection";
   case RenderTapeProjectionStatus::NonDrawRecord: return "non-draw-record";
-  case RenderTapeProjectionStatus::MissingFullSnapshot:
-    return "missing-full-snapshot";
+  case RenderTapeProjectionStatus::StateFoldFailed:
+    return "state-fold-failed";
   case RenderTapeProjectionStatus::MissingFrameBoundary:
     return "missing-frame-boundary";
   case RenderTapeProjectionStatus::MissingDefinition:
@@ -822,22 +817,7 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
       result.status = RenderTapeProjectionBundleStatus::InvalidProjection;
       return result;
     }
-    ProjectionRecordCopy bootstrap;
-    if (!copyProjectionRecord(tape, result.projection.selectedLocators.front(),
-                              bootstrap, true)) {
-      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
-      return result;
-    }
-    std::array bootstrapCopies{std::move(bootstrap)};
-    std::vector<std::byte> bootstrapChunk;
-    CommandChunkEnvelope bootstrapEnvelope{};
     CommandChunkValidationStatus chunkStatus{};
-    if (!buildProjectionChunk(bootstrapCopies, bootstrapChunk,
-                              bootstrapEnvelope, &chunkStatus)) {
-      result.status = RenderTapeProjectionBundleStatus::ChunkBuildFailure;
-      result.projection.sourceValidation.chunkStatus = chunkStatus;
-      return result;
-    }
 
     std::vector<ProjectionRecordCopy> commandCopies;
     commandCopies.reserve(result.projection.selectedLocators.size() + 2u);
@@ -889,7 +869,8 @@ RenderTapeProjectionBundleResult materializeRenderTapeProjectionBundle(
     }
 
     RenderTapeBuilder builder;
-    builder.appendBootstrapState(bootstrapChunk);
+    builder.appendBootstrapState(result.projection.stateFold.bootstrapChunk,
+                                 result.projection.stateFold.gammaRamp);
     for (std::uint32_t eventIndex = 0u; eventIndex < tape.events.size();
          ++eventIndex) {
       const auto event = tape.event(eventIndex);

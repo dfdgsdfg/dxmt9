@@ -2,6 +2,7 @@
 
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_state_fold.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -88,7 +89,7 @@ enum class RenderTapeProjectionStatus : std::uint8_t {
   UnsupportedProfile,
   InvalidSelection,
   NonDrawRecord,
-  MissingFullSnapshot,
+  StateFoldFailed,
   MissingFrameBoundary,
   MissingDefinition,
   MissingInitialContent,
@@ -112,6 +113,7 @@ struct RenderTapeProjectionResult {
   std::uint64_t excludedRecordCount = 0u;
   RenderTapeProjectionLocator clearLocator{};
   RenderTapeProjectionLocator presentLocator{};
+  RenderTapeStateFoldResult stateFold{};
   std::vector<RenderTapeProjectionLocator> selectedLocators;
   std::vector<RenderTapeProjectionObject> objects;
   std::vector<RenderTapeProjectionBlobReference> blobReferences;

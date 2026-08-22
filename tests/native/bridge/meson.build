@@ -288,8 +288,11 @@ test('dxmt9-render-tape-projection-cli-spec', python3,
        dxmt9_render_tape_tool,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
+       render_tape_provider_fixture_spec,
+       dxmt9_render_tape_provider_tool,
      ],
-     env: dxmt9_native_test_env)
+     env: render_tape_provider_test_env,
+     timeout: 120)
 
 test('dxmt9-render-tape-policy-cli-spec', python3,
      args: [

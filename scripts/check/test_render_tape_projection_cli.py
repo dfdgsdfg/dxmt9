@@ -26,13 +26,16 @@ def run(*args: object, check: bool = True) -> subprocess.CompletedProcess[str]:
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 6:
         raise SystemExit(
-            "usage: test_render_tape_projection_cli.py <fixture> <tool> <bundle-tool>"
+            "usage: test_render_tape_projection_cli.py <fixture> <tool> "
+            "<bundle-tool> <provider-fixture> <provider>"
         )
     fixture = pathlib.Path(sys.argv[1])
     tool = pathlib.Path(sys.argv[2])
     bundle_tool = pathlib.Path(sys.argv[3])
+    provider_fixture = pathlib.Path(sys.argv[4])
+    provider = pathlib.Path(sys.argv[5])
     with tempfile.TemporaryDirectory(prefix="dxmt9-render-tape-project-") as root:
         tape = pathlib.Path(root) / "events.bin"
         identity = pathlib.Path(root) / "identity.bin"
@@ -72,6 +75,11 @@ def main() -> int:
             "command_event_ordinal": 6,
             "first_record_index": 1,
             "record_count": 2,
+        }
+        assert artifact["bootstrap"] == {
+            "derived": True,
+            "selected_record_full_snapshot": False,
+            "coverage_mask": (1 << 23) - 1,
         }
         assert [(entry["event_ordinal"], entry["record_index"])
                 for entry in artifact["draws"]] == [(6, 1), (6, 2)]
@@ -269,6 +277,81 @@ def main() -> int:
         assert "identity" not in manifest["components"]
         assert (output_bundle / "output.rgba").read_bytes() == pixels
         assert not list(pathlib.Path(root).glob(".projected-bundle.staging-*"))
+
+        provider_source = pathlib.Path(root) / "provider-source"
+        provider_bundle = pathlib.Path(root) / "provider-bundle"
+        run(provider_fixture, "--write-projection-fixture", provider_source)
+        provider_events = provider_source / "events.bin"
+        provider_before = hashlib.sha256(provider_events.read_bytes()).hexdigest()
+        seed_sha = hashlib.sha256(
+            (provider_source / "seed.bin").read_bytes()
+        ).hexdigest()
+        provider_plan = json.loads(run(
+            tool, "project", provider_events,
+            "--command-event-ordinal", 6,
+            "--first-record", 0,
+            "--record-count", 1,
+            "--verified-blob", f"{seed_sha}:16",
+        ).stdout)
+        assert provider_plan["bootstrap"]["derived"] is True
+        assert (
+            provider_plan["bootstrap"]["selected_record_full_snapshot"] is False
+        )
+        assert (
+            hashlib.sha256(provider_events.read_bytes()).hexdigest()
+            == provider_before
+        )
+        run(
+            sys.executable, bundle_tool, "pack",
+            "--events", provider_events,
+            "--identity", provider_source / "identity.bin",
+            "--blob", provider_source / "seed.bin",
+            "--output-dir", provider_bundle,
+            "--validator", tool,
+        )
+        real_output = pathlib.Path(root) / "provider-projected-bundle"
+        real_projection = json.loads(run(
+            sys.executable, bundle_tool, "executable-project", provider_bundle,
+            "--output-dir", real_output,
+            "--command-event-ordinal", 6,
+            "--first-record", 0,
+            "--record-count", 1,
+            "--validator", tool,
+            "--provider", provider,
+        ).stdout)
+        assert real_projection["oracle_accepted"] is True
+        real_manifest = json.loads((real_output / "manifest.json").read_text())
+        assert real_manifest["validity"] == {
+            "fresh_process_repeats": 2,
+            "provider_replay": True,
+            "strict_projected_oracle": True,
+            "structural": True,
+        }
+        assert real_manifest["scope"]["production_provider_replay"] is True
+        assert real_manifest["projection"]["command_event_ordinal"] == 6
+        assert real_manifest["projection"]["first_record"] == 0
+        assert real_manifest["projection"]["record_count"] == 1
+        assert len(real_manifest["projection"]["provider_runs"]) == 2
+        assert (real_manifest["projection"]["provider_runs"][0] ==
+                real_manifest["projection"]["provider_runs"][1])
+
+        real_replay = json.loads(run(
+            sys.executable, bundle_tool, "provider-replay", real_output,
+            "--provider", provider,
+            "--validator", tool,
+            "--warmup", 1,
+            "--repeat", 2,
+        ).stdout)
+        assert real_replay["oracle_accepted"] is True
+        assert real_replay["deterministic"] is True
+        assert real_replay["replay_policy"] == {
+            "reset": "fresh-process-device",
+            "warmup": 1,
+            "repeat": 2,
+        }
+        assert len(real_replay["warmup_runs"]) == 1
+        assert len(real_replay["runs"]) == 2
+        assert real_replay["runs"][0] == real_replay["runs"][1]
 
         damaged_identity = pathlib.Path(root) / "damaged-identity.bin"
         damaged = bytearray(identity.read_bytes())

@@ -751,15 +751,18 @@ pure, cold value transform over a structurally validated `frame-tape` and an
 explicitly verified blob catalogue. Its selector names exactly one canonical
 `CommandChunk` event by event ordinal and one non-empty contiguous record
 interval within that event. Every selected record must be a Draw, the first
-selected Draw must carry a validator-accepted `FULL_SNAPSHOT`, and the selected
-interval must be preceded by a Clear and followed by the frame's Present;
+selected Draw's effective state must fold deterministically from the canonical
+`BootstrapState` plus every preceding and selected sparse state/constant write,
+and the selected interval must be preceded by a Clear and followed by the
+frame's Present;
 Clear, Present, `OrderedControl`, `ObjectDestroy`, and `PresentComplete` remain
 outside the child interval. Successful output preserves selected Draw order as
 `(event ordinal, record index)` locators, exact generation-qualified identities,
 definition locators, immutable-payload references, and every digest-backed
 resource mutation for those identities before the selected event. Missing
-source validity, wrong generation, definition, verified digest, initial
-full-content closure, boundary, snapshot, or range proof must reject before any
+source validity, complete state-category coverage, live generation-qualified
+definition, verified digest, initial full-content closure, boundary, fold, or
+range proof must reject before any
 replay sink, provider, Metal, or artifact-write effect. This is an offline
 transform and must add no per-Draw capture-path work.
 
@@ -900,16 +903,19 @@ requirement.
 **R-HARN-REPLAY-7.22** Executable projection consumes a structurally valid
 `dxmt9.render_tape.bundle.v2` bundle and an authenticated R-HARN-REPLAY-7.21
 identity component before effects. It selects one non-empty contiguous Draw
-range wholly contained in one sidecar-proven pass and anchored by a canonical
-`FULL_SNAPSHOT`. The materializer emits another atomic
-`dxmt9.render_tape.bundle.v2`, never a legacy mini-replay manifest: it derives a
-bootstrap overlay from the selected full snapshot, retains the coordinator
-Clear and Present outside the child range, conserves selected Draw order and
-payload bytes, remaps only canonical handle-table indices required by the new
-chunk layout, and includes exactly the generation-qualified definitions,
-descriptor dependencies, immutable payloads, and complete pre-effect resource
-mutations reachable from the retained records. The final candidate must pass
-the production tape and chunk validators before the existing production
+range wholly contained in one sidecar-proven pass. The materializer emits
+another atomic `dxmt9.render_tape.bundle.v2`, never a legacy mini-replay
+manifest: it derives a complete bootstrap overlay by folding the canonical
+`BootstrapState` and every ordered sparse state/constant write through the
+selected first Draw, retains the coordinator Clear and Present outside the
+child range, conserves selected Draw order and payload bytes, remaps only
+canonical handle-table indices required by the new chunk layout, and includes
+exactly the surviving generation-qualified definitions, descriptor
+dependencies, immutable payloads, and complete pre-effect resource mutations
+reachable from the retained records and derived bootstrap. Incomplete category
+coverage, a stale generation, or missing closure must reject before output.
+The final candidate must pass the production tape and chunk validators before
+the existing production
 provider is invoked.
 
 An offline materializer accepts only capture-authority identity. A

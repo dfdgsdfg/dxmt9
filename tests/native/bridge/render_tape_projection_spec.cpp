@@ -268,6 +268,123 @@ std::vector<std::byte> bootstrapChunk() {
   }});
 }
 
+RenderTapeSurfaceDescriptorV2 outputDescriptor();
+std::vector<std::byte> textureDescriptor();
+
+std::vector<std::byte> sparseTexturePayload(bool drawRecord,
+                                            bool bindTexture,
+                                            std::uint32_t handleIndex = 0u) {
+  const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
+  const auto sectionPayloadOffset = alignUp(
+      sectionTableOffset + sizeof(D9CCommandChunkWireSectionDesc),
+      alignof(std::uint32_t));
+  const D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = drawRecord ? 4u : 0u,
+      .primitiveCount = drawRecord ? 1u : 0u,
+      .sectionCount = 1u,
+      .sectionTableOffset = static_cast<std::uint32_t>(sectionTableOffset),
+      .sectionPayloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+  };
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+      .elementSize = sizeof(D9CCommandChunkWireTextureBinding),
+      .count = 1u,
+      .payloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+      .byteSize = sizeof(D9CCommandChunkWireTextureBinding),
+  };
+  const D9CCommandChunkWireTextureBinding texture{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = bindTexture ? handleIndex
+                                 : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+  };
+  std::vector<std::byte> payload(sectionPayloadOffset + sizeof(texture));
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  std::memcpy(payload.data() + sectionTableOffset, &section, sizeof(section));
+  std::memcpy(payload.data() + sectionPayloadOffset, &texture,
+              sizeof(texture));
+  return payload;
+}
+
+std::vector<std::byte> setVsFloatPayload(
+    std::uint32_t startRegister,
+    std::span<const std::array<std::uint32_t, 4u>> registers) {
+  const D9CCommandChunkWireSetConst fixed{
+      .startRegister = startRegister,
+      .registerCount = static_cast<std::uint32_t>(registers.size()),
+  };
+  std::vector<std::byte> payload(sizeof(fixed) +
+                                 registers.size_bytes());
+  std::memcpy(payload.data(), &fixed, sizeof(fixed));
+  std::memcpy(payload.data() + sizeof(fixed), registers.data(),
+              registers.size_bytes());
+  return payload;
+}
+
+std::vector<std::byte> makeSparseFoldTape() {
+  const auto output = outputDescriptor();
+  const auto texture = textureDescriptor();
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff204060u,
+      .z = 1.0f,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const std::array firstConstants{
+      std::array<std::uint32_t, 4u>{1u, 2u, 3u, 4u},
+      std::array<std::uint32_t, 4u>{5u, 6u, 7u, 8u},
+  };
+  const std::array<std::array<std::uint32_t, 4u>, 1u> lastConstant{
+      std::array<std::uint32_t, 4u>{9u, 10u, 11u, 12u},
+  };
+  const std::array records{
+      Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)},
+      Record{
+          .type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payload = sparseTexturePayload(false, true),
+          .handles = {D9CCommandChunkWireHandleEntry{
+              .kind = kTexture.kind,
+              .generation = kTexture.generation,
+              .objectId = kTexture.objectId,
+          }}},
+      Record{.type = D9C_COMMAND_RECORD_SET_VS_CONST_F,
+             .payload = setVsFloatPayload(0u, firstConstants)},
+      Record{.type = D9C_COMMAND_RECORD_SET_VS_CONST_F,
+             .payload = setVsFloatPayload(1u, lastConstant)},
+      Record{.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+             .payload = sparseTexturePayload(true, false)},
+      Record{.type = D9C_COMMAND_RECORD_PRESENT,
+             .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  const auto chunk = makeChunk(records);
+  const RenderTapeOracleAttachment oracle{
+      .identity = kOutput,
+      .descriptorKind =
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+  };
+  std::array<std::byte, 1536u> gamma{};
+  for (std::size_t index = 0u; index < gamma.size() / 2u; ++index) {
+    const auto value = static_cast<std::uint16_t>((index % 256u) << 8u);
+    std::memcpy(gamma.data() + index * 2u, &value, sizeof(value));
+  }
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(bootstrapChunk(), gamma);
+  builder.appendObjectDefine(
+      kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+      std::as_bytes(std::span(&output, 1u)), 0u, {});
+  builder.appendObjectDefine(
+      kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+      texture, 0u, {}, 4u, 1u);
+  builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                                 0u, 4u, kTextureDigest);
+  builder.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 6u, .handleCount = 1u}, chunk);
+  builder.appendPresentComplete(
+      5u, 6u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  return builder.seal();
+}
+
 std::vector<std::byte> frameChunk(bool firstFullSnapshot = true,
                                   bool includeAlias = false) {
   const D9CCommandChunkWireClear clear{
@@ -804,7 +921,7 @@ void identityTruthTableAndMalformedInputs() {
 }
 
 void executableProjectionMaterializesCanonicalBundle() {
-  const auto tape = makeFrameTape();
+  const auto tape = makeFrameTape(false);
   const auto blobs = catalogue();
   const auto identity = makeIdentity(tape);
   const auto materialized = materializeRenderTapeProjectionBundle(
@@ -964,6 +1081,83 @@ void projectionPreservesDispositionAndAliasMetadata() {
         "projection preserves texture disposition and exact alias metadata");
 }
 
+void sparseStateFoldTruthTable() {
+  const auto tape = makeSparseFoldTape();
+  const auto blobs = catalogue();
+  const auto sourceValidation = validateRenderTape(tape, blobs);
+  check(sourceValidation.valid(),
+        renderTapeValidationStatusName(sourceValidation.status));
+  const auto folded = foldRenderTapeStateForDraw(tape, blobs, 5u, 4u);
+  const auto repeated = foldRenderTapeStateForDraw(tape, blobs, 5u, 4u);
+  check(folded.valid(), renderTapeStateFoldStatusName(folded.status));
+  check(!folded.selectedRecordWasFullSnapshot &&
+            folded.coverageMask == kRenderTapeRequiredCategoryMask &&
+            folded.bootstrapChunk == repeated.bootstrapChunk &&
+            folded.gammaRamp.size() == 1536u &&
+            folded.gammaRamp == repeated.gammaRamp &&
+            folded.referencedIdentities.empty(),
+        "default sparse fold is complete, deterministic, and drops an "
+        "overwritten binding");
+
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, folded.bootstrapChunk.data(), sizeof(header));
+  ImportedChunkView chunk;
+  check(importPrevalidatedCommandChunk(
+            folded.bootstrapChunk,
+            CommandChunkEnvelope{header.version, header.recordCount,
+                                 header.handleCount},
+            chunk) &&
+            chunk.records.size() == 1u &&
+            chunk.records[0].type == D9C_COMMAND_RECORD_APPLY_STATE &&
+            (chunk.record(0u).drawHeader.flags &
+             D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) != 0u,
+        "fold emits one canonical APPLY_STATE|FULL_SNAPSHOT record");
+  const auto record = chunk.record(0u);
+  const auto findSection = [&](std::uint16_t kind) {
+    for (std::size_t index = 0u; index < record.sections.size(); ++index) {
+      const auto section = record.section(index);
+      if (section.descriptor.kind == kind) return section;
+    }
+    throw TestFailure("folded bootstrap omitted required section");
+  };
+  const auto textureSection =
+      findSection(D9C_COMMAND_CHUNK_SECTION_TEXTURE);
+  D9CCommandChunkWireTextureBinding texture{};
+  std::memcpy(&texture, textureSection.payload.data(), sizeof(texture));
+  check(textureSection.descriptor.count == D9C_DRAW_PACKET_MAX_TEXTURES &&
+            texture.slot == 0u && texture.valid == 1u &&
+            texture.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+        "last sparse texture binding wins and expands to complete slots");
+  const auto constants = findSection(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F);
+  D9CCommandChunkWireConstantRange range{};
+  std::memcpy(&range, constants.payload.data(), sizeof(range));
+  std::array<std::uint32_t, 4u> registerOne{};
+  std::memcpy(registerOne.data(),
+              constants.payload.data() + sizeof(range) + 16u,
+              sizeof(registerOne));
+  check(range.startRegister == 0u &&
+            range.registerCount == D9C_DRAW_PACKET_MAX_CONST_VS_F &&
+            registerOne == std::array<std::uint32_t, 4u>{9u, 10u, 11u, 12u},
+        "overlapping standalone constant ranges preserve exact last-write semantics");
+
+  check(foldRenderTapeStateForDraw(tape, blobs, 5u, 3u).status ==
+            RenderTapeStateFoldStatus::InvalidSelection,
+        "non-Draw fold target rejects before producing a bootstrap");
+  auto incomplete = tape;
+  auto* tapeHeader = reinterpret_cast<RenderTapeHeader*>(incomplete.data());
+  auto* events = reinterpret_cast<RenderTapeEventHeader*>(
+      incomplete.data() + tapeHeader->eventTableOffset);
+  auto* bootstrap = reinterpret_cast<RenderTapeBootstrapHeader*>(
+      incomplete.data() + tapeHeader->payloadArenaOffset +
+      events[0u].payloadOffset);
+  bootstrap->requiredCategoryMask &= ~(std::uint64_t{1} << 4u);
+  const auto rejected =
+      foldRenderTapeStateForDraw(incomplete, blobs, 5u, 4u);
+  check(rejected.status == RenderTapeStateFoldStatus::InvalidSource &&
+            rejected.bootstrapChunk.empty(),
+        "incomplete category manifest rejects before output construction");
+}
+
 void failClosedSelectionAndClosureCases() {
   const auto blobs = catalogue();
   check(projectRenderTapeDrawSlice(makeSequenceTape(), blobs, selector()).status ==
@@ -982,9 +1176,16 @@ void failClosedSelectionAndClosureCases() {
   check(projectRenderTapeDrawSlice(makeFrameTape(), blobs, coordinator).status ==
             RenderTapeProjectionStatus::InvalidSelection,
         "coordinator event cannot masquerade as a command record range");
-  check(projectRenderTapeDrawSlice(makeFrameTape(false), blobs, selector()).status ==
-            RenderTapeProjectionStatus::MissingFullSnapshot,
-        "first draw without FULL_SNAPSHOT must fail closed");
+  const auto defaultDelta =
+      projectRenderTapeDrawSlice(makeFrameTape(false), blobs, selector());
+  check(defaultDelta.valid() && defaultDelta.stateFold.valid() &&
+            !defaultDelta.stateFold.selectedRecordWasFullSnapshot &&
+            defaultDelta.stateFold.referencedIdentities.size() == 2u &&
+            defaultDelta.stateFold.referencedIdentities[0].generation ==
+                kTexture.generation &&
+            defaultDelta.stateFold.referencedIdentities[1].generation ==
+                kShader.generation,
+        "first default sparse Draw derives a complete bootstrap without the diagnostic flag");
   auto outOfRange = selector();
   outOfRange.firstRecordIndex = 3u;
   outOfRange.recordCount = 2u;
@@ -1037,7 +1238,7 @@ int main(int argc, char** argv) {
     }
     if ((argc == 3 || argc == 4) &&
         std::string_view(argv[1]) == "--write-fixture") {
-      const auto tape = makeFrameTape();
+      const auto tape = makeFrameTape(false);
       std::ofstream output(argv[2], std::ios::binary);
       output.write(reinterpret_cast<const char*>(tape.data()),
                    static_cast<std::streamsize>(tape.size()));
@@ -1059,6 +1260,7 @@ int main(int argc, char** argv) {
     acceptedRangeConservesCanonicalIdentity();
     projectionAccountsLatePerIdentitySeed();
     projectionPreservesDispositionAndAliasMetadata();
+    sparseStateFoldTruthTable();
     failClosedSelectionAndClosureCases();
     identityTruthTableAndMalformedInputs();
     policyExploreTruthTable();
