@@ -2044,19 +2044,6 @@ RenderTapeReductionResult reduceRenderTape(
     std::uint32_t presentCommandCount = 0u;
     std::uint32_t firstCommandEvent = kNoIndex;
 
-    // Ordered controls and destruction cannot be reduced safely: their
-    // effects are not represented by the selected command closure.
-    for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
-      const auto type = static_cast<RenderTapeEventType>(tape.events[i].type);
-      if (type == RenderTapeEventType::OrderedControl ||
-          type == RenderTapeEventType::ObjectDestroy) {
-        result.status = RenderTapeReductionStatus::UnsupportedEvent;
-        result.validation = result.sourceValidation;
-        result.validation.failedEventIndex = i;
-        return result;
-      }
-    }
-
     // Build the command index and identity references from the immutable,
     // already validated source view.
     for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
@@ -2244,7 +2231,10 @@ RenderTapeReductionResult reduceRenderTape(
 
     // Construct the source-index retention set in source order. Resource
     // mutations after the first command are ordinary interval traffic; only
-    // the declared seed prefix is safe to carry into a reduced frame.
+    // selected generation-qualified identities are carried into a reduced
+    // frame. The source validator permits such traffic only before
+    // PresentComplete and requires PresentComplete to be terminal, so no
+    // post-terminal event can reach this closure pass.
     std::vector<std::uint8_t> retain(tape.events.size(), 0u);
     retain[0u] = 1u;
     for (std::uint32_t i = 1u; i < tape.events.size() - 1u; ++i) {
@@ -2255,9 +2245,16 @@ RenderTapeReductionResult reduceRenderTape(
         retain[i] = containsIdentity(closure, fixed.identity) ? 1u : 0u;
       } else if (type == RenderTapeEventType::ResourceMutation &&
                  (firstCommandEvent != kNoIndex && i >= firstCommandEvent)) {
-        result.status = RenderTapeReductionStatus::UnsupportedEvent;
-        result.validation.failedEventIndex = i;
-        return result;
+        RenderTapeResourceMutationHeader fixed{};
+        if (!load(tape.event(i).payload, 0u, fixed)) {
+          result.status = RenderTapeReductionStatus::ClosureFailure;
+          result.validation.failedEventIndex = i;
+          return result;
+        }
+        // A complete seed followed by a mutation is ordinary interval
+        // traffic.  It is reducible when the selected command closure reads
+        // the same generation-qualified identity.
+        retain[i] = containsIdentity(closure, fixed.identity) ? 1u : 0u;
       } else if (type == RenderTapeEventType::ResourceMutation) {
         RenderTapeResourceMutationHeader fixed{};
         load(tape.event(i).payload, 0u, fixed);
@@ -2269,21 +2266,39 @@ RenderTapeReductionResult reduceRenderTape(
           retain[i] = 0u;
           continue;
         }
-        // Only the definition-declared initial-content prefix is reducible.
-        // Any later live mutation, including one before the first command,
-        // has interval semantics that this bounded reducer cannot project.
         if (need->expectedCount == 0u ||
             need->recordedCount >= need->expectedCount ||
             need->recordedBytes >= need->expectedBytes) {
-          result.status = RenderTapeReductionStatus::UnsupportedEvent;
-          result.validation.failedEventIndex = i;
-          return result;
+          retain[i] = containsIdentity(closure, fixed.identity) ? 1u : 0u;
+          continue;
         }
         need->recordedBytes += fixed.byteSize;
         ++need->recordedCount;
         retain[i] = 1u;
       } else if (type == RenderTapeEventType::CommandChunk) {
         retain[i] = selected[i];
+      } else if (type == RenderTapeEventType::OrderedControl) {
+        RenderTapeOrderedControlHeader fixed{};
+        if (!load(tape.event(i).payload, 0u, fixed)) {
+          result.status = RenderTapeReductionStatus::ClosureFailure;
+          result.validation.failedEventIndex = i;
+          return result;
+        }
+        const auto kind = static_cast<RenderTapeControlKind>(fixed.kind);
+        const bool objectScoped =
+            kind == RenderTapeControlKind::QueryGetData ||
+            kind == RenderTapeControlKind::CpuRead;
+        retain[i] = objectScoped
+                        ? containsIdentity(closure, fixed.identity)
+                        : 1u;
+      } else if (type == RenderTapeEventType::ObjectDestroy) {
+        RenderTapeObjectDestroyHeader fixed{};
+        if (!load(tape.event(i).payload, 0u, fixed)) {
+          result.status = RenderTapeReductionStatus::ClosureFailure;
+          result.validation.failedEventIndex = i;
+          return result;
+        }
+        retain[i] = containsIdentity(closure, fixed.identity);
       }
     }
     retain[tape.events.size() - 1u] = 1u;

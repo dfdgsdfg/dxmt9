@@ -741,10 +741,15 @@ delete arbitrary bytes. The bounded first reducer operates on whole
 generation-qualified definitions and complete initial mutations reachable from
 selected command handles, the selected Present command, and terminal
 `PresentComplete`, then rewrites ordinals and component manifests canonically.
-It must validate the candidate before effects and accept it only when an
-explicit production-provider oracle succeeds. Deterministic bisection may
-search this same finite selection space; it must not silently omit live
-mutations, controls, destruction, or other semantics it cannot close.
+The low-level `reduceRenderTape()` API and `dxmt9-render-tape reduce` command
+are structural only: they must validate the candidate before publication or
+effects, but do not execute a provider or claim an oracle result. The
+high-level `scripts/tools/run_dxmt9_render_tape.py reduce`/`bisect` wrapper
+owns the separate production-provider preflight/replay gate and may accept a
+candidate for provider-backed reduction only after that explicit oracle
+succeeds. Deterministic bisection may search this same finite selection space;
+it must not silently omit live mutations, controls, destruction, or other
+semantics it cannot close.
 
 **R-HARN-REPLAY-7.16** The first Render Tape v2 draw-slice projector must be a
 pure, cold value transform over a structurally validated `frame-tape` and an

@@ -29,6 +29,12 @@ void check(bool condition, std::string_view message) {
   }
 }
 
+bool sameWireIdentity(const D9CWireObjectIdentity& lhs,
+                      const D9CWireObjectIdentity& rhs) {
+  return lhs.kind == rhs.kind && lhs.generation == rhs.generation &&
+         lhs.objectId == rhs.objectId;
+}
+
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
@@ -2364,11 +2370,29 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
         "out-of-range selections must fail closed");
 
   RenderTapeBuilder liveMutation;
+  const D9CWireObjectIdentity unrelatedOldTexture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 1u,
+      .objectId = 0x9021u,
+  };
+  auto unrelatedNewTexture = unrelatedOldTexture;
+  ++unrelatedNewTexture.generation;
   liveMutation.appendBootstrapState(makeApplyStateChunk());
   liveMutation.appendObjectDefine(kSurface, kSurfaceDescriptorKind, surfaceDescriptorBytes,
                                   0u, {});
   liveMutation.appendObjectDefine(kTexture, kTextureDescriptorKind, textureDescriptor,
                                   0u, {}, 4u, 1u);
+  liveMutation.appendObjectDefine(unrelatedOldTexture, kTextureDescriptorKind,
+                                  textureDescriptor, 0u, {}, 4u, 1u);
+  liveMutation.appendResourceMutation(unrelatedOldTexture,
+                                      RenderTapeMutationKind::Upload, 0u, 0u,
+                                      4u, seedDigest);
+  liveMutation.appendObjectDestroy(unrelatedOldTexture);
+  liveMutation.appendObjectDefine(unrelatedNewTexture, kTextureDescriptorKind,
+                                  textureDescriptor, 0u, {}, 4u, 1u);
+  liveMutation.appendResourceMutation(unrelatedNewTexture,
+                                      RenderTapeMutationKind::Upload, 0u, 0u,
+                                      4u, seedDigest);
   liveMutation.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
                                       0u, 0u, 4u, seedDigest);
   liveMutation.appendCommandChunk(
@@ -2380,15 +2404,64 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
       CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
       makePresentChunk());
   liveMutation.appendPresentComplete(
-      7u, 8u, RenderTapeDigestValidity::NotCaptured, {},
+      12u, 8u, RenderTapeDigestValidity::NotCaptured, {},
       std::as_bytes(std::span(&oracle, 1u)));
   const auto liveMutationSource = liveMutation.seal();
   check(validateRenderTape(liveMutationSource, catalogue).valid(),
         "ordinary post-seed mutation fixture must validate");
-  const std::array liveCommands{4u, 6u};
-  check(reduceRenderTape(liveMutationSource, catalogue, liveCommands).status ==
-            RenderTapeReductionStatus::UnsupportedEvent,
-        "post-seed mutation must reject instead of being silently omitted");
+  const std::array liveCommands{9u, 11u};
+  const auto reducedLiveMutation =
+      reduceRenderTape(liveMutationSource, catalogue, liveCommands);
+  ImportedRenderTapeView liveSourceView;
+  ImportedRenderTapeView reducedLiveView;
+  check(validateRenderTape(liveMutationSource, catalogue, &liveSourceView).valid() &&
+            validateRenderTape(reducedLiveMutation.bytes, catalogue,
+                               &reducedLiveView)
+                .valid(),
+        "post-seed reduced tape must validate with its rewritten event layout");
+  check(reducedLiveMutation.valid() &&
+            reducedLiveMutation.retainedSourceEventIndices ==
+                std::vector<std::uint32_t>({0u, 1u, 2u, 8u, 9u, 10u, 11u,
+                                            12u}),
+        "post-seed mutation must remain in the selected identity closure while unrelated generations are omitted");
+  const std::array liveEventTypes{
+      RenderTapeEventType::BootstrapState, RenderTapeEventType::ObjectDefine,
+      RenderTapeEventType::ObjectDefine, RenderTapeEventType::ResourceMutation,
+      RenderTapeEventType::CommandChunk, RenderTapeEventType::ResourceMutation,
+      RenderTapeEventType::CommandChunk, RenderTapeEventType::PresentComplete};
+  check(reducedLiveView.events.size() == liveEventTypes.size() &&
+            std::equal(liveEventTypes.begin(), liveEventTypes.end(),
+                       reducedLiveView.events.begin(),
+                       [](RenderTapeEventType type,
+                          const RenderTapeEventHeader& header) {
+                         return static_cast<std::uint32_t>(type) == header.type;
+                       }),
+        "reduced mutation events must retain canonical source order");
+  check(std::equal(liveSourceView.event(8u).payload.begin(),
+                   liveSourceView.event(8u).payload.end(),
+                   reducedLiveView.event(3u).payload.begin(),
+                   reducedLiveView.event(3u).payload.end()) &&
+            std::equal(liveSourceView.event(10u).payload.begin(),
+                       liveSourceView.event(10u).payload.end(),
+                       reducedLiveView.event(5u).payload.begin(),
+                       reducedLiveView.event(5u).payload.end()),
+        "retained mutation payload bytes must be unchanged");
+  RenderTapeResourceMutationHeader liveSeed{};
+  RenderTapeResourceMutationHeader liveUpdate{};
+  check(reducedLiveView.event(3u).payload.size() == sizeof(liveSeed) &&
+            reducedLiveView.event(5u).payload.size() == sizeof(liveUpdate),
+        "retained mutation payloads must have their canonical fixed size");
+  std::memcpy(&liveSeed, reducedLiveView.event(3u).payload.data(),
+              sizeof(liveSeed));
+  std::memcpy(&liveUpdate, reducedLiveView.event(5u).payload.data(),
+              sizeof(liveUpdate));
+  check(
+            sameWireIdentity(liveSeed.identity, kTexture) &&
+            sameWireIdentity(liveUpdate.identity, kTexture) &&
+            liveSeed.digest == seedDigest && liveUpdate.digest == seedDigest &&
+            reducedLiveMutation.referencedBlobDigests ==
+                std::vector<RenderTapeDigest>({seedDigest}),
+        "retained mutations must preserve generation-qualified identities and digests");
 
   RenderTapeBuilder preCommandMutation;
   preCommandMutation.appendBootstrapState(makeApplyStateChunk());
@@ -2413,9 +2486,203 @@ void wholeEventReductionIsCanonicalAndFailClosed() {
   check(validateRenderTape(preCommandSource, catalogue).valid(),
         "ordinary pre-command mutation fixture must validate");
   const std::array preCommandCommands{5u, 6u};
-  check(reduceRenderTape(preCommandSource, catalogue, preCommandCommands)
-                .status == RenderTapeReductionStatus::UnsupportedEvent,
-        "ordinary pre-command mutation must not be reclassified as seed data");
+  const auto reducedPreCommand =
+      reduceRenderTape(preCommandSource, catalogue, preCommandCommands);
+  check(reducedPreCommand.valid() &&
+            reducedPreCommand.retainedSourceEventIndices ==
+                std::vector<std::uint32_t>({0u, 1u, 2u, 3u, 4u, 5u, 6u,
+                                            7u}),
+        "duplicate pre-command identity mutations must preserve source order");
+  ImportedRenderTapeView preSourceView;
+  ImportedRenderTapeView reducedPreView;
+  check(validateRenderTape(preCommandSource, catalogue, &preSourceView).valid() &&
+            validateRenderTape(reducedPreCommand.bytes, catalogue,
+                               &reducedPreView)
+                .valid(),
+        "pre-command reduced tape must validate with its rewritten event layout");
+  check(std::equal(preSourceView.event(3u).payload.begin(),
+                   preSourceView.event(3u).payload.end(),
+                   reducedPreView.event(3u).payload.begin(),
+                   reducedPreView.event(3u).payload.end()) &&
+            std::equal(preSourceView.event(4u).payload.begin(),
+                       preSourceView.event(4u).payload.end(),
+                       reducedPreView.event(4u).payload.begin(),
+                       reducedPreView.event(4u).payload.end()),
+        "pre-command mutation payload bytes must remain source-identical");
+  RenderTapeResourceMutationHeader preSeed{};
+  RenderTapeResourceMutationHeader preUpdate{};
+  check(reducedPreView.event(3u).payload.size() == sizeof(preSeed) &&
+            reducedPreView.event(4u).payload.size() == sizeof(preUpdate),
+        "pre-command mutation payloads must have their canonical fixed size");
+  std::memcpy(&preSeed, reducedPreView.event(3u).payload.data(),
+              sizeof(preSeed));
+  std::memcpy(&preUpdate, reducedPreView.event(4u).payload.data(),
+              sizeof(preUpdate));
+  check(sameWireIdentity(preSeed.identity, kTexture) &&
+            sameWireIdentity(preUpdate.identity, kTexture) &&
+            preSeed.digest == seedDigest && preUpdate.digest == seedDigest &&
+            reducedPreCommand.referencedBlobDigests ==
+                std::vector<RenderTapeDigest>({seedDigest}),
+        "pre-command mutations must preserve identity and digest order");
+
+  // Ordered controls and a retirement in the selected identity closure are
+  // reducible in their original journal order.  The destroyed texture is not
+  // used by the Present command, so this exercises the exact safe case rather
+  // than inventing a post-retirement handle use.
+  RenderTapeBuilder ordered;
+  constexpr D9CWireObjectIdentity unrelatedQuery{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY,
+      .generation = 1u,
+      .objectId = 0x9031u,
+  };
+  constexpr D9CWireObjectIdentity unrelatedBuffer{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+      .generation = 1u,
+      .objectId = 0x9032u,
+  };
+  constexpr std::array<std::byte, 1u> unrelatedQueryDescriptor{};
+  constexpr std::array<std::byte, 8u> unrelatedBufferDescriptor{};
+  ordered.appendBootstrapState(makeApplyStateChunk());
+  ordered.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+                              surfaceDescriptorBytes, 0u, {});
+  ordered.appendObjectDefine(kTexture, kTextureDescriptorKind,
+                              textureDescriptor, 0u, {}, 4u, 1u);
+  ordered.appendObjectDefine(
+      unrelatedQuery, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+      unrelatedQueryDescriptor, 0u, {});
+  ordered.appendObjectDefine(
+      unrelatedBuffer, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+      unrelatedBufferDescriptor, 0u, {});
+  ordered.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload, 0u,
+                                 0u, 4u, seedDigest);
+  const RenderTapeQueryGetDataControl queryPayload{
+      .dataSize = 8u,
+      .seqId = 21u,
+  };
+  const RenderTapeOrderedControlHeader queryControl{
+      .identity = unrelatedQuery,
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+      .disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Completed),
+      .controlBytes = sizeof(queryPayload),
+      .completionOrdinal = 2u,
+  };
+  ordered.appendOrderedControl(queryControl,
+                               std::as_bytes(std::span(&queryPayload, 1u)));
+  const RenderTapeCpuReadControl cpuReadPayload{
+      .copyCount = 1u,
+      .bytesRead = 16u,
+  };
+  const RenderTapeOrderedControlHeader cpuReadControl{
+      .identity = unrelatedBuffer,
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::CpuRead),
+      .disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Completed),
+      .controlBytes = sizeof(cpuReadPayload),
+      .completionOrdinal = 3u,
+  };
+  ordered.appendOrderedControl(cpuReadControl,
+                               std::as_bytes(std::span(&cpuReadPayload, 1u)));
+  ordered.appendObjectDestroy(unrelatedBuffer);
+  ordered.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+      textureState);
+  std::array<std::byte, kRenderTapeGammaRampBytes> gamma{};
+  const RenderTapeOrderedControlHeader gammaControl{
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet),
+      .disposition = static_cast<std::uint32_t>(
+          RenderTapeControlDisposition::Completed),
+      .controlBytes = kRenderTapeGammaRampBytes,
+      .completionOrdinal = 4u,
+  };
+  ordered.appendOrderedControl(gammaControl, gamma);
+  ordered.appendObjectDestroy(kTexture);
+  ordered.appendCommandChunk(
+      CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+      makePresentChunk());
+  ordered.appendPresentComplete(
+      13u, 9u, RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  const auto orderedSource = ordered.seal();
+  check(validateRenderTape(orderedSource, catalogue).valid(),
+        "ordered control/destroy source fixture must validate");
+  const std::array orderedSelection{9u, 12u};
+  const auto reducedOrdered =
+      reduceRenderTape(orderedSource, catalogue, orderedSelection);
+  check(reducedOrdered.valid(),
+        "reducer must retain selected control/destroy ordering");
+  check(reducedOrdered.retainedSourceEventIndices ==
+            std::vector<std::uint32_t>({0u, 1u, 2u, 5u, 9u, 10u, 11u, 12u,
+                                        13u}),
+        "selected control and destroy events must remain source ordered");
+  ImportedRenderTapeView orderedSourceView;
+  ImportedRenderTapeView reducedOrderedView;
+  check(validateRenderTape(orderedSource, catalogue, &orderedSourceView).valid() &&
+            validateRenderTape(reducedOrdered.bytes, catalogue,
+                               &reducedOrderedView)
+                .valid(),
+        "ordered reduction must pass final structural validation");
+  const std::array orderedEventTypes{
+      RenderTapeEventType::BootstrapState, RenderTapeEventType::ObjectDefine,
+      RenderTapeEventType::ObjectDefine, RenderTapeEventType::ResourceMutation,
+      RenderTapeEventType::CommandChunk, RenderTapeEventType::OrderedControl,
+      RenderTapeEventType::ObjectDestroy, RenderTapeEventType::CommandChunk,
+      RenderTapeEventType::PresentComplete};
+  check(reducedOrderedView.events.size() == orderedEventTypes.size() &&
+            std::equal(orderedEventTypes.begin(), orderedEventTypes.end(),
+                       reducedOrderedView.events.begin(),
+                       [](RenderTapeEventType type,
+                          const RenderTapeEventHeader& header) {
+                         return static_cast<std::uint32_t>(type) == header.type;
+                       }),
+        "reduced controls and destruction must retain source event types/order");
+  check(std::equal(orderedSourceView.event(5u).payload.begin(),
+                   orderedSourceView.event(5u).payload.end(),
+                   reducedOrderedView.event(3u).payload.begin(),
+                   reducedOrderedView.event(3u).payload.end()) &&
+            std::equal(orderedSourceView.event(10u).payload.begin(),
+                       orderedSourceView.event(10u).payload.end(),
+                       reducedOrderedView.event(5u).payload.begin(),
+                       reducedOrderedView.event(5u).payload.end()) &&
+            std::equal(orderedSourceView.event(11u).payload.begin(),
+                       orderedSourceView.event(11u).payload.end(),
+                       reducedOrderedView.event(6u).payload.begin(),
+                       reducedOrderedView.event(6u).payload.end()) &&
+            std::equal(orderedSourceView.event(12u).payload.begin(),
+                       orderedSourceView.event(12u).payload.end(),
+                       reducedOrderedView.event(7u).payload.begin(),
+                       reducedOrderedView.event(7u).payload.end()),
+        "retained control, destruction, mutation, and Present payload bytes must be unchanged");
+  RenderTapeOrderedControlHeader reducedGamma{};
+  RenderTapeObjectDestroyHeader reducedDestroy{};
+  check(reducedOrderedView.event(5u).payload.size() >= sizeof(reducedGamma) &&
+            reducedOrderedView.event(6u).payload.size() == sizeof(reducedDestroy),
+        "retained control and destruction payloads must have canonical sizes");
+  std::memcpy(&reducedGamma, reducedOrderedView.event(5u).payload.data(),
+              sizeof(reducedGamma));
+  std::memcpy(&reducedDestroy, reducedOrderedView.event(6u).payload.data(),
+              sizeof(reducedDestroy));
+  check(reducedGamma.kind ==
+                static_cast<std::uint32_t>(RenderTapeControlKind::GammaRampSet) &&
+            reducedGamma.controlBytes == kRenderTapeGammaRampBytes &&
+            sameWireIdentity(reducedDestroy.identity, kTexture),
+        "retained GammaRampSet and ObjectDestroy must preserve typed payloads");
+
+  RenderTapeBuilder afterTerminal;
+  for (std::size_t index = 0u; index < orderedSourceView.events.size(); ++index) {
+    const auto event = orderedSourceView.event(index);
+    afterTerminal.appendRawEvent(
+        static_cast<RenderTapeEventType>(event.header.type), event.payload);
+  }
+  afterTerminal.appendObjectDestroy(unrelatedBuffer);
+  bool rejectedAfterTerminal = false;
+  try {
+    static_cast<void>(afterTerminal.seal());
+  } catch (const std::invalid_argument&) {
+    rejectedAfterTerminal = true;
+  }
+  check(rejectedAfterTerminal,
+        "events after terminal PresentComplete must fail before reduction effects");
 
   auto invalidSource = source;
   reinterpret_cast<RenderTapeHeader*>(invalidSource.data())->version += 1u;

@@ -1296,15 +1296,26 @@ both capture digests match, both outputs are non-degenerate, and the mutation
 therefore has an observable result. Prior-output-load proof and broader grammar
 remain open.
 
-For `frame-tape`, `reduce` retains selected whole `CommandChunk` events plus
+For `frame-tape`, the low-level C++ `reduceRenderTape()` API and
+`dxmt9-render-tape reduce` command are structural transforms: they retain
+selected whole `CommandChunk` events plus
 their bootstrap, exact live generation definitions, complete initial seed/blob
-closure, the selected Present, and terminal `PresentComplete`. It rewrites
-ordinals and the content-addressed manifest, validates before provider effects,
-and accepts only a candidate whose explicit provider oracle succeeds. `bisect`
-performs deterministic delta minimization over that same whole-command domain.
-Both operations reject controls, destruction, live post-seed mutations,
-sequence input, and any other shape whose semantics the bounded closure cannot
-preserve.
+closure, the selected Present, terminal `PresentComplete`, and any
+source-ordered `OrderedControl`/`ObjectDestroy` or post-seed mutation that is
+part of the selected generation-qualified identity closure. Identity-free
+controls are retained conservatively; unrelated object-scoped events and
+unreferenced mutations/destructions are omitted. It rewrites ordinals and the
+content-addressed manifest, and structurally validates the candidate before
+publication. `bisect` performs deterministic delta minimization over that same
+whole-command domain.
+This is structural reducer coverage only: the current provider still rejects
+unsupported control semantics, PresentEx, volume, and broader interval shapes
+before effects, and no reducer change proves prior-output-load identity. The
+high-level `scripts/tools/run_dxmt9_render_tape.py reduce`/`bisect` wrapper
+then runs structural validation followed by the explicit production-provider
+preflight/replay oracle; only that wrapper's candidate acceptance is
+provider-gated. Provider preflight/replay remains a separate promotion step
+from the low-level structural API and native CLI.
 
 This is a provider API plus native evidence seam, not a new structural CLI.
 The existing `validate`/`inspect` commands remain structural-only. The bounded
@@ -1319,7 +1330,8 @@ The structural/replay tools have these modes:
 | `validate` / `inspect` | schema/resource/order validation and structural conservation; no provider execution | none |
 | `provider-replay` | production-provider execution with declared fresh-process reset, warm-up, repetition, and exact run identity | identity only; no performance sampling |
 | `parallel-verify` | atomic fresh-process identity/ExplicitParallel equality plus typed non-vacuity and zero-GPU-error gates | bounded refinement identity only; no performance or wild claim |
-| `reduce` / `bisect` | deterministic whole-command frame reduction with closure validation and explicit provider oracle | none |
+| low-level `reduceRenderTape()` / `dxmt9-render-tape reduce` | deterministic structural whole-command frame reduction with closure validation; no provider execution | none |
+| Python `run_dxmt9_render_tape.py reduce` / `bisect` | high-level reduction/bisection plus explicit production-provider preflight/replay gate | identity only; no performance sampling |
 | `project` | pure one-command-event contiguous Draw-range readiness projection; no provider execution or wire rewrite | none |
 | future `benchmark` | repeated execution with a declared sampling policy beyond identity checks | explicit and profile-bound |
 

@@ -431,6 +431,25 @@ def main() -> int:
             encoding="utf-8",
         )
         fake_provider.chmod(0o755)
+        rejected_reduction_output = root_path / "rejected-provider-reduction"
+        rejected_reduction = run(
+            sys.executable,
+            str(runner),
+            "reduce",
+            str(bundle),
+            "--output-dir",
+            str(rejected_reduction_output),
+            "--select-command-event",
+            str(present_event),
+            "--validator",
+            str(validator),
+            "--provider",
+            str(fake_provider),
+            check=False,
+        )
+        assert rejected_reduction.returncode != 0
+        assert "provider oracle rejected" in rejected_reduction.stderr
+        assert not rejected_reduction_output.exists()
         weak_oracle = run(
             sys.executable,
             str(runner),
