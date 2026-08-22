@@ -10,6 +10,13 @@
  *   deferred payload retirement: PostEncodePayloadRetirement
  *   Present pacing             : PresentFrameLatency
  *
+ * FirstLeaseWaitAction is the model-code truth-table binding for
+ * classifyFirstLeaseCapacityWait. OrdinaryDirectSources denotes non-Present
+ * Direct Arena Ready heads whose already-owned charge fits both ordinaryDirect
+ * and highWater. The ExecuteOneSourceSerial action leaves openSession
+ * unchanged, so pressure cannot create or enlarge a represented session or
+ * its release event.
+ *
  * Source arrival and GPU settlement are deliberately not queue actions.
  * Their assumptions are explicit below; all other fairness is limited to
  * queue-owned actions while they remain enabled.
@@ -17,7 +24,8 @@
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
-CONSTANTS MaxSources, MaxSessionLen, MaxPresentOutstanding
+CONSTANTS MaxSources, MaxSessionLen, MaxPresentOutstanding,
+          SeedDeniedFirstLeaseCycle, OrdinaryDirectSources
 
 Sources == 1 .. MaxSources
 Phases == {"Unaccepted", "Admission", "Leased", "Ready", "Encoded",
@@ -49,14 +57,23 @@ VARIABLES
   completionQueue,
   nextSessionId,
   sourceSession,
-  terminal
+  terminal,
+  firstLeaseParked,
+  firstLeaseObservedGeneration,
+  arenaAdmissionPressure,
+  pressureSerialProgressAvailable,
+  pressureEscaped
 
-vars == <<phase, nextAccept, accepted, released, presentBearing,
-          presentSubmitted, presentPublished, presentSkipped, presentSettled,
-          payloadRetired, capacityOwner, capacityGeneration, capacityParked,
-          capacityObservedGeneration, readyGeneration, encoderParked,
-          encoderObservedGeneration, openSession, gpuQueue, gpuSettled,
-          completionQueue, nextSessionId, sourceSession, terminal>>
+vars ==
+  <<phase, nextAccept, accepted, released, presentBearing,
+    presentSubmitted, presentPublished, presentSkipped, presentSettled,
+    payloadRetired, capacityOwner, capacityGeneration, capacityParked,
+    capacityObservedGeneration, readyGeneration, encoderParked,
+    encoderObservedGeneration, openSession, gpuQueue, gpuSettled,
+    completionQueue, nextSessionId, sourceSession, terminal,
+    firstLeaseParked, firstLeaseObservedGeneration,
+    arenaAdmissionPressure, pressureSerialProgressAvailable,
+    pressureEscaped>>
 
 SeqSet(seq) == {seq[i] : i \in DOMAIN seq}
 AtPhase(name) == {s \in Sources : phase[s] = name}
@@ -65,13 +82,18 @@ Increasing(seq) ==
   \A i \in DOMAIN seq : i < Len(seq) => seq[i] < seq[i + 1]
 
 Init ==
-  /\ phase = [s \in Sources |-> "Unaccepted"]
-  /\ nextAccept = 1
-  /\ accepted = {}
+  /\ phase = IF SeedDeniedFirstLeaseCycle
+       THEN [s \in Sources |->
+               IF s = 1 THEN "Submitted"
+               ELSE IF s = 2 THEN "Ready"
+               ELSE "Unaccepted"]
+       ELSE [s \in Sources |-> "Unaccepted"]
+  /\ nextAccept = IF SeedDeniedFirstLeaseCycle THEN 3 ELSE 1
+  /\ accepted = IF SeedDeniedFirstLeaseCycle THEN {1, 2} ELSE {}
   /\ released = {}
-  /\ presentBearing = {}
-  /\ presentSubmitted = {}
-  /\ presentPublished = {}
+  /\ presentBearing = IF SeedDeniedFirstLeaseCycle THEN {1} ELSE {}
+  /\ presentSubmitted = IF SeedDeniedFirstLeaseCycle THEN {1} ELSE {}
+  /\ presentPublished = IF SeedDeniedFirstLeaseCycle THEN {1} ELSE {}
   /\ presentSkipped = {}
   /\ presentSettled = {}
   /\ payloadRetired = {}
@@ -83,12 +105,19 @@ Init ==
   /\ encoderParked = FALSE
   /\ encoderObservedGeneration = 0
   /\ openSession = <<>>
-  /\ gpuQueue = <<>>
+  /\ gpuQueue = IF SeedDeniedFirstLeaseCycle THEN <<1>> ELSE <<>>
   /\ gpuSettled = {}
   /\ completionQueue = <<>>
-  /\ nextSessionId = 1
-  /\ sourceSession = [s \in Sources |-> 0]
+  /\ nextSessionId = IF SeedDeniedFirstLeaseCycle THEN 2 ELSE 1
+  /\ sourceSession = IF SeedDeniedFirstLeaseCycle
+       THEN [s \in Sources |-> IF s = 1 THEN 1 ELSE 0]
+       ELSE [s \in Sources |-> 0]
   /\ terminal = "Running"
+  /\ firstLeaseParked = IF SeedDeniedFirstLeaseCycle THEN 2 ELSE 0
+  /\ firstLeaseObservedGeneration = capacityGeneration
+  /\ arenaAdmissionPressure = FALSE
+  /\ pressureSerialProgressAvailable = TRUE
+  /\ pressureEscaped = {}
 
 AcceptSource(isPresent) ==
   /\ terminal = "Running"
@@ -203,6 +232,7 @@ WakeEncoder ==
 EncodeReadySource ==
   /\ terminal = "Running"
   /\ ~encoderParked
+  /\ firstLeaseParked = 0
   /\ AtPhase("Ready") # {}
   /\ Len(openSession) < MaxSessionLen
   /\ LET s == Oldest(AtPhase("Ready")) IN
@@ -297,6 +327,10 @@ SubmitSession ==
 GpuSettleHead ==
   /\ gpuQueue # <<>>
   /\ Head(gpuQueue) \notin gpuSettled
+  (* The seeded older residency is deliberately unavailable: its settlement
+     becomes reachable only after the queue makes the bounded serial step. *)
+  /\ (~SeedDeniedFirstLeaseCycle \/ pressureEscaped # {} \/
+        terminal # "Running")
   /\ LET s == Head(gpuQueue) IN
        /\ gpuSettled' = gpuSettled \cup {s}
        /\ phase' = [phase EXCEPT ![s] = "GpuSettled"]
@@ -332,9 +366,10 @@ ReleaseSource ==
        /\ released' = released \cup {s}
        /\ payloadRetired' = payloadRetired \cup {s}
        /\ completionQueue' = Tail(completionQueue)
+       /\ capacityGeneration' = capacityGeneration + 1
   /\ UNCHANGED <<nextAccept, accepted, presentBearing, presentSubmitted,
                   presentPublished, presentSkipped, presentSettled,
-                  capacityOwner, capacityGeneration, capacityParked,
+                  capacityOwner, capacityParked,
                   capacityObservedGeneration, readyGeneration,
                   encoderParked, encoderObservedGeneration, openSession,
                   gpuQueue, gpuSettled, nextSessionId, sourceSession,
@@ -374,6 +409,7 @@ TerminalDrainSource(stage) ==
   /\ stage \in {"Admission", "Leased", "Ready", "Encoded"}
   /\ AtPhase(stage) # {}
   /\ LET s == Oldest(AtPhase(stage)) IN
+       /\ s # firstLeaseParked
        /\ phase' = [phase EXCEPT ![s] = "TerminalDrain"]
        /\ openSession' = SelectSeq(openSession, LAMBDA x : x # s)
        /\ capacityOwner' = IF capacityOwner = s THEN 0 ELSE capacityOwner
@@ -428,9 +464,94 @@ TerminalReleaseDrained ==
                   gpuQueue, gpuSettled, completionQueue, nextSessionId,
                   sourceSession, terminal>>
 
+FirstLeaseWaitAction ==
+  IF terminal # "Running" THEN "Stop"
+  ELSE IF capacityGeneration # firstLeaseObservedGeneration THEN "RetryLease"
+  ELSE IF arenaAdmissionPressure /\ pressureSerialProgressAvailable /\
+          firstLeaseParked \in OrdinaryDirectSources /\
+          firstLeaseParked \in AtPhase("Ready")
+       THEN "ExecuteOneSourceSerial"
+  ELSE "Wait"
+
+BeginArenaAdmissionPressure ==
+  /\ terminal = "Running"
+  /\ firstLeaseParked # 0
+  /\ ~arenaAdmissionPressure
+  /\ arenaAdmissionPressure' = TRUE
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal>>
+  /\ firstLeaseParked' = firstLeaseParked
+  /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
+  /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
+  /\ pressureEscaped' = pressureEscaped
+
+PressureSerialEscape ==
+  /\ FirstLeaseWaitAction = "ExecuteOneSourceSerial"
+  /\ LET s == firstLeaseParked IN
+       /\ s = Oldest(AtPhase("Ready"))
+       /\ s \notin presentBearing
+       /\ phase' = [phase EXCEPT ![s] = "Submitted"]
+       /\ gpuQueue' = Append(gpuQueue, s)
+       /\ sourceSession' = [sourceSession EXCEPT ![s] = nextSessionId]
+       /\ nextSessionId' = nextSessionId + 1
+       /\ pressureEscaped' = pressureEscaped \cup {s}
+  /\ firstLeaseParked' = 0
+  /\ pressureSerialProgressAvailable' = FALSE
+  /\ UNCHANGED <<nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuSettled, completionQueue, terminal,
+                  firstLeaseObservedGeneration, arenaAdmissionPressure>>
+
+WakeFirstLeaseWaiter ==
+  /\ firstLeaseParked # 0
+  /\ FirstLeaseWaitAction \in {"RetryLease", "Stop"}
+  /\ firstLeaseParked' = 0
+  /\ pressureSerialProgressAvailable' =
+       IF FirstLeaseWaitAction = "RetryLease" THEN TRUE
+       ELSE pressureSerialProgressAvailable
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal>>
+  /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
+  /\ arenaAdmissionPressure' = arenaAdmissionPressure
+  /\ pressureEscaped' = pressureEscaped
+
+ClearArenaAdmissionPressure ==
+  /\ arenaAdmissionPressure
+  /\ \/ terminal # "Running"
+     \/ capacityGeneration # firstLeaseObservedGeneration
+  /\ arenaAdmissionPressure' = FALSE
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal>>
+  /\ firstLeaseParked' = firstLeaseParked
+  /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
+  /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
+  /\ pressureEscaped' = pressureEscaped
+
 AcceptNext == AcceptSource(nextAccept = MaxSources)
 
-Next ==
+BaseNext ==
   \/ AcceptNext
   \/ AcquireCapacity
   \/ ParkCapacityWaiter
@@ -456,27 +577,45 @@ Next ==
   \/ TerminalSkipPresent
   \/ TerminalReleaseDrained
 
-QueueFairness ==
-  /\ WF_vars(AcquireCapacity)
-  /\ WF_vars(WakeCapacityWaiter)
-  /\ WF_vars(PublishSource)
-  /\ WF_vars(WakeEncoder)
-  /\ WF_vars(EncodeReadySource)
-  /\ WF_vars(PublishPresent)
-  /\ WF_vars(SkipPresent)
-  /\ WF_vars(SubmitSession)
-  /\ WF_vars(ExpandCompletion)
-  /\ WF_vars(ReleaseSource)
-  /\ WF_vars(SettlePresent)
-  /\ WF_vars(TerminalDrainAdmission)
-  /\ WF_vars(TerminalDrainLeased)
-  /\ WF_vars(TerminalDrainReady)
-  /\ WF_vars(TerminalDrainEncoded)
-  /\ WF_vars(TerminalSkipPresent)
-  /\ WF_vars(TerminalReleaseDrained)
+PreserveFirstLease ==
+  /\ firstLeaseParked' = firstLeaseParked
+  /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
+  /\ arenaAdmissionPressure' = arenaAdmissionPressure
+  /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
+  /\ pressureEscaped' = pressureEscaped
 
-GpuSettlementAssumption == WF_vars(GpuSettleHead)
-SourceArrivalAssumption == WF_vars(AcceptNext)
+Next ==
+  \/ BaseNext /\ PreserveFirstLease
+  \/ BeginArenaAdmissionPressure
+  \/ PressureSerialEscape
+  \/ WakeFirstLeaseWaiter
+  \/ ClearArenaAdmissionPressure
+
+QueueFairness ==
+  /\ WF_vars(AcquireCapacity /\ PreserveFirstLease)
+  /\ WF_vars(WakeCapacityWaiter /\ PreserveFirstLease)
+  /\ WF_vars(PublishSource /\ PreserveFirstLease)
+  /\ WF_vars(WakeEncoder /\ PreserveFirstLease)
+  /\ WF_vars(EncodeReadySource /\ PreserveFirstLease)
+  /\ WF_vars(PublishPresent /\ PreserveFirstLease)
+  /\ WF_vars(SkipPresent /\ PreserveFirstLease)
+  /\ WF_vars(SubmitSession /\ PreserveFirstLease)
+  /\ WF_vars(ExpandCompletion /\ PreserveFirstLease)
+  /\ WF_vars(ReleaseSource /\ PreserveFirstLease)
+  /\ WF_vars(SettlePresent /\ PreserveFirstLease)
+  /\ WF_vars(TerminalDrainAdmission /\ PreserveFirstLease)
+  /\ WF_vars(TerminalDrainLeased /\ PreserveFirstLease)
+  /\ WF_vars(TerminalDrainReady /\ PreserveFirstLease)
+  /\ WF_vars(TerminalDrainEncoded /\ PreserveFirstLease)
+  /\ WF_vars(TerminalSkipPresent /\ PreserveFirstLease)
+  /\ WF_vars(TerminalReleaseDrained /\ PreserveFirstLease)
+  /\ WF_vars(BeginArenaAdmissionPressure)
+  /\ WF_vars(PressureSerialEscape)
+  /\ WF_vars(WakeFirstLeaseWaiter)
+  /\ WF_vars(ClearArenaAdmissionPressure)
+
+GpuSettlementAssumption == WF_vars(GpuSettleHead /\ PreserveFirstLease)
+SourceArrivalAssumption == WF_vars(AcceptNext /\ PreserveFirstLease)
 
 Spec ==
   Init /\ [][Next]_vars /\ QueueFairness /\ GpuSettlementAssumption /\
@@ -486,6 +625,9 @@ TypeOK ==
   /\ MaxSources \in Nat \ {0}
   /\ MaxSessionLen \in Nat \ {0}
   /\ MaxPresentOutstanding \in Nat \ {0}
+  /\ SeedDeniedFirstLeaseCycle \in BOOLEAN
+  /\ SeedDeniedFirstLeaseCycle => MaxSources >= 2
+  /\ OrdinaryDirectSources \subseteq Sources
   /\ phase \in [Sources -> Phases]
   /\ nextAccept \in 1 .. (MaxSources + 1)
   /\ accepted \subseteq Sources
@@ -510,6 +652,11 @@ TypeOK ==
   /\ nextSessionId \in Nat \ {0}
   /\ sourceSession \in [Sources -> Nat]
   /\ terminal \in Terminals
+  /\ firstLeaseParked \in 0 .. MaxSources
+  /\ firstLeaseObservedGeneration \in Nat
+  /\ arenaAdmissionPressure \in BOOLEAN
+  /\ pressureSerialProgressAvailable \in BOOLEAN
+  /\ pressureEscaped \subseteq Sources
 
 BoundedStores ==
   /\ Len(openSession) <= MaxSessionLen
@@ -534,6 +681,7 @@ OwnershipConservation ==
   /\ SeqSet(completionQueue) = AtPhase("Completion")
   /\ (capacityOwner = 0 \/ phase[capacityOwner] = "Leased")
   /\ (capacityParked = 0 \/ phase[capacityParked] = "Admission")
+  /\ (firstLeaseParked = 0 \/ phase[firstLeaseParked] = "Ready")
 
 FifoSessionAndCompletion ==
   /\ Increasing(openSession)
@@ -573,6 +721,20 @@ EncoderLostWakeupFreedom ==
        readyGeneration # encoderObservedGeneration)
     => ENABLED WakeEncoder
 
+FirstLeaseWaitActionEnabled ==
+  firstLeaseParked # 0 /\ FirstLeaseWaitAction # "Wait" =>
+    \/ FirstLeaseWaitAction = "ExecuteOneSourceSerial" /\
+         ENABLED PressureSerialEscape
+    \/ FirstLeaseWaitAction \in {"RetryLease", "Stop"} /\
+         ENABLED WakeFirstLeaseWaiter
+
+PressureEscapeIsStandalone ==
+  /\ pressureEscaped \cap SeqSet(openSession) = {}
+  /\ \A s \in pressureEscaped :
+       /\ sourceSession[s] # 0
+       /\ \A t \in accepted \ {s} :
+            sourceSession[t] # sourceSession[s]
+
 TerminalCapacityWaiterUnblocked ==
   terminal # "Running" ~> capacityParked = 0
 
@@ -586,6 +748,7 @@ StickyTrackingStep ==
   /\ presentPublished \subseteq presentPublished'
   /\ presentSkipped \subseteq presentSkipped'
   /\ presentSettled \subseteq presentSettled'
+  /\ pressureEscaped \subseteq pressureEscaped'
 
 StickyTracking == [][StickyTrackingStep]_vars
 
@@ -598,5 +761,21 @@ EveryPresentDecided ==
 
 EveryPresentSettled ==
   \A s \in Sources : s \in presentBearing ~> s \in presentSettled
+
+SeededDeniedLeasePressureProgress ==
+  SeedDeniedFirstLeaseCycle =>
+    ([] (terminal = "Running") =>
+      /\ <>arenaAdmissionPressure
+      /\ <> (2 \in pressureEscaped))
+
+EveryPressureEscapedSourceReleased ==
+  \A s \in Sources : s \in pressureEscaped ~> s \in released
+
+DeniedFirstLeaseAdmissionCycleBroken ==
+  \A s \in OrdinaryDirectSources :
+    [] (terminal = "Running") =>
+      (firstLeaseParked = s /\ arenaAdmissionPressure /\
+          pressureSerialProgressAvailable
+        ~> s \in pressureEscaped)
 
 ====

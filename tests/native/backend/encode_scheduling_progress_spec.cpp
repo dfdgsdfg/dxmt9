@@ -140,16 +140,27 @@ void admissionTruthTable() {
   }
 }
 
-void capacityGenerationTruthTable() {
-  using dxmt9::render::firstLeaseCapacityWaitDone;
-  for (bool stopped : {false, true}) {
-    for (std::uint64_t observed : {0ull, 1ull, 7ull}) {
-      for (std::uint64_t current : {0ull, 1ull, 7ull}) {
-        check(firstLeaseCapacityWaitDone(stopped, observed, current) ==
-                  (stopped || observed != current),
-              "first-lease generation truth table drifted");
-      }
-    }
+void firstLeaseCapacityWaitTruthTable() {
+  using namespace dxmt9::render;
+  for (std::uint32_t bits = 0; bits < 32u; ++bits) {
+    const FirstLeaseCapacityWaitState state{
+        .stopped = (bits & 1u) != 0,
+        .admissionPressure = (bits & 2u) != 0,
+        .serialProgressAvailable = (bits & 4u) != 0,
+        .readyHeadOwnsOrdinaryDirectCapacity = (bits & 8u) != 0,
+        .observedGeneration = 7u,
+        .currentGeneration = (bits & 16u) != 0 ? 8u : 7u,
+    };
+    const auto expected = state.stopped
+        ? FirstLeaseCapacityWaitAction::Stop
+        : state.currentGeneration != state.observedGeneration
+            ? FirstLeaseCapacityWaitAction::RetryLease
+            : state.admissionPressure && state.serialProgressAvailable &&
+                    state.readyHeadOwnsOrdinaryDirectCapacity
+                ? FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial
+                : FirstLeaseCapacityWaitAction::Wait;
+    check(classifyFirstLeaseCapacityWait(state) == expected,
+          "first-lease capacity-wait action truth table drifted");
   }
 }
 
@@ -479,7 +490,7 @@ void poisonOriginPublishesFirstCallsiteOnce() {
 int main() {
   try {
     admissionTruthTable();
-    capacityGenerationTruthTable();
+    firstLeaseCapacityWaitTruthTable();
     sessionWakeTruthTables();
     initializerTransitionTruthTable();
     terminalFanoutTruthTable();

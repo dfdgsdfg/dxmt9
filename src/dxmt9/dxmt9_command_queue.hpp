@@ -943,8 +943,10 @@ class CommandQueue {
   // release; it finalizes only on ordered fences —
   // Present tail, non-appendable/semantic source, session-source cap or
   // preflight failure, producer sequence wait, initializer-wait boundary, and
-  // shutdown drain. Admission and writer pressure only wake deterministic
-  // lease/boundary re-evaluation and never select a submission fence.
+  // shutdown drain. Admission and writer pressure never post a submission
+  // fence. When a denied first lease and live Arena admission form a cycle,
+  // the coordinator may execute one exact already-resident ordinary Direct
+  // FIFO head serially; another escape requires capacity-generation progress.
   void runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted);
   std::optional<core::metalqueue::QueueSubmissionRecord>
   encodeCpuReadySessionSource(
@@ -1152,6 +1154,12 @@ class CommandQueue {
   std::uint64_t sessionReleaseCoveredRawOrdinal_ = 0;
   std::uint64_t sessionReleaseCoveredSeqId_ = 0;
   std::size_t cpuReadyCapacityWaiterCount_ = 0;
+  // Native-only deterministic wait-entry observation. Production never sets
+  // the gate; the counters let the production-loop fixture synchronize on the
+  // two condition-variable boundaries without sleep or polling.
+  bool testOnlySchedulingWaitObservationEnabled_ = false;
+  std::uint64_t testOnlyArenaAdmissionWaitEntries_ = 0;
+  std::uint64_t testOnlyFirstLeaseWaitEntries_ = 0;
   bool stop_ = true;
 
  private:

@@ -665,7 +665,21 @@ candidate larger than the ordinary Direct reservation footprint is classified
 before construction as an isolated bounded Arena session, ordered legacy
 rollback, or invalid input; it must not consume successor headroom or split an
 already-open session in response to current occupancy. Raw-writer or Arena
-admission pressure may block and wake progress, but is not a release reason.
+admission pressure is not a release reason and must not post a
+`SessionReleaseEvent`. If an Arena admission waiter appears while the first
+lease is denied by older unavailable residency, the coordinator may execute
+exactly one FIFO Ready source through the existing standalone serial path only
+when the denied identity is unchanged, the source is a non-Present Direct
+Arena source that already owns its complete physical residency, and its charge
+fits both `ordinaryDirect` and the admission high-water vector. This bounded
+escape acquires no lease, reserves no capacity, opens no session, and remains
+unavailable again until a capacity-generation transition. It may reduce that
+exact source to a singleton submission; GPU timing must not append it to a
+session, widen any later group, fabricate completion, or re-arm another escape
+without reclaim progress. A SegmentSerial source retains its atomically
+published event-group metadata, FIFO execution, per-segment completion, and
+tail settlement; the escape cannot expose a Writing group member or alter
+publication/abort atomicity.
 Promotion requires zero pressure-created session releases and observable lease
 current/peak/denial, reserved/used/slack credits, successor-headroom minimum,
 fixed-cap release reason, and isolated or rollback reason. Every accepted

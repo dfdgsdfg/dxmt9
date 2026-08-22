@@ -4182,6 +4182,10 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   // parked, so only the acquire-wait for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(
       qmxBegin, "wait_for_cpu_ready_arena_admission-cv", /*skipHold=*/true);
+  if (testOnlySchedulingWaitObservationEnabled_) {
+    ++testOnlyArenaAdmissionWaitEntries_;
+    sessionReleaseCv_.notify_all();
+  }
   // Wake a parked Tape-gated encode session for deterministic re-evaluation.
   // This live pressure observation carries no release fence.
   encodeCv_.notify_one();

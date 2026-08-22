@@ -35,10 +35,40 @@ constexpr CpuReadyAdmissionAction classifyCpuReadyAdmissionGate(
   return CpuReadyAdmissionAction::Wait;
 }
 
-constexpr bool firstLeaseCapacityWaitDone(
-    bool stopped, std::uint64_t observedGeneration,
-    std::uint64_t currentGeneration) noexcept {
-  return stopped || currentGeneration != observedGeneration;
+enum class FirstLeaseCapacityWaitAction : std::uint8_t {
+  Wait,
+  RetryLease,
+  ExecuteOneSourceSerial,
+  Stop,
+};
+
+struct FirstLeaseCapacityWaitState {
+  bool stopped = false;
+  bool admissionPressure = false;
+  bool serialProgressAvailable = false;
+  bool readyHeadOwnsOrdinaryDirectCapacity = false;
+  std::uint64_t observedGeneration = 0;
+  std::uint64_t currentGeneration = 0;
+};
+
+// A capacity generation always gets the first retry: it may make the complete
+// fixed lease available without changing grouping. Admission pressure may use
+// one exact already-resident ordinary Direct head only once before another
+// capacity transition; this creates no SessionReleaseEvent and reserves no new
+// Tape capacity.
+constexpr FirstLeaseCapacityWaitAction classifyFirstLeaseCapacityWait(
+    FirstLeaseCapacityWaitState state) noexcept {
+  if (state.stopped) {
+    return FirstLeaseCapacityWaitAction::Stop;
+  }
+  if (state.currentGeneration != state.observedGeneration) {
+    return FirstLeaseCapacityWaitAction::RetryLease;
+  }
+  if (state.admissionPressure && state.serialProgressAvailable &&
+      state.readyHeadOwnsOrdinaryDirectCapacity) {
+    return FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial;
+  }
+  return FirstLeaseCapacityWaitAction::Wait;
 }
 
 struct CpuReadySessionWakeState {

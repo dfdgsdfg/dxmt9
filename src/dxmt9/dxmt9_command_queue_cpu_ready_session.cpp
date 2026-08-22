@@ -242,6 +242,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   render::EncodeSessionAdmissionState pendingAdmission{};
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
+  bool firstLeasePressureSerialProgressAvailable = true;
+  std::uint64_t firstLeasePressureSerialProgressGeneration = 0;
+  std::optional<QueueCompletionSource> pressureSerialSource;
   const bool terminalSuffixJoinEnabled =
       deferredTerminalSuffixJoinEnabled(backend_.get());
   const auto& tapeValues = cpuReadyTape_.config().values();
@@ -804,7 +807,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     bool blockedByPendingCompatibility = false;
     bool leaseDenied = false;
     std::uint64_t leaseDeniedSeqId = 0;
+    QueueCompletionSource leaseDeniedReadySource{};
+    bool leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity = false;
     bool invalidCapacitySnapshot = false;
+    bool invalidPressureSerialSource = false;
     bool selectionAcquiredLease = false;
     std::uint64_t selectionLeaseGeneration = 0;
     std::array<render::SessionCapacityVector, kCommandChunkCount>
@@ -834,6 +840,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   break;
                 }
                 if (exactReplaySingleSource) {
+                  if (pressureSerialSource.has_value() &&
+                      (candidate.source != pressureSerialSource->source ||
+                       candidate.slotIndex != pressureSerialSource->slotIndex ||
+                       candidate.seqId != pressureSerialSource->seqId)) {
+                    invalidPressureSerialSource = true;
+                    return std::size_t{0};
+                  }
                   return std::size_t{1};
                 }
                 if (selected >= 2u && candidate.semantic.hasPresent()) {
@@ -944,6 +957,21 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     perf::countCpuReadySessionLeaseDenied();
                     leaseDenied = true;
                     leaseDeniedSeqId = candidate.seqId;
+                    leaseDeniedReadySource = {
+                        .source = candidate.source,
+                        .slotIndex = candidate.slotIndex,
+                        .seqId = candidate.seqId,
+                        .hasPresent = candidate.hasPresent,
+                        .commandBegin = candidate.commandBegin,
+                        .commandCount = candidate.commandCount,
+                    };
+                    leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity =
+                        leaseDeniedReadySource.source.valid() &&
+                        candidate.payload.isArena() && !candidate.hasPresent &&
+                        render::sessionCapacityFitsWithin(
+                            capacity, capacityPolicy.ordinaryDirect) &&
+                        render::sessionCapacityFitsWithin(
+                            capacity, capacityPolicy.highWater);
                     break;
                   }
                   selectionAcquiredLease = true;
@@ -984,7 +1012,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       if (invalidCapacitySnapshot) {
         // Invalid Tape identity/arithmetic is structural corruption, not a
         // capacity transition. Poison synchronously so it cannot enter the
-        // generation wait and wedge without a possible releasing event.
+        // generation wait with an unrepairable predicate.
+        queueLifecycle_.poisonTapeFailureLocked();
+        return;
+      }
+      if (invalidPressureSerialSource) {
+        // The pressure escape requires the exact Ready identity observed at
+        // denial. Identity drift is structural corruption, not another
+        // capacity transition or permission to select a different head.
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
@@ -1003,14 +1038,54 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         }
         const std::uint64_t observedCapacityProgress =
             queueLifecycle_.cpuReadyCapacityProgressGeneration();
+        if (!firstLeasePressureSerialProgressAvailable &&
+            observedCapacityProgress !=
+                firstLeasePressureSerialProgressGeneration) {
+          firstLeasePressureSerialProgressAvailable = true;
+        }
+        render::FirstLeaseCapacityWaitAction waitAction =
+            render::FirstLeaseCapacityWaitAction::Wait;
+        const auto classifyWait = [&] {
+          return render::classifyFirstLeaseCapacityWait({
+              .stopped = stop_,
+              .admissionPressure = arenaAdmissionWaiterCount_.load(
+                  std::memory_order_acquire) != 0u,
+              .serialProgressAvailable =
+                  firstLeasePressureSerialProgressAvailable,
+              .readyHeadOwnsOrdinaryDirectCapacity =
+                  leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity,
+              .observedGeneration = observedCapacityProgress,
+              .currentGeneration =
+                  queueLifecycle_.cpuReadyCapacityProgressGeneration(),
+          });
+        };
         ++cpuReadyCapacityWaiterCount_;
-        encodeCv_.wait(lock, [this, observedCapacityProgress] {
-          return render::firstLeaseCapacityWaitDone(
-              stop_, observedCapacityProgress,
-              queueLifecycle_.cpuReadyCapacityProgressGeneration());
+        if (testOnlySchedulingWaitObservationEnabled_) {
+          ++testOnlyFirstLeaseWaitEntries_;
+          sessionReleaseCv_.notify_all();
+        }
+        encodeCv_.wait(lock, [&] {
+          waitAction = classifyWait();
+          return waitAction != render::FirstLeaseCapacityWaitAction::Wait;
         });
         DXMT_ASSERT(cpuReadyCapacityWaiterCount_ > 0);
         --cpuReadyCapacityWaiterCount_;
+        if (waitAction == render::FirstLeaseCapacityWaitAction::Stop) {
+          return;
+        }
+        if (waitAction ==
+            render::FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial) {
+          DXMT_ASSERT(leaseDeniedReadySource.source.valid());
+          pressureSerialSource = leaseDeniedReadySource;
+          exactReplaySingleSource = true;
+          firstLeasePressureSerialProgressAvailable = false;
+          firstLeasePressureSerialProgressGeneration =
+              observedCapacityProgress;
+        } else {
+          DXMT_ASSERT(waitAction ==
+                      render::FirstLeaseCapacityWaitAction::RetryLease);
+          firstLeasePressureSerialProgressAvailable = true;
+        }
         continue;
       }
       if (blockedByPendingCompatibility && pendingRecord.has_value()) {
@@ -1401,6 +1476,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       continue;
     }
     exactReplaySingleSource = false;
+    pressureSerialSource.reset();
     const auto unchargeSelectedCapacity =
         [&](std::size_t sourceIndex) {
           if (sourceIndex >= count ||
