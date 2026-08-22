@@ -72,6 +72,19 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = true;
   }
 
+  static CommandQueue::CpuReadyArenaFailureSnapshot takeFailure(
+      CommandQueue& queue) {
+    return queue.takeCpuReadyArenaFailure();
+  }
+
+  static CommandQueue::CpuReadyArenaFailureSnapshot activeFailure(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.arenaBuildContext_
+        ? queue.arenaBuildContext_->firstFailure()
+        : CommandQueue::CpuReadyArenaFailureSnapshot{};
+  }
+
   static std::uint32_t admissionWaiterCount(CommandQueue& queue) {
     return queue.arenaAdmissionWaiterCount_.load(std::memory_order_acquire);
   }
@@ -439,8 +452,10 @@ struct RoutingDevice final : dxmt9::Device {
   void submitClear(const ClearDesc& clear) override {
     ++clearCalls;
     queue_.submitClear(clear);
-    if (rejectAfterClear_) {
+    if (rejectAfterClear_ || (rejectAfterFinalClear_ && clearCalls >= 3u)) {
       queue_.rejectActiveCpuReadyArenaSource();
+      organicFailure = dxmt9::CommandQueueArenaLeaseTestAccess::activeFailure(queue_);
+      organicFailureObserved = true;
     }
   }
 
@@ -460,6 +475,7 @@ struct RoutingDevice final : dxmt9::Device {
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
   bool rejectAfterClear_ = false;
+  bool rejectAfterFinalClear_ = false;
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
@@ -470,6 +486,8 @@ struct RoutingDevice final : dxmt9::Device {
   std::uint64_t capturedBufferLastUsedSeq = UINT64_MAX;
   std::thread::id captureThread{};
   std::vector<ChunkHandleEntry> capturedResources;
+  dxmt9::CommandQueue::CpuReadyArenaFailureSnapshot organicFailure{};
+  bool organicFailureObserved = false;
 };
 
 struct RuntimeFixture {
@@ -837,6 +855,12 @@ void postSemanticDirectFailureDoesNotFallback() {
             dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
                 fixture.routing->queue_) == 2,
         "failed Direct identity is consumed and reclaimed without publication");
+  check(fixture.routing->organicFailureObserved &&
+            fixture.routing->organicFailure.failureClass ==
+                dxmt9::CommandQueue::CpuReadyArenaFailureClass::ActiveArenaRejected &&
+            fixture.routing->organicFailure.source == 0u &&
+            fixture.routing->organicFailure.segment == 0u,
+        "organic replayRawChunk failure must retain its typed active coordinates");
 }
 
 void batchBuilderFailureRetriesCompleteEventSerialExactlyOnce() {
@@ -907,6 +931,68 @@ void postSemanticBatchPublishFailureFailsStopsWithoutRetry() {
             fixture.routing->queue_.cpuReadyArenaPoisoned(),
         "post-semantic publish failure must fail-stop without EventSerial "
         "retry or duplicate semantic effects");
+}
+
+void firstOrganicFailureIsRetainedWithCoordinates() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "failure retention segment must build");
+  const std::array segments{*segment};
+  const auto layout = makeArenaSourcePayloadLayout(
+      segments, limits.pageSize, limits.maxPagesPerSource);
+  check(layout.has_value(), "failure retention layout must build");
+  auto lease = fixture.routing->queue_.beginCpuReadyArenaSource(31u, *layout);
+  check(lease.has_value(), "failure retention lease must admit");
+  fixture.routing->queue_.rejectActiveCpuReadyArenaSource();
+  ClearDesc clear{};
+  fixture.routing->queue_.submitClear(clear);
+  const auto failure =
+      dxmt9::CommandQueueArenaLeaseTestAccess::activeFailure(
+          fixture.routing->queue_);
+  check(failure.failureClass ==
+            dxmt9::CommandQueue::CpuReadyArenaFailureClass::ActiveArenaRejected &&
+            failure.source == 0u && failure.segment == 0u &&
+            failure.plannedPages != std::numeric_limits<std::uint32_t>::max(),
+        "first organic failure class and active coordinates must survive a "
+        "later failed append");
+  lease->abortForFallback();
+}
+
+void organicBatchAppendFailureFromReplayFailsOnce() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  fixture.routing->rejectAfterFinalClear_ = true;
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{clearRecord(rects), clearRecord(rects),
+                           clearRecord(rects), presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 17u, /*captureIdentity=*/true);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  const auto readback = fixture.routing->organicFailure;
+  const auto consumed =
+      dxmt9::CommandQueueArenaLeaseTestAccess::takeFailure(
+          fixture.routing->queue_);
+  check(hr < 0 && fixture.routing->clearCalls == 3u &&
+            fixture.routing->presentCalls == 1u &&
+            readback.failureClass ==
+                dxmt9::CommandQueue::CpuReadyArenaFailureClass::ActiveArenaRejected &&
+            readback.source == 2u && readback.segment == 0u &&
+            readback.actualCommands == 1u &&
+            consumed.failureClass ==
+                dxmt9::CommandQueue::CpuReadyArenaFailureClass::None,
+        "organic replay result: hr=" + std::to_string(hr) +
+        " clears=" + std::to_string(fixture.routing->clearCalls.load()) +
+        " presents=" + std::to_string(fixture.routing->presentCalls.load()) +
+        " class=" + std::to_string(static_cast<unsigned>(readback.failureClass)) +
+        " source=" + std::to_string(readback.source) +
+        " actual=" + std::to_string(readback.actualCommands) +
+        " consumed=" +
+            std::to_string(static_cast<unsigned>(consumed.failureClass)));
 }
 
 void workerPressureWaitResumesAfterActiveLeasePublishes() {
@@ -986,6 +1072,8 @@ int main() {
     batchBuilderFailureRetriesCompleteEventSerialExactlyOnce();
     captureIdentityBeginFailureRetriesCompleteEventSerialExactlyOnce();
     postSemanticBatchPublishFailureFailsStopsWithoutRetry();
+    firstOrganicFailureIsRetainedWithCoordinates();
+    organicBatchAppendFailureFromReplayFailsOnce();
     workerPressureWaitResumesAfterActiveLeasePublishes();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_production_routing_spec failed: "

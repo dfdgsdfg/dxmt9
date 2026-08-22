@@ -461,6 +461,32 @@ class CommandQueue {
     FailStopped,
   };
 
+  enum class CpuReadyArenaFailureClass : std::uint8_t {
+    None,
+    BuilderInitialization,
+    ContextInvalid,
+    Append,
+    CaptureRanges,
+    SegmentSelection,
+    ActiveArenaRejected,
+    InjectedBuilder,
+    InjectedRollback,
+    InjectedPostSemanticPublish,
+    PayloadSeal,
+    Planner,
+    CaptureProjection,
+    SnapshotValidation,
+    Abort,
+  };
+
+  struct CpuReadyArenaFailureSnapshot {
+    CpuReadyArenaFailureClass failureClass = CpuReadyArenaFailureClass::None;
+    std::uint32_t source = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t segment = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t plannedPages = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t actualCommands = std::numeric_limits<std::uint32_t>::max();
+  };
+
   // Move-only capability for one replay-thread-owned direct arena source.
   // Admission fixes and consumes raw/source/seq identities under mutex_; all
   // builder appends then run outside the queue lock. Destruction without a
@@ -587,6 +613,7 @@ class CommandQueue {
   bool cpuReadyArenaPoisoned() const noexcept {
     return arenaBuildPoisoned_.load(std::memory_order_acquire);
   }
+  CpuReadyArenaFailureSnapshot takeCpuReadyArenaFailure() noexcept;
   // A publish/proof failure after replayResolvedChunk has applied semantic
   // effects cannot take the pre-effect EventSerial retry. The caller marks
   // this queue fail-stop before returning the typed chunk failure.
@@ -1118,6 +1145,7 @@ class CommandQueue {
           initialBackBuffer(initialBackBuffer),
           ownerThread(std::this_thread::get_id()) {
       if (!initializeBuilders(tape)) {
+        noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
         failed.store(true, std::memory_order_relaxed);
       }
     }
@@ -1149,8 +1177,71 @@ class CommandQueue {
         batchLayouts[source] = sourceLayouts[source];
       }
       if (!initializeBatchBuilders(tape)) {
+        noteFailure(CpuReadyArenaFailureClass::BuilderInitialization);
         failed.store(true, std::memory_order_relaxed);
       }
+    }
+
+    void noteFailure(CpuReadyArenaFailureClass failureClass,
+                     std::size_t source = std::numeric_limits<std::size_t>::max(),
+                     std::size_t segment = std::numeric_limits<std::size_t>::max(),
+                     std::size_t plannedPages = std::numeric_limits<std::size_t>::max(),
+                     std::size_t actualCommands = std::numeric_limits<std::size_t>::max()) noexcept {
+      bool expected = false;
+      if (!firstFailureClaimed.compare_exchange_strong(
+              expected, true, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        return;
+      }
+      firstFailureSource.store(static_cast<std::uint32_t>(source),
+                               std::memory_order_relaxed);
+      firstFailureSegment.store(static_cast<std::uint32_t>(segment),
+                                std::memory_order_relaxed);
+      firstFailurePlannedPages.store(static_cast<std::uint32_t>(plannedPages),
+                                     std::memory_order_relaxed);
+      firstFailureActualCommands.store(
+          static_cast<std::uint32_t>(actualCommands),
+          std::memory_order_relaxed);
+      // Readers acquire the class only after all coordinates are complete.
+      firstFailureClass.store(static_cast<std::uint8_t>(failureClass),
+                              std::memory_order_release);
+    }
+
+    CpuReadyArenaFailureSnapshot firstFailure() const noexcept {
+      return {
+          .failureClass = static_cast<CpuReadyArenaFailureClass>(
+              firstFailureClass.load(std::memory_order_acquire)),
+          .source = firstFailureSource.load(std::memory_order_acquire),
+          .segment = firstFailureSegment.load(std::memory_order_acquire),
+          .plannedPages =
+              firstFailurePlannedPages.load(std::memory_order_acquire),
+          .actualCommands =
+              firstFailureActualCommands.load(std::memory_order_acquire),
+      };
+    }
+
+    std::size_t activeSourceIndex() const noexcept {
+      return batchMode ? activeSource : 0u;
+    }
+
+    std::size_t activeSegmentIndex() const noexcept { return activeSegment; }
+
+    std::size_t plannedActivePages() const noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount
+            ? batchLayouts[activeSource].segments[activeSegment].layout.pageCount
+            : std::numeric_limits<std::size_t>::max();
+      }
+      return activeSegment < layout.segmentCount
+          ? layout.segments[activeSegment].layout.pageCount
+          : std::numeric_limits<std::size_t>::max();
+    }
+
+    std::size_t actualActiveCommands() const noexcept {
+      const auto* assembler = activeAssembler();
+      return assembler ? assembler->commandCount()
+                       : std::numeric_limits<std::size_t>::max();
     }
 
     bool initializeBuilders(core::CpuReadyTape& tape) noexcept {
@@ -1175,6 +1266,19 @@ class CommandQueue {
     }
 
     core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
+      if (batchMode) {
+        return activeSource < sourceCount &&
+                activeSegment < batchLayouts[activeSource].segmentCount &&
+                batchAssemblers[activeSource][activeSegment]
+            ? &*batchAssemblers[activeSource][activeSegment]
+            : nullptr;
+      }
+      return activeSegment < layout.segmentCount && assemblers[activeSegment]
+          ? &*assemblers[activeSegment]
+          : nullptr;
+    }
+
+    const core::ArenaSourcePayloadAssembler* activeAssembler() const noexcept {
       if (batchMode) {
         return activeSource < sourceCount &&
                 activeSegment < batchLayouts[activeSource].segmentCount &&
@@ -1275,6 +1379,17 @@ class CommandQueue {
     std::thread::id ownerThread{};
     std::atomic<bool> failed{false};
     std::atomic<bool> publishing{false};
+    std::atomic<bool> firstFailureClaimed{false};
+    std::atomic<std::uint8_t> firstFailureClass{
+        static_cast<std::uint8_t>(CpuReadyArenaFailureClass::None)};
+    std::atomic<std::uint32_t> firstFailureSource{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailureSegment{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailurePlannedPages{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::atomic<std::uint32_t> firstFailureActualCommands{
+        std::numeric_limits<std::uint32_t>::max()};
     core::Handle pendingBackBuffer{};
     bool updatesBackBuffer = false;
     // Before Ready publication the Presenter registry owns any stashed token,
@@ -1328,6 +1443,10 @@ class CommandQueue {
     if (!context || context->ownerThread != std::this_thread::get_id() ||
         context->publishing.load(std::memory_order_acquire)) {
       if (context) {
+        context->noteFailure(
+            CpuReadyArenaFailureClass::ContextInvalid,
+            context->activeSourceIndex(), context->activeSegmentIndex(),
+            context->plannedActivePages(), context->actualActiveCommands());
         context->failed.store(true, std::memory_order_release);
       }
       arenaBuildPoisoned_.store(true, std::memory_order_release);
@@ -1336,6 +1455,10 @@ class CommandQueue {
     const bool batch = context->batchMode;
     if (context->failed.load(std::memory_order_acquire) ||
         !append(*context)) {
+      context->noteFailure(
+          CpuReadyArenaFailureClass::Append, context->activeSourceIndex(),
+          context->activeSegmentIndex(), context->plannedActivePages(),
+          context->actualActiveCommands());
       context->failed.store(true, std::memory_order_release);
       // SegmentSerial owns a whole-event rollback capability.  Keep the
       // queue healthy until publishCpuReadyArenaBatch performs the guarded
@@ -1404,6 +1527,7 @@ class CommandQueue {
       std::size_t controlIndex) noexcept;
 
   std::optional<ArenaBuildContext> arenaBuildContext_{};
+  CpuReadyArenaFailureSnapshot lastCpuReadyArenaFailure_{};
   std::atomic<ArenaBuildContext*> activeArenaBuild_{nullptr};
   std::atomic<bool> arenaAdmissionActive_{false};
   std::atomic<bool> arenaBuildPoisoned_{false};

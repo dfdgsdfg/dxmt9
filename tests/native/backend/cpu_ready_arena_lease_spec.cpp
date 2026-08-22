@@ -90,6 +90,14 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.cpuReadyTape_.readyCount();
   }
 
+  static CommandQueue::CpuReadyArenaFailureSnapshot activeFailure(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.arenaBuildContext_
+        ? queue.arenaBuildContext_->firstFailure()
+        : CommandQueue::CpuReadyArenaFailureSnapshot{};
+  }
+
   static bool activeFlushDeferred(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.arenaBuildContext_ &&
@@ -1115,6 +1123,48 @@ void testBatchBuilderFailureRollsBackForEventSerialFallback() {
         "leave the queue unpoisoned");
 }
 
+void testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSources(129, layouts);
+  check(begin.has_value(), "failure-retention admission must succeed");
+  const auto submission = materializedSubmission(Handle{17}, 8, 10);
+  std::array submissions{submission};
+  check(begin->selectSourceSegment(0, 0),
+        "failure-retention first source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  check(begin->selectSourceSegment(1, 0),
+        "failure-retention second source selection must succeed");
+  queue.submitDrawRunBatch(submissions);
+  queue.submitDrawRunBatch(submissions);
+  const auto first = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
+  check(first.failureClass ==
+            CommandQueue::CpuReadyArenaFailureClass::Append &&
+            first.source == 1u && first.segment == 0u &&
+            first.plannedPages == layout.segments[0].layout.pageCount &&
+            first.actualCommands == 1u,
+        "organic append failure coordinates: class=" +
+            std::to_string(static_cast<unsigned>(first.failureClass)) +
+            " source=" + std::to_string(first.source) +
+            " segment=" + std::to_string(first.segment) +
+            " planned=" + std::to_string(first.plannedPages) +
+            " actual=" + std::to_string(first.actualCommands));
+  queue.submitDrawRunBatch(submissions);
+  const auto retained = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
+  check(retained.failureClass == first.failureClass &&
+            retained.source == first.source && retained.segment == first.segment &&
+            retained.plannedPages == first.plannedPages &&
+            retained.actualCommands == first.actualCommands,
+        "a later failure must not overwrite the first typed failure record");
+  check(begin->publishBatchWithStatus({}, nullptr) ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "retained organic append failure must take the pre-effect rollback");
+}
+
 void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -1151,6 +1201,7 @@ int main() {
     testBatchPublishRunsEventProofWithoutCaptureSidecar();
     testBatchPlannerRejectionRollsBackBeforeEffects();
     testBatchBuilderFailureRollsBackForEventSerialFallback();
+    testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';

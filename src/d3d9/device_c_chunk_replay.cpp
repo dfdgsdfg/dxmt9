@@ -510,6 +510,30 @@ int32_t commitChunkFail(const char* reason,
   return hr;
 }
 
+const char* cpuReadyArenaFailureClassName(
+    dxmt9::CommandQueue::CpuReadyArenaFailureClass failureClass) noexcept {
+  using Failure = dxmt9::CommandQueue::CpuReadyArenaFailureClass;
+  switch (failureClass) {
+  case Failure::None: return "none";
+  case Failure::BuilderInitialization: return "builder_initialization";
+  case Failure::ContextInvalid: return "context_invalid";
+  case Failure::Append: return "append";
+  case Failure::CaptureRanges: return "capture_ranges";
+  case Failure::SegmentSelection: return "segment_selection";
+  case Failure::ActiveArenaRejected: return "active_arena_rejected";
+  case Failure::InjectedBuilder: return "injected_builder";
+  case Failure::InjectedRollback: return "injected_rollback";
+  case Failure::InjectedPostSemanticPublish:
+    return "injected_post_semantic_publish";
+  case Failure::PayloadSeal: return "payload_seal";
+  case Failure::Planner: return "planner";
+  case Failure::CaptureProjection: return "capture_projection";
+  case Failure::SnapshotValidation: return "snapshot_validation";
+  case Failure::Abort: return "abort";
+  }
+  return "unknown";
+}
+
 // The fat-packet applier chain lived here: applyDrawPacketStateViaIface,
 // applyDrawPacketStateDirect, applyDrawPacketState, timedApplyDrawPacketState and
 // applyDrawPrimitivePacket, plus validateDrawPacketStateDelta and
@@ -1808,6 +1832,19 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // legal EventSerial fallback boundary: poison and fail-stop rather than
     // replaying this raw event a second time.
     queue->failStopCpuReadyArena();
+    const auto failure = queue->takeCpuReadyArenaFailure();
+    if (failure.failureClass !=
+        dxmt9::CommandQueue::CpuReadyArenaFailureClass::None) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-device",
+          "cpu_ready_arena post_replay_publish_failure raw=%llu "
+          "records=%u class=%s source=%u segment=%u "
+          "planned_pages=%u actual_commands=%u",
+          static_cast<unsigned long long>(raw.replaySeq), raw.recordCount,
+          cpuReadyArenaFailureClassName(failure.failureClass),
+          failure.source, failure.segment, failure.plannedPages,
+          failure.actualCommands);
+    }
     if (captureIdentityRequested) failCaptureIdentity("arena-publish-after-effects");
     return commitChunkFail("chunk-arena-publish-after-effects");
   }
