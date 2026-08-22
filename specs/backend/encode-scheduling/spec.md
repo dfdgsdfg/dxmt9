@@ -252,11 +252,14 @@ The raw queue supplies one already assigned `rawOrdinal` and `seqId` per PE
 event. After all required bounded capacity is reserved, the single replay
 worker assigns global `sourceOrdinal` and segment `seqId` values in strict
 event/segment order and publishes a compact `PublicationTicket`. The ticket,
-not any payload block, is visible while construction continues. EventSerial
-mode fixes one source identity for the event. SegmentSerial mode fixes the
-complete ordered event-to-segment mapping; all segment identities are published
-or aborted together and are never reused. No segment may become Ready alone,
-and a later event cannot bypass an earlier event group.
+not any payload block, is visible while construction continues. v2 `EventSerial`
+fixes one source identity for the event and remains the compatibility path even
+when v2 `SegmentSerial` is requested but cannot be proved. SegmentSerial fixes
+the complete ordered event-to-segment mapping; all segment identities are
+published or aborted together and are never reused. The retired
+`dxmt9.render_tape.identity.v1` sidecar is rejected before staging or provider
+effects and is never reinterpreted as EventSerial. No segment may become Ready
+alone, and a later event cannot bypass an earlier event group.
 
 ```mermaid
 stateDiagram-v2
@@ -330,6 +333,72 @@ The protocol is:
    and advance page/source generations. Submission records retain the receipt,
    callbacks/resources, and encoded-work identity. Ineligible or legacy
    identities retain the same two-phase operation after Metal completion.
+
+### 3.2.1 v2 identity groups and settlement
+
+`EventSerial` and `SegmentSerial` are identity projections over one PE event;
+they are not aliases for physical Arena blocks. v2 EventSerial has exactly one
+identity entry for the complete event record range. v2 SegmentSerial has a
+bounded ordered group:
+
+| Value | Contract |
+|---|---|
+| Event group | One raw FIFO event ordinal, one generation-stamped group lease, one capture token, and one complete event-local record partition. |
+| Segment identity | One contiguous non-empty record range, one `segmentIndex` derived from group position, one `sourceOrdinal`, one `seqId`, one retention lifetime, and one completion source. |
+| Physical block | Storage only; it carries no independent source identity, completion, DAG, or pass boundary. |
+| Event settlement | A value-owned final status published only after every segment receipt settles in flattened FIFO order. |
+
+The group lease is acquired under the tape metadata lock before any segment is
+constructed. It reserves the aggregate descriptor, identity-slot, page/block,
+retention, resource-mark, publication-control, and session-headroom vectors for
+all segments. The lease stores the event ordinal, segment count, exact record
+ranges, and the next identity pair. Assignment walks `(eventOrdinal,
+segmentIndex)` in order and increments `sourceOrdinal` and `seqId` once per
+segment. A failed checked sum, limit, generation, or resource claim restores
+all cursors and releases the whole lease; no partially assigned identity is
+observable.
+
+The group follows one lifecycle transaction:
+
+```mermaid
+flowchart LR
+  L[Acquire event-group lease] --> W[Write every segment]
+  W --> S[Seal all ranges, marks, and summaries]
+  S --> R[Publish one Ready group]
+  R --> E[Replay segmentIndex order]
+  E --> C[Settle each seqId once]
+  C --> F[Settle event after final segment]
+  F --> Q[Reclaim pages/resources at shared watermarks]
+  W --> A[Abort whole group before effects]
+  S --> A
+  A --> B[EventSerial v2 fallback]
+```
+
+`Ready` is a group state, not a segment state. The encode coordinator may
+consume the group through one `EncodeSession`; it must preserve segment order,
+natural FIFO completion registration, and the complete event record coverage.
+FrameGraph builds one DAG over the event view. A pass and its action ledger may
+continue over an adjacent identity edge only when the membership pieces are
+contiguous and agree on pass identity, attachment/sample shape, exact hazards,
+and load/store semantics. An identity edge is never itself a DAG, logical-pass,
+command-buffer, or submission boundary.
+
+Each segment registers one generation-checked completion receipt. The finish
+thread settles receipts in flattened event/segment order and emits event
+settlement only after the final segment. For a resource referenced by several
+segments, the retention and use stamp use the greatest applicable segment
+watermark. Page runs, publication controls, and group-lease credits remain
+owned until every receipt is activated, settled, and detached; an early segment
+completion cannot reclaim storage needed by a later segment. Duplicate, stale,
+or ABA receipts fail before callbacks, resource-watermark advancement, or
+reclaim.
+
+If v2 SegmentSerial validation fails before receipt activation, child/segment
+creation, or any Metal effect, the coordinator discards the group and replays
+the complete PE event through v2 EventSerial with the same record order and
+Presenter/pass/action/resource contracts. After that effect boundary, failure
+is fail-stop and cannot publish a mixed group or partially fall back. v1 is
+never a fallback.
 
 ### 3.3 Capacity and Back-Pressure
 
@@ -1500,8 +1569,9 @@ select pass actions or publish pass-end sidecars.
 Required scheduling counters include:
 
 - requested and resolved source-delivery, partition-execution, and segment-
-  execution provider modes, including default, legacy-alias, parse-rejection,
-  capability-fallback, and per-pass lane-selection reasons;
+  execution provider modes plus EventSerial/SegmentSerial identity mode,
+  including default, legacy-alias, parse-rejection, capability-fallback,
+  complete-event fallback, and per-pass lane-selection reasons;
 - CPU-ready source/page/byte/retention/ticket current and peak occupancy,
   per-dimension high-water closes and low-water reopen/reclaim wakeups;
 - admission wait time/count, head candidate dimensions, wrap padding,
@@ -1519,7 +1589,9 @@ Required scheduling counters include:
   open-session park/wake count and duration, render-continuation allow/reject
   reason, and release-event reason/fence/watermark;
 - raw replay ordinal, published global `sourceOrdinal`, published `seqId`,
-  source-qualified command attribution, completion watermark, and reclaim
+  source-qualified command attribution, event-group and segment counts,
+  group-lease reserve/abort, exact identity assignment, per-segment completion,
+  final event settlement, shared-resource completion watermark, and page reclaim
   watermark;
 - identity/explicit partition counts, draws and cost per range, planner CPU
   time, validation fallback, and parallel eligibility/rejection;
@@ -1531,7 +1603,7 @@ Promotion uses the ordered gates in `R-BACK-2.50`. Moving a wait between
 counters or saturating a new bounded queue is not overlap progress.
 `admissionPressureRelease` and `rawWriterPressureRelease` are forbidden steady-
 state release reasons; any nonzero pressure-created release fails promotion.
-The current provider default remains `compatibility + identity + off` until
+The current provider default remains `compatibility + event + identity + off` until
 those gates pass. Promoting another default must not make an already supported
 provider mode unreachable. Treating the Arena as unconditional or deleting a
 fallback is a provider-lifecycle decision, not a storage-only refactor.

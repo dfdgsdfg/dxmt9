@@ -7,9 +7,10 @@ tags: [specs, backend, encode-scheduling, gap]
 
 # Encode Scheduling Gap
 
-This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50` and
-`R-BACK-2.57`–`R-BACK-2.75`. The parent [backend gap](../gap.md) keeps only a
-routing summary. Historical experiments remain in `docs/perfomance/`.
+This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
+`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.81`. The parent
+[backend gap](../gap.md) keeps only a routing summary. Historical experiments
+remain in `docs/perfomance/`.
 
 ## Current status correction (2026-08-21)
 
@@ -520,4 +521,4 @@ roadmap therefore treats source storage, logical-pass ownership, and Metal
 execution lanes as separate contracts and applies `R-BACK-2.50` before any
 default promotion.
 
-| Segmented event identity (`R-BACK-2.40`, `R-BACK-2.49`, `R-BACK-2.60`, `R-BACK-2.66`, `R-BACK-2.76`) | ⚠️ planner/schema identity-v2 contract implemented; production admission/publication and completion integration open / compatibility lane preserved | The normative contract now distinguishes physical Arena blocks from an opt-in SegmentSerial mapping in which one PE event owns an atomic ordered group of identity-bearing sources, with per-source completion and whole-event failure. | Implement bounded event-group publication, independent identity-segment limits, shared-resource/page watermark handling, and deterministic native/TLA evidence. Keep EventSerial compatibility fallback and the Tape gate default off until multi-segment FrameGraph/session/Presenter evidence and R-BACK-2.50 pass. |
+| Render Tape identity v1/v2 and SegmentSerial (`R-BACK-2.40`, `R-BACK-2.49`, `R-BACK-2.60`, `R-BACK-2.66`, `R-BACK-2.76`–`2.81`) | ⚠️ v1 retired/rejected; v2 EventSerial reachable; v2 SegmentSerial contract and projection grammar specified, production group integration open | `identity.bin` v1 is explicitly rejected and never reinterpreted. The v2 EventSerial one-source-per-event path remains the compatibility/default identity lane and the complete-event fallback. Native projection/provider tests cover v2 identity authentication, exact record partition, strict source/sequence order, contiguous pass-piece projection, and malformed identity rejection. The GT2 r65/r66 capture-authority runs prove surviving v2 sidecars and exact v2 event/record/pass coverage; they do not prove production SegmentSerial admission or shared watermark reclaim. | Implement and bind the generation-stamped event-group lease, exact flattened segment `sourceOrdinal`/`seqId` assignment, atomic group publication/abort, pass/DAG continuity, per-segment receipts plus final event settlement, shared resource/page watermarks, and pre-effect whole-event EventSerial fallback. Add `RenderTapeParallelJoin`-class bounded refinement or extension, native truth-table/fake-backend gates, and a non-vacuous GT2 identity-v2 EventSerial-vs-SegmentSerial pair with zero GPU errors and equal output/record identity. Keep SegmentSerial and the Tape lane default-off until R-BACK-2.50 and cross-workload visual/locality/no-gputrace gates pass; do not revive v1. |

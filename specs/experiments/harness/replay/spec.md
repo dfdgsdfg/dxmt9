@@ -1016,6 +1016,13 @@ reinterprets those bytes. The current segmented grammar is schema
 Present ordinal, and bounded capture token used for the only legal PE-to-
 provider join.
 
+Within v2, `EventSerial` is the reachable compatibility projection: each event
+has exactly one complete identity entry. `SegmentSerial` is the separate opt-in
+projection that may expose multiple entries for one event only after the full
+event-group proof succeeds. A failed v2 SegmentSerial proof falls back to the
+complete v2 EventSerial event before provider effects; it never revives the
+Retired v1 bytes.
+
 In v2, the source table is an ordered identity-segment table. One event owns
 one or more entries, each naming its event ordinal, production
 `sourceOrdinal`, production `seqId`, and non-empty event-local record range.

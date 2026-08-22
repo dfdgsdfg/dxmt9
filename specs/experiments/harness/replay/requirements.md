@@ -1028,5 +1028,9 @@ unsupported control, or resource-identity failure rejects the whole event
 group; it must not publish a partial source list or infer a compatibility
 identity. Capture and provider replay must report segment count, flattened
 record coverage, per-segment completion, and final event settlement separately.
-The existing v1 one-source-per-event and EventSerial compatibility lanes remain
-valid and reachable.
+The legacy `dxmt9.render_tape.identity.v1` component is Retired and rejected
+before staging, projection, or provider invocation; its one-source-per-event
+bytes must not be reinterpreted as current identity. The v2 EventSerial
+one-source-per-event compatibility lane remains valid and reachable, and is the
+required complete-event fallback when v2 SegmentSerial cannot be authenticated
+or proved before effects. v1 is never a fallback.

@@ -22,8 +22,9 @@ another:
 | Logical render-pass boundary | A D3D9/Metal semantic boundary that fixes attachment and pass actions. |
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
-The requirements `R-BACK-2.35` through `R-BACK-2.50` and `R-BACK-2.57`
-through `R-BACK-2.67` are authoritative here.
+The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.81` are
+authoritative here.
 
 ## 1. Producer / Encode Overlap
 
@@ -76,17 +77,21 @@ summaries, but no drawable or present token. Deferring a frame-latency wait to
 create this window must not admit a second present tail before the prior gate is
 drained and must preserve `R-BACK-2.49` completion order. Admission assigns one
 unique, strictly increasing global `sourceOrdinal` and one unique `seqId` in
-the same order. The compatibility lane retains one logical source identity per
-PE chunk/event. An explicitly selected segmented streaming lane may instead
-map one PE chunk/event to an ordered, bounded group of identity-bearing source
-segments; each segment has its own `sourceOrdinal`, `seqId`, retention lifetime,
-and completion source, while the event retains one group transaction and
-capture token. Physical payload blocks remain storage only and do not acquire
-identities by themselves. Once all bounded storage for the immediate raw-FIFO
-successor is reserved, its generation-stamped `PublicationTicket` fixes the
-complete event-group identity list until every segment seals or the whole group
-aborts. No segment may publish independently, and no later event or segment may
-become ready while an earlier admitted group remains unsealed.
+the same order. The v2 `EventSerial` lane retains one logical source identity
+per PE chunk/event and is reachable in both compatibility mode and as the
+complete-event fallback from `SegmentSerial`. The opt-in v2 `SegmentSerial`
+lane may instead map one PE chunk/event to an ordered, bounded group of
+identity-bearing source segments; each segment has its own `sourceOrdinal`,
+`seqId`, retention lifetime, and completion source, while the event retains one
+group transaction and capture token. Physical payload blocks remain storage
+only and do not acquire identities by themselves. The v1 identity
+sidecar/schema is retired: a reader must reject it before projection, provider
+invocation, or source publication, and must not reinterpret it as either v2
+identity lane. Once all bounded storage for the immediate raw-FIFO successor
+is reserved, its generation-stamped `PublicationTicket` fixes the complete
+event-group identity list until every segment seals or the whole group aborts.
+No segment may publish independently, and no later event or segment may become
+ready while an earlier admitted group remains unsealed.
 
 **R-BACK-2.41** The scheduler must be able to coalesce consecutive compatible
 CPU-ready sources or source ranges into the same `EncodeSession` and Metal
@@ -914,17 +919,78 @@ GPU-visible correctness, matched locality/economics, supervised wild
 correctness, and performance evidence. Existing serial and source-local
 parallel modes remain reachable while this evidence is incomplete.
 
-**R-BACK-2.76** A segmented event is one ordered publication group containing
-one or more identity-bearing source segments. Segment publication is
-all-or-nothing; segments replay in `segmentIndex` order and may share an
-`EncodeSession`, but may not bypass or reorder one another. Each segment
-`seqId` completes exactly once in flattened FIFO order, and event-level
-settlement is successful only after the final segment settles. Before the first
-Metal effect, a missing identity, stale generation, incomplete record/pass
-coverage, unsupported control, resource-mark failure, or capacity overflow
-must reject the whole group and route the complete PE event through the
-EventSerial compatibility lane. After receipt activation, any Metal effect, or
-child/segment creation, failure is fail-stop; partial rollback, orphan segment
-completion, and mixed event fallback are forbidden. A resource referenced by
-multiple segments remains retained until the greatest applicable segment
-watermark completes.
+**R-BACK-2.76** A v2 identity component must distinguish the retired
+`dxmt9.render_tape.identity.v1` schema from the current v2 grammar. A v1
+header, version, or one-source mapping must be rejected before staging,
+projection, provider invocation, or source publication; the reader must not
+silently upgrade or reinterpret its bytes. v2 `EventSerial` is the reachable
+one-source-per-event compatibility identity: it uses one complete event-local
+record range, one `sourceOrdinal`, one `seqId`, and one completion source.
+v2 `SegmentSerial` is a separate opt-in projection and may only be selected
+when its complete event-group proof in `R-BACK-2.77`–`R-BACK-2.80` succeeds.
+
+**R-BACK-2.77** A v2 `SegmentSerial` event is one ordered publication group
+containing one or more identity-bearing source segments. Its generation-
+stamped event-group lease must reserve, before construction, the complete
+vector for every segment: source descriptors, identity slots, payload blocks
+and page runs, retention entries, resource-mark claims, publication controls,
+and session headroom. The lease records the event ordinal, segment count,
+segment record ranges, and the next `sourceOrdinal`/`seqId` pair as one
+immutable ticket. Assignment is exact and flattened: event order is primary,
+`segmentIndex` is secondary, and each segment receives the next strictly
+increasing `sourceOrdinal` and `seqId`; no identity is assigned from a physical
+page/block boundary. Capacity or checked-arithmetic failure leaves every
+cursor, watermark, and identity counter unchanged and selects the complete
+EventSerial fallback before construction.
+
+**R-BACK-2.78** SegmentSerial publication and replay must be all-or-nothing.
+The group transitions `Reserved -> Writing -> Sealed -> Ready` as one
+transaction; every segment descriptor, payload range, identity, retention
+claim, and event summary must be complete before the one `Sealed -> Ready`
+publication. A segment must never be independently Ready, and an earlier
+event-group must block a younger event from bypassing it. Segments replay only
+in `segmentIndex` order and may share an `EncodeSession`, but segment edges are
+not physical-block, command-buffer, logical-pass, or submission boundaries.
+The v2 event DAG is built once over the complete ordered record stream; a pass
+may continue over adjacent segment ranges only when membership is contiguous
+and its attachment, hazard, action, and logical-pass identity is unchanged.
+Missing or inconsistent pass/DAG coverage rejects the whole group before any
+Metal effect.
+
+**R-BACK-2.79** Segment completion and resource lifetime must be flattened and
+watermark-safe. Each segment `seqId` registers exactly one completion source and
+settles exactly once in event/segment FIFO order; final event settlement is
+published only after the last segment settles. A shared resource remains
+retained and marked until the greatest applicable segment `seqId` and resource
+completion watermark have passed. Shared payload pages, publication controls,
+and event-lease credits may reclaim only after every segment receipt is
+activated, completed, and detached; a segment's earlier completion must not
+release storage or resources still needed by a later segment. Stale, duplicate,
+or ABA receipts fail before callback, waterline, or release side effects.
+
+**R-BACK-2.80** SegmentSerial must fail closed at the first effect boundary.
+Before any receipt activation, child/segment encoder creation, or Metal effect,
+a missing identity, stale generation, incomplete record/pass coverage,
+unsupported control, resource-mark failure, or capacity overflow must reject
+the whole group and route the complete PE event through v2 EventSerial. The
+fallback must preserve the same event record order, Presenter ownership,
+logical-pass actions, resource marks, and completion semantics. After receipt
+activation, encoder/child creation, or any Metal effect, failure is fail-stop:
+partial rollback, orphan segment completion, mixed event fallback, and a second
+publication are forbidden. `EventSerial` remains reachable when SegmentSerial
+is unset, unsupported, malformed, or rejected; no fallback may revive v1.
+
+**R-BACK-2.81** Closure of the bounded SegmentSerial lane requires the ordered
+evidence bundle from `R-BACK-2.50` and `R-VERIF-2.13`–`R-VERIF-2.15`: a bounded
+refinement model must cover group lease/publication/abort, exact flattened
+identity assignment, pass/DAG continuity, per-segment completion, final event
+settlement, shared resource/page watermarks, and EventSerial fallback; native
+truth-table and fake-backend tests must bind those predicates to the production
+helpers; and a GT2 identity-v2 capture/replay run must authenticate v2
+EventSerial and a non-vacuous SegmentSerial attempt. The current GT2 r65/r66
+identity-v2 captures in the replay spec prove capture-authority v2 coverage,
+but do not by themselves prove production SegmentSerial admission, shared
+watermark reclamation, or performance. Promotion additionally requires paired
+GT2 visual/locality/no-gputrace results with zero GPU errors, repeated identity
+and segment evidence, then the cross-workload gates; until then the Tape and
+SegmentSerial selectors remain default-off and EventSerial remains reachable.
