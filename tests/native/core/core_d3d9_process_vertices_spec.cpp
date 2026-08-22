@@ -12,9 +12,15 @@
 //   core_d3d9_device_validation_spec.cpp, core_d3d9_recorder_lock_spec.cpp,
 //   core_d3d9_shared_handle_spec.cpp) is to mirror the small, self-contained
 //   PE-side pure logic here, byte-for-byte, and pin its observable contract
-//   at value level. The implementation file remains the source of truth;
-//   drift between it and this mirror is a regression this spec exists to
-//   catch.
+//   at value level. The implementation file remains the source of truth.
+//
+//   KNOW WHAT THIS DOES NOT DO: because the mirror is a copy rather than a
+//   call, editing d3d9_pe_process_vertices.cpp does NOT fail this spec. It
+//   cannot detect drift; it pins the contract in value terms and records the
+//   arithmetic, so a reviewer reading both files can see a divergence, and a
+//   future change that means to alter the contract has something concrete to
+//   contradict. Treat a green run here as "the documented contract still
+//   holds internally", never as "the shipped implementation still matches".
 //
 // CRITICAL PROVENANCE RULE FOLLOWED HERE: every `expected*` value below is
 // derived by hand arithmetic written out in the test comments/code from the
