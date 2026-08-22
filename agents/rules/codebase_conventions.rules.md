@@ -48,6 +48,36 @@ conventions, not feature requirements; durable behavior belongs in `specs/`.
   TLA+ bindings, or Metal lifetime rules. Do not add comments that restate the
   code.
 
+## Moving Code Between Translation Units
+
+Both rules below were established by measurement during the 2026-08-22
+`d3d9_pe_device.cpp` decomposition, after each one first produced a wrong
+answer. They are properties of the language and of this COM-shaped code, so
+they bind anyone who moves a definition across a TU boundary again.
+
+**Out-lining one virtual relocates the vtable and every inline virtual with
+it.** The Itanium ABI emits the vtable in the TU defining the class's *key
+function* — the first non-pure, non-inline virtual in **declaration order**.
+While every virtual is defined in-class there is no key function and the vtable
+is comdat everywhere; out-line a single one and that TU claims the vtable plus
+the out-of-line bodies of all inline virtuals, which is where COM calls from
+Wine actually land. Out-lining three diagnostics virtuals moved `DrawPrimitive`
+and the vtable into the diagnostics object and inverted the split to
+`744 KB diag / 146 KB hot`. So the owner is decidable, not accidental: out-line
+the earliest-declared virtual into the TU that should own it, deliberately,
+before moving any others.
+
+**"It has call sites in the object" does not prove a function is not inlined.**
+The same function can be called at one site and inlined at another. Three
+call-scope helpers were classified as free to move because the baseline object
+contained calls to them; they were *also* inlined into the hot COM entries and
+guarded there, so out-lining them put two unconditional calls on every D3D9
+entry point (`BeginScene` 71 → 38 instructions, gaining two calls where it had
+none). Never reason about whether a call "should" be inlined — measure whether
+it is, per call site, and treat the instruction-level diff as the arbiter:
+scoping analysis proposes, the measurement disposes. Run it as an iteration
+loop while moving code, not as a final check.
+
 ## C++ Design Shape
 
 - Preserve data-oriented hot paths. Draw/state/bridge/queue changes should use
