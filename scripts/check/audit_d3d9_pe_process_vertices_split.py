@@ -7,6 +7,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
+# The D3D9DeviceImpl class declaration and its method bodies live in this
+# header, included by d3d9_pe_device.cpp and (as the hot/cold split proceeds)
+# by the cold-subsystem TUs. Assertions about the CLASS target this file;
+# assertions about the owning translation unit target DEVICE.
+DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
 ENGINE_HPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.hpp"
 ENGINE_CPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.cpp"
 CHILD_HPP = ROOT / "src/d3d9/d3d9_pe_device_child.hpp"
@@ -30,6 +35,11 @@ def forbid(source: str, needle: str, label: str) -> None:
 
 def main() -> int:
     device = DEVICE.read_text()
+    device_impl = DEVICE_IMPL.read_text()
+    # Anything asserted "in the device implementation" must hold across the
+    # pair; a forbid that looked at only one half could be defeated by
+    # moving the offending code into the other.
+    device_all = device + device_impl
     engine_hpp = ENGINE_HPP.read_text()
     engine_cpp = ENGINE_CPP.read_text()
     child_hpp = CHILD_HPP.read_text()
@@ -37,6 +47,8 @@ def main() -> int:
     meson = MESON.read_text()
 
     require(meson, "'d3d9_pe_process_vertices.cpp'", "PE Meson source")
+    require(device, '#include "d3d9_pe_device_impl.hpp"',
+            "device TU includes the class header")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")
@@ -61,19 +73,19 @@ def main() -> int:
     require(engine_cpp, "executeSimpleProcessVertexShaderRange(",
             "co-located simple-VS interpreter")
     require(engine_cpp, "describeProcessFvf(", "co-located FVF engine")
-    forbid(device, "executeSimpleProcessVertexShaderRange(",
+    forbid(device_all, "executeSimpleProcessVertexShaderRange(",
            "interpreter left in device TU")
 
     wrapper_match = re.search(
         r"^    HRESULT STDMETHODCALLTYPE ProcessVertices\(UINT srcStart, UINT dstIndex,"
         r".*?^    \}$",
-        device,
+        device_impl,
         re.DOTALL | re.MULTILINE,
     )
     if not wrapper_match:
         fail("ProcessVertices STDMETHODCALLTYPE wrapper shape not found")
     wrapper = wrapper_match.group(0)
-    if device.count("HRESULT STDMETHODCALLTYPE ProcessVertices(") != 1:
+    if device_impl.count("HRESULT STDMETHODCALLTYPE ProcessVertices(") != 1:
         fail("ProcessVertices STDMETHODCALLTYPE must remain unique")
     ordered = (
         'notePeDeviceCallAfterPresent("ProcessVertices")',
@@ -89,11 +101,11 @@ def main() -> int:
     require(wrapper, ".textures = std::span<", "borrowed texture context")
 
     require(
-        device,
+        device_impl,
         "class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush",
         "device inheritance layout",
     )
-    if device.count("public D3D9PeRecorderFlush") != 1:
+    if device_all.count("public D3D9PeRecorderFlush") != 1:
         fail("D3D9PeRecorderFlush must have exactly one derived implementation")
     require(
         child_hpp,
@@ -132,23 +144,23 @@ def main() -> int:
     # sample by value put it back into 118 hot-path call-site contracts.
     forbid(child_hpp, "D3D9PePresentCallToken", "diagnostic sample in child header")
     require(
-        device,
+        device_impl,
         "void notePeDeviceCallAfterPresent(const char* callName,",
         "void device entry note",
     )
-    require(device, "NotifyPeFirstCallAfterPresentForChild(", "first-call override")
-    require(device, "NotifyPeCallScopeReturnForChild(", "call-scope return override")
-    require(device, "PopPeCallScopeForChild(", "call-scope pop override")
+    require(device_impl, "NotifyPeFirstCallAfterPresentForChild(", "first-call override")
+    require(device_impl, "NotifyPeCallScopeReturnForChild(", "call-scope return override")
+    require(device_impl, "PopPeCallScopeForChild(", "call-scope pop override")
 
     for dead in (
         "shadowedTextureEquals",
         "peInterAppendFocusCallNameIndex",
         "OtherConst",
     ):
-        forbid(device + recorder_hpp, dead, "dead recorder/device helper")
+        forbid(device_all + recorder_hpp, dead, "dead recorder/device helper")
     if re.search(
         r"flushPendingCommandChunk\(\s*PeRecorderFlushReason reason\s*=",
-        device,
+        device_impl,
     ):
         fail("flushPendingCommandChunk retains its unused default argument")
 
