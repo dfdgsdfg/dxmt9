@@ -51,6 +51,7 @@ PrefixOf(s, full) == s = SubSeq(full, 1, Len(s))
 
 VARIABLES
   phase,
+  planValid,
   rawHighWater,
   sourceHighWater,
   seqHighWater,
@@ -77,15 +78,13 @@ VARIABLES
   fallbackCount
 
 vars ==
-  <<phase, rawHighWater, sourceHighWater, seqHighWater,
+  <<phase, planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
     eventSettlementCount, resourceWatermark, pageWatermark,
     tailWatermark, detachedSources, reclaimingSources, destroyedSources,
     reclaimedSources, abortSucceeded, fallbackCount>>
-
-PlanValid == passPieceId = [s \in Sources |-> 1]
 
 Terminal == phase \in {"Completed", "Fallback", "Poisoned"}
 ReclaimTerminal ==
@@ -96,6 +95,7 @@ Greatest(s) == CHOOSE x \in s : \A y \in s : x >= y
 
 Init ==
   /\ phase = "Idle"
+  /\ planValid \in BOOLEAN
   /\ rawHighWater = 0
   /\ sourceHighWater = 10
   /\ seqHighWater = 1
@@ -103,7 +103,7 @@ Init ==
   /\ sourceHighWaterBefore = 10
   /\ seqHighWaterBefore = 1
   /\ recordCoverage = <<>>
-  /\ passPieceId \in {[s \in Sources |-> 1], [s \in Sources |-> 2]}
+  /\ passPieceId = [s \in Sources |-> 1]
   /\ readySegments = {}
   /\ published = FALSE
   /\ effects = 0
@@ -123,12 +123,12 @@ Init ==
 
 BeginBatch ==
   /\ phase = "Idle"
-  /\ PlanValid
+  /\ planValid
   /\ rawHighWater' = 41
   /\ sourceHighWater' = EventSourceOrdinals[Len(EventSourceOrdinals)]
   /\ seqHighWater' = EventSeqIds[Len(EventSeqIds)]
   /\ phase' = "Writing"
-  /\ UNCHANGED <<rawHighWaterBefore, sourceHighWaterBefore,
+  /\ UNCHANGED <<planValid, rawHighWaterBefore, sourceHighWaterBefore,
     seqHighWaterBefore, recordCoverage, passPieceId, readySegments,
     published, effects, settlementRegistered, completedSeqs,
     completedSources, eventSettlementCount, resourceWatermark,
@@ -141,7 +141,7 @@ WriteRecord ==
   /\ LET nextRecord == Len(recordCoverage) + 1 IN
        /\ nextRecord = EventRecordOrder[Len(recordCoverage) + 1]
        /\ recordCoverage' = Append(recordCoverage, nextRecord)
-  /\ UNCHANGED <<phase, rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<phase, planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -151,7 +151,7 @@ WriteRecord ==
 
 PublishGroup ==
   /\ phase = "Writing"
-  /\ PlanValid
+  /\ planValid
   /\ recordCoverage = EventRecordOrder
   /\ passPieceId = [s \in Sources |-> 1]
   /\ readySegments' = Sources
@@ -161,7 +161,7 @@ PublishGroup ==
   /\ tailWatermark' = Greatest(SeqSet(ResourceDependentSeqs) \cup
                            SeqSet(PageDependentSeqs))
   /\ phase' = "Published"
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, effects, settlementRegistered,
     completedSeqs, completedSources, eventSettlementCount,
@@ -170,10 +170,10 @@ PublishGroup ==
 
 InvalidPlanEventSerial ==
   /\ phase = "Idle"
-  /\ ~PlanValid
+  /\ ~planValid
   /\ phase' = "Fallback"
   /\ fallbackCount' = 1
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -189,7 +189,7 @@ RegisterExactSettlement ==
   /\ EventSourceOrdinals[1] = 11
   /\ EventSeqIds[Len(EventSeqIds)] = tailWatermark
   /\ settlementRegistered' = TRUE
-  /\ UNCHANGED <<phase, rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<phase, planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     completedSeqs, completedSources, eventSettlementCount,
@@ -202,7 +202,7 @@ EncodeGroup ==
   /\ settlementRegistered
   /\ phase' = "Active"
   /\ effects' = 1
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published,
     settlementRegistered, completedSeqs, completedSources,
@@ -222,7 +222,7 @@ CompleteSegment ==
                      THEN "Completed" ELSE "Active"
        /\ eventSettlementCount' = IF nextIndex = Len(EventSeqIds)
                                   THEN 1 ELSE eventSettlementCount
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, resourceWatermark, pageWatermark, tailWatermark,
@@ -239,7 +239,7 @@ ReclaimSegment ==
   /\ LET nextIndex == Len(reclaimedSources) + 1 IN
        /\ completedSources[nextIndex] = SourceOrder[nextIndex]
        /\ reclaimedSources' = Append(reclaimedSources, SourceOrder[nextIndex])
-  /\ UNCHANGED <<phase, rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<phase, planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -251,7 +251,7 @@ StartAbort ==
   /\ phase = "Writing"
   /\ effects = 0
   /\ phase' = "Detached"
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -270,7 +270,7 @@ DetachNewest ==
                                       ReverseSourceOrder[nextIndex])
        /\ phase' = IF nextIndex = Len(SourceOrder)
                      THEN "Reclaiming" ELSE "Detached"
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -295,7 +295,7 @@ FinishDetachedOwner ==
        /\ abortSucceeded' = IF nextIndex = Len(SourceOrder) THEN TRUE
                             ELSE abortSucceeded
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWaterBefore, sourceHighWaterBefore,
+  /\ UNCHANGED <<planValid, rawHighWaterBefore, sourceHighWaterBefore,
     seqHighWaterBefore, recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
     eventSettlementCount, resourceWatermark, pageWatermark, tailWatermark,
@@ -308,7 +308,7 @@ FallbackOnce ==
   /\ fallbackCount = 0
   /\ phase' = "Fallback"
   /\ fallbackCount' = 1
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, readySegments, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -321,7 +321,7 @@ PoisonWrongDetach ==
   /\ Len(detachedSources) < Len(SourceOrder)
   /\ phase' = "Poisoned"
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -334,7 +334,7 @@ PoisonWrongFinish ==
   /\ Len(destroyedSources) < Len(SourceOrder)
   /\ phase' = "Poisoned"
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -347,7 +347,7 @@ PoisonPartialAbort ==
   /\ Len(destroyedSources) < Len(SourceOrder)
   /\ phase' = "Poisoned"
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -360,7 +360,7 @@ PreEffectPassMismatchFallback ==
   /\ phase' = "Detached"
   /\ passPieceId' = [passPieceId EXCEPT ![2] = 2]
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, published, effects, settlementRegistered,
     completedSeqs, completedSources, eventSettlementCount,
@@ -375,7 +375,7 @@ PreEffectPartitionMismatchFallback ==
   /\ readySegments' = {}
   \* Gap/overlap/duplicate range rejection is pre-publication.  The concrete
   \* range predicate is bound by RecordPartition and native capture tests.
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -388,7 +388,7 @@ PoisonAfterEffect ==
   /\ effects = 1
   /\ phase' = "Poisoned"
   /\ readySegments' = {}
-  /\ UNCHANGED <<rawHighWater, sourceHighWater, seqHighWater,
+  /\ UNCHANGED <<planValid, rawHighWater, sourceHighWater, seqHighWater,
     rawHighWaterBefore, sourceHighWaterBefore, seqHighWaterBefore,
     recordCoverage, passPieceId, published, effects,
     settlementRegistered, completedSeqs, completedSources,
@@ -418,6 +418,7 @@ Next ==
 
 TypeOK ==
   /\ phase \in Phases
+  /\ planValid \in BOOLEAN
   /\ rawHighWater \in Nat
   /\ sourceHighWater \in Nat
   /\ seqHighWater \in Nat
@@ -525,7 +526,7 @@ FallbackBeforeEffects ==
   /\ (fallbackCount = 1 =>
        /\ phase = "Fallback"
        /\ effects = 0
-       /\ (abortSucceeded \/ ~PlanValid)
+       /\ (abortSucceeded \/ ~planValid)
        /\ readySegments = {})
   /\ (phase = "Fallback" => fallbackCount = 1)
 
