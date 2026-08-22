@@ -1,4 +1,4 @@
-static bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
+inline bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
     switch (format) {
     case D3DFMT_DXT1:
     case D3DFMT_DXT2:
@@ -11,7 +11,7 @@ static bool renderTapeFormatIsBlockCompressed(std::uint32_t format) {
     }
 }
 
-static bool renderTapeDescriptorSubresourceCountFits(
+inline bool renderTapeDescriptorSubresourceCountFits(
     std::uint32_t count, std::size_t headerBytes) noexcept {
     if constexpr (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
         return true;
@@ -22,14 +22,14 @@ static bool renderTapeDescriptorSubresourceCountFits(
     }
 }
 
-static bool renderTapeTextureSubresourceDescriptor(
+inline bool renderTapeTextureSubresourceDescriptor(
     std::span<const std::byte> descriptor, std::uint32_t subresource,
     D9CSurfaceDesc &out) noexcept {
     return dxmt9::d3d9::renderTapeTextureSubresourceDescriptor(
         descriptor, subresource, out);
 }
 
-static bool renderTapeValidateExpectedContent(
+inline bool renderTapeValidateExpectedContent(
     const D9CWireObjectIdentity &identity,
     std::span<const std::byte> descriptor,
     std::span<const std::vector<std::byte>> content,
@@ -61,7 +61,7 @@ static bool renderTapeValidateExpectedContent(
     }
 }
 
-static bool renderTapeSameIdentity(
+inline bool renderTapeSameIdentity(
     const D9CWireObjectIdentity &a,
     const D9CWireObjectIdentity &b) noexcept {
     return a.kind == b.kind && a.generation == b.generation &&

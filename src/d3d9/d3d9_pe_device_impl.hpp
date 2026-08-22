@@ -1,7 +1,15 @@
 #pragma once
 
-/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex and recorder glue.
- * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
+/* src/d3d9/d3d9_pe_device_impl.hpp — PE-side IDirect3DDevice9Ex and recorder glue.
+ * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h.
+ *
+ * This is a header rather than a TU so the cold subsystems (SWVP, PE
+ * diagnostics, Render Tape capture, cold COM) can be compiled separately
+ * while the hot recorder/append path stays visible for inlining. Everything
+ * at namespace scope here is `inline`: a `static` would give each including
+ * TU its own copy, and for the mutable state (the Render Tape producer /
+ * publisher atomics, the PE call-tracking thread_locals) separate copies
+ * would be a correctness bug, not just duplication. */
 
 #include <algorithm>
 #include <array>
@@ -54,7 +62,7 @@
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
-static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
+inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
 using dxmt9::d3d9::pe::process_vertices::analyzeSimpleProcessVertexShader;
 using dxmt9::d3d9::pe::process_vertices::Context;
@@ -72,19 +80,19 @@ using dxmt9::d3d9::RenderTapeTextureDimension;
 using dxmt9::d3d9::RenderTapeTextureDescriptorV2;
 using dxmt9::d3d9::RenderTapeVertexDeclDescriptor;
 
-static D3DFORMAT exposeAdapterDisplayFormat(D3DFORMAT fmt) {
+inline D3DFORMAT exposeAdapterDisplayFormat(D3DFORMAT fmt) {
     if (fmt == D3DFMT_A8R8G8B8) return D3DFMT_X8R8G8B8;
     return fmt;
 }
 
-static void dxmt9DeviceDebugLog(const char* fmt, ...) {
+inline void dxmt9DeviceDebugLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-device", fmt, args);
     va_end(args);
 }
 
-static void dxmt9DeviceInfoLog(const char* fmt, ...) {
+inline void dxmt9DeviceInfoLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-device", fmt, args);
@@ -93,7 +101,7 @@ static void dxmt9DeviceInfoLog(const char* fmt, ...) {
 
 #include "d3d9_pe_device_diag_log.inc.hpp"
 
-static bool dxmt9PeRecorderStatsEnabled() {
+inline bool dxmt9PeRecorderStatsEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_STATS");
     return enabled;
 }
@@ -107,11 +115,11 @@ static bool dxmt9PeRecorderStatsEnabled() {
 // they must not be OR'd in here. If a future consumer needs this data
 // without DXMT9_PE_RECORDER_STATS, extend this predicate rather than adding
 // a second unguarded call site.
-static bool dxmt9PeCallTrackingEnabled() {
+inline bool dxmt9PeCallTrackingEnabled() {
     return dxmt9PeRecorderStatsEnabled();
 }
 
-static bool dxmt9PerfVsConstSetterRangeEnabled() {
+inline bool dxmt9PerfVsConstSetterRangeEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_PERF_VS_CONST_SETTER_RANGE");
     return enabled;
@@ -130,7 +138,7 @@ static bool dxmt9PerfVsConstSetterRangeEnabled() {
 // touchConstShadow. Every member is read once at process start (each
 // accessor below caches its env read in a function-local static), so the
 // composite is safe to cache the same way.
-static bool dxmt9PeConstSetterSlowPathRequired() {
+inline bool dxmt9PeConstSetterSlowPathRequired() {
     static const bool required =
         // dxmt9PeCallTrackingEnabled() -- the gate for
         // notePeDeviceCallAfterPresent / PeCallScope, see the "Single
@@ -151,12 +159,12 @@ static bool dxmt9PeConstSetterSlowPathRequired() {
     return required;
 }
 
-static bool dxmt9PeRecorderChunkLogEnabled() {
+inline bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
 }
 
-static bool dxmt9PeRenderTapeCaptureEnabled() {
+inline bool dxmt9PeRenderTapeCaptureEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE") &&
         [] {
@@ -167,7 +175,7 @@ static bool dxmt9PeRenderTapeCaptureEnabled() {
     return enabled;
 }
 
-static std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
+inline std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
     if (!dxmt9PeRenderTapeCaptureEnabled()) {
         return dxmt9::d3d9::kRenderTapeProfileFrame;
     }
@@ -179,7 +187,7 @@ static std::uint32_t dxmt9PeRenderTapeCaptureProfile() {
     return profile;
 }
 
-static std::uint32_t dxmt9PeRenderTapeCaptureSkipPresents() {
+inline std::uint32_t dxmt9PeRenderTapeCaptureSkipPresents() {
     if (!dxmt9PeRenderTapeCaptureEnabled()) {
         return 0u;
     }
@@ -188,7 +196,7 @@ static std::uint32_t dxmt9PeRenderTapeCaptureSkipPresents() {
     return skip;
 }
 
-static dxmt9::d3d9::RenderTapeCaptureLimits
+inline dxmt9::d3d9::RenderTapeCaptureLimits
 dxmt9PeRenderTapeCaptureLimits(bool captureEnabled) {
     dxmt9::d3d9::RenderTapeCaptureLimits limits{};
     if (captureEnabled) {
@@ -198,18 +206,18 @@ dxmt9PeRenderTapeCaptureLimits(bool captureEnabled) {
     return limits;
 }
 
-static std::atomic<D3D9PeRenderTapeBootstrapProducer>
+inline std::atomic<D3D9PeRenderTapeBootstrapProducer>
     dxmt9PeRenderTapeBootstrapProducer{nullptr};
-static std::atomic<D3D9PeRenderTapeArtifactPublisher>
+inline std::atomic<D3D9PeRenderTapeArtifactPublisher>
     dxmt9PeRenderTapeArtifactPublisher{nullptr};
 
-void dxmt9PeSetRenderTapeBootstrapProducer(
+inline void dxmt9PeSetRenderTapeBootstrapProducer(
     D3D9PeRenderTapeBootstrapProducer producer) noexcept {
     dxmt9PeRenderTapeBootstrapProducer.store(producer,
                                              std::memory_order_release);
 }
 
-void dxmt9PeSetRenderTapeArtifactPublisher(
+inline void dxmt9PeSetRenderTapeArtifactPublisher(
     D3D9PeRenderTapeArtifactPublisher publisher) noexcept {
     dxmt9PeRenderTapeArtifactPublisher.store(publisher,
                                              std::memory_order_release);
@@ -225,7 +233,7 @@ void dxmt9PeSetRenderTapeArtifactPublisher(
 // UP draw variants — see appendDrawPrimitiveUPRecordWithFvf /
 // appendDrawIndexedPrimitiveUPRecordWithFvf) are untouched by this flag and
 // always use the standalone flush (R-BACK-2.52(e)).
-static bool dxmt9PeInlineConstDeltaEnabled() {
+inline bool dxmt9PeInlineConstDeltaEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_INLINE_CONST_DELTA");
     return enabled;
 }
@@ -239,12 +247,12 @@ static bool dxmt9PeInlineConstDeltaEnabled() {
 // only in the win32 PE lanes (src/d3d9/meson.build), but the implementation
 // is still guarded with #ifdef _WIN32 in case this ever gets pulled into a
 // shared header compiled on the host/unix lane.
-static bool dxmt9PeModuleMapEnabled() {
+inline bool dxmt9PeModuleMapEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_MODULE_MAP");
     return enabled;
 }
 
-static void dxmt9PeModuleMapInfoLog(const char* fmt, ...) {
+inline void dxmt9PeModuleMapInfoLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-pe-module-map", fmt, args);
@@ -256,9 +264,9 @@ static void dxmt9PeModuleMapInfoLog(const char* fmt, ...) {
 // runtime address, logged alongside the module map, must fall inside our own
 // d3d9.dll's [base, base+size) range. The join script asserts this to verify
 // its address space matches the Win32 VA space it is joining against.
-static void dxmt9PeModuleMapProbeMarker() {}
+inline void dxmt9PeModuleMapProbeMarker() {}
 
-static void dxmt9PeDumpModuleMap() {
+inline void dxmt9PeDumpModuleMap() {
     if (!dxmt9PeModuleMapEnabled()) {
         return;
     }
@@ -322,7 +330,7 @@ static void dxmt9PeDumpModuleMap() {
     DXMT_ASSERT(probeContained);
 }
 #else
-static void dxmt9PeDumpModuleMap() {
+inline void dxmt9PeDumpModuleMap() {
     // Non-Windows build of this translation unit: no Toolhelp32 API
     // available. Should not be reachable — src/d3d9/meson.build only
     // compiles d3d9_pe_device.cpp on the windows host_machine lane — but
@@ -339,12 +347,12 @@ static void dxmt9PeDumpModuleMap() {
 // when unset. See src/d3d9/d3d9_pe_thread_sampler.hpp for the suspend-window
 // safety contract, and agents/rules/environment_variables_bridge.rules.md for
 // why a run with this enabled is not a valid performance sample.
-static bool dxmt9PeThreadSamplerEnabled() {
+inline bool dxmt9PeThreadSamplerEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_THREAD_SAMPLER");
     return enabled;
 }
 
-static std::uint32_t dxmt9PeThreadSamplerHz() {
+inline std::uint32_t dxmt9PeThreadSamplerHz() {
     static const std::uint32_t hz = [] {
         // Unset, unparseable, and 0 all fall back to the default rather than
         // clamping to the floor, so a typo reads as "default", not "50".
@@ -358,7 +366,7 @@ static std::uint32_t dxmt9PeThreadSamplerHz() {
     return hz;
 }
 
-static void dxmt9PeThreadSamplerInfoLog(const char* fmt, ...) {
+inline void dxmt9PeThreadSamplerInfoLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-pe-sampler", fmt, args);
@@ -368,7 +376,7 @@ static void dxmt9PeThreadSamplerInfoLog(const char* fmt, ...) {
 // DXMT9_PE_FORCE_RECORDER_LOCK: rollback/insurance lane for wild apps that
 // release resources from loader threads despite not passing
 // D3DCREATE_MULTITHREADED. See dxmt9PeRecorderLockRequired() below.
-static bool dxmt9PeForceRecorderLockEnabled() {
+inline bool dxmt9PeForceRecorderLockEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_PE_FORCE_RECORDER_LOCK");
     return enabled;
@@ -381,7 +389,7 @@ static bool dxmt9PeForceRecorderLockEnabled() {
 // of hot d3d9.dll self-PC on GT2, which does not pass the flag). Pure so it
 // is host-testable without a device: flag set -> locked; flag clear + env
 // set -> locked (rollback lane); flag clear + env clear -> unlocked.
-static bool dxmt9PeRecorderLockRequired(DWORD behaviorFlags,
+inline bool dxmt9PeRecorderLockRequired(DWORD behaviorFlags,
                                         bool forceLockEnv) noexcept {
     return (behaviorFlags & D3DCREATE_MULTITHREADED) != 0 || forceLockEnv;
 }
@@ -413,17 +421,17 @@ private:
     bool locked_;
 };
 
-static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
+inline double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-static std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) {
+inline std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         t.time_since_epoch()).count();
 }
 
-static std::uint32_t dxmt9PeCurrentThreadId() noexcept {
+inline std::uint32_t dxmt9PeCurrentThreadId() noexcept {
 #if defined(_WIN32)
     return static_cast<std::uint32_t>(GetCurrentThreadId());
 #else
@@ -431,12 +439,12 @@ static std::uint32_t dxmt9PeCurrentThreadId() noexcept {
 #endif
 }
 
-static thread_local const char* dxmt9PeCurrentCallName = nullptr;
-static thread_local PeInterAppendCallFamily dxmt9PeCurrentAppendFamily =
+inline thread_local const char* dxmt9PeCurrentCallName = nullptr;
+inline thread_local PeInterAppendCallFamily dxmt9PeCurrentAppendFamily =
     PeInterAppendCallFamily::Unknown;
-static thread_local std::int64_t dxmt9PeCurrentCallEntryNs = 0;
+inline thread_local std::int64_t dxmt9PeCurrentCallEntryNs = 0;
 
-static void dxmt9PeSetCurrentCallName(const char* callName) noexcept {
+inline void dxmt9PeSetCurrentCallName(const char* callName) noexcept {
     dxmt9PeCurrentCallName = callName;
 }
 
@@ -559,9 +567,9 @@ struct D3D9PePresentCallToken {
 // method). 16 is far above any real chain; a would-be overflow declines to
 // track rather than aliasing a live slot.
 static constexpr std::size_t kPeCallScopeSlots = 16;
-static thread_local D3D9PePresentCallToken
+inline thread_local D3D9PePresentCallToken
     dxmt9PeCallScopeSlots[kPeCallScopeSlots];
-static thread_local std::size_t dxmt9PeCallScopeDepth = 0;
+inline thread_local std::size_t dxmt9PeCallScopeDepth = 0;
 
 #include "d3d9_pe_device_diag_callstack.inc.hpp"
 
@@ -604,7 +612,7 @@ static thread_local std::size_t dxmt9PeCallScopeDepth = 0;
 
 #include "d3d9_pe_device_com_cold_helpers.inc.hpp"
 
-static D9CRect toR(const RECT& r) {
+inline D9CRect toR(const RECT& r) {
     D9CRect c; c.left = r.left; c.top = r.top;
     c.right = r.right; c.bottom = r.bottom;
     return c;
@@ -616,7 +624,7 @@ static D9CRect toR(const RECT& r) {
 // table here avoids dragging core_format into the PE TU. Returns 0 for
 // unknown/unsupported formats; the caller must fall through to the
 // normal create path on 0.
-static uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
+inline uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
     switch (fmt) {
         case D3DFMT_A8R8G8B8:
         case D3DFMT_X8R8G8B8:
@@ -678,7 +686,12 @@ static_assert(
  *     returns E_FAIL for in-band UNUSED (not D3DERR_INVALIDCALL).
  * ========================================================================= */
 
-namespace {
+// NOT an anonymous namespace. D3D9DeviceImpl has data members of the types
+// declared below (std::optional<RenderTapeLiveRegistry> renderTapeRegistry_,
+// std::vector<RenderTapeArmObjectSnapshot> renderTapeArmSnapshots_). In an
+// anonymous namespace each including TU would get a distinct type, so the
+// class would have a different type in each TU -- an ODR violation the
+// compiler cannot diagnose. Keep these at namespace scope.
 
 /// D3D9 shader-version token form: ((stageHi << 16) | (major << 8) | minor).
 /// stageHi == 0xFFFE for vertex shaders, 0xFFFF for pixel shaders.
@@ -805,14 +818,14 @@ inline void fvfToVertexElements(DWORD fvf,
     out.push_back({0xFF, 0, D3DDECLTYPE_UNUSED, 0, 0, 0});
 }
 
-}  // namespace
+// (end of the formerly-anonymous namespace; see the note above it)
 
 /* =========================================================================
  * Raw-handle extractors — safe because only our device creates these objects.
  * ========================================================================= */
 
-static D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return D3D9PeRawSurface(p); }
-static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
+inline D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return D3D9PeRawSurface(p); }
+inline D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
 
 /* R-FORMAT-11 — RESZ MSAA depth-resolve trigger. RESZ is a *command*, not
  * storage: an app requests a multisample depth resolve into the bound INTZ

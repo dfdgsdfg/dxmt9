@@ -1,4 +1,4 @@
-[[nodiscard]] HRESULT validateShaderBytecodeForStage(const DWORD* code,
+[[nodiscard]] inline HRESULT validateShaderBytecodeForStage(const DWORD* code,
                                                      bool vertexStage) {
     if (!code) return D3DERR_INVALIDCALL;
     const uint32_t token = static_cast<uint32_t>(code[0]);
@@ -30,7 +30,7 @@
     return S_OK;
 }
 
-[[nodiscard]] std::uint64_t hashValidatedShaderBytecode(const DWORD* code) {
+[[nodiscard]] inline std::uint64_t hashValidatedShaderBytecode(const DWORD* code) {
     size_t wordCount = 0;
     for (size_t i = 0; i < kShaderBoundedScan; ++i) {
         if (static_cast<uint32_t>(code[i]) == kShaderEndToken) {
@@ -60,7 +60,7 @@
 ///   - each offset is naturally aligned to the element's word size when the
 ///     type is FLOAT-like / 32-bit-aligned (multiples of 4). Misaligned
 ///     offsets are surfaced as E_FAIL per Wine, not D3DERR_INVALIDCALL.
-[[nodiscard]] HRESULT validateVertexElements(const D3DVERTEXELEMENT9* elems) {
+[[nodiscard]] inline HRESULT validateVertexElements(const D3DVERTEXELEMENT9* elems) {
     if (!elems) return D3DERR_INVALIDCALL;
     constexpr size_t kMaxLen = MAXD3DDECLLENGTH + 1; /* +END */
     for (size_t i = 0; i < kMaxLen; ++i) {

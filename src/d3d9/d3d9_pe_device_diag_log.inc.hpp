@@ -1,4 +1,4 @@
-static void dxmt9WriteStderrLineAtomic(const char* line, std::size_t len) noexcept {
+inline void dxmt9WriteStderrLineAtomic(const char* line, std::size_t len) noexcept {
     if (!line || len == 0u) return;
 #if defined(_WIN32)
     (void)_write(_fileno(stderr), line, static_cast<unsigned int>(len));
@@ -7,7 +7,7 @@ static void dxmt9WriteStderrLineAtomic(const char* line, std::size_t len) noexce
 #endif
 }
 
-static void dxmt9PerfLogStderrAtomic(const char* fmt, ...) noexcept {
+inline void dxmt9PerfLogStderrAtomic(const char* fmt, ...) noexcept {
     char line[512]{};
     va_list args;
     va_start(args, fmt);

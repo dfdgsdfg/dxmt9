@@ -1,4 +1,4 @@
-static const char* dxmt9PeCallerModuleLeaf(const Dxmt9PeCallerModuleInfo& info) {
+inline const char* dxmt9PeCallerModuleLeaf(const Dxmt9PeCallerModuleInfo& info) {
     const char* leaf = info.path.data();
     for (const char* p = info.path.data(); *p; ++p) {
         if (*p == '\\' || *p == '/') {
@@ -8,7 +8,7 @@ static const char* dxmt9PeCallerModuleLeaf(const Dxmt9PeCallerModuleInfo& info) 
     return *leaf ? leaf : "unknown";
 }
 
-static Dxmt9PeCallerModuleInfo dxmt9PeResolveCallerModule(
+inline Dxmt9PeCallerModuleInfo dxmt9PeResolveCallerModule(
     const void* callerPc) {
     Dxmt9PeCallerModuleInfo info{};
     if (!callerPc) {

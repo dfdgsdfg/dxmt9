@@ -1,4 +1,4 @@
-static void dxmt9PeCaptureCallStack(D3D9PePresentCallToken& sample) {
+inline void dxmt9PeCaptureCallStack(D3D9PePresentCallToken& sample) {
 #if defined(_WIN32)
     void* frames[D3D9PePresentCallStackDepth]{};
     const USHORT count = RtlCaptureStackBackTrace(
@@ -13,7 +13,7 @@ static void dxmt9PeCaptureCallStack(D3D9PePresentCallToken& sample) {
 #endif
 }
 
-static std::array<char, 2048> dxmt9PeFormatCallerStack(
+inline std::array<char, 2048> dxmt9PeFormatCallerStack(
     const D3D9PePresentCallToken& sample) {
     std::array<char, 2048> out{};
     std::size_t used = 0;

@@ -1,8 +1,8 @@
-static bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
+inline bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
     return type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE || type == D3DSBT_VERTEXSTATE;
 }
 
-static bool isUnknownFormat(D3DFORMAT fmt) {
+inline bool isUnknownFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_UNKNOWN;
 }
 
@@ -17,7 +17,7 @@ static bool isUnknownFormat(D3DFORMAT fmt) {
 // (device_c_resources.cpp) pass an explicit Levels through unclamped, and an
 // over-long count reaches MTLTextureDescriptor, which asserts instead of
 // failing gracefully.
-static uint32_t peFullMipLevelCount(UINT maxDimension) {
+inline uint32_t peFullMipLevelCount(UINT maxDimension) {
     UINT dimension = maxDimension;
     uint32_t levels = 1u;
     while (dimension > 1u) {
@@ -27,7 +27,7 @@ static uint32_t peFullMipLevelCount(UINT maxDimension) {
     return levels;
 }
 
-[[nodiscard]] static HRESULT peTextureLevelCountHResult(UINT minDimension, UINT maxDimension,
+[[nodiscard]] inline HRESULT peTextureLevelCountHResult(UINT minDimension, UINT maxDimension,
                                                         UINT levels) {
     // Every axis must be nonzero: MTLTextureDescriptor asserts on a zero
     // width/height/depth just as it does on an over-long level count, so a
@@ -60,7 +60,7 @@ static uint32_t peFullMipLevelCount(UINT maxDimension) {
 // (validatePresentParametersD3D, parallel-owned). These device-side
 // validators apply the identical present-parameter rule at the device's
 // own re-configuration entry points without crossing the C bridge first.
-static bool isValidPresentationIntervalRaw(UINT interval) {
+inline bool isValidPresentationIntervalRaw(UINT interval) {
     return interval == D3DPRESENT_INTERVAL_DEFAULT ||
            interval == D3DPRESENT_INTERVAL_ONE ||
            interval == D3DPRESENT_INTERVAL_TWO ||
@@ -77,7 +77,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // D3DSWAPEFFECT_DISCARD, and a non-zero MultiSampleQuality requires a
 // non-NONE MultiSampleType. (test_swapchain_multisample_reset resets
 // with DISCARD + 2_SAMPLES, which stays valid under this rule.)
-[[nodiscard]] static HRESULT pePresentParamsHResult(D3DSWAPEFFECT swapEffect,
+[[nodiscard]] inline HRESULT pePresentParamsHResult(D3DSWAPEFFECT swapEffect,
                                                     UINT backBufferCount,
                                                     UINT presentationInterval,
                                                     D3DMULTISAMPLE_TYPE multiSampleType,
@@ -121,7 +121,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // Mirror: core_d3d9_device_validation_spec.cpp::mirrorResetExModeHResult.
 // hasMode == (pFsMode != nullptr); when hasMode is false modeSize/modeW/
 // modeH are ignored.
-[[nodiscard]] static HRESULT peResetExModeHResult(bool windowed, bool hasMode,
+[[nodiscard]] inline HRESULT peResetExModeHResult(bool windowed, bool hasMode,
                                                   UINT modeSize, UINT modeW,
                                                   UINT modeH, UINT ppW, UINT ppH) {
     if (hasMode && modeSize != sizeof(D3DDISPLAYMODEEX)) {
@@ -142,13 +142,13 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // Mirror: core_d3d9_device_validation_spec.cpp::mirrorNormalizeBackBufferCount.
 // BackBufferCount == 0 normalizes to 1 (the documented minimum the
 // swap-chain reports back through GetPresentParameters).
-[[nodiscard]] static UINT peNormalizeBackBufferCount(UINT count) {
+[[nodiscard]] inline UINT peNormalizeBackBufferCount(UINT count) {
     return count == 0u ? 1u : count;
 }
 
 // Mirror: core_d3d9_device_validation_spec.cpp::mirrorQueryDataSizeForType.
 // Per-type IDirect3DQuery9::GetDataSize byte size (0 = unsupported type).
-[[nodiscard]] static DWORD peQueryDataSizeForType(D3DQUERYTYPE type) {
+[[nodiscard]] inline DWORD peQueryDataSizeForType(D3DQUERYTYPE type) {
     switch (type) {
     case D3DQUERYTYPE_EVENT:             return sizeof(BOOL);
     case D3DQUERYTYPE_OCCLUSION:         return sizeof(DWORD);
@@ -176,7 +176,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // shared token, a known token opens the same Metal backing, and an unknown
 // nonzero value retains Wine's permissive create behavior. Cross-process
 // Win32-handle transport still requires IOSurface / MTLSharedTextureHandle.
-[[nodiscard]] static HRESULT validateSharedHandleForTexture(bool extended,
+[[nodiscard]] inline HRESULT validateSharedHandleForTexture(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
                                               UINT levels,
@@ -196,7 +196,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // VB/IB shared-handle contract (Wine d3d9 d3d9_device_CreateVertexBuffer /
 // CreateIndexBuffer): non-extended -> E_NOTIMPL; extended + non-DEFAULT pool
 // -> D3DERR_NOTAVAILABLE; extended + DEFAULT -> provider shared path.
-[[nodiscard]] static HRESULT validateSharedHandleForBuffer(bool extended,
+[[nodiscard]] inline HRESULT validateSharedHandleForBuffer(bool extended,
                                              HANDLE* sharedHandle,
                                              D3DPOOL pool) {
     if (!sharedHandle) return S_OK;
@@ -211,7 +211,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 //   - SYSTEMMEM -> S_OK; user pointer aliased
 //   - SCRATCH   -> D3DERR_INVALIDCALL
 //   - DEFAULT   -> provider shared path
-[[nodiscard]] static HRESULT validateSharedHandleForSurface(bool extended,
+[[nodiscard]] inline HRESULT validateSharedHandleForSurface(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
                                               bool allowSystemMemUserMemory) {
@@ -230,7 +230,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // Render-target / depth-stencil surfaces are DEFAULT-pool only. Wine d3d9
 // d3d9_device_CreateRenderTarget / CreateDepthStencilSurface: non-extended
 // -> E_NOTIMPL; extended -> provider shared path.
-[[nodiscard]] static HRESULT validateSharedHandleForDefaultSurface(bool extended,
+[[nodiscard]] inline HRESULT validateSharedHandleForDefaultSurface(bool extended,
                                                      HANDLE* sharedHandle) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
