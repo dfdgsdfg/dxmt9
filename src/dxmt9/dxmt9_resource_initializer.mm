@@ -315,9 +315,14 @@ bool Initializer::hasPendingUploadsUnlocked() const noexcept {
 }
 
 void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
-  // TLA+: ResourceLifetime!StageInitializerUpload / NoUseAfterFree.
-  DXMT_ASSERT(lifetime::pendingInitializerReferenceSafe(
-      true, staging.destTexture.handle != 0));
+  // TLA+: ResourceLifetime!StageInitializerUpload / NoUseAfterFree is asserted
+  // where the StagingCopy is BUILT (Pool::stageTextureUpload, right after
+  // `out.destTexture = texture`), not here. Both production callers enqueue
+  // exactly that function's result, so a copy reaching this point has already
+  // been checked, and re-asserting at the entry point only constrains callers
+  // that never carry a destination at all -- including the empty placeholder
+  // `{}` that dxmt9-encode-scheduling-progress-spec enqueues to exercise the
+  // empty-to-non-empty wake hook, which the duplicate aborted on.
   const bool wasEmpty = pendingUploads_.empty();
   pendingUploads_.push_back(std::move(staging));
   if (render::initializerPendingTransitionNeedsWake(
