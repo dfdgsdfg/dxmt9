@@ -973,7 +973,9 @@ void organicBatchAppendFailureFromReplayFailsOnce() {
                            clearRecord(rects), presentRecord()};
   auto raw = makeRaw(makeWireFixture(records), 17u, /*captureIdentity=*/true);
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
-  const auto readback = fixture.routing->organicFailure;
+  const auto readback =
+      dxmt9::CommandQueueArenaLeaseTestAccess::takeFailure(
+          fixture.routing->queue_);
   const auto consumed =
       dxmt9::CommandQueueArenaLeaseTestAccess::takeFailure(
           fixture.routing->queue_);

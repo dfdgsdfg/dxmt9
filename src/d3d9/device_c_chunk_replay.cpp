@@ -1832,7 +1832,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // legal EventSerial fallback boundary: poison and fail-stop rather than
     // replaying this raw event a second time.
     queue->failStopCpuReadyArena();
-    const auto failure = queue->takeCpuReadyArenaFailure();
+    const auto failure = queue->peekCpuReadyArenaFailure();
     if (failure.failureClass !=
         dxmt9::CommandQueue::CpuReadyArenaFailureClass::None) {
       dxmt9::util::logf(

@@ -613,6 +613,7 @@ class CommandQueue {
   bool cpuReadyArenaPoisoned() const noexcept {
     return arenaBuildPoisoned_.load(std::memory_order_acquire);
   }
+  CpuReadyArenaFailureSnapshot peekCpuReadyArenaFailure() noexcept;
   CpuReadyArenaFailureSnapshot takeCpuReadyArenaFailure() noexcept;
   // A publish/proof failure after replayResolvedChunk has applied semantic
   // effects cannot take the pre-effect EventSerial retry. The caller marks

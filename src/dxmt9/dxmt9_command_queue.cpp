@@ -3635,6 +3635,12 @@ CommandQueue::CpuReadyArenaBuildLease::~CpuReadyArenaBuildLease() {
 }
 
 CommandQueue::CpuReadyArenaFailureSnapshot
+CommandQueue::peekCpuReadyArenaFailure() noexcept {
+  std::lock_guard lock(mutex_);
+  return lastCpuReadyArenaFailure_;
+}
+
+CommandQueue::CpuReadyArenaFailureSnapshot
 CommandQueue::takeCpuReadyArenaFailure() noexcept {
   std::lock_guard lock(mutex_);
   const auto failure = lastCpuReadyArenaFailure_;
