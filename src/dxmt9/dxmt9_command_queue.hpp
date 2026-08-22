@@ -367,7 +367,8 @@ class CommandQueue {
   // the lifecycle controller but starts no Metal objects or worker threads.
   struct ArenaLeaseTestQueueTag {};
   CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits,
-               WMT::Reference<WMT::CommandQueue> queue = {});
+               WMT::Reference<WMT::CommandQueue> queue = {},
+               render::RenderPartitionConfig renderPartitionConfig = {});
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -1312,6 +1313,7 @@ class CommandQueue {
       return ActiveArenaAppendResult::Inactive;
     }
     auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+    const bool batch = context && context->batchMode;
     if (!context || context->ownerThread != std::this_thread::get_id() ||
         context->failed.load(std::memory_order_acquire) ||
         context->publishing.load(std::memory_order_acquire) ||
@@ -1319,7 +1321,13 @@ class CommandQueue {
       if (context) {
         context->failed.store(true, std::memory_order_release);
       }
-      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      // SegmentSerial owns a whole-event rollback capability.  Keep the
+      // queue healthy until publishCpuReadyArenaBatch performs the guarded
+      // rollback; poisoning here would turn a pre-effect failure into an
+      // unrecoverable device loss and prevent EventSerial retry.
+      if (!batch) {
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
+      }
       return ActiveArenaAppendResult::Failed;
     }
     return ActiveArenaAppendResult::Appended;
@@ -1392,6 +1400,10 @@ class CommandQueue {
   // Native rollback pin: force the pre-effect builder rejection seam and
   // perturb nextSeqId_ so the guarded abort must fail-stop, never recover.
   bool testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
+  // Native routing pin: fail one batch builder before any semantic replay so
+  // the production caller must take the complete EventSerial retry exactly
+  // once. Never set by production.
+  bool testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
   bool testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyOverrideLiveActiveRenderInstance_ = false;

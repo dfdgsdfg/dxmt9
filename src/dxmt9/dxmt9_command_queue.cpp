@@ -771,11 +771,13 @@ CommandQueue::CommandQueue(InertTestQueueTag,
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits,
-                           WMT::Reference<WMT::CommandQueue> queue)
+                           WMT::Reference<WMT::CommandQueue> queue,
+                           render::RenderPartitionConfig renderPartitionConfig)
     : cpuReadyTape_(core::CpuReadyTapeConfig::queueSessionStreaming(
           kCommandChunkCount)),
-      cpuReadySessionLaneEnabled_(false), queue_(std::move(queue)),
-      queueView_(queue_.handle), limits_(limits) {
+      cpuReadySessionLaneEnabled_(false),
+      renderPartitionConfig_(renderPartitionConfig),
+      queue_(std::move(queue)), queueView_(queue_.handle), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
 }
@@ -4038,6 +4040,10 @@ CommandQueue::beginCpuReadyArenaSources(
                              std::span(controls).first(layouts.size()),
                              layouts, cpuReadyTape_, currentBackBuffer_);
   auto* context = &*arenaBuildContext_;
+  if (testOnlyForceNextCpuReadyArenaBuilderFailure_) {
+    testOnlyForceNextCpuReadyArenaBuilderFailure_ = false;
+    context->failed.store(true, std::memory_order_release);
+  }
   if (testOnlyForceNextCpuReadyArenaRollbackFailure_) {
     testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
     context->failed.store(true, std::memory_order_release);
@@ -4782,10 +4788,15 @@ CommandQueue::publishCpuReadyArenaBatch(
     CpuReadyCaptureIdentityBatch* captureIdentity) noexcept {
   auto* context = activeArenaBuild_.load(std::memory_order_acquire);
   if (!context || !context->batchMode || context->reservation.ticket != ticket ||
-      context->ownerThread != std::this_thread::get_id() ||
-      context->failed.load(std::memory_order_acquire)) {
+      context->ownerThread != std::this_thread::get_id()) {
     abortCpuReadyArenaBatch(ticket);
     return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  if (context->failed.load(std::memory_order_acquire)) {
+    const auto status = abortCpuReadyArenaBatch(ticket, false);
+    return status == CpuReadyArenaBatchAbortStatus::RolledBack
+               ? CpuReadyArenaPublishStatus::RecoverableFailure
+               : CpuReadyArenaPublishStatus::FailStopped;
   }
   {
     const auto qmxBegin = queueMutexProbeBegin();

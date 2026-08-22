@@ -56,6 +56,11 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.cpuReadyTape_.residentCount();
   }
 
+  static void forceNextBatchBuilderFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaBuilderFailure_ = true;
+  }
+
   static std::uint32_t admissionWaiterCount(CommandQueue& queue) {
     return queue.arenaAdmissionWaiterCount_.load(std::memory_order_acquire);
   }
@@ -334,8 +339,19 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
 }
 
 struct RoutingDevice final : dxmt9::Device {
-  explicit RoutingDevice(bool rejectAfterClear = false)
-      : queue_(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_),
+  explicit RoutingDevice(bool rejectAfterClear = false,
+                         bool segmentSerial = false)
+      : queue_(
+            dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_, {},
+            segmentSerial
+                ? dxmt9::render::RenderPartitionConfig{
+                      .sourceIdentity =
+                          dxmt9::render::SourceIdentityConfig{
+                              .requested = dxmt9::render::
+                                  SourceIdentityModeRequest::Segment,
+                              .resolved = dxmt9::render::
+                                  SourceIdentityMode::SegmentSerial}}
+                : dxmt9::render::RenderPartitionConfig{}),
         rejectAfterClear_(rejectAfterClear) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
@@ -411,8 +427,10 @@ struct RoutingDevice final : dxmt9::Device {
 };
 
 struct RuntimeFixture {
-  explicit RuntimeFixture(bool rejectAfterClear = false) {
-    auto upper = std::make_unique<RoutingDevice>(rejectAfterClear);
+  explicit RuntimeFixture(bool rejectAfterClear = false,
+                          bool segmentSerial = false) {
+    auto upper = std::make_unique<RoutingDevice>(rejectAfterClear,
+                                                  segmentSerial);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -638,6 +656,31 @@ void postSemanticDirectFailureDoesNotFallback() {
         "failed Direct identity is consumed and reclaimed without publication");
 }
 
+void batchBuilderFailureRetriesCompleteEventSerialExactlyOnce() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  // Two jumbo GPU records exceed the per-source page bound together, so the
+  // planner admits two SegmentSerial sources.  The native seam rejects the
+  // batch builder before semantic replay; production routing must roll back
+  // that whole admission and replay the raw event once through EventSerial.
+  const std::array records{clearRecord(17000), clearRecord(17000),
+                           presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 1);
+  dxmt9::CommandQueueArenaLeaseTestAccess::forceNextBatchBuilderFailure(
+      fixture.routing->queue_);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr == D3D_OK && fixture.routing->clearCalls == 2u &&
+            fixture.routing->presentCalls == 1u,
+        "batch builder rejection must retry the complete raw event once in "
+        "EventSerial order");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == 2u &&
+            !fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "EventSerial retry must leave one ordered Ready source and no poison");
+}
+
 void workerPressureWaitResumesAfterActiveLeasePublishes() {
   RuntimeFixture fixture;
   SourcePayloadCapacity capacity{};
@@ -709,6 +752,7 @@ int main() {
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();
+    batchBuilderFailureRetriesCompleteEventSerialExactlyOnce();
     workerPressureWaitResumesAfterActiveLeasePublishes();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_production_routing_spec failed: "

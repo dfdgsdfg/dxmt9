@@ -1853,9 +1853,23 @@ class CpuReadyTape {
   std::optional<DetachedArenaOwner> beginArenaAbort(
       CpuReadyPublicationTicket ticket) noexcept {
     auto* entry = resolveEntry(ticket.id, ticket.storage);
+    // Detach is intentionally a two-phase operation: owners are destroyed
+    // outside the tape lock and then finished in reverse order.  During that
+    // first phase sourceTail_ still names the end of the original batch, so
+    // skip the already-detached Reclaiming suffix when proving that this
+    // ticket is the next newest Writing entry.
+    std::size_t expectedIndex = previousSourceIndex(sourceTail_);
+    for (std::size_t detached = 0; detached < residentCount_; ++detached) {
+      const auto& prior = entries_[expectedIndex];
+      if (prior.state != State::Reclaiming || !prior.arenaOwnerDetached ||
+          prior.arenaDetachKind != Entry::ArenaDetachKind::Abort) {
+        break;
+      }
+      expectedIndex = previousSourceIndex(expectedIndex);
+    }
     if (!entry || entry->state != State::Writing || residentCount_ == 0 ||
         entry->payloadKind != PayloadKind::Arena ||
-        ticket.id.index != previousSourceIndex(sourceTail_) ||
+        ticket.id.index != expectedIndex ||
         !ticketMatchesEntry(ticket, *entry) ||
         !entry->readyPublicationReserved ||
         readyPublicationReservations_ == 0 || entry->arenaOwnerDetached) {

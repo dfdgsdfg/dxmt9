@@ -925,7 +925,7 @@ void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
         "cross-source publication must expose both Ready entries together");
 }
 
-void testBatchBuilderFailureLeavesNoReadyEntries() {
+void testBatchBuilderFailureRollsBackForEventSerialFallback() {
   using namespace dxmt9;
   using namespace dxmt9::core;
 
@@ -945,11 +945,17 @@ void testBatchBuilderFailureLeavesNoReadyEntries() {
   // The one-command source capacity makes this append reject the active
   // builder before publication; the batch must still have zero Ready rows.
   queue.submitDrawRunBatch(submissions);
-  check(begin->publishBatchWithStatus({}, nullptr) ==
-            CommandQueue::CpuReadyArenaPublishStatus::FailStopped,
-        "post-append builder rejection must fail-stop the complete batch");
-  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u,
-        "builder rejection must not expose a partial Ready entry");
+  const auto publishStatus = begin->publishBatchWithStatus({}, nullptr);
+  check(publishStatus ==
+            CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
+        "pre-effect builder rejection must rollback for EventSerial fallback");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::residentSources(queue) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(queue) == 1u &&
+            CommandQueueArenaLeaseTestAccess::writeIndex(queue) == 0u &&
+            !queue.cpuReadyArenaPoisoned(),
+        "builder rollback must restore cursors, residency, zero Ready, and "
+        "leave the queue unpoisoned");
 }
 
 void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
@@ -984,7 +990,7 @@ int main() {
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();
     testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
-    testBatchBuilderFailureLeavesNoReadyEntries();
+    testBatchBuilderFailureRollsBackForEventSerialFallback();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
