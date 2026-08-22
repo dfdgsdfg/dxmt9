@@ -77,20 +77,34 @@ classifyFirstLeaseReadyHeadEligibility(
   return FirstLeaseReadyHeadEligibility::Eligible;
 }
 
+struct FirstLeaseReadyHeadIdentity {
+  std::uint64_t seqId = 0;
+  std::uint64_t sourceOrdinal = 0;
+
+  constexpr bool valid() const noexcept {
+    return seqId != 0 && sourceOrdinal != 0;
+  }
+
+  constexpr bool operator==(const FirstLeaseReadyHeadIdentity&) const noexcept =
+      default;
+};
+
 struct FirstLeaseCapacityWaitState {
   bool stopped = false;
   bool admissionPressure = false;
-  bool serialProgressAvailable = false;
   bool readyHeadOwnsOrdinaryDirectCapacity = false;
+  FirstLeaseReadyHeadIdentity readyHead{};
+  FirstLeaseReadyHeadIdentity lastSerialProgressHead{};
   std::uint64_t observedGeneration = 0;
   std::uint64_t currentGeneration = 0;
 };
 
 // A capacity generation always gets the first retry: it may make the complete
 // fixed lease available without changing grouping. Admission pressure may use
-// one exact already-resident ordinary Direct head only once before another
-// capacity transition; this creates no SessionReleaseEvent and reserves no new
-// Tape capacity.
+// one exact already-resident ordinary Direct head only once per denied Ready
+// identity. FIFO head advance may expose another finite escape without waiting
+// for a physical-capacity generation; the same identity cannot execute twice.
+// This creates no SessionReleaseEvent and reserves no new Tape capacity.
 constexpr FirstLeaseCapacityWaitAction classifyFirstLeaseCapacityWait(
     FirstLeaseCapacityWaitState state) noexcept {
   if (state.stopped) {
@@ -99,8 +113,9 @@ constexpr FirstLeaseCapacityWaitAction classifyFirstLeaseCapacityWait(
   if (state.currentGeneration != state.observedGeneration) {
     return FirstLeaseCapacityWaitAction::RetryLease;
   }
-  if (state.admissionPressure && state.serialProgressAvailable &&
-      state.readyHeadOwnsOrdinaryDirectCapacity) {
+  if (state.admissionPressure && state.readyHeadOwnsOrdinaryDirectCapacity &&
+      state.readyHead.valid() &&
+      state.readyHead != state.lastSerialProgressHead) {
     return FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial;
   }
   return FirstLeaseCapacityWaitAction::Wait;

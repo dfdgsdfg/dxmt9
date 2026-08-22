@@ -243,10 +243,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   render::EncodeSessionAdmissionState pendingAdmission{};
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
-  bool firstLeasePressureSerialProgressAvailable = true;
-  std::uint64_t firstLeasePressureSerialProgressGeneration = 0;
-  std::uint64_t firstLeaseCreditRearmObservedGeneration =
-      std::numeric_limits<std::uint64_t>::max();
+  render::FirstLeaseReadyHeadIdentity firstLeasePressureSerialConsumedHead{};
+  render::FirstLeaseReadyHeadIdentity firstLeaseCreditRearmObservedHead{};
+  render::FirstLeaseReadyHeadIdentity firstLeasePressureSerialPendingHead{};
   std::optional<QueueCompletionSource> pressureSerialSource;
   const bool terminalSuffixJoinEnabled =
       deferredTerminalSuffixJoinEnabled(backend_.get());
@@ -1057,29 +1056,28 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         }
         const std::uint64_t observedCapacityProgress =
             queueLifecycle_.cpuReadyCapacityProgressGeneration();
-        if (!firstLeasePressureSerialProgressAvailable &&
-            observedCapacityProgress !=
-                firstLeasePressureSerialProgressGeneration) {
-          firstLeasePressureSerialProgressAvailable = true;
-          if (schedulingObservabilityEnabled &&
-              firstLeaseCreditRearmObservedGeneration !=
-                  observedCapacityProgress) {
-            firstLeaseCreditRearmObservedGeneration =
-                observedCapacityProgress;
-            perf::countCpuReadyFirstLeaseCreditRearmed();
-          }
+        const render::FirstLeaseReadyHeadIdentity leaseDeniedReadyHead{
+                .seqId = leaseDeniedSeqId,
+                .sourceOrdinal = leaseDeniedReadyHeadSourceOrdinal,
+            };
+        const bool firstLeasePressureSerialProgressAvailable =
+            leaseDeniedReadyHead.valid() &&
+            leaseDeniedReadyHead != firstLeasePressureSerialConsumedHead;
+        if (schedulingObservabilityEnabled &&
+            arenaAdmissionWaiterCount_.load(std::memory_order_acquire) != 0u &&
+            leaseDeniedReadyHeadEligibility ==
+                render::FirstLeaseReadyHeadEligibility::Eligible &&
+            firstLeasePressureSerialConsumedHead.valid() &&
+            firstLeasePressureSerialProgressAvailable &&
+            firstLeaseCreditRearmObservedHead != leaseDeniedReadyHead) {
+          firstLeaseCreditRearmObservedHead = leaseDeniedReadyHead;
+          perf::countCpuReadyFirstLeaseCreditRearmed();
         }
         render::FirstLeaseCapacityWaitAction waitAction =
             render::FirstLeaseCapacityWaitAction::Wait;
         const auto classifyWait = [&] {
           const auto currentGeneration =
               queueLifecycle_.cpuReadyCapacityProgressGeneration();
-          if (schedulingObservabilityEnabled &&
-              currentGeneration != observedCapacityProgress &&
-              firstLeaseCreditRearmObservedGeneration != currentGeneration) {
-            firstLeaseCreditRearmObservedGeneration = currentGeneration;
-            perf::countCpuReadyFirstLeaseCreditRearmed();
-          }
           if (schedulingObservabilityEnabled) {
             perf::updateCpuReadyFirstLeaseWaitGenerations(
                 observedCapacityProgress, currentGeneration);
@@ -1088,11 +1086,12 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               .stopped = stop_,
               .admissionPressure = arenaAdmissionWaiterCount_.load(
                   std::memory_order_acquire) != 0u,
-              .serialProgressAvailable =
-                  firstLeasePressureSerialProgressAvailable,
               .readyHeadOwnsOrdinaryDirectCapacity =
                   leaseDeniedReadyHeadEligibility ==
                   render::FirstLeaseReadyHeadEligibility::Eligible,
+              .readyHead = leaseDeniedReadyHead,
+              .lastSerialProgressHead =
+                  firstLeasePressureSerialConsumedHead,
               .observedGeneration = observedCapacityProgress,
               .currentGeneration = currentGeneration,
           });
@@ -1137,13 +1136,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           DXMT_ASSERT(leaseDeniedReadySource.source.valid());
           pressureSerialSource = leaseDeniedReadySource;
           exactReplaySingleSource = true;
-          firstLeasePressureSerialProgressAvailable = false;
-          firstLeasePressureSerialProgressGeneration =
-              observedCapacityProgress;
+          firstLeasePressureSerialPendingHead = leaseDeniedReadyHead;
         } else {
           DXMT_ASSERT(waitAction ==
                       render::FirstLeaseCapacityWaitAction::RetryLease);
-          firstLeasePressureSerialProgressAvailable = true;
         }
         continue;
       }
@@ -1256,7 +1252,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
-      exactReplaySingleSource = true;
+      const bool abandonedPressureSerial =
+          firstLeasePressureSerialPendingHead.valid();
+      pressureSerialSource.reset();
+      firstLeasePressureSerialPendingHead = {};
+      exactReplaySingleSource = !abandonedPressureSerial;
       if (testOnlyRestore) {
         return;
       }
@@ -1486,6 +1486,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             queueLifecycle_.poisonTapeFailureLocked();
             return;
           }
+          pressureSerialSource.reset();
+          firstLeasePressureSerialPendingHead = {};
           if (testOnlyPauseAfterStaleMultiSourcePlannerRestore_) {
             testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
             testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = true;
@@ -1531,8 +1533,17 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailureLocked();
         return;
       }
-      exactReplaySingleSource = true;
+      const bool abandonedPressureSerial =
+          firstLeasePressureSerialPendingHead.valid();
+      pressureSerialSource.reset();
+      firstLeasePressureSerialPendingHead = {};
+      exactReplaySingleSource = !abandonedPressureSerial;
       continue;
+    }
+    if (firstLeasePressureSerialPendingHead.valid()) {
+      firstLeasePressureSerialConsumedHead =
+          firstLeasePressureSerialPendingHead;
+      firstLeasePressureSerialPendingHead = {};
     }
     exactReplaySingleSource = false;
     pressureSerialSource.reset();

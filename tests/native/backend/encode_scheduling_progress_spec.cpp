@@ -161,50 +161,65 @@ void firstLeaseCapacityWaitTruthTable() {
     check(classifyFirstLeaseReadyHeadEligibility(head) == expected,
           "first-lease ready-head eligibility priority drifted");
   }
-  for (std::uint32_t bits = 0; bits < 32u; ++bits) {
+  for (std::uint32_t bits = 0; bits < 64u; ++bits) {
+    const bool readyHeadValid = (bits & 4u) != 0;
+    const bool sameConsumedHead = (bits & 8u) != 0;
+    const FirstLeaseReadyHeadIdentity readyHead = readyHeadValid
+        ? FirstLeaseReadyHeadIdentity{.seqId = 11u, .sourceOrdinal = 13u}
+        : FirstLeaseReadyHeadIdentity{};
     const FirstLeaseCapacityWaitState state{
         .stopped = (bits & 1u) != 0,
         .admissionPressure = (bits & 2u) != 0,
-        .serialProgressAvailable = (bits & 4u) != 0,
-        .readyHeadOwnsOrdinaryDirectCapacity = (bits & 8u) != 0,
+        .readyHeadOwnsOrdinaryDirectCapacity = (bits & 16u) != 0,
+        .readyHead = readyHead,
+        .lastSerialProgressHead = sameConsumedHead
+            ? readyHead
+            : FirstLeaseReadyHeadIdentity{
+                  .seqId = 10u, .sourceOrdinal = 12u},
         .observedGeneration = 7u,
-        .currentGeneration = (bits & 16u) != 0 ? 8u : 7u,
+        .currentGeneration = (bits & 32u) != 0 ? 8u : 7u,
     };
     const auto expected = state.stopped
         ? FirstLeaseCapacityWaitAction::Stop
         : state.currentGeneration != state.observedGeneration
             ? FirstLeaseCapacityWaitAction::RetryLease
-            : state.admissionPressure && state.serialProgressAvailable &&
-                    state.readyHeadOwnsOrdinaryDirectCapacity
+            : state.admissionPressure &&
+                    state.readyHeadOwnsOrdinaryDirectCapacity &&
+                    state.readyHead.valid() &&
+                    state.readyHead != state.lastSerialProgressHead
                 ? FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial
                 : FirstLeaseCapacityWaitAction::Wait;
     check(classifyFirstLeaseCapacityWait(state) == expected,
           "first-lease capacity-wait action truth table drifted");
   }
 
-  FirstLeaseCapacityWaitState generation{
+  FirstLeaseCapacityWaitState identity{
       .admissionPressure = true,
-      .serialProgressAvailable = true,
       .readyHeadOwnsOrdinaryDirectCapacity = true,
+      .readyHead = {.seqId = 11u, .sourceOrdinal = 13u},
       .observedGeneration = 7u,
       .currentGeneration = 7u,
   };
-  check(classifyFirstLeaseCapacityWait(generation) ==
+  check(classifyFirstLeaseCapacityWait(identity) ==
             FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial,
-        "one eligible head consumes the generation's serial credit");
-  generation.serialProgressAvailable = false;
-  check(classifyFirstLeaseCapacityWait(generation) ==
+        "one eligible denied head consumes its exact serial token");
+  identity.lastSerialProgressHead = identity.readyHead;
+  check(classifyFirstLeaseCapacityWait(identity) ==
             FirstLeaseCapacityWaitAction::Wait,
-        "one generation cannot consume a second serial credit");
-  generation.currentGeneration = 8u;
-  check(classifyFirstLeaseCapacityWait(generation) ==
+        "one denied Ready identity cannot consume a second serial token");
+  identity.readyHead = {.seqId = 12u, .sourceOrdinal = 14u};
+  check(classifyFirstLeaseCapacityWait(identity) ==
+            FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial,
+        "FIFO head advance rearms one exact serial token in the same "
+        "capacity generation");
+  identity.currentGeneration = 8u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
             FirstLeaseCapacityWaitAction::RetryLease,
         "an explicit generation transition retries before serial progress");
-  generation.observedGeneration = 8u;
-  generation.serialProgressAvailable = true;
-  check(classifyFirstLeaseCapacityWait(generation) ==
+  identity.observedGeneration = 8u;
+  check(classifyFirstLeaseCapacityWait(identity) ==
             FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial,
-        "the new generation rearms exactly one serial credit");
+        "generation retry does not consume the changed head's serial token");
 
   constexpr std::array ineligibleStates{
       FirstLeaseReadyHeadState{.arena = false,
@@ -235,11 +250,11 @@ void firstLeaseCapacityWaitTruthTable() {
         classifyFirstLeaseReadyHeadEligibility(ineligibleStates[i]);
     check(sibling == expectedIneligible[i],
           "the exact ineligible sibling must retain its disposition");
-    generation.readyHeadOwnsOrdinaryDirectCapacity =
+    identity.readyHeadOwnsOrdinaryDirectCapacity =
         sibling == FirstLeaseReadyHeadEligibility::Eligible;
-    check(classifyFirstLeaseCapacityWait(generation) ==
+    check(classifyFirstLeaseCapacityWait(identity) ==
               FirstLeaseCapacityWaitAction::Wait,
-          "each ineligible sibling preserves the generation credit");
+          "each ineligible sibling preserves the exact-head token");
   }
 }
 

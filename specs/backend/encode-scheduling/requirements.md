@@ -675,19 +675,24 @@ already-open session in response to current occupancy. Raw-writer or Arena
 admission pressure is not a release reason and must not post a
 `SessionReleaseEvent`. If an Arena admission waiter appears while the first
 lease is denied by older unavailable residency, the coordinator may execute
-exactly one FIFO Ready source through the existing standalone serial path only
-when the denied identity is unchanged, the source is a non-Present Direct Arena
-source that already owns its complete physical residency, its semantic payload
-shape fits `ordinaryDirect`, and its complete physical reservation fits the
-admission high-water vector. `ordinaryDirect.pages` compares payload pages
-without circular-wrap padding; the independent high-water, lease, retirement,
-and completion accounts retain payload plus wrap-padding pages and the complete
-byte/descriptor/ticket charge. This bounded escape acquires no lease, reserves
-no capacity, opens no session, and remains
-unavailable again until a capacity-generation transition. It may reduce that
-exact source to a singleton submission; GPU timing must not append it to a
-session, widen any later group, fabricate completion, or re-arm another escape
-without reclaim progress. A SegmentSerial source retains its atomically
+one FIFO Ready source through the existing standalone serial path at most once
+per exact denied `(seqId, sourceOrdinal)` identity. The identity must remain
+unchanged through the denial, and the source must be a non-Present Direct Arena
+source that already owns its complete physical residency, whose semantic
+payload shape fits `ordinaryDirect`, and whose complete physical reservation
+fits the admission high-water vector. `ordinaryDirect.pages` compares payload
+pages without circular-wrap padding; the independent high-water, lease,
+retirement, and completion accounts retain payload plus wrap-padding pages and
+the complete byte/descriptor/ticket charge. This bounded escape acquires no
+lease, reserves no capacity, opens no session, and permanently consumes the
+token for that exact identity. A different FIFO head may consume its own token
+without a capacity-generation transition, but the same identity must not
+execute twice; the fixed Ready/source bounds therefore bound total escapes in
+one pressure episode. A capacity-generation transition keeps retry priority
+and does not erase a consumed identity token. The escape may reduce that exact
+source to a singleton submission; GPU timing must not append it to a session,
+widen any later group, fabricate completion, or re-arm the same identity. A
+SegmentSerial source retains its atomically
 published event-group metadata, FIFO execution, per-segment completion, and
 tail settlement; the escape cannot expose a Writing group member or alter
 publication/abort atomicity.
@@ -792,6 +797,15 @@ their composition is live.
   with no progress" from legitimate idleness in a wild run without
   gputrace, so a liveness regression is detectable on first occurrence
   rather than by black-screen reproduction.
+- (d) The composed pressure cycle must cover a multi-source Arena batch whose
+  complete control predicate needs at least two distinct Ready-head singleton
+  drains while the capacity generation remains unchanged. The model and a
+  deterministic native composition pin must prove exact-head token
+  conservation, FIFO ownership, at-most-once escape per identity, admission
+  retry only after the full batch predicate becomes Ready, and no
+  pressure-created release or capacity transition. The native pin must use the
+  production admission predicates, condition variables, and serial execution
+  path; polling, sleeps, and synthetic occupancy arrays are not evidence.
 
 The composition model runs under `dxmt9-verify-tla` with the existing
 models. This requirement adds verification obligations only; it must not

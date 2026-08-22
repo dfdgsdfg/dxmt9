@@ -455,14 +455,19 @@ Only a valid unavailable-capacity denial may wait for a later
 capacity-releasing generation. The shared
 `classifyFirstLeaseCapacityWait` action gives generation progress priority over
 pressure. With no generation change, one live Arena admission waiter may spend
-one local serial-progress credit on the exact denied non-Present Direct Arena
-Ready head only after `FirstLeaseReadyHeadCapacityView::ordinaryShape` proves
+one local serial-progress token at most once for each exact denied
+`(seqId, sourceOrdinal)` non-Present Direct Arena Ready head, only after
+`FirstLeaseReadyHeadCapacityView::ordinaryShape` proves
 the semantic payload-page shape against `ordinaryDirect` and
 `fullReservation` independently proves payload plus circular-wrap padding
 against high-water. Lease and physical-retirement accounting also retain
 `fullReservation`; the typed view does not transfer, forgive, or double-count
-padding ownership. The next denial parks until another capacity generation;
-it cannot repeatedly drain the Ready FIFO from one pressure episode.
+padding ownership. The consumed identity remains unavailable even if the
+capacity generation changes. When standalone execution advances the FIFO, a
+different Ready identity owns a distinct finite token and may make further
+progress in the same capacity generation; the fixed Ready/source bounds limit
+the episode, and no identity may execute twice. A generation change still wins
+classification priority over pressure.
 
 The physical byte credit is a typed
 scheduler-owned Tape charge, not a universal physical-memory measure and not
@@ -1697,6 +1702,21 @@ max-payload Ready head fail the payload-shape ordinary test. The bounded fixes
 add no release event, capacity, or ownership transition; no new wild run is
 claimed here.
 
+The follow-up GT2 identity-v2 r15 diagnostic
+`experiments/output/render-tape-gt2-identity-v2-r15-post-progress-fix/r15-console.log`
+also completed bootstrap/arm and reached `captured_present_reserve_begin`, then
+held a stable frontier for more than 30 seconds. The denied first-lease head was
+seq/source 7204 at unchanged observed/current generation 14416; one admission
+waiter had 122 enters and 121 retry exits, replay raw one remained in
+ArenaAdmission with pending publication 7205..7234, pressure-serial was 113,
+credit-exhausted was 42, and both ordinary/high-water ineligibility counters
+were zero. This confirms the r14 batch and wrap-shape fixes and isolates the
+remaining defect: the generation-scoped escape credit could not rearm after the
+FIFO head changed within the same generation. The bounded repair above changes
+only the token key from capacity generation to exact Ready-head identity; it
+adds no capacity, release event, ownership/lifetime transition, or eligibility
+relaxation. No post-fix wild run is claimed here.
+
 ## 10. Verification Mapping
 
 | Contract | Evidence |
@@ -1704,7 +1724,7 @@ claimed here.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills the Tape with older unavailable residency plus a Ready suffix, drives a real replay-offload item into Arena admission while capture reserve waits for its drain, and proves the shared first-lease classifier executes exactly one eligible ordinary-Direct FIFO head standalone, returns the drain, conserves completion/reclaim, and consumes at most one credit per generation. Four sibling cases pin Present, non-Arena, ordinary-capacity, and high-water ineligibility without credit consumption before an explicit generation retry. `CpuReadySessionProgress` and `SessionCapacityLease` retain their detailed ownership refinements; seeded `EncodeSchedulingProgress` composes replay-in-flight, drain wait, denied first lease, admission pressure, singleton serial escape, FIFO completion, reclaim, and drain-return liveness. |
+| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills the Tape with older unavailable residency plus a Ready suffix, drives a real multi-source replay-offload batch into Arena admission while capture reserve waits for its drain, and proves the shared first-lease classifier executes at least two distinct eligible ordinary-Direct FIFO heads standalone in one unchanged capacity generation until the complete control predicate becomes Ready. Exact-head at-most-once tokens, FIFO submission, ownership conservation, admission retry, and drain return are pinned through production predicates and condition variables. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. `CpuReadySessionProgress` and `SessionCapacityLease` retain their detailed ownership refinements; seeded `EncodeSchedulingProgress` composes replay-in-flight, drain wait, denied first lease, two exact-identity serial escapes, unchanged-generation head advance, FIFO completion, and drain-return liveness. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |
