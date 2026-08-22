@@ -910,9 +910,15 @@ must gate before metadata collection or allocation. The PE must finish any
 capture-only object/materialization preflight before assigning the final event
 ordinal and submitting the chunk, so later inserted journal events cannot move
 an ordinal already copied by the provider. Capture may select a larger bounded
-Arena profile sufficient for one maximum segmented source, but that profile
-must be selected only when both capture and the publisher are active and must
-not change normal renderer admission. A provider-replay sidecar may be labelled
+Arena profile: EventSerial/default capture retains its 512-page source bound,
+while the queue-immutable `DXMT9_RENDER_IDENTITY_MODE=segment` profile retains
+the same 2,048-page (8 MiB) Arena and bounds each SegmentSerial source to 64
+pages. Events exceeding that bound are admitted only as an ordered atomic Arena
+batch, with all payload, descriptor, control, and Ready entries published
+together or aborted together; an indivisible over-bound layout is rejected
+rather than widened. This profile must be selected only when both capture and
+the publisher are active and must not change normal renderer admission. A
+provider-replay sidecar may be labelled
 authoritative only for the exact replay process that emitted it; an offline
 ordinal-derived mapping is not authoritative and must not satisfy this
 requirement.

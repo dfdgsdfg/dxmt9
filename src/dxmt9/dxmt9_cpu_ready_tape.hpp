@@ -223,9 +223,10 @@ class CpuReadyTapeConfig {
   }
 
   static CpuReadyTapeConfig queueCaptureStreaming(
-      std::size_t controlCapacity) {
+      std::size_t controlCapacity, bool segmentSerial = false) {
     constexpr std::size_t kPageCapacityMultiplier = 64;
     constexpr std::size_t kCapturePagesPerSource = 512;
+    constexpr std::size_t kSegmentSerialPagesPerSource = 64;
     if (controlCapacity >
         std::numeric_limits<std::size_t>::max() /
             kPageCapacityMultiplier) {
@@ -241,7 +242,9 @@ class CpuReadyTapeConfig {
         .readyFifoCount = controlCapacity,
         .compatibilityPayloadCount = controlCapacity * 2,
         .maxPagesPerSource =
-            std::min(kCapturePagesPerSource, pageCount),
+            std::min(segmentSerial ? kSegmentSerialPagesPerSource
+                                   : kCapturePagesPerSource,
+                     pageCount),
         .highWaterSources = controlCapacity * 2,
         .lowWaterSources = controlCapacity,
         .highWaterPages = pageCount,

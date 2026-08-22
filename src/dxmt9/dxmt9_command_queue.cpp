@@ -544,7 +544,9 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                            render::RenderPartitionConfig renderPartitionConfig)
     : cpuReadyTape_(renderTapePublisherCaptureEnabled
                         ? core::CpuReadyTapeConfig::queueCaptureStreaming(
-                              kCommandChunkCount)
+                              kCommandChunkCount,
+                              renderPartitionConfig.sourceIdentity.resolved ==
+                                  render::SourceIdentityMode::SegmentSerial)
                     : cpuReadySessionLaneEnabled
                         ? core::CpuReadyTapeConfig::queueSessionStreaming(
                               kCommandChunkCount)

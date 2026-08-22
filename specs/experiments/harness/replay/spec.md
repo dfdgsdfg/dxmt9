@@ -1470,8 +1470,14 @@ bundle contains 36 command sources and 51 frozen pass ranges, and the
 capture-authority sidecar validates exact command/record coverage. The final
 event ordinal is assigned only after PE object/materialization preflight, then
 copied through the bounded capture token into the Direct Arena source. The
-capture-only queue profile owns 2,048 4-KiB pages (8 MiB) and permits one
-512-page segmented source; normal capture-off and streaming selection retain
+capture-only queue profile owns 2,048 4-KiB pages (8 MiB). EventSerial/default
+capture retains its existing 512-page source representation; the queue-immutable
+`DXMT9_RENDER_IDENTITY_MODE=segment` mode permits at most 64 pages in one
+SegmentSerial source. A canonical event whose physical payload exceeds that
+per-source bound is partitioned into ordered source rows through the value-owned
+Arena batch lease; descriptor, payload, control, and Ready publication are one
+all-or-nothing transaction, and pre-effect failure aborts the complete batch
+without widening a source. Normal capture-off and streaming selection retain
 their existing bounds.
 
 The r65 full-frame provider output is non-degenerate but is not promotion
