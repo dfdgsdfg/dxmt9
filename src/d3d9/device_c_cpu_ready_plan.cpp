@@ -303,6 +303,7 @@ CpuReadyPlan planCpuReadyChunk(
     CpuReadyPlanOptions options) noexcept {
   if (rawOrdinal == 0 || options.pageSize == 0 || options.maxPages == 0 ||
       options.maxOrdinaryPagesPerSegment == 0 ||
+      options.maxSourcesPerChunk == 0 ||
       options.maxSegmentsPerSource == 0 ||
       options.maxSegmentsPerSource >
           core::kMaxArenaSourcePayloadSegments ||
@@ -365,6 +366,17 @@ CpuReadyPlan planCpuReadyChunk(
       .lane = ReplayLane::DirectArenaCandidate,
       .reason = ReplayReason::Eligible,
   };
+  try {
+    // At most one physical segment can be committed by each raw record, and
+    // at most one source can own each non-empty segment. Reserve only against
+    // the immutable producer view; no plan-sized object lives on the stack.
+    plan.segments.reserve(imported.records.size());
+    plan.sources.reserve(
+        std::min(options.maxSourcesPerChunk, imported.records.size()));
+  } catch (...) {
+    return fallback(rawOrdinal, ReplayLane::Reject,
+                    ReplayReason::StructuralOverflow);
+  }
   const std::size_t maxPagesPerSource =
       std::min(options.maxPages, options.maxPagesPerSource);
   std::size_t totalDrawCount = 0;
@@ -376,8 +388,7 @@ CpuReadyPlan planCpuReadyChunk(
 
   const auto appendSegment = [&](const SegmentAccumulator& segment,
                                  bool jumbo) noexcept {
-    if (!segment.active ||
-        plan.segmentCount >= options.maxSegmentsPerSource) {
+    if (!segment.active) {
       return false;
     }
     auto capacity = segment.capacity;
@@ -394,7 +405,7 @@ CpuReadyPlan planCpuReadyChunk(
             std::numeric_limits<std::uint32_t>::max()) {
       return false;
     }
-    plan.segments[plan.segmentCount++] = CpuReadySegmentPlan{
+    plan.segments.push_back(CpuReadySegmentPlan{
         .firstRecordIndex =
             static_cast<std::uint32_t>(segment.firstRecordIndex),
         .recordCount = static_cast<std::uint32_t>(
@@ -402,7 +413,8 @@ CpuReadyPlan planCpuReadyChunk(
         .jumbo = jumbo,
         .capacity = capacity,
         .layout = *layout,
-    };
+    });
+    ++plan.segmentCount;
     return true;
   };
 
@@ -533,25 +545,92 @@ CpuReadyPlan planCpuReadyChunk(
     return fallback(rawOrdinal, ReplayLane::Reject,
                     ReplayReason::StructuralOverflow);
   }
-  std::array<core::SourcePayloadLayout,
-             core::kMaxArenaSourcePayloadSegments> segmentLayouts{};
-  for (std::size_t i = 0; i < plan.segmentCount; ++i) {
-    segmentLayouts[i] = plan.segments[i].layout;
+  // Group the already planned physical blocks into bounded logical sources.
+  // The old one-source behavior is the default; source segmentation is an
+  // explicit planner capability and does not alter the physical block plans.
+  std::size_t sourceSegmentBegin = 0;
+  while (sourceSegmentBegin < plan.segmentCount) {
+    if (plan.sourceCount >= options.maxSourcesPerChunk) {
+      return fallback(rawOrdinal, ReplayLane::Legacy,
+                      ReplayReason::Oversize);
+    }
+    std::size_t sourceSegmentEnd = sourceSegmentBegin;
+    std::array<core::SourcePayloadLayout,
+               core::kMaxArenaSourcePayloadSegments>
+        sourceLayouts{};
+    std::optional<core::ArenaSourcePayloadLayout> sourceLayout;
+    while (sourceSegmentEnd < plan.segmentCount &&
+           sourceSegmentEnd - sourceSegmentBegin <
+               options.maxSegmentsPerSource) {
+      const auto candidateCount = sourceSegmentEnd - sourceSegmentBegin + 1u;
+      for (std::size_t i = 0; i < candidateCount; ++i) {
+        sourceLayouts[i] =
+            plan.segments[sourceSegmentBegin + i].layout;
+      }
+      const auto candidate = core::makeArenaSourcePayloadLayout(
+          std::span(sourceLayouts).first(candidateCount), options.pageSize,
+          maxPagesPerSource);
+      if (!candidate) {
+        break;
+      }
+      sourceLayout = *candidate;
+      ++sourceSegmentEnd;
+    }
+    if (!sourceLayout || sourceSegmentEnd == sourceSegmentBegin) {
+      // Each physical block was checked against maxPagesPerSource when it
+      // was formed. Reaching this branch means the bounded planner cannot
+      // represent the requested source grouping.
+      return fallback(rawOrdinal, ReplayLane::Legacy,
+                      ReplayReason::Oversize);
+    }
+
+    const auto& first = plan.segments[sourceSegmentBegin];
+    const auto& last = plan.segments[sourceSegmentEnd - 1u];
+    if (last.firstRecordIndex < first.firstRecordIndex ||
+        last.recordCount > std::numeric_limits<std::uint32_t>::max() -
+                               last.firstRecordIndex ||
+        last.firstRecordIndex + last.recordCount < first.firstRecordIndex ||
+        last.firstRecordIndex + last.recordCount - first.firstRecordIndex ==
+            0u) {
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
+    }
+    if (sourceSegmentBegin > std::numeric_limits<std::uint32_t>::max() ||
+        sourceSegmentEnd - sourceSegmentBegin >
+            std::numeric_limits<std::uint32_t>::max()) {
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
+    }
+    plan.sources.push_back(CpuReadySourcePlan{
+        .firstSegmentIndex = static_cast<std::uint32_t>(sourceSegmentBegin),
+        .segmentCount = static_cast<std::uint32_t>(
+            sourceSegmentEnd - sourceSegmentBegin),
+        .firstRecordIndex = first.firstRecordIndex,
+        .recordCount = static_cast<std::uint32_t>(
+            last.firstRecordIndex + last.recordCount -
+            first.firstRecordIndex),
+        .jumbo = std::any_of(
+            plan.segments.begin() + sourceSegmentBegin,
+            plan.segments.begin() + sourceSegmentEnd,
+            [](const CpuReadySegmentPlan& segment) { return segment.jumbo; }),
+        .arenaLayout = *sourceLayout,
+    });
+    ++plan.sourceCount;
+    sourceSegmentBegin = sourceSegmentEnd;
   }
-  const auto arenaLayout = core::makeArenaSourcePayloadLayout(
-      std::span(segmentLayouts).first(plan.segmentCount), options.pageSize,
-      std::numeric_limits<std::uint32_t>::max());
-  if (!arenaLayout) {
+
+  if (plan.sourceCount == 0) {
     return fallback(rawOrdinal, ReplayLane::Reject,
                     ReplayReason::StructuralOverflow);
   }
-  if (arenaLayout->pageCount > maxPagesPerSource) {
-    return fallback(rawOrdinal, ReplayLane::Legacy,
-                    ReplayReason::Oversize);
-  }
-  plan.arenaLayout = *arenaLayout;
-  if (plan.segmentCount == 1) {
-    plan.layout = plan.segments[0].layout;
+  // Preserve the old aggregate adapter only when there is one source. The
+  // multi-source plan is intentionally invisible to the current production
+  // caller until its source transaction is implemented.
+  if (plan.sourceCount == 1) {
+    plan.arenaLayout = plan.sources[0].arenaLayout;
+    if (plan.segmentCount == 1) {
+      plan.layout = plan.segments[0].layout;
+    }
   }
   return plan;
 }

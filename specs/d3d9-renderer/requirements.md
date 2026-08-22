@@ -245,7 +245,11 @@ this key extension together with the renderer factory; see spec.md
 one Frame Graph DAG **per logical `SourcePayloadView`**. A legacy
 `CommandChunk` is adapted as one such view; an Arena source exposes one view
 over its complete ordered payload-block chain. The baseline DAG covers exactly
-that logical source. Payload blocks and segments must not create separate DAGs.
+that logical event stream. Physical payload blocks and storage segments must
+not create separate DAGs. A SegmentSerial scheduling projection may attach
+multiple identity-bearing source segments to one event, but those identities
+are a bounded replay/lifetime partition over the same event DAG; a segment edge
+does not create a DAG, pass, or action boundary.
 A source that spans a `Present` boundary keeps its `Present` record as one node
 inside the DAG. Nodes represent passes (render, compute,
 blit, present, sync). Edges represent resource read/write dependencies internal
@@ -276,9 +280,11 @@ reordering is forbidden and sources are processed in submission order. That
 planner may replay only its qualified `DrawRun` permutation across an already-
 Represented retained prefix after complete dependency and transaction
 preflight. It does not reorder source completion: completion remains exactly
-once in natural FIFO submission order. Payload blocks, graph nodes, and
-`(source, commandIndex)` diagnostic locators must not create, split, defer, or
-coalesce source completion.
+once in natural FIFO submission order. Physical payload blocks, graph nodes,
+and `(event, segment, commandIndex)` diagnostic locators must not create, split,
+defer, or coalesce completion. Only an explicitly authenticated SegmentSerial
+identity mapping may split one event into source completions, and it must
+preserve exact event-local segment order and all-or-nothing publication.
 
 **R-BACK-32.2** Frame Graph construction must be deterministic: the same source
 view and retained resource-alias mapping must always produce the same DAG, the

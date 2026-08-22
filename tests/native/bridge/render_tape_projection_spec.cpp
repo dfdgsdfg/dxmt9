@@ -652,6 +652,48 @@ std::vector<std::byte> makeIdentity(
       std::span(ranges).first(splitPasses ? 2u : 1u));
 }
 
+std::vector<std::byte> makeSplitIdentity(const std::vector<std::byte>& tape) {
+  const std::array sources{
+      RenderTapeIdentitySource{.eventOrdinal = 6u,
+                               .sourceOrdinal = 101u,
+                               .seqId = 501u,
+                               .captureToken = 77u,
+                               .firstRecord = 0u,
+                               .recordCount = 2u,
+                               .firstRange = 0u,
+                               .rangeCount = 1u},
+      RenderTapeIdentitySource{.eventOrdinal = 6u,
+                               .sourceOrdinal = 102u,
+                               .seqId = 502u,
+                               .captureToken = 77u,
+                               .firstRecord = 2u,
+                               .recordCount = 2u,
+                               .firstRange = 1u,
+                               .rangeCount = 1u},
+  };
+  const std::array ranges{
+      RenderTapeIdentityRange{.eventOrdinal = 6u,
+                              .sourceOrdinal = 101u,
+                              .seqId = 501u,
+                              .logicalPassId = 9001u,
+                              .firstRecord = 0u,
+                              .recordCount = 2u,
+                              .dagPassIndex = 3u,
+                              .passKind = 1u},
+      RenderTapeIdentityRange{.eventOrdinal = 6u,
+                              .sourceOrdinal = 102u,
+                              .seqId = 502u,
+                              .logicalPassId = 9001u,
+                              .firstRecord = 2u,
+                              .recordCount = 2u,
+                              .dagPassIndex = 3u,
+                              .passKind = 1u},
+  };
+  return buildRenderTapeIdentity(
+      tape, catalogue(), 42u, 6u, 77u, RenderTapeIdentityAuthority::Capture,
+      sources, ranges);
+}
+
 std::vector<std::byte> makePolicyTape() {
   constexpr std::array<std::byte, 4u> shaderDescriptor{};
   const auto output = outputDescriptor();
@@ -918,6 +960,37 @@ void identityTruthTableAndMalformedInputs() {
   check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
             RenderTapeIdentityStatus::PassIdentityMismatch,
         "inconsistent repeated logical pass identity fails closed");
+
+  const auto split = makeSplitIdentity(tape);
+  RenderTapeIdentityView splitView;
+  const auto splitAccepted =
+      validateRenderTapeIdentity(tape, blobs, split, &splitView);
+  check(splitAccepted.valid() && splitView.sources.size() == 2u &&
+            splitView.sources[0].firstRecord == 0u &&
+            splitView.sources[1].firstRecord == 2u &&
+            splitView.ranges[1].firstRecord == 2u,
+        "v2 identity joins contiguous source fragments under one event");
+  std::uint64_t splitPass = 0u;
+  check(renderTapeIdentityOwnsSelection(splitView, 6u, 2u, 2u, &splitPass) &&
+            splitPass == 9001u &&
+            !renderTapeIdentityOwnsSelection(splitView, 6u, 1u, 3u),
+        "event-local selection resolves through the second source fragment");
+
+  malformed = split;
+  sidecarAt<RenderTapeIdentitySource>(
+      malformed, sizeof(RenderTapeIdentityHeader) +
+                     sizeof(RenderTapeIdentitySource)).firstRecord = 3u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::SourceCoverageMismatch,
+        "a source gap across one event fails exact aggregate coverage");
+  malformed = split;
+  sidecarAt<RenderTapeIdentityRange>(
+      malformed, sizeof(RenderTapeIdentityHeader) +
+                     2u * sizeof(RenderTapeIdentitySource) +
+                     sizeof(RenderTapeIdentityRange)).passKind = 2u;
+  check(validateRenderTapeIdentity(tape, blobs, malformed).status ==
+            RenderTapeIdentityStatus::PassIdentityMismatch,
+        "cross-fragment logical pass metadata is authenticated");
 }
 
 void executableProjectionMaterializesCanonicalBundle() {

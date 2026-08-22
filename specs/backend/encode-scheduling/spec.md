@@ -220,7 +220,13 @@ explicit owner destructors before any page generation advances. The
 control-shell `ChunkSlot` contains only lifecycle state and IDs into this
 storage. `SourcePayloadView` resolves across the chain synchronously while
 presenting one logical ordered command stream; block boundaries are invisible
-to FrameGraph ownership, replay order, partitioning, and completion.
+to FrameGraph ownership, replay order, partitioning, and completion. The
+EventSerial lane has one source identity for this view. The opt-in SegmentSerial
+lane may project one PE event's ordered record stream into a bounded group of
+identity-bearing source segments. That projection is an identity and lifetime
+boundary, not a physical-block boundary: segment records are contiguous and
+complete, segment identities are strictly ordered, and a logical pass may
+continue across an edge.
 
 `Represented` and `Submitted` are lifetime pins, not locks. After the
 coordinator resolves a generation-checked locator, the synchronous encode call
@@ -242,14 +248,15 @@ limit is rejected as already-invalid input.
 
 ### 3.2 Publication and Admission
 
-The raw queue supplies one already assigned `rawOrdinal` and `seqId` per logical
-source. After all required bounded capacity is reserved, the single replay
-worker assigns global `sourceOrdinal` in the same strict order and publishes a
-compact `PublicationTicket`. The ticket, not any payload block, is visible while
-construction continues. Its three identities are fixed through complete-chain
-seal, ordered legacy rollback, or abort and are never reused. There is a
-one-to-one, order-isomorphic mapping for logical sources; adding payload segments
-does not split that mapping or allocate additional sequence identities.
+The raw queue supplies one already assigned `rawOrdinal` and `seqId` per PE
+event. After all required bounded capacity is reserved, the single replay
+worker assigns global `sourceOrdinal` and segment `seqId` values in strict
+event/segment order and publishes a compact `PublicationTicket`. The ticket,
+not any payload block, is visible while construction continues. EventSerial
+mode fixes one source identity for the event. SegmentSerial mode fixes the
+complete ordered event-to-segment mapping; all segment identities are published
+or aborted together and are never reused. No segment may become Ready alone,
+and a later event cannot bypass an earlier event group.
 
 ```mermaid
 stateDiagram-v2

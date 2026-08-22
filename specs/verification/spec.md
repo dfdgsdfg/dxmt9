@@ -126,6 +126,18 @@ actions, and output pixels. Prior-output loads, arbitrary controls, broader
 provider grammar, unbounded sequences, concurrency, and driver behavior remain
 outside this checker.
 
+The v2 identity-segment lane is a separate refinement obligation. Its required
+bounded model (`RenderTapeIdentitySegments.tla`) must cover one command event
+with multiple ordered source segments, exact event-local record partitioning,
+pass-piece continuity across a segment edge, flattened source/sequence
+monotonicity, and whole-event fail-closed publication. The scheduling models
+must additionally extend `CpuReadySessionProgress.tla`,
+`EncodeSessionCompletion.tla`, and `PostEncodePayloadRetirement.tla` (or
+provide an equivalent composed model) for atomic event-group admission,
+per-segment completion, final event settlement, and shared-resource/page
+watermarks. Until those models and production-predicate native bindings exist,
+v2 identity is a specification/gap item, not verification evidence.
+
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
 | `archicture/spec.md` §6 / `backend/spec.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |

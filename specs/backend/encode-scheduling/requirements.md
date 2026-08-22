@@ -76,14 +76,17 @@ summaries, but no drawable or present token. Deferring a frame-latency wait to
 create this window must not admit a second present tail before the prior gate is
 drained and must preserve `R-BACK-2.49` completion order. Admission assigns one
 unique, strictly increasing global `sourceOrdinal` and one unique `seqId` in
-the same order. One logical source may own an ordered chain of packed Arena
-payload blocks, but every block in that chain shares the same `rawOrdinal`,
-`sourceOrdinal`, `seqId`, retention lifetime, publication transaction, and
-completion source. Once all bounded storage for the immediate raw-FIFO
-successor is reserved, its generation-stamped `PublicationTicket` fixes those
-identities until that complete source seals or aborts. No segment or block may
-publish independently, and no later source may become ready while an earlier
-admitted source remains unsealed.
+the same order. The compatibility lane retains one logical source identity per
+PE chunk/event. An explicitly selected segmented streaming lane may instead
+map one PE chunk/event to an ordered, bounded group of identity-bearing source
+segments; each segment has its own `sourceOrdinal`, `seqId`, retention lifetime,
+and completion source, while the event retains one group transaction and
+capture token. Physical payload blocks remain storage only and do not acquire
+identities by themselves. Once all bounded storage for the immediate raw-FIFO
+successor is reserved, its generation-stamped `PublicationTicket` fixes the
+complete event-group identity list until every segment seals or the whole group
+aborts. No segment may publish independently, and no later event or segment may
+become ready while an earlier admitted group remains unsealed.
 
 **R-BACK-2.41** The scheduler must be able to coalesce consecutive compatible
 CPU-ready sources or source ranges into the same `EncodeSession` and Metal
@@ -349,9 +352,13 @@ represented source may complete before all Metal commands that contain its work
 complete; reclaim, query, frame-token, and deferred-destruction consumers still
 observe their existing per-source timelines. Payload blocks, payload segments,
 FrameGraph nodes, partitions, and command indices must never create independent
-completion signals. Source-qualified `(source, commandIndex)` attribution may
-identify replay and diagnostics, but completion and reclaim remain exactly once
-per logical source `seqId`. Eligible source payload storage may retire after its
+completion signals. Explicit identity-bearing source segments are logical
+sources and therefore create one completion source each; they replay in
+event-local segment order and their completions expand in the same flattened
+FIFO order. Event-level settlement occurs only after the final segment settles.
+Source-qualified `(event, segment, commandIndex)` attribution may identify
+replay and diagnostics, but completion and reclaim remain exactly once per
+logical source `seqId`. Eligible source payload storage may retire after its
 final synchronous encode borrow ends, before submission or GPU completion, only
 after a queue receipt has become the completion authority. This releases
 payload pages, publication controls, and physical lease credit but not Metal
@@ -436,12 +443,20 @@ non-wrapping page runs, is invisible while `Writing`, and becomes read-only only
 after an atomic `Sealed -> Ready` publication of the complete chain that has
 completed validation, retention, resource marking, summaries, `sourceOrdinal`,
 and `seqId` assignment. Only its compact `PublicationTicket` control metadata
-is scheduler-visible while `Writing`; no payload block is resolvable until the
-whole source is `Ready`.
+is scheduler-visible while `Writing`; no payload block or identity segment is
+resolvable until the whole source or event group is `Ready`. In the segmented
+streaming lane, all segment descriptors, segment payload blocks, identities,
+and event-group metadata become visible in one atomic `Sealed -> Ready`
+publication; a partially ready event group is invalid.
 
 Capacity must be bounded simultaneously by source descriptors, total resident
 pages/bytes, `maxPagesPerPayloadSegment`, `maxPayloadSegmentsPerSource`,
-`maxPagesPerSource`, retained-handle entries, and session source references.
+`maxPagesPerSource`, retained-handle entries, session source references, and
+the independent `maxIdentitySegmentsPerEvent` and
+`maxIdentitySegmentsPerSession` limits. `maxPagesPerSource` bounds one
+compatibility source; a segmented event group additionally charges the sum of
+all segment reservations against the event and session limits. These
+identity-segment limits are not aliases for `maxPayloadSegmentsPerSource`.
 `maxPagesPerPayloadSegment` bounds each ordinary packed segment;
 `maxPayloadSegmentsPerSource` bounds ordinary plus jumbo segments; and
 `maxPagesPerSource` bounds their total pages, including a jumbo segment that
@@ -462,7 +477,8 @@ the total page or segment-count limit, or a jumbo record that exceeds the total
 source limit, must use the ordered legacy one-source rollback path or fail the
 already-invalid oversized input; temporary pressure must not create a second
 payload copy, reorder sources, hide a represented prefix, or fragment a session.
-Current/peak occupancy, high-water hits, admission wait, segment/jumbo counts,
+Current/peak occupancy, high-water hits, admission wait, physical
+segment/jumbo counts, identity-segment counts, group-abort/compatibility
 bypass reason, and reclaim wakeups must be observable.
 
 **R-BACK-2.61** Direct device calls may replace a full deferred-replay drain
@@ -655,9 +671,10 @@ both exceeded their limits. This observation must not affect classification,
 the selected predecessor fence, or session grouping.
 
 **R-BACK-2.66** Render scheduling must expose stable provider configuration as
-three typed, independently resolved axes:
+four typed, independently resolved axes:
 
 - source delivery is `Compatibility` or `Streaming`;
+- source identity granularity is `EventSerial` or `SegmentSerial`;
 - partition execution is `IdentitySerial`, `ExplicitSerial`, or
   `ExplicitParallel`; and
 - command-buffer segmentation is `Disabled` or `Metal4`.
@@ -670,6 +687,10 @@ queue creation and keep it immutable for that queue. `Compatibility` uses the
 payload-owning source path, while `Streaming` selects bounded CPU-ready Tape
 publication and `EncodeSession` source streaming; ordered Legacy, Inline, and
 control dispositions remain valid fallbacks inside the streaming mode.
+`EventSerial` is mandatory for Compatibility and is the default Streaming
+identity lane. `SegmentSerial` is opt-in, requires the bounded event-group
+publication contract in R-BACK-2.40 and R-BACK-2.60, and must fall back the
+complete event to EventSerial compatibility when any segment cannot be proved.
 `IdentitySerial` uses the allocation-free identity cursor,
 `ExplicitSerial` runs the deterministic production partition planner on the
 single encode coordinator, and `ExplicitParallel` runs the same validated plan
@@ -685,10 +706,12 @@ semantic optimizers such as pass coalescing or DCE, alter Presenter policy, or
 weaken any order, lifetime, load/store, completion, or locality contract.
 
 The canonical process selectors are `DXMT9_RENDER_SOURCE_MODE` with values
-`compatibility|streaming`, `DXMT9_RENDER_PARTITION_MODE` with values
+`compatibility|streaming`, an identity-granularity selector with values
+`event|segment`, `DXMT9_RENDER_PARTITION_MODE` with values
 `identity|serial|parallel`, and `DXMT9_RENDER_SEGMENT_MODE` with values
-`off|metal4`. The current default is
-`compatibility + identity + off`. Until migration is complete,
+`off|metal4`. The identity-granularity default is `event`; the current full
+default is
+`compatibility + event + identity + off`. Until migration is complete,
 `DXMT9_CPU_READY_TAPE=0|1` is a compatibility alias for only the source-delivery
 axis when the canonical source selector is unset; it is not a separate provider
 mode. An unknown value must fail closed to that axis's default and emit one
@@ -890,3 +913,18 @@ ordered evidence bundle in `R-BACK-2.50` and `R-VERIF-6.4`, including repeated
 GPU-visible correctness, matched locality/economics, supervised wild
 correctness, and performance evidence. Existing serial and source-local
 parallel modes remain reachable while this evidence is incomplete.
+
+**R-BACK-2.76** A segmented event is one ordered publication group containing
+one or more identity-bearing source segments. Segment publication is
+all-or-nothing; segments replay in `segmentIndex` order and may share an
+`EncodeSession`, but may not bypass or reorder one another. Each segment
+`seqId` completes exactly once in flattened FIFO order, and event-level
+settlement is successful only after the final segment settles. Before the first
+Metal effect, a missing identity, stale generation, incomplete record/pass
+coverage, unsupported control, resource-mark failure, or capacity overflow
+must reject the whole group and route the complete PE event through the
+EventSerial compatibility lane. After receipt activation, any Metal effect, or
+child/segment creation, failure is fail-stop; partial rollback, orphan segment
+completion, and mixed event fallback are forbidden. A resource referenced by
+multiple segments remains retained until the greatest applicable segment
+watermark completes.

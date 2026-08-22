@@ -762,7 +762,8 @@ and the selected interval must be preceded by a Clear and followed by the
 frame's Present;
 Clear, Present, `OrderedControl`, `ObjectDestroy`, and `PresentComplete` remain
 outside the child interval. Successful output preserves selected Draw order as
-`(event ordinal, record index)` locators, exact generation-qualified identities,
+`(event ordinal, segment index, record index)` locators, exact
+generation-qualified identities,
 definition locators, immutable-payload references, and every digest-backed
 resource mutation for those identities before the selected event. Missing
 source validity, complete state-category coverage, live generation-qualified
@@ -781,7 +782,7 @@ GT2 replay. `events.bin` alone does not carry authoritative frame ID,
 production source/sequence ID, or logical-pass identity. Those values may be
 used only after separately authenticating the R-HARN-REPLAY-7.21
 `identity.bin`; without it, the canonical event ordinal plus record index is
-the only admitted locator.
+the only admitted locator and carries no production source identity.
 
 **R-HARN-REPLAY-7.18** Production capture and production-provider replay use
 one tape-exact attachment-action policy. While either operation is active, an
@@ -873,21 +874,30 @@ unhashed, or projection artifact into replay evidence.
 
 **R-HARN-REPLAY-7.21** A Render Tape identity component is the sole authority
 for mapping the canonical event journal to production scheduling and
-FrameGraph identity. The component uses the versioned, pointer-free
-`dxmt9.render_tape.identity.v1` schema at the canonical `identity.bin` path and
-is declared by `components.identity` with its schema, byte count, and lowercase
-SHA-256. Its header binds the exact `events.bin` byte count and digest, frame
-ID, Present ordinal, and one non-zero bounded capture token. Each canonical
-`CommandChunk` event has exactly one source entry naming the event ordinal,
-production `sourceOrdinal`, production `seqId`, record count, and an exact
-range of pass-membership entries. Those entries cover every record exactly
-once in record order and name the frozen pre-reorder `logicalPassId`, DAG pass
-index, and pass kind. Source ordinals and sequence IDs must be strictly
-monotone, source/pass ranges must be canonical and in bounds, event and record
-coverage must be exact, and repeated pass identity must be self-consistent.
-Any missing, altered, stale-token, non-monotone, partial, overlapping, inferred,
-or process-local identity rejects the bundle before projection or provider
-effects.
+FrameGraph identity. Version 1 is the retired one-source-per-event grammar and
+must be rejected rather than reinterpreted by the current reader. The current
+segmented grammar uses the versioned,
+pointer-free `dxmt9.render_tape.identity.v2` schema at the canonical
+`identity.bin` path and is declared by `components.identity` with its schema,
+byte count, and lowercase SHA-256. Its header binds the exact `events.bin`
+byte count and digest, frame ID, Present ordinal, and one non-zero bounded
+capture token. Each canonical `CommandChunk` event has one or more ordered
+identity-segment entries naming the event ordinal, production `sourceOrdinal`,
+production `seqId`, and an event-local non-empty record range. A segment's
+zero-based index and group count are derived canonically from its position in
+the contiguous same-event row group; they are not duplicated wire fields.
+Flattened source ordinals and sequence IDs are strictly monotone, while
+repeated event ordinals are permitted only for adjacent segments in one
+complete group.
+
+The segment ranges must partition every event's records exactly once in record
+order. Each segment carries an exact range of pass-membership pieces naming the
+frozen pre-reorder `logicalPassId`, DAG pass index, and pass kind. A logical
+pass may cross a segment edge only through contiguous adjacent pieces with
+identical pass identity; the edge itself is not a pass boundary. Missing,
+altered, stale-token, non-monotone, partial, overlapping, inferred,
+process-local, or cross-edge-inconsistent identity rejects the bundle before
+projection or provider effects.
 
 The capture join must copy value identity from the actual
 `ResolvedPublishedSource` and `CpuReadySourceMetadata` plus the FrameGraph that
@@ -908,7 +918,11 @@ requirement.
 **R-HARN-REPLAY-7.22** Executable projection consumes a structurally valid
 `dxmt9.render_tape.bundle.v2` bundle and an authenticated R-HARN-REPLAY-7.21
 identity component before effects. It selects one non-empty contiguous Draw
-range wholly contained in one sidecar-proven pass. The materializer emits
+range wholly contained in one sidecar-proven pass. The range may cross
+identity-segment edges only when every covered pass piece is contiguous and has
+the same authenticated logical-pass identity; output retains each covered
+segment's source identity and never infers one merged source. The materializer
+emits
 another atomic `dxmt9.render_tape.bundle.v2`, never a legacy mini-replay
 manifest: it derives a complete bootstrap overlay by folding the canonical
 `BootstrapState` and every ordered sparse state/constant write through the
@@ -1005,3 +1019,14 @@ closes the bounded implementation join; it does not claim a GT2 capture,
 performance result, default promotion, or wild correctness evidence. A
 non-vacuous GT2 capture/ExplicitParallel replay remains a separate evidence
 gate.
+
+**R-HARN-REPLAY-7.25** A v2 identity event-group join is atomic. Before any
+projection, provider, or artifact effect, validation must authenticate every
+segment identity, exact event-local record partition, and pass-piece
+continuation. A missing segment, stale generation, range gap/overlap,
+unsupported control, or resource-identity failure rejects the whole event
+group; it must not publish a partial source list or infer a compatibility
+identity. Capture and provider replay must report segment count, flattened
+record coverage, per-segment completion, and final event settlement separately.
+The existing v1 one-source-per-event and EventSerial compatibility lanes remain
+valid and reachable.

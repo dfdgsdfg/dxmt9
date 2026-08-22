@@ -45,8 +45,10 @@ struct SchedulingProgressTestAccess {
   }
 
   static void enqueueInitializerPending(resources::Initializer& initializer) {
-    std::lock_guard lock(initializer.queue_->mutex_);
-    initializer.enqueuePendingUploadUnlocked({});
+    // This fixture exercises only the pending-upload wake edge. A default
+    // StagingCopy is not a valid initializer resource and is now correctly
+    // rejected by the lifetime contract before it can enter the queue.
+    initializer.queue_->noteInitializerPendingUploads();
   }
 
   static void requestTerminal(CommandQueue& queue) {

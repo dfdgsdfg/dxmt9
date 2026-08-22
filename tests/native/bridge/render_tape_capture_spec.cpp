@@ -3734,6 +3734,82 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   check(ledger.append(8u, 12u, 22u, 32u, 5u, ranges) &&
             ledger.copy(8u, query, {}),
         "a newer capture token resets stale failed state deterministically");
+
+  RenderTapeProductionIdentityLedger splitLedger;
+  const RenderTapeProductionPassRange firstFragment{
+      .firstRecord = 0u,
+      .recordCount = 2u,
+      .dagPassIndex = 3u,
+      .passKind = 1u,
+      .logicalPassId = 7001u,
+  };
+  const RenderTapeProductionPassRange secondFragment{
+      .firstRecord = 2u,
+      .recordCount = 3u,
+      .dagPassIndex = 3u,
+      .passKind = 1u,
+      .logicalPassId = 7001u,
+  };
+  check(splitLedger.append(9u, 41u, 51u, 61u, 0u, 2u,
+                           std::span(&firstFragment, 1u)) &&
+            splitLedger.append(9u, 41u, 52u, 62u, 2u, 3u,
+                               std::span(&secondFragment, 1u)),
+        "v2 ledger accepts contiguous same-event source fragments");
+  check(splitLedger.copy(9u, query, {}) && query.sourceCount == 2u &&
+            query.rangeCount == 2u,
+        "split ledger exposes both authoritative source rows");
+  std::vector<std::byte> splitBytes(query.byteCount);
+  check(splitLedger.copy(9u, copied, splitBytes),
+        "split ledger copies its exact versioned sidecar extent");
+  std::array<D9CRenderTapeIdentitySourceEntry, 2> splitSources{};
+  std::array<D9CRenderTapeIdentityRangeEntry, 2> splitRanges{};
+  std::memcpy(splitSources.data(), splitBytes.data(), sizeof(splitSources));
+  std::memcpy(splitRanges.data(), splitBytes.data() + sizeof(splitSources),
+              sizeof(splitRanges));
+  check(splitSources[0].eventOrdinal == 41u &&
+            splitSources[1].eventOrdinal == 41u &&
+            splitSources[0].firstRecord == 0u &&
+            splitSources[1].firstRecord == 2u &&
+            splitRanges[0].firstRecord == 0u &&
+            splitRanges[1].firstRecord == 2u &&
+            splitRanges[0].logicalPassId == 7001u &&
+            splitRanges[1].logicalPassId == 7001u,
+        "split sidecar preserves event-local coverage and pass continuity");
+  const RenderTapeProductionPassRange wrongPassMetadata{
+      .firstRecord = 5u,
+      .recordCount = 1u,
+      .dagPassIndex = 9u,
+      .passKind = 1u,
+      .logicalPassId = 7001u,
+  };
+  check(!splitLedger.append(9u, 41u, 53u, 63u, 5u, 1u,
+                            std::span(&wrongPassMetadata, 1u)),
+        "same logical pass with changed metadata fails closed");
+
+  RenderTapeProductionIdentityLedger unauthenticatedSplit;
+  const RenderTapeProductionPassRange inferredFirst{
+      .firstRecord = 0u, .recordCount = 2u, .dagPassIndex = 3u, .passKind = 1u};
+  const RenderTapeProductionPassRange inferredSecond{
+      .firstRecord = 2u, .recordCount = 3u, .dagPassIndex = 3u, .passKind = 1u};
+  check(unauthenticatedSplit.append(
+                10u, 42u, 61u, 71u, 0u, 2u,
+                std::span(&inferredFirst, 1u)) &&
+            unauthenticatedSplit.append(
+                10u, 42u, 62u, 72u, 2u, 3u,
+                std::span(&inferredSecond, 1u)),
+        "split ledger accepts fragments without an asserted pass join");
+  check(unauthenticatedSplit.copy(10u, query, {}),
+        "unauthenticated split remains queryable");
+  std::vector<std::byte> unauthenticatedBytes(query.byteCount);
+  check(unauthenticatedSplit.copy(10u, copied, unauthenticatedBytes),
+        "unauthenticated split copies its sidecar");
+  std::array<D9CRenderTapeIdentityRangeEntry, 2> inferredRanges{};
+  std::memcpy(inferredRanges.data(),
+              unauthenticatedBytes.data() +
+                  2u * sizeof(D9CRenderTapeIdentitySourceEntry),
+              sizeof(inferredRanges));
+  check(inferredRanges[0].logicalPassId != inferredRanges[1].logicalPassId,
+        "zero logical pass IDs never infer continuity across source boundaries");
 }
 
 void testBlockCompressedLockCaptureLayouts() {

@@ -12,9 +12,9 @@ namespace dxmt9::d3d9 {
 
 inline constexpr std::uint64_t kRenderTapeIdentityMagic =
     0x31444954544d5844ull;
-inline constexpr std::uint32_t kRenderTapeIdentityVersion = 1u;
+inline constexpr std::uint32_t kRenderTapeIdentityVersion = 2u;
 inline constexpr char kRenderTapeIdentitySchema[] =
-    "dxmt9.render_tape.identity.v1";
+    "dxmt9.render_tape.identity.v2";
 
 enum class RenderTapeIdentityAuthority : std::uint32_t {
   Capture = 1u,
@@ -45,10 +45,11 @@ struct RenderTapeIdentitySource {
   std::uint64_t sourceOrdinal = 0u;
   std::uint64_t seqId = 0u;
   std::uint64_t captureToken = 0u;
+  // Event-local record interval owned by this authoritative source.
+  std::uint32_t firstRecord = 0u;
   std::uint32_t recordCount = 0u;
   std::uint32_t firstRange = 0u;
   std::uint32_t rangeCount = 0u;
-  std::uint32_t reserved0 = 0u;
 };
 
 struct RenderTapeIdentityRange {
@@ -56,6 +57,8 @@ struct RenderTapeIdentityRange {
   std::uint64_t sourceOrdinal = 0u;
   std::uint64_t seqId = 0u;
   std::uint64_t logicalPassId = 0u;
+  // Ranges use the parent command event's coordinate space, not a
+  // source-local rebasing. This authenticates coverage across fragments.
   std::uint32_t firstRecord = 0u;
   std::uint32_t recordCount = 0u;
   std::uint32_t dagPassIndex = 0u;
@@ -104,6 +107,10 @@ struct RenderTapeProductionPassRange {
   std::uint32_t recordCount = 0u;
   std::uint32_t dagPassIndex = 0u;
   std::uint32_t passKind = 0u;
+  // Zero allocates a fresh pass ID. Non-zero is an authenticated pass ID
+  // supplied by a trusted producer when a pass continues across source
+  // boundaries.
+  std::uint64_t logicalPassId = 0u;
 };
 
 // Unix-provider capture ledger. The offload worker is the sole appender and
@@ -116,12 +123,22 @@ public:
               std::uint64_t sourceOrdinal, std::uint64_t seqId,
               std::uint32_t recordCount,
               std::span<const RenderTapeProductionPassRange> ranges) noexcept;
+  bool append(std::uint64_t captureToken, std::uint64_t eventOrdinal,
+              std::uint64_t sourceOrdinal, std::uint64_t seqId,
+              std::uint32_t firstRecord, std::uint32_t recordCount,
+              std::span<const RenderTapeProductionPassRange> ranges) noexcept;
   void fail(std::uint64_t captureToken) noexcept;
   bool copy(std::uint64_t captureToken,
             D9CRenderTapeIdentityCaptureResult& out,
             std::span<std::byte> bytes) const noexcept;
 
 private:
+  bool appendImpl(std::uint64_t captureToken, std::uint64_t eventOrdinal,
+                  std::uint64_t sourceOrdinal, std::uint64_t seqId,
+                  std::uint32_t firstRecord, std::uint32_t recordCount,
+                  std::span<const RenderTapeProductionPassRange> ranges,
+                  bool rangesAreSourceLocal) noexcept;
+
   mutable std::mutex mutex_{};
   std::uint64_t captureToken_ = 0u;
   std::uint64_t nextLogicalPassId_ = 1u;

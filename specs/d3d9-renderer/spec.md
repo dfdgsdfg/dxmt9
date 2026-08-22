@@ -609,9 +609,13 @@ with the dump off.
 The builder runs on the unix-side encode thread and operates on **one logical
 `SourcePayloadView` at a time** per `R-BACK-32.1`. The legacy adapter presents
 one `CommandChunk`; the Arena adapter presents the complete ordered payload-block
-chain of one source. Each source-ready invocation builds a fresh `FrameGraph`
-over exactly that view. Segment boundaries do not finalize the graph or create
-additional completion sources. The opt-in R-BACK-32.10 scheduler may retain one
+chain of one event. Each source-ready invocation builds a fresh `FrameGraph`
+over exactly that event view. Physical segment boundaries do not finalize the
+graph or create additional completion sources. An explicitly selected
+SegmentSerial scheduler may project the event into multiple identity-bearing
+source segments for publication and completion, but all segments resolve
+against this one event DAG and a pass may continue across an identity edge. The
+opt-in R-BACK-32.10 scheduler may retain one
 source and inspect an immutable summary for its already-ready immediate FIFO
 successor. R-BACK-32.11 permits a future bounded ready-prefix summary. Those DCE
 summary paths do not merge records, passes, or edges across logical sources.

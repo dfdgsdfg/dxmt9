@@ -716,6 +716,94 @@ void segmentedRangesCoverEveryRawRecordExactlyOnce() {
         "segment ranges form one gap-free non-overlapping raw-record partition");
 }
 
+void segmentedSourcesPreserveRawRangesAndTailOwnership() {
+  const auto exact40Rects = clearRectCountForSegmentPages(40, true);
+  const std::array records{
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      fixture.view(), 241,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 1,
+       .maxPagesPerSource = 64,
+       .maxSourcesPerChunk = 2});
+  check(plan.directArenaCandidate() && plan.sourceCount == 2 &&
+            !plan.arenaLayout.has_value() && plan.segmentCount == 2,
+        "explicit source segmentation keeps the physical blocks bounded and exposes two sources");
+  for (std::size_t i = 0; i < plan.sourceCount; ++i) {
+    const auto& source = plan.sources[i];
+    check(source.valid() && source.segmentCount == 1 &&
+              source.firstSegmentIndex == i && source.arenaLayout.pageCount <= 64,
+          "each segmented source owns one complete bounded Arena layout");
+  }
+  check(plan.sources[0].firstRecordIndex == 0u &&
+            plan.sources[0].recordCount == 2u &&
+            plan.sources[1].firstRecordIndex == 2u &&
+            plan.sources[1].recordCount == 3u &&
+            plan.sources[0].firstRecordIndex + plan.sources[0].recordCount ==
+                plan.sources[1].firstRecordIndex &&
+            plan.sources[1].firstRecordIndex + plan.sources[1].recordCount ==
+                records.size(),
+        "source ranges preserve the state prefix, interstitial state, and trailing state exactly once");
+}
+
+void segmentedPresentTailStaysInFinalSource() {
+  const auto exact64Rects = clearRectCountForSegmentPages(64, true);
+  const std::array records{
+      clearRecord(exact64Rects),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      fixture.view(), 242,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 1,
+       .maxPagesPerSource = 64,
+       .maxSourcesPerChunk = 2});
+  check(plan.directArenaCandidate() && plan.sourceCount == 2 &&
+            plan.sources[0].firstRecordIndex == 0u &&
+            plan.sources[0].recordCount == 1u &&
+            plan.sources[1].firstRecordIndex == 1u &&
+            plan.sources[1].recordCount == 1u &&
+            plan.sources[1].arenaLayout.segmentCount == 1 &&
+            plan.segments[1].capacity.presentRecords == 1u,
+        "Present remains a final one-record source after source segmentation");
+}
+
+void sourcePlansScalePastPhysicalEightBlockCompatibilityBound() {
+  const auto exact64Rects = clearRectCountForSegmentPages(64, true);
+  std::vector<RecordSpec> records;
+  records.reserve(9);
+  for (std::size_t i = 0; i < 9; ++i) {
+    records.push_back(clearRecord(exact64Rects));
+  }
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      fixture.view(), 243,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 8,
+       .maxPagesPerSource = 512,
+       .maxSourcesPerChunk = 2});
+  check(plan.directArenaCandidate() && plan.segmentCount == 9 &&
+            plan.sourceCount == 2 && !plan.arenaLayout.has_value(),
+        "nine physical segments now split into bounded sources instead of hitting the old eight-segment cap");
+  check(plan.sources[0].segmentCount == 8 &&
+            plan.sources[0].arenaLayout.pageCount <= 512 &&
+            plan.sources[1].segmentCount == 1 &&
+            plan.sources[1].firstSegmentIndex == 8u &&
+            plan.sources[1].firstRecordIndex == 8u &&
+            plan.sources[1].recordCount == 1u,
+        "the first source accepts the complete 512-page grouping and the ninth block becomes a successor source");
+}
+
 void presentTailIsAOrderedDirectSegment() {
   const auto exact64Rects = clearRectCountForSegmentPages(64, true);
   const std::array records{
@@ -832,6 +920,9 @@ int main() {
     upPayloadUsesCheckedAlignedBuilderUpperBound();
     segmentedArenaBoundariesAndHardCaps();
     segmentedRangesCoverEveryRawRecordExactlyOnce();
+    segmentedSourcesPreserveRawRangesAndTailOwnership();
+    segmentedPresentTailStaysInFinalSource();
+    sourcePlansScalePastPhysicalEightBlockCompatibilityBound();
     presentTailIsAOrderedDirectSegment();
     nonFinalOrRepeatedPresentFallsBackAsOneSource();
     oversizeAndOverflowFallbackBeforeReplay();

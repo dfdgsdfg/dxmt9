@@ -246,7 +246,7 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
   manifest << ']';
   if (!bundle.identity.empty()) {
     manifest << ",\n    \"identity\":{\"path\":\"identity.bin\","
-                "\"schema\":\"dxmt9.render_tape.identity.v1\",\"bytes\":"
+                "\"schema\":\"dxmt9.render_tape.identity.v2\",\"bytes\":"
              << bundle.identity.size() << ",\"sha256\":\""
              << identityDigest << "\"}";
   }

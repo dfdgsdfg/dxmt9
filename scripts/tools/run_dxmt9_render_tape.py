@@ -16,7 +16,7 @@ from typing import Any, Optional
 SCHEMA = "dxmt9.render_tape.bundle.v2"
 EVENTS_NAME = "events.bin"
 IDENTITY_NAME = "identity.bin"
-IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v1"
+IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v2"
 MAX_REPLAY_RUNS = 64
 PARALLEL_VERIFY_RUNS = 2
 PROVIDER_SCHEMA = "dxmt9.render_tape.provider_replay.v1"

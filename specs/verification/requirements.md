@@ -153,7 +153,12 @@ successor headroom including deterministic wrap padding, fixed session credits,
 isolated/rollback disposition, snapshot suffixes that remain `Ready`,
 pre-effect newly represented batch rollback without rewinding an older emitted
 session prefix, non-present prefix submission, shutdown and device-loss release,
-and stale-reference rejection. It must model ordered Present/Flush/direct-
+and stale-reference rejection. For the SegmentSerial lane it must additionally
+model one PE event mapping to a bounded ordered source-segment group, atomic
+group publication/abort, exact event-local record partition, per-segment
+completion, and final event settlement only after the last segment. It must
+prove that an incomplete or failed segment cannot leave an orphan Ready source
+or bypass a younger event. It must model ordered Present/Flush/direct-
 observation/producer-sequence-wait/fixed-cap/semantic release-event fences and
 prove that they do not overtake older raw or ready work. It must prove bounded
 resident sources/pages, no page reuse before ordered reclaim, no ready source
@@ -174,6 +179,12 @@ local binding generations and dirty shadows, direct-binding PSO ABI, exact
 serial draw ownership, ordered child join, parent end, and completion. Metal 4
 multi-segment completion and cross-source parallel grouping remain separate
 open refinements; this bounded model must not be cited for those claims.
+
+SegmentSerial source identity is a separate obligation: a pass-piece sequence
+may cross an identity-segment edge only when event-local record coverage is
+contiguous and pass identity is unchanged, while segment completion still
+joins in strict source order. Physical Arena blocks and Metal 4 segments must
+not be substituted for this identity proof.
 
 **R-VERIF-2.16** Parallel policy verification must separate semantic safety
 from economics. A safety certificate must refine the sealed serial stream
@@ -364,6 +375,12 @@ capture/replay model to production predicates with native tests, and must replay
 at least one complete Present interval twice with identical structural
 conservation and output hashes. Existing draw-slice mini replay remains valid
 for its declared window but does not satisfy this full-frame requirement.
+
+For `dxmt9.render_tape.identity.v2`, native evidence must additionally bind the
+production validator to exact event-to-segment record partitioning, strict
+flattened identity order, pass-piece continuity across segment edges, atomic
+whole-event failure, and per-segment completion/final event settlement. A v1
+artifact or event-order-derived mapping cannot satisfy this evidence.
 
 ---
 

@@ -519,3 +519,5 @@ increase command buffers, logical pass reopens, and tile cost. The current
 roadmap therefore treats source storage, logical-pass ownership, and Metal
 execution lanes as separate contracts and applies `R-BACK-2.50` before any
 default promotion.
+
+| Segmented event identity (`R-BACK-2.40`, `R-BACK-2.49`, `R-BACK-2.60`, `R-BACK-2.66`, `R-BACK-2.76`) | ⚠️ planner/schema identity-v2 contract implemented; production admission/publication and completion integration open / compatibility lane preserved | The normative contract now distinguishes physical Arena blocks from an opt-in SegmentSerial mapping in which one PE event owns an atomic ordered group of identity-bearing sources, with per-source completion and whole-event failure. | Implement bounded event-group publication, independent identity-segment limits, shared-resource/page watermark handling, and deterministic native/TLA evidence. Keep EventSerial compatibility fallback and the Tape gate default off until multi-segment FrameGraph/session/Presenter evidence and R-BACK-2.50 pass. |

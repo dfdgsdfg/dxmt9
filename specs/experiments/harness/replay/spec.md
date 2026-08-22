@@ -1006,23 +1006,35 @@ capturing process.
 
 #### Authoritative identity component
 
-`identity.bin` is a cold, fixed-layout, little-endian sidecar with schema
-`dxmt9.render_tape.identity.v1`. The manifest authenticates it independently
-under `components.identity`; the sidecar header in turn authenticates the
-exact `events.bin` digest and byte count. The header also owns the non-zero
-frame ID, Present ordinal, and bounded capture token used for the only legal
-PE-to-provider join. A source table has one entry per canonical
-`CommandChunk` event and records its event ordinal, production
-`sourceOrdinal`, production `seqId`, record count, and contiguous membership
-range. The membership table partitions each source's record indices and pins
-the frozen pre-reorder logical pass ID, DAG pass index, and pass kind.
+`identity.bin` is a cold, fixed-layout, little-endian sidecar. Version 1 used
+schema `dxmt9.render_tape.identity.v1` and one source entry per canonical
+`CommandChunk` event; it is Retired, and the current reader rejects rather than
+reinterprets those bytes. The current segmented grammar is schema
+`dxmt9.render_tape.identity.v2`. The manifest authenticates that schema under
+`components.identity`; the sidecar header in turn authenticates the exact
+`events.bin` digest and byte count. The header also owns the non-zero frame ID,
+Present ordinal, and bounded capture token used for the only legal PE-to-
+provider join.
+
+In v2, the source table is an ordered identity-segment table. One event owns
+one or more entries, each naming its event ordinal, production
+`sourceOrdinal`, production `seqId`, and non-empty event-local record range.
+Segment index/count are canonical derived values from position in the
+contiguous same-event group, not redundant wire fields. The entries for one
+event must partition the event's records exactly once; the flattened identity
+order is strict by event then segment.
+The membership table partitions each segment's records and pins the frozen
+pre-reorder logical pass ID, DAG pass index, and pass kind. A pass may cross a
+segment edge only through adjacent contiguous membership pieces with the same
+pass identity. Segment edges are not DAG or logical-pass boundaries.
 
 Validation first authenticates both components, then checks exact command-event
 and record coverage, canonical table/range layout, strict source/sequence
-monotonicity, pass self-consistency, and agreement with the tape's Present
-ordinal. No slot index, pointer, borrowed payload span, or registry address is
-serialized. Projection treats the sidecar as a capability: absence or mismatch
-fails before it creates a staging directory or invokes a provider.
+monotonicity, pass self-consistency including cross-segment pieces, and
+agreement with the tape's Present ordinal. No slot index, pointer, borrowed
+payload span, or registry address is serialized. Projection treats the sidecar
+as a capability: absence or mismatch fails before it creates a staging
+directory or invokes a provider.
 
 The production capture-side identity join is implemented and remains bounded.
 The schema and validator accept provider-emitted identity only when it is
@@ -1390,9 +1402,10 @@ The command writes no JSON on rejection. The artifact is not a rewritten v2
 tape and is not `dxmt9.3dmark05.mini_replay_manifest.v1`. `events.bin` alone
 has canonical event ordinals but no authoritative production
 source/sequence or logical-pass/DAG identity. The separately authenticated
-`identity.bin` now supplies those values from the original capture; the
-selector continues to use event ordinal plus record index and never infers a
-mapping when the sidecar is absent.
+`identity.bin` now supplies those values from the original capture; v2
+selection retains event ordinal, segment index, and record index and never
+infers a mapping when the sidecar is absent. A selected range may cross a
+segment edge only after the validator proves contiguous equal pass identity.
 
 This pure selector/conservation transform neither changes replay order nor
 executes stateful rendering, so the formal scheduling layer from

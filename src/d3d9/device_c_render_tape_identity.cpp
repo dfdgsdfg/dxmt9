@@ -123,57 +123,75 @@ RenderTapeIdentityValidationResult validateRenderTapeIdentity(
         RenderTapeEventType::CommandChunk) {
       continue;
     }
-    if (sourceIndex >= sources.size()) {
-      return failure(RenderTapeIdentityStatus::SourceCoverageMismatch, sourceIndex);
-    }
     RenderTapeCommandChunkHeader fixed{};
     if (!load(event.payload, 0u, fixed)) {
       return failure(RenderTapeIdentityStatus::InvalidTape, sourceIndex);
     }
-    const auto& source = sources[sourceIndex];
-    if (source.eventOrdinal != event.header.ordinal ||
-        source.recordCount != fixed.recordCount ||
-        source.captureToken != header.captureToken ||
-        source.reserved0 != 0u ||
-        source.firstRange != expectedFirstRange || source.rangeCount == 0u ||
-        source.firstRange > ranges.size() ||
-        source.rangeCount > ranges.size() - source.firstRange) {
-      return failure(RenderTapeIdentityStatus::SourceCoverageMismatch, sourceIndex);
-    }
-    if (source.sourceOrdinal <= priorSourceOrdinal || source.seqId <= priorSeqId) {
-      return failure(RenderTapeIdentityStatus::NonMonotoneSource, sourceIndex);
-    }
-    priorSourceOrdinal = source.sourceOrdinal;
-    priorSeqId = source.seqId;
-    std::uint32_t expectedRecord = 0u;
-    for (std::uint32_t local = 0u; local < source.rangeCount; ++local) {
-      const auto rangeIndex = source.firstRange + local;
-      const auto& range = ranges[rangeIndex];
-      if (range.eventOrdinal != source.eventOrdinal ||
-          range.sourceOrdinal != source.sourceOrdinal ||
-          range.seqId != source.seqId || range.logicalPassId == 0u ||
-          range.recordCount == 0u || range.firstRecord != expectedRecord ||
-          range.passKind == 0u ||
-          range.recordCount > source.recordCount - expectedRecord) {
-        return failure(RenderTapeIdentityStatus::InvalidRange, sourceIndex,
-                       rangeIndex);
+    std::uint32_t expectedEventRecord = 0u;
+    bool foundEventSource = false;
+    while (sourceIndex < sources.size() &&
+           sources[sourceIndex].eventOrdinal == event.header.ordinal) {
+      foundEventSource = true;
+      const auto& source = sources[sourceIndex];
+      if (source.recordCount == 0u ||
+          source.recordCount > std::numeric_limits<std::uint32_t>::max() -
+                                   source.firstRecord ||
+          expectedEventRecord > fixed.recordCount ||
+          source.recordCount > fixed.recordCount - expectedEventRecord ||
+          source.firstRecord != expectedEventRecord ||
+          source.captureToken != header.captureToken || source.rangeCount == 0u ||
+          source.firstRange != expectedFirstRange ||
+          source.firstRange > ranges.size() ||
+          source.rangeCount > ranges.size() - source.firstRange) {
+        return failure(RenderTapeIdentityStatus::SourceCoverageMismatch,
+                       sourceIndex);
       }
-      expectedRecord += range.recordCount;
-      const auto found = std::find_if(passes.begin(), passes.end(),
-          [&](const auto& pass) { return pass.first == range.logicalPassId; });
-      const auto membership = std::pair(range.dagPassIndex, range.passKind);
-      if (found == passes.end()) {
-        passes.push_back({range.logicalPassId, membership});
-      } else if (found->second != membership) {
-        return failure(RenderTapeIdentityStatus::PassIdentityMismatch,
-                       sourceIndex, rangeIndex);
+      if (source.sourceOrdinal <= priorSourceOrdinal ||
+          source.seqId <= priorSeqId) {
+        return failure(RenderTapeIdentityStatus::NonMonotoneSource,
+                       sourceIndex);
       }
+      priorSourceOrdinal = source.sourceOrdinal;
+      priorSeqId = source.seqId;
+      const auto sourceEnd = source.firstRecord + source.recordCount;
+      std::uint32_t expectedRecord = source.firstRecord;
+      for (std::uint32_t local = 0u; local < source.rangeCount; ++local) {
+        const auto rangeIndex = source.firstRange + local;
+        const auto& range = ranges[rangeIndex];
+        if (range.eventOrdinal != source.eventOrdinal ||
+            range.sourceOrdinal != source.sourceOrdinal ||
+            range.seqId != source.seqId || range.logicalPassId == 0u ||
+            range.recordCount == 0u || range.firstRecord != expectedRecord ||
+            range.passKind == 0u || range.firstRecord < source.firstRecord ||
+            range.firstRecord > sourceEnd ||
+            range.recordCount > sourceEnd - range.firstRecord) {
+          return failure(RenderTapeIdentityStatus::InvalidRange, sourceIndex,
+                         rangeIndex);
+        }
+        expectedRecord += range.recordCount;
+        const auto found = std::find_if(passes.begin(), passes.end(),
+            [&](const auto& pass) { return pass.first == range.logicalPassId; });
+        const auto membership = std::pair(range.dagPassIndex, range.passKind);
+        if (found == passes.end()) {
+          passes.push_back({range.logicalPassId, membership});
+        } else if (found->second != membership) {
+          return failure(RenderTapeIdentityStatus::PassIdentityMismatch,
+                         sourceIndex, rangeIndex);
+        }
+      }
+      if (expectedRecord != sourceEnd) {
+        return failure(RenderTapeIdentityStatus::RecordCoverageMismatch,
+                       sourceIndex);
+      }
+      expectedEventRecord += source.recordCount;
+      expectedFirstRange += source.rangeCount;
+      ++sourceIndex;
+      if (expectedEventRecord == fixed.recordCount) break;
     }
-    if (expectedRecord != source.recordCount) {
-      return failure(RenderTapeIdentityStatus::RecordCoverageMismatch, sourceIndex);
+    if (!foundEventSource || expectedEventRecord != fixed.recordCount) {
+      return failure(RenderTapeIdentityStatus::SourceCoverageMismatch,
+                     sourceIndex);
     }
-    expectedFirstRange += source.rangeCount;
-    ++sourceIndex;
   }
   if (sourceIndex != sources.size() || expectedFirstRange != ranges.size()) {
     return failure(RenderTapeIdentityStatus::SourceCoverageMismatch, sourceIndex);
@@ -250,7 +268,12 @@ bool renderTapeIdentityOwnsSelection(
   if (recordCount == 0u) return false;
   const auto end = static_cast<std::uint64_t>(firstRecord) + recordCount;
   for (const auto& source : identity.sources) {
-    if (source.eventOrdinal != eventOrdinal || end > source.recordCount) continue;
+    const auto sourceEnd = static_cast<std::uint64_t>(source.firstRecord) +
+                           source.recordCount;
+    if (source.eventOrdinal != eventOrdinal ||
+        firstRecord < source.firstRecord || end > sourceEnd) {
+      continue;
+    }
     for (std::uint32_t local = 0u; local < source.rangeCount; ++local) {
       const auto& range = identity.ranges[source.firstRange + local];
       const auto rangeEnd = static_cast<std::uint64_t>(range.firstRecord) +
@@ -295,6 +318,25 @@ bool RenderTapeProductionIdentityLedger::append(
     std::uint64_t sourceOrdinal, std::uint64_t seqId,
     std::uint32_t recordCount,
     std::span<const RenderTapeProductionPassRange> ranges) noexcept {
+  return appendImpl(captureToken, eventOrdinal, sourceOrdinal, seqId,
+                    0u, recordCount, ranges, true);
+}
+
+bool RenderTapeProductionIdentityLedger::append(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal,
+    std::uint64_t sourceOrdinal, std::uint64_t seqId,
+    std::uint32_t firstRecord, std::uint32_t recordCount,
+    std::span<const RenderTapeProductionPassRange> ranges) noexcept {
+  return appendImpl(captureToken, eventOrdinal, sourceOrdinal, seqId,
+                    firstRecord, recordCount, ranges, false);
+}
+
+bool RenderTapeProductionIdentityLedger::appendImpl(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal,
+    std::uint64_t sourceOrdinal, std::uint64_t seqId,
+    std::uint32_t firstRecord, std::uint32_t recordCount,
+    std::span<const RenderTapeProductionPassRange> ranges,
+    bool rangesAreSourceLocal) noexcept {
   if (captureToken == 0u || eventOrdinal == 0u || sourceOrdinal == 0u ||
       seqId == 0u || recordCount == 0u || ranges.empty()) {
     fail(captureToken);
@@ -309,7 +351,7 @@ bool RenderTapeProductionIdentityLedger::append(
     ranges_.clear();
   }
   if (failed_ || (!sources_.empty() &&
-      (eventOrdinal <= sources_.back().eventOrdinal ||
+      (eventOrdinal < sources_.back().eventOrdinal ||
        sourceOrdinal <= sources_.back().sourceOrdinal ||
        seqId <= sources_.back().seqId)) ||
       ranges_.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -318,17 +360,51 @@ bool RenderTapeProductionIdentityLedger::append(
     failed_ = true;
     return false;
   }
-  std::uint32_t nextRecord = 0u;
+  if (!sources_.empty() && eventOrdinal == sources_.back().eventOrdinal) {
+    const auto& prior = sources_.back();
+    if (prior.firstRecord > std::numeric_limits<std::uint32_t>::max() -
+                                prior.recordCount) {
+      failed_ = true;
+      return false;
+    }
+    const auto expected = prior.firstRecord + prior.recordCount;
+    if (rangesAreSourceLocal) firstRecord = expected;
+    if (firstRecord != expected) {
+      failed_ = true;
+      return false;
+    }
+  } else if (!sources_.empty() && eventOrdinal <= sources_.back().eventOrdinal) {
+    failed_ = true;
+    return false;
+  } else if (rangesAreSourceLocal) {
+    firstRecord = 0u;
+  } else if (firstRecord != 0u) {
+    failed_ = true;
+    return false;
+  }
+  if (recordCount > std::numeric_limits<std::uint32_t>::max() - firstRecord) {
+    failed_ = true;
+    return false;
+  }
+  const auto sourceEnd = firstRecord + recordCount;
+  std::uint32_t nextRecord = firstRecord;
   for (const auto& range : ranges) {
-    if (range.firstRecord != nextRecord || range.recordCount == 0u ||
-        range.passKind == 0u ||
-        range.recordCount > recordCount - nextRecord) {
+    if (range.recordCount == 0u || range.passKind == 0u ||
+        range.firstRecord > std::numeric_limits<std::uint32_t>::max() -
+                                 (rangesAreSourceLocal ? firstRecord : 0u)) {
+      failed_ = true;
+      return false;
+    }
+    const auto eventFirstRecord = range.firstRecord +
+        (rangesAreSourceLocal ? firstRecord : 0u);
+    if (eventFirstRecord != nextRecord || eventFirstRecord > sourceEnd ||
+        range.recordCount > sourceEnd - eventFirstRecord) {
       failed_ = true;
       return false;
     }
     nextRecord += range.recordCount;
   }
-  if (nextRecord != recordCount ||
+  if (nextRecord != sourceEnd ||
       nextLogicalPassId_ >
           std::numeric_limits<std::uint64_t>::max() - ranges.size()) {
     failed_ = true;
@@ -339,12 +415,33 @@ bool RenderTapeProductionIdentityLedger::append(
     ranges_.reserve(ranges_.size() + ranges.size());
     const auto firstRange = static_cast<std::uint32_t>(ranges_.size());
     for (const auto& range : ranges) {
+      const auto eventFirstRecord = range.firstRecord +
+          (rangesAreSourceLocal ? firstRecord : 0u);
+      std::uint64_t logicalPassId = range.logicalPassId;
+      if (logicalPassId == 0u) logicalPassId = nextLogicalPassId_++;
+      const auto found = std::find_if(
+          ranges_.begin(), ranges_.end(), [&](const auto& prior) {
+            return prior.logicalPassId == logicalPassId;
+          });
+      if (found != ranges_.end() &&
+          (found->dagPassIndex != range.dagPassIndex ||
+           found->passKind != range.passKind)) {
+        failed_ = true;
+        return false;
+      }
+      if (logicalPassId >= nextLogicalPassId_) {
+        if (logicalPassId == std::numeric_limits<std::uint64_t>::max()) {
+          failed_ = true;
+          return false;
+        }
+        nextLogicalPassId_ = logicalPassId + 1u;
+      }
       ranges_.push_back(D9CRenderTapeIdentityRangeEntry{
           .eventOrdinal = eventOrdinal,
           .sourceOrdinal = sourceOrdinal,
           .seqId = seqId,
-          .logicalPassId = nextLogicalPassId_++,
-          .firstRecord = range.firstRecord,
+          .logicalPassId = logicalPassId,
+          .firstRecord = eventFirstRecord,
           .recordCount = range.recordCount,
           .dagPassIndex = range.dagPassIndex,
           .passKind = range.passKind,
@@ -355,10 +452,10 @@ bool RenderTapeProductionIdentityLedger::append(
         .sourceOrdinal = sourceOrdinal,
         .seqId = seqId,
         .captureToken = captureToken,
+        .firstRecord = firstRecord,
         .recordCount = recordCount,
         .firstRange = firstRange,
         .rangeCount = static_cast<std::uint32_t>(ranges.size()),
-        .reserved0 = 0u,
     });
   } catch (...) {
     failed_ = true;

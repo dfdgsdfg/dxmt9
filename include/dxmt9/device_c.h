@@ -860,10 +860,10 @@ typedef struct D9CRenderTapeIdentitySourceEntry {
     uint64_t sourceOrdinal;
     uint64_t seqId;
     uint64_t captureToken;
+    uint32_t firstRecord;
     uint32_t recordCount;
     uint32_t firstRange;
     uint32_t rangeCount;
-    uint32_t reserved0;
 } D9CRenderTapeIdentitySourceEntry;
 
 typedef struct D9CRenderTapeIdentityRangeEntry {

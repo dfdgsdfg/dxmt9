@@ -30,3 +30,5 @@ The production command-tape lane is intentionally narrower than the staged
 capture, presenter, or completion behavior, and it falls back to source order
 when a session, injected command buffer, Clear/helper merge boundary, or replay
 permutation cannot be proven safe.
+
+| SegmentSerial event identity (`R-BACK-32.1`, `R-BACK-32.8`, `R-BACK-2.76`) | ⚠️ planner/schema contract implemented; production admission/publication and completion/reclaim open | The event-level FrameGraph contract now permits one PE event to carry multiple authenticated source identities while preserving one event DAG and pass continuity across segment edges. | Add production multi-segment identity through FrameGraph, EncodeSession, Presenter, and completion/reclaim; prove segment edges do not create DAG/pass boundaries and retain EventSerial compatibility fallback. |

@@ -129,7 +129,7 @@ def main() -> int:
             tool, "identity", tape, identity, *common,
         ).stdout)
         assert identity_result == {
-            "schema": "dxmt9.render_tape.identity.v1",
+            "schema": "dxmt9.render_tape.identity.v2",
             "valid": True,
             "authority": 1,
             "frame_id": 42,
