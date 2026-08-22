@@ -5,6 +5,16 @@
 #include "d3d9_pe_device_impl.hpp"
 
 /* =========================================================================
+ * Key function -- see the declaration comment in d3d9_pe_device_impl.hpp.
+ * Its only job here is to be the first non-pure, non-inline virtual in
+ * declaration order, which anchors the vtable in this translation unit.
+ * ========================================================================= */
+
+HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept {
+    return flushPeRecorder(PeRecorderFlushReason::Child);
+}
+
+/* =========================================================================
  * Factory function (called from factory.cpp)
  * ========================================================================= */
 

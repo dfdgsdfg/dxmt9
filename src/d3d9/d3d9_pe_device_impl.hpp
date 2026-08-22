@@ -6507,9 +6507,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
 public:
-    HRESULT FlushPeRecorderForChild() noexcept override {
-        return flushPeRecorder(PeRecorderFlushReason::Child);
-    }
+    // KEY FUNCTION. Deliberately the one virtual whose body is NOT in this
+    // header, and deliberately the FIRST virtual in declaration order, so the
+    // Itanium ABI's "first non-pure, non-inline virtual" rule resolves to it.
+    // That pins the vtable -- and with it the out-of-line copies of every
+    // inline virtual, i.e. the whole IDirect3DDevice9Ex COM surface Wine calls
+    // through -- into d3d9_pe_device.cpp, the hot TU, where it belongs.
+    // Without this the class has NO key function, the vtable is comdat in
+    // every TU, and the first cold TU to out-line any virtual silently claims
+    // it: step 8 did exactly that by accident and moved DrawPrimitive into the
+    // diagnostics object (744 KB there, 146 KB left in the hot TU).
+    // Defined in d3d9_pe_device.cpp. Do not give it an in-class body.
+    HRESULT FlushPeRecorderForChild() noexcept override;
     HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept override {
         if (!buffer) {
             return S_OK;
