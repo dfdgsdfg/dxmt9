@@ -54,7 +54,7 @@ void D3D9DeviceImpl::CaptureStateBlockShadowForChild(D3D9StateBlockShadow& out) 
         FixedTransformTable refreshed{};
         out.transforms.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
             D9CMatrix latest{};
-            if (peState_.transformShadow.get(state, latest)) {
+            if (peState_.transformShadowTyped().get(transformStateKey(state), latest)) {
                 refreshed.set(state, latest);
             } else {
                 // Server lost the binding (e.g. Reset); keep the
@@ -350,18 +350,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     if (defaultPoolResourceRefs_ != 0) {
         clearPeStateTracking();
         stateBlockRecording_ = false;
-        peState_.stateBlockRenderStateRestore.clear();
-        peState_.stateBlockTransformRestore.clear();
-        peState_.stateBlockTransformRecorded.clear();
+        peState_.stateBlockRenderStateRestoreTyped().clear();
+        peState_.stateBlockTransformRestoreTyped().clear();
+        peState_.stateBlockTransformRecordedTyped().clear();
         peState_.stateBlockVdeclRecorded = false;
         deviceNotReset_ = true;
         return D3DERR_INVALIDCALL;
     }
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    peState_.stateBlockRenderStateRestore.clear();
-    peState_.stateBlockTransformRestore.clear();
-    peState_.stateBlockTransformRecorded.clear();
+    peState_.stateBlockRenderStateRestoreTyped().clear();
+    peState_.stateBlockTransformRestoreTyped().clear();
+    peState_.stateBlockTransformRecordedTyped().clear();
     peState_.stateBlockVdeclRecorded = false;
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
@@ -1321,7 +1321,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetTransform(D3DTRANSFORMSTATETYPE sta
     dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
     const uint32_t stateKey = static_cast<uint32_t>(state);
     D9CMatrix wireM{};
-    if (peState_.transformShadow.get(stateKey, wireM)) {
+    if (peState_.transformShadowTyped().get(transformStateKey(stateKey), wireM)) {
         std::memcpy(pM, &wireM, sizeof(wireM));
         return S_OK;
     }
@@ -1462,7 +1462,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderState(D3DRENDERSTATETYPE stat
     notePeDeviceCallAfterPresent("GetRenderState");
     if (!pValue) return D3DERR_INVALIDCALL;
     uint32_t shadowValue = 0;
-    if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
+    if (peState_.renderStateShadowTyped().get(
+            renderStateSlotKey(static_cast<DWORD>(state)), shadowValue)) {
         *pValue = shadowValue;
         return S_OK;
     }
@@ -1502,9 +1503,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
     if (SUCCEEDED(hr)) {
         stateBlockRecording_ = true;
-        peState_.stateBlockRenderStateRestore.clear();
-        peState_.stateBlockTransformRestore.clear();
-        peState_.stateBlockTransformRecorded.clear();
+        peState_.stateBlockRenderStateRestoreTyped().clear();
+        peState_.stateBlockTransformRestoreTyped().clear();
+        peState_.stateBlockTransformRecordedTyped().clear();
         peState_.stateBlockVdeclRecorded = false;
     }
     dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
@@ -1532,10 +1533,11 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
         stateBlockRecording_ = false;
         peState_.stateBlockRenderStateRestore.forEach([&](uint32_t state, uint32_t value) {
             (void)dxmt9c_device_set_render_state(dev_, state, value);
-            peState_.renderStateShadow.set(state, value);
-            peState_.pendingRenderStates.erase(state);
+            const RenderStateSlot renderKey = renderStateSlotKey(state);
+            peState_.renderStateShadowTyped().set(renderKey, value);
+            peState_.pendingRenderStatesTyped().erase(renderKey);
         });
-        peState_.stateBlockRenderStateRestore.clear();
+        peState_.stateBlockRenderStateRestoreTyped().clear();
         // wined3d semantics: state set / multiplied inside Begin/End
         // remains on the device after End. The PE shadow was updated
         // along with the server during the recording branch of
@@ -1544,9 +1546,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
         peState_.stateBlockTransformRestore.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
             // Drain any pending Sets that were re-routed during recording
             // — they have already been forwarded to the server.
-            peState_.pendingTransforms.erase(state);
+            peState_.pendingTransformsTyped().erase(transformStateKey(state));
         });
-        peState_.stateBlockTransformRestore.clear();
+        peState_.stateBlockTransformRestoreTyped().clear();
         if (sb) {
             // Mark Begin/End context so the new stateblock's ctor
             // takes its tracked-keys set from
@@ -1560,7 +1562,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
         // Clear AFTER CreatePeStateBlock so the new stateblock's ctor
         // can read stateBlockTransformRecorded via
         // CaptureStateBlockShadowForChild.
-        peState_.stateBlockTransformRecorded.clear();
+        peState_.stateBlockTransformRecordedTyped().clear();
         peState_.stateBlockVdeclRecorded = false;
     }
     dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
@@ -1575,14 +1577,16 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetTextureStageState(DWORD stage,
     if (!pValue) return D3DERR_INVALIDCALL;
     if (stage >= kFragmentBlendStageCount) return D3DERR_INVALIDCALL;
     if (!isValidTextureStageStateType(type)) return D3DERR_INVALIDCALL;
-    const uint32_t stageSlot = textureStageSlot(stage);
-    const uint32_t stateSlot = textureStageStateSlot(type);
+    const TextureStageIndex stageKey = textureStageIndexKey(stage);
+    const TextureStageStateType typeKey =
+        textureStageStateTypeKey(static_cast<uint32_t>(type));
     uint32_t shadowValue = 0;
-    if (peState_.tssShadow.get(stageSlot, stateSlot, shadowValue)) {
+    if (peState_.tssShadowTyped().get(stageKey, typeKey, shadowValue)) {
         *pValue = shadowValue;
         return S_OK;
     }
-    *pValue = dxmt9c_device_get_texture_stage_state(dev_, stageSlot, stateSlot);
+    *pValue = dxmt9c_device_get_texture_stage_state(
+        dev_, rawSlot(stageKey), rawSlot(typeKey));
     return S_OK;
 }
 
@@ -1591,8 +1595,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetSamplerState(DWORD sampler,
                                                        DWORD* pValue) noexcept {
     notePeDeviceCallAfterPresent("GetSamplerState");
     if (!pValue) return D3DERR_INVALIDCALL;
-    uint32_t samplerIndex = 0;
-    if (!samplerSlot(sampler, samplerIndex)) {
+    SamplerIndex samplerIndexKeyVal{};
+    if (!samplerIndexKey(sampler, samplerIndexKeyVal)) {
         *pValue = 0;
         return S_OK;
     }
@@ -1601,15 +1605,17 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetSamplerState(DWORD sampler,
     // GetTextureStageState pattern (see above): shadow first, fall
     // back to the core-side read for slots the app has never written
     // (those return the resetState() defaults).
-    uint32_t stateSlot = 0;
-    if (samplerStateSlot(type, stateSlot)) {
+    SamplerStateType stateTypeKeyVal{};
+    if (samplerStateTypeKey(static_cast<uint32_t>(type), stateTypeKeyVal)) {
         uint32_t shadowValue = 0;
-        if (peState_.samplerStateShadow.get(samplerIndex, stateSlot, shadowValue)) {
+        if (peState_.samplerStateShadowTyped().get(
+                samplerIndexKeyVal, stateTypeKeyVal, shadowValue)) {
             *pValue = shadowValue;
             return S_OK;
         }
     }
-    *pValue = dxmt9c_device_get_sampler_state(dev_, samplerIndex, (uint32_t)type);
+    *pValue = dxmt9c_device_get_sampler_state(
+        dev_, rawSlot(samplerIndexKeyVal), (uint32_t)type);
     return S_OK;
 }
 
@@ -2140,9 +2146,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     releaseAllBound();
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    peState_.stateBlockRenderStateRestore.clear();
-    peState_.stateBlockTransformRestore.clear();
-    peState_.stateBlockTransformRecorded.clear();
+    peState_.stateBlockRenderStateRestoreTyped().clear();
+    peState_.stateBlockTransformRestoreTyped().clear();
+    peState_.stateBlockTransformRecordedTyped().clear();
     peState_.stateBlockVdeclRecorded = false;
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));

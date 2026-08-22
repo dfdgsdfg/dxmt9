@@ -1314,7 +1314,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     DWORD renderStateValue(D3DRENDERSTATETYPE state) const {
         uint32_t shadowValue = 0;
-        if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
+        if (peState_.renderStateShadowTyped().get(
+                renderStateSlotKey(static_cast<uint32_t>(state)), shadowValue)) {
             return shadowValue;
         }
         return dxmt9c_device_get_render_state(dev_, static_cast<uint32_t>(state));
@@ -1424,7 +1425,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
-        return peState_.renderStateEquals(state, value);
+        return peState_.renderStateEqualsTyped(renderStateSlotKey(state), value);
     }
 
     bool shadowedStreamSourceEquals(UINT stream,
@@ -3851,8 +3852,8 @@ public:
         return stateBlockRecording_;
     }
     void InvalidateStateBlockShadowForChild() noexcept override {
-        peState_.renderStateShadow.clear();
-        peState_.transformShadow.clear();
+        peState_.renderStateShadowTyped().clear();
+        peState_.transformShadowTyped().clear();
         clearPendingHotState();
     }
     void AddDefaultPoolResourceRefForChild() noexcept override {
@@ -4549,11 +4550,12 @@ public:
         // entry before the draw runs.
         const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
         const uint32_t stateKey = static_cast<uint32_t>(state);
+        const TransformState transformKey = transformStateKey(stateKey);
         if (stateBlockRecording_) {
-            if (!peState_.stateBlockTransformRestore.contains(stateKey)) {
+            if (!peState_.stateBlockTransformRestoreTyped().contains(transformKey)) {
                 D9CMatrix previous = identityTransformMatrix();
-                (void)peState_.transformShadow.get(stateKey, previous);
-                peState_.stateBlockTransformRestore.set(stateKey, previous);
+                (void)peState_.transformShadowTyped().get(transformKey, previous);
+                peState_.stateBlockTransformRestoreTyped().set(transformKey, previous);
             }
             // PE-shadow stateblock support. The NEW value being set inside
             // BeginStateBlock/EndStateBlock is what the resulting stateblock
@@ -4563,14 +4565,14 @@ public:
             // wined3d's "MultiplyTransform during recording is ignored by the
             // stateblock" quirk.
             if (!suppressStateBlockTransformRecord_) {
-                peState_.stateBlockTransformRecorded.set(stateKey, wireM);
+                peState_.stateBlockTransformRecordedTyped().set(transformKey, wireM);
             }
             // Keep the PE shadow in sync with the server during recording so
             // a subsequent MultiplyTransform / GetTransform on the same key
             // observes the in-flight value, not pre-Begin state. EndStateBlock
             // is responsible for reverting shadow entries that should not
             // survive the block (see the *Restore loop).
-            peState_.transformShadow.set(stateKey, wireM);
+            peState_.transformShadowTyped().set(transformKey, wireM);
             hotSetter.markDirty();
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
@@ -4582,9 +4584,9 @@ public:
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
         D9CMatrix shadowMatrix{};
-        const bool shadowMatches = peState_.transformShadow.get(stateKey, shadowMatrix) &&
+        const bool shadowMatches = peState_.transformShadowTyped().get(transformKey, shadowMatrix) &&
                                    matrixEquals(shadowMatrix, wireM);
-        const bool alreadyPending = peState_.pendingTransforms.contains(stateKey);
+        const bool alreadyPending = peState_.pendingTransformsTyped().contains(transformKey);
         if (!alreadyPending && shadowMatches) {
             return S_OK;
         }
@@ -4598,12 +4600,12 @@ public:
         // budget AND the server has already received the prior
         // delta when the next chunk-record runs.
         if (!alreadyPending &&
-            peState_.pendingTransforms.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+            peState_.pendingTransformsTyped().size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        peState_.pendingTransforms.set(stateKey, wireM);
-        peState_.transformShadow.set(stateKey, wireM);
+        peState_.pendingTransformsTyped().set(transformKey, wireM);
+        peState_.transformShadowTyped().set(transformKey, wireM);
         hotSetter.markDirty();
         return S_OK;
     }
@@ -4895,31 +4897,33 @@ public:
         }
         if (stateBlockRecording_) {
             const DWORD stateKey = static_cast<DWORD>(state);
-            if (!peState_.stateBlockRenderStateRestore.contains(stateKey)) {
+            const RenderStateSlot renderKey = renderStateSlotKey(stateKey);
+            if (!peState_.stateBlockRenderStateRestoreTyped().contains(renderKey)) {
                 DWORD previous = dxmt9c_device_get_render_state(dev_, stateKey);
                 uint32_t shadowValue = 0;
-                if (peState_.renderStateShadow.get(stateKey, shadowValue)) {
+                if (peState_.renderStateShadowTyped().get(renderKey, shadowValue)) {
                     previous = shadowValue;
                 }
-                peState_.stateBlockRenderStateRestore.set(stateKey, previous);
+                peState_.stateBlockRenderStateRestoreTyped().set(renderKey, previous);
             }
             hotSetter.markDirty();
             return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
         }
         const DWORD stateKey = static_cast<DWORD>(state);
+        const RenderStateSlot renderKey = renderStateSlotKey(stateKey);
         if (shadowedRenderStateEquals(stateKey, value)) {
             return S_OK;
         }
         // Phase 31: cap check — if a NEW state would push the pending
         // table past the per-packet cap, drain pending state into the chunk
         // via chunkBarrierFlush() so the next packet starts fresh.
-        if (!peState_.pendingRenderStates.contains(stateKey) &&
-            peState_.pendingRenderStates.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (!peState_.pendingRenderStatesTyped().contains(renderKey) &&
+            peState_.pendingRenderStatesTyped().size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        peState_.renderStateShadow.set(stateKey, value);
-        peState_.pendingRenderStates.set(stateKey, value);
+        peState_.renderStateShadowTyped().set(renderKey, value);
+        peState_.pendingRenderStatesTyped().set(renderKey, value);
         hotSetter.markDirty();
         return S_OK;
     }
@@ -4973,22 +4977,23 @@ public:
         // device-method boundary.
         if (stage >= kFragmentBlendStageCount) return D3DERR_INVALIDCALL;
         if (!isValidTextureStageStateType(type)) return D3DERR_INVALIDCALL;
-        const uint32_t stageSlot = textureStageSlot(stage);
-        const uint32_t stateSlot = textureStageStateSlot(type);
+        const TextureStageIndex stageKey = textureStageIndexKey(stage);
+        const TextureStageStateType typeKey =
+            textureStageStateTypeKey(static_cast<uint32_t>(type));
         uint32_t shadowValue = 0;
-        if (peState_.tssShadow.get(stageSlot, stateSlot, shadowValue) &&
+        if (peState_.tssShadowTyped().get(stageKey, typeKey, shadowValue) &&
             shadowValue == value) {
             return S_OK;
         }
         // Phase 34: cap-check uses chunkBarrierFlush so pending state is
         // encoded as APPLY_STATE record(s) + cleared before the new entry.
-        if (!peState_.pendingTss.contains(stageSlot, stateSlot) &&
-            peState_.pendingTss.size() >= D9C_DRAW_PACKET_MAX_TSS) {
+        if (!peState_.pendingTssTyped().contains(stageKey, typeKey) &&
+            peState_.pendingTssTyped().size() >= D9C_DRAW_PACKET_MAX_TSS) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        peState_.tssShadow.set(stageSlot, stateSlot, value);
-        peState_.pendingTss.set(stageSlot, stateSlot, value);
+        peState_.tssShadowTyped().set(stageKey, typeKey, value);
+        peState_.pendingTssTyped().set(stageKey, typeKey, value);
         hotSetter.markDirty();
         return S_OK;
     }
@@ -5005,27 +5010,29 @@ public:
             *this, PeHotStateSetterFamily::TextureStageSampler);
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
-        uint32_t samplerIndex = 0;
-        if (!samplerSlot(sampler, samplerIndex)) {
+        SamplerIndex samplerIndexKeyVal{};
+        if (!samplerIndexKey(sampler, samplerIndexKeyVal)) {
             return D3DERR_INVALIDCALL;
         }
-        uint32_t stateSlot = 0;
-        if (!samplerStateSlot(type, stateSlot)) {
+        SamplerStateType stateTypeKeyVal{};
+        if (!samplerStateTypeKey(static_cast<uint32_t>(type), stateTypeKeyVal)) {
             return S_OK;
         }
         uint32_t shadowValue = 0;
-        if (peState_.samplerStateShadow.get(samplerIndex, stateSlot, shadowValue) &&
+        if (peState_.samplerStateShadowTyped().get(
+                samplerIndexKeyVal, stateTypeKeyVal, shadowValue) &&
             shadowValue == value) {
             return S_OK;
         }
         // Phase 34: cap-check uses chunkBarrierFlush.
-        if (!peState_.pendingSamplerStates.contains(samplerIndex, stateSlot) &&
-            peState_.pendingSamplerStates.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
+        if (!peState_.pendingSamplerStatesTyped().contains(
+                samplerIndexKeyVal, stateTypeKeyVal) &&
+            peState_.pendingSamplerStatesTyped().size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        peState_.samplerStateShadow.set(samplerIndex, stateSlot, value);
-        peState_.pendingSamplerStates.set(samplerIndex, stateSlot, value);
+        peState_.samplerStateShadowTyped().set(samplerIndexKeyVal, stateTypeKeyVal, value);
+        peState_.pendingSamplerStatesTyped().set(samplerIndexKeyVal, stateTypeKeyVal, value);
         hotSetter.markDirty();
         return S_OK;
     }
@@ -5594,7 +5601,7 @@ public:
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
-        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
@@ -5659,7 +5666,7 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
-        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
@@ -5735,7 +5742,7 @@ public:
         if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
-        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
@@ -5796,7 +5803,7 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
-        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
