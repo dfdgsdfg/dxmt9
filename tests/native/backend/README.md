@@ -10,6 +10,8 @@ NSObject release symbols link against winemetal.
 | `backend_key_descriptor_spec.cpp` | `buildDrawUniforms()`, depth/stencil + sampler key value-transform (`R-BACK-3.*`) |
 | `backend_pipeline_key_spec.cpp` | PSO key (blend, MRT color-write, FVF hash, sRGB format, sampler texture/filter flags) (`R-BACK-3.*`) |
 | `dod_replay_observer_spec.cpp` | Warmed ChunkSlot capacity reuse + uniform interning (`R-VERIF-7.3`) |
+| `drawable_token_spec.cpp` | Production stash/take/complete/fail predicates and deterministic wait handoff (`R-VERIF-3.6`) |
+| `resource_lifetime_spec.cpp` | Initializer/reference lifetime truth tables plus direct HandleArena ABA reuse (`R-VERIF-3.1`–`3.4`) |
 | `resource_hazard_spec.cpp` | Encoder hazard FSM via fake backend (`R-BACK-2.14-2.28`, `R-VERIF-4.4`) |
 | `render_pass_actions_spec.cpp` | Color first-use DontCare-load + depth look-ahead + load/store counters (`R-BACK-15.4-15.16`) |
 | `allocation_counter_spec.cpp` | Real perf-counter emission for Metal buffer allocations (wrapped via `assert_perf_counters`) (`R-BENCH-2.5`) |

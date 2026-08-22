@@ -140,6 +140,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9_heap_manager.hpp"
 #include "dxmt9_mark_reclaim_predicates.hpp"
+#include "dxmt9_resource_lifetime.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstddef>
@@ -435,9 +436,9 @@ class HandleArena {
         continue;
       }
       auto& record = *slot.record;
-      // TLA+: ProducerMarkReclaim!Reclaim(r) — shared predicate, not an
-      // inlined copy of the gate, so the model and the native spec cannot
-      // drift from it.
+      // TLA+: ProducerMarkReclaim!Reclaim(r) / ResourceLifetime!FreeResource.
+      // This remains the one shared production reclaim predicate, so neither
+      // model nor its native truth table can drift from the actual gate.
       if (canReclaimRecord(record.destroyPending, record.lastUsedSeqId,
                            completedSeqId)) {
         beforeErase(record);

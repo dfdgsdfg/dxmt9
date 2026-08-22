@@ -3,6 +3,7 @@
 
 #include "dxmt9_resource_initializer.hpp"
 
+#include "dxmt9/assert.hpp"
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_debug_trace.hpp"
@@ -314,6 +315,9 @@ bool Initializer::hasPendingUploadsUnlocked() const noexcept {
 }
 
 void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
+  // TLA+: ResourceLifetime!StageInitializerUpload / NoUseAfterFree.
+  DXMT_ASSERT(lifetime::pendingInitializerReferenceSafe(
+      true, staging.destTexture.handle != 0));
   const bool wasEmpty = pendingUploads_.empty();
   pendingUploads_.push_back(std::move(staging));
   if (render::initializerPendingTransitionNeedsWake(
@@ -380,6 +384,11 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     }
   }
   for (const auto& u : pendingUploads_) {
+    // TLA+: ResourceLifetime!SubmitInitializerUpload. Keep the retained
+    // destination alive through encoding and commit; Metal then owns the
+    // encoded command-buffer reference until completion.
+    DXMT_ASSERT(lifetime::pendingInitializerReferenceSafe(
+        true, u.destTexture.handle != 0));
     WMTOrigin origin{0, 0, 0};
     WMTSize size{u.width, u.height, u.depth};
     blit.copyFromTextureToTexture(WMT::Texture{u.stagingTexture.handle}, 0, 0,

@@ -1,206 +1,215 @@
 ---- MODULE ResourceLifetime ----
-(*
- * dxmt9 Resource Lifetime — TLA+ Specification
+(******************************************************************************
+ * Deferred resource destruction with an Initializer-held reference.
  *
- * Verifies the deferred-destruction invariant (R-BACK-5.6, R-BACK-7.3):
+ * Arena records are protected by the chunk sequence watermark. Private-texture
+ * uploads are different: Initializer::pendingUploads_ owns a retained
+ * destination reference before the upload has a chunk seqId, and the encoded
+ * Metal command buffer owns that reference after submission. The original
+ * model collapsed arena-record release and Metal-object deallocation, so it
+ * could not express the 2026-08-02 pending-upload use-after-free.
  *
- *   A GPU resource (MTLBuffer / MTLTexture) must not be freed until all
- *   in-flight GPU commands that reference it have completed.
+ * Implementation = "Retained" models Pool::StagingCopy::destTexture.
+ * Implementation = "Bare" deliberately models the old bare destination handle
+ * and is checked by ResourceLifetime.counterexample.cfg.
  *
- * Implementation strategy in dxmt9:
- *   Each resource tracks `lastUsedSeqId` — the seqId of the last CommandChunk
- *   that referenced it. When the application calls destroyBuffer/destroyTexture,
- *   the resource transitions to DestroyPending. The FinishThread (or a deferred
- *   GC pass) may free the underlying MTL object only when:
- *
- *     completedSeqId >= lastUsedSeqId
- *
- *   i.e., the GPU has finished all commands in the referencing chunk.
- *   A drain commit is modeled explicitly so teardown can eventually make
- *   progress even when the Wine thread stops issuing more work.
- *
- * Requirement traceability:
- *   R-BACK-5.6  destroyBuffer/destroyTexture must defer until GPU done
- *   R-BACK-7.3  Resource destruction safe while in-flight GPU work references it
- *
- * Properties verified:
- *   Safety   — TypeOK, NoUseAfterFree
- *   Liveness — DestroyPendingEventuallyFreed
- *)
+ * Requirement traceability: R-VERIF-3.1--3.3, R-VERIF-6.1--6.3,
+ * R-BACK-5.6, and R-BACK-7.3.
+ *******************************************************************************)
 
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS
-  Resources,   \* set of resource identifiers (e.g., {r1, r2, r3})
-  MAX_SEQID    \* model-checking bound
+CONSTANTS Resources, MAX_SEQID, Implementation
 
 ASSUME Resources # {}
 ASSUME MAX_SEQID \in Nat /\ MAX_SEQID >= 1
+ASSUME Implementation \in {"Retained", "Bare"}
 
 ResourceStates == {"Live", "DestroyPending", "Freed"}
+InitializerStates == {"None", "Pending", "InFlight"}
 
 VARIABLES
-  resState,        \* FUNCTION Resources → ResourceStates
-  lastUsedSeqId,   \* FUNCTION Resources → Nat  (seqId of last chunk that used it; 0 = unused)
-  completedSeqId,  \* Nat — seq ID of most recently GPU-completed chunk (mirrors CommandQueue)
-  currentSeqId     \* Nat — next seq ID to assign
+  resState,
+  lastUsedSeqId,
+  completedSeqId,
+  currentSeqId,
+  initializerState,
+  metalAlive
 
-vars == <<resState, lastUsedSeqId, completedSeqId, currentSeqId>>
-
-(* ================================================================
-   Initialization
-   ================================================================ *)
+vars == <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+          initializerState, metalAlive>>
 
 Init ==
-  /\ resState       = [r \in Resources |-> "Live"]
-  /\ lastUsedSeqId  = [r \in Resources |-> 0]
+  /\ resState = [r \in Resources |-> "Live"]
+  /\ lastUsedSeqId = [r \in Resources |-> 0]
   /\ completedSeqId = 0
-  /\ currentSeqId   = 1
+  /\ currentSeqId = 1
+  /\ initializerState = [r \in Resources |-> "None"]
+  /\ metalAlive = [r \in Resources |-> TRUE]
 
-(* ================================================================
-   Actions
-   ================================================================ *)
-
-(*
- * UseResource(r)
- * A draw call in the current chunk references resource r.
- * Updates lastUsedSeqId so the deferred-free gate knows when GPU is done with it.
- * A Freed resource must not be used (use-after-free is a bug in the core/backend).
- *)
 UseResource(r) ==
   /\ resState[r] = "Live"
+  /\ metalAlive[r]
   /\ currentSeqId <= MAX_SEQID
   /\ lastUsedSeqId' = [lastUsedSeqId EXCEPT ![r] = currentSeqId]
-  /\ UNCHANGED <<resState, completedSeqId, currentSeqId>>
+  /\ UNCHANGED <<resState, completedSeqId, currentSeqId,
+                  initializerState, metalAlive>>
 
-(*
- * CommitChunk
- * Wine thread commits the current chunk. Advances currentSeqId.
- * Resources referenced in this chunk will have lastUsedSeqId = currentSeqId - 1
- * after this commit (they were recorded before the increment).
- *)
 CommitChunk ==
   /\ currentSeqId <= MAX_SEQID
   /\ currentSeqId' = currentSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId,
+                  initializerState, metalAlive>>
 
-(*
- * DrainCommit
- * Once any resource is DestroyPending, the queue can still commit its
- * current chunk during teardown/drain. This keeps the model live without
- * assuming the Wine thread keeps committing forever.
- *)
 DrainCommit ==
   /\ \E r \in Resources : resState[r] = "DestroyPending"
   /\ currentSeqId <= MAX_SEQID
   /\ currentSeqId' = currentSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId,
+                  initializerState, metalAlive>>
 
-(*
- * DestroyResource(r)
- * Application calls destroyBuffer / destroyTexture.
- * Transitions the resource to DestroyPending — the MTL object is NOT freed yet.
- * This is always safe: the application relinquishes ownership immediately.
- *)
-DestroyResource(r) ==
-  /\ resState[r] = "Live"
-  /\ resState' = [resState EXCEPT ![r] = "DestroyPending"]
-  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId>>
-
-(*
- * FreeResource(r)
- * Backend frees the underlying MTL object.
- * ONLY permitted when completedSeqId >= lastUsedSeqId[r], i.e., the GPU has
- * finished all commands in the last chunk that referenced this resource.
- *)
-FreeResource(r) ==
-  /\ resState[r] = "DestroyPending"
-  /\ completedSeqId >= lastUsedSeqId[r]   \* safety gate
-  /\ resState' = [resState EXCEPT ![r] = "Freed"]
-  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId>>
-
-(*
- * GPUComplete
- * GPU finishes a chunk; completedSeqId advances.
- * Simplified model: completes one chunk at a time, in order.
- *)
 GPUComplete ==
   /\ completedSeqId < currentSeqId - 1
   /\ completedSeqId' = completedSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, currentSeqId>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, currentSeqId,
+                  initializerState, metalAlive>>
 
-(* ================================================================
-   Specification
-   ================================================================ *)
+(* Pool::stageTextureUpload constructs StagingCopy::destTexture before the
+ * application may drop the arena handle. *)
+StageInitializerUpload(r) ==
+  /\ resState[r] = "Live"
+  /\ metalAlive[r]
+  /\ initializerState[r] = "None"
+  /\ initializerState' = [initializerState EXCEPT ![r] = "Pending"]
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+                  metalAlive>>
+
+(* flushToWaitUnlocked encodes and commits while StagingCopy still retains the
+ * destination. The abstract Initializer actor then denotes Metal's in-flight
+ * command-buffer ownership until completion. *)
+SubmitInitializerUpload(r) ==
+  /\ initializerState[r] = "Pending"
+  /\ metalAlive[r]
+  /\ initializerState' = [initializerState EXCEPT ![r] = "InFlight"]
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+                  metalAlive>>
+
+(* A committed Metal command buffer releases its encoded resource references
+ * when it settles, both on ordinary completion and on command-buffer failure
+ * or device loss. This is the terminal InFlight ownership transition; it does
+ * not claim that the upload succeeded. *)
+SettleInitializerUpload(r) ==
+  /\ initializerState[r] = "InFlight"
+  /\ initializerState' = [initializerState EXCEPT ![r] = "None"]
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+                  metalAlive>>
+
+(* Null command-buffer / encoder failure clears the pending vector before any
+ * GPU use; releasing the retained reference is therefore safe. *)
+AbortInitializerUpload(r) ==
+  /\ initializerState[r] = "Pending"
+  /\ initializerState' = [initializerState EXCEPT ![r] = "None"]
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+                  metalAlive>>
+
+DestroyResource(r) ==
+  /\ resState[r] = "Live"
+  /\ resState' = [resState EXCEPT ![r] = "DestroyPending"]
+  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId,
+                  initializerState, metalAlive>>
+
+(* TLA+: resources::canReclaimRecord. Releasing the arena record is still
+ * gated only by destroyPending and the chunk completion watermark. In the
+ * retained implementation that release cannot deallocate the Metal object
+ * while the independent Initializer actor owns it. The Bare branch is the old
+ * bug kept executable for the companion counterexample. *)
+FreeResource(r) ==
+  /\ resState[r] = "DestroyPending"
+  /\ completedSeqId >= lastUsedSeqId[r]
+  /\ resState' = [resState EXCEPT ![r] = "Freed"]
+  /\ IF Implementation = "Retained"
+        THEN UNCHANGED metalAlive
+        ELSE metalAlive' = [metalAlive EXCEPT ![r] = FALSE]
+  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId,
+                  initializerState>>
+
+(* Objective-C reference counting performs this abstract transition after both
+ * the arena and Initializer/command-buffer owners have released their
+ * references. Production intentionally has no global owner-oracle predicate. *)
+ReleaseMetalObject(r) ==
+  /\ Implementation = "Retained"
+  /\ resState[r] = "Freed"
+  /\ initializerState[r] = "None"
+  /\ metalAlive[r]
+  /\ metalAlive' = [metalAlive EXCEPT ![r] = FALSE]
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
+                  initializerState>>
 
 Next ==
   \/ CommitChunk
   \/ DrainCommit
   \/ GPUComplete
-  \/ \E r \in Resources : UseResource(r)
-  \/ \E r \in Resources : DestroyResource(r)
-  \/ \E r \in Resources : FreeResource(r)
+  \/ \E r \in Resources :
+       \/ UseResource(r)
+       \/ StageInitializerUpload(r)
+       \/ SubmitInitializerUpload(r)
+       \/ SettleInitializerUpload(r)
+       \/ AbortInitializerUpload(r)
+       \/ DestroyResource(r)
+       \/ FreeResource(r)
+       \/ ReleaseMetalObject(r)
 
 Spec ==
   Init
   /\ [][Next]_vars
   /\ WF_vars(GPUComplete)
   /\ WF_vars(DrainCommit)
-  /\ \A r \in Resources : WF_vars(FreeResource(r))
-
-(* ================================================================
-   Type invariant
-   ================================================================ *)
+  /\ \A r \in Resources :
+       /\ WF_vars(SubmitInitializerUpload(r) \/ AbortInitializerUpload(r))
+       /\ WF_vars(SettleInitializerUpload(r))
+       /\ WF_vars(FreeResource(r))
+       /\ WF_vars(ReleaseMetalObject(r))
 
 TypeOK ==
-  /\ resState      \in [Resources -> ResourceStates]
+  /\ resState \in [Resources -> ResourceStates]
   /\ lastUsedSeqId \in [Resources -> Nat]
   /\ completedSeqId \in Nat
-  /\ currentSeqId  \in Nat
+  /\ currentSeqId \in Nat
+  /\ initializerState \in [Resources -> InitializerStates]
+  /\ metalAlive \in [Resources -> BOOLEAN]
 
-(* ================================================================
-   Safety invariants
-   ================================================================ *)
-
-(*
- * NoUseAfterFree
- * The GPU must never be executing commands that reference a Freed resource.
- *
- * A resource is Freed only after completedSeqId >= lastUsedSeqId[r].
- * At that point, no in-flight command can reference it, because all chunks
- * with seqId <= completedSeqId have already completed on the GPU.
- *
- * Formally: if a resource is Freed, then the GPU has completed past its
- * last-use seqId — the dangerous "in flight" window is closed.
- *)
+(* No arena record, queued initializer upload, or initializer command buffer
+ * may retain a reference to a deallocated Metal object. *)
 NoUseAfterFree ==
+  \A r \in Resources :
+    (resState[r] # "Freed" \/ initializerState[r] # "None")
+      => metalAlive[r]
+
+PrematureFreeImpossible ==
   \A r \in Resources :
     resState[r] = "Freed" => completedSeqId >= lastUsedSeqId[r]
 
-(*
- * PrematureFreeImpossible
- * A resource in DestroyPending with in-flight references cannot be freed.
- * This invariant makes the safety gate explicit.
- *)
-PrematureFreeImpossible ==
+InitializerReferenceSafety ==
   \A r \in Resources :
-    (resState[r] = "DestroyPending" /\ lastUsedSeqId[r] > completedSeqId)
-    => resState[r] # "Freed"
+    initializerState[r] # "None" => metalAlive[r]
 
-Safety == TypeOK /\ NoUseAfterFree /\ PrematureFreeImpossible
+MetalReleaseAfterAllOwners ==
+  \A r \in Resources :
+    ~metalAlive[r] =>
+      /\ resState[r] = "Freed"
+      /\ initializerState[r] = "None"
+      /\ completedSeqId >= lastUsedSeqId[r]
 
-(* ================================================================
-   Liveness
-   ================================================================ *)
-
-(*
- * DestroyPendingEventuallyFreed
- * A resource marked DestroyPending is eventually freed.
- * Guaranteed because the GPU eventually completes all submitted work (WF_GPUComplete)
- * and the FreeResource action is taken once the gate opens (WF_FreeResource).
- *)
 DestroyPendingEventuallyFreed ==
   \A r \in Resources :
     resState[r] = "DestroyPending" ~> resState[r] = "Freed"
+
+InitializerEventuallySettled ==
+  \A r \in Resources :
+    initializerState[r] # "None" ~> initializerState[r] = "None"
+
+FreedEventuallyMetalReleased ==
+  \A r \in Resources :
+    resState[r] = "Freed" ~> ~metalAlive[r]
 
 ====

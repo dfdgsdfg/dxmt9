@@ -5839,7 +5839,16 @@ void CommandQueue::stashDrawableToken(core::PresentId id,
   if (slot.generation != decodePresentIdGeneration(id)) {
     return;
   }
-  slot.pendingToken = std::move(token);
+  // Async and sync-on-submit acquisition both use a null token as their
+  // normal fallback result. That is not a StashToken transition.
+  if (!token) {
+    DXMT_ASSERT(!slot.pendingToken.occupied());
+    return;
+  }
+  // TLA+: DrawableToken!StashToken. Never overwrite a token that has not
+  // reached the single-use Take transition.
+  const bool stashed = slot.pendingToken.stash(std::move(token));
+  DXMT_ASSERT(stashed);
 }
 
 std::shared_ptr<PresentDrawableToken>
@@ -5856,7 +5865,8 @@ CommandQueue::takeDrawableToken(core::PresentId id) {
   if (slot.generation != decodePresentIdGeneration(id)) {
     return {};
   }
-  return std::exchange(slot.pendingToken, {});
+  // TLA+: DrawableToken!Take / NoUseAfterTake.
+  return slot.pendingToken.take();
 }
 
 }  // namespace dxmt9

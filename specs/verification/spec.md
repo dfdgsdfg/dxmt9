@@ -131,7 +131,7 @@ outside this checker.
 | `archicture/spec.md` §6 / `backend/spec.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
 | `archicture/spec.md` §6 / `backend/spec.md` §2.2 | `tla/QueueLifecycleRefinement.tla` | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` |
 | `backend/spec.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
-| `backend/spec.md` §5 / §7 | `tla/ResourceLifetime.tla` | `src/dxmt9/dxmt9_resource_pool.*` |
+| `backend/spec.md` §5 / §7 | `tla/ResourceLifetime.tla` plus the expected-failure `ResourceLifetime.counterexample.cfg` | shared `resources::canReclaimRecord`, `resources::lifetime::pendingInitializerReferenceSafe`, `HandleArena`, `Pool::StagingCopy`, and `Initializer` in `src/dxmt9/dxmt9_{mark_reclaim_predicates,resource_lifetime,resource_pool,resource_initializer}.*` |
 | `backend/spec.md` §5 / R-BACK-5.11 | `tla/BufferBackingVersioning.tla` | `src/dxmt9/dxmt9_resource_pool.*`, draw binding snapshots in `src/dxmt9/dxmt9_command_queue.cpp` |
 | `backend/spec.md` §7.2.1 / R-BACK-5.12 | `tla/NoOverwriteByteRange.tla` | `core::Buffer` lock metadata, `Device::uploadBufferDataRange`, `Pool::uploadBufferDataRange`; `tests/native/core/core_device_com_spec.cpp`, `tests/native/backend/dynamic_rename_ring_spec.cpp` |
 | `backend/spec.md` §8 / §8.1 | `tla/PresentFrameLatency.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` |
@@ -194,8 +194,9 @@ specs/verification/
     ├── ReplayScopedDrain.cfg
     ├── PresentIdAba.tla   (slot, generation) tagged-handle ABA-safety
     ├── PresentIdAba.cfg
-    ├── ResourceLifetime.tla  Deferred GPU resource destruction
+    ├── ResourceLifetime.tla  Deferred GPU resource destruction plus Initializer ownership
     ├── ResourceLifetime.cfg
+    ├── ResourceLifetime.counterexample.cfg  expected bare-destination failure
     ├── BufferBackingVersioning.tla  MANAGED concrete-backing reuse lifetime
     ├── BufferBackingVersioning.cfg
     ├── NoOverwriteByteRange.tla  DEFAULT+DYNAMIC exact NOOVERWRITE range
@@ -312,8 +313,9 @@ exercise all structural behaviors while keeping the state space tractable.
 | DceChunkLookahead | `MaxSources` / `MaxInflight` | 4 / 3 | unbounded source seqIds / `kMaxQueuedChunks`; exactly one held lookahead source |
 | WireObjectRegistry | `Slots` / `Requests` / `Kinds` / `MAX_GENERATION` | `{s1,s2}` / `{r1,r2}` / `{Texture,Buffer}` / 3 | device-local stable object IDs, nonzero full `uint32_t` generations, exact kind/ID/generation admission, and retirement at `UINT32_MAX` |
 | PresentIdAba | `Slots` / `Entities` / `MAX_GEN` / `MAX_OPS` | `{s1,s2}` / `{p1,p2}` / 3 / 6 | unbounded slots, generation domain = 2^24 (`HandleArena::kGenerationBits`) |
-| ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
-| ResourceLifetime | `MAX_SEQID` | 5 | unbounded |
+| ResourceLifetime | `Resources` | `{r1,r2}` | dynamic; two resources distinguish independent arena/initializer ownership |
+| ResourceLifetime | `MAX_SEQID` | 3 | unbounded; three sequence values cover use, commit/drain, and completion |
+| ResourceLifetime | `Implementation` | `Retained` (`Bare` in the expected-failure config) | retained `StagingCopy::destTexture`; the `Bare` branch reproduces the historical escape |
 | BufferBackingVersioning | `Backings` | `{b1,b2,b3}` | grow-only per-buffer backing ring |
 | BufferBackingVersioning | `MAX_SEQID` | 3 | unbounded |
 | EncoderLifecycle | `RenderTargets` | `{rt1,rt2}` | dynamic |
@@ -379,7 +381,7 @@ or reviewing a TLA+ module.
 | `QueueLifecycleRefinement.tla` | Concrete refinement of `QueueLifecycleController` staging fields | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `ReadySlotsArePending`, `PendingCompletionAreSubmitted`, `CompletedSeqQueueBounded`, lifecycle refinement of `CommandQueue!Spec` | `WaitForSequenceProgress`, `StopUnblocksWaits` | `tests/native/backend/dod_replay_observer_spec.cpp` |
 | `PresentFrameLatency.tla` | Queue-owned frame-latency tokens, present vs non-present timelines | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` | `TypeOK`, `SeqTimelineSafety`, `PresentCompletionSafety`, `OutstandingPresentBound`, `PresentQueueSafety`, `AppWaitReturnSafe` | `SubmittedPresentsEventuallyComplete`, `WaitEventuallyReturnsOrStops` | `tests/native/backend/present_boundary_policy_spec.cpp` |
 | `ConcurrentProgressSignals.tla` | Pacing independence across `completedSeqId` / `presentCompletedSeqId` / `ringSlotOccupancy` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `PacingOrdering` (`presentCompletedSeqId ≤ completedSeqId`), `RingOccupancyBound`, `FrameLatencyBound`, `OutstandingAccounting` | `NoQueryWaitBlocksPresent`, `NoFrameLatencyBlocksQuery`, `NoRingPressureBlocksPresentCompletion` | _(gap: no native spec — cross-axis non-blocking is observable only at the queue, not as a pure-data transform; tracked as `R-VERIF-2.9 / 2.10` evidence shortfall in `specs/verification/gap.md`)_ |
-| `DrawableToken.tla` | `PresentDrawableToken` lifecycle: Stash / Complete / Fail / Take / Wait | `src/dxmt9/dxmt9_presenter.*` (token), `src/dxmt9/dxmt9_command_queue.*` (stash/take) | `TypeOK`, `NoDoubleComplete`, `NoUseAfterTake`, `StashTakeOrdering`, `DrawableValueShape`, `TakenIsSink`, `FulfilledMonotonic` | `WaitProgress`, `EventuallyResolved` | `tests/native/backend/present_acquire_policy_spec.cpp` covers the surrounding **policy** (env-var → AcquirePolicy resolver); _(gap: no deterministic spec for the token's stash/take/wait state machine — only the TLA+ model and runtime exercise)_ |
+| `DrawableToken.tla` | `PresentDrawableToken` lifecycle: Stash / Complete / Fail / Take / Wait | `detail::drawableTokenMayFulfill`, `detail::SingleUseTokenSlot`, `PresentDrawableToken`, and `CommandQueue::stash/takeDrawableToken` | `TypeOK`, `NoDoubleComplete`, `NoUseAfterTake`, `StashTakeOrdering`, `DrawableValueShape`, `TakenIsSink`, `FulfilledMonotonic` | `WaitProgress`, `EventuallyResolved` | `tests/native/backend/drawable_token_spec.cpp` pins the production fulfilment predicate, no-overwrite stash, single-use take, complete-before-wait, and wait/fail handoff without sleeps or Metal timing |
 | `EncodeSessionCompletion.tla` | One Metal session tail expands into ordered per-source `seqId` completions | `QueueSubmissionRecord::fixedCompletionSources`, `QueueLifecycleController::submitEncodedSubmission`, pending completion drain in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `CommittedWaterlineOK`, `OrderedCompletionExpansion`, `NoInlineCompletionOfSessionSources`, `PresentCompletionAfterTail` | _(safety/refinement model; no fairness property)_ | `tests/native/backend/queue_completion_sources_spec.cpp` |
 | `CpuReadySessionProgress.tla` | Bounded Ready FIFO, one tentative pre-effect prefix, ordered semantic release FIFO, forward-looking terminal fence, session/pass acknowledgement, and completion/reclaim; an additional submitted-Present/Ready-Direct initial branch forces the capacity-wait trace without replacing the original empty-start state space, and pressure-created release actions are unreachable | `CpuReadyTape` in `src/dxmt9/dxmt9_cpu_ready_tape.hpp`; tentative queue seam, capacity-progress generation, and source metadata in `QueueLifecycleController` (`src/dxmt9/dxmt9_queue.*`); `SessionReleaseState::requestTerminal` is implemented as pure state but has no production caller | `TypeOK`, `BoundedStores`, `FifoSourceOrder`, `OneTentativePrefix`, `CompatibleSuffixStaysReady`, `NoYoungerThanEarliestFence`, `RollbackBeforeEffectsRestoresExactPrefix`, `ReleaseQueueOrdered`, `AckAfterRequiredActionAndFenceCoverage`, `NoCompletionBeforeSubmit`, `NoPressureCreatedRelease`, `CapacityWakeMatchesReclaim`, `TerminalFenceSafety` (model-only terminal refinement) | `OrdinaryReleaseProgress`, `StartupCapacityWakeProgress`, `StartupDirectProgress`; `ShutdownProgress` is a forward obligation, not a claim about the current direct-drain runtime; weak fairness only for enabled coordinator/completion/finish actions | `tests/native/backend/cpu_ready_tape_spec.cpp`, `tests/native/backend/queue_completion_sources_spec.cpp`, `tests/native/backend/cpu_ready_session_join_spec.cpp` |
 | `PostEncodePayloadRetirement.tla` | Eligible payload retirement after synchronous encode while work remains unsubmitted, with a bounded source-kind-neutral receipt ledger and mixed legacy/retired completion | `PostEncodeCompletionLedger`, `QueueCompletionSource`, `CpuReadyTape` two-phase retirement, and submission/completion handling in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `RetirementRequiresEncode`, `TwoPhasePageRelease`, `LiveReceiptGenerationMatches`, `ReleasedReceiptIsStale`, `CompletionExactlyOnce`, `DeviceLossSettlesExactlyOnce`, `ResourcesSurviveCompletion`, `OrderedWaterlines`, `PresentNeverRetires`, `GpuAccountingIndependentOfResidency`, `BoundedReceipts` | _(safety/refinement model; no fairness property)_ | `tests/native/backend/post_encode_payload_retirement_spec.cpp`, `tests/native/backend/queue_completion_sources_spec.cpp`, `tests/native/backend/cpu_ready_tape_spec.cpp`, `tests/native/backend/cpu_ready_session_join_spec.cpp` |
@@ -391,8 +393,8 @@ or reviewing a TLA+ module.
 | `ParallelPolicySelection.tla` | Bounded safe-only candidate selection/refinement (`R-BACK-2.68`–`2.75`, `R-VERIF-2.16`–`2.22`) | `validateParallelPassSemanticPlan` / `selectParallelPassCandidate` proof-core predicates and no production call site; native bounded adversarial value tests own exact coverage/arithmetic/selection equivalence | `TypeOK`, `SelectionIsSafe`, `SelectionIsArgmax`, `NoEffectBeforeSelection`, `SerialFallbackHasNoParallelEffect`, `SelectedProofOnlyEffect`, `JoinParentCompletion` | `EventuallySettles`, `SelectedEventuallySettles`, and `SerialEventuallySettles` under weak fairness; bounded invalid-batch serial fallback, benefit-zero skip, selected effect, join, parent end, completion | `tests/native/backend/parallel_render_pass_spec.cpp` |
 | `RenderTapeParallelJoin.tla` | Bounded Render Tape identity/ExplicitParallel refinement for one Clear, a `FULL_SNAPSHOT` DrawRun, two child partitions, joined completion, and Present | `device_c_render_tape_provider.*` partition-mode replay and child join; value-level contract for the production provider | `TypeOK`, `SelectionAndPartitionNonVacuous`, `IdentitySerialOrder`, `ChildWorkIsOrderedAndOwned`, `ChildrenJoinInOrder`, `ParallelOutputPreservesSerialOrder`, `SnapshotPrecedesDraw`, `ExactIdentityRefinement` | `ClearProgress`, `SnapshotProgress`, `IdentityProgress`, `WorkerWorkProgress`, `JoinProgress`, `PresentProgress` | Provider CLI `parallel-verify` supplies the fresh-process identity/ExplicitParallel oracle; native provider and Metal tests remain the concrete binding layer |
 | `WireObjectRegistry.tla` | PE → unix canonical stable identity and slot reuse | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*`, `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `KindStable`, `NoReuseWithoutGenerationAdvance`, `NoGenerationWrap` | _(safety model; no fairness property)_ | `tests/native/bridge/chunk_record_registry_spec.cpp`, `tests/native/bridge/chunk_record_validation_spec.cpp` |
-| `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_registry_spec.cpp` (generation reuse/reject path); _(gap: no dedicated `HandleArena` slot-reuse spec)_ |
-| `ResourceLifetime.tla` | Deferred GPU resource destruction; `lastUsedSeqId ≤ completedSeqId` before free | `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `NoUseAfterFree` | `DestroyPendingEventuallyFreed` | `tests/native/backend/resource_hazard_spec.cpp`, `tests/native/core/resource_format_boundary_spec.cpp` |
+| `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/backend/resource_lifetime_spec.cpp` directly forces LIFO slot reuse, generation advance, stale/wrong-kind rejection, and sibling-slot preservation; bridge registry coverage remains complementary |
+| `ResourceLifetime.tla` | Deferred chunk-watermark destruction plus pending/in-flight Initializer ownership and eventual reference release | `resources::canReclaimRecord`, `resources::lifetime::pendingInitializerReferenceSafe`, `HandleArena::reclaimCompleted`, `Pool::stageTextureUpload`, and `Initializer::{enqueuePendingUploadUnlocked,flushToWaitUnlocked}` | `TypeOK`, `NoUseAfterFree`, `PrematureFreeImpossible`, `InitializerReferenceSafety`, `MetalReleaseAfterAllOwners`; the `Bare` config must violate `NoUseAfterFree` | `DestroyPendingEventuallyFreed`, `InitializerEventuallySettled`, `FreedEventuallyMetalReleased` | `tests/native/backend/resource_lifetime_spec.cpp` exhausts 22 production-predicate tuples and directly pins HandleArena reclamation/ABA behavior |
 | `BufferBackingVersioning.tla` | MANAGED CPU-shadow upload selects a safe concrete backing and draw packets pin it by sequence | `BufferRecord::renameRing`, `Pool::uploadBufferData`, `Pool::snapshotBufferBinding`, `Pool::markBufferSnapshotUse` | `TypeOK`, `ActiveBackingAllocated`, `LogicalWatermarkCoversEveryBacking`, `NoUploadOverwriteInFlight`, `NoBackingFreedInFlight`, `DestroyPendingCannotFreeEarly` | `DestroyPendingEventuallyFreed` | `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/core/core_device_com_spec.cpp`, `tests/native/bridge/pe_buffer_lock_order_spec.cpp` |
 | `ReplayScopedDrain.tla` | Core-buffer-identity commit-replay ledger shared by wrapper aliases, scoped/global terminal wakeups, failure-before-completion publication, pre-rename backing capture, and queued plus in-flight raw-entry residency | `ReplayDrainLedger`, `ReplayOffloadQueue`, the rename ring, and raw canonical admission/replay in `src/d3d9/device_c_*` / `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `ReplayedLeQueued`, `NoRejectedWatermark`, `ScopedReturnSafe`, `GlobalReturnSafe`, `StopUnblocksWithoutSuccess`, `QueuedChunkUsesCapturedGeneration`, `OneGenerationPerRawChunk`, `FailedNeverAcknowledged`, `RawEntryImmutable`, `RawResidencyMatchesOutstanding`, `InFlightRetainsResidency`, `TerminalPrecedesCompletion`, `FailureBlocksAdmission`, `InlineTraceEquivalent`, `UnrelatedResourceDoesNotBlock` | `ScopedWaitEventuallyReturnsOrStopsOrPoisons`, `GlobalWaitEventuallyReturnsOrStopsOrPoisons` | `tests/native/backend/replay_offload_queue_spec.cpp`, `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/backend/replay_byte_identity_spec.cpp`, `tests/native/bridge/pe_buffer_lock_order_spec.cpp`, `tests/native/core/core_device_com_spec.cpp` |
 | `EncoderLifecycle.tla` | `MTLCommandEncoder` mutual exclusion + exact hazard sets + Bloom-as-diagnostic | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers | `TypeOK`, `KindSwitchThroughIdle`, `RenderTargetConsistency`, `ExactHazardBlocksMerge`, `BloomNeverForcesSplit` | `ActiveEncoderEventuallyEnds` | `tests/native/backend/resource_hazard_spec.cpp` |
@@ -433,19 +435,64 @@ prior pre-existing models could not see:
 
 ### 7.2 Evidence gaps surfaced by this matrix
 
-Compiling the matrix surfaced three "TLA-only" rows where there is no
-deterministic native spec. They are tracked together in `specs/verification/gap.md`:
+The DrawableToken and HandleArena rows now have deterministic production-
+predicate/owner pins. One TLA-only row remains and is tracked in
+`specs/verification/gap.md`:
 
 - `ConcurrentProgressSignals.tla` — cross-axis non-blocking is a
   queue-observation property, not a pure-data transform. A fake-backend
   observer covering all three axes simultaneously would be useful but
   does not exist today.
-- `DrawableToken.tla` — the token's `stash → wait → take → complete/fail`
-  interleaving has no deterministic companion. The native
-  `present_acquire_policy_spec` covers only policy selection.
-- `PresentIdAba.tla` — `HandleArena` slot reuse is only exercised end-to-end
-  through `chunk_record_registry_spec`'s generation-reject path; a
-  focused `HandleArena` slot-recycle spec would tighten the binding.
+
+`DrawableToken.tla` covers one stash/take/fulfil/wait lifecycle for each of
+two present IDs; `Taken` is terminal in that finite model. The native spec pins
+that same single-token production transition. Repeated or overlapping Present
+lifecycles through one Presenter slot are outside this model and test, rather
+than being inferred from the exact-once result.
+
+The ResourceLifetime model now distinguishes arena-record release from Metal-
+object deallocation and carries an independent Initializer owner through
+`Pending -> InFlight -> None`, including pre-submit abort and success/device-
+loss settlement after submission. The 22-case native truth table executes the
+shared production reclaim/reference predicates and the expected-failure TLC config
+reproduces the old bare-destination escape. This evidence does not prove
+Objective-C reference-count implementation or Metal command-buffer retention;
+those platform mechanisms remain assumptions at the abstraction boundary.
+
+### 7.3 Queue observer follow-up design
+
+The existing `dod_replay_observer_spec.cpp` observation is test-local and reads
+a completed `ChunkSlot`; it does not observe production replay dispatch and
+does not contain the imported retained-handle table. It therefore remains
+capacity/category evidence, not closure of `R-VERIF-7.3`.
+
+The bounded production seam should be one cold nullable sink on the replay
+owner, not a second backend:
+
+1. Add POD observation metadata in `dxmt9_queue.hpp` with source
+   identity/generation, `seqId`, command ordinal, `MetalCommandKind`, replay
+   category, and barrier/readback flags. Deliver the source's exact retained
+   `ChunkHandleEntry` values as a synchronous call-local span; the sink must
+   consume or copy it immediately and production must never store the span.
+2. Factor the resource-marking switches in `markArenaSourceResources` and the
+   legacy import path into one `visitCommandResourceHandles` production visitor.
+   Draw visits must include flat-state handles plus draw-payload backing
+   snapshots/overrides; non-draw visits must use the same descriptors that the
+   pool marking functions consume. The observer and `mark*Use` path must share
+   this visitor so tests cannot duplicate retention policy.
+3. Invoke a nullable `{context, function-pointer}` sink immediately before each
+   production command dispatch, after source generation/range validation and
+   before encoder side effects. Keep the null branch outside per-handle loops
+   and compile no vector/string ownership into the hot path.
+4. Extend `dxmt9-dod-replay-observer-spec` through the real replay entry with a
+   mixed Draw/Clear/Copy/Readback/Present source. Assert exact source/sequence,
+   retained-handle conservation, category and boundary flags, and encoded kind
+   order. Add a fake backend only for the final dispatch call; use condition
+   variables or direct calls, never sleeps or GPU timing.
+
+This seam crosses legacy and Arena/Tape replay ownership and resource-marking
+code, so it is intentionally not implemented as an isolated add-on in the
+current lifetime change.
 
 ---
 

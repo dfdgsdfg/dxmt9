@@ -1294,7 +1294,7 @@ class CommandQueue {
     Presenter* presenter = nullptr;
     std::uint32_t generation = 0;
     std::int32_t nextFree = -1;
-    std::shared_ptr<PresentDrawableToken> pendingToken{};
+    detail::SingleUseTokenSlot<PresentDrawableToken> pendingToken{};
   };
   static constexpr std::uint64_t encodePresentId(std::uint32_t slotIndex,
                                                  std::uint32_t generation) noexcept {

@@ -9,6 +9,7 @@
 // "fatter" Presenter shape.
 
 #include "dxmt9_presenter_macdrv.hpp"
+#include "dxmt9_drawable_token_state.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9/core.hpp"
 #include "../winemetal/Metal.hpp"

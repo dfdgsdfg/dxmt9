@@ -64,6 +64,9 @@ counterexample_models=(
   # a record `gcArena` already released. This is what licenses T2b (capture off
   # `CommandQueue::mutex_`); design doc §8 T2b.
   "ProducerMarkReclaim|.capture.counterexample|Invariant NoCaptureAfterFree is violated"
+  # Retained Initializer ownership removed: arena reclamation deallocates the
+  # destination while the pending upload still names it.
+  "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"
 )
 
 for row in "${counterexample_models[@]}"; do
@@ -85,6 +88,14 @@ for row in "${counterexample_models[@]}"; do
   if [[ "$status" -eq 0 ]] || ! grep -q "$expected" "$counterexample_log"; then
     cat "$counterexample_log"
     echo "expected $model$cfg_suffix counterexample was not observed" >&2
+    exit 1
+  fi
+  if [[ "$model" == "ResourceLifetime" ]] &&
+     { ! grep -Fq "<StageInitializerUpload " "$counterexample_log" ||
+       ! grep -Fq "<DestroyResource " "$counterexample_log" ||
+       ! grep -Fq "<FreeResource " "$counterexample_log"; }; then
+    cat "$counterexample_log"
+    echo "expected ResourceLifetime historical trace was not observed" >&2
     exit 1
   fi
   echo "=== $model$cfg_suffix.cfg (expected failure) ==="

@@ -833,6 +833,12 @@ Pool::stageTextureUpload(WMT::Device device,
   StagingCopy out;
   out.stagingTexture = std::move(stagingTexture);
   out.destTexture = texture;
+  // TLA+: ResourceLifetime!StageInitializerUpload / NoUseAfterFree.
+  // The initializer upload is outside the chunk seqId timeline, so its
+  // retained destination is the production owner represented by
+  // initializerState = "Pending" in the model.
+  DXMT_ASSERT(lifetime::pendingInitializerReferenceSafe(
+      true, out.destTexture.handle != 0));
   out.mipLevel = mipLevel;
   out.slice = slice;
   out.width = mipWidth;

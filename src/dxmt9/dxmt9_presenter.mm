@@ -186,6 +186,12 @@ bool resolveDisableVsync(const char* env) {
 void PresentDrawableToken::complete(WMT::Reference<WMT::MetalDrawable> drawable) {
   {
     std::lock_guard lock(mutex_);
+    // TLA+: DrawableToken!NoDoubleComplete / FulfilledMonotonic.
+    const bool mayFulfill = detail::drawableTokenMayFulfill(ready_);
+    DXMT_ASSERT(mayFulfill);
+    if (!mayFulfill) {
+      return;
+    }
     drawable_ = std::move(drawable);
     ready_ = true;
   }
@@ -195,6 +201,12 @@ void PresentDrawableToken::complete(WMT::Reference<WMT::MetalDrawable> drawable)
 void PresentDrawableToken::fail() {
   {
     std::lock_guard lock(mutex_);
+    // TLA+: DrawableToken!NoDoubleComplete / FulfilledMonotonic.
+    const bool mayFulfill = detail::drawableTokenMayFulfill(ready_);
+    DXMT_ASSERT(mayFulfill);
+    if (!mayFulfill) {
+      return;
+    }
     drawable_ = nullptr;
     ready_ = true;
   }

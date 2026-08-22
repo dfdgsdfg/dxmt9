@@ -56,6 +56,17 @@ present_acquire_policy_spec = executable(
 test('dxmt9-present-acquire-policy-spec', present_acquire_policy_spec,
      env: dxmt9_native_test_env)
 
+drawable_token_spec = executable(
+  'dxmt9-drawable-token-spec',
+  'drawable_token_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-drawable-token-spec', drawable_token_spec,
+     env: dxmt9_native_test_env)
+
 # Present boundary policy resolver matrix — locks the priority
 # `Disabled > PresentCompletion > Completion > AfterAcquire > Default`
 # and the "0" / empty-string / null treatment of the four
@@ -139,6 +150,17 @@ dod_replay_observer_spec = executable(
 )
 
 test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
+
+resource_lifetime_spec = executable(
+  'dxmt9-resource-lifetime-spec',
+  'resource_lifetime_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-resource-lifetime-spec', resource_lifetime_spec,
+     env: dxmt9_native_test_env)
 
 queue_completion_sources_spec = executable(
   'dxmt9-queue-completion-sources-spec',

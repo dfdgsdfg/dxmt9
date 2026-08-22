@@ -575,9 +575,11 @@ palette, keep the old path.
 > PE `GetDesc` reports `41` vs `21` and rejects it with `INVALIDCALL` — still not
 > D3D9's `D3D_OK`, but a different wrong answer than was recorded here.
 
-**The hang is a real use-after-free, and it is not P8-specific — OPEN.**
-`StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`
-as a `WMT::Reference` but holds `destTexture` as a **bare, unretained handle**.
+**The hang was a real use-after-free, and it is not P8-specific — FIXED
+2026-08-02.**
+At the time, `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retained its
+`stagingTexture` as a `WMT::Reference` but held `destTexture` as a **bare,
+unretained handle**.
 Staging an upload never bumps the destination's `lastUsedSeqId`, so when the
 texture is released, `gcArena`'s gate
 
@@ -625,6 +627,16 @@ alternative and was rejected: the initializer completes against its own
 > refcounting, **a mechanism the model does not represent**. Recorded as a known
 > incompleteness in `specs/verification/gap.md`. A model that cannot see the bug
 > class cannot certify the fix, and re-running it is not evidence.
+
+> **Closed 2026-08-22 at the verification layer.** `ResourceLifetime.tla` now
+> separates arena-record release from Metal-object deallocation and gives the
+> Initializer an explicit retained-reference actor across Pending and InFlight
+> states. The production `Retained` configuration is green, while the companion
+> `Bare` configuration must still violate `NoUseAfterFree` on the original
+> stage → destroy → reclaim trace. Shared production predicates/assertions and
+> `dxmt9-resource-lifetime-spec` bind the reclaim/retention guards. This does
+> not claim a proof of Objective-C reference counting or Metal command-buffer
+> retention; those mechanisms remain outside the finite model.
 
 **A second, lower hazard one level up, also fixed.** `StagingCopy::destHeap` was
 a bare `obj_handle_t`, and `HeapManager::retireFreedHeaps` erases an `Instance` —
