@@ -5137,9 +5137,20 @@ CommandQueue::publishCpuReadyArenaBatch(
               capturedValid = false;
               break;
             }
-            const auto endRecord = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(end,
-                    static_cast<std::uint64_t>(anchor.lastRecord) + 1u));
+            // Each source owns a contiguous raw-record range.  Its final
+            // command anchor must cover any trailing non-emitting records up
+            // to that source boundary; using only the event's final anchor
+            // here made a valid multi-source identity projection fail when a
+            // source ended before the event's final command.
+            const bool lastForSource =
+                anchorIndex + 1u == context->captureCommandAnchors.size() ||
+                context->captureCommandAnchors[anchorIndex + 1u]
+                        .firstRecord >= end;
+            const std::uint32_t endRecord = lastForSource
+                ? static_cast<std::uint32_t>(end)
+                : static_cast<std::uint32_t>(
+                      std::min<std::uint64_t>(
+                          end, static_cast<std::uint64_t>(anchor.lastRecord) + 1u));
             if (endRecord <= cursor) {
               capturedValid = false;
               break;

@@ -581,13 +581,25 @@ void capturedLargeRawPublishesTwoAuthenticatedSources() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/true);
   const auto rects = clearRectCountForPlannerPages(20);
-  const std::array records{clearRecord(rects), clearRecord(rects),
-                           clearRecord(rects), clearRecord(rects),
+  // Keep a StateOnly record after each early source candidate.  These records
+  // do not produce Arena commands, so the projection must close each source's
+  // final command anchor at that source's raw boundary rather than only at the
+  // event's final anchor.
+  const std::array records{clearRecord(rects),
+                           applyRenderStateRecord(RS_TEXTURE_FACTOR, 1u),
+                           clearRecord(rects),
+                           applyRenderStateRecord(RS_TEXTURE_FACTOR, 2u),
+                           clearRecord(rects),
+                           applyRenderStateRecord(RS_TEXTURE_FACTOR, 3u),
+                           clearRecord(rects),
+                           applyRenderStateRecord(RS_TEXTURE_FACTOR, 4u),
                            clearRecord(rects),
                            presentRecord()};
   auto raw = makeRaw(makeWireFixture(records), 4, /*captureIdentity=*/true);
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
-  check(hr == D3D_OK, "captured large raw must replay successfully");
+  check(hr == D3D_OK,
+        "captured large raw with source-boundary StateOnly records must "
+        "replay successfully");
   check(fixture.routing->clearCalls == 5u && fixture.routing->presentCalls == 1u,
         "captured large raw must preserve one-pass clear/present counts");
   const auto readySources = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
