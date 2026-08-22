@@ -7708,6 +7708,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     }
                     const HRESULT flushHr = flushPendingCommandChunk(
                         PeRecorderFlushReason::Child);
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture alias_pending_flush_end "
+                        "hr=0x%08x disposition=%s",
+                        static_cast<unsigned>(flushHr),
+                        SUCCEEDED(flushHr) ? "completed" : "failed");
                     if (FAILED(flushHr)) {
                         markRenderTapeInvalidOnce(
                             "alias_pending_flush_failed", &object);
@@ -8267,6 +8272,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     bool produceRenderTapeBootstrap(
         dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
+        dxmt9DeviceInfoLog("render_tape_capture bootstrap_begin");
         if (!renderTapeRegistry_) {
             dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
             return false;
@@ -8380,6 +8386,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 }
             }
             seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
+            dxmt9DeviceInfoLog(
+                "render_tape_capture bootstrap_overlay_complete "
+                "records=%u handles=%u bytes=%zu",
+                overlay.recordCount, overlay.handleCount, overlay.blob.size());
 
             std::vector<const RenderTapeLiveObject *> objects;
             objects.reserve(renderTapeRegistry_->objects.size());
@@ -8574,6 +8584,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     missing.expectedTightBytesValid ? 1 : 0);
                 return false;
             }
+            dxmt9DeviceInfoLog(
+                "render_tape_capture bootstrap_closure_complete "
+                "handles=%zu live_objects=%zu closure=%zu",
+                bootstrapHandles.size(), objects.size(), closure.size());
             for (const auto *object : objects) {
                 if (!dxmt9::d3d9::renderTapeBootstrapClosureContains(
                         closure, object->identity)) {
@@ -8810,6 +8824,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     seed.oracleAttachments.size());
                 return false;
             }
+            dxmt9DeviceInfoLog(
+                "render_tape_capture bootstrap_complete objects=%zu "
+                "mutations=%zu blobs=%zu oracle_attachments=%zu",
+                seed.objects.size(), seed.mutations.size(), seed.blobs.size(),
+                seed.oracleAttachments.size());
             return true;
         } catch (...) {
             dxmt9DeviceInfoLog(
@@ -9247,6 +9266,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             ++renderTapeNextCaptureToken_;
         }
         renderTapeActiveCaptureToken_ = renderTapeNextCaptureToken_;
+        dxmt9DeviceInfoLog(
+            "render_tape_capture arm_complete token=%llu objects=%zu "
+            "mutations=%zu blobs=%zu",
+            static_cast<unsigned long long>(renderTapeActiveCaptureToken_),
+            seed.objects.size(), seed.mutations.size(), seed.blobs.size());
         return true;
     }
 
@@ -10545,8 +10569,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     chunkHasPresentRecord(chunk);
                 bool presentMirrorReserved = false;
                 if (capturePresent) {
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture captured_present_reserve_begin "
+                        "token=%llu",
+                        static_cast<unsigned long long>(
+                            renderTapeActiveCaptureToken_));
                     const HRESULT reserveHr = hr32(
                         dxmt9c_device_reserve_render_tape_present_capture(dev_));
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture captured_present_reserve_end "
+                        "token=%llu hr=0x%08x disposition=%s",
+                        static_cast<unsigned long long>(
+                            renderTapeActiveCaptureToken_),
+                        static_cast<unsigned>(reserveHr),
+                        SUCCEEDED(reserveHr) ? "reserved" : "failed");
                     if (SUCCEEDED(reserveHr)) {
                         presentMirrorReserved = true;
                     } else {

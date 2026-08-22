@@ -43,11 +43,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -154,10 +156,37 @@ struct CommandQueueArenaLeaseTestAccess {
         });
   }
 
+  static void pauseAfterFirstLeaseRetry(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPauseAfterFirstLeaseRetry_ = true;
+    queue.testOnlyPausedAfterFirstLeaseRetry_ = false;
+  }
+
+  static bool waitForFirstLeaseRetryPause(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.sessionReleaseCv_.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return queue.testOnlyPausedAfterFirstLeaseRetry_;
+        });
+  }
+
+  static void resumeAfterFirstLeaseRetry(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPausedAfterFirstLeaseRetry_ = false;
+    queue.sessionReleaseCv_.notify_all();
+  }
+
   static bool waitForArenaAdmission(
       CommandQueue& queue,
       const core::ArenaSourcePayloadLayout& layout) {
     return queue.waitForCpuReadyArenaAdmission(layout);
+  }
+
+  static core::CpuReadyTape::ReserveProbe probeArenaAdmission(
+      CommandQueue& queue,
+      const core::ArenaSourcePayloadLayout& layout) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.probeArenaReserve(layout);
   }
 
   static std::uint64_t capacityProgressGeneration(CommandQueue& queue) {
@@ -770,10 +799,20 @@ dxmt9::d3d9::RawCommandChunk makeRaw(
 }
 
 struct SessionJoinDevice final : dxmt9::Device {
-  SessionJoinDevice()
-      : queue_(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_,
-               retainedToken<WMT::CommandQueue>(
-                   "session-join-production-queue-token")) {}
+  explicit SessionJoinDevice(bool captureStreaming = false)
+      : queue_(
+            dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_,
+            retainedToken<WMT::CommandQueue>(
+                "session-join-production-queue-token"),
+            captureStreaming
+                ? dxmt9::render::RenderPartitionConfig{
+                      .sourceIdentity =
+                          dxmt9::render::SourceIdentityConfig{
+                              .requested = dxmt9::render::
+                                  SourceIdentityModeRequest::Segment,
+                              .resolved = dxmt9::render::
+                                  SourceIdentityMode::SegmentSerial}}
+                : dxmt9::render::RenderPartitionConfig{}) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return queue_; }
@@ -807,9 +846,33 @@ struct SessionJoinDevice final : dxmt9::Device {
   std::uint64_t nextHandle_ = 1;
 };
 
+SourcePayloadLayout maximal64PageSegment(SourcePayloadCapacity capacity) {
+  constexpr std::size_t kPageSize = 4096u;
+  constexpr std::size_t kMaxPages = 64u;
+  std::size_t acceptedBytes = 0u;
+  std::size_t rejectedBytes = kPageSize * kMaxPages + 1u;
+  std::optional<SourcePayloadLayout> accepted;
+  while (acceptedBytes + 1u < rejectedBytes) {
+    const std::size_t candidateBytes =
+        acceptedBytes + (rejectedBytes - acceptedBytes) / 2u;
+    capacity.drawPayloadBytes = candidateBytes;
+    const auto candidate =
+        makeSourcePayloadLayout(capacity, kPageSize, kMaxPages);
+    if (candidate) {
+      acceptedBytes = candidateBytes;
+      accepted = candidate;
+    } else {
+      rejectedBytes = candidateBytes;
+    }
+  }
+  check(accepted.has_value() && accepted->pageCount == kMaxPages,
+        "capture segment must maximize within the production 64-page bound");
+  return *accepted;
+}
+
 struct RuntimeFixture {
-  RuntimeFixture() {
-    auto upper = std::make_unique<SessionJoinDevice>();
+  explicit RuntimeFixture(bool captureStreaming = false) {
+    auto upper = std::make_unique<SessionJoinDevice>(captureStreaming);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -847,22 +910,74 @@ struct RuntimeFixture {
 
   void publishArenaClearPages(std::uint64_t rawOrdinal,
                               std::size_t pageCount) {
-    SourcePayloadCapacity capacity{};
-    capacity.commandHeaders = 1;
-    capacity.clearRecords = 1;
-    capacity.drawPayloadBytes = (pageCount - 1u) * 4096u;
-    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
-    check(segment.has_value() && segment->pageCount == pageCount,
-          "sized arena clear segment must match its exact page claim");
-    const std::array segments{*segment};
-    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(pageCount != 0u && pageCount <= 512u &&
+              (pageCount <= 64u || pageCount % 64u == 0u),
+          "sized Arena clear source must use bounded 64-page segments");
+    const std::size_t segmentCount =
+        pageCount <= 64u ? 1u : pageCount / 64u;
+    std::array<SourcePayloadLayout, 8> segments{};
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      const std::size_t segmentPages = pageCount <= 64u ? pageCount : 64u;
+      SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = 1;
+      capacity.clearRecords = 1;
+      capacity.drawPayloadBytes = (segmentPages - 1u) * 4096u;
+      const auto segment = pageCount > 64u
+          ? std::optional<SourcePayloadLayout>{
+                maximal64PageSegment(capacity)}
+          : makeSourcePayloadLayout(capacity, 4096, 64);
+      check(segment.has_value() && segment->pageCount == segmentPages,
+            "sized Arena clear segment must match its bounded page claim");
+      segments[i] = *segment;
+    }
+    const auto layout = makeArenaSourcePayloadLayout(
+        std::span(segments).first(segmentCount), 4096, pageCount);
     check(layout.has_value() && layout->pageCount == pageCount,
           "sized arena clear source must match its exact page claim");
     auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
     check(begin.has_value(), "sized arena clear admission must succeed");
     auto lease = std::move(*begin.lease);
-    routing->queue_.submitClear(ClearDesc{});
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      check(lease.selectSegment(i),
+            "sized Arena clear source selects each physical segment");
+      routing->queue_.submitClear(ClearDesc{});
+    }
     check(lease.publish(), "sized arena clear source must publish directly");
+  }
+
+  void publishArenaClearPresentPages(std::uint64_t rawOrdinal,
+                                     std::size_t pageCount) {
+    check(pageCount != 0u && pageCount % 64u == 0u && pageCount <= 512u,
+          "sized Arena Present source must use bounded 64-page segments");
+    const std::size_t segmentCount = pageCount / 64u;
+    std::array<SourcePayloadLayout, 8> segments{};
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = i + 1u == segmentCount ? 2u : 1u;
+      capacity.clearRecords = 1;
+      capacity.presentRecords = i + 1u == segmentCount ? 1u : 0u;
+      const auto segment = maximal64PageSegment(capacity);
+      check(segment.pageCount == 64u,
+            "sized Arena Present segment must claim exactly 64 pages");
+      segments[i] = segment;
+    }
+    const auto layout = makeArenaSourcePayloadLayout(
+        std::span(segments).first(segmentCount), 4096, pageCount);
+    check(layout.has_value() && layout->pageCount == pageCount,
+          "sized Arena Present source must match its exact page claim");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "sized Arena Present admission must succeed");
+    auto lease = std::move(*begin.lease);
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      check(lease.selectSegment(i),
+            "sized Arena Present source selects each physical segment");
+      routing->queue_.submitClear(ClearDesc{});
+      if (i + 1u == segmentCount) {
+        check(routing->queue_.submitPresent(SwapDesc{}) != 0u,
+              "sized Arena Present records one terminal Present");
+      }
+    }
+    check(lease.publish(), "sized Arena Present source publishes directly");
   }
 
   void publishArenaDraw(std::uint64_t rawOrdinal) {
@@ -4222,18 +4337,37 @@ void productionLoopLeaseWaitResumesAfterGpuReclaim() {
         "GPU-reclaim Direct source completes and reclaims normally");
 }
 
-void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
-  RuntimeFixture fixture;
-  auto& queue = fixture.routing->queue_;
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyClearPresent(
-            queue),
-        "pressure fixture publishes the older standalone Present first");
-  for (std::uint64_t rawOrdinal = 2; rawOrdinal <= 8; ++rawOrdinal) {
-    fixture.publishArenaClearPages(rawOrdinal, 64);
+struct P0OffloadAdmissionContext {
+  dxmt9::CommandQueue* queue = nullptr;
+  const dxmt9::core::ArenaSourcePayloadLayout* layout = nullptr;
+  std::atomic<bool> admitted{false};
+};
+
+std::atomic<P0OffloadAdmissionContext*> p0OffloadAdmissionContext{nullptr};
+
+std::int32_t replayP0OffloadAdmission(
+    D9CDevice*, dxmt9::d3d9::RawCommandChunk&) {
+  auto* context = p0OffloadAdmissionContext.load(std::memory_order_acquire);
+  if (!context || !context->queue || !context->layout) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  fixture.publishArenaClearPages(9, 40);
-  for (std::uint64_t rawOrdinal = 10; rawOrdinal <= 32; ++rawOrdinal) {
-    fixture.publishArenaClearPages(rawOrdinal, 1);
+  const bool admitted =
+      dxmt9::CommandQueueArenaLeaseTestAccess::waitForArenaAdmission(
+          *context->queue, *context->layout);
+  context->admitted.store(admitted, std::memory_order_release);
+  dxmt9::perf::recordOffloadReplayStage(
+      dxmt9::perf::OffloadReplayStage::Done);
+  return D3D_OK;
+}
+
+void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
+  RuntimeFixture fixture(/*captureStreaming=*/true);
+  auto& queue = fixture.routing->queue_;
+  const auto frontierBefore =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+  fixture.publishArenaClearPresentPages(1u, 512u);
+  for (std::uint64_t rawOrdinal = 2; rawOrdinal <= 4; ++rawOrdinal) {
+    fixture.publishArenaClearPages(rawOrdinal, 512u);
   }
 
   const auto sourcesBefore =
@@ -4241,11 +4375,11 @@ void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
           snapshotReadyCompletionSources(queue);
   const auto statsBefore =
       dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
-  check(sourcesBefore.size() == 32u && sourcesBefore.front().hasPresent &&
-            statsBefore.residentSources == 32u &&
-            statsBefore.residentPages == 512u,
-        "pressure fixture fills the production Tape with one older Present "
-        "and a 31-source Ready suffix");
+  check(sourcesBefore.size() == 4u && sourcesBefore.front().hasPresent &&
+            statsBefore.residentSources == 4u &&
+            statsBefore.residentPages == 2048u,
+        "pressure fixture fills the capture-streaming Tape with one older "
+        "Present and a three-source Ready suffix");
 
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
@@ -4260,6 +4394,8 @@ void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
 
   dxmt9::CommandQueueArenaLeaseTestAccess::
       enableSchedulingWaitObservation(queue);
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      pauseAfterFirstLeaseRetry(queue);
   auto backendState = std::make_shared<ProductionLoopBackendState>();
   dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
       queue, std::make_unique<ProductionLoopBackend>(backendState));
@@ -4271,22 +4407,29 @@ void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
             waitForFirstLeaseWaitEntries(queue, 1u),
         "first lease denial parks before Arena admission pressure appears");
 
-  std::atomic<bool> admissionReturned{false};
-  std::atomic<bool> admissionResult{true};
-  std::thread admissionThread([&] {
-    admissionResult.store(
-        dxmt9::CommandQueueArenaLeaseTestAccess::waitForArenaAdmission(
-            queue, *layout),
-        std::memory_order_release);
-    admissionReturned.store(true, std::memory_order_release);
-  });
+  fixture.cDevice->replayOffload =
+      std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>(
+          replayP0OffloadAdmission);
+  P0OffloadAdmissionContext offloadContext{
+      .queue = &queue,
+      .layout = &*layout,
+  };
+  p0OffloadAdmissionContext.store(&offloadContext,
+                                   std::memory_order_release);
+  fixture.cDevice->replayOffload->queue().
+      enableDrainWaitObservationForTest();
+  fixture.cDevice->replayOffload->start(fixture.cDevice.get());
+  const std::array offloadRecords{clearRecord()};
+  auto offloadRaw = makeRaw(makeWireFixture(offloadRecords), 5u);
+  check(fixture.cDevice->replayOffload->queue().push(
+            std::move(offloadRaw)),
+        "composition enqueues one real offload raw item");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::
             waitForArenaAdmissionWaitEntries(queue, 1u) &&
             dxmt9::CommandQueueArenaLeaseTestAccess::
-                    arenaAdmissionWaiterCount(queue) == 1u &&
-            !admissionReturned.load(std::memory_order_acquire),
-        "real Arena admission parks under full-Tape pressure while encode "
-        "remains in its first-lease wait");
+                    arenaAdmissionWaiterCount(queue) == 1u,
+        "the real offload item parks in Arena admission under full-Tape "
+        "pressure while encode remains in its first-lease wait");
 
   check(dxmt9::CommandQueueArenaLeaseTestAccess::
             waitForFirstLeaseWaitEntries(queue, 2u),
@@ -4324,28 +4467,167 @@ void productionLoopPressureEscapesDeniedFirstLeaseOnce() {
         "older unavailable residency and the exact escaped head both remain "
         "completion-owned");
 
-  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
-  encodeThread.join();
-  admissionThread.join();
-  check(admissionReturned.load(std::memory_order_acquire) &&
-            !admissionResult.load(std::memory_order_acquire),
-        "terminal cleanup releases the still-pressured replay waiter");
+  const auto frontierAtSecondWait =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+  check(frontierAtSecondWait.cpuReadyFirstLeaseHeadSeq ==
+                sourcesBefore[2].seqId &&
+            frontierAtSecondWait.cpuReadyFirstLeaseHeadSourceOrdinal == 3u &&
+            frontierAtSecondWait.cpuReadyFirstLeaseWaitCurrent == 1u &&
+            frontierAtSecondWait.cpuReadyArenaAdmissionWaitCurrent == 1u &&
+            frontierAtSecondWait.offloadReplayInflightRaw == 1u &&
+            frontierAtSecondWait.offloadReplayStage ==
+                static_cast<std::uint64_t>(
+                    dxmt9::perf::OffloadReplayStage::ArenaAdmission),
+        "frontier gauges expose the exact next head, raw replay, and Arena "
+        "admission stage without waiting for another Present");
+
+  std::atomic<bool> captureReturned{false};
+  std::atomic<std::int32_t> captureResult{D3D_OK};
+  std::mutex captureReturnMutex;
+  std::condition_variable captureReturnCv;
+  std::thread captureThread([&] {
+    captureResult.store(
+        dxmt9c_device_reserve_render_tape_present_capture(
+            fixture.cDevice.get()),
+        std::memory_order_release);
+    {
+      std::lock_guard lock(captureReturnMutex);
+      captureReturned.store(true, std::memory_order_release);
+    }
+    captureReturnCv.notify_all();
+  });
+  check(fixture.cDevice->replayOffload->queue().
+            waitForDrainWaitEntriesForTest(1u) &&
+            !captureReturned.load(std::memory_order_acquire) &&
+            dxmt9::perf::snapshotSchedulingProgressFrontier().
+                    offloadDrainWaitCurrent == 1u,
+        "capture reserve deterministically waits for the real in-flight raw "
+        "item without polling");
+
+  const std::uint64_t generationBeforeReclaim =
+      dxmt9::CommandQueueArenaLeaseTestAccess::capacityProgressGeneration(
+          queue);
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
             queue, std::span<const dxmt9::core::metalqueue::
                                  QueueCompletionSource>(&progressed[0], 1u)) ==
-            1u &&
+                1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
                 queue,
                 std::span<const dxmt9::core::metalqueue::QueueCompletionSource>(
-                    &progressed[1], 1u)) == 1u,
-        "standalone pressure progress retains normal FIFO completion and "
-        "finish-owned reclaim reachability");
+                    &progressed[1], 1u)) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::
+                    capacityProgressGeneration(queue) !=
+                generationBeforeReclaim,
+        "older and escaped completion advance the explicit capacity "
+        "generation and free the real replay admission");
+  const auto statsAfterProgress =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(statsAfterProgress.residentSources == 2u &&
+            statsAfterProgress.residentPages == 1024u &&
+            statsAfterProgress.readyFifoEntries == 2u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::probeArenaAdmission(
+                queue, *layout) ==
+                dxmt9::core::CpuReadyTape::ReserveProbe::Ready,
+        "two exact 8x64-segment releases reach capture page low-water and "
+        "make the production Arena predicate Ready");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            waitForFirstLeaseRetryPause(queue),
+        "the production generation predicate retries before another lease");
+  const bool replayDrained = fixture.cDevice->replayOffload->queue().
+      waitForDrainedForTest();
+  const bool replayAdmitted =
+      offloadContext.admitted.load(std::memory_order_acquire);
+  bool captureReturnedBeforeStop = false;
+  {
+    std::unique_lock lock(captureReturnMutex);
+    captureReturnedBeforeStop = captureReturnCv.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return captureReturned.load(std::memory_order_acquire);
+        });
+  }
+  const auto captureResultBeforeStop =
+      captureResult.load(std::memory_order_acquire);
+  const bool eligibleProgressReturnedDrain =
+      replayDrained && replayAdmitted && captureReturnedBeforeStop &&
+      captureResultBeforeStop == dxmt9::core::D3DERR_NOTAVAILABLE;
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      resumeAfterFirstLeaseRetry(queue);
+  captureThread.join();
+  encodeThread.join();
+  fixture.cDevice->replayOffload->stop();
+  p0OffloadAdmissionContext.store(nullptr, std::memory_order_release);
+  const auto frontierAfter =
+      dxmt9::perf::snapshotSchedulingProgressFrontier();
+  const auto waitEnters = frontierAfter.cpuReadyFirstLeaseWaitEnter -
+      frontierBefore.cpuReadyFirstLeaseWaitEnter;
+  const auto waitExits =
+      frontierAfter.cpuReadyFirstLeaseActionRetryGeneration -
+          frontierBefore.cpuReadyFirstLeaseActionRetryGeneration +
+      frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
+          frontierBefore.cpuReadyFirstLeaseActionPressureSerial +
+      frontierAfter.cpuReadyFirstLeaseActionStop -
+          frontierBefore.cpuReadyFirstLeaseActionStop;
+  const auto admissionEnters =
+      frontierAfter.cpuReadyArenaAdmissionWaitEnter -
+      frontierBefore.cpuReadyArenaAdmissionWaitEnter;
+  const auto admissionExits =
+      frontierAfter.cpuReadyArenaAdmissionExitRetry -
+          frontierBefore.cpuReadyArenaAdmissionExitRetry +
+      frontierAfter.cpuReadyArenaAdmissionExitStop -
+          frontierBefore.cpuReadyArenaAdmissionExitStop;
+  const auto admissionRetryExits =
+      frontierAfter.cpuReadyArenaAdmissionExitRetry -
+          frontierBefore.cpuReadyArenaAdmissionExitRetry;
+  const auto admissionStopExits =
+      frontierAfter.cpuReadyArenaAdmissionExitStop -
+          frontierBefore.cpuReadyArenaAdmissionExitStop;
+  check(eligibleProgressReturnedDrain && admissionRetryExits == 1u &&
+            admissionStopExits == 0u,
+        "eligible standalone progress must admit replay and return capture "
+        "before teardown (drained=" + std::to_string(replayDrained) +
+        ", admitted=" + std::to_string(replayAdmitted) +
+        ", capture_returned=" +
+        std::to_string(captureReturnedBeforeStop) +
+        ", capture_result=" + std::to_string(captureResultBeforeStop) +
+        ", admission_retry_exits=" +
+        std::to_string(admissionRetryExits) +
+        ", admission_stop_exits=" + std::to_string(admissionStopExits) +
+        ")");
+  check(waitEnters == waitExits && waitEnters == 2u &&
+            admissionEnters == admissionExits && admissionEnters == 1u &&
+            admissionRetryExits == 1u && admissionStopExits == 0u &&
+            frontierAfter.cpuReadyFirstLeaseActionPressureSerial -
+                    frontierBefore.cpuReadyFirstLeaseActionPressureSerial ==
+                1u &&
+            frontierAfter.cpuReadyFirstLeaseActionRetryGeneration -
+                    frontierBefore.cpuReadyFirstLeaseActionRetryGeneration ==
+                1u &&
+            frontierAfter.cpuReadyFirstLeaseActionStop -
+                    frontierBefore.cpuReadyFirstLeaseActionStop ==
+                0u &&
+            frontierAfter.cpuReadyFirstLeaseCreditRearmed -
+                    frontierBefore.cpuReadyFirstLeaseCreditRearmed ==
+                1u &&
+            frontierAfter.cpuReadyFirstLeaseWaitCurrent == 0u &&
+            frontierAfter.cpuReadyArenaAdmissionWaitCurrent == 0u &&
+            frontierAfter.offloadDrainWaitCurrent == 0u &&
+            frontierAfter.offloadPushWaitCurrent == 0u &&
+            frontierAfter.offloadReplayInflightRaw == 0u &&
+            frontierAfter.offloadReplayStage ==
+                static_cast<std::uint64_t>(
+                    dxmt9::perf::OffloadReplayStage::Done),
+        "production frontier counters conserve every wait/action pair, one "
+        "credit, retry, drain, raw, and replay-stage transition");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
                 progressed.back().seqId &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, readyAfterEscape) &&
             dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) ==
-                readyAfterEscape.size(),
-        "completion reclaims exactly the progressed prefix without losing the "
-        "untouched Ready suffix");
+                0u,
+        "completion reclaims the progressed prefix while the terminal drain "
+        "submits and post-encode retires every untouched suffix identity");
 }
 
 void productionLoopLeaseWaitResumesAfterInlineReclaim() {
@@ -5830,6 +6112,10 @@ int main() {
             std::getenv("DXMT9_SESSION_JOIN_SPLIT_POLICY_CASE");
         splitCase && std::strcmp(splitCase, "per-n-records") == 0) {
       productionLoopPlansFreshRepeatedSourceWindow();
+      return 0;
+    }
+    if (std::getenv("DXMT9_SESSION_JOIN_P0_COMPOSITION_CASE")) {
+      productionLoopPressureEscapesDeniedFirstLeaseOnce();
       return 0;
     }
     sessionSourcePolicyClassifiesLegacyAndArena();

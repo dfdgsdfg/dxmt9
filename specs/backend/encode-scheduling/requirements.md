@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.81` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.82` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1012,3 +1012,27 @@ watermark reclamation, or performance. Promotion additionally requires paired
 GT2 visual/locality/no-gputrace results with zero GPU errors, repeated identity
 and segment evidence, then the cross-workload gates; until then the Tape and
 SegmentSerial selectors remain default-off and EventSerial remains reachable.
+
+**R-BACK-2.82** A capture-era scheduling stall must preserve its exact
+production frontier without changing scheduling, capacity, wake, or lifetime
+policy. Capture-only PE execution must emit ordered cold breadcrumbs for
+bootstrap entry, sealed-overlay completion, closure completion, bootstrap
+completion, arm completion, captured-Present reserve entry/return, and pending-
+alias flush return with the exact HRESULT disposition. The successful lifecycle
+must distinguish arm completion from the following captured Present's reserve,
+identity settlement, and publisher closure; a pending alias destroy must remain
+pinned until its ordered flush and bootstrap ownership complete.
+
+When `DXMT_PERF_COUNTERS` is enabled, the denied-first-lease production
+classifier and its eligibility predicate must expose wait enter/current,
+generation retry, pressure-serial, stop, no-admission-pressure, exhausted-
+credit, non-Arena, Present, ordinary-capacity, high-water, and credit-rearm
+counts, plus observed/current capacity generation and exact Ready-head `seqId`
+and `sourceOrdinal` gauges. The Arena admission gate must expose enter/current
+and retry/stop exits. Replay offload must expose current drain/push waiters, raw
+in-flight state, and a typed `plan`, `arena_admission`, `encode`, or `done`
+stage. A scheduling-watchdog threshold report must include these values without
+waiting for a later Present or creating a second watchdog. Every new hot-path
+operation must remain behind the existing perf or capture gate, and native
+tests must use the production predicates and condition variables without
+sleeping or polling.

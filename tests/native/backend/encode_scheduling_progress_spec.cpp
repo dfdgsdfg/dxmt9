@@ -142,6 +142,25 @@ void admissionTruthTable() {
 
 void firstLeaseCapacityWaitTruthTable() {
   using namespace dxmt9::render;
+  for (std::uint32_t bits = 0; bits < 16u; ++bits) {
+    const FirstLeaseReadyHeadState head{
+        .arena = (bits & 1u) != 0,
+        .present = (bits & 2u) != 0,
+        .fitsOrdinaryCapacity = (bits & 4u) != 0,
+        .fitsHighWater = (bits & 8u) != 0,
+    };
+    const auto expected = !head.arena
+        ? FirstLeaseReadyHeadEligibility::NonArena
+        : head.present
+            ? FirstLeaseReadyHeadEligibility::Present
+            : !head.fitsOrdinaryCapacity
+                ? FirstLeaseReadyHeadEligibility::OrdinaryCapacity
+                : !head.fitsHighWater
+                    ? FirstLeaseReadyHeadEligibility::HighWater
+                    : FirstLeaseReadyHeadEligibility::Eligible;
+    check(classifyFirstLeaseReadyHeadEligibility(head) == expected,
+          "first-lease ready-head eligibility priority drifted");
+  }
   for (std::uint32_t bits = 0; bits < 32u; ++bits) {
     const FirstLeaseCapacityWaitState state{
         .stopped = (bits & 1u) != 0,
@@ -161,6 +180,66 @@ void firstLeaseCapacityWaitTruthTable() {
                 : FirstLeaseCapacityWaitAction::Wait;
     check(classifyFirstLeaseCapacityWait(state) == expected,
           "first-lease capacity-wait action truth table drifted");
+  }
+
+  FirstLeaseCapacityWaitState generation{
+      .admissionPressure = true,
+      .serialProgressAvailable = true,
+      .readyHeadOwnsOrdinaryDirectCapacity = true,
+      .observedGeneration = 7u,
+      .currentGeneration = 7u,
+  };
+  check(classifyFirstLeaseCapacityWait(generation) ==
+            FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial,
+        "one eligible head consumes the generation's serial credit");
+  generation.serialProgressAvailable = false;
+  check(classifyFirstLeaseCapacityWait(generation) ==
+            FirstLeaseCapacityWaitAction::Wait,
+        "one generation cannot consume a second serial credit");
+  generation.currentGeneration = 8u;
+  check(classifyFirstLeaseCapacityWait(generation) ==
+            FirstLeaseCapacityWaitAction::RetryLease,
+        "an explicit generation transition retries before serial progress");
+  generation.observedGeneration = 8u;
+  generation.serialProgressAvailable = true;
+  check(classifyFirstLeaseCapacityWait(generation) ==
+            FirstLeaseCapacityWaitAction::ExecuteOneSourceSerial,
+        "the new generation rearms exactly one serial credit");
+
+  constexpr std::array ineligibleStates{
+      FirstLeaseReadyHeadState{.arena = false,
+                               .present = false,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = true,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = false,
+                               .fitsOrdinaryCapacity = false,
+                               .fitsHighWater = true},
+      FirstLeaseReadyHeadState{.arena = true,
+                               .present = false,
+                               .fitsOrdinaryCapacity = true,
+                               .fitsHighWater = false},
+  };
+  constexpr std::array expectedIneligible{
+      FirstLeaseReadyHeadEligibility::NonArena,
+      FirstLeaseReadyHeadEligibility::Present,
+      FirstLeaseReadyHeadEligibility::OrdinaryCapacity,
+      FirstLeaseReadyHeadEligibility::HighWater,
+  };
+  for (std::size_t i = 0; i < ineligibleStates.size(); ++i) {
+    const auto sibling =
+        classifyFirstLeaseReadyHeadEligibility(ineligibleStates[i]);
+    check(sibling == expectedIneligible[i],
+          "the exact ineligible sibling must retain its disposition");
+    generation.readyHeadOwnsOrdinaryDirectCapacity =
+        sibling == FirstLeaseReadyHeadEligibility::Eligible;
+    check(classifyFirstLeaseCapacityWait(generation) ==
+              FirstLeaseCapacityWaitAction::Wait,
+          "each ineligible sibling preserves the generation credit");
   }
 }
 

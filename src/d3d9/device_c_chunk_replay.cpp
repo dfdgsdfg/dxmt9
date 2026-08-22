@@ -1587,7 +1587,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
                              bool allowDirectArena,
-                             bool forceEventSerial = false) {
+                             bool forceEventSerial = false,
+                             bool reportOffloadReplayStage = false) {
   // 64 pages is a capture planner/source-grouping bound, not queue storage
   // capacity. It applies only after the PE bridge has authenticated this raw
   // item to a capture token and event ordinal; startup/non-capture raws use
@@ -1625,6 +1626,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // planning or repeated marking.
     markLegacyResources(device, raw);
     if (captureIdentityRequested) failCaptureIdentity("planning-disabled");
+    if (reportOffloadReplayStage) {
+      dxmt9::perf::recordOffloadReplayStage(
+          dxmt9::perf::OffloadReplayStage::Encode);
+    }
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
@@ -1656,6 +1661,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
               ? dxmt9::core::CpuReadyTape::kMaxArenaBatchSources
               : 1,
       });
+  if (reportOffloadReplayStage) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Encode);
+  }
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
   const auto logAdmissionFailure = [&](std::uint32_t beginStatus,
                                        dxmt9::CommandQueue::
@@ -1961,10 +1970,20 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
+  const bool schedulingObservabilityEnabled = dxmt9::perf::enabled();
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Plan);
+  }
   const auto replayCpuStart = std::chrono::steady_clock::now();
   const int32_t hr = replayPlannedChunk(
       d, chunk, /*pacedByPresentOrdinal=*/true,
-      /*allowDirectArena=*/true);
+      /*allowDirectArena=*/true, /*forceEventSerial=*/false,
+      schedulingObservabilityEnabled);
+  if (schedulingObservabilityEnabled) {
+    dxmt9::perf::recordOffloadReplayStage(
+        dxmt9::perf::OffloadReplayStage::Done);
+  }
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   if (failed(hr)) {
     dxmt9::perf::countCommandChunkReject();

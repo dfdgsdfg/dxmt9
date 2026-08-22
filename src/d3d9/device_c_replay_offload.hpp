@@ -300,6 +300,10 @@ bool prepareOffloadChunk(
 // check with no counter traffic.
 void notePushBackpressureWait(std::uint64_t nanoseconds);
 void noteWorkerIdleWait(std::uint64_t nanoseconds);
+bool replayOffloadObservabilityEnabled() noexcept;
+void notePushWaitEnter();
+void notePushWaitExit();
+void noteReplayInflightRaw(bool inFlight);
 
 // Raw-queue bounds (read-once): DXMT9_OFFLOAD_QUEUE_CHUNKS (default 64) and
 // DXMT9_OFFLOAD_QUEUE_BYTES (default 8 MiB) — the backpressure tuning lever
@@ -316,7 +320,8 @@ std::size_t offloadQueueMaxBytes();
 class ReplayOffloadQueue {
  public:
   ReplayOffloadQueue(std::size_t maxChunks, std::size_t maxBytes)
-      : maxChunks_(maxChunks), maxBytes_(maxBytes) {}
+      : maxChunks_(maxChunks), maxBytes_(maxBytes),
+        observabilityEnabled_(replayOffloadObservabilityEnabled()) {}
 
   // No-move-on-failure guarantee: `chunk` is only ever std::move()'d into
   // the internal deque on the success (post-stop-check) path below. If this
@@ -341,7 +346,13 @@ class ReplayOffloadQueue {
     if (!admissible()) {
       // Producer backpressure: counted only when the bound actually blocks.
       const auto waitStart = std::chrono::steady_clock::now();
+      if (observabilityEnabled_) {
+        notePushWaitEnter();
+      }
       spaceCv_.wait(lock, admissible);
+      if (observabilityEnabled_) {
+        notePushWaitExit();
+      }
       notePushBackpressureWait(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - waitStart).count()));
@@ -381,6 +392,9 @@ class ReplayOffloadQueue {
     queue_.pop_front();
     queuedBytes_ -= out.recordBytes;
     inFlight_ = true;
+    if (observabilityEnabled_) {
+      noteReplayInflightRaw(true);
+    }
     spaceCv_.notify_all();
     return true;
   }
@@ -388,6 +402,9 @@ class ReplayOffloadQueue {
   void markReplayDone() {
     std::lock_guard lock(mutex_);
     inFlight_ = false;
+    if (observabilityEnabled_) {
+      noteReplayInflightRaw(false);
+    }
     drainCv_.notify_all();
   }
 
@@ -398,7 +415,32 @@ class ReplayOffloadQueue {
   // check stopped() / the worker's failed() after this returns.
   void waitDrained() {
     std::unique_lock lock(mutex_);
+    if (testOnlyDrainWaitObservationEnabled_ &&
+        !stop_ && (!queue_.empty() || inFlight_)) {
+      ++testOnlyDrainWaitEntries_;
+      drainCv_.notify_all();
+    }
     drainCv_.wait(lock, [&] { return stop_ || (queue_.empty() && !inFlight_); });
+  }
+
+  void enableDrainWaitObservationForTest() {
+    std::lock_guard lock(mutex_);
+    testOnlyDrainWaitObservationEnabled_ = true;
+    testOnlyDrainWaitEntries_ = 0;
+  }
+
+  bool waitForDrainWaitEntriesForTest(std::uint64_t expected) {
+    std::unique_lock lock(mutex_);
+    return drainCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+      return testOnlyDrainWaitEntries_ >= expected;
+    });
+  }
+
+  bool waitForDrainedForTest() {
+    std::unique_lock lock(mutex_);
+    return drainCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+      return queue_.empty() && !inFlight_;
+    });
   }
 
   void stop() {
@@ -422,6 +464,7 @@ class ReplayOffloadQueue {
  private:
   const std::size_t maxChunks_;
   const std::size_t maxBytes_;
+  const bool observabilityEnabled_;
   mutable std::mutex mutex_;
   std::condition_variable workCv_;
   std::condition_variable spaceCv_;
@@ -430,6 +473,8 @@ class ReplayOffloadQueue {
   std::size_t queuedBytes_ = 0;
   bool inFlight_ = false;
   bool stop_ = false;
+  bool testOnlyDrainWaitObservationEnabled_ = false;
+  std::uint64_t testOnlyDrainWaitEntries_ = 0;
 };
 
 // getenv("DXMT9_OFFLOAD_COMMIT_REPLAY"), read once. Defined in

@@ -42,6 +42,39 @@ enum class FirstLeaseCapacityWaitAction : std::uint8_t {
   Stop,
 };
 
+enum class FirstLeaseReadyHeadEligibility : std::uint8_t {
+  Eligible,
+  NonArena,
+  Present,
+  OrdinaryCapacity,
+  HighWater,
+};
+
+struct FirstLeaseReadyHeadState {
+  bool arena = false;
+  bool present = false;
+  bool fitsOrdinaryCapacity = false;
+  bool fitsHighWater = false;
+};
+
+constexpr FirstLeaseReadyHeadEligibility
+classifyFirstLeaseReadyHeadEligibility(
+    FirstLeaseReadyHeadState state) noexcept {
+  if (!state.arena) {
+    return FirstLeaseReadyHeadEligibility::NonArena;
+  }
+  if (state.present) {
+    return FirstLeaseReadyHeadEligibility::Present;
+  }
+  if (!state.fitsOrdinaryCapacity) {
+    return FirstLeaseReadyHeadEligibility::OrdinaryCapacity;
+  }
+  if (!state.fitsHighWater) {
+    return FirstLeaseReadyHeadEligibility::HighWater;
+  }
+  return FirstLeaseReadyHeadEligibility::Eligible;
+}
+
 struct FirstLeaseCapacityWaitState {
   bool stopped = false;
   bool admissionPressure = false;

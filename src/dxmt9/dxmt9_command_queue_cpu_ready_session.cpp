@@ -228,6 +228,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::SessionReleaseAckResult;
   using core::metalqueue::SessionReleaseAction;
   using core::metalqueue::SessionReleaseCompletion;
+  const bool schedulingObservabilityEnabled = perf::enabled();
 
   std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
@@ -244,6 +245,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   bool exactReplaySingleSource = false;
   bool firstLeasePressureSerialProgressAvailable = true;
   std::uint64_t firstLeasePressureSerialProgressGeneration = 0;
+  std::uint64_t firstLeaseCreditRearmObservedGeneration =
+      std::numeric_limits<std::uint64_t>::max();
   std::optional<QueueCompletionSource> pressureSerialSource;
   const bool terminalSuffixJoinEnabled =
       deferredTerminalSuffixJoinEnabled(backend_.get());
@@ -808,7 +811,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     bool leaseDenied = false;
     std::uint64_t leaseDeniedSeqId = 0;
     QueueCompletionSource leaseDeniedReadySource{};
-    bool leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity = false;
+    render::FirstLeaseReadyHeadEligibility leaseDeniedReadyHeadEligibility =
+        render::FirstLeaseReadyHeadEligibility::NonArena;
+    std::uint64_t leaseDeniedReadyHeadSourceOrdinal = 0;
     bool invalidCapacitySnapshot = false;
     bool invalidPressureSerialSource = false;
     bool selectionAcquiredLease = false;
@@ -965,13 +970,24 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                         .commandBegin = candidate.commandBegin,
                         .commandCount = candidate.commandCount,
                     };
-                    leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity =
-                        leaseDeniedReadySource.source.valid() &&
-                        candidate.payload.isArena() && !candidate.hasPresent &&
-                        render::sessionCapacityFitsWithin(
-                            capacity, capacityPolicy.ordinaryDirect) &&
-                        render::sessionCapacityFitsWithin(
-                            capacity, capacityPolicy.highWater);
+                    leaseDeniedReadyHeadSourceOrdinal =
+                        candidate.metadata.sourceOrdinal;
+                    leaseDeniedReadyHeadEligibility =
+                        render::classifyFirstLeaseReadyHeadEligibility({
+                            .arena = candidate.payload.isArena(),
+                            .present = candidate.hasPresent,
+                            .fitsOrdinaryCapacity =
+                                render::sessionCapacityFitsWithin(
+                                    capacity,
+                                    capacityPolicy.ordinaryDirect),
+                            .fitsHighWater =
+                                render::sessionCapacityFitsWithin(
+                                    capacity, capacityPolicy.highWater),
+                        });
+                    if (schedulingObservabilityEnabled) {
+                      perf::recordCpuReadyFirstLeaseEligibility(
+                          leaseDeniedReadyHeadEligibility);
+                    }
                     break;
                   }
                   selectionAcquiredLease = true;
@@ -1042,10 +1058,29 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             observedCapacityProgress !=
                 firstLeasePressureSerialProgressGeneration) {
           firstLeasePressureSerialProgressAvailable = true;
+          if (schedulingObservabilityEnabled &&
+              firstLeaseCreditRearmObservedGeneration !=
+                  observedCapacityProgress) {
+            firstLeaseCreditRearmObservedGeneration =
+                observedCapacityProgress;
+            perf::countCpuReadyFirstLeaseCreditRearmed();
+          }
         }
         render::FirstLeaseCapacityWaitAction waitAction =
             render::FirstLeaseCapacityWaitAction::Wait;
         const auto classifyWait = [&] {
+          const auto currentGeneration =
+              queueLifecycle_.cpuReadyCapacityProgressGeneration();
+          if (schedulingObservabilityEnabled &&
+              currentGeneration != observedCapacityProgress &&
+              firstLeaseCreditRearmObservedGeneration != currentGeneration) {
+            firstLeaseCreditRearmObservedGeneration = currentGeneration;
+            perf::countCpuReadyFirstLeaseCreditRearmed();
+          }
+          if (schedulingObservabilityEnabled) {
+            perf::updateCpuReadyFirstLeaseWaitGenerations(
+                observedCapacityProgress, currentGeneration);
+          }
           return render::classifyFirstLeaseCapacityWait({
               .stopped = stop_,
               .admissionPressure = arenaAdmissionWaiterCount_.load(
@@ -1053,12 +1088,20 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               .serialProgressAvailable =
                   firstLeasePressureSerialProgressAvailable,
               .readyHeadOwnsOrdinaryDirectCapacity =
-                  leaseDeniedReadyHeadOwnsOrdinaryDirectCapacity,
+                  leaseDeniedReadyHeadEligibility ==
+                  render::FirstLeaseReadyHeadEligibility::Eligible,
               .observedGeneration = observedCapacityProgress,
-              .currentGeneration =
-                  queueLifecycle_.cpuReadyCapacityProgressGeneration(),
+              .currentGeneration = currentGeneration,
           });
         };
+        if (schedulingObservabilityEnabled) {
+          perf::enterCpuReadyFirstLeaseWait(
+              arenaAdmissionWaiterCount_.load(std::memory_order_acquire) != 0u,
+              firstLeasePressureSerialProgressAvailable,
+              observedCapacityProgress,
+              queueLifecycle_.cpuReadyCapacityProgressGeneration(),
+              leaseDeniedSeqId, leaseDeniedReadyHeadSourceOrdinal);
+        }
         ++cpuReadyCapacityWaiterCount_;
         if (testOnlySchedulingWaitObservationEnabled_) {
           ++testOnlyFirstLeaseWaitEntries_;
@@ -1070,6 +1113,19 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         });
         DXMT_ASSERT(cpuReadyCapacityWaiterCount_ > 0);
         --cpuReadyCapacityWaiterCount_;
+        if (schedulingObservabilityEnabled) {
+          perf::exitCpuReadyFirstLeaseWait(waitAction);
+        }
+        if (waitAction ==
+                render::FirstLeaseCapacityWaitAction::RetryLease &&
+            testOnlyPauseAfterFirstLeaseRetry_) {
+          testOnlyPauseAfterFirstLeaseRetry_ = false;
+          testOnlyPausedAfterFirstLeaseRetry_ = true;
+          sessionReleaseCv_.notify_all();
+          sessionReleaseCv_.wait(lock, [this] {
+            return stop_ || !testOnlyPausedAfterFirstLeaseRetry_;
+          });
+        }
         if (waitAction == render::FirstLeaseCapacityWaitAction::Stop) {
           return;
         }

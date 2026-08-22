@@ -4173,6 +4173,11 @@ CommandQueue::beginCpuReadyArenaSources(
 
 bool CommandQueue::waitForCpuReadyArenaAdmission(
     const core::ArenaSourcePayloadLayout& layout) noexcept {
+  const bool schedulingObservabilityEnabled = perf::enabled();
+  if (schedulingObservabilityEnabled) {
+    perf::enterCpuReadyArenaAdmissionWait();
+    perf::recordOffloadReplayStage(perf::OffloadReplayStage::ArenaAdmission);
+  }
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
   const auto waitStarted = std::chrono::steady_clock::now();
   const auto qmxBegin = queueMutexProbeBegin();
@@ -4217,6 +4222,10 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   const bool admitted = !stop_ &&
       !arenaBuildPoisoned_.load(std::memory_order_acquire);
   arenaAdmissionWaiterCount_.fetch_sub(1, std::memory_order_acq_rel);
+  if (schedulingObservabilityEnabled) {
+    perf::exitCpuReadyArenaAdmissionWait(admitted);
+    perf::recordOffloadReplayStage(perf::OffloadReplayStage::Encode);
+  }
   perf::countCpuReadyTapeAdmissionWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStarted).count()));

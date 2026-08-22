@@ -1160,6 +1160,8 @@ class CommandQueue {
   bool testOnlySchedulingWaitObservationEnabled_ = false;
   std::uint64_t testOnlyArenaAdmissionWaitEntries_ = 0;
   std::uint64_t testOnlyFirstLeaseWaitEntries_ = 0;
+  bool testOnlyPauseAfterFirstLeaseRetry_ = false;
+  bool testOnlyPausedAfterFirstLeaseRetry_ = false;
   bool stop_ = true;
 
  private:

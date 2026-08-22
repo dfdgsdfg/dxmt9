@@ -270,6 +270,7 @@ void SchedulingProgressWatchdog::sample() noexcept {
     return;
   }
   const std::uint64_t nowNs = steadyNowNs();
+  bool frontierReported = false;
   for (auto& slot : slots_) {
     lockSlot(slot);
     const std::uint64_t identity = slot.identity;
@@ -303,6 +304,10 @@ void SchedulingProgressWatchdog::sample() noexcept {
     unlockSlot(slot);
     const std::uint32_t terminal =
         terminalFlags_.load(std::memory_order_relaxed);
+    if (!frontierReported) {
+      perf::reportSchedulingProgressThreshold();
+      frontierReported = true;
+    }
     util::logf(
         util::LogLevel::Warn, "scheduling-watchdog",
         "pending seq=%llu phase=%s age_ms=%llu total_age_ms=%llu "

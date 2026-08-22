@@ -1643,6 +1643,34 @@ new parallel-lane work should be limited to keeping the seam compiling and
 verified; repeated performance matrices on producer-paced workloads are not
 evidence and should not be scheduled.
 
+### Capture and first-lease diagnostic frontier
+
+`R-BACK-2.82` is observation-only. PE capture breadcrumbs are emitted only
+inside an enabled capture lifecycle. `bootstrap_overlay_complete` follows
+successful overlay seal and validation; `bootstrap_closure_complete` follows
+successful generation-qualified closure construction; `bootstrap_complete`
+follows complete seed construction; and `arm_complete` follows accepted arm,
+interval start, object/mutation seed replay, and capture-token assignment. The
+next Present separately brackets `captured_present_reserve_begin/end`; its
+existing identity attachment and publisher call remain the settlement and
+closure authorities. `alias_pending_flush_end` records both success and failure
+before the replacement path recurses or aborts.
+
+The backend diagnostic binds directly to two production classifiers:
+
+| Frontier | Production authority | Observation |
+|---|---|---|
+| First-lease eligibility | `classifyFirstLeaseReadyHeadEligibility` | exact non-Arena, Present, ordinary-capacity, and high-water disqualifiers |
+| First-lease action | `classifyFirstLeaseCapacityWait` | wait, retry-generation, pressure-serial, stop, plus no-pressure and exhausted-credit wait causes |
+| Arena admission | `classifyCpuReadyAdmissionGate` | wait enter/current and retry/stop exit |
+| Replay drain | `ReplayOffloadQueue` plus `ReplayOffloadWorker` | drain/push waiter gauges, raw in-flight, and `plan`/`arena_admission`/`encode`/`done` stage |
+
+All values are stored only under `DXMT_PERF_COUNTERS`. The existing
+`SchedulingProgressWatchdog` sampler emits the compact frontier snapshot when
+an obligation crosses `DXMT9_SCHEDULING_PROGRESS_WATCHDOG_MS`; reporting does
+not depend on the Present-count periodic reporter and does not add a recovery
+edge.
+
 ## 10. Verification Mapping
 
 | Contract | Evidence |
@@ -1650,7 +1678,7 @@ evidence and should not be scheduled.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills the Tape with older unavailable residency plus a Ready suffix, parks a real Arena admission waiter, and proves the shared first-lease classifier executes exactly one ordinary-Direct FIFO head standalone without a release event, loses no suffix identity, then leaves normal completion/reclaim reachable. `CpuReadySessionProgress` and `SessionCapacityLease` retain their detailed ownership refinements; seeded `EncodeSchedulingProgress` composes denied first lease, admission pressure, singleton serial escape, FIFO completion, and reclaim liveness. |
+| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills the Tape with older unavailable residency plus a Ready suffix, drives a real replay-offload item into Arena admission while capture reserve waits for its drain, and proves the shared first-lease classifier executes exactly one eligible ordinary-Direct FIFO head standalone, returns the drain, conserves completion/reclaim, and consumes at most one credit per generation. Four sibling cases pin Present, non-Arena, ordinary-capacity, and high-water ineligibility without credit consumption before an explicit generation retry. `CpuReadySessionProgress` and `SessionCapacityLease` retain their detailed ownership refinements; seeded `EncodeSchedulingProgress` composes replay-in-flight, drain wait, denied first lease, admission pressure, singleton serial escape, FIFO completion, reclaim, and drain-return liveness. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |

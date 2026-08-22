@@ -62,7 +62,13 @@ VARIABLES
   firstLeaseObservedGeneration,
   arenaAdmissionPressure,
   pressureSerialProgressAvailable,
-  pressureEscaped
+  pressureEscaped,
+  pressureCreditGeneration,
+  pressureCreditConsumedGenerations,
+  replayInFlight,
+  replayDrainWaiting,
+  replayDrainReturned,
+  replayObservedCapacityGeneration
 
 vars ==
   <<phase, nextAccept, accepted, released, presentBearing,
@@ -73,13 +79,23 @@ vars ==
     completionQueue, nextSessionId, sourceSession, terminal,
     firstLeaseParked, firstLeaseObservedGeneration,
     arenaAdmissionPressure, pressureSerialProgressAvailable,
-    pressureEscaped>>
+    pressureEscaped, pressureCreditGeneration,
+    pressureCreditConsumedGenerations, replayInFlight,
+    replayDrainWaiting, replayDrainReturned,
+    replayObservedCapacityGeneration>>
 
 SeqSet(seq) == {seq[i] : i \in DOMAIN seq}
 AtPhase(name) == {s \in Sources : phase[s] = name}
 Oldest(set) == CHOOSE s \in set : \A t \in set : s <= t
 Increasing(seq) ==
   \A i \in DOMAIN seq : i < Len(seq) => seq[i] < seq[i + 1]
+AdmissionReleaseObligations ==
+  \* The seeded capture frontier requires both the older Present and the
+  \* exact pressure-escaped head to release before page low-water reopens.
+  \* Set membership makes each bounded obligation discharge at most once.
+  IF SeedDeniedFirstLeaseCycle
+    THEN Cardinality({1, 2} \ released)
+    ELSE 0
 
 Init ==
   /\ phase = IF SeedDeniedFirstLeaseCycle
@@ -118,6 +134,12 @@ Init ==
   /\ arenaAdmissionPressure = FALSE
   /\ pressureSerialProgressAvailable = TRUE
   /\ pressureEscaped = {}
+  /\ pressureCreditGeneration = capacityGeneration
+  /\ pressureCreditConsumedGenerations = {}
+  /\ replayInFlight = SeedDeniedFirstLeaseCycle
+  /\ replayDrainWaiting = SeedDeniedFirstLeaseCycle
+  /\ replayDrainReturned = FALSE
+  /\ replayObservedCapacityGeneration = capacityGeneration
 
 AcceptSource(isPresent) ==
   /\ terminal = "Running"
@@ -468,6 +490,8 @@ FirstLeaseWaitAction ==
   IF terminal # "Running" THEN "Stop"
   ELSE IF capacityGeneration # firstLeaseObservedGeneration THEN "RetryLease"
   ELSE IF arenaAdmissionPressure /\ pressureSerialProgressAvailable /\
+          pressureCreditGeneration = capacityGeneration /\
+          capacityGeneration \notin pressureCreditConsumedGenerations /\
           firstLeaseParked \in OrdinaryDirectSources /\
           firstLeaseParked \in AtPhase("Ready")
        THEN "ExecuteOneSourceSerial"
@@ -490,6 +514,12 @@ BeginArenaAdmissionPressure ==
   /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
   /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
   /\ pressureEscaped' = pressureEscaped
+  /\ pressureCreditGeneration' = pressureCreditGeneration
+  /\ pressureCreditConsumedGenerations' = pressureCreditConsumedGenerations
+  /\ replayInFlight' = replayInFlight
+  /\ replayDrainWaiting' = replayDrainWaiting
+  /\ replayDrainReturned' = replayDrainReturned
+  /\ replayObservedCapacityGeneration' = replayObservedCapacityGeneration
 
 PressureSerialEscape ==
   /\ FirstLeaseWaitAction = "ExecuteOneSourceSerial"
@@ -501,6 +531,8 @@ PressureSerialEscape ==
        /\ sourceSession' = [sourceSession EXCEPT ![s] = nextSessionId]
        /\ nextSessionId' = nextSessionId + 1
        /\ pressureEscaped' = pressureEscaped \cup {s}
+       /\ pressureCreditConsumedGenerations' =
+            pressureCreditConsumedGenerations \cup {capacityGeneration}
   /\ firstLeaseParked' = 0
   /\ pressureSerialProgressAvailable' = FALSE
   /\ UNCHANGED <<nextAccept, accepted, released, presentBearing,
@@ -511,6 +543,50 @@ PressureSerialEscape ==
                   encoderParked, encoderObservedGeneration, openSession,
                   gpuSettled, completionQueue, terminal,
                   firstLeaseObservedGeneration, arenaAdmissionPressure>>
+  /\ UNCHANGED <<pressureCreditGeneration, replayInFlight,
+                  replayDrainWaiting, replayDrainReturned,
+                  replayObservedCapacityGeneration>>
+
+RearmPressureCredit ==
+  /\ terminal = "Running"
+  /\ pressureCreditGeneration # capacityGeneration
+  /\ pressureCreditGeneration' = capacityGeneration
+  /\ pressureSerialProgressAvailable' = TRUE
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal, firstLeaseParked,
+                  firstLeaseObservedGeneration, arenaAdmissionPressure,
+                  pressureEscaped, pressureCreditConsumedGenerations,
+                  replayInFlight, replayDrainWaiting, replayDrainReturned,
+                  replayObservedCapacityGeneration>>
+
+ReturnReplayDrain ==
+  /\ terminal = "Running"
+  /\ replayInFlight
+  /\ replayDrainWaiting
+  /\ AdmissionReleaseObligations = 0
+  /\ ~arenaAdmissionPressure
+  /\ replayInFlight' = FALSE
+  /\ replayDrainWaiting' = FALSE
+  /\ replayDrainReturned' = TRUE
+  /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
+                  presentSubmitted, presentPublished, presentSkipped,
+                  presentSettled, payloadRetired, capacityOwner,
+                  capacityGeneration, capacityParked,
+                  capacityObservedGeneration, readyGeneration,
+                  encoderParked, encoderObservedGeneration, openSession,
+                  gpuQueue, gpuSettled, completionQueue, nextSessionId,
+                  sourceSession, terminal, firstLeaseParked,
+                  firstLeaseObservedGeneration, arenaAdmissionPressure,
+                  pressureSerialProgressAvailable, pressureEscaped,
+                  pressureCreditGeneration,
+                  pressureCreditConsumedGenerations,
+                  replayObservedCapacityGeneration>>
 
 WakeFirstLeaseWaiter ==
   /\ firstLeaseParked # 0
@@ -530,11 +606,16 @@ WakeFirstLeaseWaiter ==
   /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
   /\ arenaAdmissionPressure' = arenaAdmissionPressure
   /\ pressureEscaped' = pressureEscaped
+  /\ pressureCreditGeneration' = pressureCreditGeneration
+  /\ pressureCreditConsumedGenerations' = pressureCreditConsumedGenerations
+  /\ replayInFlight' = replayInFlight
+  /\ replayDrainWaiting' = replayDrainWaiting
+  /\ replayDrainReturned' = replayDrainReturned
+  /\ replayObservedCapacityGeneration' = replayObservedCapacityGeneration
 
 ClearArenaAdmissionPressure ==
   /\ arenaAdmissionPressure
-  /\ \/ terminal # "Running"
-     \/ capacityGeneration # firstLeaseObservedGeneration
+  /\ AdmissionReleaseObligations = 0
   /\ arenaAdmissionPressure' = FALSE
   /\ UNCHANGED <<phase, nextAccept, accepted, released, presentBearing,
                   presentSubmitted, presentPublished, presentSkipped,
@@ -548,6 +629,12 @@ ClearArenaAdmissionPressure ==
   /\ firstLeaseObservedGeneration' = firstLeaseObservedGeneration
   /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
   /\ pressureEscaped' = pressureEscaped
+  /\ pressureCreditGeneration' = pressureCreditGeneration
+  /\ pressureCreditConsumedGenerations' = pressureCreditConsumedGenerations
+  /\ replayInFlight' = replayInFlight
+  /\ replayDrainWaiting' = replayDrainWaiting
+  /\ replayDrainReturned' = replayDrainReturned
+  /\ replayObservedCapacityGeneration' = replayObservedCapacityGeneration
 
 AcceptNext == AcceptSource(nextAccept = MaxSources)
 
@@ -583,11 +670,22 @@ PreserveFirstLease ==
   /\ arenaAdmissionPressure' = arenaAdmissionPressure
   /\ pressureSerialProgressAvailable' = pressureSerialProgressAvailable
   /\ pressureEscaped' = pressureEscaped
+  /\ pressureCreditGeneration' = pressureCreditGeneration
+  /\ pressureCreditConsumedGenerations' = pressureCreditConsumedGenerations
+  /\ replayInFlight' = replayInFlight
+  /\ replayDrainWaiting' = replayDrainWaiting
+  /\ replayDrainReturned' =
+       IF terminal = "Running" /\ terminal' # "Running"
+         THEN FALSE
+         ELSE replayDrainReturned
+  /\ replayObservedCapacityGeneration' = replayObservedCapacityGeneration
 
 Next ==
   \/ BaseNext /\ PreserveFirstLease
   \/ BeginArenaAdmissionPressure
   \/ PressureSerialEscape
+  \/ RearmPressureCredit
+  \/ ReturnReplayDrain
   \/ WakeFirstLeaseWaiter
   \/ ClearArenaAdmissionPressure
 
@@ -611,6 +709,8 @@ QueueFairness ==
   /\ WF_vars(TerminalReleaseDrained /\ PreserveFirstLease)
   /\ WF_vars(BeginArenaAdmissionPressure)
   /\ WF_vars(PressureSerialEscape)
+  /\ WF_vars(RearmPressureCredit)
+  /\ WF_vars(ReturnReplayDrain)
   /\ WF_vars(WakeFirstLeaseWaiter)
   /\ WF_vars(ClearArenaAdmissionPressure)
 
@@ -657,6 +757,13 @@ TypeOK ==
   /\ arenaAdmissionPressure \in BOOLEAN
   /\ pressureSerialProgressAvailable \in BOOLEAN
   /\ pressureEscaped \subseteq Sources
+  /\ pressureCreditGeneration \in Nat
+  /\ pressureCreditConsumedGenerations \subseteq Nat
+  /\ replayInFlight \in BOOLEAN
+  /\ replayDrainWaiting \in BOOLEAN
+  /\ replayDrainReturned \in BOOLEAN
+  /\ replayObservedCapacityGeneration \in Nat
+  /\ AdmissionReleaseObligations \in 0 .. 2
 
 BoundedStores ==
   /\ Len(openSession) <= MaxSessionLen
@@ -777,5 +884,35 @@ DeniedFirstLeaseAdmissionCycleBroken ==
       (firstLeaseParked = s /\ arenaAdmissionPressure /\
           pressureSerialProgressAvailable
         ~> s \in pressureEscaped)
+
+EligiblePressureCycleLeadsToDrainReturn ==
+  /\ SeedDeniedFirstLeaseCycle =>
+      (firstLeaseParked \in OrdinaryDirectSources /\ replayDrainWaiting
+        ~> (replayDrainReturned \/ terminal # "Running"))
+  /\ [](replayDrainReturned =>
+       /\ terminal = "Running"
+       /\ AdmissionReleaseObligations = 0
+       /\ ~arenaAdmissionPressure)
+
+PressureEscapeConsumesOnlyEligibleHead ==
+  [][(pressureCreditConsumedGenerations' #
+       pressureCreditConsumedGenerations) =>
+      /\ FirstLeaseWaitAction = "ExecuteOneSourceSerial"
+      /\ firstLeaseParked = Oldest(AtPhase("Ready"))
+      /\ firstLeaseParked \in OrdinaryDirectSources]_vars
+
+IneligibleHeadDoesNotConsumeCredit ==
+  [][(firstLeaseParked # 0 /\
+      (firstLeaseParked \notin OrdinaryDirectSources \/
+       firstLeaseParked \notin AtPhase("Ready"))) =>
+      pressureCreditConsumedGenerations' =
+        pressureCreditConsumedGenerations]_vars
+
+CapacityGenerationRearmsOneCredit ==
+  [](terminal = "Running" /\
+     pressureCreditGeneration # capacityGeneration
+       ~> terminal # "Running" \/
+           (pressureCreditGeneration = capacityGeneration /\
+            pressureSerialProgressAvailable))
 
 ====
