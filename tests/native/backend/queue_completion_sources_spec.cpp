@@ -38,10 +38,15 @@ using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::ChunkSlotControl;
+using dxmt9::core::ArenaSourcePayloadBuilder;
 using dxmt9::core::CpuReadySourceId;
 using dxmt9::core::CpuReadyStorageRef;
 using dxmt9::core::CpuReadyTape;
 using dxmt9::core::CpuReadyTapeConfig;
+using dxmt9::core::SourcePayloadCapacity;
+using dxmt9::core::SourcePayloadLayout;
+using dxmt9::core::makeArenaSourcePayloadLayout;
+using dxmt9::core::makeSourcePayloadLayout;
 
 constexpr CpuReadyTape::SourceRef testSource(std::size_t slotIndex,
                                              std::uint64_t seqId) {
@@ -117,6 +122,51 @@ void dceChunkLookaheadProgressPolicyIsFailOpen() {
 template <typename T>
 std::span<const T> asSpan(const std::vector<T>& values) {
   return std::span<const T>(values.data(), values.size());
+}
+
+CpuReadyTapeConfig makeSeparatedPayloadConfig(
+    std::size_t pageCount = 8,
+    std::size_t sourceCount = 8,
+    std::size_t compatibilityCount = 1) {
+  const auto config = CpuReadyTapeConfig::create({
+      .pageSize = 4096,
+      .pageCount = pageCount,
+      .sourceSlotCount = sourceCount,
+      .readyFifoCount = sourceCount,
+      .compatibilityPayloadCount = compatibilityCount,
+      .maxPagesPerSource = pageCount,
+      .highWaterSources = sourceCount,
+      .lowWaterSources = 0,
+      .highWaterPages = pageCount,
+      .lowWaterPages = 0,
+      .highWaterReady = sourceCount,
+      .lowWaterReady = 0,
+  });
+  check(config.has_value(), "separated payload configuration validates");
+  return *config;
+}
+
+SourcePayloadLayout makeMinimalArenaLayout() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.surfaceCopyRecords = 1;
+  const auto layout = makeSourcePayloadLayout(capacity, 4096, 8);
+  check(layout.has_value(), "minimal arena layout validates");
+  return *layout;
+}
+
+void publishMinimalArena(CpuReadyTape& tape,
+                         const CpuReadyTape::Reservation& reservation,
+                         const SourcePayloadLayout& layout) {
+  auto memory = tape.writableStorage(reservation.ticket);
+  check(reservation.payloadKind == CpuReadyTape::PayloadKind::Arena &&
+            reservation.arenaPayload != nullptr &&
+            memory.size() >= layout.usedBytes,
+        "strict reservation owns writable arena storage");
+  ArenaSourcePayloadBuilder builder(
+      *reservation.arenaPayload, layout, memory.first(layout.usedBytes));
+  check(builder.tryAppendSurfaceCopyCommand({}) && builder.publish(),
+        "minimal arena payload publishes before Tape seal");
 }
 
 void mapWaitTargetNeverExceedsCommittedWaterline() {
@@ -748,6 +798,110 @@ void finishPathDrainsSettlementLedgerBeyondCapacity() {
   check(last.has_value() && !last->hasPresent &&
             last->tailSeqId == eventCount,
         "finish path retains the value-owned final non-Present status");
+}
+
+void partialSegmentSerialCompletionDefersReclaimUntilTail() {
+  QueueFixture fixture{makeSeparatedPayloadConfig()};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "SegmentSerial source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = fixture.cpuReadyTape.reserveArenaBatch(
+      layouts, 41, 11, 1, 7);
+  check(batch.has_value(), "SegmentSerial group reserves atomically");
+  for (std::size_t i = 0; i < batch->count; ++i) {
+    publishMinimalArena(fixture.cpuReadyTape, batch->reservations[i], segment);
+  }
+  const std::array<std::size_t, 2> controls{0u, 1u};
+  check(fixture.cpuReadyTape.sealAndPublishArenaBatch(*batch, controls),
+        "SegmentSerial group publishes atomically");
+  std::array<CpuReadyTape::ReadyEntry, 2> sources{};
+  check(fixture.cpuReadyTape.copyReadyPrefix(sources) == sources.size() &&
+            fixture.cpuReadyTape.representReadyPrefix(sources) &&
+            fixture.cpuReadyTape.transitionAll(
+                std::array<CpuReadyTape::SourceRef, 2>{
+                    sources[0].source, sources[1].source},
+                CpuReadyTape::State::Represented,
+                CpuReadyTape::State::Submitted),
+        "SegmentSerial group reaches submitted state");
+  fixture.lastCommittedSeqId = 2;
+  fixture.nextSeqId.store(3, std::memory_order_relaxed);
+  fixture.inflightCount = 2;
+
+  const auto staleRejectsBefore = fixture.cpuReadyTape.stats().staleRejects;
+  check(fixture.cpuReadyTape.complete(
+            sources[0].source.id, sources[0].source.storage),
+        "SegmentSerial head completes independently");
+  const auto partialStatus = fixture.cpuReadyTape.reclaimStatus(
+      sources[0].source.id, sources[0].source.storage);
+  check(partialStatus.disposition ==
+            CpuReadyTape::ReclaimDisposition::AwaitingGroupCompletion &&
+            partialStatus.grouped() && partialStatus.groupSourceCount == 2u &&
+            partialStatus.groupSourceIndex == 0u &&
+            partialStatus.groupTailSeqId == 2u,
+        "reclaim observation distinguishes a valid group hold from corruption");
+  fixture.completedSeqQueue.push_back(1);
+  std::unique_lock lock(fixture.mutex);
+  std::uint64_t finishedSeq = 0;
+  check(fixture.controller.runFinishIteration(
+            lock, [&](std::uint64_t seqId) { finishedSeq = seqId; }),
+        "partial SegmentSerial completion advances without poisoning");
+  checkEq(finishedSeq, 1ull,
+          "partial SegmentSerial completion advances the source waterline");
+  check(!fixture.stop && fixture.cpuReadyTape.residentCount() == 2u &&
+            fixture.cpuReadyTape.stats().staleRejects == staleRejectsBefore,
+        "partial completion retains the whole group without a stale reject");
+
+  check(fixture.cpuReadyTape.complete(
+            sources[1].source.id, sources[1].source.storage),
+        "SegmentSerial tail completes independently");
+  const auto settlement =
+      fixture.cpuReadyTape.takeCompletedArenaGroupSettlement(sources[1].source);
+  check(settlement.has_value() &&
+            fixture.controller.completedArenaGroupSettlementLedger()->append(
+                *settlement),
+        "SegmentSerial tail publishes one event settlement");
+  fixture.completedSeqQueue.push_back(2);
+  check(fixture.controller.runFinishIteration(
+            lock, [&](std::uint64_t seqId) { finishedSeq = seqId; }),
+        "SegmentSerial tail completion drains the retained FIFO group");
+  checkEq(finishedSeq, 2ull,
+          "SegmentSerial tail advances the completion waterline");
+  check(!fixture.stop && fixture.cpuReadyTape.residentCount() == 0u &&
+            fixture.controller.completedEventSettlementCount() == 1u,
+        "tail completion reclaims every group owner exactly once");
+
+  lock.unlock();
+  const auto eventSerial = fixture.cpuReadyTape.reserve();
+  check(eventSerial.has_value(),
+        "EventSerial remains reachable after SegmentSerial settlement");
+  eventSerial->payload->appendClear({});
+  eventSerial->payload->seqId = 3;
+  check(fixture.cpuReadyTape.sealAndPublish(
+            eventSerial->ticket, 13, 3, 0) &&
+            fixture.cpuReadyTape.copyReadyPrefix(
+                std::span<CpuReadyTape::ReadyEntry>(sources).first(1)) == 1u &&
+            fixture.cpuReadyTape.representReadyPrefix(
+                std::span<const CpuReadyTape::ReadyEntry>(sources).first(1)) &&
+            fixture.cpuReadyTape.transition(
+                sources[0].source.id, sources[0].source.storage,
+                CpuReadyTape::State::Represented,
+                CpuReadyTape::State::Submitted) &&
+            fixture.cpuReadyTape.complete(
+                sources[0].source.id, sources[0].source.storage),
+        "following EventSerial source reaches completed state");
+  fixture.lastCommittedSeqId = 3;
+  fixture.nextSeqId.store(4, std::memory_order_relaxed);
+  fixture.inflightCount = 1;
+  fixture.completedSeqQueue.push_back(3);
+  lock.lock();
+  check(fixture.controller.runFinishIteration(
+            lock, [&](std::uint64_t seqId) { finishedSeq = seqId; }) &&
+            finishedSeq == 3u && fixture.cpuReadyTape.residentCount() == 0u &&
+            !fixture.stop,
+        "following EventSerial source preserves FIFO completion and reclaim");
 }
 
 void appendShapeTestDraw(ChunkSlot& slot,
@@ -3224,6 +3378,7 @@ int main() {
     mapWaitTargetNeverExceedsCommittedWaterline();
     undrainedSettlementLedgerFailsClosedAtCapacity();
     finishPathDrainsSettlementLedgerBeyondCapacity();
+    partialSegmentSerialCompletionDefersReclaimUntilTail();
     appendsSingleLegacySource();
     appendsMultiSourceBatchInStrictSeqOrder();
     respectsAlreadyQueuedCompletions();

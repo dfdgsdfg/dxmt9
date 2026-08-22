@@ -2826,20 +2826,9 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
-  const auto head = submissionBinding_.cpuReadyTape->oldestResident();
-  if (head && head->seqId < seqId) {
-    poisonTapeFailureLocked();
-    dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
-                                          qmxSegStart);
-    return false;
-  }
   dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                         qmxSegStart);
-  // Inline completion already performed its two-phase reclaim before making
-  // this sequence visible. An absent head or a newer head therefore requires
-  // no second reclaim; an equal GPU-completed head is reclaimed here.
-  if (head && head->seqId == seqId &&
-      !reclaimCompletedTapeHead(lock, seqId)) {
+  if (!reclaimCompletedTapeHeadsThrough(lock, seqId)) {
     return false;
   }
   qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
@@ -2850,6 +2839,49 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                         qmxSegStart);
   return true;
+}
+
+bool QueueLifecycleController::reclaimCompletedTapeHeadsThrough(
+    std::unique_lock<std::mutex>& lock,
+    u64 completedSeqId) {
+  DXMT_ASSERT(lock.owns_lock());
+  for (;;) {
+    const auto head = submissionBinding_.cpuReadyTape->oldestResident();
+    if (!head || head->seqId > completedSeqId) {
+      return true;
+    }
+    const auto status = submissionBinding_.cpuReadyTape->reclaimStatus(
+        head->source.id, head->source.storage);
+    if (head->state != CpuReadyTape::State::Completed ||
+        status.disposition == CpuReadyTape::ReclaimDisposition::Invalid) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    if (status.disposition ==
+        CpuReadyTape::ReclaimDisposition::AwaitingGroupCompletion) {
+      // A flattened group may legitimately hold an older completed head while
+      // later segment receipts are still in flight. Once the group's own tail
+      // waterline has passed, the same state is no longer deferral: it means a
+      // completion locator was lost or corrupted and must remain fail-stop.
+      if (!status.grouped() ||
+          status.groupTailSeqId <= completedSeqId) {
+        poisonTapeFailureLocked();
+        return false;
+      }
+      return true;
+    }
+    // The only legal older resident is a grouped source held for a tail that
+    // has now completed. An ungrouped or already-past-tail head is a skipped
+    // FIFO owner and retains the historical fail-stop behavior.
+    if (head->seqId < completedSeqId &&
+        (!status.grouped() || status.groupTailSeqId < completedSeqId)) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    if (!reclaimCompletedTapeHead(lock, head->seqId)) {
+      return false;
+    }
+  }
 }
 
 bool QueueLifecycleController::reclaimCompletedTapeHead(

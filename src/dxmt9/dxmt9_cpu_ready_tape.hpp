@@ -422,6 +422,13 @@ struct ChunkSlotControl {
 // separately bounded compatibility payload lane. Every method is called under
 // the owning queue's scheduling mutex unless explicitly documented otherwise.
 class CpuReadyTape {
+ private:
+  enum class GroupCompletionStatus : std::uint8_t {
+    Invalid,
+    Pending,
+    Complete,
+  };
+
  public:
   enum class PayloadKind {
     Legacy,
@@ -440,6 +447,21 @@ class CpuReadyTape {
     GPU = Submitted,
     Completed,
     Reclaiming,
+  };
+
+  enum class ReclaimDisposition : std::uint8_t {
+    Invalid,
+    AwaitingGroupCompletion,
+    Ready,
+  };
+
+  struct ReclaimStatus {
+    ReclaimDisposition disposition = ReclaimDisposition::Invalid;
+    std::uint64_t groupTailSeqId = 0;
+    std::uint32_t groupSourceCount = 0;
+    std::uint32_t groupSourceIndex = 0;
+
+    bool grouped() const noexcept { return groupSourceCount > 1u; }
   };
 
   struct Reservation {
@@ -2048,14 +2070,60 @@ class CpuReadyTape {
   bool beginReclaim(CpuReadySourceId id,
                     CpuReadyStorageRef storage) noexcept {
     auto* entry = resolveEntry(id, storage);
+    const auto status = reclaimStatus(id, storage);
     if (!entry || id.index != sourceHead_ ||
-        entry->state != State::Completed ||
-        entry->readyPublicationReserved || !groupMembersCompleted(*entry)) {
-      noteStaleReject();
+        status.disposition != ReclaimDisposition::Ready) {
+      if (status.disposition == ReclaimDisposition::Invalid ||
+          !entry || id.index != sourceHead_) {
+        noteStaleReject();
+      }
       return false;
     }
     entry->state = State::Reclaiming;
     return true;
+  }
+
+  // Pure lifecycle observation used by QueueLifecycle to distinguish the
+  // expected SegmentSerial group hold from a stale/corrupt reclaim locator.
+  // It does not make a failed probe count as a stale access; beginReclaim()
+  // retains that accounting for genuinely invalid transitions.
+  ReclaimStatus reclaimStatus(CpuReadySourceId id,
+                              CpuReadyStorageRef storage) const noexcept {
+    const auto* entry = resolveEntry(id, storage);
+    if (!entry || entry->state != State::Completed ||
+        entry->readyPublicationReserved || entry->arenaOwnerDetached) {
+      return {};
+    }
+    if (!entry->strictAdmission) {
+      if (entry->groupRawOrdinal != 0u ||
+          entry->groupHeadSourceOrdinal != 0u ||
+          entry->groupBuildGeneration != 0u ||
+          entry->groupTailSeqId != 0u ||
+          entry->groupSourceCount != 0u || entry->groupSourceIndex != 0u) {
+        return {};
+      }
+      return ReclaimStatus{
+          .disposition = ReclaimDisposition::Ready,
+          .groupTailSeqId = entry->seqId,
+          .groupSourceCount = 1u,
+          .groupSourceIndex = 0u,
+      };
+    }
+    if (!groupIdentityValid(*entry)) {
+      return {};
+    }
+    const auto groupStatus = groupCompletionStatus(*entry);
+    if (groupStatus == GroupCompletionStatus::Invalid) {
+      return {};
+    }
+    return ReclaimStatus{
+        .disposition = groupStatus == GroupCompletionStatus::Complete
+            ? ReclaimDisposition::Ready
+            : ReclaimDisposition::AwaitingGroupCompletion,
+        .groupTailSeqId = entry->groupTailSeqId,
+        .groupSourceCount = entry->groupSourceCount,
+        .groupSourceIndex = entry->groupSourceIndex,
+    };
   }
 
   // Explicit two-phase reclaim capability. Generic resolve/matches/storage
@@ -2212,12 +2280,39 @@ class CpuReadyTape {
     } arenaDetachKind = ArenaDetachKind::None;
   };
 
-  bool groupMembersCompleted(const Entry& group) const noexcept {
+  static bool groupIdentityValid(const Entry& entry) noexcept {
+    if (!entry.strictAdmission || entry.seqId == 0u ||
+        entry.groupRawOrdinal == 0u ||
+        entry.groupHeadSourceOrdinal == 0u ||
+        entry.groupBuildGeneration == 0u || entry.groupSourceCount == 0u ||
+        entry.groupTailSeqId == 0u ||
+        entry.groupSourceCount > kMaxArenaBatchSources ||
+        entry.groupSourceIndex >= entry.groupSourceCount) {
+      return false;
+    }
+    const auto remaining = static_cast<std::uint64_t>(
+        entry.groupSourceCount - 1u - entry.groupSourceIndex);
+    return remaining <= std::numeric_limits<std::uint64_t>::max() -
+                            entry.seqId &&
+           entry.groupTailSeqId == entry.seqId + remaining &&
+           entry.groupSourceIndex <=
+               std::numeric_limits<std::uint64_t>::max() -
+                   entry.groupHeadSourceOrdinal &&
+           entry.sourceOrdinal ==
+               entry.groupHeadSourceOrdinal + entry.groupSourceIndex;
+  }
+
+  GroupCompletionStatus groupCompletionStatus(
+      const Entry& group) const noexcept {
+    if (!groupIdentityValid(group)) {
+      return GroupCompletionStatus::Invalid;
+    }
     if (group.groupSourceCount <= 1u) {
-      return true;
+      return GroupCompletionStatus::Complete;
     }
     std::size_t observed = 0;
     std::size_t firstObserved = group.groupSourceCount;
+    bool complete = true;
     std::array<bool, kMaxArenaBatchSources> indices{};
     for (std::size_t i = 0; i < capacity(); ++i) {
       const auto& member = entries_[i];
@@ -2229,17 +2324,23 @@ class CpuReadyTape {
         continue;
       }
       ++observed;
-      if (member.groupSourceIndex >= group.groupSourceCount ||
+      if (!groupIdentityValid(member) ||
+          member.groupSourceIndex >= group.groupSourceCount ||
           member.groupSourceIndex >= indices.size() ||
           indices[member.groupSourceIndex]) {
-        return false;
+        return GroupCompletionStatus::Invalid;
       }
       indices[member.groupSourceIndex] = true;
       firstObserved = std::min(firstObserved,
                                static_cast<std::size_t>(
                                    member.groupSourceIndex));
-      if (member.state != State::Completed && member.state != State::Reclaiming) {
-        return false;
+      if (member.state == State::Free || member.state == State::Writing ||
+          member.state == State::Sealed) {
+        return GroupCompletionStatus::Invalid;
+      }
+      if (member.state != State::Completed &&
+          member.state != State::Reclaiming) {
+        complete = false;
       }
     }
     // Members already reclaimed are intentionally absent from the ring, but
@@ -2247,14 +2348,19 @@ class CpuReadyTape {
     // fail closed rather than accidentally turning a forged/ABA group into a
     // reclaimable tail.
     if (observed == 0 || firstObserved >= group.groupSourceCount) {
-      return false;
+      return GroupCompletionStatus::Invalid;
     }
     for (std::size_t i = firstObserved; i < group.groupSourceCount; ++i) {
       if (!indices[i]) {
-        return false;
+        return GroupCompletionStatus::Invalid;
       }
     }
-    return observed <= group.groupSourceCount;
+    return complete ? GroupCompletionStatus::Complete
+                    : GroupCompletionStatus::Pending;
+  }
+
+  bool groupMembersCompleted(const Entry& group) const noexcept {
+    return groupCompletionStatus(group) == GroupCompletionStatus::Complete;
   }
 
   struct Page {

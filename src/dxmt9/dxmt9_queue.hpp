@@ -990,6 +990,11 @@ class QueueLifecycleController {
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
+  // Reclaim every completed FIFO owner at or below the published completion
+  // waterline. A valid SegmentSerial head may remain resident until its tail
+  // completes; stale, corrupt, or skipped non-group heads still fail-stop.
+  bool reclaimCompletedTapeHeadsThrough(std::unique_lock<std::mutex>& lock,
+                                        u64 completedSeqId);
   // TLA+: ReclaimFree.
   bool reclaimCompletedTapeHead(std::unique_lock<std::mutex>& lock, u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
