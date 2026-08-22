@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 // D3D9 constant mirrors. This header is compiled natively (no windows.h /
@@ -359,6 +360,267 @@ inline bool samplerStateSlot(std::uint32_t type,
     return slot < kPeSamplerStateSlots;
 }
 
+// ---------------------------------------------------------------------------
+// Typed slot keys (additive, migration-only untyped surface stays above).
+//
+// R-PE-TYPED-SLOTS: the audit that motivated this section found the tables
+// above keyed by a bare std::uint32_t, so nothing at the type level stops
+// e.g. a sampler index from being passed where a render-state slot, TSS
+// type, or transform state was expected -- the only thing that would catch
+// it is differential-golden coverage happening to exercise that exact path.
+//
+// Six distinct index spaces are in play here, verified against the code
+// above rather than assumed:
+//   - RenderStateSlot        D3DRS_* value, used directly as the
+//                             FixedStateTable<kPeRenderStateSlots> index
+//                             (renderStateShadow / pendingRenderStates /
+//                             stateBlockRenderStateRestore).
+//   - TextureStageIndex      texture-stage ordinal (0..7), the ROW of the
+//                             kPeTextureStageSlots x kPeTextureStageStateSlots
+//                             matrices (tssShadow / pendingTss), produced by
+//                             clamping via textureStageSlot().
+//   - TextureStageStateType  D3DTSS_* type, the COLUMN of the same TSS
+//                             matrices, produced by textureStageStateSlot().
+//   - SamplerIndex           internal sampler slot (0..kPeSamplerSlots-1,
+//                             fragment samplers then vertex-texture
+//                             samplers), the ROW of samplerStateShadow /
+//                             pendingSamplerStates, produced by samplerSlot()
+//                             / textureBindingSlot() from an external
+//                             D3DSAMP_*/D3DDMAPSAMPLER-relative ordinal.
+//   - SamplerStateType       D3DSAMPLERSTATETYPE value, the COLUMN of the
+//                             same sampler matrices, produced by
+//                             samplerStateSlot().
+//   - TransformState         D3DTRANSFORMSTATETYPE value, the external key
+//                             FixedTransformTable::get/set/erase/contains
+//                             accept directly (it does its own internal
+//                             slotForState()/stateForSlot() remapping).
+//
+// Key design: each space is a distinct `enum class Tag : std::uint32_t {}`
+// with no enumerators ("opaque newtype" pattern) rather than a
+// std::variant<...> over the six spaces. A variant would need a runtime
+// discriminant, pay a branch/visit to get the value back out, and -- worse
+// for this use -- would let one variable hold "a slot from some space",
+// which is exactly the untyped hazard being removed. An `enum class` with a
+// fixed uint32_t underlying type has the same object representation and
+// value semantics as a plain uint32_t (guaranteed by the standard: no
+// hidden state, trivially copyable, standard-layout), so every conversion
+// to/from the underlying value below is a single `static_cast` that
+// optimizes to a no-op, and the typed accessors below compile down to the
+// exact same array indexing FixedStateTable/FixedStateMatrix/
+// FixedTransformTable already did -- zero-overhead in the same sense the
+// hot DOD tables above already are. What the enum class actually buys is
+// static overload resolution: RenderStateSlot and SamplerIndex are
+// unrelated types with no implicit conversion between them (and none to
+// plain uint32_t either), so a call site that mixes them fails to compile
+// instead of silently indexing the wrong table at runtime.
+enum class RenderStateSlot : std::uint32_t {};
+enum class TextureStageIndex : std::uint32_t {};
+enum class TextureStageStateType : std::uint32_t {};
+enum class SamplerIndex : std::uint32_t {};
+enum class SamplerStateType : std::uint32_t {};
+enum class TransformState : std::uint32_t {};
+
+constexpr std::uint32_t rawSlot(RenderStateSlot key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+constexpr std::uint32_t rawSlot(TextureStageIndex key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+constexpr std::uint32_t rawSlot(TextureStageStateType key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+constexpr std::uint32_t rawSlot(SamplerIndex key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+constexpr std::uint32_t rawSlot(SamplerStateType key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+constexpr std::uint32_t rawSlot(TransformState key) noexcept {
+    return static_cast<std::uint32_t>(key);
+}
+
+// Typed constructors. These wrap the existing untyped clamp/lookup
+// functions above (textureStageSlot, textureStageStateSlot, samplerSlot,
+// samplerStateSlot) rather than duplicating their logic, so the typed and
+// untyped surfaces can never disagree about what a given external D3D9
+// ordinal maps to.
+constexpr RenderStateSlot renderStateSlotKey(std::uint32_t state) noexcept {
+    return static_cast<RenderStateSlot>(state);
+}
+constexpr TextureStageIndex textureStageIndexKey(std::uint32_t stage) noexcept {
+    return static_cast<TextureStageIndex>(textureStageSlot(stage));
+}
+constexpr TextureStageStateType textureStageStateTypeKey(std::uint32_t type) noexcept {
+    return static_cast<TextureStageStateType>(textureStageStateSlot(type));
+}
+inline bool samplerIndexKey(std::uint32_t sampler, SamplerIndex& out) noexcept {
+    std::uint32_t slot = 0;
+    if (!samplerSlot(sampler, slot)) {
+        return false;
+    }
+    out = static_cast<SamplerIndex>(slot);
+    return true;
+}
+inline bool samplerStateTypeKey(std::uint32_t type, SamplerStateType& out) noexcept {
+    std::uint32_t slot = 0;
+    if (!samplerStateSlot(type, slot)) {
+        return false;
+    }
+    out = static_cast<SamplerStateType>(slot);
+    return true;
+}
+constexpr TransformState transformStateKey(std::uint32_t state) noexcept {
+    return static_cast<TransformState>(state);
+}
+
+// Typed façades over the existing untyped tables. Each view holds a single
+// reference to the same storage the untyped surface uses (no duplicated
+// state, nothing to keep in sync) and forwards every call straight to the
+// underlying get/set/contains/erase; the Key (and, for the matrix view,
+// RowKey/ColKey) template parameters are fixed by the alias a call site
+// uses, so passing a foreign key type is a hard compile error rather than a
+// silent cross-index-space bug.
+template<typename Key, std::size_t Slots>
+class TypedStateTableView {
+public:
+    explicit constexpr TypedStateTableView(FixedStateTable<Slots>& table) noexcept
+        : table_(table) {}
+
+    bool contains(Key key) const noexcept { return table_.contains(rawSlot(key)); }
+    bool empty() const noexcept { return table_.empty(); }
+    std::uint32_t size() const noexcept { return table_.size(); }
+    bool get(Key key, std::uint32_t& value) const noexcept {
+        return table_.get(rawSlot(key), value);
+    }
+    void set(Key key, std::uint32_t value) noexcept { table_.set(rawSlot(key), value); }
+    void erase(Key key) noexcept { table_.erase(rawSlot(key)); }
+    void clear() noexcept { table_.clear(); }
+
+private:
+    FixedStateTable<Slots>& table_;
+};
+
+template<typename RowKey, typename ColKey, std::size_t Rows, std::size_t Slots>
+class TypedStateMatrixView {
+public:
+    explicit constexpr TypedStateMatrixView(FixedStateMatrix<Rows, Slots>& matrix) noexcept
+        : matrix_(matrix) {}
+
+    bool contains(RowKey row, ColKey col) const noexcept {
+        return matrix_.contains(rawSlot(row), rawSlot(col));
+    }
+    bool empty() const noexcept { return matrix_.empty(); }
+    std::uint32_t size() const noexcept { return matrix_.size(); }
+    bool get(RowKey row, ColKey col, std::uint32_t& value) const noexcept {
+        return matrix_.get(rawSlot(row), rawSlot(col), value);
+    }
+    void set(RowKey row, ColKey col, std::uint32_t value) noexcept {
+        matrix_.set(rawSlot(row), rawSlot(col), value);
+    }
+    void clear() noexcept { matrix_.clear(); }
+
+private:
+    FixedStateMatrix<Rows, Slots>& matrix_;
+};
+
+class TypedTransformTableView {
+public:
+    explicit constexpr TypedTransformTableView(FixedTransformTable& table) noexcept
+        : table_(table) {}
+
+    bool contains(TransformState state) const noexcept {
+        return table_.contains(rawSlot(state));
+    }
+    bool empty() const noexcept { return table_.empty(); }
+    std::uint32_t size() const noexcept { return table_.size(); }
+    bool get(TransformState state, D9CMatrix& value) const noexcept {
+        return table_.get(rawSlot(state), value);
+    }
+    void set(TransformState state, const D9CMatrix& value) noexcept {
+        table_.set(rawSlot(state), value);
+    }
+    void erase(TransformState state) noexcept { table_.erase(rawSlot(state)); }
+    void clear() noexcept { table_.clear(); }
+
+private:
+    FixedTransformTable& table_;
+};
+
+using RenderStateTableView = TypedStateTableView<RenderStateSlot, kPeRenderStateSlots>;
+using TssTableView = TypedStateMatrixView<TextureStageIndex, TextureStageStateType,
+                                          kPeTextureStageSlots, kPeTextureStageStateSlots>;
+using SamplerStateTableView = TypedStateMatrixView<SamplerIndex, SamplerStateType,
+                                                    kPeSamplerSlots, kPeSamplerStateSlots>;
+
+// Read-only counterparts, needed wherever the shadow is only reachable
+// through a `const PeHotStateShadow&` (e.g. mini-replay / process-vertices
+// read paths). Same zero-overhead reasoning as the mutable views above;
+// these simply omit set/erase/clear because a const reference cannot offer
+// them.
+template<typename Key, std::size_t Slots>
+class ConstTypedStateTableView {
+public:
+    explicit constexpr ConstTypedStateTableView(const FixedStateTable<Slots>& table) noexcept
+        : table_(table) {}
+
+    bool contains(Key key) const noexcept { return table_.contains(rawSlot(key)); }
+    bool empty() const noexcept { return table_.empty(); }
+    std::uint32_t size() const noexcept { return table_.size(); }
+    bool get(Key key, std::uint32_t& value) const noexcept {
+        return table_.get(rawSlot(key), value);
+    }
+
+private:
+    const FixedStateTable<Slots>& table_;
+};
+
+template<typename RowKey, typename ColKey, std::size_t Rows, std::size_t Slots>
+class ConstTypedStateMatrixView {
+public:
+    explicit constexpr ConstTypedStateMatrixView(
+        const FixedStateMatrix<Rows, Slots>& matrix) noexcept
+        : matrix_(matrix) {}
+
+    bool contains(RowKey row, ColKey col) const noexcept {
+        return matrix_.contains(rawSlot(row), rawSlot(col));
+    }
+    bool empty() const noexcept { return matrix_.empty(); }
+    std::uint32_t size() const noexcept { return matrix_.size(); }
+    bool get(RowKey row, ColKey col, std::uint32_t& value) const noexcept {
+        return matrix_.get(rawSlot(row), rawSlot(col), value);
+    }
+
+private:
+    const FixedStateMatrix<Rows, Slots>& matrix_;
+};
+
+class ConstTypedTransformTableView {
+public:
+    explicit constexpr ConstTypedTransformTableView(const FixedTransformTable& table) noexcept
+        : table_(table) {}
+
+    bool contains(TransformState state) const noexcept {
+        return table_.contains(rawSlot(state));
+    }
+    bool empty() const noexcept { return table_.empty(); }
+    std::uint32_t size() const noexcept { return table_.size(); }
+    bool get(TransformState state, D9CMatrix& value) const noexcept {
+        return table_.get(rawSlot(state), value);
+    }
+
+private:
+    const FixedTransformTable& table_;
+};
+
+using ConstRenderStateTableView =
+    ConstTypedStateTableView<RenderStateSlot, kPeRenderStateSlots>;
+using ConstTssTableView =
+    ConstTypedStateMatrixView<TextureStageIndex, TextureStageStateType,
+                              kPeTextureStageSlots, kPeTextureStageStateSlots>;
+using ConstSamplerStateTableView =
+    ConstTypedStateMatrixView<SamplerIndex, SamplerStateType,
+                              kPeSamplerSlots, kPeSamplerStateSlots>;
+
 inline D9CMatrix identityTransformMatrix() noexcept {
     D9CMatrix matrix{};
     matrix.m[0] = 1.0f;
@@ -468,5 +730,80 @@ struct PeHotStateShadow {
     bool renderStateEquals(std::uint32_t state, std::uint32_t value) const noexcept {
         std::uint32_t shadowValue = 0;
         return renderStateShadow.get(state, shadowValue) && shadowValue == value;
+    }
+
+    // --- Typed accessors (R-PE-TYPED-SLOTS) ---------------------------------
+    // Additive views over the exact same storage the untyped fields above
+    // use (renderStateShadow, pendingRenderStates, stateBlockRenderStateRestore,
+    // tssShadow, pendingTss, samplerStateShadow, pendingSamplerStates,
+    // transformShadow, pendingTransforms, stateBlockTransformRestore,
+    // stateBlockTransformRecorded). Callers that do not own
+    // d3d9_pe_device.cpp should prefer these; the untyped fields remain the
+    // migration surface d3d9_pe_device.cpp keeps using unchanged.
+    RenderStateTableView renderStateShadowTyped() noexcept {
+        return RenderStateTableView(renderStateShadow);
+    }
+    RenderStateTableView pendingRenderStatesTyped() noexcept {
+        return RenderStateTableView(pendingRenderStates);
+    }
+    RenderStateTableView stateBlockRenderStateRestoreTyped() noexcept {
+        return RenderStateTableView(stateBlockRenderStateRestore);
+    }
+    TssTableView tssShadowTyped() noexcept { return TssTableView(tssShadow); }
+    TssTableView pendingTssTyped() noexcept { return TssTableView(pendingTss); }
+    SamplerStateTableView samplerStateShadowTyped() noexcept {
+        return SamplerStateTableView(samplerStateShadow);
+    }
+    SamplerStateTableView pendingSamplerStatesTyped() noexcept {
+        return SamplerStateTableView(pendingSamplerStates);
+    }
+    TypedTransformTableView transformShadowTyped() noexcept {
+        return TypedTransformTableView(transformShadow);
+    }
+    TypedTransformTableView pendingTransformsTyped() noexcept {
+        return TypedTransformTableView(pendingTransforms);
+    }
+    TypedTransformTableView stateBlockTransformRestoreTyped() noexcept {
+        return TypedTransformTableView(stateBlockTransformRestore);
+    }
+    TypedTransformTableView stateBlockTransformRecordedTyped() noexcept {
+        return TypedTransformTableView(stateBlockTransformRecorded);
+    }
+
+    // const overloads (cv-qualification-based overloading, not name
+    // collision) for read paths that only see a `const PeHotStateShadow&`.
+    ConstRenderStateTableView renderStateShadowTyped() const noexcept {
+        return ConstRenderStateTableView(renderStateShadow);
+    }
+    ConstRenderStateTableView pendingRenderStatesTyped() const noexcept {
+        return ConstRenderStateTableView(pendingRenderStates);
+    }
+    ConstRenderStateTableView stateBlockRenderStateRestoreTyped() const noexcept {
+        return ConstRenderStateTableView(stateBlockRenderStateRestore);
+    }
+    ConstTssTableView tssShadowTyped() const noexcept { return ConstTssTableView(tssShadow); }
+    ConstTssTableView pendingTssTyped() const noexcept { return ConstTssTableView(pendingTss); }
+    ConstSamplerStateTableView samplerStateShadowTyped() const noexcept {
+        return ConstSamplerStateTableView(samplerStateShadow);
+    }
+    ConstSamplerStateTableView pendingSamplerStatesTyped() const noexcept {
+        return ConstSamplerStateTableView(pendingSamplerStates);
+    }
+    ConstTypedTransformTableView transformShadowTyped() const noexcept {
+        return ConstTypedTransformTableView(transformShadow);
+    }
+    ConstTypedTransformTableView pendingTransformsTyped() const noexcept {
+        return ConstTypedTransformTableView(pendingTransforms);
+    }
+    ConstTypedTransformTableView stateBlockTransformRestoreTyped() const noexcept {
+        return ConstTypedTransformTableView(stateBlockTransformRestore);
+    }
+    ConstTypedTransformTableView stateBlockTransformRecordedTyped() const noexcept {
+        return ConstTypedTransformTableView(stateBlockTransformRecorded);
+    }
+
+    bool renderStateEqualsTyped(RenderStateSlot state, std::uint32_t value) const noexcept {
+        std::uint32_t shadowValue = 0;
+        return renderStateShadow.get(rawSlot(state), shadowValue) && shadowValue == value;
     }
 };

@@ -2247,8 +2247,8 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
 static D9CMatrix transformOrIdentity(const PeHotStateShadow& state,
                                      D3DTRANSFORMSTATETYPE transformState) {
     D9CMatrix matrix = identityTransformMatrix();
-    (void)state.transformShadow.get(
-        static_cast<std::uint32_t>(transformState), matrix);
+    (void)state.transformShadowTyped().get(
+        transformStateKey(static_cast<std::uint32_t>(transformState)), matrix);
     return matrix;
 }
 
@@ -2351,7 +2351,8 @@ HRESULT processVertices(const Context& context,
     }
     auto renderStateValue = [&](D3DRENDERSTATETYPE state) -> DWORD {
         uint32_t shadowValue = 0;
-        if (context.state.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
+        if (context.state.renderStateShadowTyped().get(
+                renderStateSlotKey(static_cast<std::uint32_t>(state)), shadowValue)) {
             return shadowValue;
         }
         return dxmt9c_device_get_render_state(context.device, static_cast<uint32_t>(state));
@@ -2722,15 +2723,16 @@ HRESULT processVertices(const Context& context,
     if (programmable) {
         for (UINT sampler = 0; sampler < shaderTextures.vertexTextures.size(); ++sampler) {
             const UINT samplerSlot = kPeFragmentSamplerSlots + sampler;
+            const SamplerIndex samplerIndex = static_cast<SamplerIndex>(samplerSlot);
             const auto samplerStateValue =
                 [&](D3DSAMPLERSTATETYPE type, DWORD fallback) -> DWORD {
-                    uint32_t stateSlot = 0;
+                    SamplerStateType stateType{};
                     uint32_t value = 0;
-                    if (!samplerStateSlot(type, stateSlot)) {
+                    if (!samplerStateTypeKey(static_cast<std::uint32_t>(type), stateType)) {
                         return fallback;
                     }
-                    if (context.state.samplerStateShadow.get(
-                            samplerSlot, stateSlot, value)) {
+                    if (context.state.samplerStateShadowTyped().get(
+                            samplerIndex, stateType, value)) {
                         return value;
                     }
                     return dxmt9c_device_get_sampler_state(
