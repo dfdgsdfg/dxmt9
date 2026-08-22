@@ -277,6 +277,49 @@ struct QueueCompletionSource {
   }
 };
 
+// Fixed-capacity value ledger for completed SegmentSerial event tails. The
+// consumer must drain this ledger; an unconsumed producer cannot grow it
+// without bound and fails closed on overflow. Tail seqIds are monotonic so a
+// wrapped/ABA publication cannot masquerade as a newer event settlement.
+struct ArenaGroupSettlementLedger {
+  static constexpr std::size_t kCapacity = 128u;
+  std::array<CpuReadyTape::ArenaGroupSettlement, kCapacity> entries{};
+  std::size_t head = 0;
+  std::size_t count = 0;
+  std::uint64_t lastAppendedTailSeqId = 0;
+  std::uint64_t lastConsumedTailSeqId = 0;
+
+  bool append(CpuReadyTape::ArenaGroupSettlement settlement) noexcept {
+    if (!settlement.valid() || count == kCapacity ||
+        settlement.tailSeqId <= lastAppendedTailSeqId) {
+      return false;
+    }
+    entries[(head + count) % kCapacity] = settlement;
+    ++count;
+    lastAppendedTailSeqId = settlement.tailSeqId;
+    return true;
+  }
+
+  bool consume(CpuReadyTape::ArenaGroupSettlement& settlement) noexcept {
+    if (count == 0) {
+      return false;
+    }
+    settlement = entries[head];
+    if (!settlement.valid() || settlement.tailSeqId <= lastConsumedTailSeqId) {
+      return false;
+    }
+    entries[head] = {};
+    head = (head + 1u) % kCapacity;
+    --count;
+    lastConsumedTailSeqId = settlement.tailSeqId;
+    return true;
+  }
+
+  const CpuReadyTape::ArenaGroupSettlement* front() const noexcept {
+    return count == 0 ? nullptr : &entries[head];
+  }
+};
+
 bool queueCompletionSourceExactlyEqual(
     const QueueCompletionSource& left,
     const QueueCompletionSource& right) noexcept;
@@ -774,6 +817,8 @@ class QueueLifecycleController {
     std::atomic<u64>* nextSeqId = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
     std::deque<u64>* completedPresentSeqQueue = nullptr;
+    ArenaGroupSettlementLedger*
+        completedArenaGroupSettlements = nullptr;
     size_t* inflightCount = nullptr;
     // Atomic only so the map DISCARD fast path can read the GPU watermark
     // without `mutex` (design T2c). This controller is the SOLE writer
@@ -910,6 +955,9 @@ class QueueLifecycleController {
                            u64 seqId);
   // TLA+: FinishDequeue, and PresentComplete for eligible present seq IDs.
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
+  // Consume value-owned SegmentSerial event settlement only once its tail has
+  // crossed the queue completion waterline.
+  bool drainCompletedArenaGroupSettlementsLocked(u64 completedSeqId) noexcept;
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
@@ -1048,6 +1096,11 @@ class QueueLifecycleController {
   size_t tentativeReadyPrefixCount_ = 0;
   std::uint64_t cpuReadyCapacityProgressGeneration_ = 0;
   PostEncodeCompletionLedger postEncodeCompletionLedger_{};
+  ArenaGroupSettlementLedger completedArenaGroupSettlements_{};
+  std::uint64_t completedEventSettlementCount_ = 0;
+  std::uint64_t completedEventTailSeqId_ = 0;
+  std::optional<CpuReadyTape::ArenaGroupSettlement>
+      lastCompletedEventSettlement_{};
   std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
 
  public:
@@ -1097,6 +1150,23 @@ class QueueLifecycleController {
   // processed, false after the controller-owned pending-stop latch is set and
   // the queue is empty.
   bool processOnePendingCompletion();
+  bool consumeCompletedArenaGroupSettlement(
+      CpuReadyTape::ArenaGroupSettlement& settlement) noexcept {
+    return completedArenaGroupSettlements_.consume(settlement);
+  }
+  ArenaGroupSettlementLedger* completedArenaGroupSettlementLedger() noexcept {
+    return &completedArenaGroupSettlements_;
+  }
+  std::uint64_t completedEventSettlementCount() const noexcept {
+    return completedEventSettlementCount_;
+  }
+  std::uint64_t completedEventTailSeqId() const noexcept {
+    return completedEventTailSeqId_;
+  }
+  const std::optional<CpuReadyTape::ArenaGroupSettlement>&
+  lastCompletedEventSettlement() const noexcept {
+    return lastCompletedEventSettlement_;
+  }
   // CPU-only specs use this to exercise the completion-watcher expansion
   // path without manufacturing a fake Objective-C command-buffer handle.
   // Production submissions enter the same pending queue through submit().

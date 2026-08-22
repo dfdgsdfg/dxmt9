@@ -21,6 +21,7 @@
 namespace {
 
 using dxmt9::core::metalqueue::QueueCompletionSource;
+using dxmt9::core::metalqueue::ArenaGroupSettlementLedger;
 using dxmt9::core::metalqueue::QueueLifecycleController;
 using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::ReadySlotSnapshot;
@@ -125,6 +126,31 @@ void mapWaitTargetNeverExceedsCommittedWaterline() {
           "committed resource mark keeps its requested sequence");
   checkEq(committedSequenceWaitTarget(0, 6), 0ull,
           "no resource dependency remains no wait");
+}
+
+void undrainedSettlementLedgerFailsClosedAtCapacity() {
+  ArenaGroupSettlementLedger ledger;
+  for (std::uint64_t tail = 1; tail <= ArenaGroupSettlementLedger::kCapacity;
+       ++tail) {
+    check(ledger.append(CpuReadyTape::ArenaGroupSettlement{
+              .rawOrdinal = tail,
+              .buildGeneration = tail,
+              .firstSourceOrdinal = tail,
+              .tailSeqId = tail,
+              .sourceCount = 1,
+              .hasPresent = false,
+          }),
+          "an undrained ledger accepts only its fixed capacity");
+  }
+  check(!ledger.append(CpuReadyTape::ArenaGroupSettlement{
+            .rawOrdinal = ArenaGroupSettlementLedger::kCapacity + 1u,
+            .buildGeneration = ArenaGroupSettlementLedger::kCapacity + 1u,
+            .firstSourceOrdinal = ArenaGroupSettlementLedger::kCapacity + 1u,
+            .tailSeqId = ArenaGroupSettlementLedger::kCapacity + 1u,
+            .sourceCount = 1,
+            .hasPresent = false,
+        }),
+        "an undrained ledger rejects overflow instead of growing");
 }
 
 void appendsSingleLegacySource() {
@@ -637,6 +663,8 @@ struct QueueFixture {
         .nextSeqId = &nextSeqId,
         .completedSeqQueue = &completedSeqQueue,
         .completedPresentSeqQueue = &completedPresentSeqQueue,
+        .completedArenaGroupSettlements =
+            controller.completedArenaGroupSettlementLedger(),
         .inflightCount = &inflightCount,
         .completedSeqId = &completedSeqId,
         .presentCompletedSeqId = &presentCompletedSeqId,
@@ -690,6 +718,37 @@ struct QueueFixture {
     return ready[offset].controlIndex;
   }
 };
+
+void finishPathDrainsSettlementLedgerBeyondCapacity() {
+  QueueFixture fixture;
+  constexpr std::uint64_t eventCount = static_cast<std::uint64_t>(
+      ArenaGroupSettlementLedger::kCapacity * 2u + 7u);
+  for (std::uint64_t tail = 1; tail <= eventCount; ++tail) {
+    check(fixture.controller.completedArenaGroupSettlementLedger()->append(
+              CpuReadyTape::ArenaGroupSettlement{
+                  .rawOrdinal = tail,
+                  .buildGeneration = tail,
+                  .firstSourceOrdinal = tail,
+                  .tailSeqId = tail,
+                  .sourceCount = 1,
+                  .hasPresent = false,
+              }),
+          "production fixture appends the next event settlement");
+    fixture.completedSeqQueue.push_back(tail);
+    fixture.lastCommittedSeqId = tail;
+    std::unique_lock lock(fixture.mutex);
+    check(fixture.controller.runFinishIteration(lock),
+          "finish path consumes the completed event settlement");
+  }
+  checkEq(fixture.controller.completedEventSettlementCount(), eventCount,
+          "finish path drains more events than the fixed ledger capacity");
+  checkEq(fixture.controller.completedEventTailSeqId(), eventCount,
+          "finish path advances the monotonic event tail waterline");
+  const auto& last = fixture.controller.lastCompletedEventSettlement();
+  check(last.has_value() && !last->hasPresent &&
+            last->tailSeqId == eventCount,
+        "finish path retains the value-owned final non-Present status");
+}
 
 void appendShapeTestDraw(ChunkSlot& slot,
                          std::span<const dxmt9::core::DrawParam> draws,
@@ -3163,6 +3222,8 @@ int main() {
   try {
     dceChunkLookaheadProgressPolicyIsFailOpen();
     mapWaitTargetNeverExceedsCommittedWaterline();
+    undrainedSettlementLedgerFailsClosedAtCapacity();
+    finishPathDrainsSettlementLedgerBeyondCapacity();
     appendsSingleLegacySource();
     appendsMultiSourceBatchInStrictSeqOrder();
     respectsAlreadyQueuedCompletions();

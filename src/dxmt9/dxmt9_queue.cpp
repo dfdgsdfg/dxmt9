@@ -2734,11 +2734,37 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   return true;
 }
 
+bool QueueLifecycleController::drainCompletedArenaGroupSettlementsLocked(
+    u64 completedSeqId) noexcept {
+  // The completion watcher appends a group result before publishing its
+  // source sequence to completedSeqQueue. Keep the value-owned result private
+  // until the finish thread has consumed the group's tail, so the event
+  // waterline cannot lead the source FIFO.
+  for (;;) {
+    const auto* front = completedArenaGroupSettlements_.front();
+    if (!front || front->tailSeqId > completedSeqId) {
+      return true;
+    }
+    CpuReadyTape::ArenaGroupSettlement settlement;
+    if (!completedArenaGroupSettlements_.consume(settlement) ||
+        settlement.tailSeqId <= completedEventTailSeqId_) {
+      return false;
+    }
+    completedEventTailSeqId_ = settlement.tailSeqId;
+    lastCompletedEventSettlement_ = settlement;
+    ++completedEventSettlementCount_;
+  }
+}
+
 bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& lock,
                                                   const std::function<void(u64)>& onAfterFinish) {
   // TLA+: FinishDequeue followed by ReclaimFree.
   u64 seqId = 0;
   if (!drainCompletedSequence(lock, seqId)) {
+    return false;
+  }
+  if (!drainCompletedArenaGroupSettlementsLocked(seqId)) {
+    poisonTapeFailureLocked();
     return false;
   }
   // SEGMENT-HOLD: bracket only this function's OWN bookkeeping -- the head
@@ -3812,6 +3838,23 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     if (!completed) {
       poisonTapeFailureLocked();
       return false;
+    }
+    if (binding.completedArenaGroupSettlements) {
+      for (const auto& source : completionSources) {
+        if (source.receiptBacked()) {
+          continue;
+        }
+        const auto settlement =
+            binding.cpuReadyTape->takeCompletedArenaGroupSettlement(
+                source.source);
+        if (!settlement) {
+          continue;
+        }
+        if (!binding.completedArenaGroupSettlements->append(*settlement)) {
+          poisonTapeFailureLocked();
+          return false;
+        }
+      }
     }
     for (const auto& source : completionSources) {
       if (!source.receiptBacked()) {

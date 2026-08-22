@@ -419,6 +419,31 @@ void watchdogRejectsStaleStoresAcrossCapacityReuse() {
         "watchdog reuse stress exercised a current generation");
 }
 
+void watchdogConservesSegmentSerialProgressPerSource() {
+  dxmt9::SchedulingProgressWatchdog watchdog(
+      /*enabled=*/true, /*thresholdMs=*/1000,
+      /*startSamplerThread=*/false);
+  constexpr std::array seqIds{41ull, 42ull, 43ull};
+  for (const auto seqId : seqIds) {
+    watchdog.noteAccepted(seqId, false);
+  }
+  watchdog.notePublished(seqIds[0], false);
+  watchdog.notePublished(seqIds[1], false);
+  watchdog.notePublished(seqIds[2], true);
+
+  for (std::size_t i = 0; i < seqIds.size(); ++i) {
+    const auto snapshot = watchdog.slotSnapshotForTest(seqIds[i]);
+    check(snapshot.tracked && snapshot.identity == seqIds[i] &&
+              snapshot.phase == dxmt9::SchedulingProgressPhase::Published &&
+              (snapshot.flags & dxmt9::SchedulingProgressAccepted) != 0,
+          "SegmentSerial publishes progress for every contiguous source");
+    const bool hasPresent =
+        (snapshot.flags & dxmt9::SchedulingProgressHasPresent) != 0;
+    check(hasPresent == (i + 1u == seqIds.size()),
+          "SegmentSerial reserves Present progress for the final source");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -432,6 +457,7 @@ int main() {
     watchdogPerfOffDoesZeroWork();
     watchdogUsesBoundedGenerationSafeSlots();
     watchdogRejectsStaleStoresAcrossCapacityReuse();
+    watchdogConservesSegmentSerialProgressPerSource();
     std::cout << "encode scheduling progress spec: ok\n";
     return 0;
   } catch (const std::exception& error) {

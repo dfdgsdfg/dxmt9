@@ -3992,6 +3992,14 @@ CommandQueue::beginCpuReadyArenaSources(
                               ? CpuReadyArenaBeginStatus::RecoverableFailure
                               : CpuReadyArenaBeginStatus::Corrupt};
   }
+  // SegmentSerial admission owns one contiguous progress obligation per
+  // source.  Record every identity while the batch is still pre-effect; the
+  // Present bit is deliberately deferred to publication because only the
+  // final source can carry the event's Present tail.
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    schedulingProgressWatchdog_.noteAccepted(
+        context->batchReservations[i].ticket.seqId, false);
+  }
   activeArenaBuild_.store(context, std::memory_order_release);
   lock.unlock();
   return {.status = CpuReadyArenaBeginStatus::Ready,
@@ -4803,13 +4811,18 @@ bool CommandQueue::publishCpuReadyArenaBatch(
   const auto presentPolicy = context->pendingPresentBoundaryPolicy;
   const bool flushAfterPublication = context->flushAfterPublication;
   context->presentTokenStashed = false;
+  // Keep progress conservation source-granular while preserving the event
+  // boundary: only the final SegmentSerial source may publish Present.
+  for (std::size_t i = 0; i < context->sourceCount; ++i) {
+    schedulingProgressWatchdog_.notePublished(
+        context->batchReservations[i].ticket.seqId,
+        hasPublishedPresent && i + 1u == context->sourceCount);
+  }
   activeArenaBuild_.store(nullptr, std::memory_order_release);
   arenaBuildContext_.reset();
   arenaAdmissionActive_.store(false, std::memory_order_release);
   recordCpuReadyTapeStats(cpuReadyTape_);
   queueLifecycle_.noteCpuReadyCapacityProgress();
-  schedulingProgressWatchdog_.notePublished(
-      publishedSeq, hasPublishedPresent);
   lock.unlock();
   writeCv_.notify_all();
   if (hasPublishedPresent) {
@@ -6089,6 +6102,8 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .nextSeqId = &nextSeqId_,
       .completedSeqQueue = &completedSeqQueue_,
       .completedPresentSeqQueue = &completedPresentSeqQueue_,
+      .completedArenaGroupSettlements =
+          queueLifecycle_.completedArenaGroupSettlementLedger(),
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
       .presentCompletedSeqId = &presentCompletedSeqId_,

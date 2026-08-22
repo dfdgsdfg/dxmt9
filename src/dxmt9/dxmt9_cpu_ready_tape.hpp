@@ -479,6 +479,24 @@ class CpuReadyTape {
     }
   };
 
+  // Value-owned settlement emitted exactly once when the final member of a
+  // strict SegmentSerial group reaches Completed.  This is intentionally
+  // independent of Present: non-Present raw events still get a durable
+  // event-tail status while Present waiters continue using their own queue.
+  struct ArenaGroupSettlement {
+    std::uint64_t rawOrdinal = 0;
+    std::uint64_t buildGeneration = 0;
+    std::uint64_t firstSourceOrdinal = 0;
+    std::uint64_t tailSeqId = 0;
+    std::uint32_t sourceCount = 0;
+    bool hasPresent = false;
+
+    bool valid() const noexcept {
+      return rawOrdinal != 0 && buildGeneration != 0 &&
+             firstSourceOrdinal != 0 && tailSeqId != 0 && sourceCount != 0;
+    }
+  };
+
   struct SourceRef {
     CpuReadySourceId id{};
     CpuReadyStorageRef storage{};
@@ -1023,6 +1041,12 @@ class CpuReadyTape {
     entry->seqId = identity.seqId;
     entry->buildGeneration = identity.buildGeneration;
     entry->arenaPayloadCount = layout.segmentCount;
+    entry->groupRawOrdinal = identity.rawOrdinal;
+    entry->groupHeadSourceOrdinal = identity.sourceOrdinal;
+    entry->groupBuildGeneration = identity.buildGeneration;
+    entry->groupSourceCount = 1;
+    entry->groupSourceIndex = 0;
+    entry->groupTailSeqId = identity.seqId;
     for (std::size_t i = 0; i < layout.segmentCount; ++i) {
       entry->arenaExtents[i] = Entry::ArenaExtent{
           .byteOffset = layout.segments[i].byteOffset,
@@ -1226,6 +1250,12 @@ class CpuReadyTape {
       entry->seqId = firstSeqId + i;
       entry->buildGeneration = buildGeneration;
       entry->arenaPayloadCount = layouts[i].segmentCount;
+      entry->groupRawOrdinal = rawOrdinal;
+      entry->groupHeadSourceOrdinal = firstSourceOrdinal;
+      entry->groupBuildGeneration = buildGeneration;
+      entry->groupSourceCount = static_cast<std::uint32_t>(layouts.size());
+      entry->groupSourceIndex = static_cast<std::uint32_t>(i);
+      entry->groupTailSeqId = exclusiveSeqTail - 1u;
       for (std::size_t segment = 0; segment < layouts[i].segmentCount;
            ++segment) {
         entry->arenaExtents[segment] = Entry::ArenaExtent{
@@ -1310,6 +1340,13 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
+    if (batch.count - 1u >
+        std::numeric_limits<std::uint64_t>::max() - first.seqId) {
+      noteStaleReject();
+      return false;
+    }
+    const auto expectedGroupTailSeqId =
+        first.seqId + static_cast<std::uint64_t>(batch.count - 1u);
     std::array<SourceSemanticSummary, kMaxArenaBatchSources> semantics{};
     std::array<std::size_t, kMaxArenaBatchSources> usedBytes{};
     for (std::size_t i = 0; i < batch.count; ++i) {
@@ -1330,7 +1367,13 @@ class CpuReadyTape {
           current.rawOrdinal != first.rawOrdinal ||
           current.buildGeneration != first.buildGeneration ||
           current.sourceOrdinal != first.sourceOrdinal + i ||
-          current.seqId != first.seqId + i) {
+          current.seqId != first.seqId + i ||
+          entry->groupRawOrdinal != first.rawOrdinal ||
+          entry->groupHeadSourceOrdinal != first.sourceOrdinal ||
+          entry->groupBuildGeneration != first.buildGeneration ||
+          entry->groupTailSeqId != expectedGroupTailSeqId ||
+          entry->groupSourceCount != batch.count ||
+          entry->groupSourceIndex != i) {
         noteStaleReject();
         return false;
       }
@@ -1910,6 +1953,25 @@ class CpuReadyTape {
     return transitionAll(sources, State::Submitted, State::Completed);
   }
 
+  std::optional<ArenaGroupSettlement> takeCompletedArenaGroupSettlement(
+      SourceRef source) noexcept {
+    auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || entry->state != State::Completed ||
+        !entry->strictAdmission || entry->seqId != entry->groupTailSeqId ||
+        entry->groupSettlementEmitted || !groupMembersCompleted(*entry)) {
+      return std::nullopt;
+    }
+    entry->groupSettlementEmitted = true;
+    return ArenaGroupSettlement{
+        .rawOrdinal = entry->groupRawOrdinal,
+        .buildGeneration = entry->groupBuildGeneration,
+        .firstSourceOrdinal = entry->groupHeadSourceOrdinal,
+        .tailSeqId = entry->groupTailSeqId,
+        .sourceCount = entry->groupSourceCount,
+        .hasPresent = entry->semantic.hasPresent(),
+    };
+  }
+
   bool completeInline(CpuReadySourceId id,
                       CpuReadyStorageRef storage) noexcept {
     auto* entry = resolveEntry(id, storage);
@@ -1924,7 +1986,11 @@ class CpuReadyTape {
   bool canBeginPostEncodeRetire(CpuReadySourceId id,
                                 CpuReadyStorageRef storage) const noexcept {
     const auto* entry = resolveEntry(id, storage);
-    return entry && id.index == sourceHead_ &&
+    // SegmentSerial keeps the complete group's physical page/control credit
+    // live until the tail has settled.  This intentionally disables the
+    // locator-backed early-retirement shortcut for grouped entries; the
+    // ordinary FIFO reclaim path then releases every member exactly once.
+    return entry && entry->groupSourceCount <= 1u && id.index == sourceHead_ &&
            entry->state == State::Represented &&
            !entry->readyPublicationReserved && !entry->arenaOwnerDetached;
   }
@@ -1967,7 +2033,7 @@ class CpuReadyTape {
     auto* entry = resolveEntry(id, storage);
     if (!entry || id.index != sourceHead_ ||
         entry->state != State::Completed ||
-        entry->readyPublicationReserved) {
+        entry->readyPublicationReserved || !groupMembersCompleted(*entry)) {
       noteStaleReject();
       return false;
     }
@@ -2111,6 +2177,13 @@ class CpuReadyTape {
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
     std::uint64_t buildGeneration = 0;
+    std::uint64_t groupRawOrdinal = 0;
+    std::uint64_t groupHeadSourceOrdinal = 0;
+    std::uint64_t groupBuildGeneration = 0;
+    std::uint64_t groupTailSeqId = 0;
+    std::uint32_t groupSourceCount = 0;
+    std::uint32_t groupSourceIndex = 0;
+    bool groupSettlementEmitted = false;
     SourceSemanticSummary semantic{};
     bool strictAdmission = false;
     bool readyPublicationReserved = false;
@@ -2121,6 +2194,51 @@ class CpuReadyTape {
       Reclaim,
     } arenaDetachKind = ArenaDetachKind::None;
   };
+
+  bool groupMembersCompleted(const Entry& group) const noexcept {
+    if (group.groupSourceCount <= 1u) {
+      return true;
+    }
+    std::size_t observed = 0;
+    std::size_t firstObserved = group.groupSourceCount;
+    std::array<bool, kMaxArenaBatchSources> indices{};
+    for (std::size_t i = 0; i < capacity(); ++i) {
+      const auto& member = entries_[i];
+      if (member.groupRawOrdinal != group.groupRawOrdinal ||
+          member.groupHeadSourceOrdinal != group.groupHeadSourceOrdinal ||
+          member.groupBuildGeneration != group.groupBuildGeneration ||
+          member.groupTailSeqId != group.groupTailSeqId ||
+          member.groupSourceCount != group.groupSourceCount) {
+        continue;
+      }
+      ++observed;
+      if (member.groupSourceIndex >= group.groupSourceCount ||
+          member.groupSourceIndex >= indices.size() ||
+          indices[member.groupSourceIndex]) {
+        return false;
+      }
+      indices[member.groupSourceIndex] = true;
+      firstObserved = std::min(firstObserved,
+                               static_cast<std::size_t>(
+                                   member.groupSourceIndex));
+      if (member.state != State::Completed && member.state != State::Reclaiming) {
+        return false;
+      }
+    }
+    // Members already reclaimed are intentionally absent from the ring, but
+    // only a reclaimed prefix may be absent.  A missing future member must
+    // fail closed rather than accidentally turning a forged/ABA group into a
+    // reclaimable tail.
+    if (observed == 0 || firstObserved >= group.groupSourceCount) {
+      return false;
+    }
+    for (std::size_t i = firstObserved; i < group.groupSourceCount; ++i) {
+      if (!indices[i]) {
+        return false;
+      }
+    }
+    return observed <= group.groupSourceCount;
+  }
 
   struct Page {
     CpuReadySourceId owner{};
