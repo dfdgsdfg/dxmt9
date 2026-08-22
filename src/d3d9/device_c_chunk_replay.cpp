@@ -1481,7 +1481,8 @@ void markLegacyResources(D9CDevice* device,
 int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
-                             bool allowDirectArena) {
+                             bool allowDirectArena,
+                             bool forceEventSerial = false) {
   const bool captureIdentityRequested =
       raw.renderTapeCaptureToken != 0u && raw.renderTapeEventOrdinal != 0u;
   std::uint32_t capturePlanReason = std::numeric_limits<std::uint32_t>::max();
@@ -1535,13 +1536,22 @@ int32_t replayPlannedChunk(D9CDevice* device,
                           ? std::numeric_limits<std::uint32_t>::max()
                           : limits.maxPagesPerSource,
           .maxSourcesPerChunk = queue && !captureIdentityRequested &&
-                  queue->segmentSerialEnabled()
+                  !forceEventSerial && queue->segmentSerialEnabled()
               ? dxmt9::core::CpuReadyTape::kMaxArenaBatchSources
               : 1,
       });
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
+  const bool segmentSerialRequested = queue && !forceEventSerial &&
+      !captureIdentityRequested && queue->segmentSerialEnabled();
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:
+    if (segmentSerialRequested) {
+      // Checked planner/descriptor rejection is still pre-effect.  Retry the
+      // complete event through the bounded v2 EventSerial planner before
+      // treating the event as terminally malformed.
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
     if (captureIdentityRequested) failCaptureIdentity("planner-reject");
     dxmt9::perf::countCpuReadySessionDisposition(
         dxmt9::perf::CpuReadySessionDisposition::Invalid);
@@ -1592,7 +1602,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
              dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
       sourceLayouts{};
   const bool segmentSerial = queue->segmentSerialEnabled() &&
-      !captureIdentityRequested && plan.sourceCount > 1;
+      !forceEventSerial && !captureIdentityRequested && plan.sourceCount > 1;
   const std::size_t sourceCount = segmentSerial ? plan.sourceCount : 1;
   if (segmentSerial) {
     for (std::size_t i = 0; i < sourceCount; ++i) {
@@ -1617,6 +1627,14 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
   if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
       !begin.has_value()) {
+    if (segmentSerial && begin.status ==
+            dxmt9::CommandQueue::CpuReadyArenaBeginStatus::RecoverableFailure) {
+      // Admission and builder construction happen before replay invokes any
+      // semantic sink.  The recoverable batch abort restored all Tape and
+      // queue cursors, so EventSerial v2 may own this raw event exactly once.
+      return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
+                                allowDirectArena, /*forceEventSerial=*/true);
+    }
     // Oversize was classified by the structural planner. Any remaining
     // admission failure is queue terminal/corruption, not a legacy fallback.
     return commitChunkFail("chunk-arena-admission");

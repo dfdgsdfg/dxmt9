@@ -48,6 +48,11 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.stop_ = true;
   }
 
+  static void forceNextBatchRollbackFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaRollbackFailure_ = true;
+  }
+
   static std::size_t readyCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.readyCount();
@@ -859,7 +864,7 @@ void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
     auto begin = queue.beginCpuReadyArenaSources(123, layouts);
     check(begin.has_value(), "batch lease admission must succeed");
     check(!begin->selectSourceSegment(1, 0),
-          "selecting a later source before its predecessor is complete fails");
+          "selecting a later source before its predecessor is selected fails");
   }
   {
     CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
@@ -872,6 +877,21 @@ void testBatchLeaseUsesSourceLocalSegmentCoordinates() {
     check(!begin->selectSourceSegment(1, 2),
           "out-of-range source-local segment fails closed");
   }
+}
+
+void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  const std::array layouts{layout, layout};
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  CommandQueueArenaLeaseTestAccess::forceNextBatchRollbackFailure(queue);
+  const auto begin = queue.beginCpuReadyArenaSources(125, layouts);
+  check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Corrupt &&
+            !begin && queue.cpuReadyArenaPoisoned(),
+        "guarded rollback failure must fail-stop instead of reporting a "
+        "recoverable EventSerial fallback");
 }
 
 }  // namespace
@@ -890,6 +910,7 @@ int main() {
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();
+    testBatchRollbackFailureDoesNotReportRecoverableFallback();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

@@ -3926,8 +3926,10 @@ CommandQueue::beginCpuReadyArenaSources(
   }
   const std::uint64_t firstSeqId =
       nextSeqId_.load(std::memory_order_relaxed);
+  std::uint64_t exclusiveSeqTail = 0;
   if (firstSeqId == 0 ||
-      firstSeqId > std::numeric_limits<std::uint64_t>::max() - layouts.size()) {
+      !core::CpuReadyTape::checkedExclusiveSeqTail(
+          firstSeqId, layouts.size(), exclusiveSeqTail)) {
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
   const std::uint64_t generation = nextArenaBuildGeneration_++;
@@ -3937,11 +3939,28 @@ CommandQueue::beginCpuReadyArenaSources(
   auto batch = cpuReadyTape_.reserveArenaBatch(
       layouts, rawOrdinal, firstSeqId, firstSeqId, buildGeneration);
   if (!batch) {
+    // reserveArenaBatch performs one aggregate preflight over every source.
+    // Do not probe layouts.front(): a later-source descriptor or allocator
+    // failure must not be relabeled as recoverable pressure (or hidden as a
+    // first-source success) when deciding whether the complete raw event may
+    // take the v2 EventSerial fallback.
     recordCpuReadyTapeStats(cpuReadyTape_);
-    const auto probe = cpuReadyTape_.probeArenaReserve(layouts.front());
-    return {.status = probe == core::CpuReadyTape::ReserveProbe::TemporaryPressure
-                          ? CpuReadyArenaBeginStatus::TemporaryPressure
-                          : CpuReadyArenaBeginStatus::Corrupt};
+    switch (cpuReadyTape_.lastArenaBatchReserveFailure()) {
+      case core::CpuReadyTape::ArenaBatchReserveFailure::TemporaryPressure:
+        return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Recoverable:
+        // The aggregate transaction rejected before exposing any Writing or
+        // Ready entry; v2 EventSerial may retry the complete raw event.
+        return {.status = CpuReadyArenaBeginStatus::RecoverableFailure};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Stopped:
+        return {.status = CpuReadyArenaBeginStatus::Stopped};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Invalid:
+        return {.status = CpuReadyArenaBeginStatus::Invalid};
+      case core::CpuReadyTape::ArenaBatchReserveFailure::Corrupt:
+      case core::CpuReadyTape::ArenaBatchReserveFailure::None:
+        return {.status = CpuReadyArenaBeginStatus::Corrupt};
+    }
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
   for (std::size_t i = 0; i < layouts.size(); ++i) {
     auto& control = slots_[controls[i]];
@@ -3951,17 +3970,27 @@ CommandQueue::beginCpuReadyArenaSources(
     control.storage = batch->reservations[i].storage;
     control.payload = nullptr;
   }
-  nextSeqId_.store(firstSeqId + layouts.size(), std::memory_order_release);
+  nextSeqId_.store(exclusiveSeqTail, std::memory_order_release);
   arenaAdmissionActive_.store(true, std::memory_order_release);
   arenaBuildContext_.emplace(*batch,
                              std::span(controls).first(layouts.size()),
                              layouts, cpuReadyTape_, currentBackBuffer_);
   auto* context = &*arenaBuildContext_;
+  if (testOnlyForceNextCpuReadyArenaRollbackFailure_) {
+    testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
+    context->failed.store(true, std::memory_order_release);
+    // Deliberately invalidate the guarded next-sequence tail proof.  This is
+    // a native-only fault pin for the no-fallback rollback-failure branch.
+    nextSeqId_.fetch_add(1, std::memory_order_acq_rel);
+  }
   if (context->failed.load(std::memory_order_relaxed)) {
     context->failed.store(true, std::memory_order_release);
     lock.unlock();
-    abortCpuReadyArenaBatch(batch->reservations[0].ticket);
-    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+    const auto abortStatus = abortCpuReadyArenaBatch(
+        batch->reservations[0].ticket, /*failStop=*/false);
+    return {.status = abortStatus == CpuReadyArenaBatchAbortStatus::RolledBack
+                              ? CpuReadyArenaBeginStatus::RecoverableFailure
+                              : CpuReadyArenaBeginStatus::Corrupt};
   }
   activeArenaBuild_.store(context, std::memory_order_release);
   lock.unlock();
@@ -4040,6 +4069,11 @@ bool CommandQueue::selectCpuReadyArenaSegment(
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     return false;
   }
+  if (!context->hasSelectedSegment && segmentIndex != 0u) {
+    context->failed.store(true, std::memory_order_release);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
   if (context->batchMode) {
     std::size_t source = 0;
     std::size_t local = segmentIndex;
@@ -4059,8 +4093,10 @@ bool CommandQueue::selectCpuReadyArenaSegment(
                                         }
                                         return value + context->activeSegment;
                                       }();
-    if (source >= context->sourceCount || segmentIndex != previousGlobal &&
-            segmentIndex != previousGlobal + 1u ||
+    if (source >= context->sourceCount ||
+        (context->hasSelectedSegment &&
+         segmentIndex != previousGlobal &&
+         segmentIndex != previousGlobal + 1u) ||
         !context->batchBuilders[source][local] ||
         !context->batchAssemblers[source][local]) {
       context->failed.store(true, std::memory_order_release);
@@ -4069,9 +4105,11 @@ bool CommandQueue::selectCpuReadyArenaSegment(
     }
     context->activeSource = source;
     context->activeSegment = local;
+    context->hasSelectedSegment = true;
     return true;
   }
   context->activeSegment = segmentIndex;
+  context->hasSelectedSegment = true;
   return true;
 }
 
@@ -4087,11 +4125,17 @@ bool CommandQueue::selectCpuReadyArenaSourceSegment(
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     return false;
   }
-  if (sourceIndex != context->activeSource &&
-      !(sourceIndex == context->activeSource + 1u &&
-        context->activeSegment + 1u ==
-            context->batchLayouts[context->activeSource].segmentCount &&
-        segmentIndex == 0u)) {
+  if (!context->hasSelectedSegment) {
+    if (sourceIndex != 0u || segmentIndex != 0u) {
+      context->failed.store(true, std::memory_order_release);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return false;
+    }
+  } else if (sourceIndex != context->activeSource &&
+             !(sourceIndex == context->activeSource + 1u &&
+               context->activeSegment + 1u ==
+                   context->batchLayouts[context->activeSource].segmentCount &&
+               segmentIndex == 0u)) {
     context->failed.store(true, std::memory_order_release);
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     return false;
@@ -4781,12 +4825,16 @@ bool CommandQueue::publishCpuReadyArenaBatch(
   return true;
 }
 
-void CommandQueue::abortCpuReadyArenaBatch(
-    core::CpuReadyPublicationTicket ticket) noexcept {
+CommandQueue::CpuReadyArenaBatchAbortStatus
+CommandQueue::abortCpuReadyArenaBatch(
+    core::CpuReadyPublicationTicket ticket, bool failStop) noexcept {
   std::array<std::optional<core::CpuReadyTape::DetachedArenaOwner>,
              core::CpuReadyTape::kMaxArenaBatchSources>
       owners{};
   std::size_t count = 0;
+  bool rollbackFailed = false;
+  bool detachFailed = false;
+  bool finishFailed = false;
   std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources> controls{};
   {
     const auto qmxBegin = queueMutexProbeBegin();
@@ -4794,7 +4842,7 @@ void CommandQueue::abortCpuReadyArenaBatch(
     QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_detach");
     if (!arenaBuildContext_ || !arenaBuildContext_->batchMode ||
         arenaBuildContext_->reservation.ticket != ticket) {
-      return;
+      return CpuReadyArenaBatchAbortStatus::NoActiveBatch;
     }
     auto& context = *arenaBuildContext_;
     count = context.sourceCount;
@@ -4807,14 +4855,16 @@ void CommandQueue::abortCpuReadyArenaBatch(
       auto detached = cpuReadyTape_.beginArenaAbort(
           context.batchReservations[i - 1].ticket);
       if (!detached) {
-        cpuReadyTape_.stopAdmission();
+        detachFailed = true;
         break;
       }
       owners[i - 1].emplace(std::move(*detached));
     }
-    stop_ = true;
-    cpuReadyTape_.stopAdmission();
-    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    if (failStop) {
+      stop_ = true;
+      cpuReadyTape_.stopAdmission();
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+    }
   }
   for (std::size_t i = count; i != 0; --i) {
     if (owners[i - 1]) {
@@ -4828,21 +4878,74 @@ void CommandQueue::abortCpuReadyArenaBatch(
     if (arenaBuildContext_) {
       for (std::size_t i = count; i != 0; --i) {
         if (owners[i - 1]) {
-          (void)cpuReadyTape_.finishArenaAbort(
+          if (!cpuReadyTape_.finishArenaAbort(
               arenaBuildContext_->batchReservations[i - 1].ticket,
-              std::move(*owners[i - 1]));
+              std::move(*owners[i - 1]))) {
+            finishFailed = true;
+          }
+        } else if (detachFailed) {
+          finishFailed = true;
         }
-        if (controls[i - 1] < slots_.size()) {
+        if (!detachFailed && !finishFailed && controls[i - 1] < slots_.size()) {
           slots_[controls[i - 1]] = {};
         }
+      }
+      rollbackFailed = detachFailed || finishFailed;
+      if (!failStop && !rollbackFailed) {
+        std::uint64_t nextSeqTail = 0;
+        if (!core::CpuReadyTape::checkedExclusiveSeqTail(
+                ticket.seqId, count, nextSeqTail) ||
+            nextSeqId_.load(std::memory_order_acquire) != nextSeqTail) {
+          rollbackFailed = true;
+        }
+      }
+      if (!failStop && !rollbackFailed) {
+        rollbackFailed = !cpuReadyTape_.restoreArenaBatchHighWaters(
+            core::CpuReadyTape::ArenaBatchReservation{
+                .reservations = arenaBuildContext_->batchReservations,
+                .count = count,
+                .rawHighWaterBefore =
+                    arenaBuildContext_->batchRawHighWaterBefore,
+                .sourceHighWaterBefore =
+                    arenaBuildContext_->batchSourceHighWaterBefore,
+                .seqHighWaterBefore =
+                    arenaBuildContext_->batchSeqHighWaterBefore,
+                .sourceTailBefore =
+                    arenaBuildContext_->batchSourceTailBefore,
+                .pageTailBefore = arenaBuildContext_->batchPageTailBefore,
+                .residentCountBefore =
+                    arenaBuildContext_->batchResidentCountBefore,
+                .occupiedPagesBefore =
+                    arenaBuildContext_->batchOccupiedPagesBefore,
+                .readyCountBefore =
+                    arenaBuildContext_->batchReadyCountBefore,
+                .readyReservationsBefore =
+                    arenaBuildContext_->batchReadyReservationsBefore,
+            });
+        if (!rollbackFailed) {
+          nextSeqId_.store(ticket.seqId, std::memory_order_release);
+        }
+      }
+      if (rollbackFailed && !failStop) {
+        stop_ = true;
+        cpuReadyTape_.stopAdmission();
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
       }
       arenaBuildContext_.reset();
     }
     arenaAdmissionActive_.store(false, std::memory_order_release);
     recordCpuReadyTapeStats(cpuReadyTape_);
   }
-  notifySchedulingTerminalWaiters(
-      render::SchedulingTerminalDisposition::DeviceLoss);
+  if (failStop || rollbackFailed) {
+    notifySchedulingTerminalWaiters(
+        render::SchedulingTerminalDisposition::DeviceLoss);
+    return rollbackFailed
+               ? CpuReadyArenaBatchAbortStatus::RollbackFailed
+               : CpuReadyArenaBatchAbortStatus::FailStopped;
+  } else {
+    writeCv_.notify_all();
+    return CpuReadyArenaBatchAbortStatus::RolledBack;
+  }
 }
 
 void CommandQueue::abortCpuReadyArenaSource(

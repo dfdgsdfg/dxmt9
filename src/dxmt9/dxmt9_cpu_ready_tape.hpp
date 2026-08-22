@@ -464,6 +464,15 @@ class CpuReadyTape {
   struct ArenaBatchReservation {
     std::array<Reservation, kMaxArenaBatchSources> reservations{};
     std::size_t count = 0;
+    std::uint64_t rawHighWaterBefore = 0;
+    std::uint64_t sourceHighWaterBefore = 0;
+    std::uint64_t seqHighWaterBefore = 0;
+    std::size_t sourceTailBefore = 0;
+    std::size_t pageTailBefore = 0;
+    std::size_t residentCountBefore = 0;
+    std::size_t occupiedPagesBefore = 0;
+    std::size_t readyCountBefore = 0;
+    std::size_t readyReservationsBefore = 0;
 
     bool valid() const noexcept {
       return count != 0 && count <= reservations.size();
@@ -564,6 +573,29 @@ class CpuReadyTape {
     Corrupt,
   };
 
+  enum class ArenaBatchReserveFailure : std::uint8_t {
+    None,
+    Recoverable,
+    TemporaryPressure,
+    Invalid,
+    Stopped,
+    Corrupt,
+  };
+
+  static bool checkedExclusiveSeqTail(std::uint64_t firstSeqId,
+                                      std::size_t count,
+                                      std::uint64_t& exclusiveTail) noexcept {
+    if (count > std::numeric_limits<std::uint64_t>::max()) {
+      return false;
+    }
+    const auto count64 = static_cast<std::uint64_t>(count);
+    if (firstSeqId > std::numeric_limits<std::uint64_t>::max() - count64) {
+      return false;
+    }
+    exclusiveTail = firstSeqId + count64;
+    return true;
+  }
+
   struct Stats {
     std::size_t residentSources = 0;
     std::size_t residentPages = 0;
@@ -657,6 +689,9 @@ class CpuReadyTape {
   std::size_t readyCount() const noexcept { return readyCount_; }
   bool readyEmpty() const noexcept { return readyCount_ == 0; }
   const Stats& stats() const noexcept { return stats_; }
+  ArenaBatchReserveFailure lastArenaBatchReserveFailure() const noexcept {
+    return lastArenaBatchReserveFailure_;
+  }
 
   LeaseAcquisitionCapacitySnapshot leaseAcquisitionCapacitySnapshot()
       const noexcept {
@@ -714,23 +749,43 @@ class CpuReadyTape {
       // any Ready publication.  They are unavailable to encode as a group,
       // but must not make the historical exactly-one Writing snapshot
       // spuriously invalid.
+      std::array<std::size_t, kMaxArenaBatchSources> orderedIndices{};
+      std::array<LeaseCapacityClaim, kMaxArenaBatchSources> orderedClaims{};
       for (std::size_t i = 0; i < writingCount; ++i) {
-        const auto index = writingIndices[i];
+        const auto expectedIndex =
+            (sourceTail_ + capacity() - writingCount + i) % capacity();
+        std::size_t found = writingCount;
+        for (std::size_t candidate = 0; candidate < writingCount;
+             ++candidate) {
+          if (writingIndices[candidate] == expectedIndex) {
+            found = candidate;
+            break;
+          }
+        }
+        if (found == writingCount) {
+          result.valid = false;
+          return result;
+        }
+        orderedIndices[i] = writingIndices[found];
+        orderedClaims[i] = writingClaims[found];
+      }
+      const auto& firstWriting = entries_[orderedIndices[0]];
+      for (std::size_t i = 0; i < writingCount; ++i) {
+        const auto index = orderedIndices[i];
         const auto& entry = entries_[index];
-        if (!entry.strictAdmission || index !=
-                (sourceTail_ + capacity() - writingCount + i) % capacity() ||
-            entry.rawOrdinal != entries_[writingIndices[0]].rawOrdinal ||
+        if (!entry.strictAdmission ||
+            entry.rawOrdinal != firstWriting.rawOrdinal ||
             entry.buildGeneration !=
-                entries_[writingIndices[0]].buildGeneration ||
+                firstWriting.buildGeneration ||
             entry.sourceOrdinal !=
-                entries_[writingIndices[0]].sourceOrdinal + i ||
-            entry.seqId != entries_[writingIndices[0]].seqId + i ||
+                firstWriting.sourceOrdinal + i ||
+            entry.seqId != firstWriting.seqId + i ||
             !entry.readyPublicationReserved) {
           result.valid = false;
           return result;
         }
         if (!addLeaseCapacityClaim(result.olderUnavailable,
-                                   writingClaims[i])) {
+                                   orderedClaims[i])) {
           result.valid = false;
           return result;
         }
@@ -997,22 +1052,31 @@ class CpuReadyTape {
       std::span<const ArenaSourcePayloadLayout> layouts,
       std::uint64_t rawOrdinal, std::uint64_t firstSourceOrdinal,
       std::uint64_t firstSeqId, std::uint64_t buildGeneration) noexcept {
+    lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::None;
     if (layouts.empty() || layouts.size() > kMaxArenaBatchSources ||
         rawOrdinal == 0 || firstSourceOrdinal == 0 || firstSeqId == 0 ||
         buildGeneration == 0 || compatibilityWritingCount_ != 0 ||
         strictWritingActive_ || rawOrdinal <= rawOrdinalHighWater_ ||
         firstSourceOrdinal <= sourceOrdinalHighWater_ ||
         firstSeqId <= seqIdHighWater_) {
+      lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Invalid;
       return std::nullopt;
     }
-    if (stopped_ ||
-        (closedPressureDimensions_ & ~kPressureCompatibility) != 0) {
+    if (stopped_) {
+      lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Stopped;
       return std::nullopt;
     }
+    if ((closedPressureDimensions_ & ~kPressureCompatibility) != 0) {
+      lastArenaBatchReserveFailure_ =
+          ArenaBatchReserveFailure::TemporaryPressure;
+      return std::nullopt;
+    }
+    std::uint64_t exclusiveSeqTail = 0;
     if (layouts.size() - 1u >
             std::numeric_limits<std::uint64_t>::max() - firstSourceOrdinal ||
-        layouts.size() - 1u >
-            std::numeric_limits<std::uint64_t>::max() - firstSeqId) {
+        !checkedExclusiveSeqTail(firstSeqId, layouts.size(),
+                                 exclusiveSeqTail)) {
+      lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Recoverable;
       return std::nullopt;
     }
     const auto& values = config_.values();
@@ -1021,6 +1085,7 @@ class CpuReadyTape {
         layouts.size() > values.highWaterReady -
                              std::min(readyPublicationReservations_,
                                       values.highWaterReady)) {
+      lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Recoverable;
       return std::nullopt;
     }
     std::size_t aggregatePages = occupiedPages_;
@@ -1031,16 +1096,21 @@ class CpuReadyTape {
       const auto& layout = layouts[i];
       if (!layout.valid() || layout.pageCount > values.maxPagesPerSource ||
           layout.pageCount > values.pageCount) {
+        lastArenaBatchReserveFailure_ =
+            layout.valid() ? ArenaBatchReserveFailure::Corrupt
+                           : ArenaBatchReserveFailure::Invalid;
         return std::nullopt;
       }
       const std::size_t entryIndex = (sourceTail_ + i) % capacity();
       const auto& entry = entries_[entryIndex];
       if (entry.state != State::Free) {
+        lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
         return std::nullopt;
       }
       for (std::size_t segment = 0; segment < layout.segmentCount;
            ++segment) {
         if (arenaOwner(entryIndex, segment).constructed) {
+          lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
           return std::nullopt;
         }
       }
@@ -1053,21 +1123,27 @@ class CpuReadyTape {
           layout.pageCount > values.highWaterPages -
                                   std::min(aggregatePages + padding,
                                            values.highWaterPages)) {
+        lastArenaBatchReserveFailure_ =
+            ArenaBatchReserveFailure::Recoverable;
         return std::nullopt;
       }
       if (aggregatePages > std::numeric_limits<std::size_t>::max() -
                                 padding - layout.pageCount) {
+        lastArenaBatchReserveFailure_ =
+            ArenaBatchReserveFailure::Recoverable;
         return std::nullopt;
       }
       aggregatePages += padding + layout.pageCount;
       const std::size_t firstPage = padding != 0 ? 0 : simulatedPageTail;
       for (std::size_t page = 0; page < padding; ++page) {
         if (pages_[simulatedPageTail + page].allocated) {
+          lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
           return std::nullopt;
         }
       }
       for (std::size_t page = 0; page < layout.pageCount; ++page) {
         if (pages_[firstPage + page].allocated) {
+          lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
           return std::nullopt;
         }
       }
@@ -1085,6 +1161,7 @@ class CpuReadyTape {
             (simulatedPadding[prior] != 0 &&
              overlaps(firstPage, layout.pageCount, 0,
                       simulatedPadding[prior]))) {
+          lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
           return std::nullopt;
         }
       }
@@ -1095,31 +1172,51 @@ class CpuReadyTape {
       // any allocator mutation; exact wrap/page overlap is rechecked below by
       // reserveStorageImpl and rolled back as one transaction if needed.
       if (aggregatePages > values.highWaterPages) {
+        lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Recoverable;
         return std::nullopt;
       }
     }
     ArenaBatchReservation result{};
+    result.rawHighWaterBefore = rawOrdinalHighWater_;
+    result.sourceHighWaterBefore = sourceOrdinalHighWater_;
+    result.seqHighWaterBefore = seqIdHighWater_;
+    result.sourceTailBefore = sourceTail_;
+    result.pageTailBefore = pageTail_;
+    result.residentCountBefore = residentCount_;
+    result.occupiedPagesBefore = occupiedPages_;
+    result.readyCountBefore = readyCount_;
+    result.readyReservationsBefore = readyPublicationReservations_;
     for (std::size_t i = 0; i < layouts.size(); ++i) {
       auto reservation = reserveStorageImpl(
           layouts[i].pageCount, PayloadKind::Arena, layouts[i].segmentCount);
       if (!reservation) {
+        bool cleanupFailed = false;
         for (std::size_t j = result.count; j != 0; --j) {
           auto detached = beginArenaAbort(
               result.reservations[j - 1].ticket);
           if (!detached) {
             stopAdmission();
+            lastArenaBatchReserveFailure_ =
+                ArenaBatchReserveFailure::Corrupt;
             return std::nullopt;
           }
           detached->destroy();
-          (void)finishArenaAbort(result.reservations[j - 1].ticket,
-                                 std::move(*detached));
+          if (!finishArenaAbort(result.reservations[j - 1].ticket,
+                                std::move(*detached))) {
+            cleanupFailed = true;
+          }
         }
         strictWritingActive_ = false;
+        if (cleanupFailed) {
+          stopAdmission();
+        }
+        lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
         return std::nullopt;
       }
       auto* entry = resolveEntry(reservation->id, reservation->storage);
       if (!entry) {
         stopAdmission();
+        lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::Corrupt;
         return std::nullopt;
       }
       entry->strictAdmission = true;
@@ -1151,9 +1248,49 @@ class CpuReadyTape {
     // identities only after every Writing entry has been constructed.
     rawOrdinalHighWater_ = rawOrdinal;
     sourceOrdinalHighWater_ = firstSourceOrdinal + layouts.size() - 1u;
-    seqIdHighWater_ = firstSeqId + layouts.size() - 1u;
+    seqIdHighWater_ = exclusiveSeqTail - 1u;
     strictWritingActive_ = true;
     return result;
+  }
+
+  // Recoverable pre-effect abort only. Post-effect callers deliberately do
+  // not invoke this and retain the fail-stop high-water discipline.
+  bool restoreArenaBatchHighWaters(
+      const ArenaBatchReservation& batch) noexcept {
+    if (!batch.valid()) {
+      return false;
+    }
+    if (sourceTail_ != batch.sourceTailBefore ||
+        pageTail_ != batch.pageTailBefore ||
+        residentCount_ != batch.residentCountBefore ||
+        occupiedPages_ != batch.occupiedPagesBefore ||
+        readyCount_ != batch.readyCountBefore ||
+        readyPublicationReservations_ != batch.readyReservationsBefore) {
+      noteStaleReject();
+      return false;
+    }
+    const auto& lastTicket = batch.reservations[batch.count - 1u].ticket;
+    if (rawOrdinalHighWater_ != lastTicket.rawOrdinal ||
+        sourceOrdinalHighWater_ != lastTicket.sourceOrdinal ||
+        seqIdHighWater_ != lastTicket.seqId || strictWritingActive_) {
+      noteStaleReject();
+      return false;
+    }
+    for (std::size_t i = 0; i < batch.count; ++i) {
+      const auto& reservation = batch.reservations[i];
+      if (reservation.id.index >= capacity() ||
+          entries_[reservation.id.index].state != State::Free ||
+          entries_[reservation.id.index].generation == reservation.id.generation) {
+        noteStaleReject();
+        return false;
+      }
+    }
+    rawOrdinalHighWater_ = batch.rawHighWaterBefore;
+    sourceOrdinalHighWater_ = batch.sourceHighWaterBefore;
+    seqIdHighWater_ = batch.seqHighWaterBefore;
+    strictWritingActive_ = false;
+    refreshAdmissionAfterRelease();
+    return true;
   }
 
   // All structural and payload checks happen before the first Ready state is
@@ -2795,6 +2932,8 @@ class CpuReadyTape {
   std::uint64_t seqIdHighWater_ = 0;
   std::uint8_t closedPressureDimensions_ = 0;
   bool strictWritingActive_ = false;
+  ArenaBatchReserveFailure lastArenaBatchReserveFailure_ =
+      ArenaBatchReserveFailure::None;
   bool stopped_ = false;
   mutable Stats stats_{};
 };

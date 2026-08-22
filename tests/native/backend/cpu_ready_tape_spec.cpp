@@ -1116,12 +1116,94 @@ void batchArenaLateFailureAndCapacityLeaveNoReadyPrefix() {
     const auto before = tape.stats().readyFifoEntries;
     check(!tape.reserveArenaBatch(oversized, 99, 1, 1, 11) &&
               tape.readyCount() == 0u &&
-              tape.stats().readyFifoEntries == before,
+              tape.stats().readyFifoEntries == before &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
           "aggregate page capacity failure leaves no Ready entry");
     const std::array overflowLayouts{*sourceLayout, *sourceLayout};
     check(!tape.reserveArenaBatch(overflowLayouts, 100,
               std::numeric_limits<std::uint64_t>::max(), 1, 12),
           "source ordinal tail overflow is rejected before reservation");
+    check(!tape.reserveArenaBatch(
+              std::array{*sourceLayout}, 100,
+              1, std::numeric_limits<std::uint64_t>::max(), 12) &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
+          "exclusive sequence tail max/count-one overflow is rejected");
+    check(!tape.reserveArenaBatch(
+              std::array{*sourceLayout, *sourceLayout}, 100,
+              1, std::numeric_limits<std::uint64_t>::max() - 1u, 12) &&
+              tape.lastArenaBatchReserveFailure() ==
+                  CpuReadyTape::ArenaBatchReserveFailure::Recoverable,
+          "exclusive sequence tail max-minus-one/count-two overflow is "
+          "rejected");
+  }
+  {
+    CpuReadyTape tape{makeSeparatedPayloadConfig(8, 8, 8)};
+    const std::array layouts{*sourceLayout, *sourceLayout};
+    auto batch = tape.reserveArenaBatch(layouts, 101, 1, 1, 13);
+    check(batch.has_value(), "recoverable rollback batch reserves");
+    for (std::size_t i = batch->count; i != 0; --i) {
+      auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+      check(owner.has_value(), "recoverable rollback detaches source");
+      owner->destroy();
+      check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                  std::move(*owner)),
+            "recoverable rollback finishes source");
+    }
+    auto forged = *batch;
+    ++forged.sourceTailBefore;
+    check(!tape.restoreArenaBatchHighWaters(forged) &&
+              tape.restoreArenaBatchHighWaters(*batch) &&
+              tape.readyCount() == 0u && tape.residentCount() == 0u &&
+              tape.reserveArenaBatch(layouts, 101, 1, 1, 14).has_value(),
+          "pre-effect rollback restores raw/source/seq admission cursors");
+  }
+}
+
+void batchCapacitySnapshotOrdersWrappedWritingRing() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig(16, 4, 4)};
+  std::array<CpuReadyTape::Reservation, 3> legacySources{};
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto source = tape.reserve();
+    check(source.has_value(), "wrap fixture reserves legacy source");
+    legacySources[i] = *source;
+    source->payload->appendClear({});
+    check(tape.sealAndPublish(source->ticket, i + 1u, i + 1u, i),
+          "wrap fixture publishes legacy source");
+    std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+    check(tape.copyReadyPrefix(ready) == 1u &&
+              tape.representReadyPrefix(ready),
+          "wrap fixture represents legacy source");
+  }
+  for (std::size_t i = 0; i < 2; ++i) {
+    auto* detached = tape.beginPostEncodeLegacyRetire(
+        legacySources[i].id, legacySources[i].storage);
+    check(detached != nullptr, "wrap fixture detaches old source");
+    detached->clearCommands();
+    detached->seqId = 0;
+    check(tape.finishReclaim(legacySources[i].id, legacySources[i].storage),
+          "wrap fixture reclaims old source");
+  }
+  const auto layout = makeMinimalArenaLayout();
+  const std::array segmentLayouts{layout};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(), "wrap batch layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  auto batch = tape.reserveArenaBatch(layouts, 10, 10, 10, 10);
+  check(batch.has_value() && batch->reservations[0].id.index == 3u &&
+            batch->reservations[1].id.index == 0u,
+        "batch reservation crosses the source ring boundary");
+  check(tape.leaseAcquisitionCapacitySnapshot().valid,
+        "wrapped multi-Writing snapshot remains valid");
+  for (std::size_t i = batch->count; i != 0; --i) {
+    auto owner = tape.beginArenaAbort(batch->reservations[i - 1].ticket);
+    check(owner.has_value(), "wrapped batch abort detaches source");
+    owner->destroy();
+    check(tape.finishArenaAbort(batch->reservations[i - 1].ticket,
+                                std::move(*owner)),
+          "wrapped batch abort reclaims source");
   }
 }
 
@@ -1659,6 +1741,7 @@ int main() {
     strictArenaDoesNotConsumeCompatibilityCapacity();
     batchArenaAdmissionIsAtomicAndSharesRawIdentity();
     batchArenaLateFailureAndCapacityLeaveNoReadyPrefix();
+    batchCapacitySnapshotOrdersWrappedWritingRing();
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     postEncodeRetirementFinishesBeforeGpuCompletion();

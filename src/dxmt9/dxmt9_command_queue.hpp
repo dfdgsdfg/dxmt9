@@ -493,9 +493,17 @@ class CommandQueue {
   enum class CpuReadyArenaBeginStatus : std::uint8_t {
     Ready,
     TemporaryPressure,
+    RecoverableFailure,
     Stopped,
     Corrupt,
     Invalid,
+  };
+
+  enum class CpuReadyArenaBatchAbortStatus : std::uint8_t {
+    RolledBack,
+    FailStopped,
+    RollbackFailed,
+    NoActiveBatch,
   };
 
   struct CpuReadyArenaBeginResult {
@@ -1082,9 +1090,19 @@ class CommandQueue {
         : reservation(batch.reservations[0]),
           controlIndex(selectedControlIndices[0]),
           layout(sourceLayouts[0]),
+          batchMode(true),
+          sourceCount(batch.count),
+          batchRawHighWaterBefore(batch.rawHighWaterBefore),
+          batchSourceHighWaterBefore(batch.sourceHighWaterBefore),
+          batchSeqHighWaterBefore(batch.seqHighWaterBefore),
+          batchSourceTailBefore(batch.sourceTailBefore),
+          batchPageTailBefore(batch.pageTailBefore),
+          batchResidentCountBefore(batch.residentCountBefore),
+          batchOccupiedPagesBefore(batch.occupiedPagesBefore),
+          batchReadyCountBefore(batch.readyCountBefore),
+          batchReadyReservationsBefore(batch.readyReservationsBefore),
           initialBackBuffer(initialBackBuffer),
-          ownerThread(std::this_thread::get_id()), batchMode(true),
-          sourceCount(batch.count) {
+          ownerThread(std::this_thread::get_id()) {
       for (std::size_t source = 0; source < sourceCount; ++source) {
         batchReservations[source] = batch.reservations[source];
         batchControlIndices[source] = selectedControlIndices[source];
@@ -1182,9 +1200,19 @@ class CommandQueue {
     std::array<std::optional<core::ArenaSourcePayloadAssembler>,
                core::kMaxArenaSourcePayloadSegments> assemblers{};
     std::size_t activeSegment = 0;
+    bool hasSelectedSegment = false;
     bool batchMode = false;
     std::size_t sourceCount = 1;
     std::size_t activeSource = 0;
+    std::uint64_t batchRawHighWaterBefore = 0;
+    std::uint64_t batchSourceHighWaterBefore = 0;
+    std::uint64_t batchSeqHighWaterBefore = 0;
+    std::size_t batchSourceTailBefore = 0;
+    std::size_t batchPageTailBefore = 0;
+    std::size_t batchResidentCountBefore = 0;
+    std::size_t batchOccupiedPagesBefore = 0;
+    std::size_t batchReadyCountBefore = 0;
+    std::size_t batchReadyReservationsBefore = 0;
     std::array<core::CpuReadyTape::Reservation,
                core::CpuReadyTape::kMaxArenaBatchSources>
         batchReservations{};
@@ -1294,8 +1322,9 @@ class CommandQueue {
   bool publishCpuReadyArenaBatch(
       core::CpuReadyPublicationTicket ticket,
       std::span<const core::ChunkHandleEntry> resources) noexcept;
-  void abortCpuReadyArenaBatch(
-      core::CpuReadyPublicationTicket ticket) noexcept;
+  CpuReadyArenaBatchAbortStatus abortCpuReadyArenaBatch(
+      core::CpuReadyPublicationTicket ticket,
+      bool failStop = true) noexcept;
   bool publishCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
@@ -1315,6 +1344,9 @@ class CommandQueue {
   // preflight, restore the exact tentative prefix, then return from the
   // manually-driven encode loop. Never set by production.
   bool testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+  // Native rollback pin: force the pre-effect builder rejection seam and
+  // perturb nextSeqId_ so the guarded abort must fail-stop, never recover.
+  bool testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;
   bool testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
   bool testOnlyOverrideLiveActiveRenderInstance_ = false;
