@@ -55,6 +55,9 @@ struct EncodeDrawRecorder {
   // encodeChunk callers must also provide renderCommandEncoder when a DrawRun
   // needs to open a render pass.
   bool suppressMetalCalls = false;
+  // Test-only effective-replay probe mode. encodeChunk still validates and
+  // selects the complete replay stream, then stops before command side effects.
+  bool suppressCommandEncoderSideEffects = false;
   // Test-only path for skipBaseStateBind=false without a live Metal device.
   // When set, encodeDraw uses the fake objects below instead of consulting the
   // pipeline/DSSO/sampler caches.
@@ -191,6 +194,7 @@ struct EncodeContext {
   // sub-allocations / binds. C1 sets the bits as records arrive.
   uniform::DirtyState dirty{};
   EncodeDrawRecorder* drawRecorder = nullptr;
+  core::metalqueue::ReplayObserverSink replayObserver{};
   // Encode-chunk-local completion watermark for transient arena reservation.
   // A stale lower watermark is safe: it can delay reclaim, never release
   // storage before the GPU completion waterline.

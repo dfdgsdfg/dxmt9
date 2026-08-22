@@ -122,6 +122,30 @@ draw-run SoA path, `dxmt9-bridge-ops-spec` pins the generated bridge opcode
 budget/placement for chunk submission, and `dxmt9-allocation-counter-spec`
 verifies that real allocation perf counters are emitted and machine-checkable.
 
+The effective replay observer is a single nullable `ReplayObserverSink` copied
+into `EncodeContext` and checked once per `encodeChunk` effective stream or
+fragment. On the serial path, the enabled observer publishes one resolved
+command only after replay-range, DCE/permutation, partition, and fallback
+selection, immediately before that selected command's encoder effects. A
+selected parallel batch publishes its covered commands in effective order only
+after every proof/economics/fallback gate and immediately before the first child
+encoder effect. There is no source-wide pre-pass.
+
+Both enabled paths walk the same production resource visitor used by queue
+residency marking and pass source/storage identity (including generations), seq
+ID, original command ordinal, `MetalCommandKind`, replay category,
+barrier/readback flags, and an exact synchronous call-local span of
+`ChunkHandleEntry` values. The sink must consume or copy that span before
+returning. The disabled path takes one cached null-function branch before any
+observer storage, allocation, or resource-visitor work; enabled storage grows
+without a fixed-capacity truncation rule.
+
+`dxmt9-encode-session-lifecycle-spec` pins this contract for selected serial
+Legacy/Arena streams and fragments. A selected fake/recorded parallel batch has
+not yet reached the observer seam in native coverage, so the parallel ordering
+clause remains an explicit R-VERIF-7.3 binding gap rather than being inferred
+from the serial fixture.
+
 ---
 
 ## 1. Test Infrastructure: dxmt9 Shader Runner

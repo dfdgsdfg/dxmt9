@@ -148,7 +148,7 @@ outside this checker.
 | `backend/spec.md` §2.7 / `include/dxmt9/device_c.h` (cross-side stable identity) | `tla/WireObjectRegistry.tla` | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*` |
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
-| `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
+| `backend/spec.md` §2 and `tests/spec.md` §0.1 | effective replay observer tests | `ReplayObserverSink` in `dxmt9_queue.hpp`, the post-selection per-command seam in `dxmt9_draw_encoder_chunk.mm`, and `encode_session_lifecycle_spec.cpp` |
 | `experiments/harness/replay/requirements.md` R-HARN-REPLAY-7.2–7.15 / R-VERIF-6.6 | bounded 45-case capture/replay refinement, deterministic repetition, closure-aware reducer/bisect, two-interval sequence identity, production routing, capture-time output oracle, and captured frame identity complete; broader grammar/captured sequence evidence open | `device_c_render_tape.*` provides the production validator/replay predicates used by the exhaustive checker and whole-command reducer. `device_c_render_tape_provider.*` shares the production canonical-chunk validator, `DeviceReplaySink`, queue/completion, and offscreen presenter seam. The CLI constructs a fresh process/device per warm-up and measured run and requires exact ordered output/conservation identity. Production capture fences prior replay and renderer work before publishing a one-shot normal-Presenter mirror for canonical Present, reuses the same-command-buffer pass, and drains plus flushes captured work before typed readback/tight-hash validation. Native provider tests prove two distinct outputs across one sequence mutation and repeat the two-digest vector on a fresh device. Captured production evidence remains the two bounded frame bundles below; no captured sequence bundle exists yet. |
 | Bounded textured-UP increment for R-HARN-REPLAY-7.6–7.8 / R-VERIF-6.6 | native fail-closed grammar, production Metal repeat identity, and captured wild identity complete | `device_c_render_tape_provider.*` preserves flattened record order across command-chunk events and admits one exact `Clear` → fixed-function textured `DrawPrimitiveUP` → standard `Present` form. `dxmt9-render-tape-provider-spec` covers split/combined chunks, full A8R8G8B8 seed closure, exact production FVF-generated declaration admission and near-miss rejection, tight non-uniform readback, representation-equivalent Metal SHA-256 `3dc6ca2708ccbb285106dea4b1cba42e6d67dd69ffe72ab003d87d7d8250b72e`, and 2/2 or 3/3 object conservation. The 2026-08-13 Sikarugir `PRESENT_LOOP_TEXTURED=1` bundle `experiments/output/render-tape-wild-textured-r2/tapes/frame-99975454225700-1` has 8 events, 3 records in 2 chunks, 3 definitions, 2 blobs, and one mutation; provider replay returns `complete`, `output_non_degenerate=true`, 2/2 blob references, 3/3 object conservation, and exact capture/replay 262144-byte SHA-256 `866e45bc5527c590f7cbf1deb9ca8fd5aa3ac2eddcd6746bdaf0572848a78c17`. |
 | Generation-qualified ProducedByCapturedPass full-clear admission | bounded native value proof and validator/provider plumbing complete; wild and GPU promotion evidence open | `RenderTapeFirstAccess` proves one exact surface→texture alias whose first terminal access in the same chunk is an unrestricted target Clear; `validateRenderTape` tracks one unresolved obligation and resolves it once before import, while rejecting unresolved/multiple/cube/multi-mip cases. Provider replay creates the parent texture without an initial mutation and then its texture-derived surface alias, but no captured production bundle or wild replay claim is made. |
@@ -377,7 +377,7 @@ or reviewing a TLA+ module.
 
 | Model | System | Code site (primary) | Invariants (safety) | Liveness | Companion native spec |
 |---|---|---|---|---|---|
-| `CommandQueue.tla` | 3-thread ring buffer (Wine / Encode / Finish), multi-sub-CB chain | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` | `TypeOK`, `SeqIdSafety`, `BoundedInflight`, `RingSafety`, `EncodeSafety`, `SubCBProgressBounded`, `OnlyFinalAdvancesSeqId`, `PresentRoutedToTail` | `PendingEventuallyFree`, `EventuallyDrained` | `tests/native/backend/chunk_record_replay_spec.cpp`, `tests/native/backend/dod_replay_observer_spec.cpp` |
+| `CommandQueue.tla` | 3-thread ring buffer (Wine / Encode / Finish), multi-sub-CB chain | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` | `TypeOK`, `SeqIdSafety`, `BoundedInflight`, `RingSafety`, `EncodeSafety`, `SubCBProgressBounded`, `OnlyFinalAdvancesSeqId`, `PresentRoutedToTail` | `PendingEventuallyFree`, `EventuallyDrained` | `tests/native/backend/chunk_record_replay_spec.cpp`, `tests/native/backend/dod_replay_observer_spec.cpp`, `tests/native/backend/encode_session_lifecycle_spec.cpp` (effective replay observer) |
 | `QueueLifecycleRefinement.tla` | Concrete refinement of `QueueLifecycleController` staging fields | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `ReadySlotsArePending`, `PendingCompletionAreSubmitted`, `CompletedSeqQueueBounded`, lifecycle refinement of `CommandQueue!Spec` | `WaitForSequenceProgress`, `StopUnblocksWaits` | `tests/native/backend/dod_replay_observer_spec.cpp` |
 | `PresentFrameLatency.tla` | Queue-owned frame-latency tokens, present vs non-present timelines | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` | `TypeOK`, `SeqTimelineSafety`, `PresentCompletionSafety`, `OutstandingPresentBound`, `PresentQueueSafety`, `AppWaitReturnSafe` | `SubmittedPresentsEventuallyComplete`, `WaitEventuallyReturnsOrStops` | `tests/native/backend/present_boundary_policy_spec.cpp` |
 | `ConcurrentProgressSignals.tla` | Pacing independence across `completedSeqId` / `presentCompletedSeqId` / `ringSlotOccupancy` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `PacingOrdering` (`presentCompletedSeqId ≤ completedSeqId`), `RingOccupancyBound`, `FrameLatencyBound`, `OutstandingAccounting` | `NoQueryWaitBlocksPresent`, `NoFrameLatencyBlocksQuery`, `NoRingPressureBlocksPresentCompletion` | _(gap: no native spec — cross-axis non-blocking is observable only at the queue, not as a pure-data transform; tracked as `R-VERIF-2.9 / 2.10` evidence shortfall in `specs/verification/gap.md`)_ |
@@ -459,40 +459,41 @@ reproduces the old bare-destination escape. This evidence does not prove
 Objective-C reference-count implementation or Metal command-buffer retention;
 those platform mechanisms remain assumptions at the abstraction boundary.
 
-### 7.3 Queue observer follow-up design
+### 7.3 Effective replay observer
 
-The existing `dod_replay_observer_spec.cpp` observation is test-local and reads
-a completed `ChunkSlot`; it does not observe production replay dispatch and
-does not contain the imported retained-handle table. It therefore remains
-capacity/category evidence, not closure of `R-VERIF-7.3`.
+`ReplayObserverSink` is copied from `CommandQueue` into `EncodeContext`. One
+cached null-function gate per `encodeChunk` effective stream or fragment
+selects either a no-op instantiation or enabled observer storage before replay
+begins. Serial replay resolves and publishes one original source-qualified
+command after range validation, DCE/permutation, partition selection, and
+fallback checks, immediately before that selected command's encoder effects.
+A selected parallel batch publishes its covered commands in effective order
+after every proof/economics/fallback gate and immediately before the first
+child encoder effect. There is no source-wide observation pre-pass. The no-op
+instantiation constructs no observer storage and performs no resource-visitor
+work.
 
-The bounded production seam should be one cold nullable sink on the replay
-owner, not a second backend:
+`visitSourceCommandResources` is the shared policy for queue marking and
+observation. It conserves flat Draw state, per-draw binding overrides and
+backing snapshots, and every non-draw endpoint. Snapshot rows preserve
+`markBufferSnapshotUse` in the production marker. The observer projects exact
+resource handles into growable call-local enabled-only storage, deduplicates
+without a fixed capacity, and exposes the resulting span only for the
+synchronous callback. No callback executes while the queue scheduling lock is
+held and no span is retained in queue, session, or submission state.
 
-1. Add POD observation metadata in `dxmt9_queue.hpp` with source
-   identity/generation, `seqId`, command ordinal, `MetalCommandKind`, replay
-   category, and barrier/readback flags. Deliver the source's exact retained
-   `ChunkHandleEntry` values as a synchronous call-local span; the sink must
-   consume or copy it immediately and production must never store the span.
-2. Factor the resource-marking switches in `markArenaSourceResources` and the
-   legacy import path into one `visitCommandResourceHandles` production visitor.
-   Draw visits must include flat-state handles plus draw-payload backing
-   snapshots/overrides; non-draw visits must use the same descriptors that the
-   pool marking functions consume. The observer and `mark*Use` path must share
-   this visitor so tests cannot duplicate retention policy.
-3. Invoke a nullable `{context, function-pointer}` sink immediately before each
-   production command dispatch, after source generation/range validation and
-   before encoder side effects. Keep the null branch outside per-handle loops
-   and compile no vector/string ownership into the hot path.
-4. Extend `dxmt9-dod-replay-observer-spec` through the real replay entry with a
-   mixed Draw/Clear/Copy/Readback/Present source. Assert exact source/sequence,
-   retained-handle conservation, category and boundary flags, and encoded kind
-   order. Add a fake backend only for the final dispatch call; use condition
-   variables or direct calls, never sleeps or GPU timing.
-
-This seam crosses legacy and Arena/Tape replay ownership and resource-marking
-code, so it is intentionally not implemented as an isolated add-on in the
-current lifetime change.
+`encode_session_lifecycle_spec.cpp` drives the real `encodeChunk` entry with
+Legacy and Arena storage. It pins mixed Draw/Clear/Copy/Readback/Present
+metadata and resources, DCE omission, permutation order, explicit DrawRun
+subranges, pre-registered source fragments, original ordinals, exact callback
+counts, and zero callbacks for an invalid range on the selected serial path.
+The production selected-parallel batch seam is implemented, but the lifecycle
+fixture's test-only side-effect suppression intentionally bypasses
+`tryEncodeParallelPass`; no selected fake/recorded parallel batch currently
+pins callback timing after the proof gates. R-VERIF-7.3 therefore remains
+partial on that bounded parallel binding. The independent
+`ConcurrentProgressSignals` cross-axis queue-observation gap in §7.2 also
+remains open.
 
 ---
 

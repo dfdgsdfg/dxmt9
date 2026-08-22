@@ -98,6 +98,40 @@ struct DrawRunCapture {
   std::vector<LateStoreResolution> lateStoreResolutions;
 };
 
+struct ReplayObservationValue {
+  dxmt9::core::CpuReadyTape::SourceRef source{};
+  std::uint64_t seqId = 0;
+  std::uint32_t commandOrdinal = 0;
+  dxmt9::core::MetalCommandKind commandKind =
+      dxmt9::core::MetalCommandKind::DrawRun;
+  dxmt9::core::metalqueue::ReplayCategory category =
+      dxmt9::core::metalqueue::ReplayCategory::Draw;
+  bool barrier = false;
+  bool readback = false;
+  std::vector<dxmt9::core::ChunkHandleEntry> resourceHandles;
+};
+
+struct ReplayObservationCapture {
+  std::vector<ReplayObservationValue> values;
+};
+
+void captureReplayObservation(
+    void* userdata,
+    const dxmt9::core::metalqueue::ReplayObservation& observation) noexcept {
+  auto* capture = static_cast<ReplayObservationCapture*>(userdata);
+  capture->values.push_back(ReplayObservationValue{
+      .source = observation.source,
+      .seqId = observation.seqId,
+      .commandOrdinal = observation.commandOrdinal,
+      .commandKind = observation.commandKind,
+      .category = observation.category,
+      .barrier = observation.barrier,
+      .readback = observation.readback,
+      .resourceHandles = {observation.resourceHandles.begin(),
+                          observation.resourceHandles.end()},
+  });
+}
+
 void recordDrawRunBegin(void* userdata,
                         std::size_t commandIndex,
                         std::size_t) {
@@ -449,6 +483,101 @@ void appendTargetDraw(dxmt9::core::ChunkSlot& slot,
   const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
   slot.appendDrawRun(state, dxmt9::core::DrawUniformPayload{}, draws,
                      payloads);
+}
+
+dxmt9::core::ChunkSlot makeReplayObserverMixedSlot(std::uint64_t seqId) {
+  auto state = makeDrawRunState();
+  state.hot.indexBuffer = dxmt9::core::Handle{0x101u};
+  state.hot.streamMask = 1u;
+  state.hot.streamBuffers[0] = dxmt9::core::Handle{0x102u};
+  state.hot.textureMask = 1u;
+  state.hot.textures[0] = dxmt9::core::Handle{0x103u};
+  state.hot.renderTargetMask = 1u;
+  state.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x104u};
+  state.hot.depthStencil.handle = dxmt9::core::Handle{0x105u};
+
+  dxmt9::core::DrawBindingOverride bindingOverride{};
+  bindingOverride.streamMask = 1u << 1u;
+  bindingOverride.streams[1].buffer = dxmt9::core::Handle{0x106u};
+  bindingOverride.indexBufferValid = true;
+  bindingOverride.indexBuffer = dxmt9::core::Handle{0x107u};
+
+  dxmt9::core::DrawBindingSnapshot bindingSnapshot{};
+  bindingSnapshot.streamMask = 1u << 1u;
+  bindingSnapshot.streams[1].buffer = dxmt9::core::Handle{0x106u};
+  bindingSnapshot.streams[1].snapshot = {
+      .metalHandle = 0x1106u,
+      .contentsAddress = 0x2106u,
+      .byteSize = 256u,
+      .contentRevision = 3u,
+  };
+  bindingSnapshot.indexSnapshotValid = true;
+  bindingSnapshot.indexBuffer = dxmt9::core::Handle{0x107u};
+  bindingSnapshot.indexSnapshot = {
+      .metalHandle = 0x1107u,
+      .contentsAddress = 0x2107u,
+      .byteSize = 128u,
+      .contentRevision = 4u,
+  };
+
+  dxmt9::core::DrawParam draw{};
+  draw.primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+  draw.primitiveCount = 1u;
+  draw.instanceCount = 1u;
+  const std::array draws{draw};
+  const std::array payloads{
+      dxmt9::core::DrawParamPayloadView{
+          .bindingOverrideData =
+              dxmt9::core::drawBindingOverrideBytes(bindingOverride),
+          .bindingSnapshotData =
+              dxmt9::core::drawBindingSnapshotBytes(bindingSnapshot),
+      },
+  };
+
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  slot.appendDrawRun(state, dxmt9::core::DrawUniformPayload{}, draws,
+                     payloads);
+
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  clear.colorAttachments[0].handle = dxmt9::core::Handle{0x200u};
+  slot.appendClear(clear);
+  slot.appendSurfaceCopy({
+      .source = dxmt9::core::Handle{0x300u},
+      .destination = dxmt9::core::Handle{0x301u},
+  });
+  slot.appendReadback({
+      .source = dxmt9::core::Handle{0x400u},
+      .destination = dxmt9::core::Handle{0x401u},
+  });
+  slot.appendPresent({}, dxmt9::core::Handle{0x500u});
+  return slot;
+}
+
+dxmt9::core::ChunkSlot makeLargeReplayObserverDrawSlot(
+    std::uint64_t seqId, std::size_t drawCount) {
+  std::vector<dxmt9::core::DrawParam> draws(drawCount);
+  std::vector<dxmt9::core::DrawBindingOverride> bindings(drawCount);
+  std::vector<dxmt9::core::DrawParamPayloadView> payloads(drawCount);
+  for (std::size_t i = 0; i < drawCount; ++i) {
+    draws[i].primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+    draws[i].primitiveCount = 1u;
+    draws[i].instanceCount = 1u;
+    bindings[i].streamMask = 1u;
+    bindings[i].streams[0].buffer =
+        dxmt9::core::Handle{0x1000u + i * 2u};
+    bindings[i].indexBufferValid = true;
+    bindings[i].indexBuffer =
+        dxmt9::core::Handle{0x1001u + i * 2u};
+    payloads[i].bindingOverrideData =
+        dxmt9::core::drawBindingOverrideBytes(bindings[i]);
+  }
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  slot.appendDrawRun(makeDrawRunState(),
+                     dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  return slot;
 }
 
 dxmt9::core::ChunkSlot makeActiveSeedOutcomeSlot(
@@ -2713,6 +2842,320 @@ void malformedPreRegisteredFragmentsRejectBeforeRecorderEffects() {
           "range rejection precedes recorder effects");
 }
 
+void checkReplayObservationHandles(
+    const ReplayObservationValue& observation,
+    std::span<const dxmt9::core::ChunkHandleEntry> expected,
+    std::string_view message) {
+  checkEq(observation.resourceHandles.size(), expected.size(), message);
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    check(observation.resourceHandles[i].kind == expected[i].kind, message);
+    checkEq(observation.resourceHandles[i].handle.value,
+            expected[i].handle.value, message);
+  }
+}
+
+void checkMixedReplayObservation(
+    const ReplayObservationValue& observation,
+    dxmt9::core::CpuReadyTape::SourceRef source,
+    std::uint64_t seqId,
+    std::uint32_t commandOrdinal) {
+  using HandleEntry = dxmt9::core::ChunkHandleEntry;
+  using HandleKind = dxmt9::core::ChunkHandleKind;
+  using Kind = dxmt9::core::MetalCommandKind;
+  using Category = dxmt9::core::metalqueue::ReplayCategory;
+  const std::array kinds{
+      Kind::DrawRun,
+      Kind::Clear,
+      Kind::SurfaceCopy,
+      Kind::Readback,
+      Kind::Present,
+  };
+  const std::array categories{
+      Category::Draw,
+      Category::Draw,
+      Category::Copy,
+      Category::Copy,
+      Category::Present,
+  };
+  const std::array<HandleEntry, 7> drawHandles{
+      HandleEntry{HandleKind::Buffer, dxmt9::core::Handle{0x101u}},
+      HandleEntry{HandleKind::Buffer, dxmt9::core::Handle{0x102u}},
+      HandleEntry{HandleKind::Texture, dxmt9::core::Handle{0x103u}},
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x104u}},
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x105u}},
+      HandleEntry{HandleKind::Buffer, dxmt9::core::Handle{0x106u}},
+      HandleEntry{HandleKind::Buffer, dxmt9::core::Handle{0x107u}},
+  };
+  const std::array<HandleEntry, 1> clearHandles{
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x200u}},
+  };
+  const std::array<HandleEntry, 2> copyHandles{
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x300u}},
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x301u}},
+  };
+  const std::array<HandleEntry, 2> readbackHandles{
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x400u}},
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x401u}},
+  };
+  const std::array<HandleEntry, 1> presentHandles{
+      HandleEntry{HandleKind::Surface, dxmt9::core::Handle{0x500u}},
+  };
+  const std::array<std::span<const HandleEntry>, 5> handles{
+      drawHandles,
+      clearHandles,
+      copyHandles,
+      readbackHandles,
+      presentHandles,
+  };
+
+  check(observation.source == source,
+        "effective observer preserves source/storage identity");
+  checkEq(observation.seqId, seqId,
+          "effective observer preserves source sequence");
+  checkEq(observation.commandOrdinal, commandOrdinal,
+          "effective observer preserves original command ordinal");
+  check(observation.commandKind == kinds[commandOrdinal],
+        "effective observer preserves Metal command kind");
+  check(observation.category == categories[commandOrdinal],
+        "effective observer classifies replay category");
+  check(observation.barrier == (commandOrdinal != 0u),
+        "effective observer classifies the command boundary");
+  check(observation.readback == (commandOrdinal == 3u),
+        "effective observer classifies synchronous readback");
+  checkReplayObservationHandles(
+      observation, handles[commandOrdinal],
+      "effective observer preserves the exact resource handle span");
+}
+
+void effectiveReplayObserverCoversLegacyArenaSelectionAndResources() {
+  using Kind = dxmt9::core::MetalCommandKind;
+  const std::array<std::uint32_t, 4> selectedOrder{2u, 0u, 3u, 4u};
+
+  for (bool arenaSource : {false, true}) {
+    Harness harness;
+    DrawRunCapture drawCapture;
+    auto recorder = makeDrawRunRecorder(drawCapture, {});
+    recorder.suppressCommandEncoderSideEffects = true;
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    ReplayObservationCapture capture;
+    ctx.replayObserver = {
+        .context = &capture,
+        .fn = captureReplayObservation,
+    };
+    auto slot = makeReplayObserverMixedSlot(arenaSource ? 902u : 901u);
+    const std::size_t slotIndex = arenaSource ? 92u : 91u;
+    const auto source = sourceRefFor(slotIndex, slot.seqId);
+
+    auto makeOptions = [&] {
+      dxmt9::encoders::EncodeChunkOptions options{};
+      options.commandBuffer = retainedToken<WMT::CommandBuffer>(
+          arenaSource ? "observer-arena-cb" : "observer-legacy-cb");
+      options.disableMidChunkCommits = true;
+      options.partitionSource = source;
+      return options;
+    };
+
+    std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> identity;
+    if (arenaSource) {
+      dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+      check(arena.valid(), "observer Arena fixture builds");
+      identity = dxmt9::encoders::encodeChunk(
+          ctx, slotIndex, arena.view(), slot.seqId, makeOptions());
+    } else {
+      identity = dxmt9::encoders::encodeChunk(
+          ctx, slotIndex, slot, makeOptions());
+    }
+    check(identity.has_value(),
+          "identity effective observer replay reaches encodeChunk");
+    checkEq(capture.values.size(), std::size_t{5},
+            "identity replay observes every mixed command exactly once");
+    for (std::uint32_t ordinal = 0; ordinal < 5u; ++ordinal) {
+      checkMixedReplayObservation(
+          capture.values[ordinal], source, slot.seqId, ordinal);
+    }
+
+    capture.values.clear();
+    auto selectedOptions = makeOptions();
+    selectedOptions.replayCommandPlanActive = true;
+    selectedOptions.replayCommandOrder = selectedOrder;
+    std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> selected;
+    if (arenaSource) {
+      dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+      check(arena.valid(), "selected observer Arena fixture builds");
+      selected = dxmt9::encoders::encodeChunk(
+          ctx, slotIndex, arena.view(), slot.seqId,
+          std::move(selectedOptions));
+    } else {
+      selected = dxmt9::encoders::encodeChunk(
+          ctx, slotIndex, slot, std::move(selectedOptions));
+    }
+    check(selected.has_value(),
+          "DCE/permutation effective observer replay reaches encodeChunk");
+    checkEq(capture.values.size(), selectedOrder.size(),
+            "DCE omission produces no callback and permutation is exact");
+    for (std::size_t i = 0; i < selectedOrder.size(); ++i) {
+      checkMixedReplayObservation(
+          capture.values[i], source, slot.seqId, selectedOrder[i]);
+    }
+    check(capture.values[0].commandKind == Kind::SurfaceCopy &&
+              capture.values[1].commandKind == Kind::DrawRun,
+          "effective observer reports encoded order rather than source order");
+  }
+}
+
+void effectiveReplayObserverCoversSubrangesFragmentsAndInvalidRanges() {
+  {
+    Harness harness;
+    DrawRunCapture drawCapture;
+    auto recorder = makeDrawRunRecorder(drawCapture, {});
+    recorder.suppressCommandEncoderSideEffects = true;
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    ReplayObservationCapture capture;
+    ctx.replayObserver = {&capture, captureReplayObservation};
+    constexpr std::size_t drawCount = 80u;
+    auto slot = makeLargeReplayObserverDrawSlot(906u, drawCount);
+    constexpr std::size_t slotIndex = 96u;
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer =
+        retainedToken<WMT::CommandBuffer>("observer-large-span-cb");
+    options.partitionSource = sourceRefFor(slotIndex, slot.seqId);
+    check(dxmt9::encoders::encodeChunk(
+              ctx, slotIndex, slot, std::move(options))
+              .has_value(),
+          "large observer resource span reaches encodeChunk");
+    checkEq(capture.values.size(), std::size_t{1},
+            "large DrawRun publishes one command callback");
+    checkEq(capture.values[0].resourceHandles.size(), drawCount * 2u,
+            "observer resource span is not truncated at a fixed capacity");
+    checkEq(capture.values[0].resourceHandles.front().handle.value,
+            std::uint64_t{0x1000u},
+            "large resource span preserves its first handle");
+    checkEq(capture.values[0].resourceHandles.back().handle.value,
+            std::uint64_t{0x109fu},
+            "large resource span preserves its last handle");
+  }
+
+  {
+    Harness harness;
+    DrawRunCapture drawCapture;
+    auto recorder = makeDrawRunRecorder(drawCapture, {});
+    recorder.suppressCommandEncoderSideEffects = true;
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    ReplayObservationCapture capture;
+    ctx.replayObserver = {&capture, captureReplayObservation};
+    constexpr std::size_t slotIndex = 93u;
+    auto slot = makeDrawRunSlot(903u);
+    const std::array subranges{
+        std::pair<std::uint32_t, std::uint32_t>{0u, 2u},
+        std::pair<std::uint32_t, std::uint32_t>{3u, 2u},
+    };
+    auto ranges = makeDrawRanges(slotIndex, slot, subranges);
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer =
+        retainedToken<WMT::CommandBuffer>("observer-subrange-cb");
+    options.partitionRanges = ranges;
+    const auto selectedSource = partitionSource(slotIndex, slot.seqId);
+    options.sessionSource = selectedSource;
+    options.partitionSource = selectedSource.source;
+    const auto submission = dxmt9::encoders::encodeChunk(
+        ctx, slotIndex, slot, std::move(options));
+    check(submission.has_value(),
+          "explicit DrawRun subranges reach the effective replay seam");
+    checkEq(capture.values.size(), std::size_t{1},
+            "multiple draw subranges publish one command callback");
+    checkEq(capture.values[0].commandOrdinal, std::uint32_t{1},
+            "subrange callback retains the original command ordinal");
+  }
+
+  {
+    Harness harness;
+    DrawRunCapture drawCapture;
+    auto recorder = makeDrawRunRecorder(drawCapture, {});
+    recorder.suppressCommandEncoderSideEffects = true;
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    ReplayObservationCapture capture;
+    ctx.replayObserver = {&capture, captureReplayObservation};
+    auto slot = makeReplayObserverMixedSlot(904u);
+    constexpr std::size_t slotIndex = 94u;
+    const auto source = fullSource(slotIndex, slot.seqId, slot.commandCount());
+    auto session = dxmt9::encoders::makeEncodeChunkSession();
+    check(dxmt9::encoders::appendEncodeChunkSessionSource(*session, source),
+          "fragment observer fixture pre-registers its source");
+    dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+    check(arena.valid(), "fragment observer Arena fixture builds");
+
+    auto fragmentOptions = [&](std::size_t commandBegin,
+                               std::size_t commandCount,
+                               std::uint32_t fragmentOrdinal,
+                               WMT::Reference<WMT::CommandBuffer> carrier) {
+      dxmt9::encoders::EncodeChunkOptions options{};
+      options.commandBuffer = std::move(carrier);
+      options.session = session.get();
+      options.deferSessionFinalization = true;
+      options.partitionSource = source.source;
+      options.preRegisteredFragment =
+          dxmt9::encoders::PreRegisteredEncodeChunkFragment{
+              .commandBegin = commandBegin,
+              .commandCount = commandCount,
+              .sourceFragmentOrdinal = fragmentOrdinal,
+              .sourceFragmentCount = 2u,
+              .transactionFragmentOrdinal = fragmentOrdinal,
+              .transactionFragmentCount = 2u,
+          };
+      return options;
+    };
+
+    auto first = dxmt9::encoders::encodeChunk(
+        ctx, slotIndex, arena.view(), slot.seqId,
+        fragmentOptions(
+            0u, 2u, 0u,
+            retainedToken<WMT::CommandBuffer>("observer-fragment-cb")));
+    check(first.has_value(), "first Arena command fragment encodes");
+    auto second = dxmt9::encoders::encodeChunk(
+        ctx, slotIndex, arena.view(), slot.seqId,
+        fragmentOptions(2u, 3u, 1u, std::move(first->commandBuffer)));
+    check(second.has_value(), "second Arena command fragment encodes");
+    checkEq(capture.values.size(), std::size_t{5},
+            "fragmented source observes every command exactly once");
+    for (std::uint32_t ordinal = 0; ordinal < 5u; ++ordinal) {
+      checkMixedReplayObservation(
+          capture.values[ordinal], source.source, slot.seqId, ordinal);
+    }
+  }
+
+  {
+    Harness harness;
+    DrawRunCapture drawCapture;
+    auto recorder = makeDrawRunRecorder(drawCapture, {});
+    recorder.suppressCommandEncoderSideEffects = true;
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    ReplayObservationCapture capture;
+    ctx.replayObserver = {&capture, captureReplayObservation};
+    auto slot = makeReplayObserverMixedSlot(905u);
+    constexpr std::size_t slotIndex = 95u;
+    auto invalidSource = fullSource(
+        slotIndex, slot.seqId, slot.commandCount());
+    invalidSource.commandBegin = slot.commandCount();
+    invalidSource.commandCount = 1u;
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer =
+        retainedToken<WMT::CommandBuffer>("observer-invalid-range-cb");
+    options.partitionSource = invalidSource.source;
+    options.sessionSource = invalidSource;
+    check(!dxmt9::encoders::encodeChunk(
+               ctx, slotIndex, slot, std::move(options))
+               .has_value(),
+          "invalid replay range rejects encodeChunk");
+    check(capture.values.empty(),
+          "invalid replay range emits zero observer callbacks");
+  }
+}
+
 void ticketBeforeEncodeAdmissionFailureRemainsUnissued() {
   Harness harness;
   auto invalidContext = harness.makeContext();
@@ -2785,6 +3228,8 @@ int main() {
     partialCommandSegmentSessionFinalizesWithoutTargets();
     preRegisteredFragmentsKeepReplayAndCompletionOrderIndependent();
     malformedPreRegisteredFragmentsRejectBeforeRecorderEffects();
+    effectiveReplayObserverCoversLegacyArenaSelectionAndResources();
+    effectiveReplayObserverCoversSubrangesFragmentsAndInvalidRanges();
     ticketBeforeEncodeAdmissionFailureRemainsUnissued();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()

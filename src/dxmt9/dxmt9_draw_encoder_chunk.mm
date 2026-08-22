@@ -169,6 +169,74 @@ using encode_session::ArgbufPayloadDeltaKey;
 
 namespace {
 
+core::metalqueue::ReplayCategory replayCategoryFor(
+    core::MetalCommandKind kind) noexcept {
+  using Kind = core::MetalCommandKind;
+  switch (kind) {
+  case Kind::DrawRun:
+  case Kind::Clear:
+  case Kind::ColorFill:
+    return core::metalqueue::ReplayCategory::Draw;
+  case Kind::Present:
+    return core::metalqueue::ReplayCategory::Present;
+  case Kind::SurfaceCopy:
+  case Kind::StretchRect:
+  case Kind::Readback:
+  case Kind::DepthResolve:
+    return core::metalqueue::ReplayCategory::Copy;
+  }
+  return core::metalqueue::ReplayCategory::Draw;
+}
+
+struct DisabledReplayObserver {
+  void observe(std::uint32_t, const core::SourceCommandView&) const noexcept {}
+};
+
+struct EnabledReplayObserver {
+  core::metalqueue::ReplayObserverSink sink{};
+  core::CpuReadyTape::SourceRef source{};
+  std::uint64_t seqId = 0;
+  std::vector<core::ChunkHandleEntry> handles;
+  std::vector<std::uint32_t> observedCommandOrdinals;
+
+  void observe(std::uint32_t commandIndex,
+               const core::SourceCommandView& command) {
+    DXMT_ASSERT(sink.fn != nullptr);
+    if (std::find(observedCommandOrdinals.begin(),
+                  observedCommandOrdinals.end(), commandIndex) !=
+        observedCommandOrdinals.end()) {
+      return;
+    }
+    observedCommandOrdinals.push_back(commandIndex);
+    handles.clear();
+    core::visitSourceCommandResources(
+        command, [&](const core::SourceCommandResourceRef& resource) {
+          const auto duplicate = std::find_if(
+              handles.begin(), handles.end(),
+              [&](const core::ChunkHandleEntry& existing) {
+                return existing.kind == resource.entry.kind &&
+                       existing.handle == resource.entry.handle;
+              });
+          if (duplicate == handles.end()) {
+            handles.push_back(resource.entry);
+          }
+        });
+
+    const auto kind = command.kind();
+    sink.fn(sink.context,
+            core::metalqueue::ReplayObservation{
+                .source = source,
+                .seqId = seqId,
+                .commandOrdinal = commandIndex,
+                .commandKind = kind,
+                .category = replayCategoryFor(kind),
+                .barrier = kind != core::MetalCommandKind::DrawRun,
+                .readback = kind == core::MetalCommandKind::Readback,
+                .resourceHandles = handles,
+            });
+  }
+};
+
 [[noreturn]] void abortEncodePartitionInvariant(const char* reason) {
   std::fprintf(
       stderr,
@@ -3508,9 +3576,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   };
 
-  auto encodeCompleteCommand = [&](std::size_t commandIndex,
+  auto encodeCompleteCommand = [&](auto& replayObserver,
+                                   std::size_t commandIndex,
                                    const core::SourceCommandView& source) {
       const auto& command = source.command;
+      replayObserver.observe(static_cast<std::uint32_t>(commandIndex), source);
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
       switch (command.kind) {
@@ -3794,7 +3864,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // prefetched PSO stay on the serial path. Clear/Present, pass actions, and
   // completion remain coordinator-owned.
   auto tryEncodeParallelPass = [&]
-      (const SealedParallelPassSnapshot& pass,
+      (auto& replayObserver,
+       const SealedParallelPassSnapshot& pass,
        std::uint32_t commandIndex,
        const core::MetalCommandView& command) -> bool {
     const auto eligibility = classifyParallelPassEligibility(
@@ -4443,6 +4514,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           state.failed = true;
         },
     };
+    // Parallel children have no serial per-command effect seam. Publish the
+    // selected source commands in effective replay order after every proof and
+    // fallback gate, immediately before the first parallel encoder effect.
+    for (std::uint32_t ordinal = pass.replayOrdinalBegin;
+         ordinal < pass.replayOrdinalEnd; ++ordinal) {
+      std::uint32_t observedCommandIndex = 0u;
+      if (!partitionReplayStream.commandIndexAt(
+              ordinal, observedCommandIndex)) {
+        abortEncodePartitionInvariant(
+            "parallel observer command resolution failed");
+      }
+      replayObserver.observe(
+          observedCommandIndex, payload.commandAt(observedCommandIndex));
+    }
+
     ParallelPassMetalBackend backend(commandBuffer, prepared.info, callbacks);
     std::array<std::uint32_t, kParallelRenderPassChildCapacity>
         completionOrder{};
@@ -4484,12 +4570,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return true;
   };
 
-  std::uint32_t parallelConsumedReplayOrdinalEnd = 0u;
-  EncodePartitionSerialCursor partitionCursor(
-      partitionReplayStream, partitionRanges,
-      useExplicitPartitionPlan);
-  EncodePartitionSerialBatch partitionBatch{};
-  while (partitionCursor.next(partitionBatch)) {
+  const bool suppressCommandEncoderSideEffects =
+      ctx.drawRecorder &&
+      ctx.drawRecorder->suppressCommandEncoderSideEffects;
+  auto encodeSelectedCommands = [&](auto& replayObserver) {
+    std::uint32_t parallelConsumedReplayOrdinalEnd = 0u;
+    EncodePartitionSerialCursor partitionCursor(
+        partitionReplayStream, partitionRanges,
+        useExplicitPartitionPlan);
+    EncodePartitionSerialBatch partitionBatch{};
+    while (partitionCursor.next(partitionBatch)) {
       if (partitionBatch.kind == EncodePartitionRangeKind::CommandSegment) {
         const std::uint64_t ordinalEnd =
             static_cast<std::uint64_t>(partitionBatch.replayOrdinalBegin) +
@@ -4507,12 +4597,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 "CommandSegment replay ordinal resolution failed");
           }
           const auto source = payload.commandAt(commandIndex);
+          if (suppressCommandEncoderSideEffects) {
+            replayObserver.observe(commandIndex, source);
+            continue;
+          }
           if (source.kind() == Kind::DrawRun) {
             if (const auto* pass = parallelPassForReplayOrdinal(
                     static_cast<std::uint32_t>(ordinal))) {
               traceEncodeCommand("begin", commandIndex, Kind::DrawRun,
                                  source.command);
-              if (tryEncodeParallelPass(*pass, commandIndex,
+              if (tryEncodeParallelPass(replayObserver, *pass, commandIndex,
                                         source.command)) {
                 parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
                 traceEncodeCommand("after-encode", commandIndex,
@@ -4526,7 +4620,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               }
             }
           }
-          encodeCompleteCommand(commandIndex, source);
+          encodeCompleteCommand(replayObserver, commandIndex, source);
         }
         continue;
       }
@@ -4558,16 +4652,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           parallelConsumedReplayOrdinalEnd) {
         continue;
       }
+      const auto source = payload.commandAt(commandIndex);
+      if (suppressCommandEncoderSideEffects) {
+        replayObserver.observe(commandIndex, source);
+        continue;
+      }
       traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       if (const auto* pass = parallelPassForReplayOrdinal(
               partitionBatch.replayOrdinalBegin)) {
         encodedInParallel = tryEncodeParallelPass(
-            *pass, commandIndex, command);
+            replayObserver, *pass, commandIndex, command);
         if (encodedInParallel) {
           parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
         }
       }
       if (!encodedInParallel) {
+        replayObserver.observe(commandIndex, source);
         encodeDrawRunCommand(
             commandIndex, command,
             partitionBatch.identityResolved
@@ -4579,6 +4679,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          command);
       applyPerRecordSplitPolicy(/*presentRecord=*/false);
       traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
+    }
+  };
+
+  // One cached gate owns the complete disabled path: no observer-specific
+  // storage is constructed and no resource visitor runs when the sink is null.
+  if (ctx.replayObserver.fn) {
+    EnabledReplayObserver replayObserver{
+        .sink = ctx.replayObserver,
+        .source = options.partitionSource,
+        .seqId = sourceSeqId,
+    };
+    encodeSelectedCommands(replayObserver);
+  } else {
+    DisabledReplayObserver replayObserver;
+    encodeSelectedCommands(replayObserver);
   }
 
   if (options.session && options.sessionSource.has_value()) {

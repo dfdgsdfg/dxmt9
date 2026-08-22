@@ -385,7 +385,19 @@ tails, unknown command IDs, record-count mismatches, and stale or null handles.
 fake-backend hook for tests. The hook must record chunk sequence IDs, retained
 resource handles, replay category, barrier/readback boundaries, and encoded
 command kind order without depending on sleeps, real GPU timing, or Metal side
-effects.
+effects. The production hook must be one cold nullable sink selected once per
+`encodeChunk` effective stream or fragment. A serial callback occurs after
+range, DCE/permutation, partition, and fallback selection and immediately
+before that selected command's encoder effects. A selected parallel batch may
+publish its covered commands in effective order after every proof/economics/
+fallback gate and immediately before the first child encoder effect; a
+source-wide pre-pass is forbidden. Each callback must include source identity/
+storage generations, original command ordinal, `MetalCommandKind`, replay
+category, barrier/readback flags, and an exact synchronous call-local span of
+retained `ChunkHandleEntry` values. Disabled observation must cost at most one
+cached null branch and perform zero observer storage, allocation, or resource-
+visitor work; the hook must not retain borrowed spans or truncate an enabled
+observation at a fixed capacity.
 
 **R-VERIF-7.4** DXMT concept mapping acceptance must be explicit: every hot-path
 owner in the README mapping has a corresponding implementation owner and test

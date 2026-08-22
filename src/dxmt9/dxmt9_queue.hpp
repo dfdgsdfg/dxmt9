@@ -118,6 +118,38 @@ enum class ChunkObservationKind {
   Present,
 };
 
+enum class ReplayCategory : std::uint8_t {
+  Draw,
+  Copy,
+  Present,
+};
+
+// Effective encode replay observation. All fields are values except the
+// resourceHandles span, which is valid only for the synchronous sink call.
+// A sink must not retain the record or its span. Source identity carries both
+// the source-slot and storage generations, making recycled queue storage
+// distinguishable from the represented source that occupied it.
+struct ReplayObservation {
+  CpuReadyTape::SourceRef source{};
+  u64 seqId = 0;
+  u32 commandOrdinal = 0;
+  MetalCommandKind commandKind = MetalCommandKind::DrawRun;
+  ReplayCategory category = ReplayCategory::Draw;
+  bool barrier = false;
+  bool readback = false;
+  std::span<const ChunkHandleEntry> resourceHandles{};
+};
+
+using ReplayObserverFn = void (*)(void* context,
+                                  const ReplayObservation& observation) noexcept;
+
+struct ReplayObserverSink {
+  void* context = nullptr;
+  ReplayObserverFn fn = nullptr;
+
+  explicit operator bool() const noexcept { return fn != nullptr; }
+};
+
 struct ChunkObservation {
   ChunkObservationKind kind = ChunkObservationKind::Draw;
   u32 compatFlags = 0;

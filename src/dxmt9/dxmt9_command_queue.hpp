@@ -571,6 +571,12 @@ class CommandQueue {
   // the existing value). Default false keeps non-chunk test/core paths
   // pinned by the run's hot resource set.
   void setSkipDrawResourceMarking(bool skip);
+  // One cold, nullable effective-replay sink copied into EncodeContext. The
+  // draw encoder checks it once after final replay selection and before
+  // command encoder effects.
+  void setReplayObserver(core::metalqueue::ReplayObserverSink sink) noexcept {
+    replayObserver_ = sink;
+  }
   void noteCommitChunkEntryForCompletionGap();
   void noteCommitChunkReplayStartForCompletionGap();
   void noteCommitChunkReplayEndForCompletionGap(std::uint64_t replayNanoseconds);
@@ -1233,6 +1239,7 @@ class CommandQueue {
   // in its body, before any member destruction runs, so the lifetime is safe
   // either way and this ordering documents the intent.
   std::unique_ptr<render::IRenderBackend> backend_;
+  core::metalqueue::ReplayObserverSink replayObserver_{};
 
   std::thread encodeThread_{};
   std::thread finishThread_{};

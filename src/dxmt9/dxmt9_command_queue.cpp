@@ -805,6 +805,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   };
   ctx.transientCompletedSeqId = transientCompletedSeqId;
   ctx.drawRecorder = testOnlyDrawRecorder_;
+  ctx.replayObserver = replayObserver_;
   return ctx;
 }
 
@@ -2814,26 +2815,27 @@ void markDrawBindingSnapshotResources(
   }
 }
 
-void markDrawRunPayloadResources(resources::Pool& pool,
-                                 const core::MetalCommandView& command,
-                                 std::uint64_t seqId) {
-  const auto arena = core::drawRunPayloadBytes(command);
-  for (const auto& param : command.drawParams) {
-    const auto bytes = core::drawRunPayloadBytes(param.bindingOverrideRange, arena);
-    if (bytes.size() == sizeof(core::DrawBindingOverride)) {
-      core::DrawBindingOverride binding{};
-      std::memcpy(&binding, bytes.data(), sizeof(binding));
-      markDrawBindingOverrideResource(pool, binding, seqId);
+void markVisitedResource(resources::Pool& pool,
+                         const core::SourceCommandResourceRef& resource,
+                         std::uint64_t seqId) {
+  const auto& entry = resource.entry;
+  switch (entry.kind) {
+  case core::ChunkHandleKind::Texture:
+    pool.markTextureUse(entry.handle, seqId);
+    break;
+  case core::ChunkHandleKind::Surface:
+    pool.markSurfaceUse(entry.handle, seqId);
+    break;
+  case core::ChunkHandleKind::Buffer:
+    if (resource.hasBufferSnapshot) {
+      pool.markBufferSnapshotUse(entry.handle, resource.bufferSnapshot, seqId);
+    } else {
+      pool.markBufferUse(entry.handle, seqId);
     }
-    const auto snapshotBytes =
-        core::drawRunPayloadBytes(param.bindingSnapshotRange, arena);
-    if (snapshotBytes.size() != sizeof(core::DrawBindingSnapshot)) {
-      continue;
-    }
-    core::DrawBindingSnapshot snapshot{};
-    if (copyDrawBindingSnapshot(snapshotBytes, snapshot)) {
-      markDrawBindingSnapshotResource(pool, snapshot, seqId);
-    }
+    break;
+  case core::ChunkHandleKind::Shader:
+  case core::ChunkHandleKind::VertexDecl:
+    break;
   }
 }
 
@@ -2842,58 +2844,10 @@ void markArenaSourceResources(resources::Pool& pool,
                               std::uint64_t seqId) {
   for (std::size_t i = 0; i < payload.commandCount(); ++i) {
     const auto sourceCommand = payload.commandAt(i);
-    const auto command = sourceCommand.command;
-    switch (command.kind) {
-    case core::MetalCommandKind::DrawRun:
-      if (command.drawState.hot) {
-        pool.markDrawResources(*command.drawState.hot, seqId);
-      }
-      markDrawRunPayloadResources(pool, command, seqId);
-      break;
-    case core::MetalCommandKind::Clear:
-      if (sourceCommand.clear) {
-        if (sourceCommand.clear->clearColor) {
-          for (const auto& attachment : sourceCommand.clear->colorAttachments) {
-            pool.markSurfaceUse(attachment.handle, seqId);
-          }
-        }
-        if (sourceCommand.clear->clearDepth ||
-            sourceCommand.clear->clearStencil) {
-          pool.markSurfaceUse(sourceCommand.clear->depthStencil.handle, seqId);
-        }
-      }
-      break;
-    case core::MetalCommandKind::SurfaceCopy:
-      if (command.surfaceCopy) {
-        pool.markSurfaceCopyResources(*command.surfaceCopy, seqId);
-      }
-      break;
-    case core::MetalCommandKind::StretchRect:
-      if (command.stretchRect) {
-        pool.markStretchResources(*command.stretchRect, seqId);
-      }
-      break;
-    case core::MetalCommandKind::Readback:
-      if (command.readback) {
-        pool.markReadbackResources(*command.readback, seqId);
-      }
-      break;
-    case core::MetalCommandKind::ColorFill:
-      if (command.colorFill) {
-        pool.markColorFillResources(*command.colorFill, seqId);
-      }
-      break;
-    case core::MetalCommandKind::DepthResolve:
-      if (command.depthResolve) {
-        pool.markDepthResolveResources(*command.depthResolve, seqId);
-      }
-      break;
-    case core::MetalCommandKind::Present:
-      if (command.present && command.present->presentSource) {
-        pool.markSurfaceUse(command.present->presentSource, seqId);
-      }
-      break;
-    }
+    visitSourceCommandResources(sourceCommand,
+                                [&](const core::SourceCommandResourceRef& resource) {
+                                  markVisitedResource(pool, resource, seqId);
+                                });
   }
 }
 
@@ -3036,36 +2990,11 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
-    const auto command = slot.commandAt(i);
-    switch (command.kind) {
-      case core::MetalCommandKind::DrawRun:
-        if (command.drawState.hot) pool.markDrawResources(*command.drawState.hot, slot.seqId);
-        markDrawRunPayloadResources(pool, command, slot.seqId);
-        break;
-      case core::MetalCommandKind::Clear:
-        if (command.clear) pool.markClearResources(*command.clear, slot.seqId);
-        break;
-      case core::MetalCommandKind::SurfaceCopy:
-        if (command.surfaceCopy) pool.markSurfaceCopyResources(*command.surfaceCopy, slot.seqId);
-        break;
-      case core::MetalCommandKind::StretchRect:
-        if (command.stretchRect) pool.markStretchResources(*command.stretchRect, slot.seqId);
-        break;
-      case core::MetalCommandKind::Readback:
-        if (command.readback) pool.markReadbackResources(*command.readback, slot.seqId);
-        break;
-      case core::MetalCommandKind::ColorFill:
-        if (command.colorFill) pool.markColorFillResources(*command.colorFill, slot.seqId);
-        break;
-      case core::MetalCommandKind::DepthResolve:
-        if (command.depthResolve) pool.markDepthResolveResources(*command.depthResolve, slot.seqId);
-        break;
-      case core::MetalCommandKind::Present:
-        if (command.present && command.present->presentSource) {
-          pool.markSurfaceUse(command.present->presentSource, slot.seqId);
-        }
-        break;
-    }
+    const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
+    visitSourceCommandResources(sourceCommand,
+                                [&](const core::SourceCommandResourceRef& resource) {
+                                  markVisitedResource(pool, resource, slot.seqId);
+                                });
   }
 }
 

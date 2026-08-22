@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -578,6 +579,152 @@ struct SourceCommandView {
 
   MetalCommandKind kind() const noexcept { return command.kind; }
 };
+
+struct SourceCommandResourceRef {
+  ChunkHandleEntry entry{};
+  DrawBufferBindingSnapshot bufferSnapshot{};
+  bool hasBufferSnapshot = false;
+};
+
+// Walk the production resource set for one command. Queue residency marking
+// and effective-replay observation share this policy so flat draw state,
+// per-draw binding overrides/snapshots, and non-draw endpoints cannot drift.
+// Snapshot-bearing rows preserve the concrete backing stamp required by
+// DYNAMIC-buffer lifetime marking; observers expose only `entry`.
+template <typename Visitor>
+void visitSourceCommandResources(const SourceCommandView& source,
+                                 Visitor&& visitor) {
+  const auto emit = [&](ChunkHandleKind kind, Handle handle,
+                        DrawBufferBindingSnapshot snapshot = {},
+                        bool hasBufferSnapshot = false) {
+    if (handle) {
+      std::invoke(visitor, SourceCommandResourceRef{
+                               .entry = {.kind = kind, .handle = handle},
+                               .bufferSnapshot = snapshot,
+                               .hasBufferSnapshot = hasBufferSnapshot,
+                           });
+    }
+  };
+
+  switch (source.command.kind) {
+  case MetalCommandKind::DrawRun:
+    if (source.command.drawState.hot) {
+      const auto& hot = *source.command.drawState.hot;
+      emit(ChunkHandleKind::Buffer, hot.indexBuffer);
+      for (const auto handle : hot.streamBuffers) {
+        emit(ChunkHandleKind::Buffer, handle);
+      }
+      for (const auto handle : hot.textures) {
+        emit(ChunkHandleKind::Texture, handle);
+      }
+      for (const auto& attachment : hot.colorAttachments) {
+        emit(ChunkHandleKind::Surface, attachment.handle);
+      }
+      emit(ChunkHandleKind::Surface, hot.depthStencil.handle);
+    }
+    {
+      const auto arena = drawRunPayloadBytes(source.command);
+      for (const auto& param : source.command.drawParams) {
+        const auto overrideBytes =
+            drawRunPayloadBytes(param.bindingOverrideRange, arena);
+        if (overrideBytes.size() == sizeof(DrawBindingOverride)) {
+          DrawBindingOverride binding{};
+          std::memcpy(&binding, overrideBytes.data(), sizeof(binding));
+          for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+            if ((binding.streamMask & (1u << stream)) != 0u) {
+              emit(ChunkHandleKind::Buffer,
+                   binding.streams[stream].buffer);
+            }
+          }
+          if (binding.indexBufferValid) {
+            emit(ChunkHandleKind::Buffer, binding.indexBuffer);
+          }
+        }
+
+        const auto snapshotBytes =
+            drawRunPayloadBytes(param.bindingSnapshotRange, arena);
+        if (snapshotBytes.size() == sizeof(DrawBindingSnapshot)) {
+          DrawBindingSnapshot binding{};
+          std::memcpy(&binding, snapshotBytes.data(), sizeof(binding));
+          for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+            if ((binding.streamMask & (1u << stream)) != 0u) {
+              emit(ChunkHandleKind::Buffer,
+                   binding.streams[stream].buffer,
+                   binding.streams[stream].snapshot,
+                   /*hasBufferSnapshot=*/true);
+            }
+          }
+          if (binding.indexSnapshotValid) {
+            emit(ChunkHandleKind::Buffer, binding.indexBuffer,
+                 binding.indexSnapshot,
+                 /*hasBufferSnapshot=*/true);
+          }
+        }
+      }
+    }
+    break;
+  case MetalCommandKind::Clear:
+    if (source.clear) {
+      const auto& clear = *source.clear;
+      if (clear.clearColor) {
+        for (const auto& attachment : clear.colorAttachments) {
+          emit(ChunkHandleKind::Surface, attachment.handle);
+        }
+      }
+      if (clear.clearDepth || clear.clearStencil) {
+        emit(ChunkHandleKind::Surface, clear.depthStencil.handle);
+      }
+    } else if (source.command.clear) {
+      const auto& clear = *source.command.clear;
+      if (clear.clearColor) {
+        for (const auto& attachment : clear.colorAttachments) {
+          emit(ChunkHandleKind::Surface, attachment.handle);
+        }
+      }
+      if (clear.clearDepth || clear.clearStencil) {
+        emit(ChunkHandleKind::Surface, clear.depthStencil.handle);
+      }
+    }
+    break;
+  case MetalCommandKind::SurfaceCopy:
+    if (source.command.surfaceCopy) {
+      emit(ChunkHandleKind::Surface, source.command.surfaceCopy->source);
+      emit(ChunkHandleKind::Surface,
+           source.command.surfaceCopy->destination);
+    }
+    break;
+  case MetalCommandKind::StretchRect:
+    if (source.command.stretchRect) {
+      emit(ChunkHandleKind::Surface, source.command.stretchRect->source);
+      emit(ChunkHandleKind::Surface,
+           source.command.stretchRect->destination);
+    }
+    break;
+  case MetalCommandKind::Readback:
+    if (source.command.readback) {
+      emit(ChunkHandleKind::Surface, source.command.readback->source);
+      emit(ChunkHandleKind::Surface,
+           source.command.readback->destination);
+    }
+    break;
+  case MetalCommandKind::ColorFill:
+    if (source.command.colorFill) {
+      emit(ChunkHandleKind::Surface, source.command.colorFill->destination);
+    }
+    break;
+  case MetalCommandKind::DepthResolve:
+    if (source.command.depthResolve) {
+      emit(ChunkHandleKind::Surface, source.command.depthResolve->msaaDepth);
+      emit(ChunkHandleKind::Surface, source.command.depthResolve->intzDest);
+    }
+    break;
+  case MetalCommandKind::Present:
+    if (source.command.present) {
+      emit(ChunkHandleKind::Surface, source.command.present->presentSource);
+    }
+    break;
+  }
+}
 
 // This is a synchronous, call-local borrowed view. Never store it or any span
 // returned from it in a session, partition, submission, or callback. Every
