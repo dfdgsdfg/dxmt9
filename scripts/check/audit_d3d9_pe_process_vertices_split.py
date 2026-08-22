@@ -12,6 +12,15 @@ DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
 # by the cold-subsystem TUs. Assertions about the CLASS target this file;
 # assertions about the owning translation unit target DEVICE.
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
+# ProcessVertices, and the rest of the cold COM surface, is DEFINED here since
+# step 10 of the hot/cold split; the class header keeps only its declaration.
+DEVICE_COLD = ROOT / "src/d3d9/d3d9_pe_device_com_cold.cpp"
+# The three remaining D3D9DeviceImpl TUs (DEVICE and DEVICE_IMPL above are the
+# other two). `forbid` checks read all five concatenated, so moving offending
+# code from any one of them into another cannot defeat them.
+DEVICE_SWVP = ROOT / "src/d3d9/d3d9_pe_device_swvp.cpp"
+DEVICE_DIAG = ROOT / "src/d3d9/d3d9_pe_device_diag.cpp"
+DEVICE_TAPE = ROOT / "src/d3d9/d3d9_pe_device_tape.cpp"
 ENGINE_HPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.hpp"
 ENGINE_CPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.cpp"
 CHILD_HPP = ROOT / "src/d3d9/d3d9_pe_device_child.hpp"
@@ -36,10 +45,13 @@ def forbid(source: str, needle: str, label: str) -> None:
 def main() -> int:
     device = DEVICE.read_text()
     device_impl = DEVICE_IMPL.read_text()
+    device_cold = DEVICE_COLD.read_text()
     # Anything asserted "in the device implementation" must hold across the
     # pair; a forbid that looked at only one half could be defeated by
     # moving the offending code into the other.
-    device_all = device + device_impl
+    device_all = (device + device_impl + device_cold +
+                  DEVICE_SWVP.read_text() + DEVICE_DIAG.read_text() +
+                  DEVICE_TAPE.read_text())
     engine_hpp = ENGINE_HPP.read_text()
     engine_cpp = ENGINE_CPP.read_text()
     child_hpp = CHILD_HPP.read_text()
@@ -47,8 +59,11 @@ def main() -> int:
     meson = MESON.read_text()
 
     require(meson, "'d3d9_pe_process_vertices.cpp'", "PE Meson source")
+    require(meson, "'d3d9_pe_device_com_cold.cpp'", "cold-COM Meson source")
     require(device, '#include "d3d9_pe_device_impl.hpp"',
             "device TU includes the class header")
+    require(device_cold, '#include "d3d9_pe_device_impl.hpp"',
+            "cold-COM TU includes the class header")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")
@@ -76,17 +91,35 @@ def main() -> int:
     forbid(device_all, "executeSimpleProcessVertexShaderRange(",
            "interpreter left in device TU")
 
+    # The body lives in the cold-COM TU at file scope, so the closing brace is
+    # in column 0 and the name is qualified. Same assertion, new owner.
     wrapper_match = re.search(
-        r"^    HRESULT STDMETHODCALLTYPE ProcessVertices\(UINT srcStart, UINT dstIndex,"
-        r".*?^    \}$",
-        device_impl,
+        r"^HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ProcessVertices\(UINT srcStart, "
+        r"UINT dstIndex,"
+        r".*?^\}$",
+        device_cold,
         re.DOTALL | re.MULTILINE,
     )
     if not wrapper_match:
         fail("ProcessVertices STDMETHODCALLTYPE wrapper shape not found")
     wrapper = wrapper_match.group(0)
+    if device_cold.count(
+            "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ProcessVertices(") != 1:
+        fail("ProcessVertices STDMETHODCALLTYPE definition must remain unique")
+    # The class header keeps exactly one declaration, and it is the one that
+    # carries `override`.
     if device_impl.count("HRESULT STDMETHODCALLTYPE ProcessVertices(") != 1:
-        fail("ProcessVertices STDMETHODCALLTYPE must remain unique")
+        fail("ProcessVertices STDMETHODCALLTYPE declaration must remain unique")
+    decl_match = re.search(
+        r"^    HRESULT STDMETHODCALLTYPE ProcessVertices\(UINT srcStart, UINT dstIndex,"
+        r".*?;$",
+        device_impl,
+        re.DOTALL | re.MULTILINE,
+    )
+    if not decl_match:
+        fail("ProcessVertices declaration shape not found in the class header")
+    require(decl_match.group(0), "DWORD flags) noexcept override",
+            "exact noexcept override on the declaration")
     ordered = (
         'notePeDeviceCallAfterPresent("ProcessVertices")',
         "if (deviceNotReset_) return D3DERR_DEVICELOST;",
@@ -96,7 +129,7 @@ def main() -> int:
     positions = [wrapper.find(item) for item in ordered]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         fail("ProcessVertices notification/lost-gate/delegation order changed")
-    require(wrapper, "DWORD flags) noexcept override", "exact noexcept override")
+    require(wrapper, "DWORD flags) noexcept {", "exact noexcept definition")
     require(wrapper, ".streamSources = std::span<", "borrowed stream context")
     require(wrapper, ".textures = std::span<", "borrowed texture context")
 
