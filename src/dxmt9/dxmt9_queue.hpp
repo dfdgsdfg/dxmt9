@@ -16,6 +16,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -807,6 +808,18 @@ void traceQueueSlotsEvent(const char* event,
  */
 class QueueLifecycleController {
  public:
+  // Failure-only provenance for lifecycle poison.  The source-location
+  // strings point at static compiler literals; publication is one-shot and
+  // never participates in normal queue payloads or transition records.
+  struct PoisonOriginSnapshot {
+    const char* file = nullptr;
+    const char* function = nullptr;
+    std::uint32_t line = 0;
+    std::uint32_t column = 0;
+
+    bool valid() const noexcept { return file != nullptr && line != 0; }
+  };
+
   struct SubmissionBinding {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
@@ -923,8 +936,21 @@ class QueueLifecycleController {
   // callers already own SubmissionBinding::mutex; completion-thread callers
   // must use the unlocked entry point so Tape/admission/stop mutation remains
   // serialized by the scheduling owner.
-  void poisonTapeFailureLocked() noexcept;
-  void poisonTapeFailure() noexcept;
+  void poisonTapeFailureLocked(
+      std::source_location location = std::source_location::current()) noexcept;
+  void poisonTapeFailure(
+      std::source_location location = std::source_location::current()) noexcept;
+  PoisonOriginSnapshot firstPoisonOrigin() const noexcept {
+    if (!firstPoisonOriginPublished_.load(std::memory_order_acquire)) {
+      return {};
+    }
+    return {
+        .file = firstPoisonOriginFile_.load(std::memory_order_relaxed),
+        .function = firstPoisonOriginFunction_.load(std::memory_order_relaxed),
+        .line = firstPoisonOriginLine_.load(std::memory_order_relaxed),
+        .column = firstPoisonOriginColumn_.load(std::memory_order_relaxed),
+    };
+  }
   // Encoded-head retention for pending session tails. Sources must already be
   // dequeued into Encoding state; this records their completion identity
   // without making them ready-visible or GPU-complete.
@@ -1110,6 +1136,15 @@ class QueueLifecycleController {
   std::size_t completedEventSettlementHistoryHead_ = 0;
   std::size_t completedEventSettlementHistoryCount_ = 0;
   std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
+  // These fields are touched only when fail-stop poison is requested.  Keep
+  // them outside SubmissionBinding and all transition/payload structures so
+  // normal queue hot paths retain their existing shape.
+  std::atomic<bool> firstPoisonOriginClaimed_{false};
+  std::atomic<bool> firstPoisonOriginPublished_{false};
+  std::atomic<const char*> firstPoisonOriginFile_{nullptr};
+  std::atomic<const char*> firstPoisonOriginFunction_{nullptr};
+  std::atomic<std::uint32_t> firstPoisonOriginLine_{0};
+  std::atomic<std::uint32_t> firstPoisonOriginColumn_{0};
 
  public:
   // Records that have been committed to Metal and are awaiting GPU completion.

@@ -534,6 +534,20 @@ const char* cpuReadyArenaFailureClassName(
   return "unknown";
 }
 
+const char* cpuReadyArenaBeginStopReasonName(
+    dxmt9::CommandQueue::CpuReadyArenaBeginStopReason reason) noexcept {
+  using Reason = dxmt9::CommandQueue::CpuReadyArenaBeginStopReason;
+  switch (reason) {
+  case Reason::None: return "none";
+  case Reason::QueueAlreadyStopped: return "queue_already_stopped";
+  case Reason::CompatibilityFlushStopped:
+    return "compatibility_flush_stopped";
+  case Reason::CpuReadyTapeAlreadyStopped:
+    return "cpu_ready_tape_already_stopped";
+  }
+  return "unknown";
+}
+
 // The fat-packet applier chain lived here: applyDrawPacketStateViaIface,
 // applyDrawPacketStateDirect, applyDrawPacketState, timedApplyDrawPacketState and
 // applyDrawPrimitivePacket, plus validateDrawPacketStateDelta and
@@ -1652,15 +1666,22 @@ int32_t replayPlannedChunk(D9CDevice* device,
             ? plan.arenaLayout->pageCount
             : (plan.sources.empty() ? 0u
                                     : plan.sources.front().arenaLayout.pageCount);
+    const auto diagnostic = queue->cpuReadyArenaBeginDiagnostic();
     dxmt9::util::logf(
         dxmt9::util::LogLevel::Warn, "dxmt9-device",
         "cpu_ready_arena_admission begin_status=%u raw=%llu records=%u "
         "capture=%u sources=%zu segments=%zu planner_pages=%zu "
-        "planner_page_bound=%zu queue_page_bound=%zu",
+        "planner_page_bound=%zu queue_page_bound=%zu stop_reason=%s "
+        "poison_origin=%s:%u poison_function=%s",
         beginStatus, static_cast<unsigned long long>(raw.replaySeq),
         raw.recordCount, captureIdentityRequested ? 1u : 0u,
         plan.sourceCount, plan.segmentCount, plannedPages,
-        plannerMaxPagesPerSource, limits.maxPagesPerSource);
+        plannerMaxPagesPerSource, limits.maxPagesPerSource,
+        cpuReadyArenaBeginStopReasonName(diagnostic.stopReason),
+        diagnostic.poisonOrigin.file ? diagnostic.poisonOrigin.file : "none",
+        diagnostic.poisonOrigin.line,
+        diagnostic.poisonOrigin.function ? diagnostic.poisonOrigin.function
+                                         : "none");
   };
   switch (plan.lane) {
   case dxmt9::d3d9::ReplayLane::Reject:

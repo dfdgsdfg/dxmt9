@@ -48,6 +48,21 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.stop_ = true;
   }
 
+  static void stopCpuReadyTape(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.cpuReadyTape_.stopAdmission();
+  }
+
+  static void stopAfterCompatibilityFlush(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = true;
+  }
+
+  static CommandQueue::CpuReadyArenaBeginDiagnostic beginDiagnostic(
+      CommandQueue& queue) {
+    return queue.cpuReadyArenaBeginDiagnostic();
+  }
+
   static bool injectCompletedSettlement(
       CommandQueue& queue, core::CpuReadyTape::ArenaGroupSettlement settlement) {
     std::lock_guard lock(queue.mutex_);
@@ -613,6 +628,32 @@ void testTypedBeginStatusAndMissingAdmissionSnapshot() {
     const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
     check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped,
           "typed begin must distinguish a stopped queue");
+    check(CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue).stopReason ==
+              CommandQueue::CpuReadyArenaBeginStopReason::QueueAlreadyStopped,
+          "typed begin must retain the queue-already-stopped reason");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::stopCpuReadyTape(queue);
+    const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue)
+                      .stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CpuReadyTapeAlreadyStopped,
+          "typed begin must distinguish a stopped CpuReadyTape");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::ensureEmptyLegacyWriter(queue);
+    CommandQueueArenaLeaseTestAccess::stopAfterCompatibilityFlush(queue);
+    const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped &&
+              CommandQueueArenaLeaseTestAccess::beginDiagnostic(queue)
+                      .stopReason ==
+                  CommandQueue::CpuReadyArenaBeginStopReason::
+                      CompatibilityFlushStopped,
+          "typed begin must distinguish a stop during compatibility flush");
   }
   {
     CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});

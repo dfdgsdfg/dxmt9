@@ -1314,7 +1314,23 @@ void QueueLifecycleController::noteCpuReadyCapacityProgress() noexcept {
   }
 }
 
-void QueueLifecycleController::poisonTapeFailureLocked() noexcept {
+void QueueLifecycleController::poisonTapeFailureLocked(
+    std::source_location location) noexcept {
+  bool expected = false;
+  if (firstPoisonOriginClaimed_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    firstPoisonOriginFile_.store(location.file_name(),
+                                 std::memory_order_relaxed);
+    firstPoisonOriginFunction_.store(location.function_name(),
+                                     std::memory_order_relaxed);
+    firstPoisonOriginLine_.store(static_cast<std::uint32_t>(location.line()),
+                                 std::memory_order_relaxed);
+    firstPoisonOriginColumn_.store(
+        static_cast<std::uint32_t>(location.column()),
+        std::memory_order_relaxed);
+    firstPoisonOriginPublished_.store(true, std::memory_order_release);
+  }
   // Lifecycle callers hold the queue scheduling mutex while mutating the
   // tape. Stop both admission surfaces under the same contract so a release
   // build cannot admit new work after a failed lifecycle mutation.
@@ -1358,13 +1374,14 @@ void QueueLifecycleController::poisonTapeFailureLocked() noexcept {
   }
 }
 
-void QueueLifecycleController::poisonTapeFailure() noexcept {
+void QueueLifecycleController::poisonTapeFailure(
+    std::source_location location) noexcept {
   if (submissionBinding_.mutex) {
     std::lock_guard lock(*submissionBinding_.mutex);
-    poisonTapeFailureLocked();
+    poisonTapeFailureLocked(location);
     return;
   }
-  poisonTapeFailureLocked();
+  poisonTapeFailureLocked(location);
 }
 
 void QueueLifecycleController::requestPendingCompletionStop() noexcept {

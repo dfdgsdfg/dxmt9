@@ -559,6 +559,20 @@ class CommandQueue {
     Invalid,
   };
 
+  enum class CpuReadyArenaBeginStopReason : std::uint8_t {
+    None,
+    QueueAlreadyStopped,
+    CompatibilityFlushStopped,
+    CpuReadyTapeAlreadyStopped,
+  };
+
+  struct CpuReadyArenaBeginDiagnostic {
+    CpuReadyArenaBeginStopReason stopReason =
+        CpuReadyArenaBeginStopReason::None;
+    core::metalqueue::QueueLifecycleController::PoisonOriginSnapshot
+        poisonOrigin{};
+  };
+
   enum class CpuReadyArenaBatchAbortStatus : std::uint8_t {
     RolledBack,
     FailStopped,
@@ -615,6 +629,7 @@ class CommandQueue {
   }
   CpuReadyArenaFailureSnapshot peekCpuReadyArenaFailure() noexcept;
   CpuReadyArenaFailureSnapshot takeCpuReadyArenaFailure() noexcept;
+  CpuReadyArenaBeginDiagnostic cpuReadyArenaBeginDiagnostic() noexcept;
   // A publish/proof failure after replayResolvedChunk has applied semantic
   // effects cannot take the pre-effect EventSerial retry. The caller marks
   // this queue fail-stop before returning the typed chunk failure.
@@ -1533,11 +1548,17 @@ class CommandQueue {
   std::atomic<bool> arenaAdmissionActive_{false};
   std::atomic<bool> arenaBuildPoisoned_{false};
   std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
+  CpuReadyArenaBeginStopReason lastCpuReadyArenaBeginStopReason_ =
+      CpuReadyArenaBeginStopReason::None;
   std::uint64_t nextArenaBuildGeneration_ = 1;
   // Native coordinator fault seam: fail one post-reservation semantic
   // preflight, restore the exact tentative prefix, then return from the
   // manually-driven encode loop. Never set by production.
   bool testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+  // Native observability pin: make the compatibility-writing-slot flush
+  // return a typed Stopped result before arena reserve. Never set by
+  // production callers.
+  bool testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
   // Native rollback pin: force the pre-effect builder rejection seam and
   // perturb nextSeqId_ so the guarded abort must fail-stop, never recover.
   bool testOnlyForceNextCpuReadyArenaRollbackFailure_ = false;

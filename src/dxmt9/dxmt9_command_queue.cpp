@@ -3648,6 +3648,15 @@ CommandQueue::takeCpuReadyArenaFailure() noexcept {
   return failure;
 }
 
+CommandQueue::CpuReadyArenaBeginDiagnostic
+CommandQueue::cpuReadyArenaBeginDiagnostic() noexcept {
+  std::lock_guard lock(mutex_);
+  return {
+      .stopReason = lastCpuReadyArenaBeginStopReason_,
+      .poisonOrigin = queueLifecycle_.firstPoisonOrigin(),
+  };
+}
+
 CommandQueue::CpuReadyArenaBuildLease::CpuReadyArenaBuildLease(
     CpuReadyArenaBuildLease&& other) noexcept
     : queue_(other.queue_),
@@ -3899,7 +3908,11 @@ CommandQueue::beginCpuReadyArenaSource(
   // single "hold" duration would not be meaningful.
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_source", /*skipHold=*/true);
+  lastCpuReadyArenaBeginStopReason_ =
+      CpuReadyArenaBeginStopReason::None;
   if (stop_) {
+    lastCpuReadyArenaBeginStopReason_ =
+        CpuReadyArenaBeginStopReason::QueueAlreadyStopped;
     return {.status = CpuReadyArenaBeginStatus::Stopped};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
@@ -3912,7 +3925,13 @@ CommandQueue::beginCpuReadyArenaSource(
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::SemanticBoundary);
         });
+    if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
+      testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      stop_ = true;
+    }
     if (stop_) {
+      lastCpuReadyArenaBeginStopReason_ =
+          CpuReadyArenaBeginStopReason::CompatibilityFlushStopped;
       return {.status = CpuReadyArenaBeginStatus::Stopped};
     }
     if (writingSlot_) {
@@ -3932,6 +3951,8 @@ CommandQueue::beginCpuReadyArenaSource(
   case core::CpuReadyTape::ReserveProbe::TemporaryPressure:
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   case core::CpuReadyTape::ReserveProbe::Stopped:
+    lastCpuReadyArenaBeginStopReason_ =
+        CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped;
     return {.status = CpuReadyArenaBeginStatus::Stopped};
   case core::CpuReadyTape::ReserveProbe::Corrupt:
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
@@ -4014,7 +4035,11 @@ CommandQueue::beginCpuReadyArenaSources(
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
+  lastCpuReadyArenaBeginStopReason_ =
+      CpuReadyArenaBeginStopReason::None;
   if (stop_) {
+    lastCpuReadyArenaBeginStopReason_ =
+        CpuReadyArenaBeginStopReason::QueueAlreadyStopped;
     return {.status = CpuReadyArenaBeginStatus::Stopped};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
@@ -4027,7 +4052,13 @@ CommandQueue::beginCpuReadyArenaSources(
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::SemanticBoundary);
         });
+    if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
+      testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      stop_ = true;
+    }
     if (stop_) {
+      lastCpuReadyArenaBeginStopReason_ =
+          CpuReadyArenaBeginStopReason::CompatibilityFlushStopped;
       return {.status = CpuReadyArenaBeginStatus::Stopped};
     }
     if (writingSlot_) {
@@ -4075,6 +4106,8 @@ CommandQueue::beginCpuReadyArenaSources(
         // Ready entry; v2 EventSerial may retry the complete raw event.
         return {.status = CpuReadyArenaBeginStatus::RecoverableFailure};
       case core::CpuReadyTape::ArenaBatchReserveFailure::Stopped:
+        lastCpuReadyArenaBeginStopReason_ =
+            CpuReadyArenaBeginStopReason::CpuReadyTapeAlreadyStopped;
         return {.status = CpuReadyArenaBeginStatus::Stopped};
       case core::CpuReadyTape::ArenaBatchReserveFailure::Invalid:
         return {.status = CpuReadyArenaBeginStatus::Invalid};

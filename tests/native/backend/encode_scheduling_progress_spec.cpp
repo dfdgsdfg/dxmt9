@@ -60,6 +60,22 @@ struct SchedulingProgressTestAccess {
     queue.queueLifecycle_.poisonTapeFailure();
   }
 
+  static core::metalqueue::QueueLifecycleController::PoisonOriginSnapshot
+  poisonWithLocations(CommandQueue& queue,
+                      std::uint_least32_t& firstLine,
+                      std::uint_least32_t& firstColumn,
+                      const char*& firstFile,
+                      const char*& firstFunction) {
+    const auto first = std::source_location::current();
+    firstLine = first.line();
+    firstColumn = first.column();
+    firstFile = first.file_name();
+    firstFunction = first.function_name();
+    queue.queueLifecycle_.poisonTapeFailure(first);
+    queue.queueLifecycle_.poisonTapeFailure(std::source_location::current());
+    return queue.queueLifecycle_.firstPoisonOrigin();
+  }
+
   static void abort(CommandQueue& queue) {
     queue.abortCpuReadyArenaSource({}, queue.slots_.size());
   }
@@ -444,6 +460,20 @@ void watchdogConservesSegmentSerialProgressPerSource() {
   }
 }
 
+void poisonOriginPublishesFirstCallsiteOnce() {
+  auto queue = makeSchedulingQueue();
+  std::uint_least32_t firstLine = 0;
+  std::uint_least32_t firstColumn = 0;
+  const char* firstFile = nullptr;
+  const char* firstFunction = nullptr;
+  const auto origin = dxmt9::SchedulingProgressTestAccess::poisonWithLocations(
+      queue, firstLine, firstColumn, firstFile, firstFunction);
+  check(origin.valid() && origin.file == firstFile &&
+            origin.function == firstFunction && origin.line == firstLine &&
+            origin.column == firstColumn,
+        "QueueLifecycleController retains the first typed poison origin");
+}
+
 }  // namespace
 
 int main() {
@@ -458,6 +488,7 @@ int main() {
     watchdogUsesBoundedGenerationSafeSlots();
     watchdogRejectsStaleStoresAcrossCapacityReuse();
     watchdogConservesSegmentSerialProgressPerSource();
+    poisonOriginPublishesFirstCallsiteOnce();
     std::cout << "encode scheduling progress spec: ok\n";
     return 0;
   } catch (const std::exception& error) {
