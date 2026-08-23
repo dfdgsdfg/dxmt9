@@ -38,6 +38,39 @@ struct PeDiagnosticsConfig {
   }
 };
 
+// Cached ownership gates keep unrelated observer knobs off the entry-point
+// hot path.  In particular, module-map, thread-sampler, and debug-log output
+// may need a diagnostics owner for their cold lifecycle, but they do not
+// justify constructing a call scope/timer or reading a clock on Set/Draw.
+struct PeDiagnosticsFeatureGates {
+  bool callScope = false;
+  bool hotSetterTimer = false;
+  bool chunkCommitTiming = false;
+  bool vsConstSetterRange = false;
+  bool moduleMap = false;
+  bool threadSampler = false;
+  bool debugLog = false;
+
+  constexpr bool any() const noexcept {
+    return callScope || hotSetterTimer || chunkCommitTiming ||
+           vsConstSetterRange || moduleMap || threadSampler || debugLog;
+  }
+
+  static constexpr PeDiagnosticsFeatureGates fromConfig(
+      const PeDiagnosticsConfig &config) noexcept {
+    const bool scope = config.recorderStats || config.statsDecimationN != 0;
+    return PeDiagnosticsFeatureGates{
+        .callScope = scope,
+        .hotSetterTimer = scope,
+        .chunkCommitTiming = config.chunkCommitTimingEnabled(),
+        .vsConstSetterRange = config.vsConstSetterRange,
+        .moduleMap = config.moduleMap,
+        .threadSampler = config.threadSampler,
+        .debugLog = config.debugLog,
+    };
+  }
+};
+
 enum class VsConstSetterRangePhase : std::uint32_t {
   Call = 1,
   Flush = 2,
@@ -132,7 +165,8 @@ struct PeInterAppendCallSiteStats {
 struct PeDiagnosticsState {
   explicit PeDiagnosticsState(D3D9DeviceImpl *device,
                               const PeDiagnosticsConfig &resolved) noexcept
-      : config(resolved), childObserver(device) {}
+      : config(resolved), gates(PeDiagnosticsFeatureGates::fromConfig(resolved)),
+        childObserver(device) {}
 
   static constexpr std::size_t kPeAppendTypeBuckets = 8;
   static std::size_t peAppendTypeBucket(std::uint32_t type) noexcept {
@@ -162,6 +196,7 @@ struct PeDiagnosticsState {
   }
 
   PeDiagnosticsConfig config{};
+  PeDiagnosticsFeatureGates gates{};
   D3D9PeDiagnosticObserver childObserver;
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
   PeRecorderStats peRecorderStats_{};

@@ -984,7 +984,7 @@ void sparseSettlementNormalAndOversizedAreExact() {
   check(!pe::acceptPreparedSparseState(
             shadow, constants, state,
             pe::settleRecorderAppend({
-                .phase = accepted.next,
+                .phase = accepted.next(),
                 .appendSucceeded = true,
             })),
         "normal sparse projection cannot settle twice");

@@ -145,8 +145,7 @@ ExplicitSet(q, value) ==
   /\ CanInput /\ q \in QualifiedKeys /\ value \in Values
   /\ LET facts == [phase |-> phase, origin |-> "ExplicitSet",
                    liveContains |-> TRUE, liveEquals |-> live[q] = value,
-                   pendingContains |-> q \in pendingDomain,
-                   recordedContains |-> q \in recordedDomain]
+                   pendingContains |-> q \in pendingDomain]
          plan == PlanRecorderStateWrite(facts)
          nextLive == IF plan.writeLive THEN [live EXCEPT ![q] = value]
                      ELSE live
@@ -204,8 +203,7 @@ PriorValueWrite(q, value) ==
   /\ q \in QualifiedKeys /\ value \in Values
   /\ LET facts == [phase |-> phase, origin |-> "PriorValueOperation",
                    liveContains |-> TRUE, liveEquals |-> live[q] = value,
-                   pendingContains |-> q \in pendingDomain,
-                   recordedContains |-> q \in recordedDomain]
+                   pendingContains |-> q \in pendingDomain]
          plan == PlanRecorderStateWrite(facts)
          nextLive == IF plan.writeLive THEN [live EXCEPT ![q] = value]
                      ELSE live

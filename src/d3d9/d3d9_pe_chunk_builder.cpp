@@ -41,7 +41,8 @@ std::uint64_t wireIdentityGetterCallCount() noexcept {
 }
 
 CommandChunkBuilder::CommandChunkBuilder(
-    const CommandChunkBuilderCapacities& capacities) {
+    const CommandChunkBuilderCapacities& capacities)
+    : retainer_(capacities.handles) {
   records_.reserve(capacities.records);
   handles_.reserve(capacities.handles);
   handleObjects_.reserve(capacities.handles);

@@ -55,8 +55,12 @@ public:
     // 1 means "named in the epoch that just closed, or the one before it".
     static constexpr std::uint64_t kWarmEpochs = 1u;
 
-    D3D9PePendingCommandRetainer() {
-        entries_.reserve(64);
+    static constexpr std::size_t kDefaultCapacity = 256u;
+
+    explicit D3D9PePendingCommandRetainer(
+        std::size_t capacity = kDefaultCapacity) {
+        entries_.reserve(capacity);
+        index_.reserveForEntries(capacity);
     }
 
     ~D3D9PePendingCommandRetainer() {
@@ -238,6 +242,18 @@ private:
             return static_cast<std::size_t>(h);
         }
 
+        void reserveForEntries(std::size_t entryCapacity) {
+            const std::size_t target =
+                std::max<std::size_t>(entryCapacity * 2u, 64u);
+            std::size_t capacity = 64u;
+            while (capacity < target) {
+                capacity <<= 1u;
+            }
+            slots.assign(capacity, Slot{});
+            occupied = 0u;
+            used = 0u;
+        }
+
         void insertRaw(std::uint32_t kind, void* ptr, std::size_t index) noexcept {
             const auto mask = slots.size() - 1u;
             auto idx = hashOf(kind, ptr) & mask;
@@ -321,7 +337,10 @@ private:
         }
 
         void clear() noexcept {
-            slots.clear();
+            // Preserve the builder-admitted capacity across Reset/discard so
+            // the next chunk can retry at the same handle ceiling without a
+            // fresh hash-table allocation.
+            std::fill(slots.begin(), slots.end(), Slot{});
             occupied = 0u;
             used = 0u;
         }

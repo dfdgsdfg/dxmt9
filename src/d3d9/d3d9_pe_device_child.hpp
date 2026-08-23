@@ -139,45 +139,12 @@ struct D3D9StateBlockShadow {
     }
   }
   void addCategoryRefs() noexcept {
-    categories.textures.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.streamSources.forEach([](std::size_t,
-                                  const StateBlockStreamSourceValue& value) {
-      D3D9StateBlockShadow::addRef(value.buffer);
-    });
-    categories.vertexShader.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.pixelShader.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.vertexDeclaration.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.indexBuffer.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.renderTargets.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
-    categories.depthStencil.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.forEachOwnedComRef(
+        [](void* value) { D3D9StateBlockShadow::addRef(value); });
   }
   void releaseCategoryRefs() noexcept {
-    categories.textures.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.streamSources.forEach([](std::size_t,
-                                  const StateBlockStreamSourceValue& value) {
-      void* buffer = value.buffer;
-      D3D9StateBlockShadow::releaseRef(buffer);
-    });
-    categories.vertexShader.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.pixelShader.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.vertexDeclaration.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.indexBuffer.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.renderTargets.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.depthStencil.forEach(
-        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.forEachOwnedComRef(
+        [](void* value) { D3D9StateBlockShadow::releaseRef(value); });
     categories.clearForBegin();
   }
 

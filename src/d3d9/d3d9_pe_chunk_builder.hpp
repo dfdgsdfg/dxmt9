@@ -12,6 +12,39 @@
 
 namespace dxmt9::d3d9::pe {
 
+// Payload values are copied verbatim into the bounded wire blob. Admission is
+// intentionally closed over the fixed payload types used by the producer;
+// variable tails continue to use appendPayload(raw bytes).
+template <typename T>
+struct IsApprovedWirePayloadValue : std::false_type {};
+
+#define DXMT9_PE_APPROVED_WIRE_PAYLOAD(Type) \
+  template <>                                  \
+  struct IsApprovedWirePayloadValue<Type> : std::true_type {}
+
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireDrawHeader);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireConstantRange);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireSetConst);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireClear);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWirePresent);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireStretchRect);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireColorFill);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireUpdateTexture);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireUpdateSurface);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireQueryIssue);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireReadback);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireReszDepthResolve);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(std::uint32_t);
+
+#undef DXMT9_PE_APPROVED_WIRE_PAYLOAD
+
+template <typename T>
+inline constexpr bool isWireSafePayloadValue =
+    std::is_standard_layout_v<std::remove_cv_t<T>> &&
+    std::is_trivially_copyable_v<std::remove_cv_t<T>> &&
+    !std::is_reference_v<T> &&
+    IsApprovedWirePayloadValue<std::remove_cv_t<T>>::value;
+
 struct PeWireObjectRef {
   D9CWireObjectIdentity identity{};
   void* object = nullptr;
@@ -168,6 +201,8 @@ class CommandChunkBuilder {
   template <typename T>
   bool appendPayloadValue(const T& value,
                           std::uint32_t* recordRelativeOffset = nullptr) {
+    static_assert(isWireSafePayloadValue<T>,
+                  "appendPayloadValue requires a standard-layout, trivially-copyable, pointer-free wire value");
     return appendPayload(
         std::span<const std::byte>(
             reinterpret_cast<const std::byte*>(&value), sizeof(value)),

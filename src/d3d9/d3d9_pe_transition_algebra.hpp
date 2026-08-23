@@ -24,7 +24,6 @@ struct StateWriteFacts {
   bool liveContains = false;
   bool liveEquals = false;
   bool pendingContains = false;
-  bool recordedContains = false;
 };
 
 enum class StateWriteKind : std::uint8_t {
@@ -42,13 +41,42 @@ enum class AppendSettlement : std::uint8_t {
   Discarded,
 };
 
-struct StateWritePlan {
-  StateWriteKind kind = StateWriteKind::NoOp;
-  bool writeLive = false;
-  bool writePending = false;
-  bool writeRecorded = false;
-  bool directOrderedCall = false;
-  bool semanticTransition = false;
+class StateWritePlan {
+ public:
+  constexpr StateWriteKind kind() const noexcept { return kind_; }
+  constexpr bool valid() const noexcept { return valid_; }
+  constexpr bool writeLive() const noexcept {
+    return kind_ == StateWriteKind::QueueDelta ||
+        kind_ == StateWriteKind::ApplyPriorValueOnly;
+  }
+  constexpr bool writePending() const noexcept {
+    return kind_ == StateWriteKind::QueueDelta;
+  }
+  constexpr bool writeRecorded() const noexcept {
+    return kind_ == StateWriteKind::RecordExplicit;
+  }
+  constexpr bool directOrderedCall() const noexcept {
+    return kind_ == StateWriteKind::ApplyPriorValueOnly;
+  }
+  constexpr bool semanticTransition() const noexcept { return semantic_; }
+
+ private:
+  constexpr StateWritePlan(StateWriteKind kind, bool semantic, bool valid)
+      : kind_(kind), semantic_(semantic), valid_(valid) {}
+
+  static constexpr StateWritePlan invalid() noexcept {
+    return StateWritePlan(StateWriteKind::NoOp, false, false);
+  }
+  static constexpr StateWritePlan fromKind(StateWriteKind kind,
+                                            bool semantic) noexcept {
+    return StateWritePlan(kind, semantic, true);
+  }
+
+  StateWriteKind kind_;
+  bool semantic_;
+  bool valid_;
+
+  friend constexpr StateWritePlan planRecorderStateWrite(StateWriteFacts) noexcept;
 };
 
 enum class TruthValue : std::uint8_t {
@@ -187,16 +215,20 @@ planRecorderStateWrite(StateWriteFacts facts) noexcept {
     const bool semantic = row.semanticTransition == SemanticRule::True ||
         (row.semanticTransition == SemanticRule::AnyNotEqualLive &&
          !liveEquals);
-    return StateWritePlan{
-        .kind = row.kind,
-        .writeLive = row.writeLive,
-        .writePending = row.writePending,
-        .writeRecorded = row.writeRecorded,
-        .directOrderedCall = row.directOrderedCall,
-        .semanticTransition = semantic,
-    };
+    const StateWritePlan plan = StateWritePlan::fromKind(row.kind, semantic);
+    // The row remains the canonical model/code matrix.  Reject a row whose
+    // effect bits disagree with the kind-derived DOD queries rather than
+    // allowing an impossible public plan to be represented.
+    if (plan.writeLive() != row.writeLive ||
+        plan.writePending() != row.writePending ||
+        plan.writeRecorded() != row.writeRecorded ||
+        plan.directOrderedCall() != row.directOrderedCall ||
+        plan.semanticTransition() != semantic) {
+      return StateWritePlan::invalid();
+    }
+    return plan;
   }
-  return {};
+  return StateWritePlan::invalid();
 }
 
 struct AppendFacts {
@@ -205,13 +237,97 @@ struct AppendFacts {
   bool explicitDiscard = false;
 };
 
-struct AppendPlan {
-  AppendSettlement next = AppendSettlement::Prepared;
-  bool consumeRepresentedPending = false;
-  bool retainPreparedProjection = true;
-  bool recordDurable = false;
-  bool valid = false;
+enum class AppendPlanKind : std::uint8_t {
+  Accepted,
+  Retry,
+  Discarded,
+  Invalid,
 };
+
+class AppendPlan {
+ public:
+  constexpr AppendSettlement next() const noexcept { return next_; }
+  constexpr bool valid() const noexcept {
+    return kind_ != AppendPlanKind::Invalid;
+  }
+  constexpr bool consumeRepresentedPending() const noexcept {
+    return kind_ == AppendPlanKind::Accepted;
+  }
+  constexpr bool retainPreparedProjection() const noexcept {
+    return kind_ == AppendPlanKind::Retry;
+  }
+  constexpr bool recordDurable() const noexcept {
+    return kind_ == AppendPlanKind::Accepted;
+  }
+
+ private:
+  constexpr AppendPlan(AppendSettlement next, AppendPlanKind kind) noexcept
+      : next_(next), kind_(kind) {}
+
+  static constexpr AppendPlan invalid(AppendSettlement next) noexcept {
+    return AppendPlan(next, AppendPlanKind::Invalid);
+  }
+
+  static constexpr AppendPlan fromRow(const AppendTableRow& row) noexcept {
+    if (!row.valid) {
+      return invalid(row.next);
+    }
+    const AppendPlanKind kind =
+        row.next == AppendSettlement::Accepted &&
+                row.consumeRepresentedPending && row.recordDurable &&
+                !row.retainPreparedProjection
+            ? AppendPlanKind::Accepted
+        : row.next == AppendSettlement::Failed &&
+                !row.consumeRepresentedPending && !row.recordDurable &&
+                row.retainPreparedProjection
+            ? AppendPlanKind::Retry
+        : row.next == AppendSettlement::Discarded &&
+                !row.consumeRepresentedPending && !row.recordDurable &&
+                !row.retainPreparedProjection
+            ? AppendPlanKind::Discarded
+            : AppendPlanKind::Invalid;
+    const AppendPlan plan(row.next, kind);
+    if (kind == AppendPlanKind::Invalid) {
+      return invalid(row.next);
+    }
+    return plan;
+  }
+
+  AppendSettlement next_;
+  AppendPlanKind kind_;
+
+  friend constexpr AppendPlan settleRecorderAppend(AppendFacts) noexcept;
+};
+
+constexpr bool appendTableRowCanonical(const AppendTableRow& row) noexcept {
+  if (!row.valid) {
+    return row.next == row.phase && !row.consumeRepresentedPending &&
+        !row.recordDurable &&
+        (row.next == AppendSettlement::Prepared
+             ? row.retainPreparedProjection
+             : !row.retainPreparedProjection);
+  }
+  return (row.next == AppendSettlement::Accepted &&
+          row.consumeRepresentedPending && !row.retainPreparedProjection &&
+          row.recordDurable) ||
+      (row.next == AppendSettlement::Failed &&
+       !row.consumeRepresentedPending && row.retainPreparedProjection &&
+       !row.recordDurable) ||
+      (row.next == AppendSettlement::Discarded &&
+       !row.consumeRepresentedPending && !row.retainPreparedProjection &&
+       !row.recordDurable);
+}
+
+constexpr bool appendTableCanonical() noexcept {
+  for (const auto& row : kAppendTable) {
+    if (!appendTableRowCanonical(row)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static_assert(appendTableCanonical(), "append table effect drift");
 
 // PeRecorderTransition!SettleRecorderAppend is the exact TLA+ twin.  Only a
 // Prepared witness can settle, and success/discard are mutually exclusive.
@@ -223,15 +339,9 @@ constexpr AppendPlan settleRecorderAppend(AppendFacts facts) noexcept {
         !matches(row.explicitDiscard, facts.explicitDiscard)) {
       continue;
     }
-    return AppendPlan{
-        .next = row.next,
-        .consumeRepresentedPending = row.consumeRepresentedPending,
-        .retainPreparedProjection = row.retainPreparedProjection,
-        .recordDurable = row.recordDurable,
-        .valid = row.valid,
-    };
+    return AppendPlan::fromRow(row);
   }
-  return {};
+  return AppendPlan::invalid(facts.phase);
 }
 
 }  // namespace dxmt9::d3d9::pe

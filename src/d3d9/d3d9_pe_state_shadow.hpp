@@ -338,6 +338,7 @@ struct FixedTransformTable {
 // exercise the same candidate without windows.h or a COM ABI.
 template<typename T, std::size_t Slots>
 struct FixedTrackedState {
+    using value_type = T;
     std::array<T, Slots> values{};
     std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
     std::uint32_t count = 0u;
@@ -382,10 +383,59 @@ struct FixedTrackedState {
 };
 
 struct StateBlockStreamSourceValue {
-    void* buffer = nullptr;
+    struct BufferRef {
+        void* value = nullptr;
+        constexpr BufferRef() noexcept = default;
+        constexpr BufferRef(void* rawValue) noexcept : value(rawValue) {}
+        constexpr void* raw() const noexcept { return value; }
+        constexpr void*& rawRef() noexcept { return value; }
+        constexpr operator void*() const noexcept { return value; }
+        friend constexpr bool operator==(BufferRef a, void* b) noexcept {
+            return a.value == b;
+        }
+    };
+    BufferRef buffer{};
     std::uint32_t offset = 0u;
     std::uint32_t stride = 0u;
 };
+
+template<typename Tag>
+struct StateBlockComRef {
+    void* value = nullptr;
+    constexpr StateBlockComRef() noexcept = default;
+    template<typename P>
+    constexpr StateBlockComRef(P* rawValue) noexcept
+        : value(static_cast<void*>(rawValue)) {}
+    static constexpr StateBlockComRef fromRaw(void* raw) noexcept {
+        return StateBlockComRef{raw};
+    }
+    constexpr void* raw() const noexcept { return value; }
+    constexpr operator void*() const noexcept { return value; }
+    friend constexpr bool operator==(StateBlockComRef a,
+                                     StateBlockComRef b) noexcept {
+        return a.value == b.value;
+    }
+    friend constexpr bool operator==(StateBlockComRef a, void* b) noexcept {
+        return a.value == b;
+    }
+};
+
+struct StateBlockTextureTag;
+struct StateBlockVertexShaderTag;
+struct StateBlockPixelShaderTag;
+struct StateBlockVertexDeclarationTag;
+struct StateBlockIndexBufferTag;
+struct StateBlockRenderTargetTag;
+struct StateBlockDepthStencilTag;
+using StateBlockTextureRef = StateBlockComRef<StateBlockTextureTag>;
+using StateBlockVertexShaderRef = StateBlockComRef<StateBlockVertexShaderTag>;
+using StateBlockPixelShaderRef = StateBlockComRef<StateBlockPixelShaderTag>;
+using StateBlockVertexDeclarationRef =
+    StateBlockComRef<StateBlockVertexDeclarationTag>;
+using StateBlockIndexBufferRef = StateBlockComRef<StateBlockIndexBufferTag>;
+using StateBlockRenderTargetRef = StateBlockComRef<StateBlockRenderTargetTag>;
+using StateBlockDepthStencilRef = StateBlockComRef<StateBlockDepthStencilTag>;
+using StateBlockClipPlaneValue = std::array<float, 4>;
 
 enum class StateBlockCaptureDisposition : std::uint8_t {
     All,
@@ -972,8 +1022,8 @@ public:
     bool acceptRenderStateBatch(
         std::span<const D9CCommandChunkWireRenderState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
-        if (!plan.valid || !plan.consumeRepresentedPending ||
-            !plan.recordDurable) {
+        if (!plan.valid() || !plan.consumeRepresentedPending() ||
+            !plan.recordDurable()) {
             return false;
         }
         auto table = renderStates();
@@ -997,8 +1047,8 @@ public:
     bool acceptTextureStageStateBatch(
         std::span<const D9CDrawPacketTextureStageState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
-        if (!plan.valid || !plan.consumeRepresentedPending ||
-            !plan.recordDurable) {
+        if (!plan.valid() || !plan.consumeRepresentedPending() ||
+            !plan.recordDurable()) {
             return false;
         }
         auto table = textureStageStates();
@@ -1023,8 +1073,8 @@ public:
     bool acceptSamplerStateBatch(
         std::span<const D9CDrawPacketSamplerState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
-        if (!plan.valid || !plan.consumeRepresentedPending ||
-            !plan.recordDurable) {
+        if (!plan.valid() || !plan.consumeRepresentedPending() ||
+            !plan.recordDurable()) {
             return false;
         }
         auto table = samplerStates();
@@ -1050,8 +1100,8 @@ public:
     bool acceptTransformBatch(
         std::span<const D9CDrawPacketTransform> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
-        if (!plan.valid || !plan.consumeRepresentedPending ||
-            !plan.recordDurable) {
+        if (!plan.valid() || !plan.consumeRepresentedPending() ||
+            !plan.recordDurable()) {
             return false;
         }
         auto table = transforms();
@@ -1107,6 +1157,47 @@ private:
 
 class StateBlockRecorded {
 public:
+    enum class Category : std::uint8_t {
+        textures,
+        streamSources,
+        streamFrequencies,
+        vertexShader,
+        pixelShader,
+        fvf,
+        vertexDeclaration,
+        indexBuffer,
+        renderTargets,
+        depthStencil,
+        viewport,
+        scissor,
+        material,
+        clipPlanes,
+        lights,
+        lightEnables,
+    };
+
+#define DXMT9_STATEBLOCK_CATEGORY_SCHEMA(X)                                \
+    X(textures, textures_, StateBlockTextureRef, kPeTextureSlots)           \
+    X(streamSources, streamSources_, StateBlockStreamSourceValue,           \
+      D9C_DRAW_PACKET_MAX_STREAMS)                                          \
+    X(streamFrequencies, streamFrequencies_, std::uint32_t,                 \
+      D9C_DRAW_PACKET_MAX_STREAMS)                                          \
+    X(vertexShader, vertexShader_, StateBlockVertexShaderRef, 1)            \
+    X(pixelShader, pixelShader_, StateBlockPixelShaderRef, 1)                \
+    X(fvf, fvf_, std::uint32_t, 1)                                           \
+    X(vertexDeclaration, vertexDeclaration_, StateBlockVertexDeclarationRef, \
+      1)                                                                    \
+    X(indexBuffer, indexBuffer_, StateBlockIndexBufferRef, 1)                \
+    X(renderTargets, renderTargets_, StateBlockRenderTargetRef,              \
+      D9C_DRAW_PACKET_MAX_RENDER_TARGETS)                                   \
+    X(depthStencil, depthStencil_, StateBlockDepthStencilRef, 1)             \
+    X(viewport, viewport_, D9CViewport, 1)                                   \
+    X(scissor, scissor_, D9CRect, 1)                                         \
+    X(material, material_, D9CMaterial, 1)                                   \
+    X(clipPlanes, clipPlanes_, StateBlockClipPlaneValue, 6)                  \
+    X(lights, lights_, D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS)                 \
+    X(lightEnables, lightEnables_, std::uint32_t, D9C_DRAW_PACKET_MAX_LIGHTS)
+
     // Fixed, kind-qualified recorded sets. Explicit recording writes are
     // last-write-wins; MultiplyTransform never enters transforms_.
     bool vertexDeclarationRecorded = false;
@@ -1115,26 +1206,50 @@ public:
     // heterogeneous map.  Their occupancy bits are the tracked-key set;
     // values are written only by recording-phase setters and are never read
     // by ordinary getters or the producer's pending/live paths.
-    FixedTrackedState<void*, kPeTextureSlots> textures{};
-    FixedTrackedState<StateBlockStreamSourceValue, D9C_DRAW_PACKET_MAX_STREAMS>
-        streamSources{};
-    FixedTrackedState<std::uint32_t, D9C_DRAW_PACKET_MAX_STREAMS>
-        streamFrequencies{};
-    FixedTrackedState<void*, 1> vertexShader{};
-    FixedTrackedState<void*, 1> pixelShader{};
-    FixedTrackedState<std::uint32_t, 1> fvf{};
-    FixedTrackedState<void*, 1> vertexDeclaration{};
-    FixedTrackedState<void*, 1> indexBuffer{};
-    FixedTrackedState<void*, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
-        renderTargets{};
-    FixedTrackedState<void*, 1> depthStencil{};
-    FixedTrackedState<D9CViewport, 1> viewport{};
-    FixedTrackedState<D9CRect, 1> scissor{};
-    FixedTrackedState<D9CMaterial, 1> material{};
-    FixedTrackedState<std::array<float, 4>, 6> clipPlanes{};
-    FixedTrackedState<D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS> lights{};
-    FixedTrackedState<std::uint32_t, D9C_DRAW_PACKET_MAX_LIGHTS>
-        lightEnables{};
+    using TextureState = FixedTrackedState<StateBlockTextureRef, kPeTextureSlots>;
+#define DXMT9_STATEBLOCK_DECLARE_ACCESSOR(name, storage, type, slots)       \
+    using name##State = FixedTrackedState<type, slots>;                     \
+    name##State& name() noexcept { return storage; }                        \
+    const name##State& name() const noexcept { return storage; }
+    DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_DECLARE_ACCESSOR)
+#undef DXMT9_STATEBLOCK_DECLARE_ACCESSOR
+
+    bool vertexDeclarationWasRecorded() const noexcept {
+        return vertexDeclarationRecorded;
+    }
+    void setVertexDeclarationRecorded(bool value) noexcept {
+        vertexDeclarationRecorded = value;
+    }
+
+    template<typename Fn>
+    void forEachCategory(Fn&& fn) noexcept {
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY(name, storage, type, slots)          \
+        fn(Category::name, storage);
+        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_CATEGORY)
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY
+    }
+
+    template<typename Fn>
+    void forEachCategory(Fn&& fn) const noexcept {
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST(name, storage, type, slots)    \
+        fn(Category::name, storage);
+        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST)
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST
+    }
+
+    template<typename Fn>
+    void forEachOwnedComRef(Fn&& fn) const noexcept {
+        forEachCategoryRef(fn);
+    }
+
+    bool has(Category wanted) const noexcept {
+        bool present = false;
+        forEachCategory([&](Category category, const auto& values) {
+            present = present || (category == wanted && !values.empty());
+        });
+        return present;
+    }
+
     PeStateBlockConstRecorded constants{};
 
     RenderStateTableView renderStates() noexcept {
@@ -1167,32 +1282,42 @@ public:
         samplerStates_.clear();
         transforms_.clear();
         vertexDeclarationRecorded = false;
-        textures.clear();
-        streamSources.clear();
-        streamFrequencies.clear();
-        vertexShader.clear();
-        pixelShader.clear();
-        fvf.clear();
-        vertexDeclaration.clear();
-        indexBuffer.clear();
-        renderTargets.clear();
-        depthStencil.clear();
-        viewport.clear();
-        scissor.clear();
-        material.clear();
-        clipPlanes.clear();
-        lights.clear();
-        lightEnables.clear();
+        forEachCategory([](Category, auto& category) { category.clear(); });
         constants.clearForBegin();
     }
 
 private:
+    template<typename T, typename Fn>
+    static void visitOwnedValue(const T& value, Fn&& fn) noexcept {
+        if constexpr (requires { value.raw(); }) {
+            fn(value.raw());
+        } else if constexpr (std::is_same_v<T, StateBlockStreamSourceValue>) {
+            fn(value.buffer.raw());
+        }
+    }
+
+    template<typename Fn>
+    void forEachCategoryRef(Fn&& fn) const noexcept {
+#define DXMT9_STATEBLOCK_VISIT_REF(name, storage, type, slots)               \
+        storage.forEach([&](std::size_t, const type& value) {                \
+            visitOwnedValue(value, fn);                                       \
+        });
+        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_REF)
+#undef DXMT9_STATEBLOCK_VISIT_REF
+    }
+
+#define DXMT9_STATEBLOCK_DECLARE_STORAGE(name, storage, type, slots)        \
+    FixedTrackedState<type, slots> storage{};
+    DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_DECLARE_STORAGE)
+#undef DXMT9_STATEBLOCK_DECLARE_STORAGE
     FixedStateTable<kPeRenderStateSlots> renderStates_{};
     FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots>
         textureStageStates_{};
     FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
     FixedTransformTable transforms_{};
 };
+
+#undef DXMT9_STATEBLOCK_CATEGORY_SCHEMA
 
 struct PeHotStateShadow : LiveShadow, PendingDelta {
     bool hasPendingHotState() const noexcept {

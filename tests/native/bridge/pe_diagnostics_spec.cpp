@@ -72,6 +72,13 @@ void testOptionalOwnerAllocationAndConfig() {
       PeDiagnosticsConfig{.moduleMap = true},
       PeDiagnosticsConfig{.threadSampler = true, .threadSamplerHz = 733},
       PeDiagnosticsConfig{.debugLog = true},
+      PeDiagnosticsConfig{.moduleMap = true, .threadSampler = true},
+      PeDiagnosticsConfig{.moduleMap = true, .debugLog = true},
+      PeDiagnosticsConfig{.threadSampler = true, .debugLog = true},
+      PeDiagnosticsConfig{.moduleMap = true, .threadSampler = true,
+                          .debugLog = true},
+      PeDiagnosticsConfig{.vsConstSetterRange = true, .moduleMap = true,
+                          .threadSampler = true, .debugLog = true},
   };
   for (const auto &config : configs) {
     const auto before = gAllocations.load(std::memory_order_relaxed);
@@ -92,6 +99,15 @@ void testOptionalOwnerAllocationAndConfig() {
               diagnostics->config.threadSampler == config.threadSampler &&
               diagnostics->config.threadSamplerHz == config.threadSamplerHz,
           "the owner preserves the resolved immutable diagnostic config");
+    const bool scopeExpected =
+        config.recorderStats || config.statsDecimationN != 0u;
+    check(diagnostics->gates.callScope == scopeExpected &&
+              diagnostics->gates.hotSetterTimer == scopeExpected,
+          "call and setter scopes are enabled only by their owning gates");
+    check(diagnostics->gates.moduleMap == config.moduleMap &&
+              diagnostics->gates.threadSampler == config.threadSampler &&
+              diagnostics->gates.debugLog == config.debugLog,
+          "observer-only gates remain independently cached");
   }
 }
 
@@ -192,6 +208,14 @@ void testSourceContracts(const std::filesystem::path &root) {
   }
   checkContains(device, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
                 "device stores one nullable diagnostic owner pointer");
+  checkContains(diagnostics, "struct PeDiagnosticsFeatureGates",
+                "diagnostic ownership has feature-specific cached gates");
+  checkContains(device, "if (!diagnostics->gates.callScope)",
+                "unrelated diagnostic gates skip call scope construction");
+  checkContains(device, "if (!diagnostics->gates.hotSetterTimer)",
+                "unrelated diagnostic gates skip setter timer construction");
+  checkContains(device, "#define dxmt9DeviceDebugLog(...)",
+                "disabled device debug logging is guarded at each call site");
   checkContains(recorder, "peDiagnosticsRead(\n                    chunkDiagnostics",
                 "chunk commit clocks are behind the nullable owner gate");
   checkContains(device, "const auto t0 = phase.begin();",
@@ -208,12 +232,12 @@ void testSourceContracts(const std::filesystem::path &root) {
       "draw entry and call tracking share one nullable diagnostic scope");
   checkBefore(
       device,
-      "if (!diagnostics) {\n            return setRenderStateCore",
+      "if (!diagnostics || !diagnostics->gates.hotSetterTimer) {\n            return setRenderStateCore",
       "PeHotStateSetterTimer hotSetter(\n            *this, *diagnostics",
       "SetRenderState branches before the enabled timer lifetime begins");
   checkBefore(
       device,
-      "if (!diagnostics) {\n            return drawPrimitiveCore",
+      "if (!diagnostics || !diagnostics->gates.callScope) {\n            return drawPrimitiveCore",
       "PeCallScope peCall(\n            *diagnostics, \"DrawPrimitive\"",
       "DrawPrimitive branches before the enabled call scope lifetime begins");
   checkBefore(

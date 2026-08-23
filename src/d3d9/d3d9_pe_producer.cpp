@@ -456,8 +456,8 @@ bool buildSparseState(const PeHotStateShadow& shadow,
 bool acceptInlineConstantDelta(PeConstShadowBlock& constants,
                                const SparseStateInput& state,
                                const AppendPlan& plan) noexcept {
-  if (!plan.valid || !plan.consumeRepresentedPending ||
-      !plan.recordDurable) {
+  if (!plan.valid() || !plan.consumeRepresentedPending() ||
+      !plan.recordDurable()) {
     return false;
   }
   struct ConstRange {
@@ -495,8 +495,8 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
                                PeConstShadowBlock& constants,
                                const SparseStateInput& state,
                                const AppendPlan& plan) noexcept {
-  if (!plan.valid || !plan.consumeRepresentedPending ||
-      !plan.recordDurable) {
+  if (!plan.valid() || !plan.consumeRepresentedPending() ||
+      !plan.recordDurable()) {
     return false;
   }
   // Preflight every allocation-free constant witness before touching any

@@ -235,14 +235,14 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Texture)) {
                 for (std::uint32_t slot = 0; slot < kPeTextureSlots; ++slot)
-                    categorySource.textures.set(slot, textures_[slot]);
+                    categorySource.textures().set(slot, textures_[slot]);
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition,
                     StateBlockCaptureCategory::StreamSource)) {
                 for (std::uint32_t slot = 0;
                      slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-                    categorySource.streamSources.set(
+                    categorySource.streamSources().set(
                         slot, StateBlockStreamSourceValue{
                                   .buffer = streamSrc_[slot],
                                   .offset = streamOff_[slot],
@@ -255,62 +255,62 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                     StateBlockCaptureCategory::StreamFrequency)) {
                 for (std::uint32_t slot = 0;
                      slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot)
-                    categorySource.streamFrequencies.set(slot, streamFreq_[slot]);
+                    categorySource.streamFrequencies().set(slot, streamFreq_[slot]);
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::VertexShader))
-                categorySource.vertexShader.set(0u, vs_);
+                categorySource.vertexShader().set(0u, vs_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::PixelShader))
-                categorySource.pixelShader.set(0u, ps_);
+                categorySource.pixelShader().set(0u, ps_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Fvf))
-                categorySource.fvf.set(0u, fvf_);
+                categorySource.fvf().set(0u, fvf_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition,
                     StateBlockCaptureCategory::VertexDeclaration))
-                categorySource.vertexDeclaration.set(0u, vdecl_);
+                categorySource.vertexDeclaration().set(0u, vdecl_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::IndexBuffer))
-                categorySource.indexBuffer.set(0u, indexBuf_);
+                categorySource.indexBuffer().set(0u, indexBuf_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::RenderTarget)) {
                 for (std::uint32_t slot = 0;
                      slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot)
-                    categorySource.renderTargets.set(slot, rtSlots_[slot]);
+                    categorySource.renderTargets().set(slot, rtSlots_[slot]);
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::DepthStencil))
-                categorySource.depthStencil.set(0u, dsSurface_);
+                categorySource.depthStencil().set(0u, dsSurface_);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Viewport))
-                categorySource.viewport.set(0u, peState_.viewportShadow);
+                categorySource.viewport().set(0u, peState_.viewportShadow);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Scissor))
-                categorySource.scissor.set(0u, peState_.scissorShadow);
+                categorySource.scissor().set(0u, peState_.scissorShadow);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Material))
-                categorySource.material.set(0u, peState_.materialShadow);
+                categorySource.material().set(0u, peState_.materialShadow);
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::ClipPlane)) {
                 for (std::uint32_t idx = 0; idx < 6u; ++idx) {
                     std::array<float, 4> plane{};
                     std::memcpy(plane.data(), peState_.clipPlaneShadow + idx * 4u,
                                 sizeof(plane));
-                    categorySource.clipPlanes.set(idx, plane);
+                    categorySource.clipPlanes().set(idx, plane);
                 }
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::Light)) {
                 for (std::uint32_t idx = 0;
                      idx < D9C_DRAW_PACKET_MAX_LIGHTS; ++idx)
-                    categorySource.lights.set(idx, peState_.lightShadow[idx]);
+                    categorySource.lights().set(idx, peState_.lightShadow[idx]);
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::LightEnable)) {
                 for (std::uint32_t idx = 0;
                      idx < D9C_DRAW_PACKET_MAX_LIGHTS; ++idx)
-                    categorySource.lightEnables.set(
+                    categorySource.lightEnables().set(
                         idx, (peState_.lightEnableShadow & (1u << idx)) != 0u);
             }
         }
@@ -403,57 +403,57 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                                            sizeof(std::int32_t) * 4u);
         out.constants.psConstB.refreshFrom(peConsts_.psConstB,
                                            sizeof(std::uint32_t));
-        refreshed.textures.forEach(
+        refreshed.textures().forEach(
             [&](std::size_t slot, void* /*prior*/) {
-                refreshed.textures.set(slot, textures_[slot]);
+                refreshed.textures().set(slot, textures_[slot]);
             });
-        refreshed.streamSources.forEach(
+        refreshed.streamSources().forEach(
             [&](std::size_t slot, const StateBlockStreamSourceValue& prior) {
                 StateBlockStreamSourceValue latest = prior;
                 latest.buffer = streamSrc_[slot];
                 latest.offset = streamOff_[slot];
                 latest.stride = streamStr_[slot];
-                refreshed.streamSources.set(slot, latest);
+                refreshed.streamSources().set(slot, latest);
             });
-        refreshed.streamFrequencies.forEach(
+        refreshed.streamFrequencies().forEach(
             [&](std::size_t slot, std::uint32_t) {
-                refreshed.streamFrequencies.set(slot, streamFreq_[slot]);
+                refreshed.streamFrequencies().set(slot, streamFreq_[slot]);
             });
-        if (refreshed.vertexShader.contains(0u))
-            refreshed.vertexShader.set(0u, vs_);
-        if (refreshed.pixelShader.contains(0u))
-            refreshed.pixelShader.set(0u, ps_);
-        if (refreshed.fvf.contains(0u)) refreshed.fvf.set(0u, fvf_);
-        if (refreshed.vertexDeclaration.contains(0u))
-            refreshed.vertexDeclaration.set(0u, vdecl_);
-        if (refreshed.indexBuffer.contains(0u))
-            refreshed.indexBuffer.set(0u, indexBuf_);
-        refreshed.renderTargets.forEach(
+        if (refreshed.vertexShader().contains(0u))
+            refreshed.vertexShader().set(0u, vs_);
+        if (refreshed.pixelShader().contains(0u))
+            refreshed.pixelShader().set(0u, ps_);
+        if (refreshed.fvf().contains(0u)) refreshed.fvf().set(0u, fvf_);
+        if (refreshed.vertexDeclaration().contains(0u))
+            refreshed.vertexDeclaration().set(0u, vdecl_);
+        if (refreshed.indexBuffer().contains(0u))
+            refreshed.indexBuffer().set(0u, indexBuf_);
+        refreshed.renderTargets().forEach(
             [&](std::size_t slot, void* /*prior*/) {
-                refreshed.renderTargets.set(slot, rtSlots_[slot]);
+                refreshed.renderTargets().set(slot, rtSlots_[slot]);
             });
-        if (refreshed.depthStencil.contains(0u))
-            refreshed.depthStencil.set(0u, dsSurface_);
-        if (refreshed.viewport.contains(0u))
-            refreshed.viewport.set(0u, peState_.viewportShadow);
-        if (refreshed.scissor.contains(0u))
-            refreshed.scissor.set(0u, peState_.scissorShadow);
-        if (refreshed.material.contains(0u))
-            refreshed.material.set(0u, peState_.materialShadow);
-        refreshed.clipPlanes.forEach(
+        if (refreshed.depthStencil().contains(0u))
+            refreshed.depthStencil().set(0u, dsSurface_);
+        if (refreshed.viewport().contains(0u))
+            refreshed.viewport().set(0u, peState_.viewportShadow);
+        if (refreshed.scissor().contains(0u))
+            refreshed.scissor().set(0u, peState_.scissorShadow);
+        if (refreshed.material().contains(0u))
+            refreshed.material().set(0u, peState_.materialShadow);
+        refreshed.clipPlanes().forEach(
             [&](std::size_t idx, const std::array<float, 4>&) {
                 std::array<float, 4> plane{};
                 std::memcpy(plane.data(), peState_.clipPlaneShadow + idx * 4u,
                             sizeof(plane));
-                refreshed.clipPlanes.set(idx, plane);
+                refreshed.clipPlanes().set(idx, plane);
             });
-        refreshed.lights.forEach(
+        refreshed.lights().forEach(
             [&](std::size_t idx, const D9CLight&) {
-                refreshed.lights.set(idx, peState_.lightShadow[idx]);
+                refreshed.lights().set(idx, peState_.lightShadow[idx]);
             });
-        refreshed.lightEnables.forEach(
+        refreshed.lightEnables().forEach(
             [&](std::size_t idx, std::uint32_t) {
-                refreshed.lightEnables.set(
+                refreshed.lightEnables().set(
                     idx, (peState_.lightEnableShadow & (1u << idx)) != 0u);
             });
         refreshed.constants = out.constants;
@@ -469,7 +469,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
     if (initialSnapshot) {
         shouldTrackVdecl =
             insideEndStateBlock_
-                ? stateBlockState_.vertexDeclarationRecorded
+                ? stateBlockState_.vertexDeclarationWasRecorded()
                 : stateBlockCaptureCategorySelected(
                       effectiveDisposition,
                       StateBlockCaptureCategory::VertexDeclaration);
@@ -482,9 +482,9 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
     }
     IDirect3DVertexDeclaration9* sourceVdecl = vdecl_;
     if (initialSnapshot && insideEndStateBlock_) {
-        void* candidateVdecl = nullptr;
-        if (stateBlockState_.vertexDeclaration.get(0u, candidateVdecl)) {
-            sourceVdecl = reinterpret_cast<IDirect3DVertexDeclaration9*>(candidateVdecl);
+        StateBlockVertexDeclarationRef candidateVdecl{};
+        if (stateBlockState_.vertexDeclaration().get(0u, candidateVdecl)) {
+            sourceVdecl = reinterpret_cast<IDirect3DVertexDeclaration9*>(candidateVdecl.raw());
         }
     }
     out.hasVdecl = shouldTrackVdecl && (sourceVdecl != nullptr);
@@ -765,6 +765,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
+        stateBlockRecorderPoisoned_ =
+            peStateBlockPoisonAfterReset(true, stateBlockRecorderPoisoned_);
+        discardPreparedStateBlockApply();
         deviceNotReset_ = false;
         // reset_lockable_backbuffer_policy: capture the new
         // PresentParameters.Flags so future GetSwapChain wrapper
@@ -889,6 +892,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetDialogBoxMode(BOOL enableDialogs) n
 }
 
 void    STDMETHODCALLTYPE D3D9DeviceImpl::SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP* ramp) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     dxmt9DeviceDebugLog("device_set_gamma_ramp device=%p swapChain=%u flags=0x%x ramp=%p",
                         this, swapChain, (unsigned)flags,
                         static_cast<const void*>(ramp));
@@ -1896,7 +1901,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderState(D3DRENDERSTATETYPE stat
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                         IDirect3DStateBlock9** ppSB) noexcept {
     notePeDeviceCallAfterPresent("CreateStateBlock");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!ppSB) return D3DERR_INVALIDCALL;
+    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
     // D3D9 creation contract: a failed create must leave the out-pointer
     // NULL before the error HRESULT is returned.
     *ppSB = nullptr;
@@ -1919,6 +1927,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE typ
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     notePeDeviceCallAfterPresent("BeginStateBlock");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
+    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
     if (stateBlockRecording_) {
         return D3DERR_INVALIDCALL;
     }
@@ -1937,7 +1948,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept {
     notePeDeviceCallAfterPresent("EndStateBlock");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!ppSB) return D3DERR_INVALIDCALL;
+    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
     // EndStateBlock without a matching BeginStateBlock returns INVALIDCALL
     // and MUST leave the out-pointer UNTOUCHED — the Wine d3d9 oracle checks
     // `stateblock == sentinel` here (begin_end_state_block_policy /
@@ -2041,6 +2055,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ValidateDevice(DWORD* pPasses) noexcep
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPaletteEntries(UINT palette, const PALETTEENTRY* entries) noexcept {
     notePeDeviceCallAfterPresent("SetPaletteEntries");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u entries=%p",
                         this, palette, static_cast<const void*>(entries));
     if (!entries) return D3DERR_INVALIDCALL;
@@ -2082,6 +2098,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetPaletteEntries(UINT palette, PALETT
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetCurrentTexturePalette(UINT palette) noexcept {
     notePeDeviceCallAfterPresent("SetCurrentTexturePalette");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     dxmt9DeviceDebugLog("device_set_current_texture_palette device=%p palette=%u", this, palette);
     if (palettes_.find(palette) == palettes_.end()) {
         return D3DERR_INVALIDCALL;
@@ -2104,6 +2122,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetCurrentTexturePalette(UINT* p) noex
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetSoftwareVertexProcessing(BOOL enable) noexcept {
     notePeDeviceCallAfterPresent("SetSoftwareVertexProcessing");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     dxmt9DeviceDebugLog("device_set_software_vertex_processing device=%p enable=%u", this, (unsigned)enable);
     softwareVertexProcessing_ = enable ? TRUE : FALSE;
     return S_OK;
@@ -2117,6 +2137,8 @@ BOOL    STDMETHODCALLTYPE D3D9DeviceImpl::GetSoftwareVertexProcessing() noexcept
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetNPatchMode(float segments) noexcept {
     notePeDeviceCallAfterPresent("SetNPatchMode");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
     // stub: Wine returns S_OK; N-Patch tessellation was removed in D3D10, legacy
     // apps tolerate a no-op.
@@ -2425,6 +2447,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetGPUThreadPriority(INT) noexcept {
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::WaitForVBlank(UINT sc) noexcept {
     notePeDeviceCallAfterPresent("WaitForVBlank");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     const HRESULT hr = hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
     const dxmt9::d3d9::RenderTapeFlushWaitControl payload{.waitedSeqId = 0u};
     NotifyRenderTapeOrderedControlForChild(
@@ -2449,6 +2473,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CheckResourceResidency(IDirect3DResour
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetMaximumFrameLatency(UINT maxLatency) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     // Wine d3d9ex test_frame_latency contract: valid range is 1..30.
     // 0 or >= 31 must return D3DERR_INVALIDCALL.
     if (maxLatency == 0 || maxLatency >= 31)
@@ -2513,6 +2539,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateDepthStencilSurfaceEx(UINT w, UI
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
                                                D3DDISPLAYMODEEX* pFsMode) noexcept {
     dxmt9PeSetCurrentCallName("ResetEx");
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!pPP) return D3DERR_INVALIDCALL;
     // ResetEx windowed/fullscreen mode rules: wrong mode Size, a mode
     // supplied for a windowed reset (or missing for a fullscreen reset),
@@ -2564,6 +2592,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {
+        stateBlockRecorderPoisoned_ =
+            peStateBlockPoisonAfterReset(true, stateBlockRecorderPoisoned_);
+        discardPreparedStateBlockApply();
         deviceNotReset_ = false;
         // Same flags-capture as Reset().
         implicitSwapchainFlagsShadow_ = pPP->Flags;

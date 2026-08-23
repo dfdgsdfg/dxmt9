@@ -9,6 +9,7 @@ tla_dir="$repo_root/specs/verification/tla"
 # included by the production C++ algebra.  A stale generated module is a
 # model/code binding failure, not a harmless documentation diff.
 python3 "$repo_root/scripts/check/gen_pe_transition_table.py" --check
+python3 "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
 
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then
@@ -91,6 +92,13 @@ counterexample_models=(
   "PeRecorderCommit|.parent-before-alias.counterexample|Invariant AliasBeforeParent is violated"
   # Builder reset while pending references remain breaks no-early-drain/reset.
   "PeRecorderCommit|.early-reset.counterexample|Invariant NoEarlyDrainReset is violated"
+  # The old success cycle left commandAccepted set in WarmAdvanced and could
+  # never prove return to a reusable Unsealed builder.
+  "PeRecorderCommit|.stuck-success.counterexample|Temporal properties were violated"
+  # StateBlock Apply backend failure must poison before Reset recovery.
+  "PeStateBlockTransaction|.no-poison.counterexample|Invariant FailurePoisoned is violated"
+  # Every poisoned Apply path releases staged references before recovery.
+  "PeStateBlockTransaction|.no-release.counterexample|Invariant FailedRefsReleased is violated"
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"

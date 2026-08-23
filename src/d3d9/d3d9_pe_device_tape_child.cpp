@@ -9,6 +9,8 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::span<const std::byte> descriptor,
     std::span<const std::byte> immutablePayload) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!peCaptureState_ ||
         peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
@@ -83,6 +85,8 @@ bool D3D9DeviceImpl::IsRenderTapeCaptureTrackingEnabledForChild() const noexcept
 }
 
 void D3D9DeviceImpl::AbortRenderTapeCaptureForChild() noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     markRenderTapeInvalidOnce("child_abort");
     if (IsRenderTapeCaptureActiveForChild())
         abortRenderTapeCapture("child_abort");
@@ -94,6 +98,8 @@ void D3D9DeviceImpl::RejectRenderTapeCaptureForChild(
     std::uint32_t subresource,
     const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic)
     noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     const char *name =
         dxmt9::d3d9::renderTapeCaptureRejectionReasonName(reason);
     const bool first = peCaptureState_ && !peCaptureState_->renderTapeRegistry.invalid;
@@ -186,6 +192,8 @@ void D3D9DeviceImpl::NotifyRenderTapeBlockMutationForChild(
     std::uint32_t subresource,
     const dxmt9::d3d9::RenderTapeBlockLockLayout &layout,
     std::span<const std::byte> bytes) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     const auto status =
         recordRenderTapeBlockBytes(object, subresource, layout, bytes);
     if (status !=
@@ -235,6 +243,8 @@ void D3D9DeviceImpl::NotifyRenderTapeLinearMutationForChild(
     std::uint32_t subresource,
     const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
     std::span<const std::byte> bytes) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     const auto status =
         recordRenderTapeLinearBytes(object, subresource, layout, bytes);
     if (status != dxmt9::d3d9::RenderTapeBlockMutationStatus::Accepted) {
@@ -282,6 +292,8 @@ void D3D9DeviceImpl::NotifyRenderTapeSurfaceAliasForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
     std::uint32_t subresource,
     const D9CSurfaceDesc &descriptor) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 alias{
@@ -304,6 +316,8 @@ void D3D9DeviceImpl::NotifyRenderTapeSurfaceAliasForChild(
 void D3D9DeviceImpl::NotifyRenderTapeStandaloneSurfaceForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &surface,
     const D9CSurfaceDesc &descriptor) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 standalone{
@@ -397,8 +411,8 @@ void D3D9DeviceImpl::retireRenderTapeAliasesForParent(
             .aliasesRemain = true,
         });
         const bool aliasAdmitted =
-            aliasPlan.valid &&
-            aliasPlan.action ==
+            aliasPlan.valid() &&
+            aliasPlan.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::DestroyAlias;
         DXMT_ASSERT(aliasAdmitted);
         if (!aliasAdmitted) {
@@ -445,8 +459,8 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
                 .aliasesRemain = true,
             });
             const bool aliasAdmitted =
-                aliasPlan.valid &&
-                aliasPlan.action ==
+                aliasPlan.valid() &&
+                aliasPlan.action() ==
                     dxmt9::d3d9::pe::RecorderCommitAction::DestroyAlias;
             DXMT_ASSERT(aliasAdmitted);
             if (!aliasAdmitted) {
@@ -479,8 +493,8 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
             .parentPending = true,
         });
         const bool parentAdmitted =
-            parentPlan.valid &&
-            parentPlan.action ==
+            parentPlan.valid() &&
+            parentPlan.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::DestroyParent;
         DXMT_ASSERT(parentAdmitted == !aliasesRemain);
         if (!parentAdmitted && !aliasesRemain) {
@@ -499,6 +513,8 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
 
 void D3D9DeviceImpl::NotifyRenderTapeObjectDestroyForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (peCaptureState_) {
         auto *entry = findRenderTapeObject(object);
         // The PE wrapper destructor has already delivered this callback.
@@ -538,6 +554,8 @@ void D3D9DeviceImpl::NotifyRenderTapeResourceMutationForChild(
     std::span<const std::byte> bytes,
     dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition)
     noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     const bool registryAccepted =
         recordRenderTapeCpuBytes(object, subresource, byteOffset, bytes);
     if (!registryAccepted) {
@@ -567,6 +585,8 @@ void D3D9DeviceImpl::NotifyRenderTapeResourceMutationForChild(
 void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
     const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
     std::span<const std::byte> payload) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!peCaptureState_ ||
         peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
@@ -588,6 +608,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::span<const std::byte> descriptor,
     std::span<const std::byte> immutablePayload) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     if (!object.valid(object.identity.kind) || descriptor.empty()) {
@@ -612,6 +634,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedObject(
 void D3D9DeviceImpl::notifyRenderTapeCreatedBuffer(
     D9CBuffer *buffer,
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     D9CBufferDesc descriptor{};
@@ -630,6 +654,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedTexture(
     D9CTexture *texture,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     dxmt9::d3d9::RenderTapeTextureDimension dimension) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     if (!texture) {
@@ -700,6 +726,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedVertexDecl(
     D9CVertexDecl *decl,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::span<const std::byte> elements, std::size_t elementCount) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     if (!decl || elements.empty() ||
@@ -722,6 +750,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedVertexDecl(
 void D3D9DeviceImpl::notifyRenderTapeCreatedQuery(
     D9CQuery *query,
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     if (!query) {
@@ -745,6 +775,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedShader(
     D9CShader *shader,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     uint32_t stage) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
     if (!shader || !object.valid(object.identity.kind)) {

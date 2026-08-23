@@ -141,16 +141,24 @@ sequence `SetTransform(B); MultiplyTransform(C)` inside Begin/End records `B`
 while the multiply reads the pre-Begin primary value and publishes only its
 result to primary state.
 
-Capture and Apply hold the device's existing recursive recorder lock across
-the complete child/backend interval when `D3DCREATE_MULTITHREADED` or the
-forced-lock setting requires it; the lock methods are no-ops on the ordinary
-single-threaded hot path. Apply preparation reserves live constant capacity
-and resolves implicit FVF declarations before backend mutation. A failed
-backend Apply enters explicit recorder poison and subsequent recording writes
-return `D3DERR_DEVICELOST` deterministically, avoiding a second divergent
-stream when rollback is unavailable. A backend Capture failure uses the same
-conservative poison boundary; candidate/snapshot publication still occurs only
-after Capture accepts.
+The conditional recorder lock is one shared production guard. It covers
+Create/Begin/EndStateBlock, Capture, Apply, every PE shadow/recording setter,
+and Render Tape child destruction/mutation/ordered-control callbacks that
+mutate `PeCaptureState` or its registry when `D3DCREATE_MULTITHREADED` or the
+forced-lock setting requires it; the guard is a one-branch no-op on the
+ordinary single-threaded hot path. The existing recursive contract permits
+bounded internal append/flush re-entry, while callback validation remains
+fail-closed and no external callback is invoked under a newly acquired lock.
+Apply preparation reserves live constant capacity and resolves implicit FVF
+declarations before backend mutation. A failed backend Apply enters explicit
+recorder poison and subsequent recording writes return `D3DERR_DEVICELOST`
+deterministically, avoiding a second divergent stream when rollback is
+unavailable. A backend Capture failure uses the same conservative poison
+boundary; candidate/snapshot publication still occurs only after Capture
+accepts. Poison survives failed Reset/ResetEx, including validation/backend
+failure, together with pre-effect Apply staging. A successful backend
+Reset/ResetEx clears poison and discards staged Apply retains only after the
+backend accepts, restoring the PE recorder for subsequent writes.
 
 ## 3. Record and chunk transactions
 
@@ -251,9 +259,11 @@ recorder/registry, or add a flush. Disabled Render Tape and PE-call tracking do
 not justify a virtual call or RAII scope per COM call. The diagnostic methods
 have therefore been removed from `D3D9PeRecorderFlush`, and the device/child
 entry helpers branch on their cached nullable owner or observer before an
-enabled-only `PeCallScope` or `D3D9PeChildCallScope` lifetime begins. The null
-edge enters the functional core without scope construction, timestamp reads,
-TLS/sample mutation, or a diagnostic callback.
+enabled-only `PeCallScope` or `D3D9PeChildCallScope` lifetime begins. Within an
+enabled owner, feature-specific cached gates ensure module-map, thread-sampler,
+and debug-only enablement does not construct unrelated call scopes/timers or
+read clocks. The null edge enters the functional core without scope
+construction, timestamp reads, TLS/sample mutation, or a diagnostic callback.
 
 `PeRecorderState` owns the producer-owned live/pending shadow, the separate
 `StateBlockRecorded` domain, constant shadows, reusable binding/build scratch,
@@ -274,7 +284,10 @@ decimated-scope accumulators, append/call attribution, present-cadence atomics,
 VS-constant range buckets, and the sampler handle. It is allocated only when at
 least one PE diagnostic gate is enabled. Chunk-commit clocks and accumulation,
 UP-copy counters, append-family/call-name TLS writes, and hot setter timers are
-all reached through its nullable gate. Child wrappers keep a nullable concrete
+all reached through its nullable gate. The pending-command retainer reserves
+its entry arena and hash index from the builder handle capacity, so the >64
+handle and default 256-handle retry paths remain warm without capacity growth.
+Child wrappers keep a nullable concrete
 `D3D9PeDiagnosticObserver`; diagnostic entry/return methods are not virtuals on
 `D3D9PeRecorderFlush`, whose remaining methods are recorder protocol,
 state-block semantics, or Render Tape lifecycle operations.
@@ -331,25 +344,36 @@ violate `OnlyAcceptedConsumes` and `AcceptedExactlyRepresented`, respectively;
 the `PreserveExisting` prior-value control must violate
 `PendingMatchesLive` on the history-free `A -> B -> A` live-phase replacement
 trace.
-The C++ and TLA rows are generated from one canonical transition table and
-checked before TLC.
+State-write and append rows are generated from their canonical table. Commit
+rows are generated directly from `settleRecorderCommit` by
+`gen_pe_commit_transition_table.py`; the verifier checks that generated matrix
+before TLC and every commit action asserts its matching row. This keeps the
+capture-skipped and WarmAdvanced-to-Unsealed edges tied to the production
+algebra without duplicating a second hand-maintained C++ table.
 `MaxOperations=2` is the explicit proof split: it covers the distinguishing
 live `A -> B -> A` replacement and keeps End enabled so `Begin -> Set -> End`
 still completes at the bound. Longer state-block write compositions remain in
 the exhaustive native and PE layers rather than this temporal state space.
 The `PeRecorderCommit.tla` model carries byte/count/handle/pin/pending-reference
-tokens through retry, capture disposition, alias-before-parent destruction,
-reset, warm advancement, and discard. `MaxOperations=8` bounds the combined
-seal/bridge retry budget while successful phase/token transitions are finite;
-the positive configuration checks 179 generated / 117 distinct states at depth
-17. The parent-before-alias and early-reset mutations each check 40 generated /
-28 distinct states at depth 6 and fail their named invariant.
+tokens through retry, all three capture dispositions (materialized, rejected,
+and skipped), alias-before-parent destruction, reset, warm advancement, and
+discard. `MaxOperations=8` bounds the combined seal/bridge retry budget while
+successful phase/token transitions are finite. A successful settlement clears
+the accepted-command witness and rearms a bounded next transaction, so the
+`WarmAdvanced -> Unsealed` reuse edge is covered by safety and liveness; the
+stuck-success mutation is an executable expected failure. The
+parent-before-alias and early-reset mutations remain independent ordering
+controls.
 The bounded native transaction witness covers prepare/backend/commit failure
 ordering and the conditional whole-operation lock interval. Production Apply
 backend failure is fail-stop rather than rollback because the backend can
-partially mutate; the poison latch is the explicit safety boundary. The commit
-model includes seal/bridge/capture-journal settlement, and the native witness
-exercises bridge failure plus capture rejection through the same pure helper.
+partially mutate; the poison latch is the explicit safety boundary. The
+companion `PeStateBlockTransaction.tla` model checks staged-reference release,
+capture disposition, poison, and Reset recovery; successful Reset is the
+coordinated task-1B policy, while Terminal is reserved for explicit teardown.
+The commit model includes seal/bridge/capture-journal settlement, and the
+native witness exercises bridge failure plus capture rejection through the
+same pure helper.
 
 ## 7. Acceptance matrix
 

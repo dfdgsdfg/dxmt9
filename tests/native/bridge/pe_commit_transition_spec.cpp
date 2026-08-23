@@ -4,11 +4,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace pe = dxmt9::d3d9::pe;
 
 namespace {
+
+static_assert(!std::is_aggregate_v<pe::RecorderCommitPlan>);
 
 int failures = 0;
 
@@ -35,29 +38,29 @@ struct CommitWitness {
 
   bool apply(pe::RecorderCommitFacts facts) {
     const auto plan = pe::settleRecorderCommit(facts);
-    if (!plan.valid) return false;
-    phase = plan.next;
-    commandAccepted = commandAccepted || plan.commandAccepted;
-    if (plan.objectDestroy) {
-      if (plan.action == pe::RecorderCommitAction::DestroyAlias) {
+    if (!plan.valid()) return false;
+    phase = plan.next();
+    commandAccepted = commandAccepted || plan.commandAccepted();
+    if (plan.objectDestroy()) {
+      if (plan.action() == pe::RecorderCommitAction::DestroyAlias) {
         ++aliasDestroys;
         if (pendingRefs != 0u) --pendingRefs;
-      } else if (plan.action == pe::RecorderCommitAction::DestroyParent) {
+      } else if (plan.action() == pe::RecorderCommitAction::DestroyParent) {
         ++parentDestroys;
         if (pendingRefs != 0u) --pendingRefs;
       }
     }
-    if (plan.action == pe::RecorderCommitAction::BeginDrain) {
+    if (plan.action() == pe::RecorderCommitAction::BeginDrain) {
       ++drainBegins;
-    } else if (plan.action == pe::RecorderCommitAction::FinishDrain) {
+    } else if (plan.action() == pe::RecorderCommitAction::FinishDrain) {
       ++drainCompletes;
     }
-    if (plan.resetBuilder) {
+    if (plan.resetBuilder()) {
       ++builderResets;
       bytes.clear();
       records = handles = pendingRefs = 0u;
     }
-    if (plan.advanceWarmEpoch) ++warmAdvances;
+    if (plan.advanceWarmEpoch()) ++warmAdvances;
     return true;
   }
 };
@@ -95,6 +98,15 @@ void testRetryAndAcceptedCapture() {
             witness.commandAccepted &&
             witness.phase == pe::RecorderCommitPhase::CaptureSettled,
         "capture rejection does not retract accepted command");
+
+  CommitWitness skipped{};
+  skipped.commandAccepted = true;
+  check(skipped.apply({
+            .phase = pe::RecorderCommitPhase::Accepted,
+            .event = pe::RecorderCommitEvent::CaptureSkipped}) &&
+            skipped.commandAccepted &&
+            skipped.phase == pe::RecorderCommitPhase::CaptureSettled,
+        "capture skipped settles without capture side effects");
 }
 
 void testDrainOrderingAndReset() {
@@ -116,7 +128,7 @@ void testDrainOrderingAndReset() {
               .event = pe::RecorderCommitEvent::DrainParent,
               .aliasesRemain = true,
               .parentPending = true})
-             .valid,
+             .valid(),
         "parent cannot destroy before aliases");
   check(witness.apply({.phase = pe::RecorderCommitPhase::Draining,
                        .event = pe::RecorderCommitEvent::DrainAlias,
@@ -181,8 +193,8 @@ void testDiscardAndFailureMatrix() {
     const auto plan = pe::settleRecorderCommit({
         .phase = phase,
         .event = pe::RecorderCommitEvent::ExplicitDiscard});
-    check(plan.valid && plan.action == pe::RecorderCommitAction::DiscardAll &&
-              plan.resetBuilder && !plan.advanceWarmEpoch,
+    check(plan.valid() && plan.action() == pe::RecorderCommitAction::DiscardAll &&
+              plan.resetBuilder() && !plan.advanceWarmEpoch(),
           "explicit discard releases pins without warm epoch advance");
     witness.apply({.phase = phase,
                    .event = pe::RecorderCommitEvent::ExplicitDiscard});
@@ -193,7 +205,7 @@ void testDiscardAndFailureMatrix() {
     check(!pe::settleRecorderCommit({
                 .phase = pe::RecorderCommitPhase::Discarded,
                 .event = pe::RecorderCommitEvent::ExplicitDiscard})
-             .valid,
+             .valid(),
           "repeated discard is rejected");
   }
 }

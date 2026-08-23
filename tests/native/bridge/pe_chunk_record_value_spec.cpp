@@ -16,6 +16,21 @@
 #include <string_view>
 #include <vector>
 
+static_assert(dxmt9::d3d9::pe::isWireSafePayloadValue<
+                  D9CCommandChunkWireUpdateTexture>);
+static_assert(dxmt9::d3d9::pe::isWireSafePayloadValue<std::uint32_t>);
+static_assert(!dxmt9::d3d9::pe::isWireSafePayloadValue<void*>);
+
+struct WireValueWithPointerMember {
+  std::uint32_t value;
+  const void* pointer;
+};
+
+static_assert(std::is_standard_layout_v<WireValueWithPointerMember> &&
+              std::is_trivially_copyable_v<WireValueWithPointerMember>);
+static_assert(!dxmt9::d3d9::pe::isWireSafePayloadValue<
+              WireValueWithPointerMember>);
+
 struct RefCounter {
   std::uint32_t refs = 1u;
 };

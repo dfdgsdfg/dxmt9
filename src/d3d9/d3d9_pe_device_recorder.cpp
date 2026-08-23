@@ -15,8 +15,8 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
         .event = discardEvent,
     });
     const bool discardAdmitted =
-        discardPlan.valid && discardPlan.resetBuilder &&
-        discardPlan.action ==
+        discardPlan.valid() && discardPlan.resetBuilder() &&
+        discardPlan.action() ==
             dxmt9::d3d9::pe::RecorderCommitAction::DiscardAll;
     DXMT_ASSERT(discardAdmitted);
     if (!discardAdmitted && peCaptureState_) {
@@ -106,7 +106,7 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                     ? dxmt9::d3d9::pe::RecorderCommitEvent::BridgeAccepted
                     : dxmt9::d3d9::pe::RecorderCommitEvent::BridgeFailed,
             });
-            if (!bridgePlan.valid) {
+            if (!bridgePlan.valid()) {
                 DXMT_ASSERT(false && "invalid bridge settlement");
                 if (captureState) {
                     markRenderTapeInvalidOnce("commit_bridge_settlement");
@@ -167,7 +167,7 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 }
                 return hr;
             }
-            auto settlementPhase = bridgePlan.next;
+            auto settlementPhase = bridgePlan.next();
             const auto capturePlan = dxmt9::d3d9::pe::settleRecorderCommit({
                 .phase = settlementPhase,
                 .event = captureChunkPrepared
@@ -176,13 +176,13 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                         ? dxmt9::d3d9::pe::RecorderCommitEvent::CaptureRejected
                         : dxmt9::d3d9::pe::RecorderCommitEvent::CaptureSkipped,
             });
-            if (!capturePlan.valid) {
+            if (!capturePlan.valid()) {
                 DXMT_ASSERT(false && "invalid capture settlement");
                 if (captureState) {
                     markRenderTapeInvalidOnce("commit_capture_settlement");
                 }
             } else {
-                settlementPhase = capturePlan.next;
+                settlementPhase = capturePlan.next();
             }
             if (settledPhase) {
                 *settledPhase = settlementPhase;
@@ -325,7 +325,7 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(PeRecorderFlushReason reason) {
             .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
         });
-        if (!sealPlan.valid || !sealPlan.preserveRetryBytes) {
+        if (!sealPlan.valid() || !sealPlan.preserveRetryBytes()) {
             return D3DERR_INVALIDCALL;
         }
         return D3DERR_INVALIDCALL;
@@ -334,7 +334,7 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(PeRecorderFlushReason reason) {
         .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
         .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealAccepted,
     });
-    if (!sealPlan.valid || sealPlan.next !=
+    if (!sealPlan.valid() || sealPlan.next() !=
             dxmt9::d3d9::pe::RecorderCommitPhase::Sealed) {
         return D3DERR_INVALIDCALL;
     }
@@ -361,15 +361,15 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(PeRecorderFlushReason reason) {
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::DrainPending,
         });
         const bool beginDrainAdmitted =
-            beginDrain.valid &&
-            beginDrain.action ==
+            beginDrain.valid() &&
+            beginDrain.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::BeginDrain;
         DXMT_ASSERT(beginDrainAdmitted);
         if (!beginDrainAdmitted && peCaptureState_) {
             markRenderTapeInvalidOnce("commit_begin_drain_settlement");
         }
         const auto drainPhase = beginDrainAdmitted
-            ? beginDrain.next
+            ? beginDrain.next()
             : dxmt9::d3d9::pe::RecorderCommitPhase::Draining;
         if (peCaptureState_) {
             const bool recordDestroy =
@@ -384,28 +384,28 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(PeRecorderFlushReason reason) {
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::DrainComplete,
         });
         const auto resetPlan = dxmt9::d3d9::pe::settleRecorderCommit({
-            .phase = finishDrain.valid
-                ? finishDrain.next
+            .phase = finishDrain.valid()
+                ? finishDrain.next()
                 : dxmt9::d3d9::pe::RecorderCommitPhase::Drained,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::BuilderReset,
         });
         const auto warmPlan = dxmt9::d3d9::pe::settleRecorderCommit({
-            .phase = resetPlan.valid
-                ? resetPlan.next
+            .phase = resetPlan.valid()
+                ? resetPlan.next()
                 : dxmt9::d3d9::pe::RecorderCommitPhase::Reset,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::WarmEpochAdvance,
         });
         const bool finishDrainAdmitted =
-            finishDrain.valid &&
-            finishDrain.action ==
+            finishDrain.valid() &&
+            finishDrain.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::FinishDrain;
         const bool resetAdmitted =
-            resetPlan.valid && resetPlan.resetBuilder &&
-            resetPlan.action ==
+            resetPlan.valid() && resetPlan.resetBuilder() &&
+            resetPlan.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::ResetBuilder;
         const bool warmAdmitted =
-            warmPlan.valid && warmPlan.advanceWarmEpoch &&
-            warmPlan.action ==
+            warmPlan.valid() && warmPlan.advanceWarmEpoch() &&
+            warmPlan.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::AdvanceWarmEpoch;
         DXMT_ASSERT(finishDrainAdmitted && resetAdmitted && warmAdmitted);
         if ((!finishDrainAdmitted || !resetAdmitted || !warmAdmitted) &&
@@ -456,8 +456,8 @@ HRESULT D3D9DeviceImpl::appendSetConstRecord(uint32_t recordType, UINT start, UI
                     .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
                     .appendSucceeded = ok,
                 });
-            if (settlement.consumeRepresentedPending &&
-                settlement.recordDurable) {
+            if (settlement.consumeRepresentedPending() &&
+                settlement.recordDurable()) {
                 settlementOwner.clear();
             }
             phase.recordEncode(t0);

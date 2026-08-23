@@ -61,36 +61,90 @@ struct RecorderCommitFacts {
   bool parentPending = false;
 };
 
-struct RecorderCommitPlan {
-  RecorderCommitPhase next = RecorderCommitPhase::Unsealed;
-  RecorderCommitAction action = RecorderCommitAction::Invalid;
-  bool valid = false;
-  bool preserveRetryBytes = false;
-  bool commandAccepted = false;
-  bool objectDestroy = false;
-  bool resetBuilder = false;
-  bool advanceWarmEpoch = false;
+class RecorderCommitPlan {
+ public:
+  constexpr RecorderCommitPhase next() const noexcept { return next_; }
+  constexpr RecorderCommitAction action() const noexcept { return action_; }
+  constexpr bool valid() const noexcept { return valid_; }
+  constexpr bool preserveRetryBytes() const noexcept {
+    return action_ == RecorderCommitAction::Retry;
+  }
+  constexpr bool commandAccepted() const noexcept {
+    return action_ == RecorderCommitAction::AcceptCommand;
+  }
+  constexpr bool objectDestroy() const noexcept {
+    return action_ == RecorderCommitAction::DestroyAlias ||
+        action_ == RecorderCommitAction::DestroyParent;
+  }
+  constexpr bool resetBuilder() const noexcept {
+    return action_ == RecorderCommitAction::ResetBuilder ||
+        action_ == RecorderCommitAction::DiscardAll;
+  }
+  constexpr bool advanceWarmEpoch() const noexcept {
+    return action_ == RecorderCommitAction::AdvanceWarmEpoch;
+  }
+
+ private:
+  constexpr RecorderCommitPlan(RecorderCommitPhase next,
+                               RecorderCommitAction action, bool valid)
+      : next_(next), action_(action), valid_(valid) {}
+
+  static constexpr bool isKnownTransition(RecorderCommitPhase next,
+                                           RecorderCommitAction action) noexcept {
+    switch (action) {
+    case RecorderCommitAction::NoOp:
+      return next == RecorderCommitPhase::CaptureSettled ||
+          next == RecorderCommitPhase::Unsealed;
+    case RecorderCommitAction::Retry:
+      return next == RecorderCommitPhase::Unsealed ||
+          next == RecorderCommitPhase::Sealed;
+    case RecorderCommitAction::Seal:
+      return next == RecorderCommitPhase::Sealed;
+    case RecorderCommitAction::AcceptCommand:
+      return next == RecorderCommitPhase::Accepted;
+    case RecorderCommitAction::CaptureCommit:
+    case RecorderCommitAction::CaptureReject:
+      return next == RecorderCommitPhase::CaptureSettled;
+    case RecorderCommitAction::BeginDrain:
+    case RecorderCommitAction::DestroyAlias:
+      return next == RecorderCommitPhase::Draining;
+    case RecorderCommitAction::DestroyParent:
+    case RecorderCommitAction::FinishDrain:
+      return next == RecorderCommitPhase::Drained;
+    case RecorderCommitAction::ResetBuilder:
+      return next == RecorderCommitPhase::Reset;
+    case RecorderCommitAction::AdvanceWarmEpoch:
+      return next == RecorderCommitPhase::WarmAdvanced;
+    case RecorderCommitAction::DiscardAll:
+      return next == RecorderCommitPhase::Discarded;
+    case RecorderCommitAction::Invalid:
+      return false;
+    }
+    return false;
+  }
+
+  static constexpr RecorderCommitPlan fromAction(
+      RecorderCommitPhase next, RecorderCommitAction action) noexcept {
+    return RecorderCommitPlan(next, action, isKnownTransition(next, action));
+  }
+
+  RecorderCommitPhase next_;
+  RecorderCommitAction action_;
+  bool valid_;
+
+  friend constexpr RecorderCommitPlan commitPlan(
+      RecorderCommitPhase, RecorderCommitAction) noexcept;
+  friend constexpr RecorderCommitPlan invalidCommitPlan() noexcept;
 };
 
-constexpr RecorderCommitPlan commitPlan(
-    RecorderCommitPhase next, RecorderCommitAction action,
-    bool preserveRetryBytes = false, bool commandAccepted = false,
-    bool objectDestroy = false, bool resetBuilder = false,
-    bool advanceWarmEpoch = false) noexcept {
-  return RecorderCommitPlan{
-      .next = next,
-      .action = action,
-      .valid = true,
-      .preserveRetryBytes = preserveRetryBytes,
-      .commandAccepted = commandAccepted,
-      .objectDestroy = objectDestroy,
-      .resetBuilder = resetBuilder,
-      .advanceWarmEpoch = advanceWarmEpoch,
-  };
+constexpr RecorderCommitPlan commitPlan(RecorderCommitPhase next,
+                                        RecorderCommitAction action) noexcept {
+  return RecorderCommitPlan::fromAction(next, action);
 }
 
 constexpr RecorderCommitPlan invalidCommitPlan() noexcept {
-  return {};
+  return RecorderCommitPlan(RecorderCommitPhase::Unsealed,
+                            RecorderCommitAction::Invalid, false);
 }
 
 // The production commit/discard paths and native/TLA witnesses use this exact
@@ -106,8 +160,7 @@ constexpr RecorderCommitPlan settleRecorderCommit(
       return invalidCommitPlan();
     }
     return commitPlan(RecorderCommitPhase::Discarded,
-                      RecorderCommitAction::DiscardAll, false, false, false,
-                      true, false);
+                      RecorderCommitAction::DiscardAll);
   }
 
   switch (facts.phase) {
@@ -117,15 +170,15 @@ constexpr RecorderCommitPlan settleRecorderCommit(
                         RecorderCommitAction::Seal);
     if (facts.event == RecorderCommitEvent::SealFailed)
       return commitPlan(RecorderCommitPhase::Unsealed,
-                        RecorderCommitAction::Retry, true);
+                        RecorderCommitAction::Retry);
     break;
   case RecorderCommitPhase::Sealed:
     if (facts.event == RecorderCommitEvent::BridgeAccepted)
       return commitPlan(RecorderCommitPhase::Accepted,
-                        RecorderCommitAction::AcceptCommand, false, true);
+                        RecorderCommitAction::AcceptCommand);
     if (facts.event == RecorderCommitEvent::BridgeFailed)
       return commitPlan(RecorderCommitPhase::Sealed,
-                        RecorderCommitAction::Retry, true);
+                        RecorderCommitAction::Retry);
     break;
   case RecorderCommitPhase::Accepted:
     if (facts.event == RecorderCommitEvent::CaptureMaterialized)
@@ -146,11 +199,11 @@ constexpr RecorderCommitPlan settleRecorderCommit(
   case RecorderCommitPhase::Draining:
     if (facts.event == RecorderCommitEvent::DrainAlias && facts.aliasesRemain)
       return commitPlan(RecorderCommitPhase::Draining,
-                        RecorderCommitAction::DestroyAlias, false, false, true);
+                        RecorderCommitAction::DestroyAlias);
     if (facts.event == RecorderCommitEvent::DrainParent &&
         !facts.aliasesRemain && facts.parentPending) {
       return commitPlan(RecorderCommitPhase::Drained,
-                        RecorderCommitAction::DestroyParent, false, false, true);
+                        RecorderCommitAction::DestroyParent);
     }
     if (facts.event == RecorderCommitEvent::DrainComplete &&
         !facts.aliasesRemain && !facts.parentPending) {
@@ -161,14 +214,12 @@ constexpr RecorderCommitPlan settleRecorderCommit(
   case RecorderCommitPhase::Drained:
     if (facts.event == RecorderCommitEvent::BuilderReset)
       return commitPlan(RecorderCommitPhase::Reset,
-                        RecorderCommitAction::ResetBuilder, false, false,
-                        false, true);
+                        RecorderCommitAction::ResetBuilder);
     break;
   case RecorderCommitPhase::Reset:
     if (facts.event == RecorderCommitEvent::WarmEpochAdvance)
       return commitPlan(RecorderCommitPhase::WarmAdvanced,
-                        RecorderCommitAction::AdvanceWarmEpoch, false, false,
-                        false, false, true);
+                        RecorderCommitAction::AdvanceWarmEpoch);
     break;
   case RecorderCommitPhase::WarmAdvanced:
     if (facts.event == RecorderCommitEvent::DrainComplete)

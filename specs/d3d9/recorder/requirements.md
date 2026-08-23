@@ -134,6 +134,23 @@ debug thread-affinity predicate; calls admitted by that flag or the explicit
 rollback lane must hold the recorder-lock witness. No diagnostic may create a
 second writer.
 
+The same conditional recorder-lock witness applies to the complete PE
+StateBlock interval (`CreateStateBlock`, `BeginStateBlock`, `EndStateBlock`,
+`Capture`, and `Apply`), every PE shadow/recording setter, and every Render
+Tape child destruction, mutation, or ordered-control callback that mutates
+`PeCaptureState` or its registry. The unlocked lane remains one branch plus
+the existing debug thread-affinity assertion. Callback re-entry is bounded by
+the existing recursive lock contract and must fail closed at its validation
+boundary; no lock may be held across a user/external callback unless that
+contract explicitly covers the callback.
+
+**R-CORE-REC-5.1.3** StateBlock recorder poison is a fail-stop lifetime, not a
+per-call flag. A backend Capture/Apply failure that may have partially mutated
+the unix device poisons the PE recorder, and subsequent PE recording writes
+return `D3DERR_DEVICELOST`. A failed Reset/ResetEx preserves poison and any
+pre-effect Apply staging; only a backend Reset/ResetEx that returns success
+discards staged Apply retains and clears poison so recording can recover.
+
 **R-CORE-REC-5.1.1** `PeRecorderState` owns the producer-owned shadow,
 the separate `StateBlockRecorded` domain, constant shadows, reusable
 binding/build scratch, command builder, retainer lock witness, and recorder

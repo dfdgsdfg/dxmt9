@@ -18,6 +18,15 @@ enum class PeStateBlockApplyAction : std::uint8_t {
     Poison,
 };
 
+// Reset is the only device-lifecycle boundary that can recover the
+// fail-stop latch.  Validation/bridge/backend failure must leave an already
+// poisoned recorder poisoned; only a backend reset that returned success may
+// clear it and discard any pre-effect Apply staging.
+constexpr bool peStateBlockPoisonAfterReset(bool backendResetSucceeded,
+                                            bool priorPoison) noexcept {
+    return backendResetSucceeded ? false : priorPoison;
+}
+
 constexpr PeStateBlockApplyAction peStateBlockApplyTransition(
     PeStateBlockApplyPhase phase, bool accepted) noexcept {
     if (accepted) {

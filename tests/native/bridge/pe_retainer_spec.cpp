@@ -1,9 +1,32 @@
 #include "d3d9_pe_retainer.hpp"
 
 #include <cstdint>
+#include <atomic>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <vector>
+
+namespace {
+std::atomic<bool> gCountAllocations{false};
+std::atomic<std::size_t> gAllocationCount{0u};
+}
+
+void* operator new(std::size_t size) {
+  if (void* value = std::malloc(size ? size : 1u)) {
+    if (gCountAllocations.load(std::memory_order_relaxed)) {
+      gAllocationCount.fetch_add(1u, std::memory_order_relaxed);
+    }
+    return value;
+  }
+  throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete[](void* value) noexcept { std::free(value); }
+void operator delete(void* value, std::size_t) noexcept { std::free(value); }
+void operator delete[](void* value, std::size_t) noexcept { std::free(value); }
 
 struct RefCounter {
   std::uint32_t refs = 1;
@@ -375,6 +398,35 @@ int main() {
       return 1;
     }
 
+    idx.clear();
+  }
+
+  // A builder-admitted 256-handle working set must remain allocation-free on
+  // the retry after Reset/discard.  In particular, RetentionIndex::clear()
+  // must preserve its preallocated slots rather than rebuilding from zero.
+  {
+    constexpr std::size_t kCapacity = 256u;
+    D3D9PePendingCommandRetainer idx(kCapacity);
+    std::vector<std::unique_ptr<D9CBuffer>> buffers;
+    buffers.reserve(kCapacity);
+    for (std::size_t i = 0; i < kCapacity; ++i) {
+      buffers.push_back(std::make_unique<D9CBuffer>());
+    }
+    auto first = idx.beginAcquire();
+    for (auto& buffer : buffers) idx.retainBuffer(buffer.get(), first);
+    idx.clear();
+
+    gAllocationCount.store(0u, std::memory_order_relaxed);
+    gCountAllocations.store(true, std::memory_order_release);
+    auto retry = idx.beginAcquire();
+    for (auto& buffer : buffers) idx.retainBuffer(buffer.get(), retry);
+    gCountAllocations.store(false, std::memory_order_release);
+    if (!check(gAllocationCount.load(std::memory_order_relaxed) == 0u,
+               "max-capacity retry after clear performs no allocations") ||
+        !check(idx.size() == kCapacity,
+               "max-capacity retry retains every admitted handle")) {
+      return 1;
+    }
     idx.clear();
   }
 

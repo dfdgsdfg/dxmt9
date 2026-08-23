@@ -6,11 +6,52 @@
 #include <map>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace pe = dxmt9::d3d9::pe;
 
 namespace {
+
+static_assert(!std::is_aggregate_v<pe::StateWritePlan>);
+static_assert(!std::is_aggregate_v<pe::AppendPlan>);
+
+constexpr auto kAcceptedAppend = pe::settleRecorderAppend({
+    .phase = pe::AppendSettlement::Prepared,
+    .appendSucceeded = true,
+});
+constexpr auto kRetryAppend = pe::settleRecorderAppend({
+    .phase = pe::AppendSettlement::Prepared,
+});
+constexpr auto kDiscardedAppend = pe::settleRecorderAppend({
+    .phase = pe::AppendSettlement::Prepared,
+    .explicitDiscard = true,
+});
+constexpr auto kContradictoryAppend = pe::settleRecorderAppend({
+    .phase = pe::AppendSettlement::Prepared,
+    .appendSucceeded = true,
+    .explicitDiscard = true,
+});
+static_assert(kAcceptedAppend.valid() &&
+              kAcceptedAppend.next() == pe::AppendSettlement::Accepted &&
+              kAcceptedAppend.consumeRepresentedPending() &&
+              kAcceptedAppend.recordDurable() &&
+              !kAcceptedAppend.retainPreparedProjection());
+static_assert(kRetryAppend.valid() &&
+              kRetryAppend.next() == pe::AppendSettlement::Failed &&
+              !kRetryAppend.consumeRepresentedPending() &&
+              !kRetryAppend.recordDurable() &&
+              kRetryAppend.retainPreparedProjection());
+static_assert(kDiscardedAppend.valid() &&
+              kDiscardedAppend.next() == pe::AppendSettlement::Discarded &&
+              !kDiscardedAppend.consumeRepresentedPending() &&
+              !kDiscardedAppend.recordDurable() &&
+              !kDiscardedAppend.retainPreparedProjection());
+static_assert(!kContradictoryAppend.valid() &&
+              kContradictoryAppend.next() == pe::AppendSettlement::Prepared &&
+              !kContradictoryAppend.consumeRepresentedPending() &&
+              !kContradictoryAppend.recordDurable() &&
+              !kContradictoryAppend.retainPreparedProjection());
 
 int failures = 0;
 
@@ -23,11 +64,11 @@ void check(bool condition, const char* message) {
 
 bool samePlan(const pe::StateWritePlan& a,
               const pe::StateWritePlan& b) {
-  return a.kind == b.kind && a.writeLive == b.writeLive &&
-      a.writePending == b.writePending &&
-      a.writeRecorded == b.writeRecorded &&
-      a.directOrderedCall == b.directOrderedCall &&
-      a.semanticTransition == b.semanticTransition;
+  return a.kind() == b.kind() && a.writeLive() == b.writeLive() &&
+      a.writePending() == b.writePending() &&
+      a.writeRecorded() == b.writeRecorded() &&
+      a.directOrderedCall() == b.directOrderedCall() &&
+      a.semanticTransition() == b.semanticTransition();
 }
 
 struct QualifiedKey {
@@ -58,11 +99,10 @@ pe::StateWritePlan write(Domains& domains, QualifiedKey key, int value,
       .liveContains = liveContains,
       .liveEquals = liveContains && liveIt->second == value,
       .pendingContains = domains.pending.contains(key),
-      .recordedContains = domains.recorded.contains(key),
   });
-  if (plan.writeLive) domains.live[key] = value;
-  if (plan.writePending) domains.pending[key] = value;
-  if (plan.writeRecorded) domains.recorded[key] = value;
+  if (plan.writeLive()) domains.live[key] = value;
+  if (plan.writePending()) domains.pending[key] = value;
+  if (plan.writeRecorded()) domains.recorded[key] = value;
   return plan;
 }
 
@@ -78,41 +118,39 @@ void exhaustiveStateTruthTable() {
           const bool liveContains = (bits & 1u) != 0u;
           const bool liveEquals = (bits & 2u) != 0u;
           const bool pendingContains = (bits & 4u) != 0u;
-          const bool recordedContains = (bits & 8u) != 0u;
           const auto plan = pe::planRecorderStateWrite({
               .phase = phase,
               .origin = origin,
               .liveContains = liveContains,
               .liveEquals = liveEquals,
               .pendingContains = pendingContains,
-              .recordedContains = recordedContains,
           });
           const bool normalizedEquals = liveContains && liveEquals;
           if (phase == pe::RecorderPhase::Live) {
             if (normalizedEquals) {
-              check(!plan.writeLive && !plan.writePending,
+              check(!plan.writeLive() && !plan.writePending(),
                     "equal live writes never create duplicate effects");
-              check(plan.kind == (pendingContains
+              check(plan.kind() == (pendingContains
                                       ? pe::StateWriteKind::RetainPending
                                       : pe::StateWriteKind::NoOp),
                     "equal live write distinguishes pending obligation");
             } else {
-              check(plan.kind == pe::StateWriteKind::QueueDelta &&
-                        plan.writeLive && plan.writePending,
+              check(plan.kind() == pe::StateWriteKind::QueueDelta &&
+                        plan.writeLive() && plan.writePending(),
                     "changed live write queues one delta");
             }
-            check(!plan.writeRecorded && !plan.directOrderedCall,
+            check(!plan.writeRecorded() && !plan.directOrderedCall(),
                   "live writes do not touch recording-only domains");
           } else if (origin == pe::WriteOrigin::ExplicitSet) {
-            check(plan.kind == pe::StateWriteKind::RecordExplicit &&
-                      plan.writeRecorded && !plan.writeLive &&
-                      !plan.writePending && !plan.directOrderedCall &&
-                      plan.semanticTransition,
+            check(plan.kind() == pe::StateWriteKind::RecordExplicit &&
+                      plan.writeRecorded() && !plan.writeLive() &&
+                      !plan.writePending() && !plan.directOrderedCall() &&
+                      plan.semanticTransition(),
                   "recording explicit write is record-only");
           } else {
-            check(plan.kind == pe::StateWriteKind::ApplyPriorValueOnly &&
-                      plan.writeLive && !plan.writePending &&
-                      !plan.writeRecorded && plan.directOrderedCall,
+            check(plan.kind() == pe::StateWriteKind::ApplyPriorValueOnly &&
+                      plan.writeLive() && !plan.writePending() &&
+                      !plan.writeRecorded() && plan.directOrderedCall(),
                   "prior-value write changes live but never recorded set");
           }
 
@@ -123,7 +161,6 @@ void exhaustiveStateTruthTable() {
                 .liveContains = false,
                 .liveEquals = false,
                 .pendingContains = pendingContains,
-                .recordedContains = recordedContains,
             });
             check(samePlan(plan, normalized),
                   "impossible equality tuple normalizes to different");
@@ -155,8 +192,8 @@ void stateSequenceEvidence() {
   const auto livePriorPlan = write(
       livePrior, render7, 4, pe::RecorderPhase::Live,
       pe::WriteOrigin::PriorValueOperation);
-  check(livePriorPlan.kind == pe::StateWriteKind::QueueDelta &&
-            !livePriorPlan.directOrderedCall &&
+  check(livePriorPlan.kind() == pe::StateWriteKind::QueueDelta &&
+            !livePriorPlan.directOrderedCall() &&
             livePrior.pending[render7] == 4,
         "prior-value operation outside recording replaces pending with result");
 
@@ -238,28 +275,29 @@ void exhaustiveAppendTruthTable() {
       });
       const bool valid = phase == pe::AppendSettlement::Prepared &&
           !(succeeded && discard);
-      check(plan.valid == valid, "append truth-table validity");
-      check(plan.consumeRepresentedPending ==
+      check(plan.valid() == valid, "append truth-table validity");
+      check(plan.consumeRepresentedPending() ==
                 (valid && succeeded),
             "only accepted append consumes represented pending");
       const bool accepted = valid && succeeded;
-      check(plan.recordDurable == accepted &&
-                (!plan.recordDurable || plan.next == pe::AppendSettlement::Accepted),
+      check(plan.recordDurable() == accepted &&
+                (!plan.recordDurable() ||
+                 plan.next() == pe::AppendSettlement::Accepted),
             "only an accepted append publishes a durable record");
       if (!valid) {
-        check(plan.next == phase && !plan.consumeRepresentedPending,
+        check(plan.next() == phase && !plan.consumeRepresentedPending(),
               "repeated/contradictory settlement fails closed");
       } else if (succeeded) {
-        check(plan.next == pe::AppendSettlement::Accepted &&
-                  !plan.retainPreparedProjection,
+        check(plan.next() == pe::AppendSettlement::Accepted &&
+                  !plan.retainPreparedProjection(),
               "accepted transition is terminal");
       } else if (discard) {
-        check(plan.next == pe::AppendSettlement::Discarded &&
-                  !plan.retainPreparedProjection,
+        check(plan.next() == pe::AppendSettlement::Discarded &&
+                  !plan.retainPreparedProjection(),
               "discard abandons projection without consumption");
       } else {
-        check(plan.next == pe::AppendSettlement::Failed &&
-                  plan.retainPreparedProjection,
+        check(plan.next() == pe::AppendSettlement::Failed &&
+                  plan.retainPreparedProjection(),
               "failed append retains exact retry projection");
       }
     }
@@ -271,13 +309,13 @@ void exhaustiveAppendTruthTable() {
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = false,
   });
-  if (failed.consumeRepresentedPending) {
+  if (failed.consumeRepresentedPending()) {
     for (const auto& [key, value] : prepared) {
       (void)value;
       pending.erase(key);
     }
   }
-  check(pending.size() == 3u && failed.retainPreparedProjection,
+  check(pending.size() == 3u && failed.retainPreparedProjection(),
         "injected append failure retains all pending and retry witness");
   const auto retryProjection = prepared;
   check(retryProjection == prepared, "retry projection is byte/value equal");
@@ -286,20 +324,20 @@ void exhaustiveAppendTruthTable() {
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = true,
   });
-  if (accepted.consumeRepresentedPending) {
+  if (accepted.consumeRepresentedPending()) {
     for (const auto& [key, value] : retryProjection) {
       (void)value;
       pending.erase(key);
     }
   }
   check(pending.size() == 1u && pending.contains(2) &&
-            accepted.recordDurable,
+            accepted.recordDurable(),
         "accepted retry consumes exact subset and preserves oversized tail");
   const auto second = pe::settleRecorderAppend({
-      .phase = accepted.next,
+      .phase = accepted.next(),
       .appendSucceeded = true,
   });
-  check(!second.valid && !second.consumeRepresentedPending &&
+  check(!second.valid() && !second.consumeRepresentedPending() &&
             pending.size() == 1u,
         "accepted projection cannot be consumed twice");
 
@@ -307,7 +345,7 @@ void exhaustiveAppendTruthTable() {
       .phase = pe::AppendSettlement::Prepared,
       .explicitDiscard = true,
   });
-  check(discarded.valid && !discarded.consumeRepresentedPending &&
+  check(discarded.valid() && !discarded.consumeRepresentedPending() &&
             pending.size() == 1u,
         "discard never consumes pending");
 

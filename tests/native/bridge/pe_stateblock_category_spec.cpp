@@ -97,24 +97,24 @@ void testCandidateAbaAndDomains() {
 
   // Every remaining PE-shadow category has a bounded tracked slot and can be
   // captured without changing the ordinary live domain.
-  candidate.textures.set(0u, reinterpret_cast<void*>(0x10u));
-  candidate.streamSources.set(0u, StateBlockStreamSourceValue{
-      .buffer = reinterpret_cast<void*>(0x20u), .offset = 4u,
+  candidate.textures().set(0u, StateBlockTextureRef::fromRaw(reinterpret_cast<void*>(0x10u)));
+  candidate.streamSources().set(0u, StateBlockStreamSourceValue{
+      .buffer = {reinterpret_cast<void*>(0x20u)}, .offset = 4u,
       .stride = 16u});
-  candidate.streamFrequencies.set(0u, 2u);
-  candidate.indexBuffer.set(0u, reinterpret_cast<void*>(0x30u));
-  candidate.vertexShader.set(0u, reinterpret_cast<void*>(0x40u));
-  candidate.pixelShader.set(0u, reinterpret_cast<void*>(0x50u));
-  candidate.fvf.set(0u, 0x1122u);
-  candidate.vertexDeclaration.set(0u, reinterpret_cast<void*>(0x60u));
-  candidate.renderTargets.set(0u, reinterpret_cast<void*>(0x70u));
-  candidate.depthStencil.set(0u, reinterpret_cast<void*>(0x80u));
-  candidate.viewport.set(0u, D9CViewport{1u, 2u, 640u, 480u, 0.0f, 1.0f});
-  candidate.scissor.set(0u, D9CRect{1, 2, 639, 479});
-  candidate.material.set(0u, D9CMaterial{});
-  candidate.clipPlanes.set(0u, std::array<float, 4>{1, 2, 3, 4});
-  candidate.lights.set(0u, D9CLight{});
-  candidate.lightEnables.set(0u, 1u);
+  candidate.streamFrequencies().set(0u, 2u);
+  candidate.indexBuffer().set(0u, StateBlockIndexBufferRef::fromRaw(reinterpret_cast<void*>(0x30u)));
+  candidate.vertexShader().set(0u, StateBlockVertexShaderRef::fromRaw(reinterpret_cast<void*>(0x40u)));
+  candidate.pixelShader().set(0u, StateBlockPixelShaderRef::fromRaw(reinterpret_cast<void*>(0x50u)));
+  candidate.fvf().set(0u, 0x1122u);
+  candidate.vertexDeclaration().set(0u, StateBlockVertexDeclarationRef::fromRaw(reinterpret_cast<void*>(0x60u)));
+  candidate.renderTargets().set(0u, StateBlockRenderTargetRef::fromRaw(reinterpret_cast<void*>(0x70u)));
+  candidate.depthStencil().set(0u, StateBlockDepthStencilRef::fromRaw(reinterpret_cast<void*>(0x80u)));
+  candidate.viewport().set(0u, D9CViewport{1u, 2u, 640u, 480u, 0.0f, 1.0f});
+  candidate.scissor().set(0u, D9CRect{1, 2, 639, 479});
+  candidate.material().set(0u, D9CMaterial{});
+  candidate.clipPlanes().set(0u, std::array<float, 4>{1, 2, 3, 4});
+  candidate.lights().set(0u, D9CLight{});
+  candidate.lightEnables().set(0u, 1u);
   std::array<float, 4> constants{1, 2, 3, 4};
   candidate.constants.vsConstF.record(3u, 1u, constants.data(),
                                       sizeof(constants));
@@ -126,33 +126,37 @@ void testCandidateAbaAndDomains() {
     // The table itself is the exhaustive routing witness; all categories are
     // occupied below and therefore participate in Capture's fixed set.
   }
-  check(candidate.textures.contains(0u) &&
-            candidate.streamSources.contains(0u) &&
-            candidate.streamFrequencies.contains(0u) &&
-            candidate.indexBuffer.contains(0u) &&
-            candidate.vertexShader.contains(0u) &&
-            candidate.pixelShader.contains(0u) && candidate.fvf.contains(0u) &&
-            candidate.vertexDeclaration.contains(0u) &&
-            candidate.renderTargets.contains(0u) &&
-            candidate.depthStencil.contains(0u) && candidate.viewport.contains(0u) &&
-            candidate.scissor.contains(0u) && candidate.material.contains(0u) &&
-            candidate.clipPlanes.contains(0u) && candidate.lights.contains(0u) &&
-            candidate.lightEnables.contains(0u) &&
+  check(candidate.textures().contains(0u) &&
+            candidate.streamSources().contains(0u) &&
+            candidate.streamFrequencies().contains(0u) &&
+            candidate.indexBuffer().contains(0u) &&
+            candidate.vertexShader().contains(0u) &&
+            candidate.pixelShader().contains(0u) && candidate.fvf().contains(0u) &&
+            candidate.vertexDeclaration().contains(0u) &&
+            candidate.renderTargets().contains(0u) &&
+            candidate.depthStencil().contains(0u) && candidate.viewport().contains(0u) &&
+            candidate.scissor().contains(0u) && candidate.material().contains(0u) &&
+            candidate.clipPlanes().contains(0u) && candidate.lights().contains(0u) &&
+            candidate.lightEnables().contains(0u) &&
             candidate.constants.vsConstF.contains(3u) &&
             candidate.constants.psConstF.contains(3u),
         "all recordable categories must have fixed candidate slots");
+  check(candidate.has(StateBlockRecorded::Category::textures) &&
+            candidate.has(StateBlockRecorded::Category::streamSources) &&
+            candidate.has(StateBlockRecorded::Category::streamFrequencies),
+        "canonical category visitor reports occupied categories");
 
   // Source tuple and frequency are independent D3D9 state aspects. Applying
   // either tracked set preserves the other aspect.
   StateBlockRecorded sourceOnly{};
-  sourceOnly.streamSources.set(
-      0u, StateBlockStreamSourceValue{reinterpret_cast<void*>(0x90u), 8u, 32u});
+  sourceOnly.streamSources().set(
+      0u, StateBlockStreamSourceValue{{reinterpret_cast<void*>(0x90u)}, 8u, 32u});
   StateBlockRecorded frequencyOnly{};
-  frequencyOnly.streamFrequencies.set(0u, 9u);
+  frequencyOnly.streamFrequencies().set(0u, 9u);
   StateBlockStreamSourceValue liveSource{
       reinterpret_cast<void*>(0x91u), 4u, 16u};
   std::uint32_t liveFrequency = 7u;
-  sourceOnly.streamSources.forEach(
+  sourceOnly.streamSources().forEach(
       [&](std::size_t, const StateBlockStreamSourceValue& value) {
         liveSource = value;
       });
@@ -160,7 +164,7 @@ void testCandidateAbaAndDomains() {
             liveSource.offset == 8u && liveSource.stride == 32u &&
             liveFrequency == 7u,
         "source Apply must preserve an unrecorded frequency");
-  frequencyOnly.streamFrequencies.forEach(
+  frequencyOnly.streamFrequencies().forEach(
       [&](std::size_t, std::uint32_t value) { liveFrequency = value; });
   check(liveSource.buffer == reinterpret_cast<void*>(0x90u) &&
             liveSource.offset == 8u && liveSource.stride == 32u &&
@@ -226,7 +230,7 @@ void testCandidateAbaAndDomains() {
             candidate.renderStates().get(render, value) && value == 1u,
         "Capture must refresh a fixed tracked key from live state only");
   candidate.clearForBegin();
-  check(candidate.renderStates().empty() && candidate.textures.empty() &&
+  check(candidate.renderStates().empty() && candidate.textures().empty() &&
             candidate.constants.vsConstF.empty(),
         "Begin must establish an empty candidate domain");
 }
@@ -319,12 +323,50 @@ void testStagedFailureAndIntervalWitness() {
         "setter must enter after Apply interval unlock");
 }
 
+void testPoisonResetFaultSequence() {
+  // A failed StateBlock backend operation is fail-stop until the device reset
+  // boundary.  Reset validation/backend failure must not make a poisoned PE
+  // shadow writable again, while a successful backend reset clears both the
+  // latch and any pre-effect staged retains.
+  check(peStateBlockPoisonAfterReset(false, true),
+        "failed Reset must preserve StateBlock poison");
+  check(!peStateBlockPoisonAfterReset(true, true),
+        "successful Reset must recover StateBlock poison");
+  check(!peStateBlockPoisonAfterReset(true, false),
+        "successful Reset keeps an unpoisoned recorder unpoisoned");
+  check(!peStateBlockPoisonAfterReset(false, false),
+        "failed Reset must not invent poison");
+
+  RefProbe stagedRef{};
+  RefProbe liveRef{};
+  RefProbe *live = &liveRef;
+  liveRef.addRef();
+  StagedRefProbe staged;
+  staged.prepare(&stagedRef);
+  check(stagedRef.refs == 2u && liveRef.refs == 2u,
+        "Apply staging retains independently before Reset");
+  // A failed reset preserves the staged candidate for the same fail-closed
+  // lifetime boundary; it is not silently converted into a live binding.
+  check(peStateBlockPoisonAfterReset(false, true),
+        "failed reset fault sequence remains poisoned with staging present");
+  check(staged.staged == &stagedRef && staged.occupied,
+        "failed reset preserves staged Apply ownership");
+  // Successful reset discards pre-effect staging after the backend accepts;
+  // the live binding remains untouched.
+  staged.discard();
+  check(!peStateBlockPoisonAfterReset(true, true) && stagedRef.refs == 1u &&
+            live == &liveRef && liveRef.refs == 2u,
+        "successful reset clears poison and releases only staged ownership");
+  live->release();
+}
+
 }  // namespace
 
 int main() {
   try {
     testCandidateAbaAndDomains();
     testStagedFailureAndIntervalWitness();
+    testPoisonResetFaultSequence();
     std::cout << "pe state-block category spec: PASS\n";
     return 0;
   } catch (const Failure& failure) {

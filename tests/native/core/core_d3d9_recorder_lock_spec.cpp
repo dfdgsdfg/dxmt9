@@ -24,6 +24,7 @@
 //   flag clear + env clear-> unlocked (the common, default case)
 
 #include "core_spec_fixtures.hpp"
+#include "dxmt9/pe_recorder_lock.hpp"
 
 #include <cstdint>
 
@@ -75,6 +76,39 @@ void testFlagClearEnvClearUnlocked() {
         "software vertex processing only, no force env -> unlocked");
 }
 
+void testProductionGuardSerializesRecorderIntervals() {
+  // This is the same guard instantiated by the PE append envelope and the
+  // StateBlock/Render Tape cold entry points.  Keep the witness on the
+  // production type so a test-only std::mutex cannot hide a guard drift.
+  std::recursive_mutex mutex;
+  const auto exercise = [&](const char* operation) {
+    std::atomic<bool> entered{false};
+    std::thread contender;
+    {
+      dxmt9::d3d9::pe::RecorderLockGuard owner(mutex, true);
+      contender = std::thread([&] {
+        dxmt9::d3d9::pe::RecorderLockGuard guard(mutex, true);
+        entered.store(true, std::memory_order_release);
+      });
+      std::this_thread::yield();
+      check(!entered.load(std::memory_order_acquire),
+            std::string(operation) + " must serialize under the production guard");
+      // Recursive re-entry is the existing PE contract: Begin/Set/End and
+      // child callbacks may reach append/flush helpers while this interval is
+      // held, without creating a lock cycle.
+      {
+        dxmt9::d3d9::pe::RecorderLockGuard nested(mutex, true);
+      }
+    }
+    contender.join();
+    check(entered.load(std::memory_order_acquire),
+          std::string(operation) + " must admit the next producer after unlock");
+  };
+  exercise("Begin/Set/End");
+  exercise("Capture/Apply");
+  exercise("child callback/capture mutation");
+}
+
 }  // namespace
 
 int main() {
@@ -82,6 +116,7 @@ int main() {
     testFlagSetLocksRegardlessOfEnv();
     testFlagClearEnvSetLocks();
     testFlagClearEnvClearUnlocked();
+    testProductionGuardSerializesRecorderIntervals();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;
