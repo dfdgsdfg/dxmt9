@@ -7,9 +7,12 @@ title: One Of 84 Bridge Entry Points Owns 99.8% Of The Drain Fence — And It Is
 date: 2026-07-31
 type: experiment-run
 status: accepted-attribution; inferences corrected 2026-07-31 after review
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-gt2-drainsites-r1; experiments/output/app-d3d9-3dmark05-gt2-drainsites-r2
 related: docs/perfomance/frame-lifecycle.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.06.md; specs/backend/requirements.md
 ---
+
+> Historical artifact notice: this leaf is retained for context, but its cited source evidence is unavailable (`outdated: evidence-missing`).
 
 # One Of 84 Bridge Entry Points Owns 99.8% Of The Drain Fence — And It Is Buffer Lock
 
@@ -181,7 +184,7 @@ of the *blocked* subset.
   against Warn-level baselines carries that perturbation.
 
 Two GT2 runs. Nothing here was measured on GT1, GT3, or SFIV; their lock mixes
-differ (SFIV is D3D9Ex with a different pool profile). The `215 us` per wait is
+differ (SFIV is D3D9 with a different pool profile). The `215 us` per wait is
 a property of this workload's chunk size and replay cost, not a constant.
 
 **Related.**

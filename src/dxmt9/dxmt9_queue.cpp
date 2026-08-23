@@ -2864,6 +2864,19 @@ bool QueueLifecycleController::reclaimCompletedTapeHeadsThrough(
     if (!head || head->seqId > completedSeqId) {
       return true;
     }
+    // A compatibility source is reserved before it receives its sequence
+    // number.  It can become the FIFO head immediately after an older
+    // completed source is reclaimed, but it is not a stale completion to
+    // reclaim: the producer still owns its Writing payload and control shell.
+    // Keep every other zero-sequence/state mismatch on the fail-stop path.
+    if (head->seqId == 0 && head->state == CpuReadyTape::State::Writing) {
+      const auto payloadKind = submissionBinding_.cpuReadyTape->payloadKind(
+          head->source.id, head->source.storage,
+          CpuReadyTape::State::Writing);
+      if (payloadKind && *payloadKind == CpuReadyTape::PayloadKind::Legacy) {
+        return true;
+      }
+    }
     const auto status = submissionBinding_.cpuReadyTape->reclaimStatus(
         head->source.id, head->source.storage);
     if (head->state != CpuReadyTape::State::Completed ||

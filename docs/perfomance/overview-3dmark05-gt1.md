@@ -257,7 +257,7 @@ docs/perfomance/
   overview-3dmark05-gt1.md             # this cross-domain GT1 map
   overview-3dmark05-gt2.md             # GT2 measured baseline
   overview-3dmark05-gt3.md             # GT3 measured baseline + V1/V2 history
-  overview-sfiv.md                     # SFIV D3D9Ex map and baseline
+  overview-sfiv.md                     # SFIV D3D9 map and baseline
   log.md                               # shared root maintenance log
   <domain>/index.md                    # domain landing
   <domain>/overview.md                 # current compact conclusion

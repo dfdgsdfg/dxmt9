@@ -1,23 +1,42 @@
 ---
 domain: root
-workload: SFIV Benchmark (D3D9Ex)
+workload: SFIV Benchmark (D3D9)
 title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-25
-source: experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725
-related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md
+updated: 2026-08-23
+source: experiments/apps_3rd/app-d3d9-sfiv-benchmark/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-d3d9ex-device-create-debug-r1-20260823; experiments/output/app-d3d9-sfiv-benchmark-post-writing-frontier-frame-sampling-r1; traces/app-d3d9-sfiv-post-writing-frontier-tail-r1/metal-system.trace
+related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md; docs/perfomance/present-pacing/present-pacing-sfiv-current-tail-attribution.235.md
 ---
 
 # SFIV Benchmark Performance — Investigation Map
 
-SFIV Benchmark (`app-d3d9-sfiv-benchmark`, D3D9Ex, windowed 1280x720,
-interval-one, Sikarugir-CX 24.0.7 Wine) is the primary D3D9Ex performance and
+SFIV Benchmark (`app-d3d9-sfiv-benchmark`, D3D9, windowed 1280x720,
+interval-one, Sikarugir-CX 24.0.7 Wine) is the primary D3D9 performance and
 visual-effects workload. The July 2026 shader-stall investigation remains
 valuable history, but its `~11-16 FPS` conclusion is no longer the current
 runtime state.
 
+The API classification is based on the executable and runtime evidence, not on
+the provider's internal implementation superset: the checked
+`StreetFighterIV_Benchmark.exe` imports `Direct3DCreate9` only, and the
+2026-08-23 debug artifact records `extended=0` device creation and
+`device_present`, with no `Direct3DCreate9Ex`, `CreateDeviceEx`, or
+`PresentEx` calls. The catalogue and this document therefore classify SFIV as
+base D3D9. The historical measurements below are retained; only their API
+label is corrected.
+
 ## Current Measured Baseline
+
+The 2026-08-23 queue-frontier validation adds a current single-run health and
+tail-attribution point without replacing the duration-matched baseline below.
+It records `3,180` Presents, `41.710` sampled FPS, wall p50/p95
+`21.356/54.179ms`, GPU-CB p50/p95 `2.135/6.483ms`, and zero GPU errors. Its
+capture is fully rendered and reports `AVERAGE: 42.60` FPS. A separate
+10-second Metal System Trace has no recurring GPU-hot frame: the longest SFIV
+depth-0 GPU interval is `7.174ms` and the longest application command-buffer
+event is `6.09ms`. See the current
+[tail attribution](present-pacing/present-pacing-sfiv-current-tail-attribution.235.md).
 
 > **Re-measured 2026-07-31 at `890d78b1`: `44.624` sampled FPS**
 > (`43.836` / `45.413` over two duration-matched runs), wall p50/p95
@@ -117,13 +136,23 @@ caused it.
 
 ## Current Interpretation
 
+> The linked July 12 SFIV leaves `.204` and `.205` are historical and marked
+> `outdated: evidence-missing`; their source artifacts are unavailable, so
+> their measurements are not current evidence.
+
 - **The former 88-96ms scene-pass cluster is no longer the current owner.**
   The July 12 traces correctly attributed the old build's `~11-16 FPS` wall to
   a data-dependent 11-fullscreen-quad effect-composite fragment path. Current
   GPU CB p50/p95 is only `2.725/8.005ms`; the old cluster is absent from the
   run-level distribution.
-- **The D3D9Ex/offload path remains healthy.** `PresentEx` continues through
-  chunk replay and ordinal pacing, the opaque-depth index-cache predicate has
+- **The residual tail is CPU/producer cadence, not a GPU-hot frame.** In the
+  2026-08-23 production sample, all eight `>=100ms` wall intervals carry only
+  `1.747-7.534ms` of GPU work and `0.043-0.108ms` of drawable wait. The
+  independent Metal trace finds no SFIV GPU interval above `7.174ms`, while
+  CPU sampling is dominated by game/Wine/Rosetta threads ahead of the
+  `dxmt9-encode` thread.
+- **The D3D9/offload path remains healthy.** `Present` continues through chunk
+  replay and ordinal pacing, the opaque-depth index-cache predicate has
   no useful SFIV matches, and the new runs have no GPU or queue errors.
 - **The visual effect path is active.** Current captures show the expected
   post-processing and lighting rather than achieving the FPS gain by dropping
@@ -147,9 +176,10 @@ failure.
    preserved-binary or commit bisect with the same 135.7-second window. The
    present artifacts prove when the gain existed, not which single change
    caused it.
-3. Investigate the remaining wall p95 (`49.728ms`) only with phase-aligned
-   frame samples. The old residual-cbuf-hoisting item is no longer a primary
-   target unless a fresh trace shows the former scene-pass cluster returning.
+3. Attribute the remaining producer-side wall gaps with a separate
+   non-throughput PE/game sampler before changing backend scheduling. The old
+   residual-cbuf-hoisting item is no longer a primary target unless a fresh
+   trace shows the former scene-pass cluster returning.
 
 ## Measurement Notes
 

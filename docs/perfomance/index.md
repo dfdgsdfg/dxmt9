@@ -25,7 +25,7 @@ This is the entry point for the `docs/perfomance/` tree.
   frame-sampled baseline and comparison limits.
 - [3DMark05 GT3 current baseline](overview-3dmark05-gt3.md) - completed
   frame-sampled baseline and preserved exact V1/V2 comparison.
-- [SFIV Benchmark investigation map](overview-sfiv.md) - D3D9Ex validation,
+- [SFIV Benchmark investigation map](overview-sfiv.md) - D3D9 validation,
   current performance improvement, flicker triage, and historical scene-pass
   GPU stall track.
 - [Shared performance documentation log](log.md) - root-level structure and

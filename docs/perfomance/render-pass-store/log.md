@@ -306,7 +306,7 @@ Detail migrated from the former long-form root [3DMark05 overview](../overview-3
 
 ## SFIV Cross-Workload Note - 2026-07-12
 
-First non-GT1 datapoint for this domain, from the SFIV (D3D9Ex) frame anatomy
+First non-GT1 datapoint for this domain, from the SFIV (D3D9) frame anatomy
 (framegraph DAG dumps, frames 799-801, `experiments/output/sfiv-dag-20260712`;
 workload map: [overview-sfiv](../overview-sfiv.md)):
 

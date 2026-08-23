@@ -1,13 +1,16 @@
 ---
 domain: present-pacing
-workload: SFIV Benchmark (D3D9Ex)
+workload: SFIV Benchmark (D3D9)
 title: "Present-Pacing #205 - The SFIV 88ms Instances Are Real Shader Work, Not A Wait"
 type: leaf
 status: current
-updated: 2026-07-12
+updated: 2026-08-23
+outdated: evidence-missing
 source: experiments/output/app-d3d9-sfiv-benchmark-latency1-probe-r3-quiet-20260712/result.json; experiments/output/app-d3d9-sfiv-benchmark-novsync-probe-r1-20260712/result.json; experiments/output/app-d3d9-sfiv-benchmark-force-frag-color-r1-20260712/result.json; experiments/output/app-d3d9-sfiv-benchmark-texwhite-probe-r1-20260712/result.json; experiments/output/app-d3d9-sfiv-benchmark-shader-attrib-r1-20260712/result.json; traces/app-d3d9-sfiv-benchmark-20260712-gpuintervals
 related: docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/overview-sfiv.md
 ---
+
+> Historical artifact notice: this leaf is retained for context, but its cited source evidence is unavailable (`outdated: evidence-missing`).
 
 # Present-Pacing #205 - The SFIV 88ms Instances Are Real Shader Work, Not A Wait
 

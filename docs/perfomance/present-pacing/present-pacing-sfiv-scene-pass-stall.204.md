@@ -1,19 +1,22 @@
 ---
 domain: present-pacing
-workload: SFIV Benchmark (D3D9Ex)
+workload: SFIV Benchmark (D3D9)
 title: "Present-Pacing #204 - SFIV Scene-Pass Frame-Period Stall Owns The Frame Wall"
 type: leaf
 status: current
-updated: 2026-07-12
+updated: 2026-08-23
+outdated: evidence-missing
 source: traces/app-d3d9-sfiv-benchmark-20260712-gpuintervals/analysis/gpu-intervals-summary.md; experiments/output/app-d3d9-sfiv-benchmark-gpu-intervals-r1-20260712/result.json; experiments/output/sfiv-dag-20260712
 related: docs/perfomance/overview-sfiv.md; docs/perfomance/present-pacing/log.md
 ---
+
+> Historical artifact notice: this leaf is retained for context, but its cited source evidence is unavailable (`outdated: evidence-missing`).
 
 # Present-Pacing #204 - SFIV Scene-Pass Frame-Period Stall Owns The Frame Wall
 
 ## Question
 
-SFIV (D3D9Ex) runs ~11-16fps while `gpu_command_buffer_time_p50` reads
+SFIV (D3D9) runs ~11-16fps while `gpu_command_buffer_time_p50` reads
 ~110-118ms per CB, which first suggested "GPU-bound". Which encoder owns the
 GPU time, and is it execution or waiting?
 

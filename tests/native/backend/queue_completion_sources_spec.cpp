@@ -800,6 +800,94 @@ void finishPathDrainsSettlementLedgerBeyondCapacity() {
         "finish path retains the value-owned final non-Present status");
 }
 
+void reclaimLeavesReservedCompatibilityWriterAtFifoHead() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1, true);
+
+  ReadySlotSnapshot completedSource{};
+  QueueSubmissionRecord record;
+  record.testOnlyAllowNullCommandBuffer = true;
+  {
+    std::unique_lock lock(fixture.mutex);
+    check(fixture.controller.dequeueReadySlot(lock, completedSource),
+          "frontier fixture represents the older source");
+    record.slotIndex = completedSource.slotIndex;
+    record.seqId = completedSource.seqId;
+    const std::array completionSources{
+        completionSourceForReadySlot(completedSource),
+    };
+    check(record.assignFixedCompletionSources(completionSources),
+          "frontier fixture stores the older source locator");
+    check(fixture.controller.submitEncodedSubmission(lock, record),
+          "frontier fixture submits the older source");
+  }
+
+  check(fixture.cpuReadyTape.complete(completedSource.sourceId,
+                                     completedSource.storage),
+        "frontier fixture completes the older source");
+  fixture.completedSeqQueue.push_back(1);
+
+  std::unique_lock lock(fixture.mutex);
+  check(fixture.controller.ensureWriterSlot(lock, 4),
+        "frontier fixture reserves a younger compatibility writer");
+  const std::size_t writerIndex = *fixture.writingSlot;
+  auto& writer = fixture.slots[writerIndex];
+  check(writer.state == ChunkSlot::State::Writing && writer.seqId == 0,
+        "younger compatibility source remains an uncommitted writer");
+  writer.payload->appendClear({});
+  const CpuReadySourceId writerSourceId = writer.sourceId;
+  const CpuReadyStorageRef writerStorage = writer.storage;
+  ChunkSlot* const writerPayload = writer.payload;
+  const std::size_t writerCommandCount = writer.payload->commandCount();
+  const auto writerCommandHeader = writer.payload->commandHeaders.front();
+  const std::size_t writerClearCount = writer.payload->clearRecords.size();
+
+  check(fixture.controller.runFinishIteration(lock),
+        "reclaiming an older source tolerates the live writer frontier");
+  check(!fixture.stop,
+        "a reserved compatibility writer does not poison the queue");
+  check(fixture.slots[writerIndex].state == ChunkSlot::State::Writing &&
+            fixture.slots[writerIndex].seqId == 0 &&
+            fixture.slots[writerIndex].sourceId == writerSourceId &&
+            fixture.slots[writerIndex].storage == writerStorage &&
+            fixture.slots[writerIndex].payload == writerPayload &&
+            fixture.slots[writerIndex].payload->commandCount() ==
+                writerCommandCount &&
+            fixture.slots[writerIndex].payload->commandHeaders.front().kind ==
+                writerCommandHeader.kind &&
+            fixture.slots[writerIndex].payload->commandHeaders.front()
+                    .payloadIndex == writerCommandHeader.payloadIndex &&
+            fixture.slots[writerIndex].payload->clearRecords.size() ==
+                writerClearCount,
+        "frontier reclaim preserves the writer control and payload exactly");
+  check(fixture.cpuReadyTape.state(writerSourceId, writerStorage) ==
+            CpuReadyTape::State::Writing,
+        "frontier reclaim preserves the writer Tape state");
+  checkEq(fixture.cpuReadyTape.residentCount(), std::size_t{1},
+          "only the reserved writer remains resident after older reclaim");
+
+  check(fixture.controller.commitCurrentChunk(lock, 4),
+        "preserved Writing frontier remains committable");
+  check(!fixture.stop && !fixture.writingSlot.has_value() &&
+            fixture.slots[writerIndex].state == ChunkSlot::State::Pending &&
+            fixture.slots[writerIndex].seqId == 2 &&
+            fixture.slots[writerIndex].sourceId == writerSourceId &&
+            fixture.slots[writerIndex].storage == writerStorage &&
+            fixture.slots[writerIndex].payload == writerPayload &&
+            fixture.slots[writerIndex].payload->seqId == 2 &&
+            fixture.slots[writerIndex].payload->commandCount() ==
+                writerCommandCount &&
+            fixture.cpuReadyTape.state(writerSourceId, writerStorage) ==
+                CpuReadyTape::State::Ready,
+        "committing the preserved frontier publishes the exact source");
+  checkEq(fixture.cpuReadyTape.readyCount(), std::size_t{1},
+          "committing the preserved frontier publishes one Ready source");
+  checkEq(fixture.nextSeqId.load(std::memory_order_relaxed), 3ull,
+          "committing the preserved frontier assigns the next sequence");
+  checkEq(fixture.lastCommittedSeqId, 2ull,
+          "committing the preserved frontier advances the committed waterline");
+}
+
 void partialSegmentSerialCompletionDefersReclaimUntilTail() {
   QueueFixture fixture{makeSeparatedPayloadConfig()};
   const auto segment = makeMinimalArenaLayout();
@@ -3378,6 +3466,7 @@ int main() {
     mapWaitTargetNeverExceedsCommittedWaterline();
     undrainedSettlementLedgerFailsClosedAtCapacity();
     finishPathDrainsSettlementLedgerBeyondCapacity();
+    reclaimLeavesReservedCompatibilityWriterAtFifoHead();
     partialSegmentSerialCompletionDefersReclaimUntilTail();
     appendsSingleLegacySource();
     appendsMultiSourceBatchInStrictSeqOrder();
