@@ -10,6 +10,7 @@ tla_dir="$repo_root/specs/verification/tla"
 # model/code binding failure, not a harmless documentation diff.
 python3 "$repo_root/scripts/check/gen_pe_transition_table.py" --check
 python3 "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
+python3 "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
 
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then
@@ -96,9 +97,15 @@ counterexample_models=(
   # never prove return to a reusable Unsealed builder.
   "PeRecorderCommit|.stuck-success.counterexample|Temporal properties were violated"
   # StateBlock Apply backend failure must poison before Reset recovery.
-  "PeStateBlockTransaction|.no-poison.counterexample|Invariant FailurePoisoned is violated"
+  "PeStateBlockTransaction|.no-poison.counterexample|Invariant NoStaleOpenAfterPostEffectFailure is violated"
   # Every poisoned Apply path releases staged references before recovery.
   "PeStateBlockTransaction|.no-release.counterexample|Invariant FailedRefsReleased is violated"
+  # Leaving the recording candidate open after backend End consumption is a
+  # stale/open serial-domain regression distinct from generic no-poison Apply.
+  "PeStateBlockTransaction|.stale-open.counterexample|Invariant NoStaleOpenAfterPostEffectFailure is violated"
+  # Treating retained COM identities as a set loses one AddRef/Release when the
+  # same object occupies multiple StateBlock categories or slots.
+  "PeStateBlockTransaction|.lost-duplicate.counterexample|Invariant PreparedRefMultiplicity is violated"
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"

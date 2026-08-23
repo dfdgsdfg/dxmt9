@@ -93,7 +93,7 @@ bool appendSetConstants(
       .registerCount = registerCount,
   };
   if (!builder.appendPayloadValue(fixed) ||
-      !builder.appendPayload(registerBytes, alignof(std::uint32_t)) ||
+      !builder.appendConstantRecordTail(registerCount, registerBytes) ||
       !builder.commitRecord()) {
     builder.rollbackRecord();
     return false;
@@ -111,7 +111,7 @@ bool appendClear(CommandChunkBuilder& builder,
   fixed.rectCount = static_cast<std::uint32_t>(rects.size());
   fixed.rectOffset = sizeof(fixed);
   if (!builder.appendPayloadValue(fixed) ||
-      !builder.appendPayload(std::as_bytes(rects), alignof(D9CRect)) ||
+      !builder.appendClearRectTail(rects) ||
       !builder.commitRecord()) {
     builder.rollbackRecord();
     return false;

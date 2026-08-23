@@ -109,6 +109,61 @@ void testProductionGuardSerializesRecorderIntervals() {
   exercise("child callback/capture mutation");
 }
 
+void testDefaultPoolResetLegalityInterval() {
+  // Reset and child AddRef/Release callbacks use the same production guard.
+  // Under MULTITHREADED, Reset's legality read must not race a last-resource
+  // release (or a concurrent create that adds the first default-pool owner).
+  std::recursive_mutex mutex;
+  std::uint32_t defaultPoolRefs = 1u;
+  std::atomic<bool> releaseStarted{false};
+  std::atomic<bool> releaseFinished{false};
+  std::thread release;
+  {
+    dxmt9::d3d9::pe::RecorderLockGuard resetGuard(mutex, true);
+    release = std::thread([&] {
+      releaseStarted.store(true, std::memory_order_release);
+      dxmt9::d3d9::pe::RecorderLockGuard childGuard(mutex, true);
+      --defaultPoolRefs;
+      releaseFinished.store(true, std::memory_order_release);
+    });
+    while (!releaseStarted.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    check(defaultPoolRefs == 1u &&
+              !releaseFinished.load(std::memory_order_acquire),
+          "Reset legality and default-pool child release share one interval");
+  }
+  release.join();
+  check(defaultPoolRefs == 0u &&
+            releaseFinished.load(std::memory_order_acquire),
+        "default-pool child release settles after Reset leaves the interval");
+
+  // The single-thread contract stays branch-only: a disabled guard must not
+  // wait for an unrelated holder or introduce an atomic counter operation.
+  std::atomic<bool> holderReady{false};
+  std::atomic<bool> releaseHolder{false};
+  std::atomic<bool> disabledEntered{false};
+  std::thread holder([&] {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    holderReady.store(true, std::memory_order_release);
+    while (!releaseHolder.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+  });
+  while (!holderReady.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  std::thread disabled([&] {
+    dxmt9::d3d9::pe::RecorderLockGuard childGuard(mutex, false);
+    disabledEntered.store(true, std::memory_order_release);
+  });
+  disabled.join();
+  check(disabledEntered.load(std::memory_order_acquire),
+        "disabled default-pool callbacks do not acquire the recorder mutex");
+  releaseHolder.store(true, std::memory_order_release);
+  holder.join();
+}
+
 }  // namespace
 
 int main() {
@@ -117,6 +172,7 @@ int main() {
     testFlagClearEnvSetLocks();
     testFlagClearEnvClearUnlocked();
     testProductionGuardSerializesRecorderIntervals();
+    testDefaultPoolResetLegalityInterval();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

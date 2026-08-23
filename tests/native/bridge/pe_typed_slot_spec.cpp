@@ -95,6 +95,24 @@ static_assert(sizeof(FixedTransformTable) == 17072,
 static_assert(sizeof(PeHotStateShadow) == 44944,
               "PeHotStateShadow storage size changed");
 
+template<typename T>
+concept ExposesRawValues = requires(T& value) { value.values; };
+template<typename T>
+concept ExposesRawOccupancy = requires(T& value) { value.occupied; };
+template<typename T>
+concept ExposesRawCount = requires(T& value) { value.count; };
+
+using RawTableProbe = FixedStateTable<8u>;
+using TrackedTableProbe = FixedTrackedState<std::uint32_t, 8u>;
+static_assert(!ExposesRawValues<RawTableProbe> &&
+              !ExposesRawOccupancy<RawTableProbe> &&
+              !ExposesRawCount<RawTableProbe>,
+              "FixedStateTable raw arrays/counter must remain private");
+static_assert(!ExposesRawValues<TrackedTableProbe> &&
+              !ExposesRawOccupancy<TrackedTableProbe> &&
+              !ExposesRawCount<TrackedTableProbe>,
+              "FixedTrackedState raw arrays/counter must remain private");
+
 // The views themselves are single-reference façades, not extra state: each
 // must be exactly pointer-sized (a reference is implemented as a pointer),
 // confirming they add no per-instance storage beyond "which table".
@@ -305,12 +323,44 @@ void transformTypedMatchesUntyped() {
   check(matrixEquals(typedValue, view), "typed get must match untyped get");
 }
 
+void fixedStorageApiRoundTrip() {
+  RawTableProbe raw{};
+  raw.set(3u, 17u);
+  std::uint32_t value = 0u;
+  std::size_t visits = 0u;
+  raw.forEach([&](std::uint32_t slot, std::uint32_t current) {
+    check(slot == 3u && current == 17u,
+          "FixedStateTable forEach exposes the typed occupied row");
+    ++visits;
+  });
+  check(visits == 1u && raw.get(3u, value) && value == 17u,
+        "FixedStateTable narrow set/get/forEach APIs round-trip");
+  raw.erase(3u);
+  check(raw.empty() && !raw.get(3u, value),
+        "FixedStateTable erase clears exactly one occupied row");
+
+  TrackedTableProbe tracked{};
+  tracked.set(5u, 29u);
+  visits = 0u;
+  tracked.forEach([&](std::size_t slot, std::uint32_t current) {
+    check(slot == 5u && current == 29u,
+          "FixedTrackedState forEach exposes the typed occupied row");
+    ++visits;
+  });
+  check(visits == 1u && tracked.get(5u, value) && value == 29u,
+        "FixedTrackedState narrow set/get/forEach APIs round-trip");
+  tracked.erase(5u);
+  check(tracked.empty() && !tracked.get(5u, value),
+        "FixedTrackedState erase clears exactly one occupied row");
+}
+
 int main() {
   try {
     renderStateTypedMatchesUntyped();
     tssTypedMatchesUntyped();
     samplerTypedMatchesUntyped();
     transformTypedMatchesUntyped();
+    fixedStorageApiRoundTrip();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_typed_slot_spec FAILED: " << failure.what() << "\n";
     return 1;

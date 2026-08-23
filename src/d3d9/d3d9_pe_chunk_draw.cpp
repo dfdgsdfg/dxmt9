@@ -8,11 +8,6 @@ namespace dxmt9::d3d9::pe {
 
 namespace {
 
-template <typename T>
-std::span<const std::byte> asBytes(std::span<const T> values) {
-  return std::as_bytes(values);
-}
-
 bool validSectionCount(std::uint16_t kind, std::size_t count) {
   const auto* rule = sectionRule(kind);
   return rule && count != 0u && count <= rule->maxCount &&
@@ -47,8 +42,7 @@ bool appendPlainSection(
   const auto* rule = sectionRule(kind);
   std::uint32_t offset = 0u;
   if (!rule || !validSectionCount(kind, values.size()) ||
-      !builder.appendPayload(asBytes(values), rule->payloadAlignment,
-                             &offset)) {
+      !builder.appendSectionPayload(kind, values, &offset)) {
     return false;
   }
   descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
@@ -71,14 +65,11 @@ bool appendConstantSection(
     return true;
   }
   const auto* rule = sectionRule(kind);
-  const D9CCommandChunkWireConstantRange range{
-      .startRegister = input.startRegister,
-      .registerCount = input.registerCount,
-  };
   std::uint32_t offset = 0u;
   if (!rule || !validConstant(kind, input) ||
-      !builder.appendPayloadValue(range, &offset) ||
-      !builder.appendPayload(input.registerBytes)) {
+      !builder.appendConstantSectionPayload(
+          kind, input.startRegister, input.registerCount,
+          input.registerBytes, &offset)) {
     return false;
   }
   descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
@@ -87,7 +78,8 @@ bool appendConstantSection(
       .count = input.registerCount,
       .payloadOffset = offset,
       .byteSize = static_cast<std::uint32_t>(
-          sizeof(range) + input.registerBytes.size()),
+          sizeof(D9CCommandChunkWireConstantRange) +
+          input.registerBytes.size()),
   };
   return true;
 }
@@ -104,7 +96,7 @@ bool appendRawSection(
   const auto* rule = sectionRule(kind);
   std::uint32_t offset = 0u;
   if (!rule || !validSectionCount(kind, bytes.size()) ||
-      !builder.appendPayload(bytes, rule->payloadAlignment, &offset)) {
+      !builder.appendUpDataSectionPayload(kind, bytes, &offset)) {
     return false;
   }
   descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
@@ -235,11 +227,9 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   std::array<D9CCommandChunkWireSectionDesc,
              D9C_COMMAND_CHUNK_SECTION_COUNT>
       descs{};
-  const auto descBytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(descs.data()),
-      count * sizeof(descs[0]));
-  if (!builder.appendPayload(descBytes,
-                             alignof(D9CCommandChunkWireSectionDesc))) {
+  if (!builder.appendSectionTable(
+          std::span<const D9CCommandChunkWireSectionDesc>(descs.data(),
+                                                          count))) {
     return false;
   }
 
@@ -429,11 +419,10 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   }
 
   if (sectionIndex != count ||
-      !builder.overwritePayload(
+      !builder.overwriteSectionTable(
           draw.sectionTableOffset,
-          std::span<const std::byte>(
-              reinterpret_cast<const std::byte*>(descs.data()),
-              count * sizeof(descs[0]))) ||
+          std::span<const D9CCommandChunkWireSectionDesc>(descs.data(),
+                                                          count)) ||
       !builder.commitRecord()) {
     builder.rollbackRecord();
     return false;

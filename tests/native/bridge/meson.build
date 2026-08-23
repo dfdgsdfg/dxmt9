@@ -12,6 +12,15 @@ pe_retainer_spec = executable(
 
 test('dxmt9-pe-retainer-spec', pe_retainer_spec)
 
+pe_fvf_transaction_spec = executable(
+  'dxmt9-pe-fvf-transaction-spec',
+  'pe_fvf_transaction_spec.cpp',
+  include_directories: include_directories('../../../src/d3d9'),
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-fvf-transaction-spec', pe_fvf_transaction_spec)
+
 pe_level_surface_cache_spec = executable(
   'dxmt9-pe-level-surface-cache-spec',
   'pe_level_surface_cache_spec.cpp',

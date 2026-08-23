@@ -29,7 +29,12 @@ space, value shape, live-shadow owner, pending representation, state-block
 capture policy, and wire section or explicit cold-call disposition. Categories
 must not be conflated merely because their indices share an integer
 representation; render-state, texture-stage, sampler, transform, binding, and
-constant keys remain kind-qualified.
+constant keys remain kind-qualified. The StateBlock recorded-category enum,
+fixed storage, Apply preparation role, Apply commit visitor, clear visitor, and
+candidate COM lifetime visitor must derive from one authoritative 26-row Apply
+physical inventory: four keyed stores, sixteen fixed stores, and the VS/PS
+float/integer/boolean constant stores. Adding a physical row must not compile
+while its Prepare, Commit, clear, or applicable lifetime behavior is omitted.
 
 **R-CORE-REC-1.3** `BeginStateBlock`, `EndStateBlock`, `Capture`, and `Apply`
 must preserve the category table in [spec.md](spec.md): Begin establishes an
@@ -40,7 +45,14 @@ and Apply replays exactly the fixed set through the normal state-transition
 owners. Enumerated prior-value operations such as `MultiplyTransform` instead
 update primary state while recording and do not enter the tracked set. Invalid
 or failed Begin/End/Capture/Apply calls must not partially publish a new
-recorded domain.
+recorded domain. An End failure before backend entry preserves Recording; once
+backend End has been entered, backend or PE-wrapper publication failure must
+leave Recording, discard the unpublished candidate, and poison the recorder so
+PE cannot retry against a unix domain that may already have ended.
+The common record-append envelope must test poison before negotiation,
+capacity accounting, or either flush edge, so child-originated writers such as
+`Query::Issue` cannot bypass the setter gates. Reset/ResetEx recovery remains a
+non-append operation and must still reach the successful-reset transition.
 
 ## 2. State algebra
 
@@ -74,6 +86,20 @@ the exact `PendingDelta` entries represented by the record. The pending entries
 may be marked as candidates during preparation, but they must be consumed only
 after `commitRecord` succeeds. Any append failure must roll all components back
 to their pre-record checkpoints.
+
+**R-CORE-REC-3.1.1** Raw byte append and overwrite primitives are builder
+implementation details and must not be callable from production record
+producers. Every variable-size producer callsite must instead use a closed
+typed adapter for its exact POD section/tail, or a category-qualified byte-tail
+adapter for schema-declared constant/UP bytes. The adapter must validate kind,
+element size/count, alignment, and bounded byte arithmetic before copying;
+pointer-bearing or unregistered types must be rejected at compile time.
+Every public typed section/tail/table adapter must roll the active record back
+on any rejected precondition, even when its caller ignores the returned
+`false`. SetConst and Clear tails must match their already-written fixed
+headers; final sparse table overwrite must match the active draw header and
+validate canonical descriptor order, schema, alignment, sequential byte
+ranges, and embedded constant ranges before it can leave a committable record.
 
 **R-CORE-REC-3.2** Sealing must be deterministic and retry-stable. Repeated
 `seal` calls without a successful commit or explicit discard must expose the
@@ -143,20 +169,40 @@ the existing debug thread-affinity assertion. Callback re-entry is bounded by
 the existing recursive lock contract and must fail closed at its validation
 boundary; no lock may be held across a user/external callback unless that
 contract explicitly covers the callback.
+The same guard serializes default-pool child ownership increments/decrements
+with `Reset`'s legality read under `D3DCREATE_MULTITHREADED`; the unlocked lane
+retains its ordinary non-atomic counter and one disabled guard branch.
 
 **R-CORE-REC-5.1.3** StateBlock recorder poison is a fail-stop lifetime, not a
-per-call flag. A backend Capture/Apply failure that may have partially mutated
-the unix device poisons the PE recorder, and subsequent PE recording writes
-return `D3DERR_DEVICELOST`. A failed Reset/ResetEx preserves poison and any
-pre-effect Apply staging; only a backend Reset/ResetEx that returns success
+per-call flag. A post-entry End failure, wrapper publication failure after an
+accepted End, or backend Capture/Apply failure that may have partially mutated
+the unix device poisons the PE recorder, and every subsequent PE recording
+write, including the specialized `SetRenderState` entry, returns
+`D3DERR_DEVICELOST` before command or shadow mutation. A failed Reset/ResetEx
+preserves poison and any pre-effect Apply staging; only a backend Reset/ResetEx
+that returns success
 discards staged Apply retains and clears poison so recording can recover.
 
 **R-CORE-REC-5.1.1** `PeRecorderState` owns the producer-owned shadow,
-the separate `StateBlockRecorded` domain, constant shadows, reusable
-binding/build scratch, command builder, retainer lock witness, and recorder
-transaction counters. `D3D9DeviceImpl` may expose mechanical references to
-that owner during migration, but it must not duplicate the storage or add an
-allocation/virtual dispatch to setters or draws.
+reusable binding/build scratch, command builder, retainer lock witness, and
+recorder transaction counters. Its closed `PeStateBlockTransactionState`
+sub-owner exclusively owns StateBlock Recording/inside-End/poison lifecycle,
+the `StateBlockRecorded` domain and constants, and occupied Apply staging.
+Staged COM values must remain category-qualified and lifecycle operations must
+release or transfer one retain per occupied category/slot, including repeated
+use of the same COM identity. `D3D9DeviceImpl` may expose mechanical references
+to the recorded value tables during migration, but it must not duplicate the
+transaction flags/storage or add allocation/virtual dispatch to setters or
+draws. Flat fixed state tables must keep their value arrays, occupancy words,
+and counters private behind bounded `set`/`get`/`erase`/`forEach` operations;
+this encapsulation must not add per-state allocation or change their byte
+footprint.
+The explicit vertex-declaration row is the exception to Apply staging: its
+candidate/snapshot owner holds the AddRef for the complete synchronous Apply
+call, while the live `vdecl_` binding remains a D3D9-required borrowed pointer.
+Prepare must neither retain nor transfer that pointer; Commit may borrow it only
+before the StateBlock wrapper can be released, matching ordinary
+`SetVertexDeclaration` refcount semantics.
 
 **R-CORE-REC-5.1.2** Ordinary PE COM references are non-atomic under the D3D9
 device/COM ownership contract. `D3D9StateBlockImpl`'s atomic reference count is
@@ -164,6 +210,16 @@ an explicitly documented exception because state-block snapshots can be held
 by the device and child wrappers across their independent ownership paths; it
 must not be generalized to every PE child. Backend chunk pins remain private
 retains and never change the public COM count observed by applications.
+
+**R-CORE-REC-5.1.4** StateBlock Begin/End/Capture/Apply/reset/teardown serial
+and reference effects must be selected by one production transition matrix
+shared with the bounded TLA+ model. Every phase/event row identifies the next
+serial phase plus candidate, staged-reference, and capture-publication effects.
+Generator freshness must reject new enum phases, events, or actions without a
+mapped row, and native tests must exhaustively compare the production planner
+with every shared row. The bounded model proves only abstract staged-reference
+cardinality; exact COM AddRef/Release/transfer multiplicity remains concrete
+native fake-object evidence.
 
 **R-CORE-REC-5.2** The ordinary Set/Draw/append path and its flat value types
 must remain in the hot recorder owner. Render Tape, call-history diagnostics,

@@ -19,6 +19,9 @@ under `tests/meson.build`.
 - `gen_pe_transition_table.py` — generates or checks the TLA translation of
   the production PE recorder transition table; `verify_tla.sh` rejects stale
   output before starting TLC.
+- `gen_pe_stateblock_transition_table.py` — generates or checks the TLA
+  translation of the production StateBlock serial/reference transition table;
+  it also rejects enum events/actions/phases without a mapped row.
 - `assert_perf_counters.py` — fails when expected perf counter keys are
   missing from a run JSON; intended to extend draw-uniforms coverage.
 - `audit_perf_counter_table.py` — text-based audit detecting fields added to

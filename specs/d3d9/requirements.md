@@ -454,7 +454,11 @@ resource binding metadata, diagnostics, or errors.
 
 **R-CORE-7.1** Both `SetFVF()` (legacy flexible vertex format) and
 `SetVertexDeclaration()` (explicit `D3DVERTEXELEMENT9` array) must be supported and
-interoperable. Setting one must not require the other to be cleared.
+interoperable. Setting one must not require the other to be cleared. A live
+`SetFVF()` must resolve and cache its implicit declaration before publishing
+FVF/declaration shadows or dirty bits; backend-null, PE-wrapper allocation, and
+cache allocation failures must return a failure HRESULT without leaking either
+owner, throwing across the `noexcept` COM boundary, or mutating those shadows.
 
 **R-CORE-7.2** The `D3DFVF_XYZRHW` flag (pre-transformed, screen-space vertex) must
 be handled. The backend must convert screen-space coordinates to Metal NDC, accounting

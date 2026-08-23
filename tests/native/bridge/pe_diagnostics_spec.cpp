@@ -150,6 +150,10 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
+  const auto recorderState =
+      readTextFile(root / "src/d3d9/d3d9_pe_recorder_state.hpp");
+  const auto stateBlockTransaction = readTextFile(
+      root / "src/d3d9/d3d9_pe_stateblock_transaction.hpp");
   const auto deviceOwner =
       readTextFile(root / "src/d3d9/d3d9_pe_device.cpp");
   const auto misc = readTextFile(
@@ -208,6 +212,14 @@ void testSourceContracts(const std::filesystem::path &root) {
   }
   checkContains(device, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
                 "device stores one nullable diagnostic owner pointer");
+  checkContains(recorderState,
+                "PeStateBlockTransactionState stateBlockTransaction{};",
+                "recorder state owns the closed StateBlock transaction");
+  checkContains(stateBlockTransaction,
+                "StateBlockVertexShaderRef stagedVertexShader_{};",
+                "Apply staging remains kind-qualified inside its owner");
+  checkNotContains(device, "std::array<void*, kPeTextureSlots> stagedApply",
+                   "device cannot bypass typed StateBlock staging");
   checkContains(diagnostics, "struct PeDiagnosticsFeatureGates",
                 "diagnostic ownership has feature-specific cached gates");
   checkContains(device, "if (!diagnostics->gates.callScope)",
@@ -230,11 +242,61 @@ void testSourceContracts(const std::filesystem::path &root) {
       "dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? "
       "&diagnostics_->peEntryDrawDecimatedStats_",
       "draw entry and call tracking share one nullable diagnostic scope");
+  const auto setRenderBegin = device.find(
+      "HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state");
+  const auto setRenderEnd = setRenderBegin == std::string::npos
+      ? std::string::npos
+      : device.find("HRESULT STDMETHODCALLTYPE GetRenderState", setRenderBegin);
+  check(setRenderBegin != std::string::npos && setRenderEnd != std::string::npos,
+        "SetRenderState source contract is present");
+  const std::string_view setRenderBody(
+      device.data() + setRenderBegin, setRenderEnd - setRenderBegin);
   checkBefore(
+      setRenderBody,
+      "if (!recorderState_.stateBlockTransaction.writeAllowed()) {\n            return D3DERR_DEVICELOST;\n        }\n        PeDiagnosticsState* const diagnostics",
+      "return setRenderStateCore(state, value, peNullHotSetter_);",
+      "SetRenderState fail-stops before its diagnostic/core bypass");
+  checkNotContains(device,
+                   "PeStateBlockTransactionState& stateBlockTransaction_",
+                   "device has no dependent StateBlock transaction pointer");
+  const auto appendRecordBegin = device.find(
+      "HRESULT appendRecord(uint32_t type, size_t sizeHint, EmitFn emit)");
+  const auto appendRecordEnd = appendRecordBegin == std::string::npos
+      ? std::string::npos
+      : device.find("HRESULT appendDrawPrimitiveRecord", appendRecordBegin);
+  check(appendRecordBegin != std::string::npos &&
+            appendRecordEnd != std::string::npos,
+        "common appendRecord source contract is present");
+  const std::string_view appendRecordBody(
+      device.data() + appendRecordBegin, appendRecordEnd - appendRecordBegin);
+  checkBefore(
+      appendRecordBody,
+      "if (recorderState_.stateBlockTransaction.isPoisoned())",
+      "if (!commandChunkNegotiated_ || bytes == 0u",
+      "poison stops every writer before negotiation and capacity work");
+  checkContains(
       device,
+      "HRESULT AppendQueryIssueForChild(\n        std::uint32_t flags",
+      "Query::Issue remains routed through the common poisoned append gate");
+  checkBefore(
+      setRenderBody,
       "if (!diagnostics || !diagnostics->gates.hotSetterTimer) {\n            return setRenderStateCore",
       "PeHotStateSetterTimer hotSetter(\n            *this, *diagnostics",
       "SetRenderState branches before the enabled timer lifetime begins");
+  const auto setFvfBegin = device.find(
+      "HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override");
+  const auto setFvfEnd = setFvfBegin == std::string::npos
+      ? std::string::npos
+      : device.find("HRESULT STDMETHODCALLTYPE GetFVF", setFvfBegin);
+  check(setFvfBegin != std::string::npos && setFvfEnd != std::string::npos,
+        "SetFVF noexcept source contract is present");
+  const std::string_view setFvfBody(
+      device.data() + setFvfBegin, setFvfEnd - setFvfBegin);
+  checkBefore(
+      setFvfBody,
+      "resolveImplicitDeclForFvf(fvf, &implicitDecl);",
+      "fvf_ = fvf;",
+      "SetFVF resolves its implicit declaration before shadow mutation");
   checkBefore(
       device,
       "if (!diagnostics || !diagnostics->gates.callScope) {\n            return drawPrimitiveCore",

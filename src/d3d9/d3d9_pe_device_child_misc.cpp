@@ -251,8 +251,12 @@ public:
           static_cast<std::uint32_t>(flags), wireObject());
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
-    if (FAILED(flushHr))
+    if (FAILED(flushHr)) {
+      (void)planPeStateBlockTransition(
+          {PeStateBlockPhase::Idle,
+           PeStateBlockEvent::CapturePreEffectFailed});
       return flushHr;
+    }
     return hr32(dxmt9c_query_issue(q_, flags));
   }
   HRESULT STDMETHODCALLTYPE GetData(void *pData, DWORD size,
@@ -409,17 +413,27 @@ public:
           }
         }
       } catch (const std::bad_alloc &) {
+        (void)planPeStateBlockTransition(
+            {PeStateBlockPhase::Idle,
+             PeStateBlockEvent::CapturePreEffectFailed});
         return E_OUTOFMEMORY;
       }
       const HRESULT captureHr =
           recorder_->CaptureStateBlockShadowForChild(candidate,
                                                       captureDisposition_);
       if (FAILED(captureHr)) {
+        (void)planPeStateBlockTransition(
+            {PeStateBlockPhase::Idle,
+             PeStateBlockEvent::CapturePreEffectFailed});
         return captureHr;
       }
     }
     const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
-    if (FAILED(hr)) {
+    const auto capturePlan = planPeStateBlockTransition(
+        {PeStateBlockPhase::Idle,
+         FAILED(hr) ? PeStateBlockEvent::CaptureBackendFailed
+                    : PeStateBlockEvent::CapturePublished});
+    if (capturePlan.action() == PeStateBlockAction::FailStop) {
       if (recorder_) recorder_->PoisonStateBlockRecorderForChild();
       dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
       return hr;

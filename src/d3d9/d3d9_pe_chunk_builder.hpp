@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -13,8 +15,9 @@
 namespace dxmt9::d3d9::pe {
 
 // Payload values are copied verbatim into the bounded wire blob. Admission is
-// intentionally closed over the fixed payload types used by the producer;
-// variable tails continue to use appendPayload(raw bytes).
+// intentionally closed over the fixed payload types used by the producer.
+// Variable tails and sparse sections have separate closed adapters below; raw
+// byte append/overwrite is private to CommandChunkBuilder.
 template <typename T>
 struct IsApprovedWirePayloadValue : std::false_type {};
 
@@ -44,6 +47,94 @@ inline constexpr bool isWireSafePayloadValue =
     std::is_trivially_copyable_v<std::remove_cv_t<T>> &&
     !std::is_reference_v<T> &&
     IsApprovedWirePayloadValue<std::remove_cv_t<T>>::value;
+
+// Exact section-kind qualification for every POD section payload emitted by
+// the PE producer. A new section payload type is unusable until it is added to
+// this registry, which is the auditable pointer-free boundary for typed array
+// copies. Byte-addressed constant and UP-data sections are admitted only by
+// their dedicated, rule-checked adapters.
+#define DXMT9_PE_WIRE_SECTION_SCHEMA(X)                                    \
+  X(D9CCommandChunkWireRenderState, D9C_COMMAND_CHUNK_SECTION_RENDER_STATE) \
+  X(D9CCommandChunkWireTextureBinding, D9C_COMMAND_CHUNK_SECTION_TEXTURE)   \
+  X(D9CCommandChunkWireStreamBinding, D9C_COMMAND_CHUNK_SECTION_STREAM)     \
+  X(D9CCommandChunkWireShaderBinding, D9C_COMMAND_CHUNK_SECTION_SHADER)     \
+  X(D9CCommandChunkWireVertexInput, D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT) \
+  X(D9CCommandChunkWireIndexBinding,                                        \
+    D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER)                                 \
+  X(D9CCommandChunkWireRenderTargetBinding,                                 \
+    D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET)                                \
+  X(D9CCommandChunkWireDepthStencilBinding,                                 \
+    D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL)                                \
+  X(D9CViewport, D9C_COMMAND_CHUNK_SECTION_VIEWPORT)                        \
+  X(D9CRect, D9C_COMMAND_CHUNK_SECTION_SCISSOR)                             \
+  X(D9CMaterial, D9C_COMMAND_CHUNK_SECTION_MATERIAL)                        \
+  X(D9CCommandChunkWireClipPlane, D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE)     \
+  X(D9CDrawPacketTextureStageState,                                         \
+    D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE)                          \
+  X(D9CDrawPacketSamplerState, D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE)     \
+  X(D9CDrawPacketTransform, D9C_COMMAND_CHUNK_SECTION_TRANSFORM)            \
+  X(D9CCommandChunkWireLight, D9C_COMMAND_CHUNK_SECTION_LIGHT)              \
+  X(D9CCommandChunkWireLightEnable, D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE)
+
+template <typename T>
+struct ApprovedWireSectionPayload {
+  static constexpr std::uint16_t kind =
+      std::numeric_limits<std::uint16_t>::max();
+};
+
+#define DXMT9_PE_APPROVED_WIRE_SECTION(Type, Kind)              \
+  template <>                                                   \
+  struct ApprovedWireSectionPayload<Type> {                     \
+    static_assert(std::is_standard_layout_v<Type>);             \
+    static_assert(std::is_trivially_copyable_v<Type>);          \
+    static constexpr std::uint16_t kind = Kind;                 \
+  };
+DXMT9_PE_WIRE_SECTION_SCHEMA(DXMT9_PE_APPROVED_WIRE_SECTION)
+#undef DXMT9_PE_APPROVED_WIRE_SECTION
+
+struct WireSectionPayloadDescriptor {
+  std::uint16_t kind;
+  std::uint16_t elementSize;
+};
+
+#define DXMT9_PE_WIRE_SECTION_DESCRIPTOR(Type, Kind) \
+  WireSectionPayloadDescriptor{Kind, sizeof(Type)},
+inline constexpr auto kWireSectionPayloadDescriptors = std::array{
+    DXMT9_PE_WIRE_SECTION_SCHEMA(DXMT9_PE_WIRE_SECTION_DESCRIPTOR)
+};
+#undef DXMT9_PE_WIRE_SECTION_DESCRIPTOR
+
+consteval bool wireSectionPayloadRegistryComplete() noexcept {
+  std::size_t typedRuleCount = 0u;
+  for (const auto& rule : kSectionRules) {
+    if ((rule.ruleFlags &
+         (SectionRuleConstantRange | SectionRuleRawBytes)) != 0u) {
+      continue;
+    }
+    ++typedRuleCount;
+    std::size_t matches = 0u;
+    for (const auto descriptor : kWireSectionPayloadDescriptors) {
+      matches += descriptor.kind == rule.kind &&
+                         descriptor.elementSize == rule.elementSize
+          ? 1u : 0u;
+    }
+    if (matches != 1u) return false;
+  }
+  return typedRuleCount == kWireSectionPayloadDescriptors.size();
+}
+
+static_assert(wireSectionPayloadRegistryComplete(),
+              "every POD section rule needs one exact typed registry row");
+
+#undef DXMT9_PE_WIRE_SECTION_SCHEMA
+
+template <typename T>
+inline constexpr bool isWireSafeSectionPayload =
+    std::is_standard_layout_v<std::remove_cv_t<T>> &&
+    std::is_trivially_copyable_v<std::remove_cv_t<T>> &&
+    !std::is_reference_v<T> && !std::is_pointer_v<std::remove_cv_t<T>> &&
+    ApprovedWireSectionPayload<std::remove_cv_t<T>>::kind !=
+        std::numeric_limits<std::uint16_t>::max();
 
 struct PeWireObjectRef {
   D9CWireObjectIdentity identity{};
@@ -194,9 +285,6 @@ class CommandChunkBuilder {
   CommandChunkBuilder& operator=(const CommandChunkBuilder&) = delete;
 
   bool beginRecord(std::uint32_t type) noexcept;
-  bool appendPayload(std::span<const std::byte> bytes,
-                     std::uint32_t alignment = 1u,
-                     std::uint32_t* recordRelativeOffset = nullptr) noexcept;
 
   template <typename T>
   bool appendPayloadValue(const T& value,
@@ -209,8 +297,41 @@ class CommandChunkBuilder {
         alignof(T), recordRelativeOffset);
   }
 
-  bool overwritePayload(std::uint32_t recordRelativeOffset,
-                        std::span<const std::byte> bytes) noexcept;
+  template <typename T>
+    requires isWireSafeSectionPayload<T>
+  bool appendSectionPayload(
+      std::uint16_t kind, std::span<const T> values,
+      std::uint32_t* recordRelativeOffset = nullptr) noexcept {
+    const auto* rule = sectionRule(kind);
+    const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+    if (!rule || !activeRule ||
+        (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+        kind != ApprovedWireSectionPayload<std::remove_cv_t<T>>::kind ||
+        values.empty() || values.size() > rule->maxCount ||
+        sizeof(T) != rule->elementSize ||
+        values.size() > std::numeric_limits<std::uint32_t>::max()) {
+      return failActiveRecord();
+    }
+    return appendPayload(std::as_bytes(values), rule->payloadAlignment,
+                         recordRelativeOffset);
+  }
+
+  bool appendConstantSectionPayload(
+      std::uint16_t kind, std::uint32_t startRegister,
+      std::uint32_t registerCount, std::span<const std::byte> registerBytes,
+      std::uint32_t* recordRelativeOffset = nullptr) noexcept;
+  bool appendUpDataSectionPayload(
+      std::uint16_t kind, std::span<const std::byte> bytes,
+      std::uint32_t* recordRelativeOffset = nullptr) noexcept;
+  bool appendSectionTable(
+      std::span<const D9CCommandChunkWireSectionDesc> sections) noexcept;
+  bool overwriteSectionTable(
+      std::uint32_t recordRelativeOffset,
+      std::span<const D9CCommandChunkWireSectionDesc> sections) noexcept;
+  bool appendConstantRecordTail(
+      std::uint32_t registerCount,
+      std::span<const std::byte> registerBytes) noexcept;
+  bool appendClearRectTail(std::span<const D9CRect> rects) noexcept;
   bool appendHandle(const PeWireObjectRef& object,
                     std::uint32_t expectedKind,
                     std::uint32_t& absoluteIndex) noexcept;
@@ -249,6 +370,28 @@ class CommandChunkBuilder {
   }
 
  private:
+  template <typename T>
+  bool readActivePayloadValue(std::uint32_t recordRelativeOffset,
+                              T& value) const noexcept {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (!active_.active || sealed_ ||
+        recordRelativeOffset > payload_.size() - active_.payloadStart ||
+        sizeof(T) > payload_.size() - active_.payloadStart -
+                        recordRelativeOffset) {
+      return false;
+    }
+    std::memcpy(&value,
+                payload_.data() + active_.payloadStart + recordRelativeOffset,
+                sizeof(T));
+    return true;
+  }
+
+  bool appendPayload(std::span<const std::byte> bytes,
+                     std::uint32_t alignment = 1u,
+                     std::uint32_t* recordRelativeOffset = nullptr) noexcept;
+  bool overwritePayload(std::uint32_t recordRelativeOffset,
+                        std::span<const std::byte> bytes) noexcept;
+
   struct ActiveRecord {
     bool active = false;
     std::uint32_t type = 0u;

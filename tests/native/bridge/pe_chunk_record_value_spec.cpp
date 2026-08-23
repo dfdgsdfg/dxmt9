@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 static_assert(dxmt9::d3d9::pe::isWireSafePayloadValue<
@@ -29,6 +30,40 @@ struct WireValueWithPointerMember {
 static_assert(std::is_standard_layout_v<WireValueWithPointerMember> &&
               std::is_trivially_copyable_v<WireValueWithPointerMember>);
 static_assert(!dxmt9::d3d9::pe::isWireSafePayloadValue<
+              WireValueWithPointerMember>);
+static_assert(!dxmt9::d3d9::pe::isWireSafeSectionPayload<
+              WireValueWithPointerMember>);
+static_assert(dxmt9::d3d9::pe::isWireSafeSectionPayload<
+              D9CCommandChunkWireRenderState>);
+static_assert(dxmt9::d3d9::pe::wireSectionPayloadRegistryComplete());
+
+template <typename Builder>
+concept ExposesRawByteAppend = requires(
+    Builder& builder, std::span<const std::byte> bytes) {
+  builder.appendPayload(bytes);
+};
+
+template <typename Builder>
+concept ExposesRawByteOverwrite = requires(
+    Builder& builder, std::span<const std::byte> bytes) {
+  builder.overwritePayload(0u, bytes);
+};
+
+template <typename Builder, typename T>
+concept AcceptsSectionPayload = requires(
+    Builder& builder, std::span<const T> values) {
+  builder.appendSectionPayload(0u, values);
+};
+
+static_assert(!ExposesRawByteAppend<
+              dxmt9::d3d9::pe::CommandChunkBuilder>);
+static_assert(!ExposesRawByteOverwrite<
+              dxmt9::d3d9::pe::CommandChunkBuilder>);
+static_assert(AcceptsSectionPayload<
+              dxmt9::d3d9::pe::CommandChunkBuilder,
+              D9CCommandChunkWireRenderState>);
+static_assert(!AcceptsSectionPayload<
+              dxmt9::d3d9::pe::CommandChunkBuilder,
               WireValueWithPointerMember>);
 
 struct RefCounter {
@@ -1257,6 +1292,144 @@ void testOversizedPendingBatchAppendFailure() {
         "retry record");
 }
 
+void testTypedTailAndSectionAdmission() {
+  CommandChunkBuilder sectionBuilder;
+  const std::array<D9CCommandChunkWireRenderState, 1> renderStates{{
+      {.state = 7u, .value = 9u},
+  }};
+  check(sectionBuilder.beginRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+        "typed-section admission begins a sparse record");
+  (void)sectionBuilder.appendSectionPayload(
+            D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+            std::span<const D9CCommandChunkWireRenderState>(renderStates));
+  check(!sectionBuilder.recordActive() && !sectionBuilder.commitRecord() &&
+            sectionBuilder.recordCount() == 0u,
+        "ignored wrong-kind section failure atomically kills the record");
+
+  CommandChunkBuilder rawSectionBuilder;
+  check(rawSectionBuilder.beginRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+        "raw-section rejection begins a sparse record");
+  (void)rawSectionBuilder.appendUpDataSectionPayload(
+            D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+            std::as_bytes(std::span(renderStates)));
+  check(!rawSectionBuilder.recordActive() &&
+            !rawSectionBuilder.commitRecord(),
+        "ignored raw-category failure atomically kills the record");
+
+  CommandChunkBuilder constantBuilder;
+  const std::array<std::uint32_t, 4> oneRegister{{1u, 2u, 3u, 4u}};
+  check(constantBuilder.beginRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F) &&
+            constantBuilder.appendPayloadValue(
+                D9CCommandChunkWireSetConst{.startRegister = 0u,
+                                            .registerCount = 1u}),
+        "constant mismatch record begins");
+  (void)constantBuilder.appendConstantRecordTail(
+      2u, std::as_bytes(std::span(oneRegister)));
+  check(!constantBuilder.recordActive() && !constantBuilder.commitRecord(),
+        "ignored SetConst header-count mismatch cannot commit");
+
+  CommandChunkBuilder constantRangeBuilder;
+  check(constantRangeBuilder.beginRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F) &&
+            constantRangeBuilder.appendPayloadValue(
+                D9CCommandChunkWireSetConst{
+                    .startRegister = D9C_DRAW_PACKET_MAX_CONST_VS_F,
+                    .registerCount = 1u}),
+        "constant range record begins");
+  (void)constantRangeBuilder.appendConstantRecordTail(
+      1u, std::as_bytes(std::span(oneRegister)));
+  check(!constantRangeBuilder.recordActive() &&
+            !constantRangeBuilder.commitRecord(),
+        "ignored SetConst header-range failure cannot commit");
+
+  CommandChunkBuilder clearBuilder;
+  const std::array<D9CRect, 1> rects{{{0, 0, 1, 1}}};
+  check(clearBuilder.beginRecord(D9C_COMMAND_RECORD_CLEAR) &&
+            clearBuilder.appendPayloadValue(D9CCommandChunkWireClear{
+                .rectCount = 1u,
+                .rectOffset = sizeof(D9CCommandChunkWireClear)}) &&
+            clearBuilder.appendClearRectTail(rects) &&
+            clearBuilder.commitRecord(),
+        "clear POD tail is admitted only through its typed adapter");
+
+  CommandChunkBuilder clearMismatchBuilder;
+  check(clearMismatchBuilder.beginRecord(D9C_COMMAND_RECORD_CLEAR) &&
+            clearMismatchBuilder.appendPayloadValue(D9CCommandChunkWireClear{
+                .rectCount = 2u,
+                .rectOffset = sizeof(D9CCommandChunkWireClear)}),
+        "Clear mismatch record begins");
+  (void)clearMismatchBuilder.appendClearRectTail(rects);
+  check(!clearMismatchBuilder.recordActive() &&
+            !clearMismatchBuilder.commitRecord(),
+        "ignored Clear header-count mismatch cannot commit");
+
+  const auto rejectDescriptor = [&](auto mutate, std::string_view message,
+                                    bool wrongTableOffset = false) {
+    CommandChunkBuilder builder;
+    D9CCommandChunkWireDrawHeader draw{};
+    draw.sectionCount = 1u;
+    draw.sectionTableOffset = sizeof(draw);
+    draw.sectionPayloadOffset =
+        sizeof(draw) + sizeof(D9CCommandChunkWireSectionDesc);
+    std::array<D9CCommandChunkWireSectionDesc, 1> placeholder{};
+    std::uint32_t payloadOffset = 0u;
+    check(builder.beginRecord(D9C_COMMAND_RECORD_APPLY_STATE) &&
+              builder.appendPayloadValue(draw) &&
+              builder.appendSectionTable(placeholder) &&
+              builder.appendSectionPayload(
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+                  std::span<const D9CCommandChunkWireRenderState>(
+                      renderStates),
+                  &payloadOffset),
+          "descriptor rejection fixture is valid before overwrite");
+    D9CCommandChunkWireSectionDesc desc{
+        .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+        .elementSize = sizeof(D9CCommandChunkWireRenderState),
+        .count = 1u,
+        .payloadOffset = payloadOffset,
+        .byteSize = sizeof(D9CCommandChunkWireRenderState),
+    };
+    mutate(desc);
+    (void)builder.overwriteSectionTable(
+                                        draw.sectionTableOffset +
+                                            (wrongTableOffset ? 4u : 0u),
+                                        std::span(&desc, 1u));
+    check(!builder.recordActive() && !builder.commitRecord(), message);
+  };
+  rejectDescriptor(
+      [](auto& desc) { desc.kind = 0u; },
+      "ignored descriptor kind/order failure cannot commit");
+  rejectDescriptor(
+      [](auto& desc) { ++desc.elementSize; },
+      "ignored descriptor element-size failure cannot commit");
+  rejectDescriptor(
+      [](auto& desc) { desc.count = 0u; },
+      "ignored descriptor count failure cannot commit");
+  rejectDescriptor(
+      [](auto& desc) { ++desc.byteSize; },
+      "ignored descriptor byte-size failure cannot commit");
+  rejectDescriptor(
+      [](auto& desc) { ++desc.payloadOffset; },
+      "ignored descriptor alignment/range failure cannot commit");
+  rejectDescriptor(
+      [](auto&) {},
+      "ignored active draw-header table-offset mismatch cannot commit", true);
+
+  CommandChunkBuilder placeholderMismatch;
+  D9CCommandChunkWireDrawHeader draw{};
+  draw.sectionCount = 2u;
+  draw.sectionTableOffset = sizeof(draw);
+  draw.sectionPayloadOffset =
+      sizeof(draw) + 2u * sizeof(D9CCommandChunkWireSectionDesc);
+  std::array<D9CCommandChunkWireSectionDesc, 1> onePlaceholder{};
+  check(placeholderMismatch.beginRecord(D9C_COMMAND_RECORD_APPLY_STATE) &&
+            placeholderMismatch.appendPayloadValue(draw),
+        "placeholder mismatch record begins");
+  (void)placeholderMismatch.appendSectionTable(onePlaceholder);
+  check(!placeholderMismatch.recordActive() &&
+            !placeholderMismatch.commitRecord(),
+        "ignored draw-header/table-count mismatch cannot commit");
+}
+
 }  // namespace
 
 int main() {
@@ -1272,6 +1445,7 @@ int main() {
     testKindQualifiedLocalIdentity();
     testKindQualifiedHazardAndPendingDestroyQueries();
     testOversizedPendingBatchAppendFailure();
+    testTypedTailAndSectionAdmission();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

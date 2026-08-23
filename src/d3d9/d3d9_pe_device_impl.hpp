@@ -48,6 +48,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_diagnostics_state.hpp"
+#include "d3d9_pe_fvf_transaction.hpp"
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_render_tape_publisher.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
@@ -853,38 +854,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool         cursorVisible_ = false;
     bool         deviceNotReset_ = false;
     uint32_t     defaultPoolResourceRefs_ = 0;
-    bool         stateBlockRecording_ = false;
-    // True only inside EndStateBlock's CreatePeStateBlock call. Tells the
-    // freshly-constructed D3D9StateBlockImpl that its initial transform
-    // tracked-keys set should be EXACTLY stateBlockTransformRecorded —
-    // even if that table is empty (a Begin/End block where everything was
-    // MultiplyTransform). Without this flag, an empty recorded set would
-    // be indistinguishable from a CreateStateBlock(D3DSBT_ALL) call,
-    // which legitimately needs every populated transform captured.
-    bool         insideEndStateBlock_ = false;
-    // Fail-stop latch for a backend StateBlock::Apply that may have partially
-    // mutated the unix device before returning failure. Once set, all PE
-    // recording writes return DEVICELOST deterministically.
-    bool         stateBlockRecorderPoisoned_ = false;
-    // AddRef'd Apply targets staged before backend mutation. Occupancy is
-    // separate from the pointer value so a tracked null still clears a live
-    // binding on the no-fail commit path.
-    std::array<void*, kPeTextureSlots> stagedApplyTextures_{};
-    std::uint32_t stagedApplyTextureMask_ = 0u;
-    std::array<StateBlockStreamSourceValue, D9C_DRAW_PACKET_MAX_STREAMS>
-        stagedApplyStreams_{};
-    std::uint32_t stagedApplyStreamMask_ = 0u;
-    void* stagedApplyVs_ = nullptr;
-    bool stagedApplyVsValid_ = false;
-    void* stagedApplyPs_ = nullptr;
-    bool stagedApplyPsValid_ = false;
-    void* stagedApplyIndex_ = nullptr;
-    bool stagedApplyIndexValid_ = false;
-    std::array<void*, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
-        stagedApplyRenderTargets_{};
-    std::uint32_t stagedApplyRenderTargetMask_ = 0u;
-    void* stagedApplyDepthStencil_ = nullptr;
-    bool stagedApplyDepthStencilValid_ = false;
     std::recursive_mutex& recorderMutex_ = recorderState_.recorderMutex;
 
     /* bound resource tracking (AddRef'd) */
@@ -929,9 +898,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     PeHotStateShadow& peState_ = recorderState_.peState;
     PeConstShadowBlock& peConsts_ = recorderState_.peConsts;
-    StateBlockRecorded& stateBlockState_ = recorderState_.stateBlock;
+    StateBlockRecorded& stateBlockState_ = recorderState_.stateBlockTransaction.recorded();
     PeStateBlockConstRecorded& stateBlockConsts_ =
-        recorderState_.stateBlock.constants;
+        recorderState_.stateBlockTransaction.constants();
     IDirect3DSurface9* rtSlots_[4]{};
     bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
@@ -1035,37 +1004,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
-    static void retainApplyRef(void*& destination, void* value) noexcept {
+    static void retainApplyRef(void* value) noexcept {
         if (value) reinterpret_cast<IUnknown*>(value)->AddRef();
-        destination = value;
     }
 
     void discardPreparedStateBlockApply() noexcept {
-        for (std::size_t i = 0; i < stagedApplyTextures_.size(); ++i) {
-            if (stagedApplyTextureMask_ & (1u << i))
-                releaseRecordedRef(stagedApplyTextures_[i]);
+        if (recorderState_.stateBlockTransaction.isApplyPrepared()) {
+            recorderState_.stateBlockTransaction.failPreparedApply(
+                [](void* value) noexcept { releaseRecordedRef(value); });
+        } else {
+            recorderState_.stateBlockTransaction.discardPrepared(
+                [](void* value) noexcept { releaseRecordedRef(value); });
         }
-        stagedApplyTextureMask_ = 0u;
-        for (std::size_t i = 0; i < stagedApplyStreams_.size(); ++i) {
-            if (stagedApplyStreamMask_ & (1u << i)) {
-                void* value = stagedApplyStreams_[i].buffer;
-                releaseRecordedRef(value);
-                stagedApplyStreams_[i].buffer = nullptr;
-            }
-        }
-        stagedApplyStreamMask_ = 0u;
-        if (stagedApplyVsValid_) releaseRecordedRef(stagedApplyVs_);
-        if (stagedApplyPsValid_) releaseRecordedRef(stagedApplyPs_);
-        if (stagedApplyIndexValid_) releaseRecordedRef(stagedApplyIndex_);
-        stagedApplyVsValid_ = stagedApplyPsValid_ = stagedApplyIndexValid_ = false;
-        for (std::size_t i = 0; i < stagedApplyRenderTargets_.size(); ++i) {
-            if (stagedApplyRenderTargetMask_ & (1u << i))
-                releaseRecordedRef(stagedApplyRenderTargets_[i]);
-        }
-        stagedApplyRenderTargetMask_ = 0u;
-        if (stagedApplyDepthStencilValid_)
-            releaseRecordedRef(stagedApplyDepthStencil_);
-        stagedApplyDepthStencilValid_ = false;
     }
 
     template<typename Table, typename T>
@@ -1097,9 +1047,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     void releaseRecordedStateBlockRefs() noexcept {
-        stateBlockState_.forEachOwnedComRef(
-            [&](void* value) { releaseRecordedRef(value); });
-        stateBlockState_.clearForBegin();
+        recorderState_.stateBlockTransaction.abandonRecording(
+            [](void* value) noexcept { releaseRecordedRef(value); });
     }
 
     bool applyCurrentPaletteToTexture(IDirect3DBaseTexture9* texture) {
@@ -2289,7 +2238,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const void* callerPc, Body&& body) noexcept {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
+            return D3DERR_DEVICELOST;
+        }
         PeDiagnosticsState* const diagnostics = diagnostics_.get();
         if (!diagnostics) {
             return std::forward<Body>(body)(peNullHotSetter_);
@@ -2312,7 +2263,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         Body&& body) noexcept {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
+            return D3DERR_DEVICELOST;
+        }
         PeDiagnosticsState* const diagnostics = diagnostics_.get();
         if (!diagnostics) {
             return std::forward<Body>(body)(
@@ -2710,6 +2663,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const size_t bytes = sizeHint;
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
+        // The common append boundary owns the fail-stop gate so child writers
+        // such as Query::Issue cannot bypass the setter-specific checks. This
+        // precedes negotiation, capacity accounting, and either flush edge;
+        // Reset recovery does not append and remains able to clear poison.
+        if (recorderState_.stateBlockTransaction.isPoisoned()) {
+            return D3DERR_DEVICELOST;
+        }
         if (!commandChunkNegotiated_ || bytes == 0u || bytes > 0xffffffffull) {
             return commandChunkNegotiated_ ? D3DERR_INVALIDCALL
                                            : D3DERR_NOTAVAILABLE;
@@ -2991,6 +2951,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             (vertexBytes != 0 && !data)) {
             return D3DERR_INVALIDCALL;
         }
+        IDirect3DVertexDeclaration9* overrideDecl = nullptr;
+        if (overrideFvf) {
+            const HRESULT fvfHr =
+                resolveImplicitDeclForFvf(packetFvf, &overrideDecl);
+            if (FAILED(fvfHr)) return fvfHr;
+        }
         const DWORD savedFvf = fvf_;
         IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
         IDirect3DVertexShader9* savedVs = vs_;
@@ -2999,7 +2965,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool savedPendingVs = peState_.pendingVs;
         if (overrideFvf) {
             fvf_ = packetFvf;
-            vdecl_ = implicitDeclForFvf(packetFvf);
+            vdecl_ = overrideDecl;
             peState_.pendingFvf = true;
             peState_.pendingVdecl = true;
         }
@@ -3122,6 +3088,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             (vertexBytes != 0 && !vertexData)) {
             return D3DERR_INVALIDCALL;
         }
+        IDirect3DVertexDeclaration9* overrideDecl = nullptr;
+        if (overrideFvf) {
+            const HRESULT fvfHr =
+                resolveImplicitDeclForFvf(packetFvf, &overrideDecl);
+            if (FAILED(fvfHr)) return fvfHr;
+        }
         const DWORD savedFvf = fvf_;
         IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
         IDirect3DVertexShader9* savedVs = vs_;
@@ -3130,7 +3102,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool savedPendingVs = peState_.pendingVs;
         if (overrideFvf) {
             fvf_ = packetFvf;
-            vdecl_ = implicitDeclForFvf(packetFvf);
+            vdecl_ = overrideDecl;
             peState_.pendingFvf = true;
             peState_.pendingVdecl = true;
         }
@@ -3230,10 +3202,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                  const void* data,
                                  std::size_t elemSize) noexcept {
         using namespace dxmt9::d3d9::pe;
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
+            return D3DERR_DEVICELOST;
+        }
         if (count == 0u) return S_OK;
         const auto* bytes = static_cast<const std::uint8_t*>(data);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             try {
                 for (std::uint32_t i = 0u; i < count; ++i) {
                     const std::uint32_t reg = start + i;
@@ -3383,13 +3357,13 @@ public:
         if (recorderLockRequired_) recorderMutex_.unlock();
     }
     bool IsStateBlockRecorderPoisonedForChild() const noexcept override {
-        return stateBlockRecorderPoisoned_;
+        return recorderState_.stateBlockTransaction.isPoisoned();
     }
     void DiscardPreparedStateBlockApplyForChild() noexcept override {
         discardPreparedStateBlockApply();
     }
     void PoisonStateBlockRecorderForChild() noexcept override {
-        stateBlockRecorderPoisoned_ = true;
+        recorderState_.stateBlockTransaction.poison();
     }
     HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept override {
         if (!buffer) {
@@ -3499,16 +3473,18 @@ public:
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         uint32_t stage) noexcept;
     bool IsStateBlockRecordingForChild() const noexcept override {
-        return stateBlockRecording_;
+        return recorderState_.stateBlockTransaction.isRecording();
     }
     void InvalidateStateBlockShadowForChild() noexcept override {
         peState_.clearServerShadowTables();
         clearPendingHotState();
     }
     void AddDefaultPoolResourceRefForChild() noexcept override {
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         ++defaultPoolResourceRefs_;
     }
     void ReleaseDefaultPoolResourceRefForChild() noexcept override {
+        PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
         if (defaultPoolResourceRefs_ != 0) {
             --defaultPoolResourceRefs_;
         }
@@ -3922,7 +3898,7 @@ public:
                 if (foreign) return finishPeCall(D3DERR_INVALIDCALL);
             }
         }
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.renderTargets(), idx, pSurf);
             hotSetter.markDirty();
             return finishPeCall(S_OK);
@@ -3992,7 +3968,7 @@ public:
                 }
             }
         }
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.depthStencil(), 0u, pSurf);
             hotSetter.markDirty();
             return S_OK;
@@ -4146,7 +4122,7 @@ public:
             peState_.transformShadowTyped().get(key, liveValue);
         const bool liveEquals = liveContains && matrixEquals(liveValue, wireM);
         const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-            .phase = stateBlockRecording_ ? RecorderPhase::Recording
+            .phase = recorderState_.stateBlockTransaction.isRecording() ? RecorderPhase::Recording
                                           : RecorderPhase::Live,
             .origin = origin,
             .liveContains = liveContains,
@@ -4224,7 +4200,7 @@ public:
         notePeDeviceCallAfterPresent("MultiplyTransform");
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_multiply_transform device=%p state=%u", this, (unsigned)state);
         D3DMATRIX cur{};
@@ -4262,7 +4238,7 @@ public:
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
                         pVP->MinZ, pVP->MaxZ };
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             stateBlockState_.viewport().set(0u, vp);
             hotSetter.markDirty();
             return S_OK;
@@ -4291,7 +4267,7 @@ public:
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             stateBlockState_.scissor().set(0u, cr);
             hotSetter.markDirty();
             return S_OK;
@@ -4317,7 +4293,7 @@ public:
                 -> HRESULT {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             stateBlockState_.material().set(0u, *reinterpret_cast<const D9CMaterial*>(pM));
             hotSetter.markDirty();
             return S_OK;
@@ -4356,7 +4332,7 @@ public:
         cl.attenuation1 = pL->Attenuation1;
         cl.attenuation2 = pL->Attenuation2;
         cl.theta = pL->Theta; cl.phi = pL->Phi;
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
             stateBlockState_.lights().set(idx, cl);
             hotSetter.markDirty();
@@ -4391,7 +4367,7 @@ public:
             [&](auto& hotSetter) __attribute__((always_inline)) noexcept
                 -> HRESULT {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
             stateBlockState_.lightEnables().set(idx, en ? 1u : 0u);
             hotSetter.markDirty();
@@ -4435,7 +4411,7 @@ public:
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             std::array<float, 4> plane{};
             std::memcpy(plane.data(), pPlane, sizeof(plane));
             stateBlockState_.clipPlanes().set(idx, plane);
@@ -4556,7 +4532,7 @@ public:
         const bool liveContains =
             peState_.renderStateShadowTyped().get(renderKey, liveValue);
         const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-            .phase = stateBlockRecording_ ? RecorderPhase::Recording
+            .phase = recorderState_.stateBlockTransaction.isRecording() ? RecorderPhase::Recording
                                           : RecorderPhase::Live,
             .origin = WriteOrigin::ExplicitSet,
             .liveContains = liveContains,
@@ -4599,6 +4575,9 @@ public:
                                               DWORD value) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
+        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
+            return D3DERR_DEVICELOST;
+        }
         PeDiagnosticsState* const diagnostics = diagnostics_.get();
         if (!diagnostics || !diagnostics->gates.hotSetterTimer) {
             return setRenderStateCore(state, value, peNullHotSetter_);
@@ -4668,7 +4647,7 @@ public:
         const bool liveContains =
             peState_.tssShadowTyped().get(stageKey, typeKey, liveValue);
         const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-            .phase = stateBlockRecording_ ? RecorderPhase::Recording
+            .phase = recorderState_.stateBlockTransaction.isRecording() ? RecorderPhase::Recording
                                           : RecorderPhase::Live,
             .origin = WriteOrigin::ExplicitSet,
             .liveContains = liveContains,
@@ -4732,7 +4711,7 @@ public:
         const bool liveContains = peState_.samplerStateShadowTyped().get(
             samplerIndexKeyVal, stateTypeKeyVal, liveValue);
         const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-            .phase = stateBlockRecording_ ? RecorderPhase::Recording
+            .phase = recorderState_.stateBlockTransaction.isRecording() ? RecorderPhase::Recording
                                           : RecorderPhase::Live,
             .origin = WriteOrigin::ExplicitSet,
             .liveContains = liveContains,
@@ -4832,7 +4811,7 @@ public:
         // anything else is D3DERR_INVALIDCALL.
         uint32_t textureSlot = 0;
         if (!fragmentTextureStageSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.textures(), textureSlot, pTex);
             hotSetter.markDirty();
             return S_OK;
@@ -4853,43 +4832,76 @@ public:
     /* ── FVF / vertex declaration ── */
     /// Resolve (and cache) the implicit IDirect3DVertexDeclaration9 for an
     /// FVF. The cache owns one ref per entry; this function does NOT add a
-    /// new reference for the caller — call AddRef yourself before handing
-    /// the pointer out. Returns nullptr only on allocation failure.
-    IDirect3DVertexDeclaration9* implicitDeclForFvf(DWORD fvf) {
-        if (fvf == 0) return nullptr;
+    /// new reference for the caller. All allocation/backend/wrapper failures
+    /// are translated to HRESULT so noexcept COM entries cannot terminate.
+    HRESULT resolveImplicitDeclForFvf(
+        DWORD fvf, IDirect3DVertexDeclaration9** out) noexcept {
+        if (!out) return D3DERR_INVALIDCALL;
+        *out = nullptr;
+        if (fvf == 0) return S_OK;
         if (auto it = fvfDeclCache_.find(fvf); it != fvfDeclCache_.end()) {
-            return it->second;
+            *out = it->second;
+            return S_OK;
         }
-        std::vector<D3DVERTEXELEMENT9> elements;
-        fvfToVertexElements(fvf, elements);
-        D9CVertexElement tmp[MAXD3DDECLLENGTH + 1]{};
-        const size_t n = elements.size();
-        if (n > MAXD3DDECLLENGTH + 1) return nullptr;
-        for (size_t i = 0; i < n; ++i) {
-            tmp[i].stream     = elements[i].Stream;
-            tmp[i].offset     = elements[i].Offset;
-            tmp[i].type       = elements[i].Type;
-            tmp[i].method     = elements[i].Method;
-            tmp[i].usage      = elements[i].Usage;
-            tmp[i].usageIndex = elements[i].UsageIndex;
+        try {
+            std::vector<D3DVERTEXELEMENT9> elements;
+            fvfToVertexElements(fvf, elements);
+            D9CVertexElement tmp[MAXD3DDECLLENGTH + 1]{};
+            const size_t n = elements.size();
+            if (n > MAXD3DDECLLENGTH + 1) return D3DERR_INVALIDCALL;
+            for (size_t i = 0; i < n; ++i) {
+                tmp[i].stream     = elements[i].Stream;
+                tmp[i].offset     = elements[i].Offset;
+                tmp[i].type       = elements[i].Type;
+                tmp[i].method     = elements[i].Method;
+                tmp[i].usage      = elements[i].Usage;
+                tmp[i].usageIndex = elements[i].UsageIndex;
+            }
+            const auto result =
+                dxmt9::d3d9::pe::createImplicitFvfDeclTransaction<
+                    D9CVertexDecl*, IDirect3DVertexDeclaration9*>(
+                    [&]() {
+                        return dxmt9c_device_create_vertex_declaration(dev_, tmp);
+                    },
+                    [](D9CVertexDecl* decl) noexcept {
+                        dxmt9c_vdecl_release(decl);
+                    },
+                    [&](D9CVertexDecl* decl) {
+                        IDirect3DVertexDeclaration9* wrapper =
+                            CreatePeVertexDecl(decl, this, this);
+                        if (wrapper) {
+                            // Create must precede any failure cleanup because
+                            // the wrapper destructor emits ObjectDestroy.
+                            notifyRenderTapeCreatedVertexDecl(
+                                decl, D3D9PeWireVertexDecl(wrapper),
+                                std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte *>(tmp),
+                                    n * sizeof(tmp[0])), n);
+                        }
+                        return wrapper;
+                    },
+                    [](IDirect3DVertexDeclaration9* decl) noexcept {
+                        decl->Release();
+                    },
+                    [&](IDirect3DVertexDeclaration9* decl) {
+                        return fvfDeclCache_.emplace(fvf, decl).second;
+                    });
+            if (!result) {
+                return result.failure ==
+                        dxmt9::d3d9::pe::ImplicitFvfDeclFailure::Backend
+                    ? D3DERR_INVALIDCALL
+                    : E_OUTOFMEMORY;
+            }
+            *out = result.wrapper;
+            return S_OK;
+        } catch (...) {
+            return E_OUTOFMEMORY;
         }
-        D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
-        if (!d) return nullptr;
-        IDirect3DVertexDeclaration9* decl = CreatePeVertexDecl(d, this, this);
-        if (!decl) return nullptr;
-        notifyRenderTapeCreatedVertexDecl(
-            d, D3D9PeWireVertexDecl(decl),
-            std::span<const std::byte>(
-                reinterpret_cast<const std::byte *>(tmp),
-                n * sizeof(tmp[0])), n);
-        /* Cache holds one ref. */
-        fvfDeclCache_.emplace(fvf, decl);
-        return decl;
     }
 
     HRESULT PrepareStateBlockApplyForChild(
         const D3D9StateBlockShadow& shadow) override {
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         discardPreparedStateBlockApply();
         const auto prepareConst = [&](ConstShadow& live,
                                       const StateBlockConstShadow& recorded,
@@ -4937,62 +4949,136 @@ public:
                           sizeof(std::uint32_t), kPsConstBMax);
         if (FAILED(hr)) return hr;
 
-        // Resolve/cache before backend mutation. Commit can then select the
-        // already-owned declaration without a fallible map/vector operation.
-        HRESULT fvfHr = S_OK;
-        try {
-            shadow.categories.fvf().forEach([&](std::size_t, DWORD fvf) {
-                if (SUCCEEDED(fvfHr) && fvf != 0u &&
-                    !implicitDeclForFvf(fvf)) {
-                    fvfHr = E_OUTOFMEMORY;
+        // Resolve/cache and retain by walking the authoritative 26-store
+        // APPLY PHYSICAL inventory. Resolution stays before every retain so a failing implicit
+        // FVF lookup leaves no staged ownership. Commit can then stay
+        // allocation-free after backend mutation; a tracked null remains
+        // represented by its occupancy mask.
+        HRESULT categoryHr = S_OK;
+        shadow.categories.forEachApplyPhysical(
+            [&]<StateBlockApplyPhysicalStore store>(const auto& values) {
+                constexpr auto descriptor =
+                    stateBlockApplyPhysicalDescriptor<store>();
+                constexpr auto role = descriptor.role;
+                if constexpr (role ==
+                              StateBlockApplyCategoryRole::ImplicitFvf) {
+                    values.forEach([&](std::size_t, DWORD fvf) {
+                        IDirect3DVertexDeclaration9* decl = nullptr;
+                        if (SUCCEEDED(categoryHr)) {
+                            categoryHr = resolveImplicitDeclForFvf(fvf, &decl);
+                        }
+                    });
+                } else if constexpr (
+                    descriptor.kind == StateBlockApplyPhysicalKind::Fixed) {
+                    static_assert(
+                        role == StateBlockApplyCategoryRole::Value ||
+                        role == StateBlockApplyCategoryRole::
+                                    CandidateOwnedVertexDeclaration ||
+                        role >= StateBlockApplyCategoryRole::StagedTexture,
+                        "StateBlock resolution role is not handled");
+                } else if constexpr (
+                    descriptor.kind == StateBlockApplyPhysicalKind::Keyed) {
+                    static_assert(
+                        store == StateBlockApplyPhysicalStore::renderStates ||
+                        store == StateBlockApplyPhysicalStore::textureStageStates ||
+                        store == StateBlockApplyPhysicalStore::samplerStates ||
+                        store == StateBlockApplyPhysicalStore::transforms,
+                        "StateBlock Prepare keyed store is not bound");
+                } else {
+                    static_assert(
+                        store == StateBlockApplyPhysicalStore::vsConstF ||
+                        store == StateBlockApplyPhysicalStore::vsConstI ||
+                        store == StateBlockApplyPhysicalStore::vsConstB ||
+                        store == StateBlockApplyPhysicalStore::psConstF ||
+                        store == StateBlockApplyPhysicalStore::psConstI ||
+                        store == StateBlockApplyPhysicalStore::psConstB,
+                        "StateBlock Prepare constant store is not bound");
                 }
             });
-        } catch (const std::bad_alloc&) {
-            fvfHr = E_OUTOFMEMORY;
-        }
-        if (FAILED(fvfHr)) return fvfHr;
-
-        // All COM retains needed by the commit are acquired before backend
-        // mutation. A tracked null remains represented by its occupancy mask.
-        shadow.categories.textures().forEach(
-            [&](std::size_t slot, void* value) {
-                retainApplyRef(stagedApplyTextures_[slot], value);
-                stagedApplyTextureMask_ |= 1u << slot;
+        if (FAILED(categoryHr)) return categoryHr;
+        shadow.categories.forEachApplyPhysical(
+            [&]<StateBlockApplyPhysicalStore store>(const auto& values) {
+                constexpr auto descriptor =
+                    stateBlockApplyPhysicalDescriptor<store>();
+                constexpr auto role = descriptor.role;
+                if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedTexture) {
+                    values.forEach([&](std::size_t slot, auto value) {
+                        recorderState_.stateBlockTransaction.stageTexture(
+                            slot, value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedStreamSource) {
+                    values.forEach([&](std::size_t slot, const auto& value) {
+                        recorderState_.stateBlockTransaction.stageStream(
+                            slot, value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedVertexShader) {
+                    values.forEach([&](std::size_t, auto value) {
+                        recorderState_.stateBlockTransaction.stageVertexShader(
+                            value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedPixelShader) {
+                    values.forEach([&](std::size_t, auto value) {
+                        recorderState_.stateBlockTransaction.stagePixelShader(
+                            value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedIndexBuffer) {
+                    values.forEach([&](std::size_t, auto value) {
+                        recorderState_.stateBlockTransaction.stageIndexBuffer(
+                            value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedRenderTarget) {
+                    values.forEach([&](std::size_t slot, auto value) {
+                        recorderState_.stateBlockTransaction.stageRenderTarget(
+                            slot, value, retainApplyRef);
+                    });
+                } else if constexpr (
+                    role == StateBlockApplyCategoryRole::StagedDepthStencil) {
+                    values.forEach([&](std::size_t, auto value) {
+                        recorderState_.stateBlockTransaction.stageDepthStencil(
+                            value, retainApplyRef);
+                    });
+                } else {
+                    if constexpr (descriptor.kind ==
+                                  StateBlockApplyPhysicalKind::Keyed) {
+                        static_assert(
+                            store == StateBlockApplyPhysicalStore::renderStates ||
+                            store == StateBlockApplyPhysicalStore::textureStageStates ||
+                            store == StateBlockApplyPhysicalStore::samplerStates ||
+                            store == StateBlockApplyPhysicalStore::transforms,
+                            "StateBlock Prepare keyed store is not bound");
+                    } else if constexpr (descriptor.kind ==
+                                         StateBlockApplyPhysicalKind::Constant) {
+                        static_assert(
+                            store == StateBlockApplyPhysicalStore::vsConstF ||
+                            store == StateBlockApplyPhysicalStore::vsConstI ||
+                            store == StateBlockApplyPhysicalStore::vsConstB ||
+                            store == StateBlockApplyPhysicalStore::psConstF ||
+                            store == StateBlockApplyPhysicalStore::psConstI ||
+                            store == StateBlockApplyPhysicalStore::psConstB,
+                            "StateBlock Prepare constant store is not bound");
+                    } else {
+                        static_assert(
+                            role == StateBlockApplyCategoryRole::Value ||
+                            role == StateBlockApplyCategoryRole::ImplicitFvf ||
+                            role == StateBlockApplyCategoryRole::
+                                        CandidateOwnedVertexDeclaration,
+                            "StateBlock Prepare role is not handled");
+                    }
+                }
             });
-        shadow.categories.streamSources().forEach(
-            [&](std::size_t slot, const StateBlockStreamSourceValue& value) {
-                stagedApplyStreams_[slot] = value;
-                retainApplyRef(stagedApplyStreams_[slot].buffer.rawRef(),
-                               value.buffer.raw());
-                stagedApplyStreamMask_ |= 1u << slot;
-            });
-        shadow.categories.vertexShader().forEach([&](std::size_t, void* value) {
-            retainApplyRef(stagedApplyVs_, value);
-            stagedApplyVsValid_ = true;
-        });
-        shadow.categories.pixelShader().forEach([&](std::size_t, void* value) {
-            retainApplyRef(stagedApplyPs_, value);
-            stagedApplyPsValid_ = true;
-        });
-        shadow.categories.indexBuffer().forEach([&](std::size_t, void* value) {
-            retainApplyRef(stagedApplyIndex_, value);
-            stagedApplyIndexValid_ = true;
-        });
-        shadow.categories.renderTargets().forEach(
-            [&](std::size_t slot, void* value) {
-                retainApplyRef(stagedApplyRenderTargets_[slot], value);
-                stagedApplyRenderTargetMask_ |= 1u << slot;
-            });
-        shadow.categories.depthStencil().forEach([&](std::size_t, void* value) {
-            retainApplyRef(stagedApplyDepthStencil_, value);
-            stagedApplyDepthStencilValid_ = true;
-        });
-        return fvfHr;
+        recorderState_.stateBlockTransaction.markApplyPrepared();
+        return categoryHr;
     }
 
     void CommitStateBlockApplyForChild(
         const D3D9StateBlockShadow& shadow) noexcept override {
-        if (stateBlockRecorderPoisoned_) return;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return;
         auto copyConst = [](ConstShadow& live,
                             const StateBlockConstShadow& recorded,
                             std::size_t elemSize) noexcept {
@@ -5039,110 +5125,178 @@ public:
             peState_.pendingTransformsTyped().erase(key);
         });
 
-        shadow.categories.textures().forEach([&](std::size_t slot, void*) {
-            if (textures_[slot]) textures_[slot]->Release();
-            textures_[slot] = reinterpret_cast<IDirect3DBaseTexture9*>(
-                stagedApplyTextures_[slot]);
-            stagedApplyTextures_[slot] = nullptr;
-            peState_.pendingTextureMask &= ~(1u << slot);
-        });
-        shadow.categories.streamSources().forEach(
-            [&](std::size_t slot, const StateBlockStreamSourceValue&) {
-                if (streamSrc_[slot]) streamSrc_[slot]->Release();
-                streamSrc_[slot] = reinterpret_cast<IDirect3DVertexBuffer9*>(
-                    stagedApplyStreams_[slot].buffer.raw());
-                streamOff_[slot] = stagedApplyStreams_[slot].offset;
-                streamStr_[slot] = stagedApplyStreams_[slot].stride;
-                stagedApplyStreams_[slot].buffer = nullptr;
-                peState_.pendingStreamMask &= ~(1u << slot);
+        // This visitor is deliberately compile-time-only binding for the
+        // manually specialized keyed/constant commit code surrounding the
+        // generated fixed-category visitor below. A new physical row must be
+        // classified here before this PE COM TU can compile.
+        shadow.categories.forEachApplyPhysical(
+            []<StateBlockApplyPhysicalStore store>(const auto&) {
+                constexpr auto descriptor =
+                    stateBlockApplyPhysicalDescriptor<store>();
+                if constexpr (descriptor.kind ==
+                              StateBlockApplyPhysicalKind::Keyed) {
+                    static_assert(
+                        store == StateBlockApplyPhysicalStore::renderStates ||
+                        store == StateBlockApplyPhysicalStore::textureStageStates ||
+                        store == StateBlockApplyPhysicalStore::samplerStates ||
+                        store == StateBlockApplyPhysicalStore::transforms,
+                        "StateBlock Commit keyed store is not bound");
+                } else if constexpr (descriptor.kind ==
+                                     StateBlockApplyPhysicalKind::Constant) {
+                    static_assert(
+                        store == StateBlockApplyPhysicalStore::vsConstF ||
+                        store == StateBlockApplyPhysicalStore::vsConstI ||
+                        store == StateBlockApplyPhysicalStore::vsConstB ||
+                        store == StateBlockApplyPhysicalStore::psConstF ||
+                        store == StateBlockApplyPhysicalStore::psConstI ||
+                        store == StateBlockApplyPhysicalStore::psConstB,
+                        "StateBlock Commit constant store is not bound");
+                } else {
+                    static_assert(
+                        descriptor.role == StateBlockApplyCategoryRole::Value ||
+                        descriptor.role == StateBlockApplyCategoryRole::ImplicitFvf ||
+                        descriptor.role == StateBlockApplyCategoryRole::
+                                    CandidateOwnedVertexDeclaration ||
+                        descriptor.role >= StateBlockApplyCategoryRole::
+                                    StagedTexture,
+                        "StateBlock Commit fixed store is not bound");
+                }
             });
-        shadow.categories.streamFrequencies().forEach(
-            [&](std::size_t slot, std::uint32_t value) {
-                streamFreq_[slot] = value;
+
+        using Category = StateBlockRecorded::Category;
+        shadow.categories.forEachTypedCategory(
+            [&]<Category category>(const auto& values) {
+                if constexpr (category == Category::textures) {
+                    values.forEach([&](std::size_t slot, auto) {
+                        if (textures_[slot]) textures_[slot]->Release();
+                        textures_[slot] =
+                            reinterpret_cast<IDirect3DBaseTexture9*>(
+                                recorderState_.stateBlockTransaction.takeTexture(slot).raw());
+                        peState_.pendingTextureMask &= ~(1u << slot);
+                    });
+                } else if constexpr (category == Category::streamSources) {
+                    values.forEach([&](std::size_t slot, const auto&) {
+                        if (streamSrc_[slot]) streamSrc_[slot]->Release();
+                        const auto staged =
+                            recorderState_.stateBlockTransaction.takeStream(slot);
+                        streamSrc_[slot] =
+                            reinterpret_cast<IDirect3DVertexBuffer9*>(
+                                staged.buffer.raw());
+                        streamOff_[slot] = staged.offset;
+                        streamStr_[slot] = staged.stride;
+                        peState_.pendingStreamMask &= ~(1u << slot);
+                    });
+                } else if constexpr (category ==
+                                     Category::streamFrequencies) {
+                    values.forEach([&](std::size_t slot, std::uint32_t value) {
+                        streamFreq_[slot] = value;
+                    });
+                } else if constexpr (category == Category::vertexShader) {
+                    values.forEach([&](std::size_t, auto) {
+                        if (vs_) vs_->Release();
+                        vs_ = reinterpret_cast<IDirect3DVertexShader9*>(
+                            recorderState_.stateBlockTransaction.takeVertexShader().raw());
+                        peState_.pendingVs = false;
+                    });
+                } else if constexpr (category == Category::pixelShader) {
+                    values.forEach([&](std::size_t, auto) {
+                        if (ps_) ps_->Release();
+                        ps_ = reinterpret_cast<IDirect3DPixelShader9*>(
+                            recorderState_.stateBlockTransaction.takePixelShader().raw());
+                        peState_.pendingPs = false;
+                    });
+                } else if constexpr (category == Category::fvf) {
+                    values.forEach([&](std::size_t, DWORD value) {
+                        fvf_ = value;
+                        peState_.pendingFvf = false;
+                        peState_.pendingVdecl = false;
+                        if (value == 0u) {
+                            vdecl_ = nullptr;
+                        } else {
+                            const auto it = fvfDeclCache_.find(value);
+                            DXMT_ASSERT(it != fvfDeclCache_.end());
+                            vdecl_ = it == fvfDeclCache_.end()
+                                ? nullptr : it->second;
+                        }
+                    });
+                } else if constexpr (category ==
+                                     Category::vertexDeclaration) {
+                    values.forEach([&](std::size_t, auto value) {
+                        vdecl_ =
+                            reinterpret_cast<IDirect3DVertexDeclaration9*>(
+                                value.raw());
+                        peState_.pendingVdecl = false;
+                    });
+                } else if constexpr (category == Category::indexBuffer) {
+                    values.forEach([&](std::size_t, auto) {
+                        if (indexBuf_) indexBuf_->Release();
+                        indexBuf_ = reinterpret_cast<IDirect3DIndexBuffer9*>(
+                            recorderState_.stateBlockTransaction.takeIndexBuffer().raw());
+                        peState_.pendingIb = false;
+                    });
+                } else if constexpr (category == Category::renderTargets) {
+                    values.forEach([&](std::size_t slot, auto) {
+                        if (rtSlots_[slot]) rtSlots_[slot]->Release();
+                        rtSlots_[slot] = reinterpret_cast<IDirect3DSurface9*>(
+                            recorderState_.stateBlockTransaction.takeRenderTarget(slot).raw());
+                        rtSlotExplicit_[slot] = true;
+                        peState_.pendingRtMask &= ~(1u << slot);
+                    });
+                } else if constexpr (category == Category::depthStencil) {
+                    values.forEach([&](std::size_t, auto) {
+                        if (dsSurface_) dsSurface_->Release();
+                        dsSurface_ = reinterpret_cast<IDirect3DSurface9*>(
+                            recorderState_.stateBlockTransaction.takeDepthStencil().raw());
+                        dsSurfaceExplicit_ = true;
+                        peState_.pendingDs = false;
+                    });
+                } else if constexpr (category == Category::viewport) {
+                    values.forEach([&](std::size_t, const D9CViewport& value) {
+                        peState_.viewportShadow = value;
+                        peState_.pendingViewport = false;
+                    });
+                } else if constexpr (category == Category::scissor) {
+                    values.forEach([&](std::size_t, const D9CRect& value) {
+                        peState_.scissorShadow = value;
+                        peState_.pendingScissor = false;
+                    });
+                } else if constexpr (category == Category::material) {
+                    values.forEach([&](std::size_t, const D9CMaterial& value) {
+                        peState_.materialShadow = value;
+                        peState_.pendingMaterial = false;
+                    });
+                } else if constexpr (category == Category::clipPlanes) {
+                    values.forEach([&](std::size_t idx, const auto& value) {
+                        std::memcpy(peState_.clipPlaneShadow + idx * 4u,
+                                    value.data(), sizeof(value));
+                        peState_.pendingClipPlaneMask &= ~(1u << idx);
+                    });
+                } else if constexpr (category == Category::lights) {
+                    values.forEach([&](std::size_t idx,
+                                       const D9CLight& value) {
+                        peState_.lightShadow[idx] = value;
+                        peState_.pendingLightSlotMask &= ~(1u << idx);
+                    });
+                } else if constexpr (category == Category::lightEnables) {
+                    values.forEach([&](std::size_t idx,
+                                       std::uint32_t value) {
+                        const std::uint32_t bit = 1u << idx;
+                        if (value) peState_.lightEnableShadow |= bit;
+                        else peState_.lightEnableShadow &= ~bit;
+                        peState_.pendingLightEnableValidMask &= ~bit;
+                        peState_.pendingLightEnableMask &= ~bit;
+                    });
+                } else {
+                    []<bool handled = false>() {
+                        static_assert(handled,
+                                      "StateBlock Commit category omitted");
+                    }();
+                }
             });
-        shadow.categories.vertexShader().forEach([&](std::size_t, void*) {
-            if (vs_) vs_->Release();
-            vs_ = reinterpret_cast<IDirect3DVertexShader9*>(stagedApplyVs_);
-            stagedApplyVs_ = nullptr;
-            stagedApplyVsValid_ = false;
-            peState_.pendingVs = false;
-        });
-        shadow.categories.pixelShader().forEach([&](std::size_t, void*) {
-            if (ps_) ps_->Release();
-            ps_ = reinterpret_cast<IDirect3DPixelShader9*>(stagedApplyPs_);
-            stagedApplyPs_ = nullptr;
-            stagedApplyPsValid_ = false;
-            peState_.pendingPs = false;
-        });
-        shadow.categories.fvf().forEach([&](std::size_t, DWORD value) {
-            fvf_ = value;
-            peState_.pendingFvf = false;
-            peState_.pendingVdecl = false;
-            vdecl_ = value == 0u ? nullptr : implicitDeclForFvf(value);
-        });
-        shadow.categories.vertexDeclaration().forEach([&](std::size_t, void* value) {
-            vdecl_ = reinterpret_cast<IDirect3DVertexDeclaration9*>(value);
-            peState_.pendingVdecl = false;
-        });
         if (shadow.hasVdecl && !shadow.categories.vertexDeclaration().contains(0u)) {
             vdecl_ = shadow.vdecl;
             peState_.pendingVdecl = false;
         }
-        shadow.categories.indexBuffer().forEach([&](std::size_t, void*) {
-            if (indexBuf_) indexBuf_->Release();
-            indexBuf_ = reinterpret_cast<IDirect3DIndexBuffer9*>(stagedApplyIndex_);
-            stagedApplyIndex_ = nullptr;
-            stagedApplyIndexValid_ = false;
-            peState_.pendingIb = false;
-        });
-        shadow.categories.renderTargets().forEach(
-            [&](std::size_t slot, void*) {
-                if (rtSlots_[slot]) rtSlots_[slot]->Release();
-                rtSlots_[slot] = reinterpret_cast<IDirect3DSurface9*>(
-                    stagedApplyRenderTargets_[slot]);
-                stagedApplyRenderTargets_[slot] = nullptr;
-                rtSlotExplicit_[slot] = true;
-                peState_.pendingRtMask &= ~(1u << slot);
-            });
-        shadow.categories.depthStencil().forEach([&](std::size_t, void*) {
-            if (dsSurface_) dsSurface_->Release();
-            dsSurface_ = reinterpret_cast<IDirect3DSurface9*>(
-                stagedApplyDepthStencil_);
-            stagedApplyDepthStencil_ = nullptr;
-            stagedApplyDepthStencilValid_ = false;
-            dsSurfaceExplicit_ = true;
-            peState_.pendingDs = false;
-        });
-        shadow.categories.viewport().forEach([&](std::size_t, const D9CViewport& value) {
-            peState_.viewportShadow = value;
-            peState_.pendingViewport = false;
-        });
-        shadow.categories.scissor().forEach([&](std::size_t, const D9CRect& value) {
-            peState_.scissorShadow = value;
-            peState_.pendingScissor = false;
-        });
-        shadow.categories.material().forEach([&](std::size_t, const D9CMaterial& value) {
-            peState_.materialShadow = value;
-            peState_.pendingMaterial = false;
-        });
-        shadow.categories.clipPlanes().forEach(
-            [&](std::size_t idx, const std::array<float, 4>& value) {
-                std::memcpy(peState_.clipPlaneShadow + idx * 4u, value.data(),
-                            sizeof(value));
-                peState_.pendingClipPlaneMask &= ~(1u << idx);
-            });
-        shadow.categories.lights().forEach([&](std::size_t idx, const D9CLight& value) {
-            peState_.lightShadow[idx] = value;
-            peState_.pendingLightSlotMask &= ~(1u << idx);
-        });
-        shadow.categories.lightEnables().forEach(
-            [&](std::size_t idx, std::uint32_t value) {
-                const std::uint32_t bit = 1u << idx;
-                if (value) peState_.lightEnableShadow |= bit;
-                else peState_.lightEnableShadow &= ~bit;
-                peState_.pendingLightEnableValidMask &= ~bit;
-                peState_.pendingLightEnableMask &= ~bit;
-            });
         copyConst(peConsts_.vsConstF, shadow.constants.vsConstF,
                   sizeof(float) * 4u);
         copyConst(peConsts_.vsConstI, shadow.constants.vsConstI,
@@ -5155,11 +5309,8 @@ public:
                   sizeof(std::int32_t) * 4u);
         copyConst(peConsts_.psConstB, shadow.constants.psConstB,
                   sizeof(std::uint32_t));
-        stagedApplyTextureMask_ = 0u;
-        stagedApplyStreamMask_ = 0u;
-        stagedApplyRenderTargetMask_ = 0u;
-        stagedApplyVsValid_ = stagedApplyPsValid_ = stagedApplyIndexValid_ =
-            stagedApplyDepthStencilValid_ = false;
+        DXMT_ASSERT(!recorderState_.stateBlockTransaction.hasPreparedApply());
+        recorderState_.stateBlockTransaction.finishPreparedApply();
     }
 
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override {
@@ -5168,7 +5319,7 @@ public:
             [&](auto& hotSetter) __attribute__((always_inline)) noexcept
                 -> HRESULT {
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             stateBlockState_.fvf().set(0u, fvf);
             hotSetter.markDirty();
             return S_OK;
@@ -5177,6 +5328,10 @@ public:
             /* Same FVF, decl already mirrored. */
             return S_OK;
         }
+        IDirect3DVertexDeclaration9* implicitDecl = nullptr;
+        const HRESULT resolveHr =
+            resolveImplicitDeclForFvf(fvf, &implicitDecl);
+        if (FAILED(resolveHr)) return resolveHr;
         fvf_ = fvf;
         peState_.pendingFvf = true;
         peState_.pendingVdecl = true;
@@ -5187,7 +5342,7 @@ public:
          * test_fvf_decl_management). vdecl_ is borrowed (see
          * SetVertexDeclaration for Wine refcount semantics) — the
          * implicit decl is kept alive by fvfDeclCache_. */
-        vdecl_ = implicitDeclForFvf(fvf);
+        vdecl_ = implicitDecl;
         return S_OK;
             });
     }
@@ -5210,7 +5365,7 @@ public:
         // during BeginStateBlock/EndStateBlock so the resulting block's
         // tracked set includes the vdecl slot. The flag is consumed by
         // CaptureStateBlockShadowForChild and cleared in EndStateBlock.
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             stateBlockState_.setVertexDeclarationRecorded(true);
             setRecordedRef(stateBlockState_.vertexDeclaration(), 0u, pVD);
             stateBlockState_.fvf().set(0u, 0u);
@@ -5253,7 +5408,7 @@ public:
             [&](auto& hotSetter) __attribute__((always_inline)) noexcept
                 -> HRESULT {
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.vertexShader(), 0u, pVS);
             hotSetter.markDirty();
             return S_OK;
@@ -5366,7 +5521,7 @@ public:
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantFSlow(start, pData, count);
         }
@@ -5401,7 +5556,7 @@ public:
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantISlow(start, pData, count);
         }
@@ -5434,7 +5589,7 @@ public:
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantBSlow(start, pData, count);
         }
@@ -5471,7 +5626,7 @@ public:
         // or non-zero stride) flow through the regular store-as-given
         // path.
         if (pBuf == nullptr && offset == 0 && stride == 0) {
-            if (stateBlockRecording_) {
+            if (recorderState_.stateBlockTransaction.isRecording()) {
                 StateBlockStreamSourceValue value{};
                 value.buffer = nullptr;
                 value.offset = streamOff_[stream];
@@ -5491,7 +5646,7 @@ public:
             hotSetter.markDirty();
             return finishPeCall(S_OK);
         }
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             StateBlockStreamSourceValue value{
                 .buffer = pBuf,
                 .offset = offset,
@@ -5553,7 +5708,7 @@ public:
             (freq & ~(kIndexedData | kInstanceData)) == 0) {
             return D3DERR_INVALIDCALL;
         }
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             // Frequency is an independent state-block aspect. Do not
             // implicitly capture or replay the source tuple.
             stateBlockState_.streamFrequencies().set(stream, freq);
@@ -5580,7 +5735,7 @@ public:
             return peCall.finish("SetIndices", hr);
         };
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.indexBuffer(), 0u, pIBuf);
             hotSetter.markDirty();
             return finishPeCall(S_OK);
@@ -5604,7 +5759,7 @@ public:
             [&](auto& hotSetter) __attribute__((always_inline)) noexcept
                 -> HRESULT {
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
-        if (stateBlockRecording_) {
+        if (recorderState_.stateBlockTransaction.isRecording()) {
             setRecordedRef(stateBlockState_.pixelShader(), 0u, pPS);
             hotSetter.markDirty();
             return S_OK;
@@ -5660,7 +5815,7 @@ public:
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantFSlow(start, pData, count);
         }
@@ -5693,7 +5848,7 @@ public:
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantISlow(start, pData, count);
         }
@@ -5726,7 +5881,7 @@ public:
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-        if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantBSlow(start, pData, count);
         }

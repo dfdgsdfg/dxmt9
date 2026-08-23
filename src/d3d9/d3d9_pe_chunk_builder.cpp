@@ -30,6 +30,40 @@ bool identityEqual(const D9CCommandChunkWireHandleEntry& entry,
          entry.objectId == identity.objectId;
 }
 
+std::uint32_t constantRecordElementSize(std::uint32_t type) noexcept {
+  switch (type) {
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+      return 16u;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      return 4u;
+    default:
+      return 0u;
+  }
+}
+
+std::uint32_t constantRecordLimit(std::uint32_t type) noexcept {
+  switch (type) {
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+      return D9C_DRAW_PACKET_MAX_CONST_VS_F;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+      return D9C_DRAW_PACKET_MAX_CONST_VS_I;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+      return D9C_DRAW_PACKET_MAX_CONST_VS_B;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+      return D9C_DRAW_PACKET_MAX_CONST_PS_F;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+      return D9C_DRAW_PACKET_MAX_CONST_PS_I;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      return D9C_DRAW_PACKET_MAX_CONST_PS_B;
+    default:
+      return 0u;
+  }
+}
+
 }  // namespace
 
 void noteWireIdentityGetterCall() noexcept {
@@ -132,6 +166,181 @@ bool CommandChunkBuilder::overwritePayload(
     std::memcpy(payload_.data() + offset, bytes.data(), bytes.size());
   }
   return true;
+}
+
+bool CommandChunkBuilder::appendConstantSectionPayload(
+    std::uint16_t kind, std::uint32_t startRegister,
+    std::uint32_t registerCount, std::span<const std::byte> registerBytes,
+    std::uint32_t* recordRelativeOffset) noexcept {
+  const auto* rule = sectionRule(kind);
+  const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+  const auto end = static_cast<std::uint64_t>(startRegister) + registerCount;
+  const auto byteSize = static_cast<std::uint64_t>(registerCount) *
+                        (rule ? rule->elementSize : 0u);
+  if (!rule || !activeRule ||
+      (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+      (rule->ruleFlags & SectionRuleConstantRange) == 0u ||
+      registerCount == 0u || registerCount > rule->maxCount ||
+      end > rule->maxCount || byteSize != registerBytes.size()) {
+    return failActiveRecord();
+  }
+  const D9CCommandChunkWireConstantRange range{
+      .startRegister = startRegister,
+      .registerCount = registerCount,
+  };
+  return appendPayloadValue(range, recordRelativeOffset) &&
+         appendPayload(registerBytes, rule->payloadAlignment);
+}
+
+bool CommandChunkBuilder::appendUpDataSectionPayload(
+    std::uint16_t kind, std::span<const std::byte> bytes,
+    std::uint32_t* recordRelativeOffset) noexcept {
+  const auto* rule = sectionRule(kind);
+  const bool kindMatchesRecord =
+      kind == D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA
+          ? active_.active &&
+                active_.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP
+          : kind == D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA &&
+                active_.active &&
+                (active_.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP ||
+                 active_.type ==
+                     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP);
+  if (!rule || !kindMatchesRecord ||
+      (rule->ruleFlags & SectionRuleRawBytes) == 0u ||
+      bytes.empty() || bytes.size() > rule->maxCount ||
+      bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return failActiveRecord();
+  }
+  return appendPayload(bytes, rule->payloadAlignment, recordRelativeOffset);
+}
+
+bool CommandChunkBuilder::appendSectionTable(
+    std::span<const D9CCommandChunkWireSectionDesc> sections) noexcept {
+  const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+  D9CCommandChunkWireDrawHeader draw{};
+  const auto tableBytes = static_cast<std::uint64_t>(sections.size()) *
+                          sizeof(D9CCommandChunkWireSectionDesc);
+  const auto currentOffset = active_.active
+      ? payload_.size() - active_.payloadStart
+      : 0u;
+  if (!activeRule ||
+      (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+      sections.size() > D9C_COMMAND_CHUNK_SECTION_COUNT ||
+      !readActivePayloadValue(0u, draw) ||
+      draw.sectionCount != sections.size() ||
+      draw.sectionTableOffset != currentOffset ||
+      draw.sectionTableOffset != sizeof(draw) ||
+      tableBytes > std::numeric_limits<std::uint32_t>::max() ||
+      static_cast<std::uint64_t>(draw.sectionTableOffset) + tableBytes !=
+          draw.sectionPayloadOffset) {
+    return failActiveRecord();
+  }
+  return appendPayload(std::as_bytes(sections),
+                       alignof(D9CCommandChunkWireSectionDesc));
+}
+
+bool CommandChunkBuilder::overwriteSectionTable(
+    std::uint32_t recordRelativeOffset,
+    std::span<const D9CCommandChunkWireSectionDesc> sections) noexcept {
+  const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+  D9CCommandChunkWireDrawHeader draw{};
+  if (!activeRule ||
+      (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+      sections.size() > D9C_COMMAND_CHUNK_SECTION_COUNT ||
+      !readActivePayloadValue(0u, draw) ||
+      recordRelativeOffset != draw.sectionTableOffset ||
+      draw.sectionTableOffset != sizeof(draw) ||
+      draw.sectionCount != sections.size() ||
+      recordRelativeOffset % alignof(D9CCommandChunkWireSectionDesc) != 0u ||
+      static_cast<std::uint64_t>(recordRelativeOffset) +
+              static_cast<std::uint64_t>(sections.size_bytes()) !=
+          draw.sectionPayloadOffset ||
+      draw.sectionPayloadOffset > payload_.size() - active_.payloadStart) {
+    return failActiveRecord();
+  }
+
+  std::uint64_t expectedOffset = draw.sectionPayloadOffset;
+  std::uint16_t previousKind = 0u;
+  for (const auto& desc : sections) {
+    const auto* rule = sectionRule(desc.kind);
+    const auto expectedBytes = static_cast<std::uint64_t>(desc.count) *
+        (rule ? rule->elementSize : 0u);
+    const auto totalBytes = expectedBytes +
+        (rule && (rule->ruleFlags & SectionRuleConstantRange) != 0u
+             ? sizeof(D9CCommandChunkWireConstantRange)
+             : 0u);
+    std::size_t alignedOffset = 0u;
+    if (!rule || desc.kind <= previousKind ||
+        desc.elementSize != rule->elementSize || desc.count == 0u ||
+        desc.count > rule->maxCount ||
+        ((rule->ruleFlags & SectionRuleSingle) != 0u && desc.count != 1u) ||
+        desc.byteSize != totalBytes ||
+        !alignUp(static_cast<std::size_t>(expectedOffset),
+                 rule->payloadAlignment, alignedOffset) ||
+        desc.payloadOffset != alignedOffset ||
+        desc.payloadOffset % rule->payloadAlignment != 0u ||
+        desc.payloadOffset > payload_.size() - active_.payloadStart ||
+        desc.byteSize > payload_.size() - active_.payloadStart -
+                            desc.payloadOffset) {
+      return failActiveRecord();
+    }
+    if ((rule->ruleFlags & SectionRuleConstantRange) != 0u) {
+      D9CCommandChunkWireConstantRange range{};
+      if (!readActivePayloadValue(desc.payloadOffset, range) ||
+          range.registerCount != desc.count ||
+          static_cast<std::uint64_t>(range.startRegister) +
+                  range.registerCount >
+              rule->maxCount) {
+        return failActiveRecord();
+      }
+    }
+    previousKind = desc.kind;
+    expectedOffset = static_cast<std::uint64_t>(desc.payloadOffset) +
+                     desc.byteSize;
+  }
+  if (expectedOffset != payload_.size() - active_.payloadStart) {
+    return failActiveRecord();
+  }
+  return overwritePayload(recordRelativeOffset, std::as_bytes(sections));
+}
+
+bool CommandChunkBuilder::appendConstantRecordTail(
+    std::uint32_t registerCount,
+    std::span<const std::byte> registerBytes) noexcept {
+  const auto elementSize = active_.active
+      ? constantRecordElementSize(active_.type)
+      : 0u;
+  const auto limit = active_.active ? constantRecordLimit(active_.type) : 0u;
+  D9CCommandChunkWireSetConst fixed{};
+  const auto expected = static_cast<std::uint64_t>(registerCount) *
+                        elementSize;
+  if (elementSize == 0u || registerCount > limit ||
+      expected != registerBytes.size() ||
+      !readActivePayloadValue(0u, fixed) ||
+      fixed.registerCount != registerCount ||
+      static_cast<std::uint64_t>(fixed.startRegister) +
+              fixed.registerCount >
+          limit ||
+      payload_.size() - active_.payloadStart !=
+          sizeof(D9CCommandChunkWireSetConst)) {
+    return failActiveRecord();
+  }
+  return appendPayload(registerBytes, alignof(std::uint32_t));
+}
+
+bool CommandChunkBuilder::appendClearRectTail(
+    std::span<const D9CRect> rects) noexcept {
+  D9CCommandChunkWireClear fixed{};
+  if (!active_.active || active_.type != D9C_COMMAND_RECORD_CLEAR ||
+      rects.size() > std::numeric_limits<std::uint32_t>::max() ||
+      !readActivePayloadValue(0u, fixed) ||
+      fixed.rectCount != rects.size() ||
+      fixed.rectOffset != sizeof(D9CCommandChunkWireClear) ||
+      payload_.size() - active_.payloadStart !=
+          sizeof(D9CCommandChunkWireClear)) {
+    return failActiveRecord();
+  }
+  return appendPayload(std::as_bytes(rects), alignof(D9CRect));
 }
 
 bool CommandChunkBuilder::appendNewHandleEntry(

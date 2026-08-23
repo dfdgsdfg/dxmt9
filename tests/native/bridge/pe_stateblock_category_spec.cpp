@@ -3,6 +3,7 @@
 // while the PE wrapper owns the corresponding COM refs at its boundaries.
 
 #include "d3d9_pe_state_shadow.hpp"
+#include "d3d9_pe_recorder_state.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 
 #include <array>
@@ -14,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 
 namespace {
 
@@ -25,23 +27,42 @@ void check(bool condition, std::string_view message) {
   if (!condition) throw Failure(std::string(message));
 }
 
-enum class Category : std::uint8_t {
-  Render, Tss, Sampler, Transform, Texture, StreamSource, StreamFrequency, Index, VertexShader,
-  PixelShader, Fvf, VertexDecl, RenderTarget, Depth, Viewport, Scissor,
-  Material, ClipPlane, Light, LightEnable, VsConstants, PsConstants,
-  Singleton,
-};
+static_assert(kStateBlockApplyPhysicalInventory.size() == 26u);
+static_assert(stateBlockApplyPhysicalDescriptor<
+                  StateBlockApplyPhysicalStore::textures>().role ==
+              StateBlockApplyCategoryRole::StagedTexture);
+static_assert(stateBlockApplyPhysicalDescriptor<
+                  StateBlockApplyPhysicalStore::fvf>().role ==
+              StateBlockApplyCategoryRole::ImplicitFvf);
+static_assert(stateBlockApplyPhysicalDescriptor<
+                  StateBlockApplyPhysicalStore::vertexDeclaration>().role ==
+              StateBlockApplyCategoryRole::CandidateOwnedVertexDeclaration);
 
-constexpr std::array<Category, 23> kCategories = {
-    Category::Render, Category::Tss, Category::Sampler, Category::Transform,
-    Category::Texture, Category::StreamSource, Category::StreamFrequency,
-    Category::Index,
-    Category::VertexShader, Category::PixelShader, Category::Fvf,
-    Category::VertexDecl, Category::RenderTarget, Category::Depth,
-    Category::Viewport, Category::Scissor, Category::Material,
-    Category::ClipPlane, Category::Light, Category::LightEnable,
-    Category::VsConstants, Category::PsConstants, Category::Singleton,
-};
+void testApplyCategoryRegistry() {
+  std::array<bool, 26u> seen{};
+  std::size_t keyed = 0u;
+  std::size_t fixed = 0u;
+  std::size_t constants = 0u;
+  std::size_t staged = 0u;
+  for (const auto descriptor : kStateBlockApplyPhysicalInventory) {
+    const auto ordinal = static_cast<std::size_t>(descriptor.store);
+    check(ordinal < seen.size() && !seen[ordinal],
+          "Apply physical inventory rows are unique");
+    seen[ordinal] = true;
+    keyed += descriptor.kind == StateBlockApplyPhysicalKind::Keyed ? 1u : 0u;
+    fixed += descriptor.kind == StateBlockApplyPhysicalKind::Fixed ? 1u : 0u;
+    constants += descriptor.kind == StateBlockApplyPhysicalKind::Constant
+        ? 1u : 0u;
+    staged += descriptor.role >=
+                  StateBlockApplyCategoryRole::StagedTexture
+        ? 1u : 0u;
+  }
+  check(keyed == 4u && fixed == 16u && constants == 6u && staged == 7u,
+        "Apply inventory has the exact 4 + 16 + 6 physical scope");
+  for (const bool present : seen) {
+    check(present, "Apply inventory covers every physical store ordinal");
+  }
+}
 
 void testCandidateAbaAndDomains() {
   StateBlockRecorded candidate{};
@@ -121,10 +142,17 @@ void testCandidateAbaAndDomains() {
   candidate.constants.psConstF.record(3u, 1u, constants.data(),
                                       sizeof(constants));
 
-  for (const auto category : kCategories) {
-    (void)category;
-    // The table itself is the exhaustive routing witness; all categories are
-    // occupied below and therefore participate in Capture's fixed set.
+  std::array<bool, static_cast<std::size_t>(
+                       StateBlockApplyPhysicalStore::Count)> physicalSeen{};
+  candidate.forEachApplyPhysical(
+      [&]<StateBlockApplyPhysicalStore store>(const auto&) {
+        const auto ordinal = static_cast<std::size_t>(store);
+        check(ordinal < physicalSeen.size() && !physicalSeen[ordinal],
+              "physical Apply inventory rows are unique");
+        physicalSeen[ordinal] = true;
+      });
+  for (const bool present : physicalSeen) {
+    check(present, "all 26 physical Apply stores visit exactly once");
   }
   check(candidate.textures().contains(0u) &&
             candidate.streamSources().contains(0u) &&
@@ -244,6 +272,195 @@ struct RefProbe {
   }
 };
 
+void testGeneratedTransitionTableIsomorphism() {
+  static_assert(!std::is_aggregate_v<PeStateBlockTransitionPlan>);
+  constexpr std::array kPhases{
+      PeStateBlockPhase::Idle, PeStateBlockPhase::Recording,
+      PeStateBlockPhase::EndPublication, PeStateBlockPhase::ApplyPrepared,
+      PeStateBlockPhase::Poisoned, PeStateBlockPhase::Terminal};
+  constexpr std::array kEvents{
+      PeStateBlockEvent::BeginFailed,
+      PeStateBlockEvent::BeginAccepted,
+      PeStateBlockEvent::EndPreEffectFailed,
+      PeStateBlockEvent::EndBackendFailed,
+      PeStateBlockEvent::EndBackendAccepted,
+      PeStateBlockEvent::EndWrapperFailed,
+      PeStateBlockEvent::EndPublished,
+      PeStateBlockEvent::CapturePreEffectFailed,
+      PeStateBlockEvent::CaptureBackendFailed,
+      PeStateBlockEvent::CapturePublished,
+      PeStateBlockEvent::ApplyPrepareFailed,
+      PeStateBlockEvent::ApplyPrepared,
+      PeStateBlockEvent::ApplyBackendFailed,
+      PeStateBlockEvent::ApplyBackendAccepted,
+      PeStateBlockEvent::ResetStarted,
+      PeStateBlockEvent::ResetFailed,
+      PeStateBlockEvent::ResetAccepted,
+      PeStateBlockEvent::Teardown};
+  constexpr std::array kActions{
+      PeStateBlockAction::Preserve,
+      PeStateBlockAction::BeginRecording,
+      PeStateBlockAction::EnterEndPublication,
+      PeStateBlockAction::PublishEnd,
+      PeStateBlockAction::FailStop,
+      PeStateBlockAction::PublishCapture,
+      PeStateBlockAction::RetainApplyRefs,
+      PeStateBlockAction::TransferApplyRefs,
+      PeStateBlockAction::AbandonForReset,
+      PeStateBlockAction::RecoverReset,
+      PeStateBlockAction::Teardown};
+
+  std::array<bool, kEvents.size()> eventMapped{};
+  std::array<bool, kActions.size()> actionMapped{};
+  for (const auto& row : kPeStateBlockTransitionTable) {
+    const auto plan = planPeStateBlockTransition({row.phase, row.event});
+    check(plan.valid() && plan.next() == row.next &&
+              plan.action() == row.action &&
+              plan.candidateEffect() == row.candidateEffect &&
+              plan.stagedRefEffect() == row.stagedRefEffect &&
+              plan.captureEffect() == row.captureEffect,
+          "production StateBlock plan must be isomorphic to every shared row");
+    for (std::size_t i = 0; i < kEvents.size(); ++i)
+      if (kEvents[i] == row.event) eventMapped[i] = true;
+    for (std::size_t i = 0; i < kActions.size(); ++i)
+      if (kActions[i] == row.action) actionMapped[i] = true;
+  }
+  for (std::size_t phaseIndex = 0; phaseIndex < kPhases.size(); ++phaseIndex) {
+    for (std::size_t eventIndex = 0; eventIndex < kEvents.size(); ++eventIndex) {
+      std::size_t matches = 0u;
+      for (const auto& row : kPeStateBlockTransitionTable) {
+        if (row.phase == kPhases[phaseIndex] &&
+            row.event == kEvents[eventIndex]) ++matches;
+      }
+      const auto plan = planPeStateBlockTransition(
+          {kPhases[phaseIndex], kEvents[eventIndex]});
+      check(matches <= 1u && plan.valid() == (matches == 1u),
+            "phase/event truth table must be exhaustive and unambiguous");
+    }
+  }
+  for (const bool mapped : eventMapped)
+    check(mapped, "every StateBlock event enum must have a shared row");
+  for (const bool mapped : actionMapped)
+    check(mapped, "every StateBlock action enum must have a shared row");
+}
+
+void testTransactionOwnershipAndLifecycle() {
+  using dxmt9::d3d9::pe::PeRecorderState;
+  static_assert(!std::is_copy_constructible_v<PeStateBlockTransactionState>);
+  static_assert(std::is_same_v<
+                decltype(std::declval<PeRecorderState&>()
+                             .stateBlockTransaction.recorded()),
+                StateBlockRecorded&>);
+
+  PeStateBlockTransactionState transaction{};
+  check(!transaction.isRecording() && !transaction.isInsideEnd() &&
+            transaction.writeAllowed(),
+        "fresh transaction must be idle and writable");
+
+  RefProbe candidateRef{};
+  candidateRef.addRef();
+  candidateRef.addRef();
+  candidateRef.addRef();
+  transaction.recorded().textures().set(
+      0u, StateBlockTextureRef::fromRaw(&candidateRef));
+  transaction.recorded().vertexShader().set(
+      0u, StateBlockVertexShaderRef::fromRaw(&candidateRef));
+  transaction.recorded().vertexDeclaration().set(
+      0u, StateBlockVertexDeclarationRef::fromRaw(&candidateRef));
+  transaction.beginAccepted([&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  });
+  check(transaction.isRecording() &&
+            transaction.recorded().textures().empty() &&
+            transaction.recorded().vertexShader().empty() &&
+            transaction.recorded().vertexDeclaration().empty() &&
+            candidateRef.refs == 1u,
+        "candidate-owned vdecl and staged categories release each retain by multiplicity");
+
+  transaction.recorded().renderStates().set(renderStateSlotKey(7u), 19u);
+  transaction.enterEndPublication();
+  check(!transaction.isRecording() && transaction.isInsideEnd(),
+        "accepted backend End enters the closed publication scope");
+  transaction.finishEndPublication(true, [&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  });
+  check(!transaction.isRecording() && !transaction.isInsideEnd() &&
+            transaction.writeAllowed() &&
+            transaction.recorded().renderStates().empty(),
+        "successful End leaves no candidate or inside-End state");
+
+  transaction.beginAccepted([&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  });
+  // A pre-effect failure makes no lifecycle call and remains retryable.
+  check(transaction.isRecording() && transaction.writeAllowed(),
+        "pre-effect End failure preserves the recording transaction");
+  transaction.failEnd([&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  });
+  check(!transaction.isRecording() && !transaction.isInsideEnd() &&
+            transaction.isPoisoned() && !transaction.writeAllowed(),
+        "post-effect End failure closes and poisons the transaction");
+}
+
+void testTypedStagingRetentionMultiplicityAndReset() {
+  PeStateBlockTransactionState transaction{};
+  RefProbe shared{};
+  auto retain = [&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->addRef();
+  };
+  auto release = [&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  };
+
+  transaction.stageTexture(0u, StateBlockTextureRef::fromRaw(&shared), retain);
+  transaction.stageTexture(1u, StateBlockTextureRef::fromRaw(&shared), retain);
+  transaction.stageStream(
+      0u, StateBlockStreamSourceValue{
+              .buffer = {&shared}, .offset = 4u, .stride = 16u},
+      retain);
+  transaction.stageVertexShader(
+      StateBlockVertexShaderRef::fromRaw(&shared), retain);
+  transaction.stagePixelShader(
+      StateBlockPixelShaderRef::fromRaw(&shared), retain);
+  transaction.stageIndexBuffer(
+      StateBlockIndexBufferRef::fromRaw(&shared), retain);
+  transaction.stageRenderTarget(
+      0u, StateBlockRenderTargetRef::fromRaw(&shared), retain);
+  transaction.stageDepthStencil(
+      StateBlockDepthStencilRef::fromRaw(&shared), retain);
+  check(transaction.hasPreparedApply() && shared.refs == 9u,
+        "each typed occupied Apply category retains independently");
+  transaction.discardPrepared(release);
+  check(!transaction.hasPreparedApply() && shared.refs == 1u,
+        "discard releases every staged retain without deduplication");
+
+  transaction.stageTexture(0u, StateBlockTextureRef::fromRaw(&shared), retain);
+  const auto transferred = transaction.takeTexture(0u);
+  check(transferred.raw() == &shared && !transaction.hasPreparedApply() &&
+            shared.refs == 2u,
+        "commit take transfers the staged retain without releasing it");
+  release(transferred.raw());
+
+  transaction.stageDepthStencil(StateBlockDepthStencilRef{}, retain);
+  check(transaction.hasPreparedApply(),
+        "typed null staging preserves occupied clear semantics");
+  check(transaction.takeDepthStencil().raw() == nullptr &&
+            !transaction.hasPreparedApply(),
+        "typed null commit clears occupancy exactly once");
+
+  transaction.stagePixelShader(
+      StateBlockPixelShaderRef::fromRaw(&shared), retain);
+  transaction.poison();
+  check(transaction.isPoisoned() && transaction.hasPreparedApply() &&
+            shared.refs == 2u,
+        "failed Reset preserves poison and pre-effect staging");
+  transaction.resetSucceeded(release);
+  check(transaction.writeAllowed() && !transaction.hasPreparedApply() &&
+            shared.refs == 1u,
+        "successful Reset alone clears poison and staged ownership");
+}
+
 struct StagedRefProbe {
   RefProbe *staged = nullptr;
   bool occupied = false;
@@ -360,13 +577,99 @@ void testPoisonResetFaultSequence() {
   live->release();
 }
 
+void testEndFailureAndPoisonWriteBoundary() {
+  check(peStateBlockEndTransition(PeStateBlockEndPhase::PreEffect, true) ==
+                PeStateBlockEndAction::Continue &&
+            peStateBlockEndTransition(PeStateBlockEndPhase::PreEffect, false) ==
+                PeStateBlockEndAction::Preserve &&
+            peStateBlockEndTransition(PeStateBlockEndPhase::Backend, false) ==
+                PeStateBlockEndAction::Poison &&
+            peStateBlockEndTransition(PeStateBlockEndPhase::Backend, true) ==
+                PeStateBlockEndAction::Publish &&
+            peStateBlockEndTransition(PeStateBlockEndPhase::Wrapper, false) ==
+                PeStateBlockEndAction::Poison &&
+            peStateBlockEndTransition(PeStateBlockEndPhase::Wrapper, true) ==
+                PeStateBlockEndAction::Publish,
+        "End phase transitions distinguish retryable pre-effect failure from fail-stop");
+
+  struct EndDomains {
+    bool peRecording = true;
+    bool unixRecording = true;
+    bool candidateOwned = true;
+    bool poisoned = false;
+    bool wrapperPublished = false;
+  };
+  const auto runEnd = [](EndDomains& domains, bool backendAccepted,
+                         bool wrapperAccepted) {
+    // The fake backend matches the production unix ordering: its recording
+    // flag is consumed before the remaining End work can fail.
+    domains.unixRecording = false;
+    if (peStateBlockEndTransition(PeStateBlockEndPhase::Backend,
+                                  backendAccepted) ==
+        PeStateBlockEndAction::Poison) {
+      domains.peRecording = false;
+      domains.candidateOwned = false;
+      domains.poisoned = true;
+      return;
+    }
+    domains.peRecording = false;
+    if (peStateBlockEndTransition(PeStateBlockEndPhase::Wrapper,
+                                  wrapperAccepted) ==
+        PeStateBlockEndAction::Poison) {
+      domains.candidateOwned = false;
+      domains.poisoned = true;
+      return;
+    }
+    domains.candidateOwned = false;
+    domains.wrapperPublished = true;
+  };
+
+  EndDomains backendFailure{};
+  runEnd(backendFailure, false, false);
+  check(!backendFailure.peRecording && !backendFailure.unixRecording &&
+            !backendFailure.candidateOwned && backendFailure.poisoned &&
+            !backendFailure.wrapperPublished,
+        "post-effect backend End failure closes both domains and poisons");
+
+  std::uint32_t renderShadow = 7u;
+  const auto setRenderState = [&](std::uint32_t value) {
+    if (!peStateBlockRecorderWriteAllowed(backendFailure.poisoned)) {
+      return false;
+    }
+    renderShadow = value;
+    return true;
+  };
+  check(!setRenderState(9u) && renderShadow == 7u,
+        "poisoned SetRenderState fails before shadow mutation");
+
+  EndDomains wrapperFailure{};
+  runEnd(wrapperFailure, true, false);
+  check(!wrapperFailure.peRecording && !wrapperFailure.unixRecording &&
+            !wrapperFailure.candidateOwned && wrapperFailure.poisoned &&
+            !wrapperFailure.wrapperPublished,
+        "post-effect wrapper End failure is fail-stop");
+
+  EndDomains success{};
+  runEnd(success, true, true);
+  check(!success.peRecording && !success.unixRecording &&
+            !success.candidateOwned && !success.poisoned &&
+            success.wrapperPublished &&
+            peStateBlockRecorderWriteAllowed(success.poisoned),
+        "accepted End publishes once and keeps later recorder writes legal");
+}
+
 }  // namespace
 
 int main() {
   try {
+    testApplyCategoryRegistry();
     testCandidateAbaAndDomains();
+    testGeneratedTransitionTableIsomorphism();
+    testTransactionOwnershipAndLifecycle();
+    testTypedStagingRetentionMultiplicityAndReset();
     testStagedFailureAndIntervalWitness();
     testPoisonResetFaultSequence();
+    testEndFailureAndPoisonWriteBoundary();
     std::cout << "pe state-block category spec: PASS\n";
     return 0;
   } catch (const Failure& failure) {

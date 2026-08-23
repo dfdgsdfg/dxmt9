@@ -58,7 +58,7 @@ and sampler slot 7.
 | Texture binding | `(TextureKind, SamplerIndex) -> PeWireObjectRef?` | `textures_` plus binding view | `pendingTextureMask` + live ref | last binding per touched slot | texture handle section |
 | Stream source / frequency | `(BufferKind, stream) -> {ref, offset, stride}` plus `(stream) -> frequency` | `streamSrc_`, `streamOff_`, `streamStr_`, `streamFreq_` | source mask and live binding; frequency is an independent tracked table | each explicit setter tracks only its semantic aspect; Apply preserves the unrecorded aspect | stream source section plus explicit frequency |
 | Vertex/pixel shader | `(ShaderKind, stage) -> ref?` | `vs_`, `ps_` | `pendingVs`, `pendingPs` | last binding per touched stage | shader handle section |
-| Vertex input | `FvfKey` or `(VertexDeclKind, singleton)` | `fvf_`, `vdecl_` | `pendingFvf`, `pendingVdecl` | declaration touch fixes the tracked singleton; saved wrapper owns its AddRef | vertex-input section |
+| Vertex input | `FvfKey` or `(VertexDeclKind, singleton)` | `fvf_`, borrowed `vdecl_` | `pendingFvf`, `pendingVdecl` | declaration touch fixes the tracked singleton; candidate/saved wrapper owns the AddRef through synchronous Apply, and Commit borrows without an extra retain/transfer | vertex-input section |
 | Index buffer | `(BufferKind, singleton) -> ref?` | `indexBuf_` | `pendingIb` | last binding | indexed-draw index section only |
 | Render targets/depth | `(SurfaceKind, rtSlot)` / `(SurfaceKind, depth)` | `rtSlots_`, `dsSurface_` and explicit masks | `pendingRtMask`, `pendingDs` | last binding per touched slot | attachment sections |
 | Viewport/scissor/material | singleton typed value | dedicated PE value | one pending bit each | last touched singleton | scalar sparse section |
@@ -114,11 +114,14 @@ pre-attempt state, including dirty constant ranges and oversized-table rows.
 | Begin | flush older pending work; create an empty recorded domain; enter Recording | preserve prior domains; do not enter Recording |
 | Explicit Set while Recording | validate; last-write-wins in `StateBlockRecorded` only; do not mutate `LiveShadow`, `PendingDelta`, or backend primary state | no new tracked key or value |
 | Prior-value operation while Recording | apply to primary live/backend state without enlarging `StateBlockRecorded`; `MultiplyTransform` is the current enumerated case | preserve primary and recorded domains on pre-effect failure |
-| End | flush ordering work; freeze the tracked set; create the wrapper-owned snapshot; leave Recording without a restore replay | pre-backend failure preserves Recording; wrapper allocation failure after backend End is fail-stop and discards the unpublished PE candidate |
+| End | flush ordering work; freeze the tracked set; create the wrapper-owned snapshot; leave Recording without a restore replay | pre-backend failure preserves Recording; backend failure after entry or wrapper allocation failure after accepted backend End leaves Recording, discards the unpublished PE candidate, and poisons the recorder |
 | Capture | refresh values for the existing tracked keys/ranges only | preserve prior captured snapshot |
 | Apply | flush and prevalidate the fixed set, apply the backend once, then publish the fixed PE shadow directly without allocation or fallible setters | pre-backend failure preserves PE/backend state; a backend failure latches recorder poison because the unix operation may have partially mutated |
 
-The implemented PE recorder owns one fixed typed `StateBlockRecorded` candidate
+The implemented PE recorder owns one closed `PeStateBlockTransactionState`
+whose API advances Recording, inside-End publication, poison/reset, candidate
+release, and prepared-Apply transfer as one transaction domain. It contains
+one fixed typed `StateBlockRecorded` candidate
 covering keyed render/TSS/sampler/transform state, texture, and independently
 tracked stream source tuples (buffer/offset/stride) and stream frequencies,
 index/VS/PS/FVF/vdecl bindings,
@@ -126,7 +129,16 @@ render-target/depth attachments, viewport/scissor/material, clip planes,
 lights/enables, and all six shader-constant kinds. Pointer slots are opaque in
 the native value owner; the PE device takes and releases their COM references
 at candidate replacement, End snapshot, Capture refresh, and Begin/reset
-boundaries. Explicit setters route to this candidate while recording, so
+boundaries. Apply staging uses category-qualified texture, stream, shader,
+index, render-target, and depth values with private occupancy masks; identical
+COM identities in multiple occupied slots retain and settle independently.
+`CandidateOwnedVertexDeclaration` is the candidate snapshot's one owned retain
+of a vertex declaration. The device's bound `vdecl_` slot is borrowed: binding
+and clearing it do not AddRef/Release that slot; an implicit-FVF declaration is
+kept alive only by `fvfDeclCache_`, while candidate capture/End ownership is
+settled through the transaction visitor. This distinction is pinned by the
+native duplicate-retain lifecycle case.
+Explicit setters route to this candidate while recording, so
 `LiveShadow`, `PendingDelta`, getters, backend state, and capture journaling
 remain unchanged. Initial `CreateStateBlock` snapshots establish bounded
 tracked sets from the current PE shadows using the typed `ALL`, `VERTEXSTATE`,
@@ -141,6 +153,15 @@ sequence `SetTransform(B); MultiplyTransform(C)` inside Begin/End records `B`
 while the multiply reads the pre-Begin primary value and publishes only its
 result to primary state.
 
+`d3d9_pe_stateblock_transition_table.inc` is the canonical serial/reference
+matrix for Begin, End, Capture, Apply, Reset, and teardown. Production calls
+`planPeStateBlockTransition`; the generator emits
+`PeStateBlockTransitionTable.tla`, checks enum/table completeness, and the
+bounded model requires each step to match its generated row. The model carries
+duplicate-retain cardinality only. Native fake-COM tests separately demonstrate
+one retain and one release or transfer per occupied category/slot for repeated
+object identities; the model is not a proof of COM implementation behavior.
+
 The conditional recorder lock is one shared production guard. It covers
 Create/Begin/EndStateBlock, Capture, Apply, every PE shadow/recording setter,
 and Render Tape child destruction/mutation/ordered-control callbacks that
@@ -149,13 +170,24 @@ forced-lock setting requires it; the guard is a one-branch no-op on the
 ordinary single-threaded hot path. The existing recursive contract permits
 bounded internal append/flush re-entry, while callback validation remains
 fail-closed and no external callback is invoked under a newly acquired lock.
+Default-pool child ownership callbacks use this same guard, so `Reset`'s
+legality read is serialized with concurrent resource creation/destruction on a
+multithreaded device; the disabled lane keeps the existing plain counter and
+only the guard's branch.
 Apply preparation reserves live constant capacity and resolves implicit FVF
-declarations before backend mutation. A failed backend Apply enters explicit
-recorder poison and subsequent recording writes return `D3DERR_DEVICELOST`
+declarations before backend mutation. A live `SetFVF` resolves and publishes
+its cached implicit declaration transaction before changing FVF/declaration
+shadows or pending bits; backend null, wrapper null/allocation, and cache
+allocation failures release their current owner exactly once and return a
+failure HRESULT through the `noexcept` COM boundary. A failed backend Apply
+enters explicit recorder poison and subsequent recording writes return `D3DERR_DEVICELOST`
 deterministically, avoiding a second divergent stream when rollback is
 unavailable. A backend Capture failure uses the same conservative poison
 boundary; candidate/snapshot publication still occurs only after Capture
-accepts. Poison survives failed Reset/ResetEx, including validation/backend
+accepts. End backend/wrapper failure uses the same poison boundary because the
+unix End owner consumes its recording flag before its remaining fallible work;
+the specialized `SetRenderState` entry checks poison before its diagnostic/core
+bypass. Poison survives failed Reset/ResetEx, including validation/backend
 failure, together with pre-effect Apply staging. A successful backend
 Reset/ResetEx clears poison and discards staged Apply retains only after the
 backend accepts, restoring the PE recorder for subsequent writes.
@@ -270,8 +302,8 @@ construction, timestamp reads, TLS/sample mutation, or a diagnostic callback.
 command builder, lock witness, and protocol counters. Keeping the recorded
 domain outside `PeHotStateShadow` prevents state-block-only tables from being
 part of the ordinary live/pending shadow layout.
-`D3D9DeviceImpl` keeps mechanical references during this migration so the COM
-surface and first declared virtual key-function placement remain unchanged.
+`D3D9DeviceImpl` reads the transaction through `recorderState_` directly; the
+COM surface and first declared virtual key-function placement remain unchanged.
 One nullable heap-owned `PeCaptureState` owns the complete Render Tape lifecycle: session,
 live registry, oracle/digest/pixel/output storage, arm phase and ordinals,
 tokens and skip selector, arm snapshots, admitted identities, first-access
@@ -380,7 +412,7 @@ same pure helper.
 | Contract | Exact owner | Current evidence | Acceptance still required |
 |---|---|---|---|
 | `R-CORE-REC-1.*`, `2.*` | PE state/constant shadows and producer | `dxmt9-pe-transition-algebra-spec`, `dxmt9-pe-shadow-native-spec`, `dxmt9-pe-producer-differential-spec`, `dxmt9-core-stateblock-restore-spec`, state-block PE conformance | Wine/wild rerun for the changed PE wrapper; non-keyed category expansion remains outside this transition increment |
-| `R-CORE-REC-3.1` | builder + append envelope | production `settleRecorderAppend`; builder rollback; failed-retry/exactly-once tests for inline constants, normal sparse state, and all four oversized typed tables | no append-local gap in the scoped state families; bridge/seal settlement is tracked below |
+| `R-CORE-REC-3.1`, `3.1.1` | builder + append envelope | production `settleRecorderAppend`; builder rollback; failed-retry/exactly-once tests for inline constants, normal sparse state, and all four oversized typed tables. `CommandChunkBuilder` keeps raw byte append/overwrite private; closed POD registries and rule-checked section/constant/UP/Clear/table adapters cover every production variable-size callsite. Native concepts reject raw access and pointer-bearing/unregistered section types, while producer-matrix tests execute the typed paths. | no append-local gap in the scoped state families; the closed registry proves admission/type shape, not compiler-independent recursive reflection over arbitrary C structs; bridge/seal settlement is tracked below |
 | `R-CORE-REC-3.2`–`3.4` | seal/commit/capture settlement | builder seal/rollback tests; `testPendingChunkLifetimeTruthTable` | bridge-failure retry, discard, capture-failure transaction model and native binding |
 | `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection, `WireObjectRegistry.tla`, render-tape identity tests | local kind+pointer collision coverage and remaining identity/model binding |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |

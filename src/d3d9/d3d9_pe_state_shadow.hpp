@@ -49,11 +49,8 @@ static constexpr std::uint32_t kPeTransformSlots =
     kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
 
 template<std::size_t Slots>
-struct FixedStateTable {
-    std::array<std::uint32_t, Slots> values{};
-    std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
-    std::uint32_t count = 0;
-
+class FixedStateTable {
+public:
     static constexpr bool valid(std::uint32_t slot) noexcept {
         return slot < Slots;
     }
@@ -131,6 +128,11 @@ struct FixedStateTable {
         }
         return false;
     }
+
+private:
+    std::array<std::uint32_t, Slots> values{};
+    std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
+    std::uint32_t count = 0;
 };
 
 template<std::size_t Rows, std::size_t Slots>
@@ -337,11 +339,9 @@ struct FixedTransformTable {
 // out of this native-buildable header is what lets the category truth table
 // exercise the same candidate without windows.h or a COM ABI.
 template<typename T, std::size_t Slots>
-struct FixedTrackedState {
+class FixedTrackedState {
+public:
     using value_type = T;
-    std::array<T, Slots> values{};
-    std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
-    std::uint32_t count = 0u;
 
     bool contains(std::size_t slot) const noexcept {
         return slot < Slots &&
@@ -362,6 +362,11 @@ struct FixedTrackedState {
         }
         values[slot] = value;
     }
+    void erase(std::size_t slot) noexcept {
+        if (!contains(slot)) return;
+        occupied[slot >> 6u] &= ~(1ull << (slot & 63u));
+        --count;
+    }
     void clear() noexcept {
         occupied = {};
         count = 0u;
@@ -380,6 +385,11 @@ struct FixedTrackedState {
             }
         }
     }
+
+private:
+    std::array<T, Slots> values{};
+    std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
+    std::uint32_t count = 0u;
 };
 
 struct StateBlockStreamSourceValue {
@@ -435,7 +445,136 @@ using StateBlockVertexDeclarationRef =
 using StateBlockIndexBufferRef = StateBlockComRef<StateBlockIndexBufferTag>;
 using StateBlockRenderTargetRef = StateBlockComRef<StateBlockRenderTargetTag>;
 using StateBlockDepthStencilRef = StateBlockComRef<StateBlockDepthStencilTag>;
+
+enum class StateBlockApplyCategoryRole : std::uint8_t {
+    Value,
+    ImplicitFvf,
+    CandidateOwnedVertexDeclaration,
+    // Staged roles stay contiguous: Prepare and lifetime coverage use this
+    // boundary to classify every pre-effect retain role exhaustively.
+    StagedTexture,
+    StagedStreamSource,
+    StagedVertexShader,
+    StagedPixelShader,
+    StagedIndexBuffer,
+    StagedRenderTarget,
+    StagedDepthStencil,
+};
+
 using StateBlockClipPlaneValue = std::array<float, 4>;
+
+enum class StateBlockApplyPhysicalKind : std::uint8_t {
+    Keyed,
+    Fixed,
+    Constant,
+};
+
+// The one authoritative APPLY PHYSICAL inventory. Its 26 rows are the four
+// keyed stores, sixteen fixed stores, and six constant stores physically
+// owned by StateBlockRecorded. Clear, candidate lifetime, Apply Prepare, and
+// Apply Commit all instantiate the typed physical visitor, so adding a row
+// without defining every relevant behavior is a compile failure.
+#define DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(KEYED, FIXED, CONSTANT)     \
+    KEYED(renderStates)                                                       \
+    KEYED(textureStageStates)                                                 \
+    KEYED(samplerStates)                                                      \
+    KEYED(transforms)                                                         \
+    FIXED(textures, textures_, StateBlockTextureRef, kPeTextureSlots,         \
+      StagedTexture)                                                          \
+    FIXED(streamSources, streamSources_, StateBlockStreamSourceValue,         \
+      D9C_DRAW_PACKET_MAX_STREAMS, StagedStreamSource)                        \
+    FIXED(streamFrequencies, streamFrequencies_, std::uint32_t,               \
+      D9C_DRAW_PACKET_MAX_STREAMS, Value)                                     \
+    FIXED(vertexShader, vertexShader_, StateBlockVertexShaderRef, 1,          \
+      StagedVertexShader)                                                     \
+    FIXED(pixelShader, pixelShader_, StateBlockPixelShaderRef, 1,             \
+      StagedPixelShader)                                                      \
+    FIXED(fvf, fvf_, std::uint32_t, 1, ImplicitFvf)                           \
+    FIXED(vertexDeclaration, vertexDeclaration_,                             \
+      StateBlockVertexDeclarationRef,                                        \
+      1, CandidateOwnedVertexDeclaration)                                    \
+    FIXED(indexBuffer, indexBuffer_, StateBlockIndexBufferRef, 1,             \
+      StagedIndexBuffer)                                                      \
+    FIXED(renderTargets, renderTargets_, StateBlockRenderTargetRef,           \
+      D9C_DRAW_PACKET_MAX_RENDER_TARGETS, StagedRenderTarget)                 \
+    FIXED(depthStencil, depthStencil_, StateBlockDepthStencilRef, 1,          \
+      StagedDepthStencil)                                                     \
+    FIXED(viewport, viewport_, D9CViewport, 1, Value)                         \
+    FIXED(scissor, scissor_, D9CRect, 1, Value)                               \
+    FIXED(material, material_, D9CMaterial, 1, Value)                         \
+    FIXED(clipPlanes, clipPlanes_, StateBlockClipPlaneValue, 6, Value)        \
+    FIXED(lights, lights_, D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS, Value)       \
+    FIXED(lightEnables, lightEnables_, std::uint32_t,                         \
+      D9C_DRAW_PACKET_MAX_LIGHTS, Value)                                      \
+    CONSTANT(vsConstF)                                                        \
+    CONSTANT(vsConstI)                                                        \
+    CONSTANT(vsConstB)                                                        \
+    CONSTANT(psConstF)                                                        \
+    CONSTANT(psConstI)                                                        \
+    CONSTANT(psConstB)
+
+enum class StateBlockApplyPhysicalStore : std::uint8_t {
+#define DXMT9_STATEBLOCK_PHYSICAL_ENUM_KEYED(name) name,
+#define DXMT9_STATEBLOCK_PHYSICAL_ENUM_FIXED(name, storage, type, slots, role) name,
+#define DXMT9_STATEBLOCK_PHYSICAL_ENUM_CONSTANT(name) name,
+    DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+        DXMT9_STATEBLOCK_PHYSICAL_ENUM_KEYED,
+        DXMT9_STATEBLOCK_PHYSICAL_ENUM_FIXED,
+        DXMT9_STATEBLOCK_PHYSICAL_ENUM_CONSTANT)
+#undef DXMT9_STATEBLOCK_PHYSICAL_ENUM_KEYED
+#undef DXMT9_STATEBLOCK_PHYSICAL_ENUM_FIXED
+#undef DXMT9_STATEBLOCK_PHYSICAL_ENUM_CONSTANT
+    Count,
+};
+
+struct StateBlockApplyPhysicalDescriptor {
+    StateBlockApplyPhysicalStore store;
+    StateBlockApplyPhysicalKind kind;
+    StateBlockApplyCategoryRole role;
+};
+
+#define DXMT9_STATEBLOCK_PHYSICAL_DESC_KEYED(name)                           \
+    StateBlockApplyPhysicalDescriptor{                                       \
+        StateBlockApplyPhysicalStore::name,                                  \
+        StateBlockApplyPhysicalKind::Keyed,                                  \
+        StateBlockApplyCategoryRole::Value},
+#define DXMT9_STATEBLOCK_PHYSICAL_DESC_FIXED(name, storage, type, slots, role) \
+    StateBlockApplyPhysicalDescriptor{                                        \
+        StateBlockApplyPhysicalStore::name,                                   \
+        StateBlockApplyPhysicalKind::Fixed,                                   \
+        StateBlockApplyCategoryRole::role},
+#define DXMT9_STATEBLOCK_PHYSICAL_DESC_CONSTANT(name)                        \
+    StateBlockApplyPhysicalDescriptor{                                       \
+        StateBlockApplyPhysicalStore::name,                                  \
+        StateBlockApplyPhysicalKind::Constant,                               \
+        StateBlockApplyCategoryRole::Value},
+inline constexpr auto kStateBlockApplyPhysicalInventory = std::array{
+    DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+        DXMT9_STATEBLOCK_PHYSICAL_DESC_KEYED,
+        DXMT9_STATEBLOCK_PHYSICAL_DESC_FIXED,
+        DXMT9_STATEBLOCK_PHYSICAL_DESC_CONSTANT)
+};
+#undef DXMT9_STATEBLOCK_PHYSICAL_DESC_KEYED
+#undef DXMT9_STATEBLOCK_PHYSICAL_DESC_FIXED
+#undef DXMT9_STATEBLOCK_PHYSICAL_DESC_CONSTANT
+
+static_assert(kStateBlockApplyPhysicalInventory.size() == 26u,
+              "StateBlock APPLY PHYSICAL inventory must name 26 stores");
+
+template<StateBlockApplyPhysicalStore Wanted>
+consteval StateBlockApplyPhysicalDescriptor stateBlockApplyPhysicalDescriptor() {
+    constexpr bool found = [] {
+        for (const auto descriptor : kStateBlockApplyPhysicalInventory) {
+            if (descriptor.store == Wanted) return true;
+        }
+        return false;
+    }();
+    static_assert(found, "physical store omitted");
+    for (const auto descriptor : kStateBlockApplyPhysicalInventory) {
+        if (descriptor.store == Wanted) return descriptor;
+    }
+    return {};
+}
 
 enum class StateBlockCaptureDisposition : std::uint8_t {
     All,
@@ -1158,45 +1297,18 @@ private:
 class StateBlockRecorded {
 public:
     enum class Category : std::uint8_t {
-        textures,
-        streamSources,
-        streamFrequencies,
-        vertexShader,
-        pixelShader,
-        fvf,
-        vertexDeclaration,
-        indexBuffer,
-        renderTargets,
-        depthStencil,
-        viewport,
-        scissor,
-        material,
-        clipPlanes,
-        lights,
-        lightEnables,
+#define DXMT9_STATEBLOCK_CATEGORY_ENUM_KEYED(name)
+#define DXMT9_STATEBLOCK_CATEGORY_ENUM_FIXED(name, storage, type, slots, role) name,
+#define DXMT9_STATEBLOCK_CATEGORY_ENUM_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_CATEGORY_ENUM_KEYED,
+            DXMT9_STATEBLOCK_CATEGORY_ENUM_FIXED,
+            DXMT9_STATEBLOCK_CATEGORY_ENUM_CONSTANT)
+#undef DXMT9_STATEBLOCK_CATEGORY_ENUM_KEYED
+#undef DXMT9_STATEBLOCK_CATEGORY_ENUM_FIXED
+#undef DXMT9_STATEBLOCK_CATEGORY_ENUM_CONSTANT
+        Count,
     };
-
-#define DXMT9_STATEBLOCK_CATEGORY_SCHEMA(X)                                \
-    X(textures, textures_, StateBlockTextureRef, kPeTextureSlots)           \
-    X(streamSources, streamSources_, StateBlockStreamSourceValue,           \
-      D9C_DRAW_PACKET_MAX_STREAMS)                                          \
-    X(streamFrequencies, streamFrequencies_, std::uint32_t,                 \
-      D9C_DRAW_PACKET_MAX_STREAMS)                                          \
-    X(vertexShader, vertexShader_, StateBlockVertexShaderRef, 1)            \
-    X(pixelShader, pixelShader_, StateBlockPixelShaderRef, 1)                \
-    X(fvf, fvf_, std::uint32_t, 1)                                           \
-    X(vertexDeclaration, vertexDeclaration_, StateBlockVertexDeclarationRef, \
-      1)                                                                    \
-    X(indexBuffer, indexBuffer_, StateBlockIndexBufferRef, 1)                \
-    X(renderTargets, renderTargets_, StateBlockRenderTargetRef,              \
-      D9C_DRAW_PACKET_MAX_RENDER_TARGETS)                                   \
-    X(depthStencil, depthStencil_, StateBlockDepthStencilRef, 1)             \
-    X(viewport, viewport_, D9CViewport, 1)                                   \
-    X(scissor, scissor_, D9CRect, 1)                                         \
-    X(material, material_, D9CMaterial, 1)                                   \
-    X(clipPlanes, clipPlanes_, StateBlockClipPlaneValue, 6)                  \
-    X(lights, lights_, D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS)                 \
-    X(lightEnables, lightEnables_, std::uint32_t, D9C_DRAW_PACKET_MAX_LIGHTS)
 
     // Fixed, kind-qualified recorded sets. Explicit recording writes are
     // last-write-wins; MultiplyTransform never enters transforms_.
@@ -1207,11 +1319,18 @@ public:
     // values are written only by recording-phase setters and are never read
     // by ordinary getters or the producer's pending/live paths.
     using TextureState = FixedTrackedState<StateBlockTextureRef, kPeTextureSlots>;
-#define DXMT9_STATEBLOCK_DECLARE_ACCESSOR(name, storage, type, slots)       \
+#define DXMT9_STATEBLOCK_DECLARE_ACCESSOR(name, storage, type, slots, role) \
     using name##State = FixedTrackedState<type, slots>;                     \
     name##State& name() noexcept { return storage; }                        \
     const name##State& name() const noexcept { return storage; }
-    DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_DECLARE_ACCESSOR)
+#define DXMT9_STATEBLOCK_ACCESSOR_KEYED(name)
+#define DXMT9_STATEBLOCK_ACCESSOR_CONSTANT(name)
+    DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+        DXMT9_STATEBLOCK_ACCESSOR_KEYED,
+        DXMT9_STATEBLOCK_DECLARE_ACCESSOR,
+        DXMT9_STATEBLOCK_ACCESSOR_CONSTANT)
+#undef DXMT9_STATEBLOCK_ACCESSOR_KEYED
+#undef DXMT9_STATEBLOCK_ACCESSOR_CONSTANT
 #undef DXMT9_STATEBLOCK_DECLARE_ACCESSOR
 
     bool vertexDeclarationWasRecorded() const noexcept {
@@ -1223,23 +1342,143 @@ public:
 
     template<typename Fn>
     void forEachCategory(Fn&& fn) noexcept {
-#define DXMT9_STATEBLOCK_VISIT_CATEGORY(name, storage, type, slots)          \
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY(name, storage, type, slots, role)    \
         fn(Category::name, storage);
-        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_CATEGORY)
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_CATEGORY_KEYED,
+            DXMT9_STATEBLOCK_VISIT_CATEGORY,
+            DXMT9_STATEBLOCK_VISIT_CATEGORY_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONSTANT
 #undef DXMT9_STATEBLOCK_VISIT_CATEGORY
     }
 
     template<typename Fn>
     void forEachCategory(Fn&& fn) const noexcept {
-#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST(name, storage, type, slots)    \
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST(name, storage, type, slots, role) \
         fn(Category::name, storage);
-        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST)
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_KEYED,
+            DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST,
+            DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST_CONSTANT
 #undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST
     }
 
     template<typename Fn>
+    void forEachTypedCategory(Fn&& fn) noexcept {
+#define DXMT9_STATEBLOCK_VISIT_TYPED(name, storage, type, slots, role)       \
+        fn.template operator()<Category::name>(storage);
+#define DXMT9_STATEBLOCK_VISIT_TYPED_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_TYPED_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_TYPED_KEYED,
+            DXMT9_STATEBLOCK_VISIT_TYPED,
+            DXMT9_STATEBLOCK_VISIT_TYPED_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_TYPED_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_TYPED_CONSTANT
+#undef DXMT9_STATEBLOCK_VISIT_TYPED
+    }
+
+    template<typename Fn>
+    void forEachTypedCategory(Fn&& fn) const noexcept {
+#define DXMT9_STATEBLOCK_VISIT_TYPED_CONST(name, storage, type, slots, role) \
+        fn.template operator()<Category::name>(storage);
+#define DXMT9_STATEBLOCK_VISIT_TYPED_CONST_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_TYPED_CONST_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_TYPED_CONST_KEYED,
+            DXMT9_STATEBLOCK_VISIT_TYPED_CONST,
+            DXMT9_STATEBLOCK_VISIT_TYPED_CONST_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_TYPED_CONST_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_TYPED_CONST_CONSTANT
+#undef DXMT9_STATEBLOCK_VISIT_TYPED_CONST
+    }
+
+    template<StateBlockApplyPhysicalStore Store>
+    decltype(auto) applyPhysicalStorage() noexcept {
+        if constexpr (Store == StateBlockApplyPhysicalStore::renderStates) {
+            return renderStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::textureStageStates) {
+            return textureStageStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::samplerStates) {
+            return samplerStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::transforms) {
+            return transforms();
+#define DXMT9_STATEBLOCK_STORAGE_KEYED(name)
+#define DXMT9_STATEBLOCK_STORAGE_FIXED(name, storage, type, slots, role)      \
+        } else if constexpr (Store == StateBlockApplyPhysicalStore::name) {  \
+            return (storage);
+#define DXMT9_STATEBLOCK_STORAGE_CONSTANT(name)                              \
+        } else if constexpr (Store == StateBlockApplyPhysicalStore::name) {  \
+            return (constants.name);
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_STORAGE_KEYED,
+            DXMT9_STATEBLOCK_STORAGE_FIXED,
+            DXMT9_STATEBLOCK_STORAGE_CONSTANT)
+#undef DXMT9_STATEBLOCK_STORAGE_KEYED
+#undef DXMT9_STATEBLOCK_STORAGE_FIXED
+#undef DXMT9_STATEBLOCK_STORAGE_CONSTANT
+        } else {
+            []<bool handled = false>() {
+                static_assert(handled, "StateBlock physical storage omitted");
+            }();
+        }
+    }
+
+    template<StateBlockApplyPhysicalStore Store>
+    decltype(auto) applyPhysicalStorage() const noexcept {
+        return const_cast<StateBlockRecorded*>(this)
+            ->template applyPhysicalStorage<Store>();
+    }
+
+    template<typename Fn>
+    void forEachApplyPhysical(Fn&& fn) noexcept {
+#define DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED(name)                          \
+        fn.template operator()<StateBlockApplyPhysicalStore::name>(         \
+            applyPhysicalStorage<StateBlockApplyPhysicalStore::name>());
+#define DXMT9_STATEBLOCK_VISIT_PHYSICAL_FIXED(name, storage, type, slots, role) \
+        DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_PHYSICAL_CONSTANT(name)                       \
+        DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED,
+            DXMT9_STATEBLOCK_VISIT_PHYSICAL_FIXED,
+            DXMT9_STATEBLOCK_VISIT_PHYSICAL_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_PHYSICAL_FIXED
+#undef DXMT9_STATEBLOCK_VISIT_PHYSICAL_CONSTANT
+    }
+
+    template<typename Fn>
+    void forEachApplyPhysical(Fn&& fn) const noexcept {
+        const_cast<StateBlockRecorded*>(this)->forEachApplyPhysical(
+            [&]<StateBlockApplyPhysicalStore Store>(auto&& storage) {
+                fn.template operator()<Store>(std::as_const(storage));
+            });
+    }
+
+    template<typename Fn>
     void forEachOwnedComRef(Fn&& fn) const noexcept {
-        forEachCategoryRef(fn);
+        forEachApplyPhysical(
+            [&]<StateBlockApplyPhysicalStore Store>(const auto& storage) {
+                constexpr auto descriptor =
+                    stateBlockApplyPhysicalDescriptor<Store>();
+                if constexpr (descriptor.kind ==
+                              StateBlockApplyPhysicalKind::Fixed) {
+                    storage.forEach([&](std::size_t, const auto& value) {
+                        visitOwnedValue<descriptor.role>(value, fn);
+                    });
+                }
+            });
     }
 
     bool has(Category wanted) const noexcept {
@@ -1277,38 +1516,46 @@ public:
         return ConstTypedTransformTableView(transforms_);
     }
     void clearForBegin() noexcept {
-        renderStates_.clear();
-        textureStageStates_.clear();
-        samplerStates_.clear();
-        transforms_.clear();
+        forEachApplyPhysical(
+            []<StateBlockApplyPhysicalStore>(auto&& storage) {
+                storage.clear();
+            });
         vertexDeclarationRecorded = false;
-        forEachCategory([](Category, auto& category) { category.clear(); });
-        constants.clearForBegin();
     }
 
 private:
-    template<typename T, typename Fn>
+    template<StateBlockApplyCategoryRole Role, typename T, typename Fn>
     static void visitOwnedValue(const T& value, Fn&& fn) noexcept {
-        if constexpr (requires { value.raw(); }) {
-            fn(value.raw());
-        } else if constexpr (std::is_same_v<T, StateBlockStreamSourceValue>) {
-            fn(value.buffer.raw());
+        constexpr bool ownsComRef =
+            Role == StateBlockApplyCategoryRole::
+                        CandidateOwnedVertexDeclaration ||
+            Role >= StateBlockApplyCategoryRole::StagedTexture;
+        if constexpr (ownsComRef) {
+            static_assert(requires { value.raw(); } ||
+                          std::is_same_v<T, StateBlockStreamSourceValue>,
+                          "owned StateBlock category needs a typed COM ref");
+            if constexpr (requires { value.raw(); }) {
+                fn(value.raw());
+            } else {
+                fn(value.buffer.raw());
+            }
+        } else {
+            static_assert(!requires { value.raw(); } &&
+                          !std::is_same_v<T, StateBlockStreamSourceValue>,
+                          "COM-ref StateBlock category needs an ownership role");
         }
     }
 
-    template<typename Fn>
-    void forEachCategoryRef(Fn&& fn) const noexcept {
-#define DXMT9_STATEBLOCK_VISIT_REF(name, storage, type, slots)               \
-        storage.forEach([&](std::size_t, const type& value) {                \
-            visitOwnedValue(value, fn);                                       \
-        });
-        DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_VISIT_REF)
-#undef DXMT9_STATEBLOCK_VISIT_REF
-    }
-
-#define DXMT9_STATEBLOCK_DECLARE_STORAGE(name, storage, type, slots)        \
+#define DXMT9_STATEBLOCK_DECLARE_STORAGE(name, storage, type, slots, role)  \
     FixedTrackedState<type, slots> storage{};
-    DXMT9_STATEBLOCK_CATEGORY_SCHEMA(DXMT9_STATEBLOCK_DECLARE_STORAGE)
+#define DXMT9_STATEBLOCK_DECLARE_STORAGE_KEYED(name)
+#define DXMT9_STATEBLOCK_DECLARE_STORAGE_CONSTANT(name)
+    DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+        DXMT9_STATEBLOCK_DECLARE_STORAGE_KEYED,
+        DXMT9_STATEBLOCK_DECLARE_STORAGE,
+        DXMT9_STATEBLOCK_DECLARE_STORAGE_CONSTANT)
+#undef DXMT9_STATEBLOCK_DECLARE_STORAGE_KEYED
+#undef DXMT9_STATEBLOCK_DECLARE_STORAGE_CONSTANT
 #undef DXMT9_STATEBLOCK_DECLARE_STORAGE
     FixedStateTable<kPeRenderStateSlots> renderStates_{};
     FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots>
@@ -1317,7 +1564,7 @@ private:
     FixedTransformTable transforms_{};
 };
 
-#undef DXMT9_STATEBLOCK_CATEGORY_SCHEMA
+#undef DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY
 
 struct PeHotStateShadow : LiveShadow, PendingDelta {
     bool hasPendingHotState() const noexcept {

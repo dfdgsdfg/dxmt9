@@ -166,8 +166,8 @@ D3D9DeviceImpl::~D3D9DeviceImpl() {
     logPeThreadSampler();
     stopPeThreadSampler();
     clearPendingCommandChunk();
-    discardPreparedStateBlockApply();
-    releaseRecordedStateBlockRefs();
+    recorderState_.stateBlockTransaction.discardAll(
+        [](void* value) noexcept { releaseRecordedRef(value); });
     releaseAllBound();
     dxmt9c_device_release(dev_);
     if (factory_) factory_->Release();
@@ -179,14 +179,15 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
   try {
     const bool initialSnapshot = !out.initialized;
     const StateBlockCaptureDisposition effectiveDisposition =
-        insideEndStateBlock_ ? StateBlockCaptureDisposition::Explicit
-                             : disposition;
+        recorderState_.stateBlockTransaction.isInsideEnd()
+            ? StateBlockCaptureDisposition::Explicit
+            : disposition;
     if (initialSnapshot) {
         out.renderStates().clear();
         out.textureStageStates().clear();
         out.samplerStates().clear();
         out.transforms().clear();
-        const auto renderSource = insideEndStateBlock_
+        const auto renderSource = recorderState_.stateBlockTransaction.isInsideEnd()
             ? stateBlockState_.renderStates()
             : peState_.renderStateShadowTyped();
         renderSource.forEach([&](RenderStateSlot state, std::uint32_t value) {
@@ -195,7 +196,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                 out.renderStates().set(state, value);
             }
         });
-        const auto tssSource = insideEndStateBlock_
+        const auto tssSource = recorderState_.stateBlockTransaction.isInsideEnd()
             ? stateBlockState_.textureStageStates()
             : peState_.tssShadowTyped();
         tssSource.forEach(
@@ -206,7 +207,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                     out.textureStageStates().set(stage, type, value);
                 }
             });
-        const auto samplerSource = insideEndStateBlock_
+        const auto samplerSource = recorderState_.stateBlockTransaction.isInsideEnd()
             ? stateBlockState_.samplerStates()
             : peState_.samplerStateShadowTyped();
         samplerSource.forEach(
@@ -217,7 +218,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                     out.samplerStates().set(sampler, type, value);
                 }
             });
-        const auto transformSource = insideEndStateBlock_
+        const auto transformSource = recorderState_.stateBlockTransaction.isInsideEnd()
             ? stateBlockState_.transforms()
             : peState_.transformShadowTyped();
         if (stateBlockCaptureCategorySelected(
@@ -229,7 +230,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         }
 
         StateBlockRecorded categorySource{};
-        if (insideEndStateBlock_) {
+        if (recorderState_.stateBlockTransaction.isInsideEnd()) {
             categorySource = stateBlockState_;
         } else {
             if (stateBlockCaptureCategorySelected(
@@ -317,7 +318,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         out.copyCategoriesFrom(categorySource);
 
         out.constants.clearForBegin();
-        if (insideEndStateBlock_) {
+        if (recorderState_.stateBlockTransaction.isInsideEnd()) {
             out.constants = stateBlockConsts_;
         } else {
             const auto copyLive = [](const ConstShadow& live,
@@ -468,7 +469,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
     bool shouldTrackVdecl;
     if (initialSnapshot) {
         shouldTrackVdecl =
-            insideEndStateBlock_
+            recorderState_.stateBlockTransaction.isInsideEnd()
                 ? stateBlockState_.vertexDeclarationWasRecorded()
                 : stateBlockCaptureCategorySelected(
                       effectiveDisposition,
@@ -481,7 +482,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         out.vdecl = nullptr;
     }
     IDirect3DVertexDeclaration9* sourceVdecl = vdecl_;
-    if (initialSnapshot && insideEndStateBlock_) {
+    if (initialSnapshot && recorderState_.stateBlockTransaction.isInsideEnd()) {
         StateBlockVertexDeclarationRef candidateVdecl{};
         if (stateBlockState_.vertexDeclaration().get(0u, candidateVdecl)) {
             sourceVdecl = reinterpret_cast<IDirect3DVertexDeclaration9*>(candidateVdecl.raw());
@@ -755,19 +756,17 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     releaseAllBound();
     if (defaultPoolResourceRefs_ != 0) {
         clearPeStateTracking();
-        stateBlockRecording_ = false;
         releaseRecordedStateBlockRefs();
+        recorderState_.stateBlockTransaction.resetFailed();
         deviceNotReset_ = true;
         return D3DERR_INVALIDCALL;
     }
     clearPeStateTracking();
-    stateBlockRecording_ = false;
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
-        stateBlockRecorderPoisoned_ =
-            peStateBlockPoisonAfterReset(true, stateBlockRecorderPoisoned_);
-        discardPreparedStateBlockApply();
+        recorderState_.stateBlockTransaction.resetSucceeded(
+            [](void* value) noexcept { releaseRecordedRef(value); });
         deviceNotReset_ = false;
         // reset_lockable_backbuffer_policy: capture the new
         // PresentParameters.Flags so future GetSwapChain wrapper
@@ -785,6 +784,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
         peState_.pendingViewport = false;
         peState_.pendingScissor  = false;
+    } else {
+        recorderState_.stateBlockTransaction.resetFailed();
     }
     if (peCaptureState_ &&
         peCaptureState_->renderTapeCapture.state() ==
@@ -1904,11 +1905,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE typ
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!ppSB) return D3DERR_INVALIDCALL;
-    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+    if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
     // D3D9 creation contract: a failed create must leave the out-pointer
     // NULL before the error HRESULT is returned.
     *ppSB = nullptr;
-    if (!isValidD3DStateBlockType(type) || stateBlockRecording_) {
+    if (!isValidD3DStateBlockType(type) ||
+        recorderState_.stateBlockTransaction.isRecording()) {
         return D3DERR_INVALIDCALL;
     }
     // State-block creation needs current server state.
@@ -1929,18 +1931,22 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     notePeDeviceCallAfterPresent("BeginStateBlock");
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
-    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
-    if (stateBlockRecording_) {
+    if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
+    if (recorderState_.stateBlockTransaction.isRecording()) {
         return D3DERR_INVALIDCALL;
     }
     const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
-    if (FAILED(flushHr)) return flushHr;
+    if (FAILED(flushHr)) {
+        recorderState_.stateBlockTransaction.beginFailed();
+        return flushHr;
+    }
     dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
     const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
     if (SUCCEEDED(hr)) {
-        releaseRecordedStateBlockRefs();
-        stateBlockConsts_.clearForBegin();
-        stateBlockRecording_ = true;
+        recorderState_.stateBlockTransaction.beginAccepted(
+            [](void* value) noexcept { releaseRecordedRef(value); });
+    } else {
+        recorderState_.stateBlockTransaction.beginFailed();
     }
     dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
     return hr;
@@ -1951,48 +1957,63 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderMutex_, recorderLockRequired_);
     if (!ppSB) return D3DERR_INVALIDCALL;
-    if (stateBlockRecorderPoisoned_) return D3DERR_DEVICELOST;
+    if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
     // EndStateBlock without a matching BeginStateBlock returns INVALIDCALL
     // and MUST leave the out-pointer UNTOUCHED — the Wine d3d9 oracle checks
     // `stateblock == sentinel` here (begin_end_state_block_policy /
     // stateblock_invalid_type_recording_invalid_calls). So null the
     // out-pointer only once we are actually attempting the create.
-    if (!stateBlockRecording_) {
+    if (!recorderState_.stateBlockTransaction.isRecording()) {
         return D3DERR_INVALIDCALL;
     }
     *ppSB = nullptr;
     const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
-    if (FAILED(flushHr)) return flushHr;
+    if (FAILED(flushHr)) {
+        recorderState_.stateBlockTransaction.endPreEffectFailed();
+        return flushHr;
+    }
     dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
     D9CStateBlock* sb = nullptr;
     HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
-    if (SUCCEEDED(hr)) {
-        stateBlockRecording_ = false;
-        if (sb) {
-            // Mark Begin/End context so the new stateblock's ctor
-            // takes its tracked-keys set from
-            // stateBlockTransformRecorded (which may be empty if all
-            // recording was MultiplyTransform) instead of falling
-            // back to a full transformShadow capture.
-            insideEndStateBlock_ = true;
-            *ppSB = CreatePeStateBlock(sb, this, this,
-                                       diagnosticObserverForChild(),
-                                       StateBlockCaptureDisposition::Explicit);
-            insideEndStateBlock_ = false;
-        }
-        if (!*ppSB) {
-            // The backend End transition has already completed and the raw
-            // state block was released by CreatePeStateBlock. This is a
-            // post-effect fail-stop path, not a retryable End: discard the
-            // unpublished PE candidate so no stale recording domain survives.
-            releaseRecordedStateBlockRefs();
-            stateBlockConsts_.clearForBegin();
-            return E_OUTOFMEMORY;
-        }
-        // Clear only after the immutable child snapshot has been published.
-        releaseRecordedStateBlockRefs();
-        stateBlockConsts_.clearForBegin();
+    if (FAILED(hr)) {
+        DXMT_ASSERT(peStateBlockEndTransition(
+            PeStateBlockEndPhase::Backend, false) ==
+            PeStateBlockEndAction::Poison);
+        // The unix End implementation consumes its recording flag before its
+        // remaining fallible work. A failed bridge call therefore cannot be
+        // retried safely: leave Recording, discard the unpublished PE
+        // candidate, and fail-stop all later recorder writes until Reset.
+        recorderState_.stateBlockTransaction.failEnd(
+            [](void* value) noexcept { releaseRecordedRef(value); });
+        dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
+                            (unsigned)hr, static_cast<void*>(sb), *ppSB);
+        return hr;
     }
+
+    recorderState_.stateBlockTransaction.enterEndPublication();
+    if (sb) {
+        // Mark Begin/End context so the new stateblock's ctor
+        // takes its tracked-keys set from
+        // stateBlockTransformRecorded (which may be empty if all
+        // recording was MultiplyTransform) instead of falling
+        // back to a full transformShadow capture.
+        *ppSB = CreatePeStateBlock(sb, this, this,
+                                   diagnosticObserverForChild(),
+                                   StateBlockCaptureDisposition::Explicit);
+    }
+    if (!*ppSB) {
+        DXMT_ASSERT(peStateBlockEndTransition(
+            PeStateBlockEndPhase::Wrapper, false) ==
+            PeStateBlockEndAction::Poison);
+        // Backend End already accepted, so wrapper publication failure is
+        // also fail-stop rather than a retryable End.
+        recorderState_.stateBlockTransaction.finishEndPublication(
+            false, [](void* value) noexcept { releaseRecordedRef(value); });
+        return E_OUTOFMEMORY;
+    }
+    // Clear only after the immutable child snapshot has been published.
+    recorderState_.stateBlockTransaction.finishEndPublication(
+        true, [](void* value) noexcept { releaseRecordedRef(value); });
     dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
                         (unsigned)hr, static_cast<void*>(sb), *ppSB);
     return hr;
@@ -2587,14 +2608,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     if (FAILED(flushHr)) return flushHr;
     releaseAllBound();
     clearPeStateTracking();
-    stateBlockRecording_ = false;
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {
-        stateBlockRecorderPoisoned_ =
-            peStateBlockPoisonAfterReset(true, stateBlockRecorderPoisoned_);
-        discardPreparedStateBlockApply();
+        recorderState_.stateBlockTransaction.resetSucceeded(
+            [](void* value) noexcept { releaseRecordedRef(value); });
         deviceNotReset_ = false;
         // Same flags-capture as Reset().
         implicitSwapchainFlagsShadow_ = pPP->Flags;
@@ -2605,6 +2624,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
         peState_.pendingViewport = false;
         peState_.pendingScissor  = false;
+    } else {
+        recorderState_.stateBlockTransaction.resetFailed();
     }
     if (peCaptureState_ &&
         peCaptureState_->renderTapeCapture.state() ==

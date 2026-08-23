@@ -12,6 +12,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_state_shadow.hpp"
+#include "d3d9_pe_stateblock_transaction.hpp"
 #include "dxmt9/thread_ownership.hpp"
 
 namespace dxmt9::d3d9::pe {
@@ -31,7 +32,7 @@ struct PeRecorderState {
 
   PeHotStateShadow peState{};
   PeConstShadowBlock peConsts{};
-  StateBlockRecorded stateBlock{};
+  ::PeStateBlockTransactionState stateBlockTransaction{};
   mutable PeBindingView peBindingView{};
   mutable PeSparseScratch peSparseScratch{};
   mutable SparseStateInput peSparseState{};

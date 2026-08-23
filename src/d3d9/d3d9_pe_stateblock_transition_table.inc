@@ -1,0 +1,31 @@
+// Canonical PE StateBlock serial/reference transition matrix. Included by
+// d3d9_pe_stateblock_transaction.hpp and translated to TLA+ by
+// scripts/check/gen_pe_stateblock_transition_table.py.
+//
+// phase, event, next, action, candidate effect, staged-ref effect, capture effect
+DXMT9_PE_STATEBLOCK_ROW(Idle, BeginFailed, Idle, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, BeginAccepted, Recording, BeginRecording, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, EndPreEffectFailed, Recording, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, EndBackendFailed, Poisoned, FailStop, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, EndBackendAccepted, EndPublication, EnterEndPublication, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(EndPublication, EndWrapperFailed, Poisoned, FailStop, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(EndPublication, EndPublished, Idle, PublishEnd, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, CapturePreEffectFailed, Idle, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, CaptureBackendFailed, Poisoned, FailStop, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, CapturePublished, Idle, PublishCapture, Preserve, Preserve, Publish)
+DXMT9_PE_STATEBLOCK_ROW(Idle, ApplyPrepareFailed, Idle, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, ApplyPrepared, ApplyPrepared, RetainApplyRefs, Preserve, Retain, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(ApplyPrepared, ApplyBackendFailed, Poisoned, FailStop, Preserve, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(ApplyPrepared, ApplyBackendAccepted, Idle, TransferApplyRefs, Preserve, Transfer, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, ResetStarted, Idle, AbandonForReset, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, ResetStarted, Idle, AbandonForReset, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Poisoned, ResetStarted, Poisoned, AbandonForReset, Discard, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, ResetFailed, Idle, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Poisoned, ResetFailed, Poisoned, Preserve, Preserve, Preserve, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, ResetAccepted, Idle, RecoverReset, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Poisoned, ResetAccepted, Idle, RecoverReset, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Idle, Teardown, Terminal, Teardown, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, Teardown, Terminal, Teardown, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(EndPublication, Teardown, Terminal, Teardown, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(ApplyPrepared, Teardown, Terminal, Teardown, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Poisoned, Teardown, Terminal, Teardown, Discard, Release, Preserve)

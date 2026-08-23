@@ -1,137 +1,182 @@
 ---- MODULE PeStateBlockTransaction ----
 (***************************************************************************
- * Small temporal model for the PE StateBlock Apply transaction. Preparation
- * owns staged references; backend failure poisons the recorder because the
- * unix operation may have partially mutated; commit failure uses the same
- * conservative boundary. A successful Reset recovers the poisoned recorder,
- * as required by the task-1B coordination contract. Terminal is reachable
- * only through explicit teardown, not as the normal Reset policy.
- ***************************************************************************)
-EXTENDS Naturals, FiniteSets, TLC
+ * Bounded serial/reference model for the PE StateBlock transaction owner.
+ * PeStateBlockTransitionTable is generated from the production C++ matrix;
+ * every modeled step asserts its exact phase/event/action/effect row.
+ * stagedRefCount is an abstract cardinality that includes duplicate COM
+ * identities. Native fake-COM tests provide concrete AddRef/Release/transfer
+ * evidence for repeated identities in different category/slot owners.
+*)
+EXTENDS Naturals, Sequences, TLC, PeStateBlockTransitionTable
 
-CONSTANTS StagedRefs, Mutation
+CONSTANTS StagedRefMultiplicity, Mutation
+ASSUME StagedRefMultiplicity \in Nat \ {0}
+ASSUME Mutation \in {"Guarded", "NoPoison", "NoRelease", "StaleOpen",
+                     "LostDuplicate"}
 
-ASSUME StagedRefs # {}
-ASSUME Mutation \in {"Guarded", "NoPoison", "NoRelease"}
-
-Phases == {"Idle", "Prepared", "Backend", "Committed", "Poisoned",
-           "Terminal"}
-CaptureDispositions == {"Pending", "Materialized", "Rejected", "Skipped",
-                        "None"}
-
-VARIABLES phase, stagedRefs, captureDisposition, failure
-
-vars == <<phase, stagedRefs, captureDisposition, failure>>
+Phases == {"Idle", "Recording", "EndPublication", "ApplyPrepared",
+           "Poisoned", "Terminal"}
+Failures == {"None", "EndBackend", "EndWrapper", "CaptureBackend",
+             "ApplyBackend"}
+VARIABLES phase, candidateOpen, stagedRefCount, captureVersion, failure,
+          resetStarted
+vars == <<phase, candidateOpen, stagedRefCount, captureVersion, failure,
+          resetStarted>>
 
 Init ==
-  /\ phase = "Idle"
-  /\ stagedRefs = {}
-  /\ captureDisposition = "None"
-  /\ failure = "None"
+  /\ phase = "Idle" /\ candidateOpen = FALSE /\ stagedRefCount = 0
+  /\ captureVersion = 0 /\ failure = "None" /\ resetStarted = FALSE
 
-PrepareSuccess ==
+BeginFailed ==
   /\ phase = "Idle"
-  /\ phase' = "Prepared"
-  /\ stagedRefs' = StagedRefs
-  /\ captureDisposition' = "Pending"
-  /\ failure' = "None"
-
-PrepareFailure ==
-  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "BeginFailed", "Idle", "Preserve",
+                       "Preserve", "Preserve", "Preserve")
   /\ UNCHANGED vars
+BeginAccepted ==
+  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "BeginAccepted", "Recording",
+                       "BeginRecording", "Discard", "Preserve", "Preserve")
+  /\ phase' = "Recording" /\ candidateOpen' = TRUE /\ failure' = "None"
+  /\ UNCHANGED <<stagedRefCount, captureVersion, resetStarted>>
+EndPreEffectFailed ==
+  /\ phase = "Recording"
+  /\ StateBlockMatches("Recording", "EndPreEffectFailed", "Recording",
+                       "Preserve", "Preserve", "Preserve", "Preserve")
+  /\ UNCHANGED vars
+EndBackendAccepted ==
+  /\ phase = "Recording"
+  /\ StateBlockMatches("Recording", "EndBackendAccepted", "EndPublication",
+                       "EnterEndPublication", "Preserve", "Preserve",
+                       "Preserve")
+  /\ phase' = "EndPublication"
+  /\ UNCHANGED <<candidateOpen, stagedRefCount, captureVersion, failure,
+                 resetStarted>>
+EndBackendFailed ==
+  /\ phase = "Recording"
+  /\ StateBlockMatches("Recording", "EndBackendFailed", "Poisoned",
+                       "FailStop", "Discard", "Preserve", "Preserve")
+  /\ phase' = IF Mutation = "StaleOpen" THEN "Recording" ELSE "Poisoned"
+  /\ candidateOpen' = (Mutation = "StaleOpen")
+  /\ failure' = "EndBackend"
+  /\ UNCHANGED <<stagedRefCount, captureVersion, resetStarted>>
+EndWrapperFailed ==
+  /\ phase = "EndPublication"
+  /\ StateBlockMatches("EndPublication", "EndWrapperFailed", "Poisoned",
+                       "FailStop", "Discard", "Preserve", "Preserve")
+  /\ phase' = "Poisoned" /\ candidateOpen' = FALSE
+  /\ failure' = "EndWrapper"
+  /\ UNCHANGED <<stagedRefCount, captureVersion, resetStarted>>
+EndPublished ==
+  /\ phase = "EndPublication"
+  /\ StateBlockMatches("EndPublication", "EndPublished", "Idle",
+                       "PublishEnd", "Discard", "Preserve", "Preserve")
+  /\ phase' = "Idle" /\ candidateOpen' = FALSE
+  /\ UNCHANGED <<stagedRefCount, captureVersion, failure, resetStarted>>
 
-BackendSuccess ==
-  /\ phase = "Prepared"
-  /\ phase' = "Backend"
-  /\ UNCHANGED <<stagedRefs, captureDisposition, failure>>
+CapturePreEffectFailed ==
+  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "CapturePreEffectFailed", "Idle", "Preserve",
+                       "Preserve", "Preserve", "Preserve")
+  /\ UNCHANGED vars
+CaptureBackendFailed ==
+  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "CaptureBackendFailed", "Poisoned",
+                       "FailStop", "Preserve", "Preserve", "Preserve")
+  /\ phase' = IF Mutation = "NoPoison" THEN "Idle" ELSE "Poisoned"
+  /\ failure' = "CaptureBackend"
+  /\ UNCHANGED <<candidateOpen, stagedRefCount, captureVersion, resetStarted>>
+CapturePublished ==
+  /\ phase = "Idle"
+  /\ captureVersion = 0
+  /\ StateBlockMatches("Idle", "CapturePublished", "Idle", "PublishCapture",
+                       "Preserve", "Preserve", "Publish")
+  /\ captureVersion' = captureVersion + 1
+  /\ UNCHANGED <<phase, candidateOpen, stagedRefCount, failure, resetStarted>>
 
-BackendFailure ==
-  /\ phase = "Prepared"
-  /\ phase' = IF Mutation = "NoPoison" THEN "Prepared" ELSE "Poisoned"
-  /\ stagedRefs' = IF Mutation = "NoRelease" THEN stagedRefs ELSE {}
-  /\ failure' = "Backend"
-  /\ UNCHANGED captureDisposition
+ApplyPrepareFailed ==
+  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "ApplyPrepareFailed", "Idle", "Preserve",
+                       "Preserve", "Preserve", "Preserve")
+  /\ UNCHANGED vars
+ApplyPrepared ==
+  /\ phase = "Idle"
+  /\ StateBlockMatches("Idle", "ApplyPrepared", "ApplyPrepared",
+                       "RetainApplyRefs", "Preserve", "Retain", "Preserve")
+  /\ phase' = "ApplyPrepared"
+  /\ stagedRefCount' = IF Mutation = "LostDuplicate"
+                       THEN StagedRefMultiplicity - 1
+                       ELSE StagedRefMultiplicity
+  /\ UNCHANGED <<candidateOpen, captureVersion, failure, resetStarted>>
+ApplyBackendFailed ==
+  /\ phase = "ApplyPrepared"
+  /\ StateBlockMatches("ApplyPrepared", "ApplyBackendFailed", "Poisoned",
+                       "FailStop", "Preserve", "Release", "Preserve")
+  /\ phase' = IF Mutation = "NoPoison" THEN "ApplyPrepared" ELSE "Poisoned"
+  /\ stagedRefCount' = IF Mutation = "NoRelease" THEN stagedRefCount ELSE 0
+  /\ failure' = "ApplyBackend"
+  /\ UNCHANGED <<candidateOpen, captureVersion, resetStarted>>
+ApplyBackendAccepted ==
+  /\ phase = "ApplyPrepared"
+  /\ StateBlockMatches("ApplyPrepared", "ApplyBackendAccepted", "Idle",
+                       "TransferApplyRefs", "Preserve", "Transfer", "Preserve")
+  /\ phase' = "Idle" /\ stagedRefCount' = 0
+  /\ UNCHANGED <<candidateOpen, captureVersion, failure, resetStarted>>
 
-CommitSuccess ==
-  /\ phase = "Backend"
-  /\ phase' = "Committed"
-  /\ stagedRefs' = {}
-  /\ UNCHANGED <<captureDisposition, failure>>
-
-CommitFailure ==
-  /\ phase = "Backend"
-  /\ phase' = IF Mutation = "NoPoison" THEN "Backend" ELSE "Poisoned"
-  /\ stagedRefs' = IF Mutation = "NoRelease" THEN stagedRefs ELSE {}
-  /\ failure' = "Commit"
-  /\ UNCHANGED captureDisposition
-
-CaptureMaterialized ==
-  /\ phase = "Committed"
-  /\ phase' = "Idle"
-  /\ captureDisposition' = "Materialized"
-  /\ UNCHANGED <<stagedRefs, failure>>
-
-CaptureRejected ==
-  /\ phase = "Committed"
-  /\ phase' = "Idle"
-  /\ captureDisposition' = "Rejected"
-  /\ UNCHANGED <<stagedRefs, failure>>
-
-CaptureSkipped ==
-  /\ phase = "Committed"
-  /\ phase' = "Idle"
-  /\ captureDisposition' = "Skipped"
-  /\ UNCHANGED <<stagedRefs, failure>>
-
-ResetSuccess ==
-  /\ phase = "Poisoned"
-  /\ phase' = "Idle"
-  /\ stagedRefs' = {}
-  /\ captureDisposition' = "None"
-  /\ failure' = "None"
-
+ResetStarted ==
+  /\ phase \in {"Idle", "Recording", "Poisoned"}
+  /\ StateBlockMatches(phase, "ResetStarted",
+                       IF phase = "Recording" THEN "Idle" ELSE phase,
+                       "AbandonForReset", "Discard", "Preserve", "Preserve")
+  /\ phase' = IF phase = "Recording" THEN "Idle" ELSE phase
+  /\ candidateOpen' = FALSE /\ resetStarted' = TRUE
+  /\ UNCHANGED <<stagedRefCount, captureVersion, failure>>
+ResetFailed ==
+  /\ resetStarted /\ phase \in {"Idle", "Poisoned"}
+  /\ StateBlockMatches(phase, "ResetFailed", phase, "Preserve", "Preserve",
+                       "Preserve", "Preserve")
+  /\ resetStarted' = FALSE
+  /\ UNCHANGED <<phase, candidateOpen, stagedRefCount, captureVersion, failure>>
+ResetAccepted ==
+  /\ resetStarted /\ phase \in {"Idle", "Poisoned"}
+  /\ StateBlockMatches(phase, "ResetAccepted", "Idle", "RecoverReset",
+                       "Discard", "Release", "Preserve")
+  /\ phase' = "Idle" /\ stagedRefCount' = 0 /\ failure' = "None"
+  /\ resetStarted' = FALSE /\ UNCHANGED <<candidateOpen, captureVersion>>
 Teardown ==
   /\ phase # "Terminal"
-  /\ phase' = "Terminal"
-  /\ stagedRefs' = {}
-  /\ captureDisposition' = "None"
-  /\ failure' = "None"
+  /\ StateBlockMatches(phase, "Teardown", "Terminal", "Teardown",
+                       "Discard", "Release", "Preserve")
+  /\ phase' = "Terminal" /\ candidateOpen' = FALSE /\ stagedRefCount' = 0
+  /\ failure' = "None" /\ resetStarted' = FALSE
+  /\ UNCHANGED captureVersion
 
-Next == PrepareSuccess \/ PrepareFailure \/ BackendSuccess \/ BackendFailure \/
-        CommitSuccess \/ CommitFailure \/ CaptureMaterialized \/
-        CaptureRejected \/ CaptureSkipped \/ ResetSuccess \/ Teardown
+Next == BeginFailed \/ BeginAccepted \/ EndPreEffectFailed \/
+        EndBackendAccepted \/ EndBackendFailed \/ EndWrapperFailed \/
+        EndPublished \/ CapturePreEffectFailed \/ CaptureBackendFailed \/
+        CapturePublished \/ ApplyPrepareFailed \/ ApplyPrepared \/
+        ApplyBackendFailed \/ ApplyBackendAccepted \/ ResetStarted \/
+        ResetFailed \/ ResetAccepted \/ Teardown
 
-TypeOK ==
-  /\ phase \in Phases
-  /\ stagedRefs \subseteq StagedRefs
-  /\ captureDisposition \in CaptureDispositions
-  /\ failure \in {"None", "Backend", "Commit"}
-
-PreparedOwnsStagedRefs ==
-  phase \in {"Prepared", "Backend"} => stagedRefs = StagedRefs
-
-FailurePoisoned == failure # "None" => phase = "Poisoned"
-
-FailedRefsReleased == failure # "None" => stagedRefs = {}
-
-CommittedHasNoStagedRefs == phase \in {"Committed", "Idle", "Terminal"} =>
-  stagedRefs = {}
-
-CaptureSettled == phase = "Idle" =>
-  captureDisposition \in {"None", "Materialized", "Rejected", "Skipped"}
-
+TypeOK == phase \in Phases /\ stagedRefCount \in Nat /\
+          captureVersion \in Nat /\ failure \in Failures
+CandidateMatchesSerialPhase ==
+  candidateOpen = (phase \in {"Recording", "EndPublication"})
+PreparedRefMultiplicity ==
+  phase = "ApplyPrepared" => stagedRefCount = StagedRefMultiplicity
+FailedRefsReleased ==
+  failure = "ApplyBackend" /\ phase = "Poisoned" => stagedRefCount = 0
+NoStaleOpenAfterPostEffectFailure ==
+  failure \in {"EndBackend", "EndWrapper", "CaptureBackend",
+               "ApplyBackend"} => phase = "Poisoned"
+NoRefsOutsidePrepared == phase # "ApplyPrepared" => stagedRefCount = 0
+CaptureVersionOnlyPublishes == captureVersion \in 0..1
 PoisonEventuallyResolves ==
   [](phase = "Poisoned" ~> (phase = "Idle" \/ phase = "Terminal"))
 
-Spec == Init /\ [][Next]_vars /\
-        WF_vars(PrepareSuccess) /\ WF_vars(BackendSuccess) /\
-        WF_vars(BackendFailure) /\ WF_vars(CommitSuccess) /\
-        WF_vars(CommitFailure) /\ WF_vars(CaptureMaterialized) /\
-        WF_vars(CaptureRejected) /\ WF_vars(CaptureSkipped) /\
-        WF_vars(ResetSuccess) /\ WF_vars(Teardown)
-
-THEOREM Spec => []TypeOK /\ []PreparedOwnsStagedRefs /\
-                 []FailurePoisoned /\ []FailedRefsReleased /\
-                 []CommittedHasNoStagedRefs /\ []CaptureSettled
-
+Spec == Init /\ [][Next]_vars /\ WF_vars(ResetStarted) /\
+        WF_vars(ResetAccepted) /\ WF_vars(Teardown)
+THEOREM Spec => []TypeOK /\ []CandidateMatchesSerialPhase /\
+                 []PreparedRefMultiplicity /\ []FailedRefsReleased /\
+                 []NoStaleOpenAfterPostEffectFailure /\
+                 []NoRefsOutsidePrepared /\ []CaptureVersionOnlyPublishes
 ====
