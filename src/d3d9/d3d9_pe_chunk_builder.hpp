@@ -102,6 +102,28 @@ bool cacheWireObjectRef(Object* object, std::uint32_t expectedKind,
   return true;
 }
 
+// Production wrappers know their local kind at the call site. Keep that
+// knowledge in the output type so a cache call cannot accidentally publish a
+// texture identity into a buffer-local slot. The four-field wire contract is
+// unchanged; the qualification exists only on the PE side.
+template <typename Object, typename Getter, typename Ref>
+bool cacheWireObjectRef(Object* object, Getter&& getter, Ref& out) {
+  static_assert(std::is_base_of_v<PeWireObjectRef, Ref>);
+  out = {};
+  if (!object) {
+    return false;
+  }
+  noteWireIdentityGetterCall();
+  D9CWireObjectIdentity identity{};
+  if (getter(object, &identity) < 0 || identity.kind != Ref::kind ||
+      identity.generation == 0u || identity.objectId == 0u) {
+    return false;
+  }
+  out.identity = identity;
+  out.object = object;
+  return true;
+}
+
 struct CommandChunkBuilderCapacities {
   std::size_t records = 64u;
   std::size_t handles = 256u;
@@ -174,7 +196,7 @@ class CommandChunkBuilder {
   std::size_t handleCount() const noexcept { return handles_.size(); }
   std::size_t payloadBytes() const noexcept { return payload_.size(); }
   std::size_t retainedObjectCount() const noexcept { return retainer_.size(); }
-  bool referencesObject(void* object) const noexcept;
+  bool referencesObject(PeLocalObjectIdentity identity) const noexcept;
 
   const std::vector<D9CCommandChunkWireRecordHeader>& recordsForTest()
       const noexcept {
@@ -208,29 +230,29 @@ class CommandChunkBuilder {
   };
 
   // R-BACK-43.7: `referencesObject()` used to be a `std::find` over the
-  // whole builder-lifetime `handleObjects_` array, called per qualifying
-  // buffer Lock — the full-arena O(n) shape this spec's process rule was
-  // written to catch. This is a chunk-lifetime pointer -> multiplicity
-  // accelerator: `handleObjects_` stays the source of truth (an object can
-  // be named by more than one handle across different records in the same
-  // chunk, so the table stores a count, not a presence bit). On overflow it
-  // stops answering and the caller falls back to the original linear scan,
-  // which stays correct because every pushed handle object is still
-  // appended to `handleObjects_` regardless of table state. `reset()` /
-  // `resetAndReleaseRetained()` clear it in full (handleObjects_ is
-  // cleared too); `rollbackRecord()` decrements counts for exactly the
-  // range of handles a failed record added, using the same handleCheckpoint
-  // bound the surrounding rollback already computes.
+  // whole builder-lifetime handle array, called per qualifying buffer Lock —
+  // the full-arena O(n) shape this spec's process rule was written to catch.
+  // This is a chunk-lifetime (kind, pointer) -> multiplicity accelerator:
+  // `handleObjects_` stays the source of truth (an object can be named by more
+  // than one handle across different records in the same chunk, so the table
+  // stores a count, not a presence bit). On overflow it stops answering and
+  // the caller falls back to the original linear scan, which stays correct
+  // because every pushed local identity is still appended regardless of table
+  // state. `reset()` / `resetAndReleaseRetained()` clear it in full;
+  // `rollbackRecord()` decrements counts for exactly the range of handles a
+  // failed record added, using the same handleCheckpoint bound the surrounding
+  // rollback already computes.
   //
   // `appendHandle` normally uses its separate record-local identity table;
-  // this table answers a different question — "does this pointer appear
-  // anywhere in the chunk?" — and therefore stores chunk-lifetime pointer
-  // multiplicity. If the record-local table overflows, appendHandle falls
+  // this table answers a different question — "does this qualified local
+  // identity appear anywhere in the chunk?" — and therefore stores
+  // chunk-lifetime multiplicity. If the record-local table overflows, appendHandle falls
   // back to its bounded current-record scan, which remains the correctness
   // fallback for that exceptional path.
   struct HandlePresenceTable {
     struct Slot {
-      void* key = nullptr;
+      std::uint32_t kind = 0u;
+      void* object = nullptr;
       std::uint32_t count = 0u;
     };
 
@@ -250,27 +272,30 @@ class CommandChunkBuilder {
       overflowed = false;
     }
 
-    // Finds `key`'s slot, inserting a fresh zero-count slot if absent.
+    // Finds `identity`'s slot, inserting a fresh zero-count slot if absent.
     // Returns nullptr (and sets `overflowed`) once the table has no more
     // room; callers must fall back to a linear scan for the rest of the
     // chunk's lifetime once that happens.
-    Slot* findOrInsert(void* key) noexcept {
+    Slot* findOrInsert(PeLocalObjectIdentity identity) noexcept {
       if (overflowed || slots.empty()) {
         return nullptr;
       }
       const auto mask = slots.size() - 1u;
-      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      auto hash = reinterpret_cast<std::uintptr_t>(identity.object) >> 4u;
+      hash ^= static_cast<std::uintptr_t>(identity.kind) * 0x9e3779b9u;
+      auto idx = hash & mask;
       for (std::size_t probes = 0; probes < slots.size(); ++probes) {
         Slot& s = slots[idx];
-        if (s.key == key) {
+        if (s.object == identity.object && s.kind == identity.kind) {
           return &s;
         }
-        if (s.key == nullptr) {
+        if (s.object == nullptr) {
           if (occupied * 4u >= slots.size() * 3u) {
             overflowed = true;
             return nullptr;
           }
-          s.key = key;
+          s.kind = identity.kind;
+          s.object = identity.object;
           s.count = 0u;
           ++occupied;
           return &s;
@@ -285,18 +310,20 @@ class CommandChunkBuilder {
     // writable slot so a caller that already knows `key` is present (such as
     // rollbackRecord() undoing its own earlier increment) can adjust its
     // count without a second, insert-capable probe.
-    Slot* find(void* key) noexcept {
+    Slot* find(PeLocalObjectIdentity identity) noexcept {
       if (overflowed || slots.empty()) {
         return nullptr;
       }
       const auto mask = slots.size() - 1u;
-      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      auto hash = reinterpret_cast<std::uintptr_t>(identity.object) >> 4u;
+      hash ^= static_cast<std::uintptr_t>(identity.kind) * 0x9e3779b9u;
+      auto idx = hash & mask;
       for (std::size_t probes = 0; probes < slots.size(); ++probes) {
         Slot& s = slots[idx];
-        if (s.key == key) {
+        if (s.object == identity.object && s.kind == identity.kind) {
           return &s;
         }
-        if (s.key == nullptr) {
+        if (s.object == nullptr) {
           return nullptr;
         }
         idx = (idx + 1u) & mask;
@@ -305,18 +332,20 @@ class CommandChunkBuilder {
     }
 
     // Non-mutating lookup for const query contexts (referencesObject()).
-    const Slot* find(void* key) const noexcept {
+    const Slot* find(PeLocalObjectIdentity identity) const noexcept {
       if (overflowed || slots.empty()) {
         return nullptr;
       }
       const auto mask = slots.size() - 1u;
-      auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
+      auto hash = reinterpret_cast<std::uintptr_t>(identity.object) >> 4u;
+      hash ^= static_cast<std::uintptr_t>(identity.kind) * 0x9e3779b9u;
+      auto idx = hash & mask;
       for (std::size_t probes = 0; probes < slots.size(); ++probes) {
         const Slot& s = slots[idx];
-        if (s.key == key) {
+        if (s.object == identity.object && s.kind == identity.kind) {
           return &s;
         }
-        if (s.key == nullptr) {
+        if (s.object == nullptr) {
           return nullptr;
         }
         idx = (idx + 1u) & mask;
@@ -340,16 +369,16 @@ class CommandChunkBuilder {
   // This is deliberately a SEPARATE structure from HandlePresenceTable
   // above, not an extension of it, because the two answer different
   // questions with different correctness requirements:
-  //   - HandlePresenceTable (referencesObject()) asks "does this *pointer*
-  //     occur anywhere in the chunk" and is correctly keyed by pointer alone
-  //     — it does not need to know whether the identity recorded against
-  //     that pointer is internally consistent.
+  //   - HandlePresenceTable (referencesObject()) asks "does this qualified
+  //     local identity occur anywhere in the chunk" and is keyed by
+  //     (kind, pointer), so a same-address wrapper from another kind cannot
+  //     satisfy a buffer hazard or pending-destroy query.
   //   - This table must reproduce the original scan's *identity*-keyed
   //     semantics exactly: two different pointers that present the same
   //     generation-qualified identity within one record is a genuine
   //     integrity fault (a stale/duplicate wire-cache entry) that the
   //     original scan detects and fails the record for
-  //     (`handleObjects_[i] != object.object` -> failActiveRecord()). A
+  //     (`handleObjects_[i].object != object.object` -> failActiveRecord()). A
   //     pointer-keyed lookup cannot see that fault at all: the second,
   //     differently-pointered append would simply miss on its own pointer
   //     and be treated as a brand-new handle, silently losing the check.
@@ -507,7 +536,7 @@ class CommandChunkBuilder {
 
   std::vector<D9CCommandChunkWireRecordHeader> records_;
   std::vector<D9CCommandChunkWireHandleEntry> handles_;
-  std::vector<void*> handleObjects_;
+  std::vector<PeLocalObjectIdentity> handleObjects_;
   std::vector<std::byte> payload_;
   std::vector<std::byte> sealedBlob_;
   D3D9PePendingCommandRetainer retainer_;

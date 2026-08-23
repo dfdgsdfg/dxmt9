@@ -16,6 +16,9 @@ under `tests/meson.build`.
 - `verify_tla.sh` — runs the TLA+ model checker over the queue, resource
   lifetime, encoder lifecycle, and query sequencing specs (test
   `dxmt9-verify-tla`).
+- `gen_pe_transition_table.py` — generates or checks the TLA translation of
+  the production PE recorder transition table; `verify_tla.sh` rejects stale
+  output before starting TLC.
 - `assert_perf_counters.py` — fails when expected perf counter keys are
   missing from a run JSON; intended to extend draw-uniforms coverage.
 - `audit_perf_counter_table.py` — text-based audit detecting fields added to

@@ -29,10 +29,158 @@ namespace {
 
 }  // namespace
 
+namespace {
+inline uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
+    switch (fmt) {
+        case D3DFMT_A8R8G8B8:
+        case D3DFMT_X8R8G8B8:
+        case D3DFMT_A8B8G8R8:
+        case D3DFMT_X8B8G8R8:
+        case D3DFMT_A2R10G10B10:
+        case D3DFMT_A2B10G10R10:
+        case D3DFMT_G16R16:
+        case D3DFMT_D32:
+        case D3DFMT_D24S8:
+        case D3DFMT_D24X8:
+            return 4;
+        case D3DFMT_R8G8B8:
+            return 3;
+        case D3DFMT_R5G6B5:
+        case D3DFMT_X1R5G5B5:
+        case D3DFMT_A1R5G5B5:
+        case D3DFMT_A4R4G4B4:
+        case D3DFMT_X4R4G4B4:
+        case D3DFMT_A8L8:
+        case D3DFMT_A8P8:
+        case D3DFMT_L16:
+        case D3DFMT_D16:
+        case D3DFMT_D15S1:
+            return 2;
+        case D3DFMT_A8:
+        case D3DFMT_L8:
+        case D3DFMT_R3G3B2:
+        case D3DFMT_A4L4:
+        case D3DFMT_P8:
+            return 1;
+        default:
+            return 0;
+    }
+}
+}  // namespace
+
+D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
+               UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
+               HWND window, bool extended,
+               DWORD implicitSwapchainFlags)
+    : dev_(dev), factory_(factory)
+    , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
+    , recorderState_(dxmt9PeRecorderLockRequired(
+          behaviorFlags, dxmt9PeForceRecorderLockEnabled()))
+    // recorderOwnership_ binds to this thread through its default member
+    // initializer, so it needs no entry here.
+    , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
+    , extended_(extended)
+    , peCaptureState_(makePeCaptureState(
+          dxmt9PeRenderTapeCaptureEnabled(),
+          dxmt9PeRenderTapeCaptureLimits(
+              dxmt9PeRenderTapeCaptureEnabled()),
+          dxmt9PeRenderTapeCaptureProfile(),
+          dxmt9PeRenderTapeCaptureSkipPresents()))
+    , diagnostics_(makePeDiagnosticsState(
+          this, dxmt9PeResolvedDiagnosticsConfig()))
+    , creationWindow_(window)
+    , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
+    if (factory_) factory_->AddRef();
+    for (UINT& freq : streamFreq_) {
+        freq = 1;
+    }
+    if (dev_) {
+        D9CCommandChunkNegotiation negotiation{};
+        negotiation.peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
+        negotiation.pePreferredVersion = D9C_COMMAND_CHUNK_VERSION;
+        const HRESULT negotiationHr =
+            hr32(dxmt9c_device_negotiate_command_chunk(
+                dev_, &negotiation));
+        commandChunkNegotiated_ = SUCCEEDED(negotiationHr) &&
+            negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION;
+        if (commandChunkNegotiated_) {
+            dxmt9DeviceInfoLog(
+                "command chunk negotiation selected canonical pe_caps=0x%x unix_caps=0x%x",
+                negotiation.peSupportedVersions,
+                negotiation.unixSupportedVersions);
+        } else {
+            dxmt9DeviceInfoLog(
+                "command chunk negotiation failed hr=0x%08x preferred=canonical selected=v%u unix_caps=0x%x",
+                static_cast<unsigned>(negotiationHr),
+                negotiation.selectedVersion,
+                negotiation.unixSupportedVersions);
+        }
+    }
+    // T2: Initialize viewport/scissor PE shadow from the implicit
+    // swapchain's back-buffer rect so GetViewport/GetScissorRect
+    // round-trip correctly before any Set call (Wine conformance:
+    // test_viewport_scissor_state_getters). Mirrors the Reset()
+    // / ResetEx() block at lines ~1601 / ~3154.
+    if (dev_) {
+        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, 0);
+        if (chain) {
+            D9CPresentParams cpp{};
+            if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cpp)))) {
+                const uint32_t w = std::max<uint32_t>(1u, cpp.backBufferWidth);
+                const uint32_t h = std::max<uint32_t>(1u, cpp.backBufferHeight);
+                peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
+                peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
+            }
+            dxmt9c_swapchain_release(chain);
+        }
+    }
+    initGammaRampIdentity();
+    // DXMT9_PE_MODULE_MAP: dump the loaded-module map after all modules
+    // (game exe, our PE d3d9.dll/winemetal.dll, Wine DLLs) are loaded.
+    // Device creation happens well after process/module init, so this is
+    // a safe, one-time-per-device site for the Tier 1 PE symbolication
+    // diagnostic.
+    dxmt9PeDumpModuleMap();
+    // DXMT9_PE_THREAD_SAMPLER: same site, same reasoning — every module is
+    // loaded by now, and the creating thread is the game thread.
+    startPeThreadSamplerIfRequested();
+    dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
+                        this, static_cast<void*>(dev_), static_cast<void*>(factory_),
+                        adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
+}
+
+D3D9DeviceImpl::~D3D9DeviceImpl() {
+    (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
+    dxmt9DeviceInfoLog(
+        "command chunk totals selected=canonical chunks=%llu records=%llu bytes=%llu identity_getter_calls=%llu",
+        static_cast<unsigned long long>(commandChunkCommits_),
+        static_cast<unsigned long long>(commandChunkRecords_),
+        static_cast<unsigned long long>(commandChunkBytes_),
+        static_cast<unsigned long long>(
+            dxmt9::d3d9::pe::wireIdentityGetterCallCount()));
+    logVsConstSetterRangePerf("destructor");
+    logPeRecorderStats("destructor", true);
+    logPeStatsDecimation();
+    // Emit the last partial interval before the sampler stops, then stop
+    // it: the sampler thread must not outlive the state it reads.
+    logPeThreadSampler();
+    stopPeThreadSampler();
+    clearPendingCommandChunk();
+    discardPreparedStateBlockApply();
+    releaseRecordedStateBlockRefs();
+    releaseAllBound();
+    dxmt9c_device_release(dev_);
+    if (factory_) factory_->Release();
+}
+
 HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
-    D3D9StateBlockShadow& out) {
+    D3D9StateBlockShadow& out,
+    StateBlockCaptureDisposition disposition) {
   try {
     const bool initialSnapshot = !out.initialized;
+    const StateBlockCaptureDisposition effectiveDisposition =
+        insideEndStateBlock_ ? StateBlockCaptureDisposition::Explicit
+                             : disposition;
     if (initialSnapshot) {
         out.renderStates().clear();
         out.textureStageStates().clear();
@@ -42,7 +190,10 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
             ? stateBlockState_.renderStates()
             : peState_.renderStateShadowTyped();
         renderSource.forEach([&](RenderStateSlot state, std::uint32_t value) {
-            out.renderStates().set(state, value);
+            if (stateBlockRenderStateSelected(effectiveDisposition,
+                                               rawSlot(state))) {
+                out.renderStates().set(state, value);
+            }
         });
         const auto tssSource = insideEndStateBlock_
             ? stateBlockState_.textureStageStates()
@@ -50,7 +201,10 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         tssSource.forEach(
             [&](TextureStageIndex stage, TextureStageStateType type,
                 std::uint32_t value) {
-                out.textureStageStates().set(stage, type, value);
+                if (stateBlockTextureStageStateSelected(
+                        effectiveDisposition, rawSlot(type))) {
+                    out.textureStageStates().set(stage, type, value);
+                }
             });
         const auto samplerSource = insideEndStateBlock_
             ? stateBlockState_.samplerStates()
@@ -58,14 +212,109 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         samplerSource.forEach(
             [&](SamplerIndex sampler, SamplerStateType type,
                 std::uint32_t value) {
-                out.samplerStates().set(sampler, type, value);
+                if (stateBlockSamplerStateSelected(effectiveDisposition,
+                                                   rawSlot(type))) {
+                    out.samplerStates().set(sampler, type, value);
+                }
             });
         const auto transformSource = insideEndStateBlock_
             ? stateBlockState_.transforms()
             : peState_.transformShadowTyped();
-        transformSource.forEach([&](TransformState state, const D9CMatrix& value) {
-            out.transforms().set(state, value);
-        });
+        if (stateBlockCaptureCategorySelected(
+                effectiveDisposition, StateBlockCaptureCategory::Transform)) {
+            transformSource.forEach(
+                [&](TransformState state, const D9CMatrix& value) {
+                    out.transforms().set(state, value);
+                });
+        }
+
+        StateBlockRecorded categorySource{};
+        if (insideEndStateBlock_) {
+            categorySource = stateBlockState_;
+        } else {
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Texture)) {
+                for (std::uint32_t slot = 0; slot < kPeTextureSlots; ++slot)
+                    categorySource.textures.set(slot, textures_[slot]);
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition,
+                    StateBlockCaptureCategory::StreamSource)) {
+                for (std::uint32_t slot = 0;
+                     slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+                    categorySource.streamSources.set(
+                        slot, StateBlockStreamSourceValue{
+                                  .buffer = streamSrc_[slot],
+                                  .offset = streamOff_[slot],
+                                  .stride = streamStr_[slot],
+                              });
+                }
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition,
+                    StateBlockCaptureCategory::StreamFrequency)) {
+                for (std::uint32_t slot = 0;
+                     slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot)
+                    categorySource.streamFrequencies.set(slot, streamFreq_[slot]);
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::VertexShader))
+                categorySource.vertexShader.set(0u, vs_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::PixelShader))
+                categorySource.pixelShader.set(0u, ps_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Fvf))
+                categorySource.fvf.set(0u, fvf_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition,
+                    StateBlockCaptureCategory::VertexDeclaration))
+                categorySource.vertexDeclaration.set(0u, vdecl_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::IndexBuffer))
+                categorySource.indexBuffer.set(0u, indexBuf_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::RenderTarget)) {
+                for (std::uint32_t slot = 0;
+                     slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot)
+                    categorySource.renderTargets.set(slot, rtSlots_[slot]);
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::DepthStencil))
+                categorySource.depthStencil.set(0u, dsSurface_);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Viewport))
+                categorySource.viewport.set(0u, peState_.viewportShadow);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Scissor))
+                categorySource.scissor.set(0u, peState_.scissorShadow);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Material))
+                categorySource.material.set(0u, peState_.materialShadow);
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::ClipPlane)) {
+                for (std::uint32_t idx = 0; idx < 6u; ++idx) {
+                    std::array<float, 4> plane{};
+                    std::memcpy(plane.data(), peState_.clipPlaneShadow + idx * 4u,
+                                sizeof(plane));
+                    categorySource.clipPlanes.set(idx, plane);
+                }
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::Light)) {
+                for (std::uint32_t idx = 0;
+                     idx < D9C_DRAW_PACKET_MAX_LIGHTS; ++idx)
+                    categorySource.lights.set(idx, peState_.lightShadow[idx]);
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition, StateBlockCaptureCategory::LightEnable)) {
+                for (std::uint32_t idx = 0;
+                     idx < D9C_DRAW_PACKET_MAX_LIGHTS; ++idx)
+                    categorySource.lightEnables.set(
+                        idx, (peState_.lightEnableShadow & (1u << idx)) != 0u);
+            }
+        }
+        out.copyCategoriesFrom(categorySource);
 
         out.constants.clearForBegin();
         if (insideEndStateBlock_) {
@@ -80,20 +329,30 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                     destination.record(0u, count, live.values.data(), elemSize);
                 }
             };
-            copyLive(peConsts_.vsConstF, out.constants.vsConstF,
-                     sizeof(float) * 4u);
-            copyLive(peConsts_.vsConstI, out.constants.vsConstI,
-                     sizeof(std::int32_t) * 4u);
-            copyLive(peConsts_.vsConstB, out.constants.vsConstB,
-                     sizeof(std::uint32_t));
-            copyLive(peConsts_.psConstF, out.constants.psConstF,
-                     sizeof(float) * 4u);
-            copyLive(peConsts_.psConstI, out.constants.psConstI,
-                     sizeof(std::int32_t) * 4u);
-            copyLive(peConsts_.psConstB, out.constants.psConstB,
-                     sizeof(std::uint32_t));
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition,
+                    StateBlockCaptureCategory::VertexConstants)) {
+                copyLive(peConsts_.vsConstF, out.constants.vsConstF,
+                         sizeof(float) * 4u);
+                copyLive(peConsts_.vsConstI, out.constants.vsConstI,
+                         sizeof(std::int32_t) * 4u);
+                copyLive(peConsts_.vsConstB, out.constants.vsConstB,
+                         sizeof(std::uint32_t));
+            }
+            if (stateBlockCaptureCategorySelected(
+                    effectiveDisposition,
+                    StateBlockCaptureCategory::PixelConstants)) {
+                copyLive(peConsts_.psConstF, out.constants.psConstF,
+                         sizeof(float) * 4u);
+                copyLive(peConsts_.psConstI, out.constants.psConstI,
+                         sizeof(std::int32_t) * 4u);
+                copyLive(peConsts_.psConstB, out.constants.psConstB,
+                         sizeof(std::uint32_t));
+            }
         }
+        out.categories.constants = out.constants;
     } else {
+        StateBlockRecorded refreshed = out.categories;
         out.renderStates().forEach(
             [&](RenderStateSlot state, std::uint32_t /*prior*/) {
                 std::uint32_t latest = 0u;
@@ -144,6 +403,61 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                                            sizeof(std::int32_t) * 4u);
         out.constants.psConstB.refreshFrom(peConsts_.psConstB,
                                            sizeof(std::uint32_t));
+        refreshed.textures.forEach(
+            [&](std::size_t slot, void* /*prior*/) {
+                refreshed.textures.set(slot, textures_[slot]);
+            });
+        refreshed.streamSources.forEach(
+            [&](std::size_t slot, const StateBlockStreamSourceValue& prior) {
+                StateBlockStreamSourceValue latest = prior;
+                latest.buffer = streamSrc_[slot];
+                latest.offset = streamOff_[slot];
+                latest.stride = streamStr_[slot];
+                refreshed.streamSources.set(slot, latest);
+            });
+        refreshed.streamFrequencies.forEach(
+            [&](std::size_t slot, std::uint32_t) {
+                refreshed.streamFrequencies.set(slot, streamFreq_[slot]);
+            });
+        if (refreshed.vertexShader.contains(0u))
+            refreshed.vertexShader.set(0u, vs_);
+        if (refreshed.pixelShader.contains(0u))
+            refreshed.pixelShader.set(0u, ps_);
+        if (refreshed.fvf.contains(0u)) refreshed.fvf.set(0u, fvf_);
+        if (refreshed.vertexDeclaration.contains(0u))
+            refreshed.vertexDeclaration.set(0u, vdecl_);
+        if (refreshed.indexBuffer.contains(0u))
+            refreshed.indexBuffer.set(0u, indexBuf_);
+        refreshed.renderTargets.forEach(
+            [&](std::size_t slot, void* /*prior*/) {
+                refreshed.renderTargets.set(slot, rtSlots_[slot]);
+            });
+        if (refreshed.depthStencil.contains(0u))
+            refreshed.depthStencil.set(0u, dsSurface_);
+        if (refreshed.viewport.contains(0u))
+            refreshed.viewport.set(0u, peState_.viewportShadow);
+        if (refreshed.scissor.contains(0u))
+            refreshed.scissor.set(0u, peState_.scissorShadow);
+        if (refreshed.material.contains(0u))
+            refreshed.material.set(0u, peState_.materialShadow);
+        refreshed.clipPlanes.forEach(
+            [&](std::size_t idx, const std::array<float, 4>&) {
+                std::array<float, 4> plane{};
+                std::memcpy(plane.data(), peState_.clipPlaneShadow + idx * 4u,
+                            sizeof(plane));
+                refreshed.clipPlanes.set(idx, plane);
+            });
+        refreshed.lights.forEach(
+            [&](std::size_t idx, const D9CLight&) {
+                refreshed.lights.set(idx, peState_.lightShadow[idx]);
+            });
+        refreshed.lightEnables.forEach(
+            [&](std::size_t idx, std::uint32_t) {
+                refreshed.lightEnables.set(
+                    idx, (peState_.lightEnableShadow & (1u << idx)) != 0u);
+            });
+        refreshed.constants = out.constants;
+        out.copyCategoriesFrom(refreshed);
     }
     // vdecl tracking:
     //   - Initial snapshot, Begin/End path → track only if
@@ -156,7 +470,9 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         shouldTrackVdecl =
             insideEndStateBlock_
                 ? stateBlockState_.vertexDeclarationRecorded
-                : true;
+                : stateBlockCaptureCategorySelected(
+                      effectiveDisposition,
+                      StateBlockCaptureCategory::VertexDeclaration);
     } else {
         shouldTrackVdecl = out.hasVdecl;
     }
@@ -164,10 +480,17 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
         out.vdecl->Release();
         out.vdecl = nullptr;
     }
-    out.hasVdecl = shouldTrackVdecl && (vdecl_ != nullptr);
-    if (shouldTrackVdecl && vdecl_) {
-        vdecl_->AddRef();
-        out.vdecl = vdecl_;
+    IDirect3DVertexDeclaration9* sourceVdecl = vdecl_;
+    if (initialSnapshot && insideEndStateBlock_) {
+        void* candidateVdecl = nullptr;
+        if (stateBlockState_.vertexDeclaration.get(0u, candidateVdecl)) {
+            sourceVdecl = reinterpret_cast<IDirect3DVertexDeclaration9*>(candidateVdecl);
+        }
+    }
+    out.hasVdecl = shouldTrackVdecl && (sourceVdecl != nullptr);
+    if (shouldTrackVdecl && sourceVdecl) {
+        sourceVdecl->AddRef();
+        out.vdecl = sourceVdecl;
     }
     out.initialized = true;
     return S_OK;
@@ -433,13 +756,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     if (defaultPoolResourceRefs_ != 0) {
         clearPeStateTracking();
         stateBlockRecording_ = false;
-        stateBlockState_.clearForBegin();
+        releaseRecordedStateBlockRefs();
         deviceNotReset_ = true;
         return D3DERR_INVALIDCALL;
     }
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    stateBlockState_.clearForBegin();
+    releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
         deviceNotReset_ = false;
@@ -1587,7 +1910,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE typ
     dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
     D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
     if (!sb) return D3DERR_INVALIDCALL;
-    *ppSB = CreatePeStateBlock(sb, this, this, diagnosticObserverForChild());
+    *ppSB = CreatePeStateBlock(
+        sb, this, this, diagnosticObserverForChild(),
+        stateBlockCaptureDispositionFromType(static_cast<std::uint32_t>(type)));
     if (!*ppSB) return E_OUTOFMEMORY;
     return S_OK;
 }
@@ -1602,7 +1927,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
     const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
     if (SUCCEEDED(hr)) {
-        stateBlockState_.clearForBegin();
+        releaseRecordedStateBlockRefs();
         stateBlockConsts_.clearForBegin();
         stateBlockRecording_ = true;
     }
@@ -1637,7 +1962,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
             // back to a full transformShadow capture.
             insideEndStateBlock_ = true;
             *ppSB = CreatePeStateBlock(sb, this, this,
-                                       diagnosticObserverForChild());
+                                       diagnosticObserverForChild(),
+                                       StateBlockCaptureDisposition::Explicit);
             insideEndStateBlock_ = false;
         }
         if (!*ppSB) {
@@ -1645,12 +1971,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
             // state block was released by CreatePeStateBlock. This is a
             // post-effect fail-stop path, not a retryable End: discard the
             // unpublished PE candidate so no stale recording domain survives.
-            stateBlockState_.clearForBegin();
+            releaseRecordedStateBlockRefs();
             stateBlockConsts_.clearForBegin();
             return E_OUTOFMEMORY;
         }
         // Clear only after the immutable child snapshot has been published.
-        stateBlockState_.clearForBegin();
+        releaseRecordedStateBlockRefs();
         stateBlockConsts_.clearForBegin();
     }
     dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
@@ -2234,7 +2560,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     releaseAllBound();
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    stateBlockState_.clearForBegin();
+    releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {

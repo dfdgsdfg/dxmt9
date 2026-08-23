@@ -34,6 +34,11 @@ struct D3D9StateBlockShadow {
   FixedTransformTable transforms_{};
 
  public:
+  // Fixed candidate categories beyond the four keyed scalar tables.  Pointer
+  // entries are owned by this wrapper snapshot (copying the shadow AddRefs
+  // them); the recorder candidate uses the same value shape but has its own
+  // release boundary.
+  StateBlockRecorded categories{};
   PeStateBlockConstRecorded constants{};
   bool hasVdecl = false;
   IDirect3DVertexDeclaration9 *vdecl = nullptr;
@@ -69,6 +74,119 @@ struct D3D9StateBlockShadow {
   ConstTypedTransformTableView transforms() const noexcept {
     return ConstTypedTransformTableView(transforms_);
   }
+
+  D3D9StateBlockShadow() = default;
+  D3D9StateBlockShadow(const D3D9StateBlockShadow& other) { *this = other; }
+  D3D9StateBlockShadow& operator=(const D3D9StateBlockShadow& other) {
+    if (this == &other) return *this;
+    releaseSavedVdecl();
+    releaseCategoryRefs();
+    renderStates_ = other.renderStates_;
+    textureStageStates_ = other.textureStageStates_;
+    samplerStates_ = other.samplerStates_;
+    transforms_ = other.transforms_;
+    categories = other.categories;
+    constants = other.constants;
+    hasVdecl = other.hasVdecl;
+    initialized = other.initialized;
+    vdecl = other.vdecl;
+    if (vdecl) vdecl->AddRef();
+    addCategoryRefs();
+    return *this;
+  }
+  D3D9StateBlockShadow(D3D9StateBlockShadow&& other) noexcept {
+    *this = std::move(other);
+  }
+  D3D9StateBlockShadow& operator=(D3D9StateBlockShadow&& other) noexcept {
+    if (this == &other) return *this;
+    releaseSavedVdecl();
+    releaseCategoryRefs();
+    renderStates_ = other.renderStates_;
+    textureStageStates_ = other.textureStageStates_;
+    samplerStates_ = other.samplerStates_;
+    transforms_ = other.transforms_;
+    categories = other.categories;
+    constants = other.constants;
+    hasVdecl = other.hasVdecl;
+    initialized = other.initialized;
+    vdecl = other.vdecl;
+    other.vdecl = nullptr;
+    other.hasVdecl = false;
+    other.initialized = false;
+    other.categories.clearForBegin();
+    return *this;
+  }
+  ~D3D9StateBlockShadow() {
+    releaseSavedVdecl();
+    releaseCategoryRefs();
+  }
+
+  void copyCategoriesFrom(const StateBlockRecorded& source) noexcept {
+    releaseCategoryRefs();
+    categories = source;
+    addCategoryRefs();
+  }
+  void clearCategoriesOwned() noexcept { releaseCategoryRefs(); }
+
+ private:
+  static void addRef(void* value) noexcept {
+    if (value) reinterpret_cast<IUnknown*>(value)->AddRef();
+  }
+  static void releaseRef(void*& value) noexcept {
+    if (value) {
+      reinterpret_cast<IUnknown*>(value)->Release();
+      value = nullptr;
+    }
+  }
+  void addCategoryRefs() noexcept {
+    categories.textures.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.streamSources.forEach([](std::size_t,
+                                  const StateBlockStreamSourceValue& value) {
+      D3D9StateBlockShadow::addRef(value.buffer);
+    });
+    categories.vertexShader.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.pixelShader.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.vertexDeclaration.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.indexBuffer.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.renderTargets.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories.depthStencil.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::addRef(value); });
+  }
+  void releaseCategoryRefs() noexcept {
+    categories.textures.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.streamSources.forEach([](std::size_t,
+                                  const StateBlockStreamSourceValue& value) {
+      void* buffer = value.buffer;
+      D3D9StateBlockShadow::releaseRef(buffer);
+    });
+    categories.vertexShader.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.pixelShader.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.vertexDeclaration.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.indexBuffer.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.renderTargets.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.depthStencil.forEach(
+        [](std::size_t, void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories.clearForBegin();
+  }
+
+  void releaseSavedVdecl() noexcept {
+    if (vdecl) {
+      vdecl->Release();
+      vdecl = nullptr;
+    }
+  }
 };
 
 struct D3D9PeRecorderFlush {
@@ -79,6 +197,19 @@ struct D3D9PeRecorderFlush {
   // device/child paths and uses an atomic counter in its implementation.
   virtual HRESULT FlushPeRecorderForChild() = 0;
   virtual bool IsStateBlockRecordingForChild() const = 0;
+  // Capture/Apply are cold, compound operations.  The device implementation
+  // conditionally takes its existing recursive recorder mutex here (only for
+  // MULTITHREADED/forced-lock devices); the pair deliberately keeps the
+  // ordinary single-thread setter path untouched.
+  virtual void LockStateBlockOperationForChild() noexcept = 0;
+  virtual void UnlockStateBlockOperationForChild() noexcept = 0;
+  virtual bool IsStateBlockRecorderPoisonedForChild() const noexcept = 0;
+  virtual HRESULT PrepareStateBlockApplyForChild(
+      const D3D9StateBlockShadow &shadow) = 0;
+  virtual void CommitStateBlockApplyForChild(
+      const D3D9StateBlockShadow &shadow) noexcept = 0;
+  virtual void DiscardPreparedStateBlockApplyForChild() noexcept = 0;
+  virtual void PoisonStateBlockRecorderForChild() noexcept = 0;
   virtual void InvalidateStateBlockShadowForChild() = 0;
   virtual void AddDefaultPoolResourceRefForChild() = 0;
   virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
@@ -145,7 +276,8 @@ struct D3D9PeRecorderFlush {
   // pointers. The caller (D3D9StateBlockImpl) owns the resulting shadow and
   // is responsible for Release on destruction.
   virtual HRESULT CaptureStateBlockShadowForChild(
-      D3D9StateBlockShadow &out) = 0;
+      D3D9StateBlockShadow &out,
+      StateBlockCaptureDisposition disposition) = 0;
 
 protected:
   ~D3D9PeRecorderFlush() = default;
@@ -258,7 +390,9 @@ IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
 IDirect3DStateBlock9 *
 CreatePeStateBlock(D9CStateBlock *stateBlock, IDirect3DDevice9 *device,
                    D3D9PeRecorderFlush *recorder = nullptr,
-                   D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
+                   StateBlockCaptureDisposition disposition =
+                       StateBlockCaptureDisposition::All);
 IDirect3DSwapChain9Ex *
 CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   D3D9PeRecorderFlush *recorder = nullptr,

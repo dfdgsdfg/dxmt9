@@ -710,7 +710,7 @@ static const PeLevelSurfaceEntry *resolveCachedLevelSurface(
     return nullptr;
   }
   dxmt9::d3d9::pe::cacheWireObjectRef(
-      entry.handle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+      entry.handle,
       dxmt9c_surface_get_wire_identity, entry.wire);
   entry.descValid = loadSurfaceDesc(entry.handle, entry.desc);
   const auto *stored = cache.store(index, entry);
@@ -815,7 +815,7 @@ public:
         desc_ = *borrowed->desc;
     } else {
       dxmt9::d3d9::pe::cacheWireObjectRef(
-          s_, D9C_CHUNK_HANDLE_KIND_SURFACE,
+          s_,
           dxmt9c_surface_get_wire_identity, wireObject_);
       descValid_ = loadSurfaceDesc(s_, desc_);
     }
@@ -1528,7 +1528,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
@@ -2174,7 +2174,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
@@ -2686,7 +2686,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));

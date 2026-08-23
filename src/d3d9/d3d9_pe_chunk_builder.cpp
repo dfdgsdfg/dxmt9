@@ -138,6 +138,8 @@ bool CommandChunkBuilder::appendNewHandleEntry(
   if (handles_.size() >= std::numeric_limits<std::uint32_t>::max()) {
     return false;
   }
+  const auto local = PeLocalObjectIdentity{
+      .kind = object.identity.kind, .object = object.object};
   try {
     handles_.push_back(D9CCommandChunkWireHandleEntry{
         .kind = object.identity.kind,
@@ -145,16 +147,17 @@ bool CommandChunkBuilder::appendNewHandleEntry(
         .objectId = object.identity.objectId,
     });
     try {
-      handleObjects_.push_back(object.object);
+      handleObjects_.push_back(local);
     } catch (...) {
       handles_.pop_back();
       throw;
     }
-    // Count this pointer's chunk-lifetime multiplicity so referencesObject()
+    // Count this qualified local identity's chunk-lifetime multiplicity so
+    // referencesObject()
     // can answer in O(1); handlePresence_'s findOrInsert() never throws, and
     // rollbackRecord() undoes exactly this increment if a later step in this
     // same append fails.
-    if (auto* slot = handlePresence_.findOrInsert(object.object)) {
+    if (auto* slot = handlePresence_.findOrInsert(local)) {
       ++slot->count;
     }
     retainer_.retainWireObject(object.identity.kind, object.object,
@@ -206,7 +209,7 @@ bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
     if (!identityEqual(handles_[i], object.identity)) {
       continue;
     }
-    if (handleObjects_[i] != object.object) {
+    if (handleObjects_[i].object != object.object) {
       return failActiveRecord();
     }
     absoluteIndex = static_cast<std::uint32_t>(i);
@@ -417,17 +420,20 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   sealed_ = false;
 }
 
-bool CommandChunkBuilder::referencesObject(void* object) const noexcept {
-  if (!object) {
+bool CommandChunkBuilder::referencesObject(
+    PeLocalObjectIdentity identity) const noexcept {
+  // Texture is the wire kind 0, so object presence—not a nonzero kind—is
+  // the validity check for a local query. An absent object remains invalid.
+  if (!identity.object) {
     return false;
   }
   if (!handlePresence_.overflowed) {
-    const auto* slot = handlePresence_.find(object);
+    const auto* slot = handlePresence_.find(identity);
     return slot != nullptr && slot->count > 0u;
   }
   // Overflow fallback: handleObjects_ is always kept complete, so the
   // original linear scan is still correct, just the pre-overflow O(n).
-  return std::find(handleObjects_.begin(), handleObjects_.end(), object) !=
+  return std::find(handleObjects_.begin(), handleObjects_.end(), identity) !=
          handleObjects_.end();
 }
 

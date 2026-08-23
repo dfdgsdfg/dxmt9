@@ -4,19 +4,27 @@
  * PlanRecorderStateWrite and SettleRecorderAppend are the exact model twins
  * of planRecorderStateWrite and settleRecorderAppend in
  * src/d3d9/d3d9_pe_transition_algebra.hpp.  QualifiedKeys models category +
- * key identity; preparation is non-reentrant by construction.
+ * key identity, while pending/durable witnesses are qualified
+ * <key,value,ordinal> tokens; preparation is non-reentrant by construction.
  ***************************************************************************)
-EXTENDS Naturals, FiniteSets, Sequences, TLC
+EXTENDS Naturals, FiniteSets, Sequences, TLC, PeRecorderTransitionTable
 
 CONSTANTS Categories, Keys, Values,
-          AppendDiscipline, MaxOperations, MaxDurable
+          AppendDiscipline, TokenDiscipline, WitnessDiscipline,
+          PriorPendingDiscipline,
+          MaxOperations, MaxDurable
 
 ASSUME Categories # {} /\ Keys # {} /\ Values # {}
 ASSUME AppendDiscipline \in {"Guarded", "ConsumeOnPrepare"}
+ASSUME TokenDiscipline \in {"Qualified", "KeyOnly"}
+ASSUME WitnessDiscipline \in
+       {"Exact", "ConsumeOnFailure", "UnderRepresentAccepted"}
+ASSUME PriorPendingDiscipline \in {"Replace", "PreserveExisting"}
 ASSUME MaxOperations \in Nat /\ MaxOperations > 0
 ASSUME MaxDurable \in Nat /\ MaxDurable > 0
 
 QualifiedKeys == Categories \X Keys
+QualifiedTokens == QualifiedKeys \X Values \X (1..MaxOperations)
 AppendPhases == {"Idle", "Prepared", "Accepted", "Failed", "Discarded"}
 RecorderPhases == {"Live", "Recording"}
 
@@ -26,56 +34,55 @@ OtherValue(v) == CHOOSE candidate \in Values : candidate # v
 (***************************************************************************
  * Shared production/model vocabulary.
  ***************************************************************************)
+TruthMatches(expected, actual) ==
+  expected = "Any" \/ (expected = "True") = actual
+
+OriginMatches(expected, actual) == expected = "Any" \/ expected = actual
+
+StateWriteRowMatches(row, facts, equal) ==
+  /\ row.phase = facts.phase
+  /\ OriginMatches(row.origin, facts.origin)
+  /\ TruthMatches(row.liveEquals, equal)
+  /\ TruthMatches(row.pendingContains, facts.pendingContains)
+
 PlanRecorderStateWrite(facts) ==
-  LET equal == facts.liveContains /\ facts.liveEquals IN
-  IF facts.phase = "Live"
-  THEN IF equal
-       THEN [kind |-> IF facts.pendingContains THEN "RetainPending" ELSE "NoOp",
-             writeLive |-> FALSE, writePending |-> FALSE,
-             writeRecorded |-> FALSE, directOrderedCall |-> FALSE,
-             semanticTransition |-> FALSE]
-       ELSE [kind |-> "QueueDelta", writeLive |-> TRUE,
-             writePending |-> TRUE, writeRecorded |-> FALSE,
-             directOrderedCall |-> FALSE, semanticTransition |-> TRUE]
-  ELSE IF facts.origin = "PriorValueOperation"
-       THEN [kind |-> "ApplyPriorValueOnly", writeLive |-> TRUE,
-             writePending |-> FALSE, writeRecorded |-> FALSE,
-             directOrderedCall |-> TRUE,
-             semanticTransition |-> ~equal]
-       ELSE [kind |-> "RecordExplicit",
-             writeLive |-> FALSE, writePending |-> FALSE,
-             writeRecorded |-> TRUE, directOrderedCall |-> FALSE,
-             semanticTransition |-> TRUE]
+  LET equal == facts.liveContains /\ facts.liveEquals
+      rowIndex == CHOOSE i \in 1..Len(StateWriteTable) :
+                    StateWriteRowMatches(StateWriteTable[i], facts, equal)
+      row == StateWriteTable[rowIndex]
+  IN [kind |-> row.kind,
+      writeLive |-> row.writeLive,
+      writePending |-> row.writePending,
+      writeRecorded |-> row.writeRecorded,
+      directOrderedCall |-> row.directOrderedCall,
+      semanticTransition |->
+        IF row.semanticTransition = "AnyNotEqualLive"
+        THEN ~equal
+        ELSE row.semanticTransition = "True"]
+
+AppendRowMatches(row, facts) ==
+  /\ row.phase = facts.phase
+  /\ TruthMatches(row.appendSucceeded, facts.appendSucceeded)
+  /\ TruthMatches(row.explicitDiscard, facts.explicitDiscard)
 
 SettleRecorderAppend(facts) ==
-  IF facts.phase # "Prepared" \/
-     (facts.appendSucceeded /\ facts.explicitDiscard)
-  THEN [next |-> facts.phase, consumeRepresentedPending |-> FALSE,
-        retainPreparedProjection |-> facts.phase = "Prepared",
-        recordDurable |-> FALSE, valid |-> FALSE]
-  ELSE IF facts.appendSucceeded
-       THEN [next |-> "Accepted", consumeRepresentedPending |-> TRUE,
-             retainPreparedProjection |-> FALSE, recordDurable |-> TRUE,
-             valid |-> TRUE]
-       ELSE IF facts.explicitDiscard
-            THEN [next |-> "Discarded",
-                  consumeRepresentedPending |-> FALSE,
-                  retainPreparedProjection |-> FALSE,
-                  recordDurable |-> FALSE, valid |-> TRUE]
-            ELSE [next |-> "Failed", consumeRepresentedPending |-> FALSE,
-                  retainPreparedProjection |-> TRUE,
-                  recordDurable |-> FALSE, valid |-> TRUE]
+  LET rowIndex == CHOOSE i \in 1..Len(AppendTable) :
+                    AppendRowMatches(AppendTable[i], facts)
+      row == AppendTable[rowIndex]
+  IN row
 
-VARIABLES phase, live, pendingDomain, pendingValues,
+VARIABLES phase, live, pendingDomain, pendingValues, pendingOrdinals,
           recordedDomain, recordedValues,
-          preparedKeys, preparedValues, preparedPendingSnapshot, appendPhase,
+          preparedKeys, preparedValues, preparedOrdinals,
+          preparedPendingSnapshot, appendPhase,
           durableRecords, durableReplayed, server, priorRead,
           operationOrdinal, capturedKeys, publishedKeys, publishedValues,
           lastConsumed, inputClosed, failureOrdinal, writeHistory
 
-vars == <<phase, live, pendingDomain, pendingValues,
+vars == <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
           recordedDomain, recordedValues,
-          preparedKeys, preparedValues, preparedPendingSnapshot, appendPhase,
+          preparedKeys, preparedValues, preparedOrdinals,
+          preparedPendingSnapshot, appendPhase,
           durableRecords, durableReplayed, server, priorRead,
           operationOrdinal, capturedKeys, publishedKeys, publishedValues,
           lastConsumed, inputClosed, failureOrdinal, writeHistory>>
@@ -85,10 +92,12 @@ Init ==
   /\ live = [q \in QualifiedKeys |-> DefaultValue]
   /\ pendingDomain = {}
   /\ pendingValues = [q \in QualifiedKeys |-> DefaultValue]
+  /\ pendingOrdinals = [q \in QualifiedKeys |-> 0]
   /\ recordedDomain = {}
   /\ recordedValues = [q \in QualifiedKeys |-> DefaultValue]
   /\ preparedKeys = {}
   /\ preparedValues = [q \in QualifiedKeys |-> DefaultValue]
+  /\ preparedOrdinals = [q \in QualifiedKeys |-> 0]
   /\ preparedPendingSnapshot = {}
   /\ appendPhase = "Idle"
   /\ durableRecords = <<>>
@@ -105,7 +114,18 @@ Init ==
   /\ writeHistory = <<>>
 
 CanInput == ~inputClosed /\ operationOrdinal < MaxOperations /\
-            appendPhase # "Prepared"
+            appendPhase \in {"Idle", "Discarded"}
+\* Closing a state block consumes no write ordinal; keeping End enabled at the
+\* bound preserves Begin -> Set -> End/Capture/Apply coverage at the two-input
+\* bound.
+CanEnd == ~inputClosed /\ appendPhase \in {"Idle", "Discarded"}
+
+PendingTokens == {<<q, pendingValues[q], pendingOrdinals[q]>> :
+                  q \in pendingDomain}
+PreparedTokens == {<<q, preparedValues[q], preparedOrdinals[q]>> :
+                   q \in preparedKeys}
+DurableTokens == UNION {durableRecords[i].tokens :
+                        i \in 1..Len(durableRecords)}
 
 BeginRecording ==
   /\ CanInput /\ phase = "Live"
@@ -113,8 +133,9 @@ BeginRecording ==
   /\ phase' = "Recording"
   /\ recordedDomain' = {}
   /\ operationOrdinal' = operationOrdinal + 1
-  /\ UNCHANGED <<live, pendingDomain, pendingValues, recordedValues,
-                 preparedKeys, preparedValues,
+  /\ UNCHANGED <<live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedValues, preparedKeys, preparedValues,
+                 preparedOrdinals,
                  preparedPendingSnapshot, appendPhase, durableRecords,
                  durableReplayed, server, priorRead, capturedKeys,
                  publishedKeys, publishedValues, lastConsumed, inputClosed,
@@ -134,6 +155,10 @@ ExplicitSet(q, value) ==
          nextPendingValues == IF plan.writePending
                               THEN [pendingValues EXCEPT ![q] = value]
                               ELSE pendingValues
+         nextPendingOrdinals == IF plan.writePending
+                                THEN [pendingOrdinals EXCEPT
+                                      ![q] = operationOrdinal + 1]
+                                ELSE pendingOrdinals
          nextRecordedDomain == IF plan.writeRecorded
                                THEN recordedDomain \cup {q} ELSE recordedDomain
          nextRecordedValues == IF plan.writeRecorded
@@ -143,7 +168,8 @@ ExplicitSet(q, value) ==
                        THEN [server EXCEPT ![q] = value] ELSE server
          nextHistory == IF phase = "Recording"
                         THEN Append(writeHistory,
-                             [kind |-> "ExplicitRecording", key |-> q,
+                             [kind |-> "ExplicitRecording",
+                              key |-> q,
                               value |-> value,
                               beforeLive |-> live, afterLive |-> nextLive,
                               beforePendingDomain |-> pendingDomain,
@@ -161,66 +187,88 @@ ExplicitSet(q, value) ==
         /\ live' = nextLive
         /\ pendingDomain' = nextPendingDomain
         /\ pendingValues' = nextPendingValues
+        /\ pendingOrdinals' = nextPendingOrdinals
         /\ recordedDomain' = nextRecordedDomain
         /\ recordedValues' = nextRecordedValues
         /\ server' = nextServer
         /\ writeHistory' = nextHistory
   /\ operationOrdinal' = operationOrdinal + 1
-  /\ UNCHANGED <<phase, preparedKeys, preparedValues,
+  /\ UNCHANGED <<phase, preparedKeys, preparedValues, preparedOrdinals,
                  preparedPendingSnapshot, appendPhase, durableRecords,
                  durableReplayed, priorRead, capturedKeys, publishedKeys,
                  publishedValues, lastConsumed, inputClosed, failureOrdinal>>
 
 PriorValueWrite(q, value) ==
-  /\ CanInput /\ phase = "Recording"
-  /\ q \notin pendingDomain
+  /\ CanInput /\ phase \in RecorderPhases
+  /\ (phase = "Live" \/ q \notin pendingDomain)
   /\ q \in QualifiedKeys /\ value \in Values
   /\ LET facts == [phase |-> phase, origin |-> "PriorValueOperation",
                    liveContains |-> TRUE, liveEquals |-> live[q] = value,
                    pendingContains |-> q \in pendingDomain,
                    recordedContains |-> q \in recordedDomain]
          plan == PlanRecorderStateWrite(facts)
-         nextLive == [live EXCEPT ![q] = value]
-         nextServer == [server EXCEPT ![q] = value]
-         nextHistory == Append(writeHistory,
-                         [kind |-> "PriorValueOperation", key |-> q,
+         nextLive == IF plan.writeLive THEN [live EXCEPT ![q] = value]
+                     ELSE live
+         replacePending == plan.writePending /\
+                           (PriorPendingDiscipline = "Replace" \/
+                            q \notin pendingDomain)
+         nextPendingDomain == IF replacePending
+                              THEN pendingDomain \cup {q} ELSE pendingDomain
+         nextPendingValues == IF replacePending
+                              THEN [pendingValues EXCEPT ![q] = value]
+                              ELSE pendingValues
+         nextPendingOrdinals == IF replacePending
+                                THEN [pendingOrdinals EXCEPT
+                                      ![q] = operationOrdinal + 1]
+                                ELSE pendingOrdinals
+         nextServer == IF plan.directOrderedCall
+                       THEN [server EXCEPT ![q] = value] ELSE server
+         nextHistory == IF phase = "Recording"
+                       THEN Append(writeHistory,
+                         [kind |-> "PriorValueOperation",
+                          key |-> q,
                           value |-> value,
                           beforeLive |-> live, afterLive |-> nextLive,
                           beforePendingDomain |-> pendingDomain,
-                          afterPendingDomain |-> pendingDomain,
+                          afterPendingDomain |-> nextPendingDomain,
                           beforePendingValues |-> pendingValues,
-                          afterPendingValues |-> pendingValues,
+                          afterPendingValues |-> nextPendingValues,
                           beforeRecordedDomain |-> recordedDomain,
                           afterRecordedDomain |-> recordedDomain,
                           beforeRecordedValues |-> recordedValues,
                           afterRecordedValues |-> recordedValues,
                           beforeServer |-> server, afterServer |-> nextServer])
-     IN /\ plan.writeLive /\ ~plan.writePending /\ ~plan.writeRecorded
-        /\ plan.directOrderedCall
+                       ELSE writeHistory
+     IN /\ plan.writeLive = (phase = "Recording" \/ ~(live[q] = value))
+        /\ plan.writeRecorded = FALSE
         /\ plan.semanticTransition = ~(live[q] = value)
         /\ live' = nextLive
+        /\ pendingDomain' = nextPendingDomain
+        /\ pendingValues' = nextPendingValues
+        /\ pendingOrdinals' = nextPendingOrdinals
         /\ server' = nextServer
         /\ writeHistory' = nextHistory
   /\ priorRead' = [priorRead EXCEPT ![q] = live[q]]
   /\ operationOrdinal' = operationOrdinal + 1
-  /\ UNCHANGED <<phase, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys, preparedValues,
+  /\ UNCHANGED <<phase, recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals,
                  preparedPendingSnapshot, appendPhase, durableRecords,
                  durableReplayed, capturedKeys, publishedKeys,
                  publishedValues, lastConsumed, inputClosed, failureOrdinal>>
 
 EndRecording ==
-  /\ CanInput /\ phase = "Recording"
+  /\ CanEnd /\ phase = "Recording"
   /\ phase' = "Live"
   /\ server' = server
   /\ publishedKeys' = recordedDomain
   /\ publishedValues' = recordedValues
   /\ capturedKeys' = recordedDomain
-  /\ operationOrdinal' = operationOrdinal + 1
-  /\ UNCHANGED <<live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
-                 durableRecords, durableReplayed, priorRead, lastConsumed,
+  /\ UNCHANGED <<live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
+                 durableRecords, durableReplayed, priorRead, operationOrdinal,
+                 lastConsumed,
                  inputClosed, failureOrdinal, writeHistory>>
 
 Prepare(keysToPrepare) ==
@@ -228,13 +276,14 @@ Prepare(keysToPrepare) ==
   /\ keysToPrepare \in SUBSET pendingDomain /\ keysToPrepare # {}
   /\ preparedKeys' = keysToPrepare
   /\ preparedValues' = [q \in QualifiedKeys |-> pendingValues[q]]
-  /\ preparedPendingSnapshot' = pendingDomain
+  /\ preparedOrdinals' = [q \in QualifiedKeys |-> pendingOrdinals[q]]
+  /\ preparedPendingSnapshot' = PendingTokens
   /\ appendPhase' = "Prepared"
   /\ pendingDomain' = IF AppendDiscipline = "ConsumeOnPrepare"
                       THEN pendingDomain \ keysToPrepare ELSE pendingDomain
-  /\ operationOrdinal' = IF operationOrdinal < MaxOperations
-                          THEN operationOrdinal + 1 ELSE operationOrdinal
-  /\ UNCHANGED <<phase, live, pendingValues, recordedDomain, recordedValues,
+  /\ operationOrdinal' = operationOrdinal
+  /\ UNCHANGED <<phase, live, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues,
                  durableRecords,
                  durableReplayed, server, priorRead, capturedKeys,
                  publishedKeys, publishedValues, lastConsumed, inputClosed,
@@ -246,38 +295,70 @@ AcceptAppend ==
         [phase |-> appendPhase, appendSucceeded |-> TRUE,
          explicitDiscard |-> FALSE])
      IN /\ appendPhase' = plan.next
-        /\ pendingDomain' = pendingDomain \ preparedKeys
-        /\ durableRecords' = Append(durableRecords,
-             [keys |-> preparedKeys, values |-> preparedValues])
-        /\ lastConsumed' = preparedKeys
-  /\ UNCHANGED <<phase, live, pendingValues, recordedDomain, recordedValues,
-                 preparedKeys, preparedValues,
+        /\ plan.valid
+        /\ plan.consumeRepresentedPending
+        /\ ~plan.retainPreparedProjection
+        /\ plan.recordDurable
+        /\ pendingDomain' =
+             IF plan.consumeRepresentedPending
+             THEN pendingDomain \ preparedKeys ELSE pendingDomain
+        /\ durableRecords' =
+             IF plan.recordDurable
+             THEN Append(durableRecords,
+                    [keys |-> preparedKeys, values |-> preparedValues,
+                     ordinals |-> preparedOrdinals,
+                     tokens |-> IF TokenDiscipline = "KeyOnly"
+                                 THEN {<<q, DefaultValue,
+                                          preparedOrdinals[q]>> :
+                                       q \in preparedKeys}
+                                 ELSE PreparedTokens])
+             ELSE durableRecords
+        /\ lastConsumed' =
+             IF WitnessDiscipline = "UnderRepresentAccepted"
+             THEN {} ELSE PreparedTokens
+  /\ UNCHANGED <<phase, live, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues,
+                 preparedKeys, preparedValues, preparedOrdinals,
                  preparedPendingSnapshot, durableReplayed, server, priorRead,
                  operationOrdinal, capturedKeys, publishedKeys,
                  publishedValues, inputClosed, failureOrdinal, writeHistory>>
 
 FailAppend ==
   /\ appendPhase = "Prepared"
-  /\ appendPhase' = SettleRecorderAppend(
-       [phase |-> appendPhase, appendSucceeded |-> FALSE,
-        explicitDiscard |-> FALSE]).next
-  /\ lastConsumed' = {}
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, durableRecords,
+  /\ LET plan == SettleRecorderAppend(
+        [phase |-> appendPhase, appendSucceeded |-> FALSE,
+         explicitDiscard |-> FALSE])
+     IN /\ plan.valid
+        /\ ~plan.consumeRepresentedPending
+        /\ plan.retainPreparedProjection
+        /\ ~plan.recordDurable
+        /\ appendPhase' = plan.next
+        /\ lastConsumed' =
+             IF WitnessDiscipline = "ConsumeOnFailure"
+             THEN PreparedTokens ELSE {}
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 durableRecords,
                  durableReplayed, server, priorRead, operationOrdinal,
                  capturedKeys, publishedKeys, publishedValues, inputClosed,
                  failureOrdinal, writeHistory>>
 
 DiscardPrepared ==
   /\ appendPhase = "Prepared"
-  /\ appendPhase' = SettleRecorderAppend(
-       [phase |-> appendPhase, appendSucceeded |-> FALSE,
-        explicitDiscard |-> TRUE]).next
-  /\ lastConsumed' = {}
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, durableRecords,
+  /\ LET plan == SettleRecorderAppend(
+        [phase |-> appendPhase, appendSucceeded |-> FALSE,
+         explicitDiscard |-> TRUE])
+     IN /\ plan.valid
+        /\ ~plan.consumeRepresentedPending
+        /\ ~plan.retainPreparedProjection
+        /\ ~plan.recordDurable
+        /\ appendPhase' = plan.next
+        /\ lastConsumed' = {}
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 durableRecords,
                  durableReplayed, server, priorRead, operationOrdinal,
                  capturedKeys, publishedKeys, publishedValues, inputClosed,
                  failureOrdinal, writeHistory>>
@@ -287,8 +368,9 @@ RetireAccepted ==
   /\ appendPhase' = "Idle"
   /\ preparedKeys' = {}
   /\ lastConsumed' = {}
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedValues,
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedValues,
+                 preparedOrdinals,
                  preparedPendingSnapshot, durableRecords, durableReplayed,
                  server, priorRead, operationOrdinal, capturedKeys,
                  publishedKeys, publishedValues, inputClosed, failureOrdinal,
@@ -300,9 +382,10 @@ ReplayAccepted ==
      IN server' = [q \in QualifiedKeys |->
           IF q \in record.keys THEN record.values[q] ELSE server[q]]
   /\ durableReplayed' = durableReplayed + 1
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
                  durableRecords, priorRead, operationOrdinal, capturedKeys,
                  publishedKeys, publishedValues, lastConsumed, inputClosed,
                  failureOrdinal, writeHistory>>
@@ -312,9 +395,10 @@ CaptureFixedSet ==
   /\ capturedKeys' = publishedKeys
   /\ publishedValues' = [q \in QualifiedKeys |->
        IF q \in publishedKeys THEN live[q] ELSE publishedValues[q]]
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
                  durableRecords, durableReplayed, server, priorRead,
                  operationOrdinal, publishedKeys, lastConsumed, inputClosed,
                  failureOrdinal, writeHistory>>
@@ -325,9 +409,10 @@ ApplyRecorded ==
        IF q \in publishedKeys THEN publishedValues[q] ELSE live[q]]
   /\ server' = [q \in QualifiedKeys |->
        IF q \in publishedKeys THEN publishedValues[q] ELSE server[q]]
-  /\ UNCHANGED <<phase, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
+  /\ UNCHANGED <<phase, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
                  durableRecords, durableReplayed, priorRead, operationOrdinal,
                  capturedKeys, publishedKeys, publishedValues, lastConsumed,
                  inputClosed, failureOrdinal, writeHistory>>
@@ -340,9 +425,10 @@ ApplyRecorded ==
 FailedPreEffectRecorderOperation ==
   /\ failureOrdinal < MaxOperations
   /\ failureOrdinal' = failureOrdinal + 1
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
                  durableRecords, durableReplayed, server, priorRead,
                  operationOrdinal, capturedKeys, publishedKeys,
                  publishedValues, lastConsumed, inputClosed, writeHistory>>
@@ -350,9 +436,10 @@ FailedPreEffectRecorderOperation ==
 Finish ==
   /\ ~inputClosed
   /\ inputClosed' = TRUE
-  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, recordedDomain,
-                 recordedValues, preparedKeys,
-                 preparedValues, preparedPendingSnapshot, appendPhase,
+  /\ UNCHANGED <<phase, live, pendingDomain, pendingValues, pendingOrdinals,
+                 recordedDomain, recordedValues, preparedKeys,
+                 preparedValues, preparedOrdinals, preparedPendingSnapshot,
+                 appendPhase,
                  durableRecords, durableReplayed, server, priorRead,
                  operationOrdinal, capturedKeys, publishedKeys,
                  publishedValues, lastConsumed, failureOrdinal, writeHistory>>
@@ -381,8 +468,6 @@ Spec == Init /\ [][Next]_vars
         /\ WF_vars(RetireAccepted)
         /\ WF_vars(ReplayAccepted)
 
-DurableKeys == UNION {durableRecords[i].keys : i \in 1..Len(durableRecords)}
-
 WriteHistoryRecord ==
   [kind : {"ExplicitRecording", "PriorValueOperation"},
    key : QualifiedKeys,
@@ -400,25 +485,34 @@ WriteHistoryRecord ==
    beforeServer : [QualifiedKeys -> Values],
    afterServer : [QualifiedKeys -> Values]]
 
+DurableRecord ==
+  [keys : SUBSET QualifiedKeys,
+   values : [QualifiedKeys -> Values],
+   ordinals : [QualifiedKeys -> 0..MaxOperations],
+   tokens : SUBSET QualifiedTokens]
+
 TypeOK ==
   /\ phase \in RecorderPhases
   /\ live \in [QualifiedKeys -> Values]
   /\ pendingDomain \subseteq QualifiedKeys
   /\ pendingValues \in [QualifiedKeys -> Values]
+  /\ pendingOrdinals \in [QualifiedKeys -> 0..MaxOperations]
   /\ recordedDomain \subseteq QualifiedKeys
   /\ recordedValues \in [QualifiedKeys -> Values]
   /\ preparedKeys \subseteq QualifiedKeys
   /\ preparedValues \in [QualifiedKeys -> Values]
-  /\ preparedPendingSnapshot \subseteq QualifiedKeys
+  /\ preparedOrdinals \in [QualifiedKeys -> 0..MaxOperations]
+  /\ preparedPendingSnapshot \subseteq QualifiedTokens
   /\ appendPhase \in AppendPhases
   /\ durableReplayed \in 0..Len(durableRecords)
   /\ Len(durableRecords) <= MaxDurable
+  /\ durableRecords \in Seq(DurableRecord)
   /\ server \in [QualifiedKeys -> Values]
   /\ priorRead \in [QualifiedKeys -> Values]
   /\ capturedKeys \subseteq QualifiedKeys
   /\ publishedKeys \subseteq QualifiedKeys
   /\ publishedValues \in [QualifiedKeys -> Values]
-  /\ lastConsumed \subseteq QualifiedKeys
+  /\ lastConsumed \subseteq QualifiedTokens
   /\ operationOrdinal \in 0..MaxOperations
   /\ failureOrdinal \in 0..MaxOperations
   /\ writeHistory \in Seq(WriteHistoryRecord)
@@ -426,6 +520,9 @@ TypeOK ==
 
 LiveAuthoritative == \A q \in QualifiedKeys : live[q] \in Values
 PendingLastWriteWins == \A q \in pendingDomain : pendingValues[q] \in Values
+PendingTokensQualified == PendingTokens \subseteq QualifiedTokens
+PendingMatchesLive ==
+  \A q \in pendingDomain : pendingValues[q] = live[q]
 QualifiedKeysDoNotAlias ==
   \A c1, c2 \in Categories, k1, k2 \in Keys :
     <<c1, k1>> = <<c2, k2>> => c1 = c2 /\ k1 = k2
@@ -453,20 +550,26 @@ PriorValueDoesNotEnlargeRecorded ==
 CaptureDoesNotEnlargeTrackedSet == capturedKeys \subseteq publishedKeys
 PreparedIsNonConsuming ==
   AppendDiscipline # "Guarded" \/ appendPhase # "Prepared" \/
-    pendingDomain = preparedPendingSnapshot
+    PendingTokens = preparedPendingSnapshot
 OnlyAcceptedConsumes ==
-  appendPhase # "Accepted" \/ lastConsumed = preparedKeys
+  appendPhase = "Accepted" \/ lastConsumed = {}
 AcceptedExactlyRepresented ==
-  appendPhase # "Accepted" \/ lastConsumed = preparedKeys
+  appendPhase # "Accepted" \/ lastConsumed = PreparedTokens
 FailedRetryStable ==
   AppendDiscipline # "Guarded" \/ appendPhase # "Failed" \/
-    preparedKeys \subseteq pendingDomain
+    PreparedTokens \subseteq PendingTokens
 NoLostPending ==
   appendPhase # "Failed" \/
-    preparedPendingSnapshot \subseteq pendingDomain \cup DurableKeys
+    preparedPendingSnapshot \subseteq PendingTokens \cup DurableTokens
 DurableRecordsAreQualified ==
-  \A i \in 1..durableReplayed :
-    durableRecords[i].keys \subseteq QualifiedKeys
+  \A i \in 1..Len(durableRecords) :
+    /\ durableRecords[i].keys \subseteq QualifiedKeys
+    /\ durableRecords[i].tokens \subseteq QualifiedTokens
+DurableTokenMatchesPayload ==
+  \A i \in 1..Len(durableRecords) :
+    durableRecords[i].tokens =
+      {<<q, durableRecords[i].values[q], durableRecords[i].ordinals[q]>> :
+       q \in durableRecords[i].keys}
 
 PreparedEventuallySettles ==
   [] (appendPhase = "Prepared" ~> appendPhase # "Prepared")

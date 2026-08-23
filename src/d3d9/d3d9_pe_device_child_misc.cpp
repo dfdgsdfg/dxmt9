@@ -3,6 +3,7 @@
  * and IDirect3DSwapChain9Ex (the non-resource families). */
 
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_stateblock_transaction.hpp"
 
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
@@ -52,6 +53,27 @@ static bool isChildStateBlockRecording(D3D9PeRecorderFlush *recorder) {
   return recorder && recorder->IsStateBlockRecordingForChild();
 }
 
+// StateBlock Capture/Apply are compound PE/backend intervals. Keep the
+// existing conditional recursive recorder lock held for the complete
+// operation; the device's lock methods are no-ops on the single-threaded
+// fast path.
+class D3D9StateBlockOperationGuard final {
+ public:
+  explicit D3D9StateBlockOperationGuard(
+      D3D9PeRecorderFlush *recorder) noexcept : recorder_(recorder) {
+    if (recorder_) recorder_->LockStateBlockOperationForChild();
+  }
+  ~D3D9StateBlockOperationGuard() {
+    if (recorder_) recorder_->UnlockStateBlockOperationForChild();
+  }
+  D3D9StateBlockOperationGuard(const D3D9StateBlockOperationGuard&) = delete;
+  D3D9StateBlockOperationGuard& operator=(
+      const D3D9StateBlockOperationGuard&) = delete;
+
+ private:
+  D3D9PeRecorderFlush *recorder_;
+};
+
 /* ── VertexDeclaration ──────────────────────────────────────────────────────
  */
 
@@ -69,7 +91,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        d_, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+        d_,
         dxmt9c_vdecl_get_wire_identity, wireObject_);
   }
   ~D3D9VertexDeclImpl() {
@@ -156,7 +178,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        q_, D9C_CHUNK_HANDLE_KIND_QUERY,
+        q_,
         dxmt9c_query_get_wire_identity, wireObject_);
   }
   ~D3D9QueryImpl() {
@@ -274,120 +296,23 @@ class D3D9StateBlockImpl final : public IDirect3DStateBlock9 {
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
   D3D9PeDiagnosticObserver *diagnostics_;
+  StateBlockCaptureDisposition captureDisposition_ =
+      StateBlockCaptureDisposition::All;
   // PE-side snapshot of transforms / shader constants / vdecl populated by
   // CaptureStateBlockShadowForChild on End/Capture and replayed by Apply.
   // Lives only in the PE process — never crosses the unix boundary.
   D3D9StateBlockShadow saved_{};
   bool savedValid_ = false;
 
-  static void releaseSavedVdecl(D3D9StateBlockShadow &shadow) noexcept {
-    if (shadow.vdecl) {
-      shadow.vdecl->Release();
-      shadow.vdecl = nullptr;
-    }
-  }
-
-  // Replay exactly the fixed PE tracked set through the public setters.  The
-  // first failure is propagated; no later category or trailing flush is
-  // silently attempted after it.
-  HRESULT replaySavedShadow() noexcept {
-    if (!savedValid_ || !device_) {
-      return S_OK;
-    }
-    HRESULT hr = S_OK;
-    saved_.renderStates().forEach(
-        [&](RenderStateSlot state, std::uint32_t value) {
-      if (SUCCEEDED(hr)) {
-        hr = device_->SetRenderState(
-            static_cast<D3DRENDERSTATETYPE>(rawSlot(state)), value);
-      }
-    });
-    saved_.textureStageStates().forEach(
-        [&](TextureStageIndex stage, TextureStageStateType type,
-            std::uint32_t value) {
-      if (SUCCEEDED(hr)) {
-        hr = device_->SetTextureStageState(
-            rawSlot(stage),
-            static_cast<D3DTEXTURESTAGESTATETYPE>(rawSlot(type)), value);
-      }
-    });
-    saved_.samplerStates().forEach(
-        [&](SamplerIndex sampler, SamplerStateType type,
-            std::uint32_t value) {
-      if (SUCCEEDED(hr)) {
-        hr = device_->SetSamplerState(
-            samplerForSlot(sampler),
-            static_cast<D3DSAMPLERSTATETYPE>(rawSlot(type)), value);
-      }
-    });
-    saved_.transforms().forEach([&](TransformState state, const D9CMatrix &m) {
-      if (SUCCEEDED(hr)) {
-        const D3DMATRIX *pm = reinterpret_cast<const D3DMATRIX *>(&m);
-        hr = device_->SetTransform(
-            static_cast<D3DTRANSFORMSTATETYPE>(rawSlot(state)), pm);
-      }
-    });
-    constexpr std::size_t kFloatVecSize = sizeof(float) * 4;
-    constexpr std::size_t kIntVecSize = sizeof(int32_t) * 4;
-    constexpr std::size_t kBoolSize = sizeof(uint32_t);
-    const auto replayConstants = [&](const StateBlockConstShadow &constants,
-                                     std::size_t elemSize,
-                                     auto setter) {
-      if (FAILED(hr)) return;
-      const bool ok = constants.forEachRange(
-          elemSize, [&](std::uint32_t start, std::uint32_t count,
-                        const std::uint8_t *bytes) {
-            hr = setter(start, count, bytes);
-            return SUCCEEDED(hr);
-          });
-      (void)ok;
-    };
-    replayConstants(saved_.constants.vsConstF, kFloatVecSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetVertexShaderConstantF(
-          start, reinterpret_cast<const float *>(bytes), count);
-    });
-    replayConstants(saved_.constants.vsConstI, kIntVecSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetVertexShaderConstantI(
-          start, reinterpret_cast<const INT *>(bytes), count);
-    });
-    replayConstants(saved_.constants.vsConstB, kBoolSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetVertexShaderConstantB(
-          start, reinterpret_cast<const BOOL *>(bytes), count);
-    });
-    replayConstants(saved_.constants.psConstF, kFloatVecSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetPixelShaderConstantF(
-          start, reinterpret_cast<const float *>(bytes), count);
-    });
-    replayConstants(saved_.constants.psConstI, kIntVecSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetPixelShaderConstantI(
-          start, reinterpret_cast<const INT *>(bytes), count);
-    });
-    replayConstants(saved_.constants.psConstB, kBoolSize,
-                    [&](UINT start, UINT count, const std::uint8_t *bytes) {
-      return device_->SetPixelShaderConstantB(
-          start, reinterpret_cast<const BOOL *>(bytes), count);
-    });
-    if (SUCCEEDED(hr) && saved_.hasVdecl) {
-      // SetVertexDeclaration is borrowed (Wine refcount semantics —
-      // see d3d9_pe_device.cpp::SetVertexDeclaration). saved_.vdecl
-      // retains its own ref until destructor (or next Capture), which
-      // is what keeps the decl alive while the state block holds it.
-      hr = device_->SetVertexDeclaration(saved_.vdecl);
-    }
-    return hr;
-  }
 
 public:
   D3D9StateBlockImpl(D9CStateBlock *sb, IDirect3DDevice9 *device,
                      D3D9PeRecorderFlush *recorder = nullptr,
-                     D3D9PeDiagnosticObserver *diagnostics = nullptr)
+                     D3D9PeDiagnosticObserver *diagnostics = nullptr,
+                     StateBlockCaptureDisposition disposition =
+                         StateBlockCaptureDisposition::All)
       : sb_(sb), device_(device), recorder_(recorder),
-        diagnostics_(diagnostics) {
+        diagnostics_(diagnostics), captureDisposition_(disposition) {
     if (device_)
       device_->AddRef();
     // Snapshot the device's current PE shadow at construction so a
@@ -395,7 +320,8 @@ public:
     // transforms / constants / vdecl the upstream tests check on Apply.
     if (recorder_) {
       savedValid_ = SUCCEEDED(
-          recorder_->CaptureStateBlockShadowForChild(saved_));
+          recorder_->CaptureStateBlockShadowForChild(saved_,
+                                                     captureDisposition_));
     }
     dxmt9DeviceDebugLog("stateblock_ctor this=%p sb=%p device=%p refs=%u", this,
                         static_cast<void *>(sb_), static_cast<void *>(device_),
@@ -412,7 +338,6 @@ public:
       dxmt9c_stateblock_release(sb_);
     }
     sb_ = nullptr;
-    releaseSavedVdecl(saved_);
     if (device_)
       device_->Release();
     device_ = nullptr;
@@ -460,8 +385,12 @@ public:
     if (diagnostics_)
       diagnostics_->notifyFirstCallAfterPresent("StateBlock::Capture");
     dxmt9DeviceDebugLog("stateblock_capture sb=%p", this);
+    D3D9StateBlockOperationGuard operation(recorder_);
     if (isChildStateBlockRecording(recorder_)) {
       return D3DERR_INVALIDCALL;
+    }
+    if (recorder_ && recorder_->IsStateBlockRecorderPoisonedForChild()) {
+      return D3DERR_DEVICELOST;
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
@@ -471,29 +400,32 @@ public:
       try {
         if (savedValid_) {
           candidate = saved_;
-          // The copied raw pointer is not an independently-owned reference.
-          candidate.vdecl = nullptr;
+          // Copy assignment retains vdecl; this candidate does not need that
+          // separate owner because CaptureStateBlockShadowForChild refreshes
+          // the fixed candidate and the original snapshot remains alive.
+          if (candidate.vdecl) {
+            candidate.vdecl->Release();
+            candidate.vdecl = nullptr;
+          }
         }
       } catch (const std::bad_alloc &) {
         return E_OUTOFMEMORY;
       }
       const HRESULT captureHr =
-          recorder_->CaptureStateBlockShadowForChild(candidate);
+          recorder_->CaptureStateBlockShadowForChild(candidate,
+                                                      captureDisposition_);
       if (FAILED(captureHr)) {
-        releaseSavedVdecl(candidate);
         return captureHr;
       }
     }
     const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
     if (FAILED(hr)) {
-      releaseSavedVdecl(candidate);
+      if (recorder_) recorder_->PoisonStateBlockRecorderForChild();
       dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
       return hr;
     }
     if (recorder_) {
-      releaseSavedVdecl(saved_);
       saved_ = std::move(candidate);
-      candidate.vdecl = nullptr;
       savedValid_ = true;
     }
     dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
@@ -503,23 +435,39 @@ public:
     if (diagnostics_)
       diagnostics_->notifyFirstCallAfterPresent("StateBlock::Apply");
     dxmt9DeviceDebugLog("stateblock_apply sb=%p", this);
+    D3D9StateBlockOperationGuard operation(recorder_);
     if (isChildStateBlockRecording(recorder_)) {
       return D3DERR_INVALIDCALL;
+    }
+    if (recorder_ && recorder_->IsStateBlockRecorderPoisonedForChild()) {
+      return D3DERR_DEVICELOST;
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
+    if (recorder_) {
+      const HRESULT prepareHr =
+          recorder_->PrepareStateBlockApplyForChild(saved_);
+      if (peStateBlockApplyTransition(
+              PeStateBlockApplyPhase::Prepare, SUCCEEDED(prepareHr)) !=
+          PeStateBlockApplyAction::Continue) {
+        return prepareHr;
+      }
+    }
     const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
-    if (FAILED(hr)) {
+    if (peStateBlockApplyTransition(
+            PeStateBlockApplyPhase::Backend, SUCCEEDED(hr)) ==
+        PeStateBlockApplyAction::Poison) {
+      if (recorder_) {
+        recorder_->DiscardPreparedStateBlockApplyForChild();
+        recorder_->PoisonStateBlockRecorderForChild();
+      }
       dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
       return hr;
     }
-    if (recorder_) recorder_->InvalidateStateBlockShadowForChild();
-    const HRESULT replayHr = replaySavedShadow();
-    if (FAILED(replayHr)) return replayHr;
-    const HRESULT settleHr = flushChildRecorder(recorder_);
-    dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)settleHr);
-    return settleHr;
+    if (recorder_) recorder_->CommitStateBlockApplyForChild(saved_);
+    dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
+    return hr;
   }
 };
 
@@ -874,9 +822,11 @@ IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
 IDirect3DStateBlock9 *CreatePeStateBlock(D9CStateBlock *stateBlock,
                                          IDirect3DDevice9 *device,
                                          D3D9PeRecorderFlush *recorder,
-                                         D3D9PeDiagnosticObserver *diagnostics) {
+                                         D3D9PeDiagnosticObserver *diagnostics,
+                                         StateBlockCaptureDisposition disposition) {
   auto *impl = new (std::nothrow)
-      D3D9StateBlockImpl(stateBlock, device, recorder, diagnostics);
+      D3D9StateBlockImpl(stateBlock, device, recorder, diagnostics,
+                         disposition);
   if (!impl) {
     if (stateBlock) dxmt9c_stateblock_release(stateBlock);
     return nullptr;

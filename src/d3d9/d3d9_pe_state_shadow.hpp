@@ -331,6 +331,179 @@ struct FixedTransformTable {
     }
 };
 
+// A state-block candidate is deliberately value-only and fixed-size.  Pointer
+// members below are non-owning observations; the PE owner takes/releases the
+// corresponding COM reference at the recording boundary.  Keeping ownership
+// out of this native-buildable header is what lets the category truth table
+// exercise the same candidate without windows.h or a COM ABI.
+template<typename T, std::size_t Slots>
+struct FixedTrackedState {
+    std::array<T, Slots> values{};
+    std::array<std::uint64_t, (Slots + 63u) / 64u> occupied{};
+    std::uint32_t count = 0u;
+
+    bool contains(std::size_t slot) const noexcept {
+        return slot < Slots &&
+               (occupied[slot >> 6u] & (1ull << (slot & 63u))) != 0u;
+    }
+    bool get(std::size_t slot, T& value) const noexcept {
+        if (!contains(slot)) return false;
+        value = values[slot];
+        return true;
+    }
+    void set(std::size_t slot, const T& value) noexcept {
+        if (slot >= Slots) return;
+        const auto word = slot >> 6u;
+        const auto bit = 1ull << (slot & 63u);
+        if ((occupied[word] & bit) == 0u) {
+            occupied[word] |= bit;
+            ++count;
+        }
+        values[slot] = value;
+    }
+    void clear() noexcept {
+        occupied = {};
+        count = 0u;
+    }
+    std::uint32_t size() const noexcept { return count; }
+    bool empty() const noexcept { return count == 0u; }
+    template<typename Fn>
+    void forEach(Fn&& fn) const {
+        for (std::size_t word = 0; word < occupied.size(); ++word) {
+            auto bits = occupied[word];
+            while (bits != 0u) {
+                const auto bit = static_cast<std::size_t>(std::countr_zero(bits));
+                const auto slot = word * 64u + bit;
+                if (slot < Slots) fn(slot, values[slot]);
+                bits &= bits - 1u;
+            }
+        }
+    }
+};
+
+struct StateBlockStreamSourceValue {
+    void* buffer = nullptr;
+    std::uint32_t offset = 0u;
+    std::uint32_t stride = 0u;
+};
+
+enum class StateBlockCaptureDisposition : std::uint8_t {
+    All,
+    VertexState,
+    PixelState,
+    Explicit,
+};
+
+enum class StateBlockCaptureCategory : std::uint8_t {
+    RenderState,
+    TextureStageState,
+    SamplerState,
+    Transform,
+    Texture,
+    StreamSource,
+    StreamFrequency,
+    IndexBuffer,
+    VertexShader,
+    PixelShader,
+    Fvf,
+    VertexDeclaration,
+    RenderTarget,
+    DepthStencil,
+    Viewport,
+    Scissor,
+    Material,
+    ClipPlane,
+    Light,
+    LightEnable,
+    VertexConstants,
+    PixelConstants,
+};
+
+constexpr StateBlockCaptureDisposition stateBlockCaptureDispositionFromType(
+    std::uint32_t type) noexcept {
+    return type == 2u ? StateBlockCaptureDisposition::PixelState
+         : type == 3u ? StateBlockCaptureDisposition::VertexState
+                      : StateBlockCaptureDisposition::All;
+}
+
+constexpr bool stateBlockCaptureCategorySelected(
+    StateBlockCaptureDisposition disposition,
+    StateBlockCaptureCategory category) noexcept {
+    if (disposition == StateBlockCaptureDisposition::All ||
+        disposition == StateBlockCaptureDisposition::Explicit) {
+        return true;
+    }
+    if (disposition == StateBlockCaptureDisposition::VertexState) {
+        switch (category) {
+        case StateBlockCaptureCategory::RenderState:
+        case StateBlockCaptureCategory::TextureStageState:
+        case StateBlockCaptureCategory::SamplerState:
+        case StateBlockCaptureCategory::VertexShader:
+        case StateBlockCaptureCategory::Fvf:
+        case StateBlockCaptureCategory::VertexDeclaration:
+        case StateBlockCaptureCategory::Light:
+        case StateBlockCaptureCategory::LightEnable:
+        case StateBlockCaptureCategory::VertexConstants:
+            return true;
+        default:
+            return false;
+        }
+    }
+    switch (category) {
+    case StateBlockCaptureCategory::RenderState:
+    case StateBlockCaptureCategory::TextureStageState:
+    case StateBlockCaptureCategory::SamplerState:
+    case StateBlockCaptureCategory::PixelShader:
+    case StateBlockCaptureCategory::PixelConstants:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// D3D9's mixed render/TSS/sampler families have vertex and pixel subsets.
+// These are the numeric D3D9 enum values, kept here so the host shadow header
+// remains independent of Windows headers while matching the backend masks.
+constexpr bool stateBlockRenderStateSelected(
+    StateBlockCaptureDisposition disposition, std::uint32_t key) noexcept {
+    if (disposition == StateBlockCaptureDisposition::All ||
+        disposition == StateBlockCaptureDisposition::Explicit) return true;
+    if (disposition == StateBlockCaptureDisposition::VertexState) {
+        return key == 9u || key == 22u || key == 29u ||
+               (key >= 34u && key <= 38u) ||
+               key == 48u || (key >= 136u && key <= 137u) || key == 139u ||
+               (key >= 140u && key <= 143u) || (key >= 145u && key <= 148u) ||
+               key == 151u || key == 152u || (key >= 154u && key <= 163u) ||
+               key == 166u || key == 167u || key == 170u ||
+               (key >= 172u && key <= 173u) || (key >= 178u && key <= 184u);
+    }
+    return key == 7u || key == 8u || key == 9u || key == 14u || key == 15u ||
+           key == 16u || key == 19u || key == 20u || (key >= 23u && key <= 27u) ||
+           (key >= 52u && key <= 60u) ||
+           (key >= 128u && key <= 135u) || key == 174u || key == 175u ||
+           (key >= 185u && key <= 195u) ||
+           (key >= 198u && key <= 209u);
+}
+
+constexpr bool stateBlockTextureStageStateSelected(
+    StateBlockCaptureDisposition disposition, std::uint32_t key) noexcept {
+    if (disposition == StateBlockCaptureDisposition::All ||
+        disposition == StateBlockCaptureDisposition::Explicit) return true;
+    if (disposition == StateBlockCaptureDisposition::VertexState)
+        return key == 11u || key == 24u;
+    return (key >= 1u && key <= 11u) || (key >= 22u && key <= 24u) ||
+           (key >= 26u && key <= 28u) || key == 32u;
+}
+
+constexpr bool stateBlockSamplerStateSelected(
+    StateBlockCaptureDisposition disposition, std::uint32_t key) noexcept {
+    if (disposition == StateBlockCaptureDisposition::All ||
+        disposition == StateBlockCaptureDisposition::Explicit) return true;
+    return disposition == StateBlockCaptureDisposition::VertexState
+        ? key == 13u
+        : key >= 1u && key <= 12u;
+}
+
 inline std::uint32_t textureStageSlot(std::uint32_t stage) noexcept {
     return std::min<std::uint32_t>(stage, kPeTextureStageSlots - 1u);
 }
@@ -938,6 +1111,32 @@ public:
     // last-write-wins; MultiplyTransform never enters transforms_.
     bool vertexDeclarationRecorded = false;
 
+    // The remaining categories are intentionally explicit rather than a
+    // heterogeneous map.  Their occupancy bits are the tracked-key set;
+    // values are written only by recording-phase setters and are never read
+    // by ordinary getters or the producer's pending/live paths.
+    FixedTrackedState<void*, kPeTextureSlots> textures{};
+    FixedTrackedState<StateBlockStreamSourceValue, D9C_DRAW_PACKET_MAX_STREAMS>
+        streamSources{};
+    FixedTrackedState<std::uint32_t, D9C_DRAW_PACKET_MAX_STREAMS>
+        streamFrequencies{};
+    FixedTrackedState<void*, 1> vertexShader{};
+    FixedTrackedState<void*, 1> pixelShader{};
+    FixedTrackedState<std::uint32_t, 1> fvf{};
+    FixedTrackedState<void*, 1> vertexDeclaration{};
+    FixedTrackedState<void*, 1> indexBuffer{};
+    FixedTrackedState<void*, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
+        renderTargets{};
+    FixedTrackedState<void*, 1> depthStencil{};
+    FixedTrackedState<D9CViewport, 1> viewport{};
+    FixedTrackedState<D9CRect, 1> scissor{};
+    FixedTrackedState<D9CMaterial, 1> material{};
+    FixedTrackedState<std::array<float, 4>, 6> clipPlanes{};
+    FixedTrackedState<D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS> lights{};
+    FixedTrackedState<std::uint32_t, D9C_DRAW_PACKET_MAX_LIGHTS>
+        lightEnables{};
+    PeStateBlockConstRecorded constants{};
+
     RenderStateTableView renderStates() noexcept {
         return RenderStateTableView(renderStates_);
     }
@@ -968,6 +1167,23 @@ public:
         samplerStates_.clear();
         transforms_.clear();
         vertexDeclarationRecorded = false;
+        textures.clear();
+        streamSources.clear();
+        streamFrequencies.clear();
+        vertexShader.clear();
+        pixelShader.clear();
+        fvf.clear();
+        vertexDeclaration.clear();
+        indexBuffer.clear();
+        renderTargets.clear();
+        depthStencil.clear();
+        viewport.clear();
+        scissor.clear();
+        material.clear();
+        clipPlanes.clear();
+        lights.clear();
+        lightEnables.clear();
+        constants.clearForBegin();
     }
 
 private:
@@ -1050,7 +1266,6 @@ private:
 
 static_assert(sizeof(LiveShadow) == 22968u);
 static_assert(sizeof(PendingDelta) == 21968u);
-static_assert(sizeof(StateBlockRecorded) == 21936u);
 static_assert(sizeof(PeHotStateShadow) == 44944u);
 static_assert(alignof(LiveShadow) == alignof(std::uint64_t));
 static_assert(alignof(PendingDelta) == alignof(std::uint64_t));

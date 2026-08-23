@@ -103,7 +103,10 @@ by a discarded builder.
 must be the pair `(kind, wrapperPointer)`. A raw wrapper pointer may exist in a
 PE-local `PeWireObjectRef` only to retain or call the wrapper; it is not a wire
 identity, must not cross the PE/unix ABI, and must not be used as an
-unqualified global cache key.
+unqualified global cache key. In particular, chunk presence, buffer-hazard,
+and pending-destroy queries must preserve `kind` through their O(1) lookup and
+any bounded linear fallback so same-address wrappers from different kinds do
+not match.
 
 **R-CORE-REC-4.2** Serialized object identity must be exactly
 `(kind, generation, objectId)`, with every component valid and nonzero where
@@ -184,8 +187,13 @@ that same owner; a test-only reimplementation is not model-to-code binding.
 **R-CORE-REC-6.2** The recorder verification bundle must include bounded
 counterexamples for lost pending state, partial append, retry drift,
 wrong-kind/stale/aliased identity, pending-alias replacement, disabled-observer
-work, and reentrant retain. Each guarded premise must have an expected-failure
-configuration or mutation control that demonstrates the defect when removed.
+work, and reentrant retain. Pending/durable evidence must use a qualified token
+containing key, value, and a bounded epoch/ordinal; key presence alone cannot
+settle a newer value after an older durable record. Each guarded premise must
+have an expected-failure configuration or mutation control that demonstrates
+the defect when removed, including dropped-value/token, non-Accepted
+consumption, inexact Accepted representation, and live prior-value pending-
+replacement mutations.
 
 **R-CORE-REC-6.3** Acceptance must map every requirement to an exact production
 owner, deterministic native or PE differential evidence, and any applicable
@@ -194,3 +202,8 @@ state-block oracle, disabled-path codegen evidence, or wild capture evidence
 must remain in [gap.md](gap.md). A recorder optimization that changes state or
 lifetime transitions stays default-off until the applicable
 `R-VERIF-1.5`–`1.8` and `R-VERIF-6.4` layers are complete.
+
+The finite state/append transition rows are maintained in one canonical table
+shared by the production C++ algebra and generated TLA module. The verifier
+must reject a stale generated module before invoking TLC; symbol-name
+similarity is not model/code binding evidence.

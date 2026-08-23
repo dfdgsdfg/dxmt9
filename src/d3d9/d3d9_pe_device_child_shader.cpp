@@ -25,7 +25,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        s_, D9C_CHUNK_HANDLE_KIND_SHADER,
+        s_,
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9VertexShaderImpl() {
@@ -99,7 +99,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        s_, D9C_CHUNK_HANDLE_KIND_SHADER,
+        s_,
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9PixelShaderImpl() {

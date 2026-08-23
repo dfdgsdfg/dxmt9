@@ -476,7 +476,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        b_, D9C_CHUNK_HANDLE_KIND_BUFFER,
+        b_,
         dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
@@ -621,7 +621,7 @@ public:
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
-        b_, D9C_CHUNK_HANDLE_KIND_BUFFER,
+        b_,
         dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,

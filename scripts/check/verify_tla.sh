@@ -5,6 +5,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tla_dir="$repo_root/specs/verification/tla"
 
+# The PE recorder TLA module is generated from the same bounded decision table
+# included by the production C++ algebra.  A stale generated module is a
+# model/code binding failure, not a harmless documentation diff.
+python3 "$repo_root/scripts/check/gen_pe_transition_table.py" --check
+
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then
   tlc_cmd=(tlc)
@@ -32,6 +37,9 @@ trap cleanup EXIT
 
 for spec in "$tla_dir"/*.tla; do
   cfg="${spec%.tla}.cfg"
+  # Imported/generated helper modules have no standalone behavior to check.
+  # Their owning model imports them after the freshness check above.
+  [[ -f "$cfg" ]] || continue
   metadir="$(mktemp -d)"
   echo "=== $(basename "$spec") ==="
   "${tlc_cmd[@]}" -workers auto -metadir "$metadir" -config "$cfg" "$spec"
@@ -67,6 +75,22 @@ counterexample_models=(
   # Consuming a projection during Prepare loses it when append subsequently
   # fails; production consumes only the accepted represented set.
   "PeRecorderTransition|.counterexample|Invariant NoLostPending is violated"
+  # A failed append must not publish a consumption witness. This independently
+  # guards OnlyAcceptedConsumes rather than relying on exact Accepted payloads.
+  "PeRecorderTransition|.consume-witness.counterexample|Invariant OnlyAcceptedConsumes is violated"
+  # Accepted must witness every and only prepared qualified token. This is
+  # distinct from forbidding witnesses on non-Accepted transitions.
+  "PeRecorderTransition|.accepted-witness.counterexample|Invariant AcceptedExactlyRepresented is violated"
+  # A live-phase prior-value operation produces a new ordinary state result;
+  # preserving the older pending value would replay stale state.
+  "PeRecorderTransition|.prior-pending.counterexample|Invariant PendingMatchesLive is violated"
+  # Dropping the value from a durable key/token lets the model accept a stale
+  # payload even though the key and ordinal still look valid.
+  "PeRecorderTransition|.stale.counterexample|Invariant DurableTokenMatchesPayload is violated"
+  # Parent destruction before alias retirement breaks the ordering contract.
+  "PeRecorderCommit|.parent-before-alias.counterexample|Invariant AliasBeforeParent is violated"
+  # Builder reset while pending references remain breaks no-early-drain/reset.
+  "PeRecorderCommit|.early-reset.counterexample|Invariant NoEarlyDrainReset is violated"
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"

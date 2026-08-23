@@ -9,11 +9,11 @@ from dataclasses import dataclass
 
 
 # Schema-content version tag. Bump when the canonical schema string format
-# below changes (e.g. addition of new fields / sizeof emission). Bumping
+# below changes (e.g. addition of new fields / record-schema emission). Bumping
 # the tag forces a hash mismatch between previously-built winemetal.dll /
 # winemetal.so even when the underlying device_c.h prototypes are unchanged,
 # so old binaries are caught instead of silently misbehaving.
-ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v4"  # v4: canonical stable-index layouts + negotiation/identity ABI (R-BACK-2.54)
+ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v6"  # v6: dispatch ordinals + POD records + ABI context
 
 # 64-bit FNV-1a constants. Chosen because the implementation is trivially
 # deterministic across Python versions and does not depend on hashlib's
@@ -37,6 +37,7 @@ def fnv1a_64(data: bytes) -> int:
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEVICE_C_HEADER = REPO_ROOT / "include" / "dxmt9" / "device_c.h"
+WINEMETAL_THUNKS_HEADER = REPO_ROOT / "src" / "winemetal" / "winemetal_thunks.hpp"
 
 OPAQUE_HANDLE_TYPES = {
     "D9CFactory",
@@ -74,6 +75,15 @@ class Proto:
     return_info: TypeInfo
     name: str
     params: list[Param]
+
+
+@dataclass(frozen=True)
+class RecordSchema:
+    """Pointer-width-independent schema for a cross-boundary POD record."""
+
+    name: str
+    fields: tuple[str, ...]
+    layout_context: tuple[str, ...] = ()
 
 
 PROTOTYPE_RE = re.compile(
@@ -234,6 +244,75 @@ def collect_prototypes(schema_headers: list[pathlib.Path]) -> list[Proto]:
     return list(ordered.values())
 
 
+def collect_record_schemas(schema_headers: list[pathlib.Path]) -> list[RecordSchema]:
+    """Collect typedef-struct records from the generator's schema inputs.
+
+    The extracted device schema contains prototypes only, so callers that need
+    pointed record definitions should also provide the original device_c.h.
+    Field declarations and layout-affecting preprocessor context are retained
+    in source order as a complete deterministic schema fingerprint; unlike host
+    sizeof/offsetof values this remains equal for the PE and unix builds
+    despite their different pointer widths.
+    """
+    records: dict[str, RecordSchema] = {}
+    struct_re = re.compile(
+        r"typedef\s+struct(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{(?P<body>.*?)\}\s*"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+        re.S,
+    )
+    for schema_header in schema_headers:
+        text = load_schema_text(schema_header)
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        text = re.sub(r"//.*$", "", text, flags=re.M)
+        layout_context = _collect_layout_context(text)
+        for match in struct_re.finditer(text):
+            fields = tuple(
+                normalize_whitespace(field)
+                for field in match.group("body").split(";")
+                if normalize_whitespace(field)
+            )
+            record = RecordSchema(match.group("name"), fields, layout_context)
+            previous = records.get(record.name)
+            if previous is not None and previous != record:
+                raise ValueError(
+                    f"conflicting bridge record definitions for {record.name}"
+                )
+            records[record.name] = record
+    return [records[name] for name in sorted(records)]
+
+
+def _collect_layout_context(text: str) -> tuple[str, ...]:
+    """Return preprocessor directives that can alter a C record layout.
+
+    This deliberately keeps the contract source-level and pointer-width
+    independent.  In particular, `#pragma pack` and macro definitions used by
+    array extents are hashed as written; host compiler sizeof/offsetof values
+    are not injected into the PE32/unix64 shared fingerprint.
+    """
+    logical_lines: list[str] = []
+    pending = ""
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if pending:
+            line = pending + line.lstrip()
+        if line.endswith("\\"):
+            pending = line[:-1]
+            continue
+        logical_lines.append(line)
+        pending = ""
+    if pending:
+        logical_lines.append(pending)
+
+    context: list[str] = []
+    directive_re = re.compile(
+        r"^\s*#\s*(?:pragma\s+pack|define|undef|if|ifdef|ifndef|elif|else|endif)\b"
+    )
+    for line in logical_lines:
+        if directive_re.match(line):
+            context.append(normalize_whitespace(line))
+    return tuple(context)
+
+
 def _canonical_type(type_info: TypeInfo) -> str:
   # Collapse "T*" / "T **" / "const T*" into a stable canonical form so two
   # builds that whitespace-differently spell the same C type produce
@@ -244,28 +323,61 @@ def _canonical_type(type_info: TypeInfo) -> str:
   return base + ("*" * type_info.pointer_depth)
 
 
-def canonicalize_schema(protos: list[Proto]) -> str:
-  # Sort by op name so the same set of prototypes always produces the same
-  # canonical text, regardless of header include / declaration order. The
-  # ABI-hash slot itself is not part of the dxmt9c_* prototype set, so it
-  # is intentionally excluded — adding or removing the reserved slot is a
-  # separate, deliberate compat break.
+def canonicalize_schema(
+    protos: list[Proto], records: list[RecordSchema] | None = None
+) -> str:
+  # Declaration order is the dispatch order: BridgeOpcode is emitted from this
+  # exact list and the unix handler table indexes it positionally. Do not sort
+  # operations here. The ABI-hash slot itself is not part of the dxmt9c_*
+  # prototype set, so it is intentionally excluded — adding or removing the
+  # reserved slot itself remains a separate, deliberate compat break.
   lines: list[str] = [f"version:{ABI_HASH_VERSION_TAG}"]
   lines.append(f"opcount:{len(protos)}")
-  for proto in sorted(protos, key=lambda p: p.name):
+  for ordinal, proto in enumerate(protos):
     parts = [
       "op",
+      f"ordinal={ordinal}",
       proto.name,
       _canonical_type(proto.return_info),
     ]
     for param in proto.params:
       parts.append(_canonical_type(param.type_info))
     lines.append("|".join(parts))
+    # Args_<op> is the actual record passed to wine_unix_call. Include its
+    # ordered fields explicitly so generated record layout is covered even if
+    # the generator's implementation changes independently of the prototype.
+    arg_fields = [
+      f"arg{index}={_canonical_type(param.type_info)}"
+      for index, param in enumerate(proto.params)
+    ]
+    if proto.return_type != "void":
+      arg_fields.append(f"ret={_canonical_type(proto.return_info)}")
+    lines.append("arg-record|" + proto.name + "|" + "|".join(arg_fields))
+  if records:
+    lines.append(f"recordcount:{len(records)}")
+    context: list[str] = []
+    for record in sorted(records, key=lambda item: item.name):
+      for directive in record.layout_context:
+        if directive not in context:
+          context.append(directive)
+    lines.append(f"layout-context-count:{len(context)}")
+    for ordinal, directive in enumerate(context):
+      lines.append(f"layout-context|ordinal={ordinal}|{directive}")
+    for record in sorted(records, key=lambda item: item.name):
+      lines.append(
+        "record|" + record.name + "|fieldcount=" + str(len(record.fields))
+      )
+      for offset, field in enumerate(record.fields):
+        # Keep names and array extents: they make declaration/offset mutations
+        # visible without baking in PE pointer width or host compiler padding.
+        lines.append(f"record-field|{record.name}|ordinal={offset}|{field}")
   return "\n".join(lines) + "\n"
 
 
-def compute_bridge_abi_hash(protos: list[Proto]) -> int:
-  return fnv1a_64(canonicalize_schema(protos).encode("utf-8"))
+def compute_bridge_abi_hash(
+    protos: list[Proto], records: list[RecordSchema] | None = None
+) -> int:
+  return fnv1a_64(canonicalize_schema(protos, records).encode("utf-8"))
 
 
 def wow64_field_decl(param: Param) -> str:
@@ -280,13 +392,18 @@ def wow64_return_decl(proto: Proto) -> str:
     return f"{proto.return_type} ret"
 
 
-def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
-    abi_hash = compute_bridge_abi_hash(protos)
+def write_ops_header(
+    path: pathlib.Path,
+    protos: list[Proto],
+    records: list[RecordSchema] | None = None,
+) -> None:
+    abi_hash = compute_bridge_abi_hash(protos, records)
     lines: list[str] = []
     lines.append("// Generated by scripts/codegen/gen_wine_bridge.py. Do not edit by hand.")
     lines.append("#pragma once")
     lines.append("")
     lines.append('#include <stdint.h>')
+    lines.append('#include <type_traits>')
     lines.append('#include "dxmt9/device_c.h"')
     # Pulls in DXMT9_WINEMETAL_BRIDGE_OP_BASE — first slot consumed by the
     # device_c bridge. Slots 0..BASE-1 are owned by the shader unix-call IDs
@@ -296,8 +413,9 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
     lines.append("")
     lines.append("namespace dxmt9::bridge {")
     # Runtime ABI-handshake constant. Computed at codegen time over the
-    # canonicalized schema (sorted op names, return + param types) so two
-    # builds of the same device_c.h + winemetal_unix_schema.h produce
+    # canonicalized schema (declaration-order ordinals, generated argument
+    # records, source POD record fields, and layout-affecting preprocessor
+    # context) so two builds of the same device_c.h + winemetal schema produce
     # identical hashes. The PE-side DllMain calls
     # DXMT9_WINEMETAL_CALL_ABI_HASH and refuses to load on mismatch.
     # Schema canonicalization version: ABI_HASH_VERSION_TAG in
@@ -354,6 +472,19 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
         if proto.return_type != "void":
             lines.append(f"  {wow64_return_decl(proto)};")
         lines.append("};")
+        lines.append("")
+        lines.append(
+            f"static_assert(std::is_standard_layout_v<Args_{proto.name}>);"
+        )
+        lines.append(
+            f"static_assert(std::is_trivially_copyable_v<Args_{proto.name}>);"
+        )
+        lines.append(
+            f"static_assert(std::is_standard_layout_v<Args32_{proto.name}>);"
+        )
+        lines.append(
+            f"static_assert(std::is_trivially_copyable_v<Args32_{proto.name}>);"
+        )
         lines.append("")
     lines.append(f"constexpr unsigned int kBridgeOpcodeCount = {len(protos)};")
     lines.append("}  // namespace dxmt9::bridge")
@@ -700,13 +831,21 @@ def main() -> int:
         else [DEVICE_C_HEADER]
     )
     protos = collect_prototypes(schema_headers)
+    # Keep the original device header in the record inputs because the
+    # extracted schema is intentionally prototypes-only.
+    record_inputs = list(schema_headers)
+    if DEVICE_C_HEADER not in record_inputs:
+        record_inputs.append(DEVICE_C_HEADER)
+    if WINEMETAL_THUNKS_HEADER not in record_inputs:
+        record_inputs.append(WINEMETAL_THUNKS_HEADER)
+    records = collect_record_schemas(record_inputs)
 
     ops_header = pathlib.Path(args.ops_header)
     client_cpp = pathlib.Path(args.client_cpp)
     server_cpp = pathlib.Path(args.server_cpp)
     server_entries = pathlib.Path(args.server_entries)
 
-    write_ops_header(ops_header, protos)
+    write_ops_header(ops_header, protos, records)
     write_client_cpp(client_cpp, ops_header.name, protos)
     write_server_cpp(server_cpp, ops_header.name, protos)
     write_server_entries(server_entries, protos)

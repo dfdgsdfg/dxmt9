@@ -127,16 +127,12 @@ void testCachedIdentityBuilderAndSeal() {
   D9CTexture first;
   D9CTexture second;
   D9CTexture rollbackOnly;
-  PeWireObjectRef firstRef;
-  PeWireObjectRef secondRef;
-  PeWireObjectRef rollbackRef;
-  check(cacheWireObjectRef(&first, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                           getTextureIdentity, firstRef) &&
-            cacheWireObjectRef(&second, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                               getTextureIdentity, secondRef) &&
-            cacheWireObjectRef(&rollbackOnly,
-                               D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                               getTextureIdentity, rollbackRef),
+  dxmt9::d3d9::pe::TextureRef firstRef;
+  dxmt9::d3d9::pe::TextureRef secondRef;
+  dxmt9::d3d9::pe::TextureRef rollbackRef;
+  check(cacheWireObjectRef(&first, getTextureIdentity, firstRef) &&
+            cacheWireObjectRef(&second, getTextureIdentity, secondRef) &&
+            cacheWireObjectRef(&rollbackOnly, getTextureIdentity, rollbackRef),
         "child construction caches each typed identity once");
   check(getterCalls == 3u, "identity getter count equals wrapper count");
 
@@ -806,8 +802,9 @@ void testConstShadowFeedsConstantSections() {
 // R-BACK-43.7 index-consistency pins for CommandChunkBuilder::
 // referencesObject()'s O(1) accelerator (HandlePresenceTable): rollback must
 // undo exactly what the failed record added, and once the fixed-capacity
-// table overflows, every prior and later distinct object must still be
-// found through the linear-scan fallback rather than silently dropped.
+// table overflows, every prior and later distinct qualified local identity
+// must still be found through the linear-scan fallback rather than silently
+// dropped.
 void testReferencesObjectRollbackAndOverflow() {
   {
     D9CTexture a;
@@ -819,7 +816,8 @@ void testReferencesObjectRollbackAndOverflow() {
         wireRef(&rollbackOnly, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x9003u);
 
     CommandChunkBuilder builder;
-    check(!builder.referencesObject(&a) && !builder.referencesObject(&b),
+    check(!builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &a}) &&
+              !builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &b}),
           "a fresh builder references nothing");
 
     std::uint32_t index = 0u;
@@ -831,7 +829,8 @@ void testReferencesObjectRollbackAndOverflow() {
         .srcHandleIndex = index, .dstHandleIndex = index};
     check(builder.appendPayloadValue(fixedA) && builder.commitRecord(),
           "first record commits");
-    check(builder.referencesObject(&a) && !builder.referencesObject(&b),
+    check(builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &a}) &&
+              !builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &b}),
           "referencesObject sees the committed handle, not an unappended one");
 
     // A record that fails after appending a NEW handle must roll that
@@ -840,12 +839,14 @@ void testReferencesObjectRollbackAndOverflow() {
               builder.appendHandle(rollbackRef,
                                    D9C_CHUNK_HANDLE_KIND_TEXTURE, index),
           "second record appends a handle before failing");
-    check(builder.referencesObject(&rollbackOnly),
+    check(builder.referencesObject(
+              {D9C_CHUNK_HANDLE_KIND_TEXTURE, &rollbackOnly}),
           "the not-yet-committed handle is visible mid-record");
     builder.rollbackRecord();
-    check(!builder.referencesObject(&rollbackOnly),
+    check(!builder.referencesObject(
+              {D9C_CHUNK_HANDLE_KIND_TEXTURE, &rollbackOnly}),
           "rollback removes presence for exactly the handle it undid");
-    check(builder.referencesObject(&a),
+    check(builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &a}),
           "rollback does not disturb an earlier record's presence");
 
     // Re-referencing `a` from a second record, then rolling that record
@@ -858,13 +859,16 @@ void testReferencesObjectRollbackAndOverflow() {
                                    index),
           "third record re-references a and newly references b");
     builder.rollbackRecord();
-    check(builder.referencesObject(&a) && !builder.referencesObject(&b),
+    check(builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &a}) &&
+              !builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &b}),
           "rollback drops the new reference (b) but a stays referenced by "
           "the committed first record");
 
     builder.resetAndReleaseRetained();
-    check(!builder.referencesObject(&a) && !builder.referencesObject(&b) &&
-              !builder.referencesObject(&rollbackOnly),
+    check(!builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &a}) &&
+              !builder.referencesObject({D9C_CHUNK_HANDLE_KIND_TEXTURE, &b}) &&
+              !builder.referencesObject(
+                  {D9C_CHUNK_HANDLE_KIND_TEXTURE, &rollbackOnly}),
           "resetAndReleaseRetained clears every chunk-lifetime presence");
   }
 
@@ -895,14 +899,19 @@ void testReferencesObjectRollbackAndOverflow() {
     // must still be found: the linear-scan fallback must stay correct
     // rather than silently losing coverage past the table's capacity.
     for (std::size_t i = 0; i < kDistinctObjects; ++i) {
-      check(builder.referencesObject(textures[i].get()),
+      check(builder.referencesObject(
+                {D9C_CHUNK_HANDLE_KIND_TEXTURE, textures[i].get()}),
             "post-overflow referencesObject still finds every appended "
             "object");
     }
     D9CTexture neverAppended;
-    check(!builder.referencesObject(&neverAppended),
+    check(!builder.referencesObject(
+                {D9C_CHUNK_HANDLE_KIND_TEXTURE, &neverAppended}),
           "post-overflow referencesObject still rejects an unappended "
           "object");
+    check(!builder.referencesObject(
+                {D9C_CHUNK_HANDLE_KIND_SURFACE, textures.front().get()}),
+          "overflow fallback keeps local kind qualification");
     // Release every retained pin while `textures` is still alive: `builder`
     // is declared before `textures`, so without this the block's implicit
     // destructors would tear down `textures` first and then run
@@ -1116,6 +1125,12 @@ void testRecordLocalDedupAccelerator() {
 
 void testKindQualifiedLocalIdentity() {
   D9CTexture object;
+  dxmt9::d3d9::pe::TextureRef cachedTexture;
+  dxmt9::d3d9::pe::SurfaceRef wrongKindCache;
+  check(cacheWireObjectRef(&object, getTextureIdentity, cachedTexture) &&
+            !cacheWireObjectRef(&object, getTextureIdentity, wrongKindCache) &&
+            wrongKindCache.object == nullptr,
+        "typed cache output rejects a getter identity from another kind");
   const PeWireObjectRef textureWire = wireRef(
       &object, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF001u);
   const auto texture = dxmt9::d3d9::pe::qualifyLocalRef<
@@ -1137,11 +1152,53 @@ void testKindQualifiedLocalIdentity() {
   CommandChunkBuilder builder;
   std::uint32_t index = 0u;
   check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
-            !builder.appendHandle(surfaceWire,
+            builder.appendHandle(textureWire,
                                   D9C_CHUNK_HANDLE_KIND_TEXTURE, index) &&
-            !builder.recordActive() && builder.handleCount() == 0u &&
-            object.refs == 1u,
+            builder.appendPayloadValue(D9CCommandChunkWireUpdateTexture{
+                .srcHandleIndex = index, .dstHandleIndex = index}) &&
+            builder.commitRecord() && builder.handleCount() == 1u &&
+            object.refs == 2u,
+        "kind-qualified builder append retains the texture identity");
+  check(builder.referencesObject(
+                dxmt9::d3d9::pe::localIdentity(texture)) &&
+            !builder.referencesObject(
+                dxmt9::d3d9::pe::localIdentity(surface)),
+        "same wrapper pointer in another kind cannot satisfy a local lookup");
+
+  CommandChunkBuilder rejecting;
+  check(rejecting.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            !rejecting.appendHandle(surfaceWire,
+                                    D9C_CHUNK_HANDLE_KIND_TEXTURE, index) &&
+            !rejecting.recordActive() && rejecting.handleCount() == 0u &&
+            object.refs == 2u,
         "wrong-kind builder append rolls back before any retain");
+}
+
+// The two production queries that used to pass only a raw pointer are the
+// buffer-lock hazard barrier and Render Tape's pending-destroy transfer. Keep
+// both meanings visible here: a same-address surface must not make either
+// query believe the buffer is retained.
+void testKindQualifiedHazardAndPendingDestroyQueries() {
+  D9CBuffer buffer;
+  const auto bufferRef = wireRef(
+      &buffer, D9C_CHUNK_HANDLE_KIND_BUFFER, 0xF101u);
+  CommandChunkBuilder builder;
+  std::uint32_t index = 0u;
+  check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            builder.appendHandle(bufferRef, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                 index) &&
+            builder.appendPayloadValue(D9CCommandChunkWireUpdateTexture{
+                .srcHandleIndex = index, .dstHandleIndex = index}) &&
+            builder.commitRecord(),
+        "buffer identity enters the pending chunk");
+  const auto bufferLocal = dxmt9::d3d9::pe::PeLocalObjectIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .object = &buffer};
+  const auto surfaceLocal = dxmt9::d3d9::pe::PeLocalObjectIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .object = &buffer};
+  check(builder.referencesObject(bufferLocal),
+        "buffer hazard query sees the retained buffer");
+  check(!builder.referencesObject(surfaceLocal),
+        "pending-destroy query rejects a wrong-kind same-address wrapper");
 }
 
 void testOversizedPendingBatchAppendFailure() {
@@ -1198,6 +1255,7 @@ int main() {
     testReferencesObjectRollbackAndOverflow();
     testRecordLocalDedupAccelerator();
     testKindQualifiedLocalIdentity();
+    testKindQualifiedHazardAndPendingDestroyQueries();
     testOversizedPendingBatchAppendFailure();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()

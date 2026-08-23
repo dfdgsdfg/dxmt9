@@ -56,7 +56,7 @@ and sampler slot 7.
 | Texture-stage state | `(TextureStageIndex, TextureStageStateType) -> u32` | `tssShadow` | `pendingTss` | last write per touched pair | TSS sparse section |
 | Sampler state | `(SamplerIndex, SamplerStateType) -> u32` | `samplerStateShadow` | `pendingSamplerStates` | last write per touched pair | sampler sparse section |
 | Texture binding | `(TextureKind, SamplerIndex) -> PeWireObjectRef?` | `textures_` plus binding view | `pendingTextureMask` + live ref | last binding per touched slot | texture handle section |
-| Stream binding/frequency | `(BufferKind, stream) -> {ref, offset, stride, frequency}` | `streamSrc_`, `streamOff_`, `streamStr_`, `streamFreq_` | stream mask plus live binding | last binding per touched stream | stream section; frequency remains explicit |
+| Stream source / frequency | `(BufferKind, stream) -> {ref, offset, stride}` plus `(stream) -> frequency` | `streamSrc_`, `streamOff_`, `streamStr_`, `streamFreq_` | source mask and live binding; frequency is an independent tracked table | each explicit setter tracks only its semantic aspect; Apply preserves the unrecorded aspect | stream source section plus explicit frequency |
 | Vertex/pixel shader | `(ShaderKind, stage) -> ref?` | `vs_`, `ps_` | `pendingVs`, `pendingPs` | last binding per touched stage | shader handle section |
 | Vertex input | `FvfKey` or `(VertexDeclKind, singleton)` | `fvf_`, `vdecl_` | `pendingFvf`, `pendingVdecl` | declaration touch fixes the tracked singleton; saved wrapper owns its AddRef | vertex-input section |
 | Index buffer | `(BufferKind, singleton) -> ref?` | `indexBuf_` | `pendingIb` | last binding | indexed-draw index section only |
@@ -69,7 +69,10 @@ and sampler slot 7.
 | Ordered commands | command ordinal | not state | not commutative state | not captured as ordinary state unless D3D9 explicitly says so | command record / barrier |
 
 `PeWireObjectRef::object` is a local lifetime aid in the table, never a wire
-field. The wire form is always `(kind, generation, objectId)`.
+field. Any PE-local lookup or pending-lifetime query uses the qualified pair
+`(identity.kind, object)`; the builder's presence accelerator and its bounded
+overflow fallback preserve that qualification. The wire form is always
+`(kind, generation, objectId)`.
 
 ### 2.2 Algebra
 
@@ -113,17 +116,41 @@ pre-attempt state, including dirty constant ranges and oversized-table rows.
 | Prior-value operation while Recording | apply to primary live/backend state without enlarging `StateBlockRecorded`; `MultiplyTransform` is the current enumerated case | preserve primary and recorded domains on pre-effect failure |
 | End | flush ordering work; freeze the tracked set; create the wrapper-owned snapshot; leave Recording without a restore replay | pre-backend failure preserves Recording; wrapper allocation failure after backend End is fail-stop and discards the unpublished PE candidate |
 | Capture | refresh values for the existing tracked keys/ranges only | preserve prior captured snapshot |
-| Apply | replay exactly the fixed set through normal setters, then settle their pending records | do not invalidate unrelated live/pending state |
+| Apply | flush and prevalidate the fixed set, apply the backend once, then publish the fixed PE shadow directly without allocation or fallible setters | pre-backend failure preserves PE/backend state; a backend failure latches recorder poison because the unix operation may have partially mutated |
 
-The implemented PE recorder owns fixed typed recorded tables for render, TSS,
-sampler, and transform state, fixed recorded register ranges for all six
-shader-constant kinds, and the existing vertex-declaration singleton. Initial
-End snapshots copy exactly those sets; later Capture refreshes values only.
+The implemented PE recorder owns one fixed typed `StateBlockRecorded` candidate
+covering keyed render/TSS/sampler/transform state, texture, and independently
+tracked stream source tuples (buffer/offset/stride) and stream frequencies,
+index/VS/PS/FVF/vdecl bindings,
+render-target/depth attachments, viewport/scissor/material, clip planes,
+lights/enables, and all six shader-constant kinds. Pointer slots are opaque in
+the native value owner; the PE device takes and releases their COM references
+at candidate replacement, End snapshot, Capture refresh, and Begin/reset
+boundaries. Explicit setters route to this candidate while recording, so
+`LiveShadow`, `PendingDelta`, getters, backend state, and capture journaling
+remain unchanged. Initial `CreateStateBlock` snapshots establish bounded
+tracked sets from the current PE shadows using the typed `ALL`, `VERTEXSTATE`,
+or `PIXELSTATE` disposition (including exact render/TSS/sampler key masks);
+Begin/End snapshots use `Explicit` and copy only explicitly touched candidate
+keys; later Capture refreshes those keys without enlargement. A source-only
+record never changes the saved frequency, and a frequency-only record never
+changes the saved source tuple.
 `MultiplyTransform` uses the prior-value transition, persists primary live
 state, and never enlarges the recorded transform set. Consequently the
 sequence `SetTransform(B); MultiplyTransform(C)` inside Begin/End records `B`
 while the multiply reads the pre-Begin primary value and publishes only its
 result to primary state.
+
+Capture and Apply hold the device's existing recursive recorder lock across
+the complete child/backend interval when `D3DCREATE_MULTITHREADED` or the
+forced-lock setting requires it; the lock methods are no-ops on the ordinary
+single-threaded hot path. Apply preparation reserves live constant capacity
+and resolves implicit FVF declarations before backend mutation. A failed
+backend Apply enters explicit recorder poison and subsequent recording writes
+return `D3DERR_DEVICELOST` deterministically, avoiding a second divergent
+stream when rollback is unavailable. A backend Capture failure uses the same
+conservative poison boundary; candidate/snapshot publication still occurs only
+after Capture accepts.
 
 ## 3. Record and chunk transactions
 
@@ -158,6 +185,20 @@ retry witness.
 | bridge commit succeeds, capture off | accepted | no work beyond one disabled branch | drain logical refs without capture events as applicable; reset; warm epoch advances |
 | bridge commit succeeds, capture active | accepted | materialize referenced objects and append exact command event first | drain pending refs; emit each admitted alias-before-parent destroy once; reset; warm epoch advances |
 | explicit discard / Reset / teardown | never submitted | no command-dependent destroy | drain logical pending refs; release all current and warm pins; clear builder |
+
+The production source of truth for this settlement is the fixed-size
+`settleRecorderCommit` algebra in
+`src/d3d9/d3d9_pe_commit_transition.hpp`. `flushPendingCommandChunk` binds
+each seal, bridge, capture, drain, builder-reset, and warm-retainer transition
+to that algebra while retaining the existing successful command cadence.
+Bridge failure returns to the same sealed phase with byte/count/handle/pin
+tokens intact, and capture materialization rejection settles only the capture
+disposition after an accepted command; it never retracts the command or
+resets the builder. Pending Render Tape aliases are retired before their
+parent, each ObjectDestroy is admitted once, and reset/warm-epoch advancement
+occurs only after all pending references are drained. Explicit discard and
+device reset clear the logical builder and retained pins without command
+dependent destroy events or a warm-epoch advance.
 
 For one builder, `pendingChunkRefs` is boolean-shaped: a logical identity owns
 zero or one pending reference regardless of wrapper release/reacquire churn.
@@ -273,14 +314,42 @@ Minimal counterexamples that must stay executable:
 7. Observer disabled; no callback/scope/timestamp/cache write occurs.
 8. Retain callback reenters registry while its lock is held; the guarded
    configuration must reject or the expected-failure control must deadlock/fail.
+9. A newer pending `(key,value,ordinal)` follows an older durable row with the
+   same key; value-only or ordinal-only mismatch must prevent the older row
+   from settling the newer token.
 
 `PeRecorderTransition.tla` checks the qualified state-write and append
 prepare/accept/fail/discard transitions, including weak-fair settlement and
-replay. Its `ConsumeOnPrepare` configuration must violate `NoLostPending`.
-The model covers only pre-effect state-block failure; production Apply can fail
-after backend effects and remains an explicit gap. It also stops at
-accepted-record durability; seal/bridge/capture-journal settlement remains a
-separate open refinement.
+replay. Pending snapshots, durable records, and consumption witnesses carry
+the per-key qualified `(key,value,ordinal)` token. `OnlyAcceptedConsumes`
+forbids a consumption witness outside Accepted, while `AcceptedExactlyRepresented`
+requires the Accepted witness to equal the prepared token set. Its
+`ConsumeOnPrepare` configuration must violate `NoLostPending`, and its
+`KeyOnly` stale-token configuration must violate `DurableTokenMatchesPayload`.
+Independent `ConsumeOnFailure` and `UnderRepresentAccepted` controls must
+violate `OnlyAcceptedConsumes` and `AcceptedExactlyRepresented`, respectively;
+the `PreserveExisting` prior-value control must violate
+`PendingMatchesLive` on the history-free `A -> B -> A` live-phase replacement
+trace.
+The C++ and TLA rows are generated from one canonical transition table and
+checked before TLC.
+`MaxOperations=2` is the explicit proof split: it covers the distinguishing
+live `A -> B -> A` replacement and keeps End enabled so `Begin -> Set -> End`
+still completes at the bound. Longer state-block write compositions remain in
+the exhaustive native and PE layers rather than this temporal state space.
+The `PeRecorderCommit.tla` model carries byte/count/handle/pin/pending-reference
+tokens through retry, capture disposition, alias-before-parent destruction,
+reset, warm advancement, and discard. `MaxOperations=8` bounds the combined
+seal/bridge retry budget while successful phase/token transitions are finite;
+the positive configuration checks 179 generated / 117 distinct states at depth
+17. The parent-before-alias and early-reset mutations each check 40 generated /
+28 distinct states at depth 6 and fail their named invariant.
+The bounded native transaction witness covers prepare/backend/commit failure
+ordering and the conditional whole-operation lock interval. Production Apply
+backend failure is fail-stop rather than rollback because the backend can
+partially mutate; the poison latch is the explicit safety boundary. The commit
+model includes seal/bridge/capture-journal settlement, and the native witness
+exercises bridge failure plus capture rejection through the same pure helper.
 
 ## 7. Acceptance matrix
 
@@ -292,7 +361,7 @@ separate open refinement.
 | `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection, `WireObjectRegistry.tla`, render-tape identity tests | local kind+pointer collision coverage and remaining identity/model binding |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
 | `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | capture lifecycle tests plus `dxmt9-pe-diagnostics-spec` disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins; PE x64/x86 compile checks; representative x64 object inspection keeps the sole `D3D9DeviceImpl` vtable in `d3d9_pe_device.cpp.obj`, and `SetRenderState`/`Surface::GetDesc` enter diagnostics through a nullable branch with direct enabled-only calls | broaden the instruction/code-size audit across the remaining representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by these pins |
-| `R-CORE-REC-6.*` | new shared transition surface plus verification owners | related producer, registry, capture tests | dedicated bounded model/exhaustive checker, mutation controls, model/code matrix |
+| `R-CORE-REC-6.*` | shared transition table plus verification owners | `d3d9_pe_transition_table.inc` feeds the production C++ algebra and generated TLA table; `gen_pe_transition_table.py --check` is wired before TLC; native exhaustive rows plus five independent expected failures cover model/code drift, qualified-token loss, acceptance witnesses, and live prior-value replacement. Single-worker production TLC checks 20,478 generated / 4,998 distinct states at depth 12. | seal/bridge/capture continuation, broader category matrix, and PE/Wine promotion evidence remain open; the complete multi-model verifier rerun belongs to final wave integration |
 
 The host suite can compile shared headers and extracted value/predicate owners,
 but cannot directly compile or execute the Windows-only COM TUs. Therefore

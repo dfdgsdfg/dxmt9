@@ -32,7 +32,6 @@ struct PeRecorderState {
   PeHotStateShadow peState{};
   PeConstShadowBlock peConsts{};
   StateBlockRecorded stateBlock{};
-  PeStateBlockConstRecorded stateBlockConsts{};
   mutable PeBindingView peBindingView{};
   mutable PeSparseScratch peSparseScratch{};
   mutable SparseStateInput peSparseState{};

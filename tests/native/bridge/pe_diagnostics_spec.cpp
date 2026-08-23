@@ -132,6 +132,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_child.hpp");
   const auto device =
       readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
+  const auto recorder =
+      readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
   const auto deviceOwner =
       readTextFile(root / "src/d3d9/d3d9_pe_device.cpp");
   const auto misc = readTextFile(
@@ -190,7 +192,7 @@ void testSourceContracts(const std::filesystem::path &root) {
   }
   checkContains(device, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
                 "device stores one nullable diagnostic owner pointer");
-  checkContains(device, "peDiagnosticsRead(\n                    chunkDiagnostics",
+  checkContains(recorder, "peDiagnosticsRead(\n                    chunkDiagnostics",
                 "chunk commit clocks are behind the nullable owner gate");
   checkContains(device, "const auto t0 = phase.begin();",
                 "append phase clocks use the nullable clock gate");

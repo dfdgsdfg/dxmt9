@@ -1,9 +1,11 @@
 #include "d3d9_pe_transition_algebra.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <map>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace pe = dxmt9::d3d9::pe;
@@ -220,6 +222,8 @@ void stateSequenceEvidence() {
 }
 
 void exhaustiveAppendTruthTable() {
+  check(pe::kStateWriteTable.size() == 5u && pe::kAppendTable.size() == 7u,
+        "native table cardinality matches generated model source");
   constexpr pe::AppendSettlement phases[] = {
       pe::AppendSettlement::Prepared, pe::AppendSettlement::Accepted,
       pe::AppendSettlement::Failed, pe::AppendSettlement::Discarded};
@@ -238,8 +242,10 @@ void exhaustiveAppendTruthTable() {
       check(plan.consumeRepresentedPending ==
                 (valid && succeeded),
             "only accepted append consumes represented pending");
-      check(plan.recordDurable == (valid && succeeded),
-            "only accepted append becomes durable");
+      const bool accepted = valid && succeeded;
+      check(plan.recordDurable == accepted &&
+                (!plan.recordDurable || plan.next == pe::AppendSettlement::Accepted),
+            "only an accepted append publishes a durable record");
       if (!valid) {
         check(plan.next == phase && !plan.consumeRepresentedPending,
               "repeated/contradictory settlement fails closed");
@@ -304,6 +310,24 @@ void exhaustiveAppendTruthTable() {
   check(discarded.valid && !discarded.consumeRepresentedPending &&
             pending.size() == 1u,
         "discard never consumes pending");
+
+  // A durable key alone is insufficient evidence after a newer write.  The
+  // model's safety relation carries the value and write ordinal in the same
+  // token, so this deliberately stale durable row cannot settle the newer
+  // pending result even though both rows have the same qualified key.
+  using Token = std::tuple<QualifiedKey, int, int>;
+  const QualifiedKey render7{0u, 7u};
+  const std::set<Token> olderDurable{{render7, 10, 1}};
+  const std::set<Token> newerValueSameOrdinal{{render7, 11, 1}};
+  const std::set<Token> newerOrdinalSameValue{{render7, 10, 2}};
+  check(!std::includes(olderDurable.begin(), olderDurable.end(),
+                       newerValueSameOrdinal.begin(),
+                       newerValueSameOrdinal.end()),
+        "qualified pending token rejects an older durable value");
+  check(!std::includes(olderDurable.begin(), olderDurable.end(),
+                       newerOrdinalSameValue.begin(),
+                       newerOrdinalSameValue.end()),
+        "qualified pending token rejects an older durable ordinal");
 }
 
 }  // namespace

@@ -106,6 +106,15 @@ bridge_ops_spec = executable(
 
 test('dxmt9-bridge-ops-spec', bridge_ops_spec)
 
+# Codegen-owned ABI fingerprint coverage: declaration order and pointed POD
+# record mutations must invalidate the handshake, while identical schemas stay
+# deterministic. The test uses temporary headers and never edits generated
+# build outputs.
+test('dxmt9-bridge-codegen-abi-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                       'tests/scripts/test_bridge_codegen_abi.py')],
+     env: dxmt9_native_test_env)
+
 bridge_marshalling_value_spec = executable(
   'dxmt9-bridge-marshalling-value-spec',
   'bridge_marshalling_value_spec.cpp',
@@ -396,6 +405,20 @@ test('dxmt9-pe-transition-algebra-spec',
      pe_transition_algebra_spec,
      env: dxmt9_native_test_env)
 
+pe_commit_transition_spec = executable(
+  'dxmt9-pe-commit-transition-spec',
+  ['pe_commit_transition_spec.cpp'],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-commit-transition-spec',
+     pe_commit_transition_spec,
+     env: dxmt9_native_test_env)
+
 pe_typed_slot_spec = executable(
   'dxmt9-pe-typed-slot-spec',
   ['pe_typed_slot_spec.cpp'],
@@ -408,6 +431,20 @@ pe_typed_slot_spec = executable(
 )
 test('dxmt9-pe-typed-slot-spec',
      pe_typed_slot_spec,
+     env: dxmt9_native_test_env)
+
+pe_stateblock_category_spec = executable(
+  'dxmt9-pe-stateblock-category-spec',
+  ['pe_stateblock_category_spec.cpp'],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-stateblock-category-spec',
+     pe_stateblock_category_spec,
      env: dxmt9_native_test_env)
 
 pe_producer_views_spec = executable(

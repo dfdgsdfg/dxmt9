@@ -5,6 +5,7 @@
 #include "util/config/config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -40,9 +41,8 @@ struct ConstShadow {
     // `out.vsConstF = peConsts_.vsConstF.values` wholesale
     // (d3d9_pe_device.cpp), and stateblock replay derives the restore
     // count directly from that vector's size
-    // (`saved_.vsConstF.size() / kFloatVecSize` in
-    // D3D9DeviceChildImpl::replaySavedShadow,
-    // d3d9_pe_device_child_misc.cpp) to call
+    // (`saved_.vsConstF.size() / kFloatVecSize` in the state-block Apply
+    // preparation path) to call
     // `SetVertexShaderConstantF(0, data, count)`. If this pre-sized
     // values up to the full register-file cap, every stateblock capture
     // would restore the whole cap's worth of registers -- including ones
@@ -98,28 +98,33 @@ struct PeConstShadowBlock {
 // Wrapper-owned state-block constant snapshot.  `trackedElems` fixes the
 // register set at EndStateBlock; Capture refreshes bytes for those registers
 // only and never grows the set.  Values are byte-shaped so all six D3D9
-// constant kinds share one allocation-free-after-reserve adapter.
+// constant kinds share one fixed-capacity, allocation-free adapter.
 struct StateBlockConstShadow {
-    std::vector<std::uint8_t> values;
-    std::vector<std::uint8_t> trackedElems;
+    static constexpr std::size_t kMaxBytes = 4096u;
+    static constexpr std::size_t kMaxElems = 256u;
+    std::array<std::uint8_t, kMaxBytes> values{};
+    std::array<std::uint8_t, kMaxElems> trackedElems{};
+    std::uint32_t valueSize = 0u;
+    std::uint32_t trackedSize = 0u;
 
-    void reserveCapacity(std::size_t byteCap, std::size_t elemCap) {
-        values.reserve(byteCap);
-        trackedElems.reserve(elemCap);
-    }
+    void reserveCapacity(std::size_t, std::size_t) noexcept {}
 
     void clear() noexcept {
-        values.clear();
-        trackedElems.clear();
+        valueSize = 0u;
+        trackedSize = 0u;
+        values.fill(0u);
+        trackedElems.fill(0u);
     }
 
     bool empty() const noexcept {
-        return std::none_of(trackedElems.begin(), trackedElems.end(),
+        return std::none_of(trackedElems.begin(), trackedElems.begin() + trackedSize,
                             [](std::uint8_t value) { return value != 0u; });
     }
 
+    std::size_t size() const noexcept { return valueSize; }
+
     bool contains(std::uint32_t reg) const noexcept {
-        return reg < trackedElems.size() && trackedElems[reg] != 0u;
+        return reg < trackedSize && trackedElems[reg] != 0u;
     }
 
     void record(std::uint32_t start, std::uint32_t count, const void* data,
@@ -129,12 +134,11 @@ struct StateBlockConstShadow {
         }
         const std::size_t end = static_cast<std::size_t>(start) + count;
         const std::size_t byteEnd = end * elemSize;
-        if (values.size() < byteEnd) {
-            values.resize(byteEnd);
-        }
-        if (trackedElems.size() < end) {
-            trackedElems.resize(end);
-        }
+        if (byteEnd > kMaxBytes || end > kMaxElems) return;
+        valueSize = std::max<std::uint32_t>(valueSize,
+                                            static_cast<std::uint32_t>(byteEnd));
+        trackedSize = std::max<std::uint32_t>(trackedSize,
+                                              static_cast<std::uint32_t>(end));
         std::memcpy(values.data() + static_cast<std::size_t>(start) * elemSize,
                     data, static_cast<std::size_t>(count) * elemSize);
         std::fill(trackedElems.begin() + start, trackedElems.begin() + end,
@@ -142,13 +146,13 @@ struct StateBlockConstShadow {
     }
 
     void refreshFrom(const ConstShadow& live, std::size_t elemSize) {
-        for (std::size_t reg = 0; reg < trackedElems.size(); ++reg) {
+        for (std::size_t reg = 0; reg < trackedSize; ++reg) {
             if (trackedElems[reg] == 0u) {
                 continue;
             }
             const std::size_t offset = reg * elemSize;
-            if (values.size() < offset + elemSize) {
-                values.resize(offset + elemSize);
+            if (valueSize < offset + elemSize) {
+                valueSize = static_cast<std::uint32_t>(offset + elemSize);
             }
             if (live.values.size() >= offset + elemSize) {
                 std::memcpy(values.data() + offset,
@@ -162,15 +166,15 @@ struct StateBlockConstShadow {
     template<typename Fn>
     bool forEachRange(std::size_t elemSize, Fn&& fn) const {
         std::size_t begin = 0u;
-        while (begin < trackedElems.size()) {
-            while (begin < trackedElems.size() && trackedElems[begin] == 0u) {
+        while (begin < trackedSize) {
+            while (begin < trackedSize && trackedElems[begin] == 0u) {
                 ++begin;
             }
-            if (begin == trackedElems.size()) {
+            if (begin == trackedSize) {
                 break;
             }
             std::size_t end = begin + 1u;
-            while (end < trackedElems.size() && trackedElems[end] != 0u) {
+            while (end < trackedSize && trackedElems[end] != 0u) {
                 ++end;
             }
             if (!fn(static_cast<std::uint32_t>(begin),

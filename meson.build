@@ -16,7 +16,8 @@ dxmt9_inc = include_directories('include')
 bridge_gen_inc = include_directories('.')
 
 # Code-gen for the PE-to-unixlib wine_unix_call bridge. Reads the device_c C ABI
-# header + the winemetal unix schema and emits the per-op bridge tables.
+# header, the winemetal unix schema, and shader/thunk POD declarations and
+# emits the per-op bridge tables plus the ABI fingerprint.
 # The .generated.cpp files are consumed by the PE-side d3d9 forwarder
 # (client) and the unix-side winemetal.so dispatch (server).
 python3 = find_program('python3', required: true)
@@ -53,6 +54,7 @@ bridge_codegen = custom_target(
   ],
   depend_files: files(
     'src/winemetal/winemetal_unix_schema.h',
+    'src/winemetal/winemetal_thunks.hpp',
     'scripts/codegen/gen_wine_bridge.py',
     'scripts/codegen/extract_device_c_schema.py',
   ),
