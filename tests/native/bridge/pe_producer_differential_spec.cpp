@@ -92,11 +92,7 @@ void check(bool condition, const std::string& message) {
 
 // --- object identity -------------------------------------------------------
 //
-// cacheWireObjectRef publishes into the same cache the legacy shim resolves
-// through (lookupCachedWireObjectRef), so a ref built this way is visible to
-// BOTH lanes. A bare PeWireObjectRef that skipped publication would make every
-// legacy-lane fixture with a bound object fail on handle resolution, which
-// looks like disagreement but is really an unprepared fixture.
+// Mirror the kind-qualified refs cached by production child wrappers.
 
 std::uint64_t nextObjectId = 1u;
 
@@ -110,15 +106,27 @@ std::uint64_t nextObjectId = 1u;
 // object down to the last one published, while the direct lane carries each
 // distinct ref and the builder cannot dedupe them. That shows up as a handle
 // count mismatch with identical payload bytes.
+template <typename Object> struct LocalRefFor;
+template <> struct LocalRefFor<D9CTexture> { using type = pe::TextureRef; };
+template <> struct LocalRefFor<D9CBuffer> { using type = pe::BufferRef; };
+template <> struct LocalRefFor<D9CShader> { using type = pe::ShaderRef; };
+template <> struct LocalRefFor<D9CSurface> { using type = pe::SurfaceRef; };
+template <> struct LocalRefFor<D9CVertexDecl> {
+  using type = pe::DeclarationRef;
+};
+
 template <typename Object>
-pe::PeWireObjectRef publishedRef(Object* object, std::uint32_t kind) {
-  static std::vector<std::pair<Object*, pe::PeWireObjectRef>> cache;
+using LocalRefForT = typename LocalRefFor<Object>::type;
+
+template <typename Object>
+LocalRefForT<Object> publishedRef(Object* object, std::uint32_t kind) {
+  static std::vector<std::pair<Object*, LocalRefForT<Object>>> cache;
   for (const auto& entry : cache) {
     if (entry.first == object) {
       return entry.second;
     }
   }
-  pe::PeWireObjectRef ref{};
+  LocalRefForT<Object> ref{};
   const auto id = ++nextObjectId;
   const auto getter = [kind, id](Object*, D9CWireObjectIdentity* identity) {
     *identity = D9CWireObjectIdentity{
@@ -136,13 +144,13 @@ pe::PeWireObjectRef publishedRef(Object* object, std::uint32_t kind) {
 
 // Same shape, never published: the legacy lane cannot resolve it.
 template <typename Object>
-pe::PeWireObjectRef unpublishedRef(Object* object, std::uint32_t kind) {
-  return pe::PeWireObjectRef{
-      .identity = D9CWireObjectIdentity{.kind = kind,
-                                        .generation = 3u,
-                                        .objectId = 0xdead0000ull},
-      .object = object,
-  };
+LocalRefForT<Object> unpublishedRef(Object* object, std::uint32_t kind) {
+  LocalRefForT<Object> ref{};
+  ref.identity = D9CWireObjectIdentity{.kind = kind,
+                                       .generation = 3u,
+                                       .objectId = 0xdead0000ull};
+  ref.object = object;
+  return ref;
 }
 
 // Shared stub objects. Distinct addresses matter: the cache is keyed on the
@@ -444,7 +452,7 @@ void emptyDelta() {
 void singleRenderStateDirty() {
   Fixture f;
   f.name = "one render state dirty";
-  f.shadow.pendingRenderStates.set(7u, 1u);
+  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
   requirePinnedOutput(f);
 }
 
@@ -462,7 +470,7 @@ void scalarCategoriesDirty() {
 void everyCategoryDirty() {
   Fixture f;
   f.name = "every category dirty";
-  f.shadow.pendingRenderStates.set(7u, 1u);
+  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
   f.shadow.pendingTextureMask = 0x1u;
   f.shadow.pendingStreamMask = 0x1u;
   f.shadow.pendingVs = true;
@@ -475,9 +483,15 @@ void everyCategoryDirty() {
   f.shadow.pendingLightSlotMask = 0x1u;
   f.shadow.pendingLightEnableValidMask = 0x1u;
   f.shadow.pendingLightEnableMask = 0x1u;
-  f.shadow.pendingTss.set(0u, 1u, 42u);
-  f.shadow.pendingSamplerStates.set(0u, 1u, 7u);
-  f.shadow.pendingTransforms.set(kD3dTsView, identityTransformMatrix());
+  f.shadow.pendingTssTyped().set(textureStageIndexKey(0u),
+                                 textureStageStateTypeKey(1u), 42u);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(0u, sampler) && samplerStateTypeKey(1u, samplerType),
+        "fixture sampler key must be valid");
+  f.shadow.pendingSamplerStatesTyped().set(sampler, samplerType, 7u);
+  f.shadow.pendingTransformsTyped().set(transformStateKey(kD3dTsView),
+                                        identityTransformMatrix());
   f.bindings.textures[0] = publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
   f.bindings.streams[0].buffer =
       publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
@@ -505,7 +519,8 @@ void renderStatesAtCap() {
   f.name = "render states at the section cap";
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_STATES;
        ++slot) {
-    f.shadow.pendingRenderStates.set(slot, slot + 1u);
+    f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot),
+                                            slot + 1u);
   }
   requirePinnedOutput(f);
 }
@@ -518,7 +533,8 @@ void renderStatesOverCapFails() {
   // really do over-fill rather than being silently dropped by the table.
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
        ++slot) {
-    f.shadow.pendingRenderStates.set(slot, slot + 1u);
+    f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot),
+                                            slot + 1u);
   }
   // Over-cap must be refused, never silently truncated -- a truncated section
   // would drop render states the app set.
@@ -551,7 +567,7 @@ void fullSnapshotMode() {
   Fixture f;
   f.name = "forced full snapshot";
   f.forceFullSnapshot = true;
-  f.shadow.renderStateShadow.set(3u, 9u);
+  f.shadow.renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
     f.bindings.textures[i] =
         publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
@@ -620,15 +636,23 @@ void snapshotDrainsEveryTable() {
   Fixture f;
   f.name = "snapshot drains tss, sampler, transform and light shadows";
   f.forceFullSnapshot = true;
-  f.shadow.renderStateShadow.set(3u, 9u);
-  f.shadow.tssShadow.set(0u, 1u, 11u);
-  f.shadow.tssShadow.set(2u, 4u, 22u);
-  f.shadow.samplerStateShadow.set(1u, 2u, 33u);
+  f.shadow.renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
+  f.shadow.tssShadowTyped().set(textureStageIndexKey(0u),
+                                textureStageStateTypeKey(1u), 11u);
+  f.shadow.tssShadowTyped().set(textureStageIndexKey(2u),
+                                textureStageStateTypeKey(4u), 22u);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(1u, sampler) && samplerStateTypeKey(2u, samplerType),
+        "fixture sampler key must be valid");
+  f.shadow.samplerStateShadowTyped().set(sampler, samplerType, 33u);
   // FixedTransformTable::set takes a STATE, not a slot: 0 and 1 are not valid
   // D3DTRANSFORMSTATETYPE values, so slotForState rejects them and the set is a
   // silent no-op. Use the real mirrored constants (VIEW=2, PROJECTION=3).
-  f.shadow.transformShadow.set(kD3dTsView, identityTransformMatrix());
-  f.shadow.transformShadow.set(kD3dTsProjection, identityTransformMatrix());
+  f.shadow.transformShadowTyped().set(transformStateKey(kD3dTsView),
+                                      identityTransformMatrix());
+  f.shadow.transformShadowTyped().set(transformStateKey(kD3dTsProjection),
+                                      identityTransformMatrix());
   // lightEnableShadow is the snapshot source; pendingLightEnableMask is the
   // delta source. Make them DIFFER so reading the wrong one is visible.
   f.shadow.lightEnableShadow = 0x5u;
@@ -875,6 +899,116 @@ void inlineConstDeltaSingleRange() {
   requirePinnedOutput(f);
 }
 
+void inlineConstAppendFailurePreservesDirtyRange() {
+  Fixture f = baseDraw("inline const append failure retry",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  auto& range = f.constants.vsConstF;
+  range.values.assign(16u, 0x5au);
+  range.dirtyElems.assign(1u, 1u);
+  range.dirtyStart = 0u;
+  range.dirtyEnd = 1u;
+
+  PeConstShadowBlock constants = f.constants;
+  pe::PeSparseScratch scratch{};
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  check(pe::buildSparseState(f.shadow, constants, f.bindings, f.payloads,
+                             f.params, false, true, scratch, header, state),
+        "inline constant preparation must succeed");
+  check(constants.vsConstF.dirty(),
+        "preparation must not consume the dirty constant range");
+
+  pe::CommandChunkBuilder builder;
+  check(builder.beginRecord(D9C_COMMAND_RECORD_CLEAR),
+        "failure injection occupies the builder's active record");
+  check(!pe::appendSparseRecord(builder, f.params.recordType, header, state),
+        "active-record injection must reject the draw append");
+  check(constants.vsConstF.dirty() &&
+            constants.vsConstF.dirtyStart == 0u &&
+            constants.vsConstF.dirtyEnd == 1u,
+        "failed append must preserve exact constant retry input");
+
+  builder.rollbackRecord();
+  check(pe::appendSparseRecord(builder, f.params.recordType, header, state),
+        "retry must accept the same prepared range exactly once");
+  check(pe::acceptInlineConstantDelta(
+            constants, state,
+            pe::settleRecorderAppend({
+                .phase = pe::AppendSettlement::Prepared,
+                .appendSucceeded = true,
+            })),
+        "accepted record must settle its prepared constant range");
+  check(!constants.vsConstF.dirty(),
+        "accepted retry consumes the dirty constant range");
+}
+
+void sparseSettlementNormalAndOversizedAreExact() {
+  Fixture f = baseDraw("settlement-only fixture",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(2u), 20u);
+  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 70u);
+  f.shadow.pendingTextureMask = 1u << 3u;
+  f.shadow.pendingViewport = true;
+  f.inlineConstDelta = true;
+  std::uint32_t constant[4] = {1u, 2u, 3u, 4u};
+  touchConstShadow(f.constants.vsConstF, 5u, 1u, constant,
+                   sizeof(constant));
+
+  PeConstShadowBlock constants = f.constants;
+  PeHotStateShadow shadow = f.shadow;
+  pe::PeSparseScratch scratch{};
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  check(pe::buildSparseState(shadow, constants, f.bindings, f.payloads,
+                             f.params, false, true, scratch, header, state),
+        "normal settlement fixture prepares");
+  const auto failed = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = false,
+  });
+  check(!pe::acceptPreparedSparseState(shadow, constants, state, failed) &&
+            shadow.pendingRenderStatesTyped().size() == 2u &&
+            shadow.pendingTextureMask == (1u << 3u) &&
+            shadow.pendingViewport && constants.vsConstF.dirty(),
+        "failed normal settlement retains every represented owner");
+
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  check(pe::acceptPreparedSparseState(shadow, constants, state, accepted) &&
+            shadow.pendingRenderStatesTyped().empty() &&
+            shadow.pendingTextureMask == 0u && !shadow.pendingViewport &&
+            !constants.vsConstF.dirty(),
+        "accepted normal settlement consumes exactly represented owners");
+  check(!pe::acceptPreparedSparseState(
+            shadow, constants, state,
+            pe::settleRecorderAppend({
+                .phase = accepted.next,
+                .appendSucceeded = true,
+            })),
+        "normal sparse projection cannot settle twice");
+
+  PeHotStateShadow oversized{};
+  auto pending = oversized.pendingRenderStatesTyped();
+  constexpr std::uint32_t total =
+      D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
+  for (std::uint32_t i = 0u; i < total; ++i) {
+    pending.set(renderStateSlotKey(i), i + 100u);
+  }
+  std::array<D9CCommandChunkWireRenderState,
+             D9C_DRAW_PACKET_MAX_RENDER_STATES> rows{};
+  const std::size_t count = oversized.prepareRenderStateBatch(rows);
+  pe::SparseStateInput oversizedState{};
+  oversizedState.renderStates = std::span(rows).first(count);
+  PeConstShadowBlock emptyConstants{};
+  check(pe::acceptPreparedSparseState(
+            oversized, emptyConstants, oversizedState, accepted) &&
+            pending.size() == 1u &&
+            pending.contains(renderStateSlotKey(total - 1u)),
+        "oversized settlement uses the same exact represented-set acceptance");
+}
+
 // --- fixed-seed randomized corpus -----------------------------------------
 
 // --- UP draw records -------------------------------------------------------
@@ -920,7 +1054,7 @@ void upDrawCarriesVertexPayload() {
 void upDrawWithDirtyState() {
   Fixture f = baseUpDraw("UP draw, inline payload plus dirty render state",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
-  f.shadow.pendingRenderStates.set(7u, 3u);
+  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 3u);
   requirePinnedOutput(f);
 }
 
@@ -1024,8 +1158,8 @@ void randomizedRecordSequences() {
     const std::uint32_t stateCount =
         rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
     for (std::uint32_t k = 0; k < stateCount; ++k) {
-      f.shadow.pendingRenderStates.set(
-          rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES, rng());
+      const auto slot = rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
+      f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot), rng());
     }
     f.shadow.pendingTextureMask =
         rng() & ((1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u);
@@ -1137,6 +1271,8 @@ int main() {
     indexBufferPendingOnly();
     inlineConstDeltaAllSixRanges();
     inlineConstDeltaSingleRange();
+    inlineConstAppendFailurePreservesDirtyRange();
+    sparseSettlementNormalAndOversizedAreExact();
     upDrawCarriesVertexPayload();
     upDrawWithDirtyState();
     upIndexedDrawCarriesBothPayloads();

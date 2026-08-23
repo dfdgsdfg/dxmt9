@@ -3,6 +3,7 @@
 #include "d3d9_pe.hpp"
 
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_diagnostic_observer.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
@@ -10,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -18,27 +20,21 @@
 #define DXMT9_PE_CALLSITE_PC() nullptr
 #endif
 
-// Opaque register-sized handle to one entry sample of the PE call-tracking
-// diagnostic (DXMT9_PE_RECORDER_STATS). The sample itself is a ~96-byte record
-// owned by d3d9_pe_device.cpp; only this index crosses a hot-path signature.
-// See "Observer boundary" in agents/rules/codebase_conventions.rules.md.
-using D3D9PePresentCallSlot = std::uint32_t;
-static constexpr D3D9PePresentCallSlot kD3D9PePresentCallSlotNone =
-    static_cast<D3D9PePresentCallSlot>(-1);
-
 // PE-side snapshot taken by D3D9StateBlockImpl::Capture(). Lives entirely in
 // the PE process; never crosses the unix boundary. Holds enough state to
 // restore the transforms / shader constants / vertex declaration the test
 // suite checks via IDirect3DStateBlock9 round-trips. AddRef policy: vdecl is
 // AddRef'd by the snapshot owner; release in the destructor and on overwrite.
 struct D3D9StateBlockShadow {
-  FixedTransformTable transforms{};
-  std::vector<std::uint8_t> vsConstF;
-  std::vector<std::uint8_t> vsConstI;
-  std::vector<std::uint8_t> vsConstB;
-  std::vector<std::uint8_t> psConstF;
-  std::vector<std::uint8_t> psConstI;
-  std::vector<std::uint8_t> psConstB;
+ private:
+  FixedStateTable<kPeRenderStateSlots> renderStates_{};
+  FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots>
+      textureStageStates_{};
+  FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
+  FixedTransformTable transforms_{};
+
+ public:
+  PeStateBlockConstRecorded constants{};
   bool hasVdecl = false;
   IDirect3DVertexDeclaration9 *vdecl = nullptr;
 
@@ -48,9 +44,39 @@ struct D3D9StateBlockShadow {
   // D3D9StateBlockImpl::Capture() call (which only refreshes values of
   // already-tracked keys).
   bool initialized = false;
+
+  RenderStateTableView renderStates() noexcept {
+    return RenderStateTableView(renderStates_);
+  }
+  ConstRenderStateTableView renderStates() const noexcept {
+    return ConstRenderStateTableView(renderStates_);
+  }
+  TssTableView textureStageStates() noexcept {
+    return TssTableView(textureStageStates_);
+  }
+  ConstTssTableView textureStageStates() const noexcept {
+    return ConstTssTableView(textureStageStates_);
+  }
+  SamplerStateTableView samplerStates() noexcept {
+    return SamplerStateTableView(samplerStates_);
+  }
+  ConstSamplerStateTableView samplerStates() const noexcept {
+    return ConstSamplerStateTableView(samplerStates_);
+  }
+  TypedTransformTableView transforms() noexcept {
+    return TypedTransformTableView(transforms_);
+  }
+  ConstTypedTransformTableView transforms() const noexcept {
+    return ConstTypedTransformTableView(transforms_);
+  }
 };
 
 struct D3D9PeRecorderFlush {
+  // Child wrappers are owned by the D3D9 device/COM contract and therefore
+  // use ordinary non-atomic ULONG refs in their PE implementation.  Backend
+  // chunk pins are independent private retains.  D3D9StateBlockImpl is the
+  // documented exception: its snapshot can be owned through independent
+  // device/child paths and uses an atomic counter in its implementation.
   virtual HRESULT FlushPeRecorderForChild() = 0;
   virtual bool IsStateBlockRecordingForChild() const = 0;
   virtual void InvalidateStateBlockShadowForChild() = 0;
@@ -64,21 +90,8 @@ struct D3D9PeRecorderFlush {
   // child record.
   virtual HRESULT AppendQueryIssueForChild(
       std::uint32_t flags,
-      const dxmt9::d3d9::pe::PeWireObjectRef &query) = 0;
+      const dxmt9::d3d9::pe::QueryRef &query) = 0;
   virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
-  // PE call-tracking diagnostic (DXMT9_PE_RECORDER_STATS). No diagnostic
-  // payload type crosses this interface: the fire-and-forget entry note returns
-  // nothing, and a call that also wants the paired return log takes a
-  // register-sized slot handle into the device's own sample storage. Every one
-  // of these is a single cached-bool test when tracking is off.
-  virtual void NotifyPeFirstCallAfterPresentForChild(
-      const char *callName, const void *callerPc = nullptr) noexcept = 0;
-  virtual D3D9PePresentCallSlot PushPeCallScopeForChild(
-      const char *callName, const void *callerPc) noexcept = 0;
-  virtual void NotifyPeCallScopeReturnForChild(D3D9PePresentCallSlot slot,
-                                               const char *callName,
-                                               HRESULT hr) noexcept = 0;
-  virtual void PopPeCallScopeForChild(D3D9PePresentCallSlot slot) noexcept = 0;
   virtual void NotifyRenderTapeObjectDefineForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &object,
       std::span<const std::byte> descriptor,
@@ -131,51 +144,66 @@ struct D3D9PeRecorderFlush {
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM
   // pointers. The caller (D3D9StateBlockImpl) owns the resulting shadow and
   // is responsible for Release on destruction.
-  virtual void CaptureStateBlockShadowForChild(D3D9StateBlockShadow &out) = 0;
+  virtual HRESULT CaptureStateBlockShadowForChild(
+      D3D9StateBlockShadow &out) = 0;
 
 protected:
   ~D3D9PeRecorderFlush() = default;
 };
 
-// RAII scope for the child wrappers whose entry note is paired with a return
-// log. Off (the default) it is one virtual call that answers "not tracked" from
-// a cached bool, and the object is two words; nothing is constructed, copied,
-// or torn down. On, the entry sample lives in the device's own storage and this
-// holds only its slot handle, so the ~96-byte record never rides a wrapper's
-// call frame or signature. The destructor releases the slot, so an early return
-// that skips finish() leaks nothing; finish() is a no-op for an untracked
-// scope, which reproduces the pre-scope behaviour of "no entry note, no return
-// log". See "Observer boundary" in agents/rules/codebase_conventions.rules.md.
+// Enabled-only RAII scope for tracked child calls. Entry helpers branch on the
+// wrapper's cached nullable concrete observer before this object's lifetime
+// begins, so the disabled edge constructs no scope and performs no diagnostic
+// token work or D3D9PeRecorderFlush virtual dispatch.
 class D3D9PeChildCallScope {
 public:
-  D3D9PeChildCallScope(D3D9PeRecorderFlush *recorder, const char *callName,
+  D3D9PeChildCallScope(D3D9PeDiagnosticObserver &observer,
+                       const char *callName,
                        const void *callerPc) noexcept {
-    if (!recorder)
-      return;
     const D3D9PePresentCallSlot slot =
-        recorder->PushPeCallScopeForChild(callName, callerPc);
+        observer.pushCallScope(callName, callerPc);
     if (slot == kD3D9PePresentCallSlotNone)
       return;
-    recorder_ = recorder;
+    observer_ = &observer;
     slot_ = slot;
   }
   D3D9PeChildCallScope(const D3D9PeChildCallScope &) = delete;
   D3D9PeChildCallScope &operator=(const D3D9PeChildCallScope &) = delete;
   ~D3D9PeChildCallScope() noexcept {
-    if (recorder_)
-      recorder_->PopPeCallScopeForChild(slot_);
+    if (observer_)
+      observer_->popCallScope(slot_);
   }
 
   HRESULT finish(const char *callName, HRESULT hr) noexcept {
-    if (recorder_)
-      recorder_->NotifyPeCallScopeReturnForChild(slot_, callName, hr);
+    if (observer_)
+      observer_->notifyCallScopeReturn(slot_, callName, hr);
     return hr;
   }
 
 private:
-  D3D9PeRecorderFlush *recorder_ = nullptr;
+  D3D9PeDiagnosticObserver *observer_ = nullptr;
   D3D9PePresentCallSlot slot_ = kD3D9PePresentCallSlotNone;
 };
+
+struct D3D9PeNullChildCallScope {
+  HRESULT finish(const char *, HRESULT hr) const noexcept {
+    return hr;
+  }
+};
+
+inline constexpr D3D9PeNullChildCallScope d3d9PeNullChildCallScope{};
+
+template<typename Body>
+__attribute__((always_inline))
+inline HRESULT d3d9PeWithChildCallScope(
+    D3D9PeDiagnosticObserver *observer, const char *callName,
+    const void *callerPc, Body &&body) noexcept {
+  if (!observer) {
+    return std::forward<Body>(body)(d3d9PeNullChildCallScope);
+  }
+  D3D9PeChildCallScope peCall(*observer, callName, callerPc);
+  return std::forward<Body>(body)(peCall);
+}
 
 // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when userMemory is non-null
 // the wrapper aliases the caller-supplied buffer in LockRect and skips the
@@ -187,26 +215,32 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,
                                    IUnknown *container,
                                    D3D9PeRecorderFlush *recorder = nullptr,
+                                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
                                    bool trackDefaultPool = true,
                                    void *userMemory = nullptr,
                                    int32_t userMemoryPitch = 0);
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
                                    D3D9PeRecorderFlush *recorder = nullptr,
+                                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
                                    void *userMemory = nullptr,
                                    int32_t userMemoryPitch = 0);
 IDirect3DVolumeTexture9 *
 CreatePeVolumeTexture(D9CTexture *texture, IDirect3DDevice9 *device,
-                      D3D9PeRecorderFlush *recorder = nullptr);
+                      D3D9PeRecorderFlush *recorder = nullptr,
+                      D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DCubeTexture9 *
 CreatePeCubeTexture(D9CTexture *texture, IDirect3DDevice9 *device,
-                    D3D9PeRecorderFlush *recorder = nullptr);
+                    D3D9PeRecorderFlush *recorder = nullptr,
+                    D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DVertexBuffer9 *
 CreatePeVertexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
-                     D3D9PeRecorderFlush *recorder = nullptr);
+                     D3D9PeRecorderFlush *recorder = nullptr,
+                     D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DIndexBuffer9 *
 CreatePeIndexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
-                    D3D9PeRecorderFlush *recorder = nullptr);
+                    D3D9PeRecorderFlush *recorder = nullptr,
+                    D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
                                              IDirect3DDevice9 *device,
                                              std::uint64_t hash,
@@ -219,44 +253,47 @@ IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
                                                 IDirect3DDevice9 *device,
                                                 D3D9PeRecorderFlush *recorder = nullptr);
 IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
-                               D3D9PeRecorderFlush *recorder = nullptr);
+                               D3D9PeRecorderFlush *recorder = nullptr,
+                               D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DStateBlock9 *
 CreatePeStateBlock(D9CStateBlock *stateBlock, IDirect3DDevice9 *device,
-                   D3D9PeRecorderFlush *recorder = nullptr);
+                   D3D9PeRecorderFlush *recorder = nullptr,
+                   D3D9PeDiagnosticObserver *diagnostics = nullptr);
 IDirect3DSwapChain9Ex *
 CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   D3D9PeRecorderFlush *recorder = nullptr,
+                  D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   bool extended = false,
                   DWORD presentFlagsShadow = 0);
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::SurfaceRef &
 D3D9PeWireSurface(IDirect3DSurface9 *surface);
 // True when the PE wrapper currently has a successful Lock outstanding.
 // Used by IDirect3DDevice9::UpdateSurface to enforce the wined3d invariant
 // that the source surface must not be locked when the copy is initiated.
 bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface);
 D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::TextureRef &
 D3D9PeWireTexture(IDirect3DBaseTexture9 *texture);
 D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer);
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::BufferRef &
 D3D9PeWireVertexBuffer(IDirect3DVertexBuffer9 *buffer);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::BufferRef &
 D3D9PeWireIndexBuffer(IDirect3DIndexBuffer9 *buffer);
 void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer);
 D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader);
 D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::ShaderRef &
 D3D9PeWireVertexShader(IDirect3DVertexShader9 *shader);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::ShaderRef &
 D3D9PeWirePixelShader(IDirect3DPixelShader9 *shader);
 std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader);
 std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader);
 D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::DeclarationRef &
 D3D9PeWireVertexDecl(IDirect3DVertexDeclaration9 *decl);
 D9CQuery *D3D9PeRawQuery(IDirect3DQuery9 *query);
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::QueryRef &
 D3D9PeWireQuery(IDirect3DQuery9 *query);

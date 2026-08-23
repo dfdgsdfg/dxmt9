@@ -77,6 +77,20 @@ pe_thread_sampler_spec = executable(
 
 test('dxmt9-pe-thread-sampler-spec', pe_thread_sampler_spec)
 
+pe_diagnostics_spec = executable(
+  'dxmt9-pe-diagnostics-spec',
+  'pe_diagnostics_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-diagnostics-spec',
+     pe_diagnostics_spec,
+     args: [meson.project_source_root()])
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',
@@ -366,6 +380,20 @@ pe_shadow_native_spec = executable(
 )
 test('dxmt9-pe-shadow-native-spec',
      pe_shadow_native_spec,
+     env: dxmt9_native_test_env)
+
+pe_transition_algebra_spec = executable(
+  'dxmt9-pe-transition-algebra-spec',
+  ['pe_transition_algebra_spec.cpp'],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-transition-algebra-spec',
+     pe_transition_algebra_spec,
      env: dxmt9_native_test_env)
 
 pe_typed_slot_spec = executable(

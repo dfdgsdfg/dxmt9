@@ -29,49 +29,122 @@ namespace {
 
 }  // namespace
 
-void D3D9DeviceImpl::CaptureStateBlockShadowForChild(D3D9StateBlockShadow& out) {
+HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
+    D3D9StateBlockShadow& out) {
+  try {
     const bool initialSnapshot = !out.initialized;
     if (initialSnapshot) {
-        // Called from D3D9StateBlockImpl ctor.
-        // Begin/End path (insideEndStateBlock_): take the recorded
-        // set verbatim — even if it is empty (the block tracked no
-        // transforms; Apply is a no-op for transforms).
-        // CreateStateBlock path: capture the entire live shadow.
-        if (insideEndStateBlock_) {
-            out.transforms = peState_.stateBlockTransformRecorded;
-        } else {
-            out.transforms = peState_.transformShadow;
-        }
-        out.initialized = true;
-    } else {
-        // Refresh mode (mid-game D3D9StateBlockImpl::Capture()).
-        // The set of tracked transform keys is FIXED at ctor;
-        // Capture() only refreshes their values from the live
-        // shadow. Keys absent from out.transforms (e.g. a block
-        // whose End-time recorded set was empty because everything
-        // was MultiplyTransform) stay absent — Apply will not
-        // touch them.
-        FixedTransformTable refreshed{};
-        out.transforms.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
-            D9CMatrix latest{};
-            if (peState_.transformShadowTyped().get(transformStateKey(state), latest)) {
-                refreshed.set(state, latest);
-            } else {
-                // Server lost the binding (e.g. Reset); keep the
-                // previously-captured value as a best-effort fallback.
-                D9CMatrix prior{};
-                out.transforms.get(state, prior);
-                refreshed.set(state, prior);
-            }
+        out.renderStates().clear();
+        out.textureStageStates().clear();
+        out.samplerStates().clear();
+        out.transforms().clear();
+        const auto renderSource = insideEndStateBlock_
+            ? stateBlockState_.renderStates()
+            : peState_.renderStateShadowTyped();
+        renderSource.forEach([&](RenderStateSlot state, std::uint32_t value) {
+            out.renderStates().set(state, value);
         });
-        out.transforms = refreshed;
+        const auto tssSource = insideEndStateBlock_
+            ? stateBlockState_.textureStageStates()
+            : peState_.tssShadowTyped();
+        tssSource.forEach(
+            [&](TextureStageIndex stage, TextureStageStateType type,
+                std::uint32_t value) {
+                out.textureStageStates().set(stage, type, value);
+            });
+        const auto samplerSource = insideEndStateBlock_
+            ? stateBlockState_.samplerStates()
+            : peState_.samplerStateShadowTyped();
+        samplerSource.forEach(
+            [&](SamplerIndex sampler, SamplerStateType type,
+                std::uint32_t value) {
+                out.samplerStates().set(sampler, type, value);
+            });
+        const auto transformSource = insideEndStateBlock_
+            ? stateBlockState_.transforms()
+            : peState_.transformShadowTyped();
+        transformSource.forEach([&](TransformState state, const D9CMatrix& value) {
+            out.transforms().set(state, value);
+        });
+
+        out.constants.clearForBegin();
+        if (insideEndStateBlock_) {
+            out.constants = stateBlockConsts_;
+        } else {
+            const auto copyLive = [](const ConstShadow& live,
+                                     StateBlockConstShadow& destination,
+                                     std::size_t elemSize) {
+                const auto count = static_cast<std::uint32_t>(
+                    live.values.size() / elemSize);
+                if (count != 0u) {
+                    destination.record(0u, count, live.values.data(), elemSize);
+                }
+            };
+            copyLive(peConsts_.vsConstF, out.constants.vsConstF,
+                     sizeof(float) * 4u);
+            copyLive(peConsts_.vsConstI, out.constants.vsConstI,
+                     sizeof(std::int32_t) * 4u);
+            copyLive(peConsts_.vsConstB, out.constants.vsConstB,
+                     sizeof(std::uint32_t));
+            copyLive(peConsts_.psConstF, out.constants.psConstF,
+                     sizeof(float) * 4u);
+            copyLive(peConsts_.psConstI, out.constants.psConstI,
+                     sizeof(std::int32_t) * 4u);
+            copyLive(peConsts_.psConstB, out.constants.psConstB,
+                     sizeof(std::uint32_t));
+        }
+    } else {
+        out.renderStates().forEach(
+            [&](RenderStateSlot state, std::uint32_t /*prior*/) {
+                std::uint32_t latest = 0u;
+                if (!peState_.renderStateShadowTyped().get(state, latest)) {
+                    latest = dxmt9c_device_get_render_state(dev_, rawSlot(state));
+                }
+                out.renderStates().set(state, latest);
+            });
+        out.textureStageStates().forEach(
+            [&](TextureStageIndex stage, TextureStageStateType type,
+                std::uint32_t /*prior*/) {
+                std::uint32_t latest = 0u;
+                if (!peState_.tssShadowTyped().get(stage, type, latest)) {
+                    latest = dxmt9c_device_get_texture_stage_state(
+                        dev_, rawSlot(stage), rawSlot(type));
+                }
+                out.textureStageStates().set(stage, type, latest);
+            });
+        out.samplerStates().forEach(
+            [&](SamplerIndex sampler, SamplerStateType type,
+                std::uint32_t /*prior*/) {
+                std::uint32_t latest = 0u;
+                if (!peState_.samplerStateShadowTyped().get(
+                        sampler, type, latest)) {
+                    latest = dxmt9c_device_get_sampler_state(
+                        dev_, rawSlot(sampler), rawSlot(type));
+                }
+                out.samplerStates().set(sampler, type, latest);
+            });
+        out.transforms().forEach(
+            [&](TransformState state, const D9CMatrix& /*prior*/) {
+            D9CMatrix latest{};
+            if (!peState_.transformShadowTyped().get(state, latest)) {
+                latest = identityTransformMatrix();
+                (void)dxmt9c_device_get_transform(dev_, rawSlot(state), &latest);
+            }
+            out.transforms().set(state, latest);
+        });
+        out.constants.vsConstF.refreshFrom(peConsts_.vsConstF,
+                                           sizeof(float) * 4u);
+        out.constants.vsConstI.refreshFrom(peConsts_.vsConstI,
+                                           sizeof(std::int32_t) * 4u);
+        out.constants.vsConstB.refreshFrom(peConsts_.vsConstB,
+                                           sizeof(std::uint32_t));
+        out.constants.psConstF.refreshFrom(peConsts_.psConstF,
+                                           sizeof(float) * 4u);
+        out.constants.psConstI.refreshFrom(peConsts_.psConstI,
+                                           sizeof(std::int32_t) * 4u);
+        out.constants.psConstB.refreshFrom(peConsts_.psConstB,
+                                           sizeof(std::uint32_t));
     }
-    out.vsConstF   = peConsts_.vsConstF.values;
-    out.vsConstI   = peConsts_.vsConstI.values;
-    out.vsConstB   = peConsts_.vsConstB.values;
-    out.psConstF   = peConsts_.psConstF.values;
-    out.psConstI   = peConsts_.psConstI.values;
-    out.psConstB   = peConsts_.psConstB.values;
     // vdecl tracking:
     //   - Initial snapshot, Begin/End path → track only if
     //     SetVertexDeclaration was called during recording.
@@ -81,7 +154,9 @@ void D3D9DeviceImpl::CaptureStateBlockShadowForChild(D3D9StateBlockShadow& out) 
     bool shouldTrackVdecl;
     if (initialSnapshot) {
         shouldTrackVdecl =
-            insideEndStateBlock_ ? peState_.stateBlockVdeclRecorded : true;
+            insideEndStateBlock_
+                ? stateBlockState_.vertexDeclarationRecorded
+                : true;
     } else {
         shouldTrackVdecl = out.hasVdecl;
     }
@@ -94,6 +169,11 @@ void D3D9DeviceImpl::CaptureStateBlockShadowForChild(D3D9StateBlockShadow& out) 
         vdecl_->AddRef();
         out.vdecl = vdecl_;
     }
+    out.initialized = true;
+    return S_OK;
+  } catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+  }
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::TestCooperativeLevel() noexcept {
@@ -267,7 +347,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateAdditionalSwapChain(
     cpp.presentationInterval = pPP->PresentationInterval;
     D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
     if (!sc) return D3DERR_INVALIDCALL;
-    *ppSC = CreatePeSwapChain(sc, this, this, extended_, pPP->Flags);
+    *ppSC = CreatePeSwapChain(sc, this, this, diagnosticObserverForChild(),
+                              extended_, pPP->Flags);
     // Wine d3d9 post-create mutation of pPP (additional swapchain only):
     //   * BackBufferCount=0 normalises to 1 (clamped to a documented
     //     minimum) and is written back to the caller's struct.
@@ -302,7 +383,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetSwapChain(UINT index,
     // and that path already sets the shadow. For lazy-created index-0
     // wrappers fall back to the device's captured implicit flags.
     const DWORD wrapperFlags = (index == 0) ? implicitSwapchainFlagsShadow_ : 0;
-    auto* wrapper = CreatePeSwapChain(sc, this, this, extended_, wrapperFlags);
+    auto* wrapper = CreatePeSwapChain(sc, this, this,
+                                      diagnosticObserverForChild(), extended_,
+                                      wrapperFlags);
     wrapper->AddRef();  // device retains one ref in the cache
     swapchainWrappers_.emplace(index,
             static_cast<IDirect3DSwapChain9*>(wrapper));
@@ -350,19 +433,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     if (defaultPoolResourceRefs_ != 0) {
         clearPeStateTracking();
         stateBlockRecording_ = false;
-        peState_.stateBlockRenderStateRestoreTyped().clear();
-        peState_.stateBlockTransformRestoreTyped().clear();
-        peState_.stateBlockTransformRecordedTyped().clear();
-        peState_.stateBlockVdeclRecorded = false;
+        stateBlockState_.clearForBegin();
         deviceNotReset_ = true;
         return D3DERR_INVALIDCALL;
     }
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    peState_.stateBlockRenderStateRestoreTyped().clear();
-    peState_.stateBlockTransformRestoreTyped().clear();
-    peState_.stateBlockTransformRecordedTyped().clear();
-    peState_.stateBlockVdeclRecorded = false;
+    stateBlockState_.clearForBegin();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
         deviceNotReset_ = false;
@@ -383,8 +460,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         peState_.pendingViewport = false;
         peState_.pendingScissor  = false;
     }
-    if (renderTapeCapture_ &&
-        renderTapeCapture_->state() ==
+    if (peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         const dxmt9::d3d9::RenderTapeResetControl payload{
             .reclaimedGeneration = 0u, .terminal = 1u};
@@ -494,8 +571,8 @@ void    STDMETHODCALLTYPE D3D9DeviceImpl::SetGammaRamp(UINT swapChain, DWORD fla
                         static_cast<const void*>(ramp));
     if (!ramp) return;
     const bool captureGamma =
-        renderTapeCapture_ &&
-        renderTapeCapture_->state() ==
+        peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing;
     if (captureGamma) {
         // A direct state mutation is an ordering boundary. Seal any
@@ -513,8 +590,8 @@ void    STDMETHODCALLTYPE D3D9DeviceImpl::SetGammaRamp(UINT swapChain, DWORD fla
     if (dev_) {
         dxmt9c_device_set_gamma_ramp(dev_, reinterpret_cast<const uint16_t*>(ramp));
     }
-    if (captureGamma && renderTapeCapture_ &&
-        renderTapeCapture_->state() ==
+    if (captureGamma && peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         const auto *bytes = reinterpret_cast<const std::byte *>(ramp);
         NotifyRenderTapeOrderedControlForChild(
@@ -586,7 +663,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateTexture(UINT w, UINT h, UINT lev
                                                   providerShared);
     if (!t) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
-    *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
+    *ppTex = CreatePeTexture(t, this, this, diagnosticObserverForChild(),
+                             userPtr, userPitch);
     notifyRenderTapeCreatedTexture(
         t, D3D9PeWireTexture(*ppTex),
         dxmt9::d3d9::RenderTapeTextureDimension::Texture2D);
@@ -629,7 +707,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVolumeTexture(UINT w, UINT h, UI
                                                          providerShared);
     if (!t) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
-    *ppTex = CreatePeVolumeTexture(t, this, this);
+    *ppTex = CreatePeVolumeTexture(t, this, this,
+                                   diagnosticObserverForChild());
     notifyRenderTapeCreatedTexture(
         t, D3D9PeWireTexture(*ppTex),
         dxmt9::d3d9::RenderTapeTextureDimension::Volume);
@@ -663,7 +742,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateCubeTexture(UINT size, UINT leve
                                                        providerShared);
     if (!t) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
-    *ppTex = CreatePeCubeTexture(t, this, this);
+    *ppTex = CreatePeCubeTexture(t, this, this,
+                                 diagnosticObserverForChild());
     notifyRenderTapeCreatedTexture(
         t, D3D9PeWireTexture(*ppTex),
         dxmt9::d3d9::RenderTapeTextureDimension::Cube);
@@ -693,7 +773,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVertexBuffer(UINT len, DWORD usa
                                                        providerShared);
     if (!b) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
-    *ppBuf = CreatePeVertexBuffer(b, this, this);
+    *ppBuf = CreatePeVertexBuffer(b, this, this,
+                                  diagnosticObserverForChild());
     notifyRenderTapeCreatedBuffer(b, D3D9PeWireVertexBuffer(*ppBuf));
     dxmt9DeviceDebugLog("device_create_vertex_buffer -> buffer=%p", *ppBuf);
     return S_OK;
@@ -722,7 +803,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateIndexBuffer(UINT len, DWORD usag
                                                       providerShared);
     if (!b) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
-    *ppBuf = CreatePeIndexBuffer(b, this, this);
+    *ppBuf = CreatePeIndexBuffer(b, this, this,
+                                 diagnosticObserverForChild());
     notifyRenderTapeCreatedBuffer(b, D3D9PeWireIndexBuffer(*ppBuf));
     dxmt9DeviceDebugLog("device_create_index_buffer -> buffer=%p", *ppBuf);
     return S_OK;
@@ -780,7 +862,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateRenderTarget(UINT w, UINT h, D3D
                                                         providerShared);
     if (!s) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
-    *ppS = CreatePeSurface(s, this, nullptr, this);
+    *ppS = CreatePeSurface(s, this, nullptr, this,
+                           diagnosticObserverForChild());
     dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
     return S_OK;
 }
@@ -817,7 +900,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateDepthStencilSurface(UINT w, UINT
                                                         providerShared);
     if (!s) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
-    *ppS = CreatePeSurface(s, this, nullptr, this);
+    *ppS = CreatePeSurface(s, this, nullptr, this,
+                           diagnosticObserverForChild());
     dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
     return S_OK;
 }
@@ -906,11 +990,11 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateSurface(IDirect3DSurface9* src,
         kLegacyUpdateSurfaceSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = AppendPhaseTimer::now();
+            const auto t0 = phase.begin();
             const bool ok = dxmt9::d3d9::pe::appendUpdateSurface(
                 builder, wire, D3D9PeWireSurface(src),
                 D3D9PeWireSurface(dst));
-            phase.record(peAppendPhaseEncode_, t0);
+            phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
 }
@@ -947,10 +1031,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateTexture(IDirect3DBaseTexture9* s
         kLegacyUpdateTextureSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = AppendPhaseTimer::now();
+            const auto t0 = phase.begin();
             const bool ok = dxmt9::d3d9::pe::appendUpdateTexture(
                 builder, sourceWire, destinationWire);
-            phase.record(peAppendPhaseEncode_, t0);
+            phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
     // The registry shadow is committed only after appendRecord accepts the
@@ -1030,10 +1114,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTargetData(IDirect3DSurface9*
         D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = AppendPhaseTimer::now();
+            const auto t0 = phase.begin();
             const bool ok = dxmt9::d3d9::pe::appendReadback(
                 builder, D3D9PeWireSurface(rt), D3D9PeWireSurface(dst));
-            phase.record(peAppendPhaseEncode_, t0);
+            phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
     if (FAILED(appendHr)) return appendHr;
@@ -1155,11 +1239,11 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::StretchRect(IDirect3DSurface9* src,
         kLegacyStretchRectSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = AppendPhaseTimer::now();
+            const auto t0 = phase.begin();
             const bool ok = dxmt9::d3d9::pe::appendStretchRect(
                 builder, wire, D3D9PeWireSurface(src),
                 D3D9PeWireSurface(dst));
-            phase.record(peAppendPhaseEncode_, t0);
+            phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
 }
@@ -1199,10 +1283,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
         D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = AppendPhaseTimer::now();
+            const auto t0 = phase.begin();
             const bool ok = dxmt9::d3d9::pe::appendColorFill(
                 builder, wire, D3D9PeWireSurface(pSurf));
-            phase.record(peAppendPhaseEncode_, t0);
+            phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
 }
@@ -1249,14 +1333,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateOffscreenPlainSurface(UINT w, UI
                                                             providerShared);
     if (!s) return D3DERR_INVALIDCALL;
     if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
-    *ppS = CreatePeSurface(s, this, nullptr, this, true, userPtr, userPitch);
+    *ppS = CreatePeSurface(s, this, nullptr, this,
+                           diagnosticObserverForChild(), true, userPtr,
+                           userPitch);
     dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTarget(DWORD idx,
                                                        IDirect3DSurface9** ppS) noexcept {
-    PeCallScope peCall(*this, "GetRenderTarget", DXMT9_PE_CALLSITE_PC());
+    return withPeCallScope(
+        "GetRenderTarget", DXMT9_PE_CALLSITE_PC(), nullptr,
+        [&](auto& peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
         return peCall.finish("GetRenderTarget", hr);
     };
@@ -1284,10 +1372,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTarget(DWORD idx,
         return finishPeCall(S_OK);
     }
     D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
-    *ppS = s ? CreatePeSurface(s, this, nullptr, this, false) : nullptr;
+    *ppS = s ? CreatePeSurface(s, this, nullptr, this,
+                               diagnosticObserverForChild(), false)
+             : nullptr;
     dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> surface=%p",
                         this, (unsigned)idx, ppS ? static_cast<void*>(*ppS) : nullptr);
     return finishPeCall(s ? S_OK : D3DERR_NOTFOUND);
+        });
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept {
@@ -1308,7 +1399,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetDepthStencilSurface(IDirect3DSurfac
         return S_OK;
     }
     D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-    *ppS = s ? CreatePeSurface(s, this, nullptr, this) : nullptr;
+    *ppS = s ? CreatePeSurface(s, this, nullptr, this,
+                               diagnosticObserverForChild())
+             : nullptr;
     dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> surface=%p",
                         this, ppS ? static_cast<void*>(*ppS) : nullptr);
     return s ? S_OK : D3DERR_NOTFOUND;
@@ -1330,7 +1423,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetTransform(D3DTRANSFORMSTATETYPE sta
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetViewport(D3DVIEWPORT9* pVP) noexcept {
-    PeCallScope peCall(*this, "GetViewport", DXMT9_PE_CALLSITE_PC());
+    return withPeCallScope(
+        "GetViewport", DXMT9_PE_CALLSITE_PC(), nullptr,
+        [&](auto& peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
         return peCall.finish("GetViewport", hr);
     };
@@ -1345,10 +1440,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetViewport(D3DVIEWPORT9* pVP) noexcep
     dxmt9DeviceDebugLog("device_get_viewport device=%p -> x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
                         this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
     return finishPeCall(S_OK);
+        });
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetScissorRect(RECT* pR) noexcept {
-    PeCallScope peCall(*this, "GetScissorRect", DXMT9_PE_CALLSITE_PC());
+    return withPeCallScope(
+        "GetScissorRect", DXMT9_PE_CALLSITE_PC(), nullptr,
+        [&](auto& peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
         return peCall.finish("GetScissorRect", hr);
     };
@@ -1358,6 +1456,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetScissorRect(RECT* pR) noexcept {
     pR->left = cr.left; pR->top = cr.top;
     pR->right = cr.right; pR->bottom = cr.bottom;
     return finishPeCall(S_OK);
+        });
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetMaterial(D3DMATERIAL9* pM) noexcept {
@@ -1488,7 +1587,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE typ
     dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
     D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
     if (!sb) return D3DERR_INVALIDCALL;
-    *ppSB = CreatePeStateBlock(sb, this, this);
+    *ppSB = CreatePeStateBlock(sb, this, this, diagnosticObserverForChild());
+    if (!*ppSB) return E_OUTOFMEMORY;
     return S_OK;
 }
 
@@ -1502,11 +1602,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
     const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
     if (SUCCEEDED(hr)) {
+        stateBlockState_.clearForBegin();
+        stateBlockConsts_.clearForBegin();
         stateBlockRecording_ = true;
-        peState_.stateBlockRenderStateRestoreTyped().clear();
-        peState_.stateBlockTransformRestoreTyped().clear();
-        peState_.stateBlockTransformRecordedTyped().clear();
-        peState_.stateBlockVdeclRecorded = false;
     }
     dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
     return hr;
@@ -1531,24 +1629,6 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
     HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
     if (SUCCEEDED(hr)) {
         stateBlockRecording_ = false;
-        peState_.stateBlockRenderStateRestore.forEach([&](uint32_t state, uint32_t value) {
-            (void)dxmt9c_device_set_render_state(dev_, state, value);
-            const RenderStateSlot renderKey = renderStateSlotKey(state);
-            peState_.renderStateShadowTyped().set(renderKey, value);
-            peState_.pendingRenderStatesTyped().erase(renderKey);
-        });
-        peState_.stateBlockRenderStateRestoreTyped().clear();
-        // wined3d semantics: state set / multiplied inside Begin/End
-        // remains on the device after End. The PE shadow was updated
-        // along with the server during the recording branch of
-        // SetTransform, so no revert loop is needed here. Just drop the
-        // (now-stale) *Restore entries.
-        peState_.stateBlockTransformRestore.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
-            // Drain any pending Sets that were re-routed during recording
-            // — they have already been forwarded to the server.
-            peState_.pendingTransformsTyped().erase(transformStateKey(state));
-        });
-        peState_.stateBlockTransformRestoreTyped().clear();
         if (sb) {
             // Mark Begin/End context so the new stateblock's ctor
             // takes its tracked-keys set from
@@ -1556,14 +1636,22 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
             // recording was MultiplyTransform) instead of falling
             // back to a full transformShadow capture.
             insideEndStateBlock_ = true;
-            *ppSB = CreatePeStateBlock(sb, this, this);
+            *ppSB = CreatePeStateBlock(sb, this, this,
+                                       diagnosticObserverForChild());
             insideEndStateBlock_ = false;
         }
-        // Clear AFTER CreatePeStateBlock so the new stateblock's ctor
-        // can read stateBlockTransformRecorded via
-        // CaptureStateBlockShadowForChild.
-        peState_.stateBlockTransformRecordedTyped().clear();
-        peState_.stateBlockVdeclRecorded = false;
+        if (!*ppSB) {
+            // The backend End transition has already completed and the raw
+            // state block was released by CreatePeStateBlock. This is a
+            // post-effect fail-stop path, not a retryable End: discard the
+            // unpublished PE candidate so no stale recording domain survives.
+            stateBlockState_.clearForBegin();
+            stateBlockConsts_.clearForBegin();
+            return E_OUTOFMEMORY;
+        }
+        // Clear only after the immutable child snapshot has been published.
+        stateBlockState_.clearForBegin();
+        stateBlockConsts_.clearForBegin();
     }
     dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
                         (unsigned)hr, static_cast<void*>(sb), *ppSB);
@@ -1986,7 +2074,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateQuery(D3DQUERYTYPE type,
         dxmt9c_query_release(q);
         return S_OK;
     }
-    *ppQ = CreatePeQuery(q, this, this);
+    *ppQ = CreatePeQuery(q, this, this, diagnosticObserverForChild());
     notifyRenderTapeCreatedQuery(q, D3D9PeWireQuery(*ppQ));
     return S_OK;
 }
@@ -2146,10 +2234,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     releaseAllBound();
     clearPeStateTracking();
     stateBlockRecording_ = false;
-    peState_.stateBlockRenderStateRestoreTyped().clear();
-    peState_.stateBlockTransformRestoreTyped().clear();
-    peState_.stateBlockTransformRecordedTyped().clear();
-    peState_.stateBlockVdeclRecorded = false;
+    stateBlockState_.clearForBegin();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {
@@ -2164,8 +2249,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         peState_.pendingViewport = false;
         peState_.pendingScissor  = false;
     }
-    if (renderTapeCapture_ &&
-        renderTapeCapture_->state() ==
+    if (peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         const dxmt9::d3d9::RenderTapeResetControl payload{
             .reclaimedGeneration = 0u, .terminal = 1u};

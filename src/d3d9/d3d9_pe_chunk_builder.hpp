@@ -23,8 +23,64 @@ struct PeWireObjectRef {
   }
 };
 
-void publishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
-void unpublishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
+static_assert(sizeof(PeWireObjectRef) == 24u);
+static_assert(alignof(PeWireObjectRef) == 8u);
+static_assert(std::is_trivially_copyable_v<PeWireObjectRef>);
+
+template <std::uint32_t Kind>
+struct PeLocalObjectRef : PeWireObjectRef {
+  static constexpr std::uint32_t kind = Kind;
+
+  bool valid() const noexcept { return PeWireObjectRef::valid(Kind); }
+};
+
+using TextureRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>;
+using BufferRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_BUFFER>;
+using SurfaceRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_SURFACE>;
+using ShaderRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_SHADER>;
+using DeclarationRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>;
+using QueryRef = PeLocalObjectRef<D9C_CHUNK_HANDLE_KIND_QUERY>;
+
+struct PeLocalObjectIdentity {
+  std::uint32_t kind = 0u;
+  void* object = nullptr;
+
+  friend bool operator==(const PeLocalObjectIdentity&,
+                         const PeLocalObjectIdentity&) = default;
+};
+
+template <std::uint32_t Kind>
+constexpr PeLocalObjectIdentity localIdentity(
+    const PeLocalObjectRef<Kind>& object) noexcept {
+  return PeLocalObjectIdentity{.kind = Kind, .object = object.object};
+}
+
+template <typename Ref>
+constexpr Ref qualifyLocalRef(const PeWireObjectRef& object) noexcept {
+  static_assert(std::is_base_of_v<PeWireObjectRef, Ref>);
+  Ref out{};
+  if (object.identity.kind != Ref::kind) {
+    return out;
+  }
+  out.identity = object.identity;
+  out.object = object.object;
+  return out;
+}
+
+#define DXMT9_PE_PIN_LOCAL_REF(Type)                      \
+  static_assert(sizeof(Type) == sizeof(PeWireObjectRef)); \
+  static_assert(alignof(Type) == alignof(PeWireObjectRef)); \
+  static_assert(std::is_trivially_copyable_v<Type>)
+
+DXMT9_PE_PIN_LOCAL_REF(TextureRef);
+DXMT9_PE_PIN_LOCAL_REF(BufferRef);
+DXMT9_PE_PIN_LOCAL_REF(SurfaceRef);
+DXMT9_PE_PIN_LOCAL_REF(ShaderRef);
+DXMT9_PE_PIN_LOCAL_REF(DeclarationRef);
+DXMT9_PE_PIN_LOCAL_REF(QueryRef);
+
+#undef DXMT9_PE_PIN_LOCAL_REF
+
 void noteWireIdentityGetterCall() noexcept;
 std::uint64_t wireIdentityGetterCallCount() noexcept;
 
@@ -41,11 +97,8 @@ bool cacheWireObjectRef(Object* object, std::uint32_t expectedKind,
       identity.generation == 0u || identity.objectId == 0u) {
     return false;
   }
-  out = PeWireObjectRef{
-      .identity = identity,
-      .object = object,
-  };
-  publishCachedWireObjectRef(out);
+  out.identity = identity;
+  out.object = object;
   return true;
 }
 
@@ -537,30 +590,30 @@ bool appendClear(CommandChunkBuilder& builder,
                    std::span<const D9CRect> rects) noexcept;
 bool appendPresent(CommandChunkBuilder& builder,
                      D9CCommandChunkWirePresent fixed,
-                     const PeWireObjectRef& source) noexcept;
+                     const SurfaceRef& source) noexcept;
 bool appendStretchRect(CommandChunkBuilder& builder,
                          D9CCommandChunkWireStretchRect fixed,
-                         const PeWireObjectRef& src,
-                         const PeWireObjectRef& dst) noexcept;
+                         const SurfaceRef& src,
+                         const SurfaceRef& dst) noexcept;
 bool appendColorFill(CommandChunkBuilder& builder,
                        D9CCommandChunkWireColorFill fixed,
-                       const PeWireObjectRef& surface) noexcept;
+                       const SurfaceRef& surface) noexcept;
 bool appendUpdateTexture(CommandChunkBuilder& builder,
-                           const PeWireObjectRef& src,
-                           const PeWireObjectRef& dst) noexcept;
+                           const TextureRef& src,
+                           const TextureRef& dst) noexcept;
 bool appendUpdateSurface(CommandChunkBuilder& builder,
                            D9CCommandChunkWireUpdateSurface fixed,
-                           const PeWireObjectRef& src,
-                           const PeWireObjectRef& dst) noexcept;
+                           const SurfaceRef& src,
+                           const SurfaceRef& dst) noexcept;
 bool appendQueryIssue(CommandChunkBuilder& builder,
                         std::uint32_t flags,
-                        const PeWireObjectRef& query) noexcept;
+                        const QueryRef& query) noexcept;
 bool appendReadback(CommandChunkBuilder& builder,
-                      const PeWireObjectRef& src,
-                      const PeWireObjectRef& dst) noexcept;
+                      const SurfaceRef& src,
+                      const SurfaceRef& dst) noexcept;
 bool appendReszDepthResolve(CommandChunkBuilder& builder,
-                              const PeWireObjectRef& msaaDepth,
-                              const PeWireObjectRef& intzDest) noexcept;
+                              const SurfaceRef& msaaDepth,
+                              const TextureRef& intzDest) noexcept;
 
 
 }  // namespace dxmt9::d3d9::pe

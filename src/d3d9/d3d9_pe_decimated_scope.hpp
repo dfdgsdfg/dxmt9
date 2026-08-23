@@ -66,11 +66,12 @@ struct DxmtPeDecimatedPhaseTimer {
   PeDecimatedScopeStats* stats = nullptr;
   std::chrono::steady_clock::time_point t0{};
 
-  DxmtPeDecimatedPhaseTimer(bool parentSampled, PeDecimatedScopeStats& target) {
-    if (!parentSampled) {
+  DxmtPeDecimatedPhaseTimer(bool parentSampled,
+                            PeDecimatedScopeStats* target) {
+    if (!parentSampled || !target) {
       return;
     }
-    stats = &target;
+    stats = target;
     t0 = std::chrono::steady_clock::now();
   }
 
@@ -97,13 +98,16 @@ struct DxmtPeDecimatedPhaseTimer {
 // Every scope must therefore pay the same null read, which is why this is a
 // helper rather than a comment telling people to remember.
 inline void dxmt9PeArmDecimatedScope(DxmtPeDecimatedScopeGuard& guard,
-                                     PeDecimatedScopeStats& stats) {
-  const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-  if (decimationN == 0 ||
-      !PeDecimatedScopeTimer::shouldSample(stats, decimationN)) {
+                                     PeDecimatedScopeStats* stats) {
+  if (!stats) {
     return;
   }
-  guard.stats = &stats;
+  const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+  if (decimationN == 0 ||
+      !PeDecimatedScopeTimer::shouldSample(*stats, decimationN)) {
+    return;
+  }
+  guard.stats = stats;
   {
     const auto n0 = std::chrono::steady_clock::now();
     const auto n1 = std::chrono::steady_clock::now();
@@ -114,4 +118,3 @@ inline void dxmt9PeArmDecimatedScope(DxmtPeDecimatedScopeGuard& guard,
   }
   guard.t0 = std::chrono::steady_clock::now();
 }
-

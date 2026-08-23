@@ -1670,7 +1670,7 @@ arches = ["x64", "x86"]
 area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
-acceptance = ["MultiplyTransform updates live primary state while recording and captured stateblocks replay the Wine-observed transform result for view, projection, texture, and world matrices"]
+acceptance = ["MultiplyTransform updates live primary state while recording, an explicit Set during recording remains record-only, their composition reads pre-Begin primary state, and captured stateblocks replay the Wine-observed transform result for view, projection, texture, and world matrices"]
 status = "partial"
 
 [[case.evidence]]

@@ -321,6 +321,9 @@ queue owns execution, fences, and frame pacing.
 
 The recorder is a D3D9 state machine first and a batching optimization second. It
 must preserve immediate API semantics even though execution is deferred.
+The normative state algebra, transaction outcomes, lifetime settlement, and
+acceptance matrix are in [`recorder/spec.md`](recorder/spec.md); this section is
+the parent architecture summary.
 
 ```mermaid
 stateDiagram-v2

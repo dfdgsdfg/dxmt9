@@ -24,6 +24,7 @@ DEVICE_TAPE = ROOT / "src/d3d9/d3d9_pe_device_tape.cpp"
 ENGINE_HPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.hpp"
 ENGINE_CPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.cpp"
 CHILD_HPP = ROOT / "src/d3d9/d3d9_pe_device_child.hpp"
+DIAGNOSTIC_OBSERVER_HPP = ROOT / "src/d3d9/d3d9_pe_diagnostic_observer.hpp"
 RECORDER_HPP = ROOT / "src/d3d9/d3d9_pe_recorder.hpp"
 MESON = ROOT / "src/d3d9/meson.build"
 
@@ -55,6 +56,7 @@ def main() -> int:
     engine_hpp = ENGINE_HPP.read_text()
     engine_cpp = ENGINE_CPP.read_text()
     child_hpp = CHILD_HPP.read_text()
+    diagnostic_observer_hpp = DIAGNOSTIC_OBSERVER_HPP.read_text()
     recorder_hpp = RECORDER_HPP.read_text()
     meson = MESON.read_text()
 
@@ -140,36 +142,25 @@ def main() -> int:
     )
     if device_all.count("public D3D9PeRecorderFlush") != 1:
         fail("D3D9PeRecorderFlush must have exactly one derived implementation")
-    require(
-        child_hpp,
-        "virtual void NotifyPeFirstCallAfterPresentForChild(",
-        "void first-call notification",
-    )
-    require(
-        child_hpp,
-        "const char *callName, const void *callerPc = nullptr) noexcept = 0;",
-        "pure first-call notification",
-    )
-    require(
-        child_hpp,
-        "virtual D3D9PePresentCallSlot PushPeCallScopeForChild(",
-        "pure call-scope push",
-    )
-    require(
-        child_hpp,
-        "virtual void NotifyPeCallScopeReturnForChild(D3D9PePresentCallSlot slot,",
-        "pure call-scope return notification",
-    )
-    require(
-        child_hpp,
-        "HRESULT hr) noexcept = 0;",
-        "pure return notification",
-    )
-    require(
-        child_hpp,
-        "virtual void PopPeCallScopeForChild(D3D9PePresentCallSlot slot) noexcept = 0;",
-        "pure call-scope pop",
-    )
+    for removed_virtual in (
+        "NotifyPeFirstCallAfterPresentForChild",
+        "PushPeCallScopeForChild",
+        "NotifyPeCallScopeReturnForChild",
+        "PopPeCallScopeForChild",
+    ):
+        forbid(child_hpp + device_all, removed_virtual,
+               "retired diagnostic recorder virtual")
+    require(child_hpp, "virtual HRESULT FlushPeRecorderForChild() = 0;",
+            "first recorder protocol virtual")
+    require(child_hpp,
+            "D3D9PeChildCallScope(D3D9PeDiagnosticObserver &observer,",
+            "enabled-only concrete child observer scope")
+    require(child_hpp, "if (!observer) {",
+            "branch before child observer scope construction")
+    require(diagnostic_observer_hpp, "class D3D9PeDiagnosticObserver {",
+            "concrete diagnostic observer")
+    forbid(diagnostic_observer_hpp, "virtual ",
+           "virtual dispatch in diagnostic observer")
     # Observer boundary (see agents/rules/codebase_conventions.rules.md): the
     # ~96-byte PE call-tracking sample is diagnostic storage owned by
     # d3d9_pe_device.cpp. Only the register-sized slot handle may cross this
@@ -181,9 +172,11 @@ def main() -> int:
         "void notePeDeviceCallAfterPresent(const char* callName,",
         "void device entry note",
     )
-    require(device_impl, "NotifyPeFirstCallAfterPresentForChild(", "first-call override")
-    require(device_impl, "NotifyPeCallScopeReturnForChild(", "call-scope return override")
-    require(device_impl, "PopPeCallScopeForChild(", "call-scope pop override")
+    require(device_impl, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
+            "nullable cold diagnostics owner")
+    require(device,
+            "HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept",
+            "device key-function definition")
 
     for dead in (
         "shadowedTextureEquals",

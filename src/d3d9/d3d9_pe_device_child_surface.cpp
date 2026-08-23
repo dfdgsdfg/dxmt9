@@ -660,7 +660,7 @@ static void fillSurfaceDesc(const D9CSurfaceDesc &src, D3DSURFACE_DESC &dst) {
 // its container for its whole lifetime, so the container — and therefore the
 // handle it owns — always outlives every borrower.
 struct PeBorrowedSurfaceHandle {
-  const dxmt9::d3d9::pe::PeWireObjectRef *wire = nullptr;
+  const dxmt9::d3d9::pe::SurfaceRef *wire = nullptr;
   const D9CSurfaceDesc *desc = nullptr;
   bool descValid = false;
 };
@@ -680,7 +680,7 @@ static bool peLevelSurfaceCacheEnabled() {
 // the container wrapper and released exactly once from its destructor.
 struct PeLevelSurfaceEntry {
   D9CSurface *handle = nullptr;
-  dxmt9::d3d9::pe::PeWireObjectRef wire{};
+  dxmt9::d3d9::pe::SurfaceRef wire{};
   D9CSurfaceDesc desc{};
   bool descValid = false;
 };
@@ -718,7 +718,6 @@ static const PeLevelSurfaceEntry *resolveCachedLevelSurface(
     // Storage refused the entry, or a duplicate raced us into the slot. Either
     // way we still own the handle we just resolved; drop it so the refcount
     // ledger matches the pre-cache behaviour.
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(entry.wire);
     dxmt9c_surface_release(entry.handle);
   }
   return stored;
@@ -728,7 +727,6 @@ static const PeLevelSurfaceEntry *resolveCachedLevelSurface(
 // container's destructor, before the container drops its own texture reference.
 static void releaseCachedLevelSurfaces(PeLevelSurfaceCache &cache) noexcept {
   cache.releaseAll([](PeLevelSurfaceEntry &entry) noexcept {
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(entry.wire);
     dxmt9c_surface_release(entry.handle);
   });
 }
@@ -742,6 +740,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   IDirect3DDevice9 *device_;
   IUnknown *container_;
   D3D9PeRecorderFlush *recorder_;
+  D3D9PeDiagnosticObserver *diagnostics_;
   D9CSurfaceDesc desc_{};
   bool descValid_ = false;
   HDC dc_ = nullptr;
@@ -768,7 +767,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   bool linearLock_ = false;
   dxmt9::d3d9::RenderTapeLockBitsOrigin linearBitsOrigin_ =
       dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
-  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
+  dxmt9::d3d9::pe::SurfaceRef wireObject_{};
   dxmt9::d3d9::pe::PeWireObjectRef mutationObject_{};
   std::uint32_t mutationSubresource_ = 0u;
   // Wine d3d9 conformance: surfaces obtained through
@@ -792,13 +791,15 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
 public:
   D3D9SurfaceImpl(D9CSurface *s, IDirect3DDevice9 *device, IUnknown *container,
                   D3D9PeRecorderFlush *recorder = nullptr,
+                  D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   bool trackDefaultPool = true,
                   void *userMemory = nullptr,
                   int32_t userMemoryPitch = 0,
-                  const dxmt9::d3d9::pe::PeWireObjectRef *parentTexture = nullptr,
+                  const dxmt9::d3d9::pe::TextureRef *parentTexture = nullptr,
                   std::uint32_t parentSubresource = 0u,
                   const PeBorrowedSurfaceHandle *borrowed = nullptr)
       : s_(s), device_(device), container_(container), recorder_(recorder),
+        diagnostics_(diagnostics),
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch),
         ownsHandle_(borrowed == nullptr) {
     if (device_)
@@ -808,7 +809,7 @@ public:
       // immutable for the handle's lifetime, so re-fetching them here would be
       // two more bridge round trips for the same answer.
       wireObject_ = borrowed->wire ? *borrowed->wire
-                                   : dxmt9::d3d9::pe::PeWireObjectRef{};
+                                   : dxmt9::d3d9::pe::SurfaceRef{};
       descValid_ = borrowed->descValid;
       if (borrowed->desc)
         desc_ = *borrowed->desc;
@@ -826,7 +827,12 @@ public:
     const bool captureTextureAlias = parentTexture && descValid_;
     const auto registrationRoute =
         dxmt9::d3d9::renderTapeSurfaceRegistrationRoute(captureTextureAlias);
-    mutationObject_ = captureTextureAlias ? *parentTexture : wireObject_;
+    if (captureTextureAlias) {
+      mutationObject_ = static_cast<const dxmt9::d3d9::pe::PeWireObjectRef &>(
+          *parentTexture);
+    } else {
+      mutationObject_ = wireObject_;
+    }
     mutationSubresource_ = captureTextureAlias ? parentSubresource : 0u;
     if (recorder_ && captureTextureAlias) {
       recorder_->NotifyRenderTapeSurfaceAliasForChild(
@@ -867,7 +873,6 @@ public:
     if (dc_)
       DeleteDC(dc_);
     if (ownsHandle_) {
-      dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
       dxmt9c_surface_release(s_);
     }
     if (container_)
@@ -877,7 +882,7 @@ public:
   }
 
   D9CSurface *raw() const { return s_; }
-  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+  const dxmt9::d3d9::pe::SurfaceRef &wireObject() const {
     return wireObject_;
   }
 
@@ -959,9 +964,8 @@ public:
     }
     return container_->QueryInterface(riid, ppv);
   }
-  HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC *pD) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "Surface::GetDesc",
-                                DXMT9_PE_CALLSITE_PC());
+  template<typename CallScope>
+  HRESULT getDescCore(D3DSURFACE_DESC *pD, CallScope &peCall) noexcept {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("Surface::GetDesc", hr);
     };
@@ -983,10 +987,17 @@ public:
                         (unsigned)pD->Height);
     return finishPeCall(S_OK);
   }
+  HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC *pD) noexcept override {
+    if (!diagnostics_)
+      return getDescCore(pD, d3d9PeNullChildCallScope);
+    D3D9PeChildCallScope peCall(*diagnostics_, "Surface::GetDesc",
+                                DXMT9_PE_CALLSITE_PC());
+    return getDescCore(pD, peCall);
+  }
   HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT *pLR, const RECT *pRect,
                                      DWORD flags) noexcept override {
-    if (recorder_)
-      recorder_->NotifyPeFirstCallAfterPresentForChild(
+    if (diagnostics_)
+      diagnostics_->notifyFirstCallAfterPresent(
           "Surface::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
@@ -1480,10 +1491,11 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
-  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
+  dxmt9::d3d9::pe::TextureRef wireObject_{};
   void *lockBits_ = nullptr;
   DWORD lockFlags_ = 0u;
   dxmt9::d3d9::RenderTapeBlockLockLayout blockLockLayout_{};
@@ -1507,9 +1519,11 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
 public:
   D3D9TextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
                   D3D9PeRecorderFlush *recorder = nullptr,
+                  D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   void *userMemory = nullptr,
                   int32_t userMemoryPitch = 0)
       : t_(t), device_(device), recorder_(recorder),
+        diagnostics_(diagnostics),
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
@@ -1526,14 +1540,13 @@ public:
     // Every borrower AddRef'd this container, so no surface wrapper can still
     // be alive here; the level handles may be released before the texture.
     releaseCachedLevelSurfaces(levelSurfaces_);
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
   }
 
   D9CTexture *raw() const { return t_; }
-  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+  const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
 
@@ -1640,8 +1653,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "Texture::GetLevelDesc",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "Texture::GetLevelDesc", DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("Texture::GetLevelDesc", hr);
     };
@@ -1661,11 +1675,13 @@ public:
       pD->Height = sd.height;
     }
     return finishPeCall(hr);
+        });
   }
   HRESULT STDMETHODCALLTYPE
   GetSurfaceLevel(UINT level, IDirect3DSurface9 **ppS) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "Texture::GetSurfaceLevel",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "Texture::GetSurfaceLevel", DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("Texture::GetSurfaceLevel", hr);
     };
@@ -1683,8 +1699,8 @@ public:
                                                entry->descValid};
         *ppS = new D3D9SurfaceImpl(entry->handle, device_,
                                    static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, true, nullptr, 0, &wireObject_,
-                                   level, &borrowed);
+                                   recorder_, diagnostics_, true, nullptr, 0,
+                                   &wireObject_, level, &borrowed);
         dxmt9DeviceDebugLog(
             "texture_get_surface_level this=%p level=%u -> surface=%p (cached)",
             this, level, *ppS);
@@ -1705,17 +1721,18 @@ public:
     }
     *ppS = new D3D9SurfaceImpl(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
-        true, nullptr, 0, &wireObject_, level);
+        diagnostics_, true, nullptr, 0, &wireObject_, level);
     dxmt9DeviceDebugLog(
         "texture_get_surface_level this=%p level=%u -> surface=%p", this, level,
         *ppS);
     return finishPeCall(S_OK);
+        });
   }
   HRESULT STDMETHODCALLTYPE LockRect(UINT level, D3DLOCKED_RECT *pLR,
                                      const RECT *pRect,
                                      DWORD flags) noexcept override {
-    if (recorder_)
-      recorder_->NotifyPeFirstCallAfterPresentForChild(
+    if (diagnostics_)
+      diagnostics_->notifyFirstCallAfterPresent(
           "Texture::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
@@ -2136,10 +2153,11 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
-  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
+  dxmt9::d3d9::pe::TextureRef wireObject_{};
   std::vector<CaptureLock> captureLocks_{};
   DWORD priorityShadow_ = 0;
   // Owns one unix D9CSurface handle per resolved face/level subresource; every
@@ -2149,8 +2167,10 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
 
 public:
   D3D9CubeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                      D3D9PeRecorderFlush *recorder = nullptr)
-      : t_(t), device_(device), recorder_(recorder) {
+                      D3D9PeRecorderFlush *recorder = nullptr,
+                      D3D9PeDiagnosticObserver *diagnostics = nullptr)
+      : t_(t), device_(device), recorder_(recorder),
+        diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -2166,14 +2186,13 @@ public:
     // Every borrower AddRef'd this container, so no surface wrapper can still
     // be alive here; the level handles may be released before the texture.
     releaseCachedLevelSurfaces(levelSurfaces_);
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
   }
 
   D9CTexture *raw() const { return t_; }
-  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+  const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
 
@@ -2285,8 +2304,9 @@ public:
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "CubeTexture::GetLevelDesc",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "CubeTexture::GetLevelDesc", DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("CubeTexture::GetLevelDesc", hr);
     };
@@ -2307,12 +2327,15 @@ public:
       pD->Height = sd.height;
     }
     return finishPeCall(hr);
+        });
   }
   HRESULT STDMETHODCALLTYPE
   GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
                     IDirect3DSurface9 **ppS) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "CubeTexture::GetCubeMapSurface",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "CubeTexture::GetCubeMapSurface",
+        DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("CubeTexture::GetCubeMapSurface", hr);
     };
@@ -2337,8 +2360,8 @@ public:
                                                entry->descValid};
         *ppS = new D3D9SurfaceImpl(entry->handle, device_,
                                    static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, true, nullptr, 0, &wireObject_,
-                                   idx, &borrowed);
+                                   recorder_, diagnostics_, true, nullptr, 0,
+                                   &wireObject_, idx, &borrowed);
         dxmt9DeviceDebugLog(
             "cube_get_surface_level this=%p face=%u level=%u -> surface=%p "
             "(cached)",
@@ -2361,17 +2384,18 @@ public:
     }
     *ppS = new D3D9SurfaceImpl(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
-        true, nullptr, 0, &wireObject_, idx);
+        diagnostics_, true, nullptr, 0, &wireObject_, idx);
     dxmt9DeviceDebugLog(
         "cube_get_surface_level this=%p face=%u level=%u -> surface=%p", this,
         static_cast<unsigned>(face), level, *ppS);
     return finishPeCall(S_OK);
+        });
   }
   HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face, UINT level,
                                      D3DLOCKED_RECT *pLR, const RECT *pRect,
                                      DWORD flags) noexcept override {
-    if (recorder_)
-      recorder_->NotifyPeFirstCallAfterPresentForChild(
+    if (diagnostics_)
+      diagnostics_->notifyFirstCallAfterPresent(
           "CubeTexture::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
@@ -2514,15 +2538,17 @@ class D3D9VolumeImpl final : public IDirect3DVolume9 {
   IDirect3DDevice9 *device_;
   IUnknown *container_;
   D3D9PeRecorderFlush *recorder_;
+  D3D9PeDiagnosticObserver *diagnostics_;
   UINT level_;
   bool defaultPoolTracked_ = false;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
   D3D9VolumeImpl(D9CTexture *t, IDirect3DDevice9 *device, IUnknown *container,
-                 D3D9PeRecorderFlush *recorder, UINT level)
+                 D3D9PeRecorderFlush *recorder,
+                 D3D9PeDiagnosticObserver *diagnostics, UINT level)
       : t_(t), device_(device), container_(container), recorder_(recorder),
-        level_(level) {
+        diagnostics_(diagnostics), level_(level) {
     if (t_)
       dxmt9c_texture_addref(t_);
     if (device_)
@@ -2597,8 +2623,9 @@ public:
     return container_->QueryInterface(riid, ppv);
   }
   HRESULT STDMETHODCALLTYPE GetDesc(D3DVOLUME_DESC *pD) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "Volume::GetDesc",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "Volume::GetDesc", DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("Volume::GetDesc", hr);
     };
@@ -2616,11 +2643,12 @@ public:
     pD->Height = sd.height;
     pD->Depth = sd.depth;
     return finishPeCall(S_OK);
+        });
   }
   HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX *locked, const D3DBOX *box,
                                     DWORD flags) noexcept override {
-    if (recorder_)
-      recorder_->NotifyPeFirstCallAfterPresentForChild(
+    if (diagnostics_)
+      diagnostics_->notifyFirstCallAfterPresent(
           "Volume::LockBox", DXMT9_PE_CALLSITE_PC());
     const HRESULT hr = lockTextureBox(t_, level_, locked, box, flags, recorder_);
     if (SUCCEEDED(hr) && recorder_ &&
@@ -2641,17 +2669,20 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
-  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
+  dxmt9::d3d9::pe::TextureRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
   D3D9VolumeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                        D3D9PeRecorderFlush *recorder = nullptr)
-      : t_(t), device_(device), recorder_(recorder) {
+                        D3D9PeRecorderFlush *recorder = nullptr,
+                        D3D9PeDiagnosticObserver *diagnostics = nullptr)
+      : t_(t), device_(device), recorder_(recorder),
+        diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -2664,14 +2695,13 @@ public:
     if (recorder_)
       recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
   }
 
   D9CTexture *raw() const { return t_; }
-  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+  const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
 
@@ -2774,8 +2804,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level,
                                          D3DVOLUME_DESC *pD) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "VolumeTexture::GetLevelDesc",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "VolumeTexture::GetLevelDesc",
+        DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("VolumeTexture::GetLevelDesc", hr);
     };
@@ -2793,11 +2825,14 @@ public:
     pD->Height = sd.height;
     pD->Depth = sd.depth;
     return finishPeCall(S_OK);
+        });
   }
   HRESULT STDMETHODCALLTYPE
   GetVolumeLevel(UINT level, IDirect3DVolume9 **ppVolume) noexcept override {
-    D3D9PeChildCallScope peCall(recorder_, "VolumeTexture::GetVolumeLevel",
-                                DXMT9_PE_CALLSITE_PC());
+    return d3d9PeWithChildCallScope(
+        diagnostics_, "VolumeTexture::GetVolumeLevel",
+        DXMT9_PE_CALLSITE_PC(),
+        [&](auto &peCall) __attribute__((always_inline)) noexcept -> HRESULT {
     const auto finishPeCall = [&](HRESULT hr) noexcept {
       return peCall.finish("VolumeTexture::GetVolumeLevel", hr);
     };
@@ -2808,14 +2843,15 @@ public:
       return finishPeCall(D3DERR_INVALIDCALL);
     *ppVolume = new D3D9VolumeImpl(t_, device_,
                                    static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, level);
+                                   recorder_, diagnostics_, level);
     return finishPeCall(S_OK);
+        });
   }
   HRESULT STDMETHODCALLTYPE LockBox(UINT level, D3DLOCKED_BOX *locked,
                                     const D3DBOX *box,
                                     DWORD flags) noexcept override {
-    if (recorder_)
-      recorder_->NotifyPeFirstCallAfterPresentForChild(
+    if (diagnostics_)
+      diagnostics_->notifyFirstCallAfterPresent(
           "VolumeTexture::LockBox", DXMT9_PE_CALLSITE_PC());
     if (!locked)
       return D3DERR_INVALIDCALL;
@@ -2864,41 +2900,45 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,
                                    IUnknown *container,
                                    D3D9PeRecorderFlush *recorder,
+                                   D3D9PeDiagnosticObserver *diagnostics,
                                    bool trackDefaultPool,
                                    void *userMemory,
                                    int32_t userMemoryPitch) {
-  return new D3D9SurfaceImpl(surface, device, container, recorder,
+  return new D3D9SurfaceImpl(surface, device, container, recorder, diagnostics,
                              trackDefaultPool, userMemory, userMemoryPitch);
 }
 
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
                                    D3D9PeRecorderFlush *recorder,
+                                   D3D9PeDiagnosticObserver *diagnostics,
                                    void *userMemory,
                                    int32_t userMemoryPitch) {
-  return new D3D9TextureImpl(texture, device, recorder, userMemory,
+  return new D3D9TextureImpl(texture, device, recorder, diagnostics, userMemory,
                              userMemoryPitch);
 }
 
 IDirect3DVolumeTexture9 *CreatePeVolumeTexture(D9CTexture *texture,
                                                IDirect3DDevice9 *device,
-                                               D3D9PeRecorderFlush *recorder) {
-  return new D3D9VolumeTextureImpl(texture, device, recorder);
+                                               D3D9PeRecorderFlush *recorder,
+                                               D3D9PeDiagnosticObserver *diagnostics) {
+  return new D3D9VolumeTextureImpl(texture, device, recorder, diagnostics);
 }
 
 IDirect3DCubeTexture9 *CreatePeCubeTexture(D9CTexture *texture,
                                            IDirect3DDevice9 *device,
-                                           D3D9PeRecorderFlush *recorder) {
-  return new D3D9CubeTextureImpl(texture, device, recorder);
+                                           D3D9PeRecorderFlush *recorder,
+                                           D3D9PeDiagnosticObserver *diagnostics) {
+  return new D3D9CubeTextureImpl(texture, device, recorder, diagnostics);
 }
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->raw() : nullptr;
 }
 
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::SurfaceRef &
 D3D9PeWireSurface(IDirect3DSurface9 *surface) {
-  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  static const dxmt9::d3d9::pe::SurfaceRef empty{};
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->wireObject()
                  : empty;
 }
@@ -2922,9 +2962,9 @@ D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture) {
   }
 }
 
-const dxmt9::d3d9::pe::PeWireObjectRef &
+const dxmt9::d3d9::pe::TextureRef &
 D3D9PeWireTexture(IDirect3DBaseTexture9 *texture) {
-  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  static const dxmt9::d3d9::pe::TextureRef empty{};
   if (!texture)
     return empty;
   switch (texture->GetType()) {

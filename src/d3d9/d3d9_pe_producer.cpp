@@ -35,15 +35,16 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   out = SparseStateInput{};
 
   // --- render states -------------------------------------------------------
-  const auto& renderStateTable =
-      snapshot ? shadow.renderStateShadow : shadow.pendingRenderStates;
+  const auto renderStateTable =
+      snapshot ? shadow.renderStateShadowTyped()
+               : shadow.pendingRenderStatesTyped();
   if (renderStateTable.size() > scratch.renderStates.size()) {
     return false;  // over cap: seal the chunk rather than truncate
   }
   std::size_t renderStateCount = 0;
-  renderStateTable.forEach([&](std::uint32_t state, std::uint32_t value) {
+  renderStateTable.forEach([&](RenderStateSlot state, std::uint32_t value) {
     scratch.renderStates[renderStateCount++] =
-        D9CCommandChunkWireRenderState{.state = state, .value = value};
+        D9CCommandChunkWireRenderState{.state = rawSlot(state), .value = value};
   });
   out.renderStates = std::span(scratch.renderStates).first(renderStateCount);
 
@@ -214,11 +215,12 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   out.clipPlanes = std::span(scratch.clipPlanes).first(clipPlaneCount);
 
   // --- TSS / sampler / transform tables ------------------------------------
-  const auto& tssTable = snapshot ? shadow.tssShadow : shadow.pendingTss;
-  const auto& samplerTable =
-      snapshot ? shadow.samplerStateShadow : shadow.pendingSamplerStates;
-  const auto& transformTable =
-      snapshot ? shadow.transformShadow : shadow.pendingTransforms;
+  const auto tssTable = snapshot ? shadow.tssShadowTyped()
+                                 : shadow.pendingTssTyped();
+  const auto samplerTable = snapshot ? shadow.samplerStateShadowTyped()
+                                     : shadow.pendingSamplerStatesTyped();
+  const auto transformTable = snapshot ? shadow.transformShadowTyped()
+                                       : shadow.pendingTransformsTyped();
   if (tssTable.size() > scratch.textureStageStates.size() ||
       samplerTable.size() > scratch.samplerStates.size() ||
       transformTable.size() > scratch.transforms.size()) {
@@ -226,26 +228,27 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   }
   std::size_t tssCount = 0;
   tssTable.forEach(
-      [&](std::uint32_t stage, std::uint32_t type, std::uint32_t value) {
+      [&](TextureStageIndex stage, TextureStageStateType type,
+          std::uint32_t value) {
         scratch.textureStageStates[tssCount++] =
-            D9CDrawPacketTextureStageState{stage, type, value};
+            D9CDrawPacketTextureStageState{rawSlot(stage), rawSlot(type), value};
       });
   out.textureStageStates =
       std::span(scratch.textureStageStates).first(tssCount);
 
   std::size_t samplerCount = 0;
   samplerTable.forEach(
-      [&](std::uint32_t sampler, std::uint32_t type, std::uint32_t value) {
+      [&](SamplerIndex sampler, SamplerStateType type, std::uint32_t value) {
         scratch.samplerStates[samplerCount++] =
-            D9CDrawPacketSamplerState{sampler, type, value};
+            D9CDrawPacketSamplerState{rawSlot(sampler), rawSlot(type), value};
       });
   out.samplerStates = std::span(scratch.samplerStates).first(samplerCount);
 
   std::size_t transformCount = 0;
   transformTable.forEach(
-      [&](std::uint32_t state, const D9CMatrix& matrix) {
+      [&](TransformState state, const D9CMatrix& matrix) {
         auto& entry = scratch.transforms[transformCount++];
-        entry.state = state;
+        entry.state = rawSlot(state);
         entry.reserved = 0u;
         entry.matrix = matrix;
       });
@@ -283,15 +286,12 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // Under DXMT9_PE_INLINE_CONST_DELTA the draw sites deliberately do NOT call
   // flushPendingConsts, and the dirty ranges ride inside the draw record
   // instead. The legacy shape folded them into the fat packet's
-  // constDeltaSections; canonical expresses the same thing natively as constant-range
-  // sections, so this drains straight into them.
+  // constDeltaSections; canonical expresses the same thing natively as
+  // constant-range sections, so this prepares those sections directly.
   //
-  // DRAINING MUTATES: each range is cleared once emitted, exactly as
-  // foldConstShadowIntoDeltaSection did before it was deleted. That is why
-  // `constants` is non-const,
-  // and it means a caller must not build a record it then throws away -- the
-  // dirty ranges are gone. Off the inline path the shadows are already clean
-  // (the caller flushed them as standalone records) so this is a no-op.
+  // Preparation is non-consuming. The caller settles these exact ranges only
+  // after appendSparseRecord accepts the record; a failed append therefore
+  // leaves retry input unchanged.
   //
   // registerBytes points into the shadow's own storage, which is device-owned
   // and outlives the append that consumes the span.
@@ -333,7 +333,6 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                   offset,
               bytes),
       };
-      shadowRange.clear();
     }
   }
 
@@ -450,6 +449,121 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   if (snapshot || (shadow.pendingTextureMask == allTextures &&
                    shadow.pendingStreamMask == allStreams)) {
     header.flags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
+  }
+  return true;
+}
+
+bool acceptInlineConstantDelta(PeConstShadowBlock& constants,
+                               const SparseStateInput& state,
+                               const AppendPlan& plan) noexcept {
+  if (!plan.valid || !plan.consumeRepresentedPending ||
+      !plan.recordDurable) {
+    return false;
+  }
+  struct ConstRange {
+    ConstShadow* shadow;
+    const SparseConstantRangeInput* accepted;
+  };
+  const ConstRange ranges[D9C_DRAW_PACKET_CONST_DELTA_COUNT] = {
+      {&constants.vsConstF, &state.vsFloatConstants},
+      {&constants.vsConstI, &state.vsIntConstants},
+      {&constants.vsConstB, &state.vsBoolConstants},
+      {&constants.psConstF, &state.psFloatConstants},
+      {&constants.psConstI, &state.psIntConstants},
+      {&constants.psConstB, &state.psBoolConstants},
+  };
+  for (const auto& range : ranges) {
+    if (!range.accepted->present()) {
+      continue;
+    }
+    if (!range.shadow->dirty() ||
+        range.shadow->dirtyStart != range.accepted->startRegister ||
+        range.shadow->dirtyEnd - range.shadow->dirtyStart !=
+            range.accepted->registerCount) {
+      return false;
+    }
+  }
+  for (const auto& range : ranges) {
+    if (range.accepted->present()) {
+      range.shadow->clear();
+    }
+  }
+  return true;
+}
+
+bool acceptPreparedSparseState(PeHotStateShadow& shadow,
+                               PeConstShadowBlock& constants,
+                               const SparseStateInput& state,
+                               const AppendPlan& plan) noexcept {
+  if (!plan.valid || !plan.consumeRepresentedPending ||
+      !plan.recordDurable) {
+    return false;
+  }
+  // Preflight every allocation-free constant witness before touching any
+  // pending owner so a stale/mismatched projection fails atomically.
+  if (!acceptInlineConstantDelta(constants, state, plan)) {
+    return false;
+  }
+
+  shadow.acceptRenderStateBatch(state.renderStates, plan);
+  shadow.acceptTextureStageStateBatch(state.textureStageStates, plan);
+  shadow.acceptSamplerStateBatch(state.samplerStates, plan);
+  shadow.acceptTransformBatch(state.transforms, plan);
+
+  for (const auto& entry : state.textures) {
+    if (entry.wire.slot < 32u) {
+      shadow.pendingTextureMask &= ~(1u << entry.wire.slot);
+    }
+  }
+  for (const auto& entry : state.streams) {
+    if (entry.wire.slot < 32u) {
+      shadow.pendingStreamMask &= ~(1u << entry.wire.slot);
+    }
+  }
+  for (const auto& entry : state.shaders) {
+    if (entry.wire.stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX) {
+      shadow.pendingVs = false;
+    } else if (entry.wire.stage ==
+               D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL) {
+      shadow.pendingPs = false;
+    }
+  }
+  for (const auto& entry : state.vertexInputs) {
+    if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
+      // Declaration wins over a co-pending FVF and carries its effective
+      // value, so the single durable entry represents both pending writes.
+      shadow.pendingVdecl = false;
+      shadow.pendingFvf = false;
+    } else if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
+      shadow.pendingFvf = false;
+    }
+  }
+  if (!state.indexBuffers.empty()) shadow.pendingIb = false;
+  for (const auto& entry : state.renderTargets) {
+    if (entry.wire.slot < 32u) {
+      shadow.pendingRtMask &= ~(1u << entry.wire.slot);
+    }
+  }
+  if (!state.depthStencils.empty()) shadow.pendingDs = false;
+  if (!state.viewports.empty()) shadow.pendingViewport = false;
+  if (!state.scissors.empty()) shadow.pendingScissor = false;
+  if (!state.materials.empty()) shadow.pendingMaterial = false;
+  for (const auto& entry : state.clipPlanes) {
+    if (entry.slot < 32u) {
+      shadow.pendingClipPlaneMask &= ~(1u << entry.slot);
+    }
+  }
+  for (const auto& entry : state.lights) {
+    if (entry.slot < 32u) {
+      shadow.pendingLightSlotMask &= ~(1u << entry.slot);
+    }
+  }
+  for (const auto& entry : state.lightEnables) {
+    if (entry.slot < 32u) {
+      const std::uint32_t bit = 1u << entry.slot;
+      shadow.pendingLightEnableValidMask &= ~bit;
+      shadow.pendingLightEnableMask &= ~bit;
+    }
   }
   return true;
 }

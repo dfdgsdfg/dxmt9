@@ -121,7 +121,7 @@ bool appendClear(CommandChunkBuilder& builder,
 
 bool appendPresent(CommandChunkBuilder& builder,
                      D9CCommandChunkWirePresent fixed,
-                     const PeWireObjectRef& source) noexcept {
+                     const SurfaceRef& source) noexcept {
   if (!builder.beginRecord(D9C_COMMAND_RECORD_PRESENT)) {
     return false;
   }
@@ -136,8 +136,8 @@ bool appendPresent(CommandChunkBuilder& builder,
 
 bool appendStretchRect(CommandChunkBuilder& builder,
                          D9CCommandChunkWireStretchRect fixed,
-                         const PeWireObjectRef& src,
-                         const PeWireObjectRef& dst) noexcept {
+                         const SurfaceRef& src,
+                         const SurfaceRef& dst) noexcept {
   fixed.reserved0 = 0u;
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_STRETCH_RECT, fixed, src,
@@ -149,7 +149,7 @@ bool appendStretchRect(CommandChunkBuilder& builder,
 
 bool appendColorFill(CommandChunkBuilder& builder,
                        D9CCommandChunkWireColorFill fixed,
-                       const PeWireObjectRef& surface) noexcept {
+                       const SurfaceRef& surface) noexcept {
   if (!builder.beginRecord(D9C_COMMAND_RECORD_COLOR_FILL)) {
     return false;
   }
@@ -167,8 +167,8 @@ bool appendColorFill(CommandChunkBuilder& builder,
 }
 
 bool appendUpdateTexture(CommandChunkBuilder& builder,
-                           const PeWireObjectRef& src,
-                           const PeWireObjectRef& dst) noexcept {
+                           const TextureRef& src,
+                           const TextureRef& dst) noexcept {
   D9CCommandChunkWireUpdateTexture fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_UPDATE_TEXTURE, fixed, src,
@@ -180,8 +180,8 @@ bool appendUpdateTexture(CommandChunkBuilder& builder,
 
 bool appendUpdateSurface(CommandChunkBuilder& builder,
                            D9CCommandChunkWireUpdateSurface fixed,
-                           const PeWireObjectRef& src,
-                           const PeWireObjectRef& dst) noexcept {
+                           const SurfaceRef& src,
+                           const SurfaceRef& dst) noexcept {
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_UPDATE_SURFACE, fixed, src,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -192,7 +192,7 @@ bool appendUpdateSurface(CommandChunkBuilder& builder,
 
 bool appendQueryIssue(CommandChunkBuilder& builder,
                         std::uint32_t flags,
-                        const PeWireObjectRef& query) noexcept {
+                        const QueryRef& query) noexcept {
   D9CCommandChunkWireQueryIssue fixed{
       .queryHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
       .flags = flags,
@@ -210,8 +210,8 @@ bool appendQueryIssue(CommandChunkBuilder& builder,
 }
 
 bool appendReadback(CommandChunkBuilder& builder,
-                      const PeWireObjectRef& src,
-                      const PeWireObjectRef& dst) noexcept {
+                      const SurfaceRef& src,
+                      const SurfaceRef& dst) noexcept {
   D9CCommandChunkWireReadback fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_READBACK, fixed, src,
@@ -222,8 +222,8 @@ bool appendReadback(CommandChunkBuilder& builder,
 }
 
 bool appendReszDepthResolve(CommandChunkBuilder& builder,
-                              const PeWireObjectRef& msaaDepth,
-                              const PeWireObjectRef& intzDest) noexcept {
+                              const SurfaceRef& msaaDepth,
+                              const TextureRef& intzDest) noexcept {
   D9CCommandChunkWireReszDepthResolve fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE, fixed, msaaDepth,

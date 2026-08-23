@@ -64,6 +64,9 @@ counterexample_models=(
   # a record `gcArena` already released. This is what licenses T2b (capture off
   # `CommandQueue::mutex_`); design doc §8 T2b.
   "ProducerMarkReclaim|.capture.counterexample|Invariant NoCaptureAfterFree is violated"
+  # Consuming a projection during Prepare loses it when append subsequently
+  # fails; production consumes only the accepted represented set.
+  "PeRecorderTransition|.counterexample|Invariant NoLostPending is violated"
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"

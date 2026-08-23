@@ -42,7 +42,7 @@ using PeRtExplicitMask =
 
 // The wire form of the device's streamSrc_ / streamOff_ / streamStr_ triple.
 struct PeStreamBinding {
-  PeWireObjectRef buffer{};
+  BufferRef buffer{};
   std::uint32_t offset = 0u;
   std::uint32_t stride = 0u;
 };
@@ -51,14 +51,14 @@ struct PeStreamBinding {
 // forwards `object` to CommandChunkBuilder::appendHandle, which owns
 // retention; it never dereferences it.
 struct PeBindingView {
-  std::array<PeWireObjectRef, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
+  std::array<TextureRef, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
   std::array<PeStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS> streams{};
-  PeWireObjectRef vs{};
-  PeWireObjectRef ps{};
-  PeWireObjectRef vdecl{};
-  PeWireObjectRef indexBuffer{};
-  PeWireObjectRef depthStencil{};
-  std::array<PeWireObjectRef, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
+  ShaderRef vs{};
+  ShaderRef ps{};
+  DeclarationRef vdecl{};
+  BufferRef indexBuffer{};
+  SurfaceRef depthStencil{};
+  std::array<SurfaceRef, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
       renderTargets{};
   // Per-slot bool array, NOT a bitmask: this mirrors the device's
   // currentRtExplicitMask(), whose type is PeRtExplicitMask

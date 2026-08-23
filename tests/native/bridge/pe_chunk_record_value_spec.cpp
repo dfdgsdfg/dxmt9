@@ -1,5 +1,6 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_const_shadow.hpp"
+#include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_validate.hpp"
 
 #include <algorithm>
@@ -277,16 +278,21 @@ void testNonDrawProducerMatrix() {
   D9CSurface srcSurface;
   D9CSurface dstSurface;
   D9CQuery query;
-  const auto srcTextureRef = wireRef(
-      &srcTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000001ull);
-  const auto dstTextureRef = wireRef(
-      &dstTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000002ull);
-  const auto srcSurfaceRef = wireRef(
-      &srcSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x810000003ull);
-  const auto dstSurfaceRef = wireRef(
-      &dstSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x810000004ull);
-  const auto queryRef =
-      wireRef(&query, D9C_CHUNK_HANDLE_KIND_QUERY, 0x810000005ull);
+  const auto srcTextureRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+          &srcTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000001ull));
+  const auto dstTextureRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+          &dstTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000002ull));
+  const auto srcSurfaceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+          &srcSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x810000003ull));
+  const auto dstSurfaceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+          &dstSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x810000004ull));
+  const auto queryRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::QueryRef>(wireRef(
+          &query, D9C_CHUNK_HANDLE_KIND_QUERY, 0x810000005ull));
 
   CommandChunkBuilder builder;
   std::array<std::byte, 16> oneRegister{};
@@ -1108,6 +1114,77 @@ void testRecordLocalDedupAccelerator() {
   }
 }
 
+void testKindQualifiedLocalIdentity() {
+  D9CTexture object;
+  const PeWireObjectRef textureWire = wireRef(
+      &object, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF001u);
+  const auto texture = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(textureWire);
+
+  PeWireObjectRef surfaceWire = textureWire;
+  surfaceWire.identity.kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+  const auto surface = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(surfaceWire);
+  check(dxmt9::d3d9::pe::localIdentity(texture) !=
+            dxmt9::d3d9::pe::localIdentity(surface),
+        "the same wrapper pointer in two kinds has distinct local identity");
+
+  const auto wrongTexture = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(surfaceWire);
+  check(!wrongTexture.valid() && wrongTexture.object == nullptr,
+        "wrong-kind qualification fails without publishing a local ref");
+
+  CommandChunkBuilder builder;
+  std::uint32_t index = 0u;
+  check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            !builder.appendHandle(surfaceWire,
+                                  D9C_CHUNK_HANDLE_KIND_TEXTURE, index) &&
+            !builder.recordActive() && builder.handleCount() == 0u &&
+            object.refs == 1u,
+        "wrong-kind builder append rolls back before any retain");
+}
+
+void testOversizedPendingBatchAppendFailure() {
+  PeHotStateShadow shadow{};
+  auto pending = shadow.pendingRenderStatesTyped();
+  constexpr std::uint32_t total =
+      D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
+  for (std::uint32_t state = 0u; state < total; ++state) {
+    pending.set(renderStateSlotKey(state), state + 10u);
+  }
+
+  std::array<D9CCommandChunkWireRenderState,
+             D9C_DRAW_PACKET_MAX_RENDER_STATES> batch{};
+  const std::size_t prepared = shadow.prepareRenderStateBatch(batch);
+  SparseStateInput state{};
+  state.renderStates = std::span(batch).first(prepared);
+
+  CommandChunkBuilder rejecting;
+  check(rejecting.beginRecord(D9C_COMMAND_RECORD_CLEAR),
+        "failure injection occupies the builder's active record");
+  check(!dxmt9::d3d9::pe::appendApplyState(rejecting, 0u, state) &&
+            pending.size() == total,
+        "an injected active-record failure leaves every prepared "
+        "oversized row pending");
+  rejecting.rollbackRecord();
+
+  CommandChunkBuilder accepted;
+  check(dxmt9::d3d9::pe::appendApplyState(accepted, 0u, state),
+        "the exact oversized batch remains appendable on retry");
+  shadow.acceptRenderStateBatch(
+      state.renderStates,
+      dxmt9::d3d9::pe::settleRecorderAppend({
+          .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
+          .appendSucceeded = true,
+      }));
+  std::uint32_t tail = 0u;
+  check(pending.size() == 1u &&
+            pending.get(renderStateSlotKey(total - 1u), tail) &&
+            tail == total - 1u + 10u,
+        "settlement consumes only the rows represented by the accepted "
+        "retry record");
+}
+
 }  // namespace
 
 int main() {
@@ -1120,6 +1197,8 @@ int main() {
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();
     testRecordLocalDedupAccelerator();
+    testKindQualifiedLocalIdentity();
+    testOversizedPendingBatchAppendFailure();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

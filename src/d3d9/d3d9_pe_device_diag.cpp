@@ -17,6 +17,35 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
+void D3D9PeDiagnosticObserver::notifyFirstCallAfterPresent(
+    const char *callName, const void *callerPc) noexcept {
+    if (device_) {
+        device_->notePeDeviceCallAfterPresent(callName, callerPc);
+    }
+}
+
+D3D9PePresentCallSlot D3D9PeDiagnosticObserver::pushCallScope(
+    const char *callName, const void *callerPc) noexcept {
+    return device_ ? device_->pushPeCallScope(callName, callerPc)
+                   : kD3D9PePresentCallSlotNone;
+}
+
+void D3D9PeDiagnosticObserver::notifyCallScopeReturn(
+    D3D9PePresentCallSlot slot, const char *callName,
+    std::int32_t hr) noexcept {
+    if (device_) {
+        device_->notePeCallScopeReturn(slot, callName,
+                                       static_cast<HRESULT>(hr));
+    }
+}
+
+void D3D9PeDiagnosticObserver::popCallScope(
+    D3D9PePresentCallSlot slot) noexcept {
+    if (device_) {
+        device_->popPeCallScope(slot);
+    }
+}
+
 const char* D3D9DeviceImpl::vsConstSetterRangePhaseName(
     VsConstSetterRangePhase phase) noexcept {
     switch (phase) {
@@ -44,7 +73,7 @@ void D3D9DeviceImpl::recordVsConstSetterRange(VsConstSetterRangePhase phase,
         return;
     }
     VsConstSetterRangeBucket* bucket = nullptr;
-    for (auto& candidate : vsConstSetterRangePerf_.buckets) {
+    for (auto& candidate : diagnostics_->vsConstSetterRangePerf_.buckets) {
         if (candidate.used) {
             if (candidate.phase == phase &&
                 candidate.vsHash == vsHash &&
@@ -69,7 +98,7 @@ void D3D9DeviceImpl::recordVsConstSetterRange(VsConstSetterRangePhase phase,
     const bool fullRange = start == 0u && count >= kVsConstFMax;
     const bool fullChanged = start == 0u && changedSpanRegs >= kVsConstFMax;
     if (!bucket) {
-        auto& overflow = vsConstSetterRangePerf_.overflow[
+        auto& overflow = diagnostics_->vsConstSetterRangePerf_.overflow[
             vsConstSetterRangePhaseIndex(phase)];
         ++overflow.events;
         overflow.rangeRegs += count;
@@ -92,7 +121,7 @@ void D3D9DeviceImpl::logVsConstSetterRangePerf(const char* event) {
     if (!dxmt9PerfVsConstSetterRangeEnabled()) {
         return;
     }
-    for (const auto& bucket : vsConstSetterRangePerf_.buckets) {
+    for (const auto& bucket : diagnostics_->vsConstSetterRangePerf_.buckets) {
         if (!bucket.used || bucket.events == 0u) {
             continue;
         }
@@ -115,9 +144,9 @@ void D3D9DeviceImpl::logVsConstSetterRangePerf(const char* event) {
             static_cast<unsigned long long>(bucket.fullChangedEvents));
     }
     for (std::size_t phaseIndex = 1u;
-         phaseIndex < vsConstSetterRangePerf_.overflow.size();
+         phaseIndex < diagnostics_->vsConstSetterRangePerf_.overflow.size();
          ++phaseIndex) {
-        const auto& overflow = vsConstSetterRangePerf_.overflow[phaseIndex];
+        const auto& overflow = diagnostics_->vsConstSetterRangePerf_.overflow[phaseIndex];
         if (overflow.events == 0u) {
             continue;
         }
@@ -139,7 +168,7 @@ void D3D9DeviceImpl::logVsConstSetterRangePerf(const char* event) {
             static_cast<unsigned long long>(overflow.fullChangedEvents));
     }
     std::fflush(stderr);
-    vsConstSetterRangePerf_ = VsConstSetterRangePerf{};
+    diagnostics_->vsConstSetterRangePerf_ = VsConstSetterRangePerf{};
 }
 
 void D3D9DeviceImpl::logPeFirstCallAfterPresent(const char* callName,
@@ -215,16 +244,16 @@ D3D9DeviceImpl::PePresentCallSample D3D9DeviceImpl::logPeCallMilestoneAfterPrese
         return {};
     }
     const std::uint64_t ordinal =
-        pePresentCallMilestonePendingOrdinal_.load(std::memory_order_acquire);
+        diagnostics_->pePresentCallMilestonePendingOrdinal_.load(std::memory_order_acquire);
     if (ordinal == 0) {
         return {};
     }
     const auto entry = std::chrono::steady_clock::now();
     const std::int64_t entryNs = dxmt9SteadyClockNs(entry);
     const std::uint32_t callCount =
-        pePresentCallCount_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        diagnostics_->pePresentCallCount_.fetch_add(1, std::memory_order_acq_rel) + 1;
     const std::int64_t returnNs =
-        pePresentCadenceReturnNs_.load(std::memory_order_acquire);
+        diagnostics_->pePresentCadenceReturnNs_.load(std::memory_order_acquire);
     std::uint32_t milestoneBit = 0;
     const bool milestone = peCallMilestoneBit(callCount, milestoneBit);
     PePresentCallSample sample{
@@ -237,9 +266,9 @@ D3D9DeviceImpl::PePresentCallSample D3D9DeviceImpl::logPeCallMilestoneAfterPrese
         return sample;
     }
     std::uint32_t mask =
-        pePresentCallMilestoneMask_.load(std::memory_order_acquire);
+        diagnostics_->pePresentCallMilestoneMask_.load(std::memory_order_acquire);
     while ((mask & milestoneBit) == 0) {
-        if (pePresentCallMilestoneMask_.compare_exchange_weak(
+        if (diagnostics_->pePresentCallMilestoneMask_.compare_exchange_weak(
                 mask, mask | milestoneBit, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             const auto callerInfo = dxmt9PeResolveCallerModule(callerPc);
@@ -869,16 +898,16 @@ D3D9DeviceImpl::topPeInterAppendPairs() const noexcept {
             const std::size_t index =
                 prev * kPeCommandRecordTypeBucketCount + next;
             const std::uint64_t totalNs =
-                peRecorderStats_.chunkInterAppendPairNsTotal[index];
+                diagnostics_->peRecorderStats_.chunkInterAppendPairNsTotal[index];
             if (totalNs == 0) {
                 continue;
             }
             PeInterAppendPairSummary candidate{
                 static_cast<std::uint32_t>(prev),
                 static_cast<std::uint32_t>(next),
-                peRecorderStats_.chunkInterAppendPairSamples[index],
+                diagnostics_->peRecorderStats_.chunkInterAppendPairSamples[index],
                 totalNs,
-                peRecorderStats_.chunkInterAppendPairNsMax[index]};
+                diagnostics_->peRecorderStats_.chunkInterAppendPairNsMax[index]};
             for (auto& slot : top) {
                 if (candidate.totalNs <= slot.totalNs) {
                     continue;
@@ -904,17 +933,17 @@ D3D9DeviceImpl::topPeInterAppendFocusCallFamilies(std::size_t focusPair) const n
         const std::size_t index =
             focusPair * kPeInterAppendCallFamilyCount + family;
         const std::uint64_t totalNs =
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusCallFamilyNsTotal[index];
         if (totalNs == 0) {
             continue;
         }
         PeInterAppendCallFamilySummary candidate{
             static_cast<std::uint32_t>(family),
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusCallFamilySamples[index],
             totalNs,
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusCallFamilyNsMax[index]};
         for (auto& slot : top) {
             if (candidate.totalNs <= slot.totalNs) {
@@ -940,7 +969,7 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallFamilies(std::size_t focusPair) 
         const std::size_t index =
             focusPair * kPeInterAppendCallFamilyCount + family;
         const std::uint64_t samples =
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallFamilySamples[index];
         if (samples == 0) {
             continue;
@@ -971,17 +1000,17 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallNames(std::size_t focusPair) con
         const std::size_t index =
             focusPair * kPeInterAppendCallNameCount + callName;
         const std::uint64_t samples =
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameSamples[index];
         if (samples == 0) {
             continue;
         }
         const auto cpuNs =
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameCpuNsTotal[index];
         PeInterAppendCallNameSummary candidate{
             static_cast<std::uint32_t>(callName), samples, cpuNs,
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameCpuNsMax[index]};
         for (auto& slot : top) {
             if (candidate.samples <= slot.samples) {
@@ -1013,7 +1042,7 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallTransitions(
                     static_cast<PeInterAppendCallFamily>(prevFamily),
                     static_cast<PeInterAppendCallFamily>(nextFamily));
             const std::uint64_t totalNs =
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallTransitionNsTotal[
                         index];
             if (totalNs == 0) {
@@ -1022,11 +1051,11 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallTransitions(
             PeInterAppendCallTransitionSummary candidate{
                 static_cast<std::uint32_t>(prevFamily),
                 static_cast<std::uint32_t>(nextFamily),
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallTransitionSamples[
                         index],
                 totalNs,
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallTransitionNsMax[
                         index]};
             for (auto& slot : top) {
@@ -1060,7 +1089,7 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallNameTransitions(
                     static_cast<PeInterAppendCallName>(prevCallName),
                     static_cast<PeInterAppendCallName>(nextCallName));
             const std::uint64_t totalNs =
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallNameTransitionNsTotal[
                         index];
             if (totalNs == 0) {
@@ -1069,11 +1098,11 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallNameTransitions(
             PeInterAppendCallNameTransitionSummary candidate{
                 static_cast<std::uint32_t>(prevCallName),
                 static_cast<std::uint32_t>(nextCallName),
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallNameTransitionSamples[
                         index],
                 totalNs,
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
                         index]};
             for (auto& slot : top) {
@@ -1099,7 +1128,7 @@ D3D9DeviceImpl::topPeInterAppendFocusBetweenCallNameTransitionSites(
     }
     const auto wantedFocusPair = static_cast<std::uint32_t>(focusPair);
     for (const auto& entry :
-         peRecorderFocusBetweenCallNameTransitionSites_) {
+         diagnostics_->peRecorderFocusBetweenCallNameTransitionSites_) {
         const auto& key = entry.first;
         const auto& stats = entry.second;
         if (key.focusPair != wantedFocusPair || stats.totalNs == 0) {
@@ -1145,18 +1174,18 @@ void D3D9DeviceImpl::logPeRecordMilestoneAfterPresent(std::uint32_t type,
         return;
     }
     const std::uint64_t ordinal =
-        pePresentRecordPendingOrdinal_.load(std::memory_order_acquire);
+        diagnostics_->pePresentRecordPendingOrdinal_.load(std::memory_order_acquire);
     if (ordinal == 0) {
         return;
     }
     std::uint32_t mask =
-        pePresentRecordMilestoneMask_.load(std::memory_order_acquire);
+        diagnostics_->pePresentRecordMilestoneMask_.load(std::memory_order_acquire);
     while ((mask & milestoneBit) == 0) {
-        if (pePresentRecordMilestoneMask_.compare_exchange_weak(
+        if (diagnostics_->pePresentRecordMilestoneMask_.compare_exchange_weak(
                 mask, mask | milestoneBit, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             const std::int64_t returnNs =
-                pePresentCadenceReturnNs_.load(std::memory_order_acquire);
+                diagnostics_->pePresentCadenceReturnNs_.load(std::memory_order_acquire);
             dxmt9DeviceInfoLog(
                 "pe_present_record_milestone device=%p ordinal=%llu "
                 "milestone=%u type=%s typeId=%u call=%s "
@@ -1207,35 +1236,35 @@ void D3D9DeviceImpl::recordPeChunkCommit(PeRecorderFlushReason reason,
                          std::uint64_t fillGapNs,
                          std::uint64_t activeFillNs,
                          std::uint64_t bridgeNs) {
-    ++peRecorderStats_.commitCount;
-    peRecorderStats_.recordCountTotal += recordCount;
-    peRecorderStats_.recordCountMax =
-        std::max<std::uint64_t>(peRecorderStats_.recordCountMax, recordCount);
-    peRecorderStats_.payloadBytesTotal += payloadBytes;
-    peRecorderStats_.payloadBytesMax =
-        std::max<std::uint64_t>(peRecorderStats_.payloadBytesMax, payloadBytes);
-    peRecorderStats_.handleCountTotal += handleCount;
-    peRecorderStats_.handleCountMax =
-        std::max<std::uint64_t>(peRecorderStats_.handleCountMax, handleCount);
+    ++diagnostics_->peRecorderStats_.commitCount;
+    diagnostics_->peRecorderStats_.recordCountTotal += recordCount;
+    diagnostics_->peRecorderStats_.recordCountMax =
+        std::max<std::uint64_t>(diagnostics_->peRecorderStats_.recordCountMax, recordCount);
+    diagnostics_->peRecorderStats_.payloadBytesTotal += payloadBytes;
+    diagnostics_->peRecorderStats_.payloadBytesMax =
+        std::max<std::uint64_t>(diagnostics_->peRecorderStats_.payloadBytesMax, payloadBytes);
+    diagnostics_->peRecorderStats_.handleCountTotal += handleCount;
+    diagnostics_->peRecorderStats_.handleCountMax =
+        std::max<std::uint64_t>(diagnostics_->peRecorderStats_.handleCountMax, handleCount);
     if (fillGapNs > 0) {
-        ++peRecorderStats_.chunkFillGapSamples;
-        peRecorderStats_.chunkFillGapNsTotal += fillGapNs;
-        peRecorderStats_.chunkFillGapNsMax =
-            std::max(peRecorderStats_.chunkFillGapNsMax, fillGapNs);
+        ++diagnostics_->peRecorderStats_.chunkFillGapSamples;
+        diagnostics_->peRecorderStats_.chunkFillGapNsTotal += fillGapNs;
+        diagnostics_->peRecorderStats_.chunkFillGapNsMax =
+            std::max(diagnostics_->peRecorderStats_.chunkFillGapNsMax, fillGapNs);
     }
     if (activeFillNs > 0) {
-        ++peRecorderStats_.chunkActiveFillSamples;
-        peRecorderStats_.chunkActiveFillNsTotal += activeFillNs;
-        peRecorderStats_.chunkActiveFillNsMax =
-            std::max(peRecorderStats_.chunkActiveFillNsMax, activeFillNs);
+        ++diagnostics_->peRecorderStats_.chunkActiveFillSamples;
+        diagnostics_->peRecorderStats_.chunkActiveFillNsTotal += activeFillNs;
+        diagnostics_->peRecorderStats_.chunkActiveFillNsMax =
+            std::max(diagnostics_->peRecorderStats_.chunkActiveFillNsMax, activeFillNs);
     }
-    ++peRecorderStats_.chunkBridgeSamples;
-    peRecorderStats_.chunkBridgeNsTotal += bridgeNs;
-    peRecorderStats_.chunkBridgeNsMax =
-        std::max(peRecorderStats_.chunkBridgeNsMax, bridgeNs);
+    ++diagnostics_->peRecorderStats_.chunkBridgeSamples;
+    diagnostics_->peRecorderStats_.chunkBridgeNsTotal += bridgeNs;
+    diagnostics_->peRecorderStats_.chunkBridgeNsMax =
+        std::max(diagnostics_->peRecorderStats_.chunkBridgeNsMax, bridgeNs);
     const auto reasonIndex = static_cast<std::size_t>(reason);
-    if (reasonIndex < peRecorderStats_.flushReasons.size()) {
-        ++peRecorderStats_.flushReasons[reasonIndex];
+    if (reasonIndex < diagnostics_->peRecorderStats_.flushReasons.size()) {
+        ++diagnostics_->peRecorderStats_.flushReasons[reasonIndex];
     }
     if (dxmt9PeRecorderChunkLogEnabled()) {
         dxmt9DeviceInfoLog(
@@ -1243,7 +1272,7 @@ void D3D9DeviceImpl::recordPeChunkCommit(PeRecorderFlushReason reason,
             "recordCount=%u payloadBytes=%u handleCount=%u wireBytes=%u "
             "fillGapMs=%.3f activeFillMs=%.3f bridgeMs=%.3f",
             this, peRecorderFlushReasonName(reason),
-            static_cast<unsigned long long>(peRecorderStats_.commitCount),
+            static_cast<unsigned long long>(diagnostics_->peRecorderStats_.commitCount),
             recordCount, payloadBytes, handleCount, wireBytes,
             static_cast<double>(fillGapNs) / 1000000.0,
             static_cast<double>(activeFillNs) / 1000000.0,
@@ -1256,27 +1285,27 @@ void D3D9DeviceImpl::recordPeChunkInterAppendGap(std::int64_t appendEntryNs,
                                  std::uint32_t nextType) {
     if (!dxmt9PeRecorderStatsEnabled() ||
         recordCountBefore == 0 ||
-        peRecorderLastAppendReturnNs_ <= 0 ||
-        appendEntryNs <= peRecorderLastAppendReturnNs_) {
+        diagnostics_->peRecorderLastAppendReturnNs_ <= 0 ||
+        appendEntryNs <= diagnostics_->peRecorderLastAppendReturnNs_) {
         return;
     }
     const auto interAppendGapNs =
         static_cast<std::uint64_t>(
-            appendEntryNs - peRecorderLastAppendReturnNs_);
-    ++peRecorderStats_.chunkInterAppendGapSamples;
-    peRecorderStats_.chunkInterAppendGapNsTotal += interAppendGapNs;
-    peRecorderStats_.chunkInterAppendGapNsMax =
-        std::max(peRecorderStats_.chunkInterAppendGapNsMax,
+            appendEntryNs - diagnostics_->peRecorderLastAppendReturnNs_);
+    ++diagnostics_->peRecorderStats_.chunkInterAppendGapSamples;
+    diagnostics_->peRecorderStats_.chunkInterAppendGapNsTotal += interAppendGapNs;
+    diagnostics_->peRecorderStats_.chunkInterAppendGapNsMax =
+        std::max(diagnostics_->peRecorderStats_.chunkInterAppendGapNsMax,
                  interAppendGapNs);
     const std::size_t pairIndex =
-        peInterAppendPairIndex(peRecorderLastAppendRecordType_, nextType);
-    ++peRecorderStats_.chunkInterAppendPairSamples[pairIndex];
-    peRecorderStats_.chunkInterAppendPairNsTotal[pairIndex] +=
+        peInterAppendPairIndex(diagnostics_->peRecorderLastAppendRecordType_, nextType);
+    ++diagnostics_->peRecorderStats_.chunkInterAppendPairSamples[pairIndex];
+    diagnostics_->peRecorderStats_.chunkInterAppendPairNsTotal[pairIndex] +=
         interAppendGapNs;
-    peRecorderStats_.chunkInterAppendPairNsMax[pairIndex] =
-        std::max(peRecorderStats_.chunkInterAppendPairNsMax[pairIndex],
+    diagnostics_->peRecorderStats_.chunkInterAppendPairNsMax[pairIndex] =
+        std::max(diagnostics_->peRecorderStats_.chunkInterAppendPairNsMax[pairIndex],
                  interAppendGapNs);
-    const std::uint32_t prevType = peRecorderLastAppendRecordType_;
+    const std::uint32_t prevType = diagnostics_->peRecorderLastAppendRecordType_;
     const std::uint32_t nextBucket = peCommandRecordTypeBucket(nextType);
     const std::size_t focusPair =
         peInterAppendFocusPairIndex(prevType, nextBucket);
@@ -1288,20 +1317,20 @@ void D3D9DeviceImpl::recordPeChunkInterAppendGap(std::int64_t appendEntryNs,
         }
         const std::size_t focusIndex =
             peInterAppendFocusCallFamilyIndex(focusPair, callFamily);
-        ++peRecorderStats_
+        ++diagnostics_->peRecorderStats_
             .chunkInterAppendFocusCallFamilySamples[focusIndex];
-        peRecorderStats_
+        diagnostics_->peRecorderStats_
             .chunkInterAppendFocusCallFamilyNsTotal[focusIndex] +=
             interAppendGapNs;
-        peRecorderStats_
+        diagnostics_->peRecorderStats_
             .chunkInterAppendFocusCallFamilyNsMax[focusIndex] =
             std::max(
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusCallFamilyNsMax[focusIndex],
                 interAppendGapNs);
         recordPeChunkInterAppendFocusPhaseSplit(focusPair, appendEntryNs);
     }
-    if (peRecorderBetweenCallsActive_) {
+    if (diagnostics_->peRecorderBetweenCallsActive_) {
         resetPeBetweenCallsWindow();
     }
 }
@@ -1309,56 +1338,56 @@ void D3D9DeviceImpl::recordPeChunkInterAppendGap(std::int64_t appendEntryNs,
 void D3D9DeviceImpl::recordPeChunkInterAppendFocusPhaseSplit(std::size_t focusPair,
                                              std::int64_t appendEntryNs) {
     if (focusPair >= kPeInterAppendFocusPairCount ||
-        peRecorderLastAppendReturnNs_ <= 0 ||
-        dxmt9PeCurrentCallEntryNs <= peRecorderLastAppendReturnNs_ ||
+        diagnostics_->peRecorderLastAppendReturnNs_ <= 0 ||
+        dxmt9PeCurrentCallEntryNs <= diagnostics_->peRecorderLastAppendReturnNs_ ||
         dxmt9PeCurrentCallEntryNs > appendEntryNs) {
         return;
     }
     const auto preCallNs = static_cast<std::uint64_t>(
-        dxmt9PeCurrentCallEntryNs - peRecorderLastAppendReturnNs_);
+        dxmt9PeCurrentCallEntryNs - diagnostics_->peRecorderLastAppendReturnNs_);
     const auto insideCallNs = static_cast<std::uint64_t>(
         appendEntryNs - dxmt9PeCurrentCallEntryNs);
-    ++peRecorderStats_.chunkInterAppendFocusPhaseSamples[focusPair];
-    peRecorderStats_.chunkInterAppendFocusPreCallNsTotal[focusPair] +=
+    ++diagnostics_->peRecorderStats_.chunkInterAppendFocusPhaseSamples[focusPair];
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusPreCallNsTotal[focusPair] +=
         preCallNs;
-    peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair] =
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair] =
         std::max(
-            peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair],
+            diagnostics_->peRecorderStats_.chunkInterAppendFocusPreCallNsMax[focusPair],
             preCallNs);
-    peRecorderStats_.chunkInterAppendFocusInsideCallNsTotal[focusPair] +=
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusInsideCallNsTotal[focusPair] +=
         insideCallNs;
-    peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair] =
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair] =
         std::max(
-            peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair],
+            diagnostics_->peRecorderStats_.chunkInterAppendFocusInsideCallNsMax[focusPair],
             insideCallNs);
     recordPeChunkInterAppendFocusTailSplit(focusPair);
 }
 
 void D3D9DeviceImpl::recordPeChunkInterAppendFocusTailSplit(std::size_t focusPair) {
     if (focusPair >= kPeInterAppendFocusPairCount ||
-        peRecorderLastAppendReturnNs_ <= 0 ||
-        peRecorderLastAppendCallExitNs_ <= peRecorderLastAppendReturnNs_ ||
-        dxmt9PeCurrentCallEntryNs < peRecorderLastAppendCallExitNs_) {
+        diagnostics_->peRecorderLastAppendReturnNs_ <= 0 ||
+        diagnostics_->peRecorderLastAppendCallExitNs_ <= diagnostics_->peRecorderLastAppendReturnNs_ ||
+        dxmt9PeCurrentCallEntryNs < diagnostics_->peRecorderLastAppendCallExitNs_) {
         return;
     }
     const auto prevCallTailNs = static_cast<std::uint64_t>(
-        peRecorderLastAppendCallExitNs_ - peRecorderLastAppendReturnNs_);
+        diagnostics_->peRecorderLastAppendCallExitNs_ - diagnostics_->peRecorderLastAppendReturnNs_);
     const auto betweenCallsNs = static_cast<std::uint64_t>(
-        dxmt9PeCurrentCallEntryNs - peRecorderLastAppendCallExitNs_);
-    ++peRecorderStats_.chunkInterAppendFocusTailSplitSamples[focusPair];
-    peRecorderStats_
+        dxmt9PeCurrentCallEntryNs - diagnostics_->peRecorderLastAppendCallExitNs_);
+    ++diagnostics_->peRecorderStats_.chunkInterAppendFocusTailSplitSamples[focusPair];
+    diagnostics_->peRecorderStats_
         .chunkInterAppendFocusPrevCallTailNsTotal[focusPair] +=
         prevCallTailNs;
-    peRecorderStats_.chunkInterAppendFocusPrevCallTailNsMax[focusPair] =
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusPrevCallTailNsMax[focusPair] =
         std::max(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusPrevCallTailNsMax[focusPair],
             prevCallTailNs);
-    peRecorderStats_.chunkInterAppendFocusBetweenCallsNsTotal[focusPair] +=
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusBetweenCallsNsTotal[focusPair] +=
         betweenCallsNs;
-    peRecorderStats_.chunkInterAppendFocusBetweenCallsNsMax[focusPair] =
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusBetweenCallsNsMax[focusPair] =
         std::max(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallsNsMax[focusPair],
             betweenCallsNs);
     recordPeChunkInterAppendFocusBetweenCallFamilies(focusPair);
@@ -1368,53 +1397,53 @@ void D3D9DeviceImpl::recordPeBetweenCallsEntry(const char* callName,
                                std::int64_t entryNs,
                                const void* callerPc) {
     if (!dxmt9PeRecorderStatsEnabled() ||
-        !peRecorderBetweenCallsActive_ ||
-        entryNs <= peRecorderBetweenCallsStartNs_) {
+        !diagnostics_->peRecorderBetweenCallsActive_ ||
+        entryNs <= diagnostics_->peRecorderBetweenCallsStartNs_) {
         return;
     }
     const auto family = peInterAppendCallFamilyFromName(callName);
     const auto callNameBucket = peInterAppendCallNameFromName(callName);
-    if (peRecorderBetweenLastCallExitNs_ >=
-            peRecorderBetweenCallsStartNs_ &&
-        entryNs > peRecorderBetweenLastCallExitNs_) {
+    if (diagnostics_->peRecorderBetweenLastCallExitNs_ >=
+            diagnostics_->peRecorderBetweenCallsStartNs_ &&
+        entryNs > diagnostics_->peRecorderBetweenLastCallExitNs_) {
         const std::size_t transitionIndex =
             peInterAppendCallTransitionIndex(
-                peRecorderBetweenLastCallFamily_, family);
+                diagnostics_->peRecorderBetweenLastCallFamily_, family);
         const auto gapNs = static_cast<std::uint64_t>(
-            entryNs - peRecorderBetweenLastCallExitNs_);
-        ++peRecorderBetweenCallTransitionSamples_[transitionIndex];
-        peRecorderBetweenCallTransitionNsTotal_[transitionIndex] += gapNs;
-        peRecorderBetweenCallTransitionNsMax_[transitionIndex] =
+            entryNs - diagnostics_->peRecorderBetweenLastCallExitNs_);
+        ++diagnostics_->peRecorderBetweenCallTransitionSamples_[transitionIndex];
+        diagnostics_->peRecorderBetweenCallTransitionNsTotal_[transitionIndex] += gapNs;
+        diagnostics_->peRecorderBetweenCallTransitionNsMax_[transitionIndex] =
             std::max(
-                peRecorderBetweenCallTransitionNsMax_[transitionIndex],
+                diagnostics_->peRecorderBetweenCallTransitionNsMax_[transitionIndex],
                 gapNs);
         const std::size_t nameTransitionIndex =
             peInterAppendCallNameTransitionIndex(
-                peRecorderBetweenLastCallName_, callNameBucket);
-        ++peRecorderBetweenCallNameTransitionSamples_[nameTransitionIndex];
-        peRecorderBetweenCallNameTransitionNsTotal_[nameTransitionIndex] +=
+                diagnostics_->peRecorderBetweenLastCallName_, callNameBucket);
+        ++diagnostics_->peRecorderBetweenCallNameTransitionSamples_[nameTransitionIndex];
+        diagnostics_->peRecorderBetweenCallNameTransitionNsTotal_[nameTransitionIndex] +=
             gapNs;
-        peRecorderBetweenCallNameTransitionNsMax_[nameTransitionIndex] =
+        diagnostics_->peRecorderBetweenCallNameTransitionNsMax_[nameTransitionIndex] =
             std::max(
-                peRecorderBetweenCallNameTransitionNsMax_[
+                diagnostics_->peRecorderBetweenCallNameTransitionNsMax_[
                     nameTransitionIndex],
                 gapNs);
         PeInterAppendCallSiteLocalKey siteKey{
-            static_cast<std::uint32_t>(peRecorderBetweenLastCallName_),
+            static_cast<std::uint32_t>(diagnostics_->peRecorderBetweenLastCallName_),
             static_cast<std::uint32_t>(callNameBucket),
             callerPc};
         auto& siteStats =
-            peRecorderBetweenCallNameTransitionSites_[siteKey];
+            diagnostics_->peRecorderBetweenCallNameTransitionSites_[siteKey];
         ++siteStats.samples;
         siteStats.totalNs += gapNs;
         siteStats.maxNs = std::max(siteStats.maxNs, gapNs);
     }
-    peRecorderBetweenLastCallExitNs_ = 0;
-    peRecorderBetweenLastCallFamily_ = family;
-    peRecorderBetweenLastCallName_ = callNameBucket;
-    ++peRecorderBetweenCallFamilySamples_[
+    diagnostics_->peRecorderBetweenLastCallExitNs_ = 0;
+    diagnostics_->peRecorderBetweenLastCallFamily_ = family;
+    diagnostics_->peRecorderBetweenLastCallName_ = callNameBucket;
+    ++diagnostics_->peRecorderBetweenCallFamilySamples_[
         static_cast<std::size_t>(family)];
-    ++peRecorderBetweenCallNameSamples_[
+    ++diagnostics_->peRecorderBetweenCallNameSamples_[
         static_cast<std::size_t>(callNameBucket)];
 }
 
@@ -1422,25 +1451,25 @@ void D3D9DeviceImpl::recordPeBetweenCallsReturn(const char* callName,
                                 std::int64_t entryNs,
                                 std::int64_t exitNs) {
     if (!dxmt9PeRecorderStatsEnabled() ||
-        !peRecorderBetweenCallsActive_ ||
-        entryNs <= peRecorderBetweenCallsStartNs_ ||
+        !diagnostics_->peRecorderBetweenCallsActive_ ||
+        entryNs <= diagnostics_->peRecorderBetweenCallsStartNs_ ||
         exitNs <= entryNs) {
         return;
     }
     const auto callNameBucket = peInterAppendCallNameFromName(callName);
     const auto index = static_cast<std::size_t>(callNameBucket);
     const auto cpuNs = static_cast<std::uint64_t>(exitNs - entryNs);
-    peRecorderBetweenLastCallFamily_ =
+    diagnostics_->peRecorderBetweenLastCallFamily_ =
         peInterAppendCallFamilyFromName(callName);
-    peRecorderBetweenLastCallName_ = callNameBucket;
-    peRecorderBetweenLastCallExitNs_ = exitNs;
-    ++peRecorderBetweenCallBodyCalls_;
-    peRecorderBetweenCallBodyCpuNsTotal_ += cpuNs;
-    peRecorderBetweenCallBodyCpuNsMax_ =
-        std::max(peRecorderBetweenCallBodyCpuNsMax_, cpuNs);
-    peRecorderBetweenCallNameCpuNsTotal_[index] += cpuNs;
-    peRecorderBetweenCallNameCpuNsMax_[index] =
-        std::max(peRecorderBetweenCallNameCpuNsMax_[index], cpuNs);
+    diagnostics_->peRecorderBetweenLastCallName_ = callNameBucket;
+    diagnostics_->peRecorderBetweenLastCallExitNs_ = exitNs;
+    ++diagnostics_->peRecorderBetweenCallBodyCalls_;
+    diagnostics_->peRecorderBetweenCallBodyCpuNsTotal_ += cpuNs;
+    diagnostics_->peRecorderBetweenCallBodyCpuNsMax_ =
+        std::max(diagnostics_->peRecorderBetweenCallBodyCpuNsMax_, cpuNs);
+    diagnostics_->peRecorderBetweenCallNameCpuNsTotal_[index] += cpuNs;
+    diagnostics_->peRecorderBetweenCallNameCpuNsMax_[index] =
+        std::max(diagnostics_->peRecorderBetweenCallNameCpuNsMax_[index], cpuNs);
 }
 
 void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_t focusPair) {
@@ -1448,9 +1477,9 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
         resetPeBetweenCallsWindow();
         return;
     }
-    auto samples = peRecorderBetweenCallFamilySamples_;
+    auto samples = diagnostics_->peRecorderBetweenCallFamilySamples_;
     const auto terminalFamily =
-        peRecorderBetweenCallsActive_
+        diagnostics_->peRecorderBetweenCallsActive_
         ? peInterAppendCallFamilyFromName(dxmt9PeCurrentCallName)
         : PeInterAppendCallFamily::Unknown;
     auto& terminalSamples =
@@ -1458,23 +1487,23 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
     if (terminalSamples != 0) {
         --terminalSamples;
     }
-    auto callNameSamples = peRecorderBetweenCallNameSamples_;
-    auto callNameCpuNsTotal = peRecorderBetweenCallNameCpuNsTotal_;
-    auto callNameCpuNsMax = peRecorderBetweenCallNameCpuNsMax_;
-    auto transitionSamples = peRecorderBetweenCallTransitionSamples_;
-    auto transitionNsTotal = peRecorderBetweenCallTransitionNsTotal_;
-    auto transitionNsMax = peRecorderBetweenCallTransitionNsMax_;
+    auto callNameSamples = diagnostics_->peRecorderBetweenCallNameSamples_;
+    auto callNameCpuNsTotal = diagnostics_->peRecorderBetweenCallNameCpuNsTotal_;
+    auto callNameCpuNsMax = diagnostics_->peRecorderBetweenCallNameCpuNsMax_;
+    auto transitionSamples = diagnostics_->peRecorderBetweenCallTransitionSamples_;
+    auto transitionNsTotal = diagnostics_->peRecorderBetweenCallTransitionNsTotal_;
+    auto transitionNsMax = diagnostics_->peRecorderBetweenCallTransitionNsMax_;
     auto nameTransitionSamples =
-        peRecorderBetweenCallNameTransitionSamples_;
+        diagnostics_->peRecorderBetweenCallNameTransitionSamples_;
     auto nameTransitionNsTotal =
-        peRecorderBetweenCallNameTransitionNsTotal_;
-    auto nameTransitionNsMax = peRecorderBetweenCallNameTransitionNsMax_;
-    const std::uint64_t bodyCalls = peRecorderBetweenCallBodyCalls_;
+        diagnostics_->peRecorderBetweenCallNameTransitionNsTotal_;
+    auto nameTransitionNsMax = diagnostics_->peRecorderBetweenCallNameTransitionNsMax_;
+    const std::uint64_t bodyCalls = diagnostics_->peRecorderBetweenCallBodyCalls_;
     const std::uint64_t bodyCpuNsTotal =
-        peRecorderBetweenCallBodyCpuNsTotal_;
-    const std::uint64_t bodyCpuNsMax = peRecorderBetweenCallBodyCpuNsMax_;
+        diagnostics_->peRecorderBetweenCallBodyCpuNsTotal_;
+    const std::uint64_t bodyCpuNsMax = diagnostics_->peRecorderBetweenCallBodyCpuNsMax_;
     const auto terminalCallName =
-        peRecorderBetweenCallsActive_
+        diagnostics_->peRecorderBetweenCallsActive_
         ? peInterAppendCallNameFromName(dxmt9PeCurrentCallName)
         : PeInterAppendCallName::Unknown;
     auto& terminalCallNameSamples =
@@ -1490,7 +1519,7 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
         }
         const std::size_t index =
             focusPair * kPeInterAppendCallFamilyCount + family;
-        peRecorderStats_
+        diagnostics_->peRecorderStats_
             .chunkInterAppendFocusBetweenCallFamilySamples[index] += count;
     }
     for (std::size_t callName = 0; callName < kPeInterAppendCallNameCount;
@@ -1501,14 +1530,14 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
         }
         const std::size_t index =
             focusPair * kPeInterAppendCallNameCount + callName;
-        peRecorderStats_
+        diagnostics_->peRecorderStats_
             .chunkInterAppendFocusBetweenCallNameSamples[index] += count;
-        peRecorderStats_
+        diagnostics_->peRecorderStats_
             .chunkInterAppendFocusBetweenCallNameCpuNsTotal[index] +=
             callNameCpuNsTotal[callName];
-        peRecorderStats_.chunkInterAppendFocusBetweenCallNameCpuNsMax[index] =
+        diagnostics_->peRecorderStats_.chunkInterAppendFocusBetweenCallNameCpuNsMax[index] =
             std::max(
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallNameCpuNsMax[index],
             callNameCpuNsMax[callName]);
     }
@@ -1527,16 +1556,16 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
                     focusPair,
                     static_cast<PeInterAppendCallFamily>(prevFamily),
                     static_cast<PeInterAppendCallFamily>(nextFamily));
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallTransitionSamples[
                     index] += count;
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallTransitionNsTotal[
                     index] += transitionNsTotal[localIndex];
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallTransitionNsMax[index] =
                 std::max(
-                    peRecorderStats_
+                    diagnostics_->peRecorderStats_
                         .chunkInterAppendFocusBetweenCallTransitionNsMax[
                             index],
                     transitionNsMax[localIndex]);
@@ -1558,43 +1587,43 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
                     focusPair,
                     static_cast<PeInterAppendCallName>(prevCallName),
                     static_cast<PeInterAppendCallName>(nextCallName));
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameTransitionSamples[
                     index] += count;
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameTransitionNsTotal[
                     index] += nameTransitionNsTotal[localIndex];
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
                     index] =
                 std::max(
-                    peRecorderStats_
+                    diagnostics_->peRecorderStats_
                         .chunkInterAppendFocusBetweenCallNameTransitionNsMax[
                             index],
                     nameTransitionNsMax[localIndex]);
         }
     }
     const auto focusPairValue = static_cast<std::uint32_t>(focusPair);
-    for (const auto& entry : peRecorderBetweenCallNameTransitionSites_) {
+    for (const auto& entry : diagnostics_->peRecorderBetweenCallNameTransitionSites_) {
         const auto& key = entry.first;
         const auto& stats = entry.second;
         PeInterAppendCallSiteKey siteKey{
             focusPairValue, key.prevCallName, key.nextCallName,
             key.callerPc};
         auto& siteStats =
-            peRecorderFocusBetweenCallNameTransitionSites_[siteKey];
+            diagnostics_->peRecorderFocusBetweenCallNameTransitionSites_[siteKey];
         siteStats.samples += stats.samples;
         siteStats.totalNs += stats.totalNs;
         siteStats.maxNs = std::max(siteStats.maxNs, stats.maxNs);
     }
-    peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCalls[focusPair] +=
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCalls[focusPair] +=
         bodyCalls;
-    peRecorderStats_
+    diagnostics_->peRecorderStats_
         .chunkInterAppendFocusBetweenCallBodyCpuNsTotal[focusPair] +=
         bodyCpuNsTotal;
-    peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCpuNsMax[focusPair] =
+    diagnostics_->peRecorderStats_.chunkInterAppendFocusBetweenCallBodyCpuNsMax[focusPair] =
         std::max(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallBodyCpuNsMax[focusPair],
             bodyCpuNsMax);
     resetPeBetweenCallsWindow();
@@ -1602,51 +1631,51 @@ void D3D9DeviceImpl::recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_
 
 void D3D9DeviceImpl::notePeCurrentCallReturnForInterAppendSplit() {
     if (!dxmt9PeRecorderStatsEnabled() ||
-        peRecorderLastAppendCallEntryNs_ <= 0 ||
-        peRecorderLastAppendCallEntryNs_ != dxmt9PeCurrentCallEntryNs ||
-        peRecorderLastAppendRecordType_ !=
+        diagnostics_->peRecorderLastAppendCallEntryNs_ <= 0 ||
+        diagnostics_->peRecorderLastAppendCallEntryNs_ != dxmt9PeCurrentCallEntryNs ||
+        diagnostics_->peRecorderLastAppendRecordType_ !=
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
         return;
     }
-    peRecorderLastAppendCallExitNs_ =
+    diagnostics_->peRecorderLastAppendCallExitNs_ =
         dxmt9SteadyClockNs(std::chrono::steady_clock::now());
-    peRecorderBetweenCallsActive_ = true;
-    peRecorderBetweenCallsStartNs_ = peRecorderLastAppendCallExitNs_;
-    peRecorderBetweenCallFamilySamples_.fill(0);
-    peRecorderBetweenCallNameSamples_.fill(0);
-    peRecorderBetweenCallNameCpuNsTotal_.fill(0);
-    peRecorderBetweenCallNameCpuNsMax_.fill(0);
-    peRecorderBetweenLastCallFamily_ = PeInterAppendCallFamily::Draw;
-    peRecorderBetweenLastCallName_ =
+    diagnostics_->peRecorderBetweenCallsActive_ = true;
+    diagnostics_->peRecorderBetweenCallsStartNs_ = diagnostics_->peRecorderLastAppendCallExitNs_;
+    diagnostics_->peRecorderBetweenCallFamilySamples_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameSamples_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameCpuNsTotal_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameCpuNsMax_.fill(0);
+    diagnostics_->peRecorderBetweenLastCallFamily_ = PeInterAppendCallFamily::Draw;
+    diagnostics_->peRecorderBetweenLastCallName_ =
         PeInterAppendCallName::DrawIndexedPrimitive;
-    peRecorderBetweenLastCallExitNs_ = peRecorderBetweenCallsStartNs_;
-    peRecorderBetweenCallTransitionSamples_.fill(0);
-    peRecorderBetweenCallTransitionNsTotal_.fill(0);
-    peRecorderBetweenCallTransitionNsMax_.fill(0);
-    peRecorderBetweenCallNameTransitionSamples_.fill(0);
-    peRecorderBetweenCallNameTransitionNsTotal_.fill(0);
-    peRecorderBetweenCallNameTransitionNsMax_.fill(0);
-    peRecorderBetweenCallNameTransitionSites_.clear();
-    peRecorderBetweenCallBodyCalls_ = 0;
-    peRecorderBetweenCallBodyCpuNsTotal_ = 0;
-    peRecorderBetweenCallBodyCpuNsMax_ = 0;
+    diagnostics_->peRecorderBetweenLastCallExitNs_ = diagnostics_->peRecorderBetweenCallsStartNs_;
+    diagnostics_->peRecorderBetweenCallTransitionSamples_.fill(0);
+    diagnostics_->peRecorderBetweenCallTransitionNsTotal_.fill(0);
+    diagnostics_->peRecorderBetweenCallTransitionNsMax_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameTransitionSamples_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameTransitionNsTotal_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameTransitionNsMax_.fill(0);
+    diagnostics_->peRecorderBetweenCallNameTransitionSites_.clear();
+    diagnostics_->peRecorderBetweenCallBodyCalls_ = 0;
+    diagnostics_->peRecorderBetweenCallBodyCpuNsTotal_ = 0;
+    diagnostics_->peRecorderBetweenCallBodyCpuNsMax_ = 0;
 }
 
 void D3D9DeviceImpl::recordPeAppendCpu(std::uint64_t appendCpuNs, bool noFlushAppend) {
     if (!dxmt9PeRecorderStatsEnabled() || appendCpuNs == 0) {
         return;
     }
-    ++peRecorderStats_.recordAppendCalls;
-    peRecorderStats_.recordAppendCpuNsTotal += appendCpuNs;
-    peRecorderStats_.recordAppendCpuNsMax =
-        std::max(peRecorderStats_.recordAppendCpuNsMax, appendCpuNs);
+    ++diagnostics_->peRecorderStats_.recordAppendCalls;
+    diagnostics_->peRecorderStats_.recordAppendCpuNsTotal += appendCpuNs;
+    diagnostics_->peRecorderStats_.recordAppendCpuNsMax =
+        std::max(diagnostics_->peRecorderStats_.recordAppendCpuNsMax, appendCpuNs);
     if (!noFlushAppend) {
         return;
     }
-    ++peRecorderStats_.recordAppendNoFlushCalls;
-    peRecorderStats_.recordAppendNoFlushCpuNsTotal += appendCpuNs;
-    peRecorderStats_.recordAppendNoFlushCpuNsMax =
-        std::max(peRecorderStats_.recordAppendNoFlushCpuNsMax,
+    ++diagnostics_->peRecorderStats_.recordAppendNoFlushCalls;
+    diagnostics_->peRecorderStats_.recordAppendNoFlushCpuNsTotal += appendCpuNs;
+    diagnostics_->peRecorderStats_.recordAppendNoFlushCpuNsMax =
+        std::max(diagnostics_->peRecorderStats_.recordAppendNoFlushCpuNsMax,
                  appendCpuNs);
 }
 
@@ -1663,17 +1692,17 @@ void D3D9DeviceImpl::recordPeConstSetterCpu(std::uint32_t recordType,
     }
     const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
     if (recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
-        ++peRecorderStats_.vsConstFSetterCalls;
-        peRecorderStats_.vsConstFSetterRegs += regs;
-        peRecorderStats_.vsConstFSetterCpuNsTotal += cpuNs;
-        peRecorderStats_.vsConstFSetterCpuNsMax =
-            std::max(peRecorderStats_.vsConstFSetterCpuNsMax, cpuNs);
+        ++diagnostics_->peRecorderStats_.vsConstFSetterCalls;
+        diagnostics_->peRecorderStats_.vsConstFSetterRegs += regs;
+        diagnostics_->peRecorderStats_.vsConstFSetterCpuNsTotal += cpuNs;
+        diagnostics_->peRecorderStats_.vsConstFSetterCpuNsMax =
+            std::max(diagnostics_->peRecorderStats_.vsConstFSetterCpuNsMax, cpuNs);
     } else if (recordType == D9C_COMMAND_RECORD_SET_PS_CONST_F) {
-        ++peRecorderStats_.psConstFSetterCalls;
-        peRecorderStats_.psConstFSetterRegs += regs;
-        peRecorderStats_.psConstFSetterCpuNsTotal += cpuNs;
-        peRecorderStats_.psConstFSetterCpuNsMax =
-            std::max(peRecorderStats_.psConstFSetterCpuNsMax, cpuNs);
+        ++diagnostics_->peRecorderStats_.psConstFSetterCalls;
+        diagnostics_->peRecorderStats_.psConstFSetterRegs += regs;
+        diagnostics_->peRecorderStats_.psConstFSetterCpuNsTotal += cpuNs;
+        diagnostics_->peRecorderStats_.psConstFSetterCpuNsMax =
+            std::max(diagnostics_->peRecorderStats_.psConstFSetterCpuNsMax, cpuNs);
     }
 }
 
@@ -1690,20 +1719,20 @@ void D3D9DeviceImpl::recordPeConstFlushCpu(std::uint32_t recordType,
         return;
     }
     const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
-    ++peRecorderStats_.constFlushCalls;
-    peRecorderStats_.constFlushRecords += records;
-    peRecorderStats_.constFlushRegs += regs;
-    peRecorderStats_.constFlushCpuNsTotal += cpuNs;
-    peRecorderStats_.constFlushCpuNsMax =
-        std::max(peRecorderStats_.constFlushCpuNsMax, cpuNs);
+    ++diagnostics_->peRecorderStats_.constFlushCalls;
+    diagnostics_->peRecorderStats_.constFlushRecords += records;
+    diagnostics_->peRecorderStats_.constFlushRegs += regs;
+    diagnostics_->peRecorderStats_.constFlushCpuNsTotal += cpuNs;
+    diagnostics_->peRecorderStats_.constFlushCpuNsMax =
+        std::max(diagnostics_->peRecorderStats_.constFlushCpuNsMax, cpuNs);
     if (recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
-        peRecorderStats_.vsConstFFlushRecords += records;
-        peRecorderStats_.vsConstFFlushRegs += regs;
-        peRecorderStats_.vsConstFFlushCpuNsTotal += cpuNs;
+        diagnostics_->peRecorderStats_.vsConstFFlushRecords += records;
+        diagnostics_->peRecorderStats_.vsConstFFlushRegs += regs;
+        diagnostics_->peRecorderStats_.vsConstFFlushCpuNsTotal += cpuNs;
     } else if (recordType == D9C_COMMAND_RECORD_SET_PS_CONST_F) {
-        peRecorderStats_.psConstFFlushRecords += records;
-        peRecorderStats_.psConstFFlushRegs += regs;
-        peRecorderStats_.psConstFFlushCpuNsTotal += cpuNs;
+        diagnostics_->peRecorderStats_.psConstFFlushRecords += records;
+        diagnostics_->peRecorderStats_.psConstFFlushRegs += regs;
+        diagnostics_->peRecorderStats_.psConstFFlushCpuNsTotal += cpuNs;
     }
 }
 
@@ -1717,10 +1746,10 @@ void D3D9DeviceImpl::recordPeChunkBarrierConstCpu(std::int64_t entryNs) {
         return;
     }
     const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
-    ++peRecorderStats_.chunkBarrierFlushCalls;
-    peRecorderStats_.chunkBarrierConstCpuNsTotal += cpuNs;
-    peRecorderStats_.chunkBarrierConstCpuNsMax =
-        std::max(peRecorderStats_.chunkBarrierConstCpuNsMax, cpuNs);
+    ++diagnostics_->peRecorderStats_.chunkBarrierFlushCalls;
+    diagnostics_->peRecorderStats_.chunkBarrierConstCpuNsTotal += cpuNs;
+    diagnostics_->peRecorderStats_.chunkBarrierConstCpuNsMax =
+        std::max(diagnostics_->peRecorderStats_.chunkBarrierConstCpuNsMax, cpuNs);
 }
 
 void D3D9DeviceImpl::recordPeApplyStateBuildCpu(std::int64_t entryNs) {
@@ -1733,10 +1762,10 @@ void D3D9DeviceImpl::recordPeApplyStateBuildCpu(std::int64_t entryNs) {
         return;
     }
     const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
-    ++peRecorderStats_.applyStateBuildCalls;
-    peRecorderStats_.applyStateBuildCpuNsTotal += cpuNs;
-    peRecorderStats_.applyStateBuildCpuNsMax =
-        std::max(peRecorderStats_.applyStateBuildCpuNsMax, cpuNs);
+    ++diagnostics_->peRecorderStats_.applyStateBuildCalls;
+    diagnostics_->peRecorderStats_.applyStateBuildCpuNsTotal += cpuNs;
+    diagnostics_->peRecorderStats_.applyStateBuildCpuNsMax =
+        std::max(diagnostics_->peRecorderStats_.applyStateBuildCpuNsMax, cpuNs);
 }
 
 void D3D9DeviceImpl::recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
@@ -1749,9 +1778,9 @@ void D3D9DeviceImpl::recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
     if (index >= kPeHotStateSetterFamilyCount) {
         return;
     }
-    ++peRecorderStats_.hotStateSetterCalls[index];
+    ++diagnostics_->peRecorderStats_.hotStateSetterCalls[index];
     if (dirty) {
-        ++peRecorderStats_.hotStateSetterDirty[index];
+        ++diagnostics_->peRecorderStats_.hotStateSetterDirty[index];
     }
     const std::int64_t returnNs =
         dxmt9SteadyClockNs(std::chrono::steady_clock::now());
@@ -1759,9 +1788,9 @@ void D3D9DeviceImpl::recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
         return;
     }
     const auto cpuNs = static_cast<std::uint64_t>(returnNs - entryNs);
-    peRecorderStats_.hotStateSetterCpuNsTotal[index] += cpuNs;
-    peRecorderStats_.hotStateSetterCpuNsMax[index] =
-        std::max(peRecorderStats_.hotStateSetterCpuNsMax[index], cpuNs);
+    diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[index] += cpuNs;
+    diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[index] =
+        std::max(diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[index], cpuNs);
 }
 
 void D3D9DeviceImpl::notePeChunkAppendBoundary(std::int64_t appendReturnNs,
@@ -1770,24 +1799,24 @@ void D3D9DeviceImpl::notePeChunkAppendBoundary(std::int64_t appendReturnNs,
         commandChunk_.recordCount() == 0) {
         return;
     }
-    if (peRecorderCurrentChunkFirstAppendNs_ == 0) {
-        peRecorderCurrentChunkFirstAppendNs_ = appendReturnNs;
-        const std::int64_t priorReturnNs = peRecorderLastChunkReturnNs_;
+    if (diagnostics_->peRecorderCurrentChunkFirstAppendNs_ == 0) {
+        diagnostics_->peRecorderCurrentChunkFirstAppendNs_ = appendReturnNs;
+        const std::int64_t priorReturnNs = diagnostics_->peRecorderLastChunkReturnNs_;
         if (priorReturnNs > 0 && appendReturnNs > priorReturnNs) {
             const auto firstRecordGapNs =
                 static_cast<std::uint64_t>(
                     appendReturnNs - priorReturnNs);
-            ++peRecorderStats_.chunkFirstRecordGapSamples;
-            peRecorderStats_.chunkFirstRecordGapNsTotal += firstRecordGapNs;
-            peRecorderStats_.chunkFirstRecordGapNsMax =
-                std::max(peRecorderStats_.chunkFirstRecordGapNsMax,
+            ++diagnostics_->peRecorderStats_.chunkFirstRecordGapSamples;
+            diagnostics_->peRecorderStats_.chunkFirstRecordGapNsTotal += firstRecordGapNs;
+            diagnostics_->peRecorderStats_.chunkFirstRecordGapNsMax =
+                std::max(diagnostics_->peRecorderStats_.chunkFirstRecordGapNsMax,
                          firstRecordGapNs);
         }
     }
-    peRecorderLastAppendReturnNs_ = appendReturnNs;
-    peRecorderLastAppendCallEntryNs_ = dxmt9PeCurrentCallEntryNs;
-    peRecorderLastAppendCallExitNs_ = 0;
-    peRecorderLastAppendRecordType_ = peCommandRecordTypeBucket(type);
+    diagnostics_->peRecorderLastAppendReturnNs_ = appendReturnNs;
+    diagnostics_->peRecorderLastAppendCallEntryNs_ = dxmt9PeCurrentCallEntryNs;
+    diagnostics_->peRecorderLastAppendCallExitNs_ = 0;
+    diagnostics_->peRecorderLastAppendRecordType_ = peCommandRecordTypeBucket(type);
 }
 
 void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
@@ -1795,10 +1824,10 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         return;
     }
     if (!force &&
-        peRecorderStatsLastLoggedCommitCount_ == peRecorderStats_.commitCount) {
+        diagnostics_->peRecorderStatsLastLoggedCommitCount_ == diagnostics_->peRecorderStats_.commitCount) {
         return;
     }
-    peRecorderStatsLastLoggedCommitCount_ = peRecorderStats_.commitCount;
+    diagnostics_->peRecorderStatsLastLoggedCommitCount_ = diagnostics_->peRecorderStats_.commitCount;
     const auto topInterAppendPairs = topPeInterAppendPairs();
     const auto hotRt =
         static_cast<std::size_t>(PeHotStateSetterFamily::RenderTarget);
@@ -1878,74 +1907,74 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
     const auto gapPsConstBetweenCallSites =
         topPeInterAppendFocusBetweenCallNameTransitionSites(gapPsConstFocus);
     const auto phaseSamples = [this](std::size_t focus) noexcept {
-        return peRecorderStats_.chunkInterAppendFocusPhaseSamples[focus];
+        return diagnostics_->peRecorderStats_.chunkInterAppendFocusPhaseSamples[focus];
     };
     const auto preCallMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusPreCallNsTotal[focus]) /
             1000000.0;
     };
     const auto preCallMaxMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusPreCallNsMax[focus]) /
             1000000.0;
     };
     const auto insideCallMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusInsideCallNsTotal[focus]) /
             1000000.0;
     };
     const auto insideCallMaxMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusInsideCallNsMax[focus]) /
             1000000.0;
     };
     const auto tailSplitSamples = [this](std::size_t focus) noexcept {
-        return peRecorderStats_
+        return diagnostics_->peRecorderStats_
             .chunkInterAppendFocusTailSplitSamples[focus];
     };
     const auto prevCallTailMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusPrevCallTailNsTotal[focus]) /
             1000000.0;
     };
     const auto prevCallTailMaxMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusPrevCallTailNsMax[focus]) /
             1000000.0;
     };
     const auto betweenCallsMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallsNsTotal[focus]) /
             1000000.0;
     };
     const auto betweenCallsMaxMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallsNsMax[focus]) /
             1000000.0;
     };
     const auto betweenCallBodyCalls = [this](std::size_t focus) noexcept {
-        return peRecorderStats_
+        return diagnostics_->peRecorderStats_
             .chunkInterAppendFocusBetweenCallBodyCalls[focus];
     };
     const auto betweenCallBodyCpuMs = [this](std::size_t focus) noexcept {
         return static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .chunkInterAppendFocusBetweenCallBodyCpuNsTotal[focus]) /
             1000000.0;
     };
     const auto betweenCallBodyCpuMaxMs =
         [this](std::size_t focus) noexcept {
             return static_cast<double>(
-                peRecorderStats_
+                diagnostics_->peRecorderStats_
                     .chunkInterAppendFocusBetweenCallBodyCpuNsMax[focus]) /
                 1000000.0;
         };
@@ -2070,53 +2099,53 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         "up{drawPrimitiveUPCalls=%llu drawIndexedPrimitiveUPCalls=%llu "
         "vertexBytes=%llu indexBytes=%llu}",
         event ? event : "unknown", this,
-        static_cast<unsigned long long>(peRecorderStats_.commitCount),
-        static_cast<unsigned long long>(peRecorderStats_.recordCountTotal),
-        static_cast<unsigned long long>(peRecorderStats_.recordCountMax),
-        static_cast<unsigned long long>(peRecorderStats_.payloadBytesTotal),
-        static_cast<unsigned long long>(peRecorderStats_.payloadBytesMax),
-        static_cast<unsigned long long>(peRecorderStats_.handleCountTotal),
-        static_cast<unsigned long long>(peRecorderStats_.handleCountMax),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.commitCount),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.recordCountTotal),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.recordCountMax),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.payloadBytesTotal),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.payloadBytesMax),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.handleCountTotal),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.handleCountMax),
         static_cast<unsigned long long>(
-            peRecorderStats_.chunkFillGapSamples),
-        static_cast<double>(peRecorderStats_.chunkFillGapNsTotal) /
+            diagnostics_->peRecorderStats_.chunkFillGapSamples),
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkFillGapNsTotal) /
             1000000.0,
-        static_cast<double>(peRecorderStats_.chunkFillGapNsMax) /
-            1000000.0,
-        static_cast<unsigned long long>(
-            peRecorderStats_.chunkFirstRecordGapSamples),
-        static_cast<double>(
-            peRecorderStats_.chunkFirstRecordGapNsTotal) / 1000000.0,
-        static_cast<double>(
-            peRecorderStats_.chunkFirstRecordGapNsMax) / 1000000.0,
-        static_cast<unsigned long long>(
-            peRecorderStats_.chunkActiveFillSamples),
-        static_cast<double>(peRecorderStats_.chunkActiveFillNsTotal) /
-            1000000.0,
-        static_cast<double>(peRecorderStats_.chunkActiveFillNsMax) /
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkFillGapNsMax) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.chunkInterAppendGapSamples),
+            diagnostics_->peRecorderStats_.chunkFirstRecordGapSamples),
         static_cast<double>(
-            peRecorderStats_.chunkInterAppendGapNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.chunkFirstRecordGapNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.chunkInterAppendGapNsMax) / 1000000.0,
-        static_cast<unsigned long long>(peRecorderStats_.chunkBridgeSamples),
-        static_cast<double>(peRecorderStats_.chunkBridgeNsTotal) /
+            diagnostics_->peRecorderStats_.chunkFirstRecordGapNsMax) / 1000000.0,
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.chunkActiveFillSamples),
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkActiveFillNsTotal) /
             1000000.0,
-        static_cast<double>(peRecorderStats_.chunkBridgeNsMax) /
-            1000000.0,
-        static_cast<unsigned long long>(peRecorderStats_.recordAppendCalls),
-        static_cast<double>(peRecorderStats_.recordAppendCpuNsTotal) /
-            1000000.0,
-        static_cast<double>(peRecorderStats_.recordAppendCpuNsMax) /
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkActiveFillNsMax) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.recordAppendNoFlushCalls),
+            diagnostics_->peRecorderStats_.chunkInterAppendGapSamples),
         static_cast<double>(
-            peRecorderStats_.recordAppendNoFlushCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.chunkInterAppendGapNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.recordAppendNoFlushCpuNsMax) / 1000000.0,
+            diagnostics_->peRecorderStats_.chunkInterAppendGapNsMax) / 1000000.0,
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.chunkBridgeSamples),
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkBridgeNsTotal) /
+            1000000.0,
+        static_cast<double>(diagnostics_->peRecorderStats_.chunkBridgeNsMax) /
+            1000000.0,
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.recordAppendCalls),
+        static_cast<double>(diagnostics_->peRecorderStats_.recordAppendCpuNsTotal) /
+            1000000.0,
+        static_cast<double>(diagnostics_->peRecorderStats_.recordAppendCpuNsMax) /
+            1000000.0,
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.recordAppendNoFlushCalls),
+        static_cast<double>(
+            diagnostics_->peRecorderStats_.recordAppendNoFlushCpuNsTotal) / 1000000.0,
+        static_cast<double>(
+            diagnostics_->peRecorderStats_.recordAppendNoFlushCpuNsMax) / 1000000.0,
         topInterAppendPairs[0].prevType,
         peCommandRecordTypeName(topInterAppendPairs[0].prevType),
         topInterAppendPairs[0].nextType,
@@ -2146,150 +2175,150 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         static_cast<double>(topInterAppendPairs[3].totalNs) / 1000000.0,
         static_cast<double>(topInterAppendPairs[3].maxNs) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.vsConstFSetterCalls),
+            diagnostics_->peRecorderStats_.vsConstFSetterCalls),
         static_cast<unsigned long long>(
-            peRecorderStats_.vsConstFSetterRegs),
+            diagnostics_->peRecorderStats_.vsConstFSetterRegs),
         static_cast<double>(
-            peRecorderStats_.vsConstFSetterCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.vsConstFSetterCpuNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.vsConstFSetterCpuNsMax) / 1000000.0,
+            diagnostics_->peRecorderStats_.vsConstFSetterCpuNsMax) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.psConstFSetterCalls),
+            diagnostics_->peRecorderStats_.psConstFSetterCalls),
         static_cast<unsigned long long>(
-            peRecorderStats_.psConstFSetterRegs),
+            diagnostics_->peRecorderStats_.psConstFSetterRegs),
         static_cast<double>(
-            peRecorderStats_.psConstFSetterCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.psConstFSetterCpuNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.psConstFSetterCpuNsMax) / 1000000.0,
-        static_cast<unsigned long long>(peRecorderStats_.constFlushCalls),
-        static_cast<unsigned long long>(peRecorderStats_.constFlushRecords),
-        static_cast<unsigned long long>(peRecorderStats_.constFlushRegs),
-        static_cast<double>(peRecorderStats_.constFlushCpuNsTotal) /
+            diagnostics_->peRecorderStats_.psConstFSetterCpuNsMax) / 1000000.0,
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.constFlushCalls),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.constFlushRecords),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.constFlushRegs),
+        static_cast<double>(diagnostics_->peRecorderStats_.constFlushCpuNsTotal) /
             1000000.0,
-        static_cast<double>(peRecorderStats_.constFlushCpuNsMax) /
+        static_cast<double>(diagnostics_->peRecorderStats_.constFlushCpuNsMax) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.vsConstFFlushRecords),
-        static_cast<unsigned long long>(peRecorderStats_.vsConstFFlushRegs),
+            diagnostics_->peRecorderStats_.vsConstFFlushRecords),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.vsConstFFlushRegs),
         static_cast<double>(
-            peRecorderStats_.vsConstFFlushCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.vsConstFFlushCpuNsTotal) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.psConstFFlushRecords),
-        static_cast<unsigned long long>(peRecorderStats_.psConstFFlushRegs),
+            diagnostics_->peRecorderStats_.psConstFFlushRecords),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.psConstFFlushRegs),
         static_cast<double>(
-            peRecorderStats_.psConstFFlushCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.psConstFFlushCpuNsTotal) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.chunkBarrierFlushCalls),
+            diagnostics_->peRecorderStats_.chunkBarrierFlushCalls),
         static_cast<double>(
-            peRecorderStats_.chunkBarrierConstCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.chunkBarrierConstCpuNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.chunkBarrierConstCpuNsMax) / 1000000.0,
+            diagnostics_->peRecorderStats_.chunkBarrierConstCpuNsMax) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.applyStateBuildCalls),
+            diagnostics_->peRecorderStats_.applyStateBuildCalls),
         static_cast<double>(
-            peRecorderStats_.applyStateBuildCpuNsTotal) / 1000000.0,
+            diagnostics_->peRecorderStats_.applyStateBuildCpuNsTotal) / 1000000.0,
         static_cast<double>(
-            peRecorderStats_.applyStateBuildCpuNsMax) / 1000000.0,
+            diagnostics_->peRecorderStats_.applyStateBuildCpuNsMax) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotRt]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotRt]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotRt]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotRt]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotRt]) /
-            1000000.0,
-        static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotRt]) / 1000000.0,
-        static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotDs]),
-        static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotDs]),
-        static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotDs]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotRt]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotDs]) / 1000000.0,
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotRt]) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotViewportScissor]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotDs]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotViewportScissor]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotDs]),
         static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotDs]) /
+            1000000.0,
+        static_cast<double>(
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotDs]) / 1000000.0,
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotViewportScissor]),
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotViewportScissor]),
+        static_cast<double>(
+            diagnostics_->peRecorderStats_
                 .hotStateSetterCpuNsTotal[hotViewportScissor]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotViewportScissor]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotViewportScissor]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotTransform]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotTransform]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotTransform]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotTransform]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotTransform]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotTransform]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotTransform]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotTransform]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotMaterialLightClip]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotMaterialLightClip]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotMaterialLightClip]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotMaterialLightClip]),
         static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .hotStateSetterCpuNsTotal[hotMaterialLightClip]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_
+            diagnostics_->peRecorderStats_
                 .hotStateSetterCpuNsMax[hotMaterialLightClip]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotRenderState]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotRenderState]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotRenderState]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotRenderState]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotRenderState]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotRenderState]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotRenderState]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotRenderState]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotTssSampler]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotTssSampler]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotTssSampler]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotTssSampler]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotTssSampler]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotTssSampler]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotTssSampler]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotTssSampler]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotTexture]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotTexture]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotTexture]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotTexture]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotTexture]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotTexture]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotTexture]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotTexture]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotVertexInput]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotVertexInput]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotVertexInput]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotVertexInput]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotVertexInput]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotVertexInput]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotVertexInput]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotVertexInput]) /
             1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterCalls[hotShader]),
+            diagnostics_->peRecorderStats_.hotStateSetterCalls[hotShader]),
         static_cast<unsigned long long>(
-            peRecorderStats_.hotStateSetterDirty[hotShader]),
+            diagnostics_->peRecorderStats_.hotStateSetterDirty[hotShader]),
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsTotal[hotShader]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsTotal[hotShader]) /
             1000000.0,
         static_cast<double>(
-            peRecorderStats_.hotStateSetterCpuNsMax[hotShader]) /
+            diagnostics_->peRecorderStats_.hotStateSetterCpuNsMax[hotShader]) /
             1000000.0,
         peInterAppendCallFamilyName(gapVsConstFamilies[0].family),
         static_cast<unsigned long long>(gapVsConstFamilies[0].samples),
@@ -2324,42 +2353,42 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         static_cast<double>(gapPsConstFamilies[1].totalNs) / 1000000.0,
         static_cast<double>(gapPsConstFamilies[1].maxNs) / 1000000.0,
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Explicit)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::CapacityPre)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::CapacityPost)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Barrier)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Present)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Readback)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Reset)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::StateBlock)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Child)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::Destructor)]),
         static_cast<unsigned long long>(
-            peRecorderStats_.flushReasons[
+            diagnostics_->peRecorderStats_.flushReasons[
                 static_cast<std::size_t>(PeRecorderFlushReason::StateMutation)]),
-        static_cast<unsigned long long>(peRecorderStats_.drawPrimitiveUPCalls),
-        static_cast<unsigned long long>(peRecorderStats_.drawIndexedPrimitiveUPCalls),
-        static_cast<unsigned long long>(peRecorderStats_.upVertexBytes),
-        static_cast<unsigned long long>(peRecorderStats_.upIndexBytes));
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.drawPrimitiveUPCalls),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.drawIndexedPrimitiveUPCalls),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.upVertexBytes),
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.upIndexBytes));
     dxmt9DeviceInfoLog(
         "pe_recorder_gap_call_stats event=%s device=%p "
         "gapDrawIndexedVsConstFTop1CallFamily=%s "
@@ -2844,7 +2873,7 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
     if (decimationN == 0) {
         return;
     }
-    const auto& appendStats = peChunkAppendDecimatedStats_;
+    const auto& appendStats = diagnostics_->peChunkAppendDecimatedStats_;
     const auto& constSetterStats = peConstSetterDecimatedStats();
     // Per-call register-count split of the const_setter scope. A flat
     // ns/sample across buckets means the fixed per-call entry cost
@@ -2869,18 +2898,18 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
     }
     std::string appendTypeText;
     {
-        static const char* const kTypeNames[kPeAppendTypeBuckets] = {
+        static const char* const kTypeNames[PeDiagnosticsState::kPeAppendTypeBuckets] = {
             "draw", "drawidx", "drawup", "applystate",
             "vsconst", "psconst", "clear", "other"};
-        for (std::size_t i = 0; i < kPeAppendTypeBuckets; ++i) {
-            if (peAppendTypeCounts_[i] == 0) continue;
+        for (std::size_t i = 0; i < PeDiagnosticsState::kPeAppendTypeBuckets; ++i) {
+            if (diagnostics_->peAppendTypeCounts_[i] == 0) continue;
             char buf[128];
             std::snprintf(buf, sizeof(buf),
                           " append_%s_calls=%llu append_%s_bytes=%llu",
                           kTypeNames[i],
-                          static_cast<unsigned long long>(peAppendTypeCounts_[i]),
+                          static_cast<unsigned long long>(diagnostics_->peAppendTypeCounts_[i]),
                           kTypeNames[i],
-                          static_cast<unsigned long long>(peAppendTypeBytes_[i]));
+                          static_cast<unsigned long long>(diagnostics_->peAppendTypeBytes_[i]));
             appendTypeText += buf;
         }
     }
@@ -2899,7 +2928,7 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         "draw_swvp_sampled=%llu draw_swvp_ms=%.3f "
         "draw_record_sampled=%llu draw_record_ms=%.3f "
         "%s%s",
-        static_cast<unsigned long long>(peStatsDecimationPresents_),
+        static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
         decimationN,
         static_cast<unsigned long long>(appendStats.events),
         static_cast<unsigned long long>(appendStats.sampled),
@@ -2907,33 +2936,33 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         static_cast<unsigned long long>(constSetterStats.events),
         static_cast<unsigned long long>(constSetterStats.sampled),
         static_cast<double>(constSetterStats.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peConstFlushDecimatedStats_.events),
-        static_cast<unsigned long long>(peConstFlushDecimatedStats_.sampled),
-        static_cast<double>(peConstFlushDecimatedStats_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peDrawPacketDecimatedStats_.events),
-        static_cast<unsigned long long>(peDrawPacketDecimatedStats_.sampled),
-        static_cast<double>(peDrawPacketDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peConstFlushDecimatedStats_.events),
+        static_cast<unsigned long long>(diagnostics_->peConstFlushDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peConstFlushDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peDrawPacketDecimatedStats_.events),
+        static_cast<unsigned long long>(diagnostics_->peDrawPacketDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peDrawPacketDecimatedStats_.sampledNs) / 1.0e6,
         static_cast<unsigned long long>(
             dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
         static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
         static_cast<double>(peDecimatedNullScopeStats().sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peAppendPhaseEncode_.sampled),
-        static_cast<double>(peAppendPhaseEncode_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peAppendPhaseFlush_.sampled),
-        static_cast<double>(peAppendPhaseFlush_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peEntryConstDecimatedStats_.events),
-        static_cast<unsigned long long>(peEntryConstDecimatedStats_.sampled),
-        static_cast<double>(peEntryConstDecimatedStats_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peEntryDrawDecimatedStats_.events),
-        static_cast<unsigned long long>(peEntryDrawDecimatedStats_.sampled),
-        static_cast<double>(peEntryDrawDecimatedStats_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peEntryStateDecimatedStats_.events),
-        static_cast<unsigned long long>(peEntryStateDecimatedStats_.sampled),
-        static_cast<double>(peEntryStateDecimatedStats_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peDrawPhaseSwvpDecimatedStats_.sampled),
-        static_cast<double>(peDrawPhaseSwvpDecimatedStats_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(peDrawPhaseRecordDecimatedStats_.sampled),
-        static_cast<double>(peDrawPhaseRecordDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peAppendPhaseEncode_.sampled),
+        static_cast<double>(diagnostics_->peAppendPhaseEncode_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peAppendPhaseFlush_.sampled),
+        static_cast<double>(diagnostics_->peAppendPhaseFlush_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peEntryConstDecimatedStats_.events),
+        static_cast<unsigned long long>(diagnostics_->peEntryConstDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peEntryConstDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peEntryDrawDecimatedStats_.events),
+        static_cast<unsigned long long>(diagnostics_->peEntryDrawDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peEntryDrawDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peEntryStateDecimatedStats_.events),
+        static_cast<unsigned long long>(diagnostics_->peEntryStateDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peEntryStateDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peDrawPhaseSwvpDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peDrawPhaseSwvpDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(diagnostics_->peDrawPhaseRecordDecimatedStats_.sampled),
+        static_cast<double>(diagnostics_->peDrawPhaseRecordDecimatedStats_.sampledNs) / 1.0e6,
         constSetterBucketText.c_str(),
         appendTypeText.c_str());
 }
@@ -2948,9 +2977,9 @@ void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {
     // rather than reporting a stale GetLastError() for it.
     const bool alreadyLive =
         dxmt9::d3d9::pe::PeThreadSampler::processSamplerIsLive();
-    peThreadSampler_ =
+    diagnostics_->peThreadSampler_ =
         dxmt9::d3d9::pe::PeThreadSampler::startForThread(GetCurrentThreadId(), hz);
-    if (!peThreadSampler_) {
+    if (!diagnostics_->peThreadSampler_) {
         if (alreadyLive) {
             dxmt9PeThreadSamplerInfoLog(
                 "not_started reason=already_running_for_process thread_id=0x%lx",
@@ -2966,20 +2995,20 @@ void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {
     }
     dxmt9PeThreadSamplerInfoLog(
         "started thread_id=0x%lx hz=%u interval_ms=%u",
-        static_cast<unsigned long>(peThreadSampler_->targetThreadId()), hz,
-        peThreadSampler_->intervalMs());
+        static_cast<unsigned long>(diagnostics_->peThreadSampler_->targetThreadId()), hz,
+        diagnostics_->peThreadSampler_->intervalMs());
 }
 
 void D3D9DeviceImpl::logPeThreadSampler() {
-    if (!peThreadSampler_) {
+    if (!diagnostics_ || !diagnostics_->peThreadSampler_) {
         return;
     }
     dxmt9::d3d9::pe::PeSamplerSnapshot snap;
-    peThreadSampler_->snapshot(snap);
+    diagnostics_->peThreadSampler_->snapshot(snap);
     dxmt9PeThreadSamplerInfoLog(
         "presents=%llu samples=%llu suspend_failures=%llu "
         "ctx_failures=%llu resume_failures=%llu hz=%u module_table=%u",
-        static_cast<unsigned long long>(peThreadSamplerPresents_),
+        static_cast<unsigned long long>(diagnostics_->peThreadSamplerPresents_),
         static_cast<unsigned long long>(snap.samples),
         static_cast<unsigned long long>(snap.suspendFailures),
         static_cast<unsigned long long>(snap.contextFailures),
@@ -3016,7 +3045,7 @@ void D3D9DeviceImpl::logRenderTapeMutationFailure(
     std::uint32_t fullRows, std::uint32_t rowBytes,
     std::uint32_t rows, std::uint32_t pitch,
     std::span<const std::byte> bytes) const noexcept {
-    if (!renderTapeRegistry_ || renderTapeRegistry_->invalid)
+    if (!peCaptureState_ || peCaptureState_->renderTapeRegistry.invalid)
         return;
     const auto *entry = findRenderTapeObject(object);
     D9CSurfaceDesc desc{};

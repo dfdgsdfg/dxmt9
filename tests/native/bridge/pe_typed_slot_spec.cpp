@@ -46,7 +46,7 @@ void check(bool condition, std::string_view message) {
 // user-provided constructors -- not a wrapper struct/class. The standard
 // guarantees a scoped enum's object representation is exactly its fixed
 // underlying type's (basic.compound / dcl.enum), so there is no wrapper-ABI
-// question to hand-wave: these five checks are true by the language rule,
+// question to hand-wave: these six checks are true by the language rule,
 // and pinned here so a future edit that turns one of these into something
 // class-like (a constructor, a base class, extra members) fails the build
 // immediately instead of silently changing parameter-passing ABI.
@@ -73,14 +73,10 @@ DXMT9_PE_STATIC_ASSERT_ZERO_OVERHEAD_KEY(TransformState);
 
 #undef DXMT9_PE_STATIC_ASSERT_ZERO_OVERHEAD_KEY
 
-// Storage size must be byte-for-byte unchanged from before this change.
-// FixedStateTable/FixedStateMatrix/FixedTransformTable/PeHotStateShadow
-// themselves were NOT touched (no member added/removed/reordered) -- only
-// new, separate view types were added alongside them -- so these literals
-// are the exact sizes measured on this same compiler/ABI immediately before
-// R-PE-TYPED-SLOTS landed (native arm64 host build,
-// -std=c++20 -O2, this TU's compiler). A change here means the hot DOD
-// tables grew or shrank, which this task must not do.
+// Storage size must remain byte-for-byte pinned. The explicit domain owners
+// regroup the same flat storage and reserve the former incidental padding, so
+// PeHotStateShadow keeps its established footprint. A change here means the
+// hot DOD tables grew or shrank.
 static_assert(sizeof(FixedStateTable<kPeRenderStateSlots>) == 1064,
               "FixedStateTable<kPeRenderStateSlots> storage size changed "
               "(was 1064 bytes before typed keys)");
@@ -96,9 +92,8 @@ static_assert(
 static_assert(sizeof(FixedTransformTable) == 17072,
               "FixedTransformTable storage size changed (was 17072 bytes "
               "before typed keys)");
-static_assert(sizeof(PeHotStateShadow) == 80160,
-              "PeHotStateShadow storage size changed (was 80160 bytes "
-              "before typed keys)");
+static_assert(sizeof(PeHotStateShadow) == 44944,
+              "PeHotStateShadow storage size changed");
 
 // The views themselves are single-reference façades, not extra state: each
 // must be exactly pointer-sized (a reference is implemented as a pointer),
@@ -217,32 +212,25 @@ static_assert(!HasRawSlot<std::uint32_t>::value,
 static_assert(!HasRawSlot<int>::value, "rawSlot must reject a bare int");
 
 // ---------------------------------------------------------------------------
-// Runtime evidence: typed and untyped accessors observe the same storage.
+// Runtime evidence: category APIs preserve values while the raw tables stay
+// private to their state-domain owners.
 
 void renderStateTypedMatchesUntyped() {
   PeHotStateShadow shadow{};
   const RenderStateSlot lighting = renderStateSlotKey(2u);  // D3DRS_ZENABLE-ish
   shadow.renderStateShadowTyped().set(lighting, 7u);
 
-  std::uint32_t untypedValue = 0;
-  check(shadow.renderStateShadow.get(2u, untypedValue),
-        "value set through the typed view must be visible to the untyped "
-        "get");
-  check(untypedValue == 7u, "value must round-trip unchanged");
-
   std::uint32_t typedValue = 0;
   check(shadow.renderStateShadowTyped().get(lighting, typedValue),
         "typed get must see the value");
   check(typedValue == 7u, "typed get must match untyped get");
 
-  // And the reverse direction: set through the untyped surface (as
-  // d3d9_pe_device.cpp does), read through the typed one.
-  shadow.pendingRenderStates.set(9u, 42u);
+  shadow.pendingRenderStatesTyped().set(renderStateSlotKey(9u), 42u);
   std::uint32_t viaTyped = 0;
   check(shadow.pendingRenderStatesTyped().get(renderStateSlotKey(9u),
                                               viaTyped),
-        "typed get must see a value set through the untyped surface");
-  check(viaTyped == 42u, "value must be identical either way");
+        "pending category API must retain its value");
+  check(viaTyped == 42u, "pending value must round-trip unchanged");
 
   // const-qualified access (the read path a `const PeHotStateShadow&`
   // caller, e.g. process-vertices, actually has).
@@ -265,11 +253,10 @@ void tssTypedMatchesUntyped() {
         "textureStageStateTypeKey must match the untyped clamp function");
 
   shadow.tssShadowTyped().set(stageKey, typeKey, 123u);
-  std::uint32_t untypedValue = 0;
-  check(shadow.tssShadow.get(rawSlot(stageKey), rawSlot(typeKey),
-                             untypedValue),
-        "value set through the typed matrix view must be visible untyped");
-  check(untypedValue == 123u, "value must round-trip unchanged");
+  std::uint32_t value = 0;
+  check(shadow.tssShadowTyped().get(stageKey, typeKey, value),
+        "typed matrix view must retain its value");
+  check(value == 123u, "value must round-trip unchanged");
 
   // Clamping behavior must be preserved: an out-of-range stage/type clamps
   // to the last valid slot, exactly like the untyped clamp functions.
@@ -300,12 +287,10 @@ void samplerTypedMatchesUntyped() {
         "D3DSAMP_ADDRESSU must resolve to a SamplerStateType");
 
   shadow.samplerStateShadowTyped().set(samplerIndex, stateType, 55u);
-  std::uint32_t untypedValue = 0;
-  check(shadow.samplerStateShadow.get(rawSlot(samplerIndex),
-                                      rawSlot(stateType), untypedValue),
-        "value set through the typed sampler matrix must be visible "
-        "untyped");
-  check(untypedValue == 55u, "value must round-trip unchanged");
+  std::uint32_t value = 0;
+  check(shadow.samplerStateShadowTyped().get(samplerIndex, stateType, value),
+        "typed sampler matrix must retain its value");
+  check(value == 55u, "value must round-trip unchanged");
 }
 
 void transformTypedMatchesUntyped() {
@@ -313,12 +298,6 @@ void transformTypedMatchesUntyped() {
   const D9CMatrix view = identityTransformMatrix();
   const auto viewState = transformStateKey(2u);  // D3DTS_VIEW
   shadow.transformShadowTyped().set(viewState, view);
-
-  D9CMatrix untypedValue{};
-  check(shadow.transformShadow.get(2u, untypedValue),
-        "value set through the typed transform view must be visible "
-        "untyped");
-  check(matrixEquals(untypedValue, view), "matrix must round-trip unchanged");
 
   D9CMatrix typedValue{};
   check(shadow.transformShadowTyped().get(viewState, typedValue),

@@ -94,9 +94,9 @@ unsigned char vdeclObject{};
 unsigned char rtObjects[D9C_DRAW_PACKET_MAX_RENDER_TARGETS]{};
 unsigned char dsObject{};
 
-pe::PeWireObjectRef ref(void* object, std::uint32_t kind,
-                        std::uint32_t objectId) {
-  pe::PeWireObjectRef r{};
+template <typename Ref>
+Ref ref(void* object, std::uint32_t kind, std::uint32_t objectId) {
+  Ref r{};
   r.object = object;
   r.identity.kind = kind;
   r.identity.generation = 1u;
@@ -109,24 +109,29 @@ pe::PeBindingView fullyBoundView() {
   pe::PeBindingView v{};
   std::uint32_t id = 1u;
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
-    v.textures[i] = ref(&texObjects[i], D9C_CHUNK_HANDLE_KIND_TEXTURE, id++);
+    v.textures[i] = ref<pe::TextureRef>(
+        &texObjects[i], D9C_CHUNK_HANDLE_KIND_TEXTURE, id++);
   }
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_STREAMS; ++i) {
     v.streams[i].buffer =
-        ref(&vbObjects[i], D9C_CHUNK_HANDLE_KIND_BUFFER, id++);
+        ref<pe::BufferRef>(&vbObjects[i], D9C_CHUNK_HANDLE_KIND_BUFFER, id++);
     v.streams[i].offset = 16u * i;
     v.streams[i].stride = 4u * (i + 1u);
   }
-  v.indexBuffer = ref(&ibObject, D9C_CHUNK_HANDLE_KIND_BUFFER, id++);
-  v.vs = ref(&vsObject, D9C_CHUNK_HANDLE_KIND_SHADER, id++);
-  v.ps = ref(&psObject, D9C_CHUNK_HANDLE_KIND_SHADER, id++);
-  v.vdecl = ref(&vdeclObject, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, id++);
+  v.indexBuffer = ref<pe::BufferRef>(
+      &ibObject, D9C_CHUNK_HANDLE_KIND_BUFFER, id++);
+  v.vs = ref<pe::ShaderRef>(&vsObject, D9C_CHUNK_HANDLE_KIND_SHADER, id++);
+  v.ps = ref<pe::ShaderRef>(&psObject, D9C_CHUNK_HANDLE_KIND_SHADER, id++);
+  v.vdecl = ref<pe::DeclarationRef>(
+      &vdeclObject, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, id++);
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++i) {
     v.renderTargets[i] =
-        ref(&rtObjects[i], D9C_CHUNK_HANDLE_KIND_SURFACE, id++);
+        ref<pe::SurfaceRef>(
+            &rtObjects[i], D9C_CHUNK_HANDLE_KIND_SURFACE, id++);
     v.rtExplicitMask[i] = true;
   }
-  v.depthStencil = ref(&dsObject, D9C_CHUNK_HANDLE_KIND_SURFACE, id++);
+  v.depthStencil = ref<pe::SurfaceRef>(
+      &dsObject, D9C_CHUNK_HANDLE_KIND_SURFACE, id++);
   v.fvf = 0x142u;
   return v;
 }
@@ -269,8 +274,8 @@ void runScenario(const std::string& name, std::uint32_t recordType,
 // is the trap this helper exists to avoid.
 void setRenderState(PeHotStateShadow& s, std::uint32_t state,
                     std::uint32_t value) {
-  s.pendingRenderStates.set(state, value);
-  s.renderStateShadow.set(state, value);
+  s.pendingRenderStatesTyped().set(renderStateSlotKey(state), value);
+  s.renderStateShadowTyped().set(renderStateSlotKey(state), value);
 }
 
 PeHotStateShadow nothingDirty() { return PeHotStateShadow{}; }

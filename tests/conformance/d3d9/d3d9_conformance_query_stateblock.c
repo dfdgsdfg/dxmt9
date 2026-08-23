@@ -580,7 +580,7 @@ void test_stateblock_multiply_transform_capture(const struct d3d9_api *api)
         D3DTS_WORLDMATRIX(255),
     };
     IDirect3DStateBlock9 *stateblock = NULL;
-    D3DMATRIX identity, scale, out;
+    D3DMATRIX identity, scale, recorded, prior, out;
     IDirect3DDevice9 *device = NULL;
     IDirect3D9 *d3d9;
     unsigned int i;
@@ -605,6 +605,8 @@ void test_stateblock_multiply_transform_capture(const struct d3d9_api *api)
 
     set_scale_matrix(&identity, 1.0f);
     set_scale_matrix(&scale, 2.0f);
+    set_scale_matrix(&recorded, 3.0f);
+    set_scale_matrix(&prior, 5.0f);
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
@@ -647,6 +649,43 @@ void test_stateblock_multiply_transform_capture(const struct d3d9_api *api)
         CHECK_HR(IDirect3DDevice9_GetTransform(device, tests[i], &out),
                 D3D_OK);
         check_matrix_equals(&out, &identity);
+    }
+
+    /* Explicit Set records only; the following prior-value operation reads
+     * the primary state that was current before Begin, not the recorded
+     * candidate. This distinguishes 1 * 5 from the incorrect 3 * 5. */
+    if (stateblock)
+    {
+        IDirect3DStateBlock9_Release(stateblock);
+        stateblock = NULL;
+    }
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &identity),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &recorded),
+            D3D_OK);
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_VIEW, &out),
+            D3D_OK);
+    check_matrix_equals(&out, &identity);
+    CHECK_HR(IDirect3DDevice9_MultiplyTransform(device, D3DTS_VIEW, &prior),
+            D3D_OK);
+    hr = IDirect3DDevice9_EndStateBlock(device, &stateblock);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(stateblock != NULL);
+    if (SUCCEEDED(hr) && stateblock)
+    {
+        memset(&out, 0xcc, sizeof(out));
+        CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_VIEW, &out),
+                D3D_OK);
+        check_matrix_equals(&out, &prior);
+        CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &identity),
+                D3D_OK);
+        CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+        memset(&out, 0xcc, sizeof(out));
+        CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_VIEW, &out),
+                D3D_OK);
+        check_matrix_equals(&out, &recorded);
     }
 
     if (stateblock)

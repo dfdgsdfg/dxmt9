@@ -12,6 +12,27 @@ namespace {
 
 std::atomic<std::uint64_t> gNextWireRegistryId{1u};
 
+// Retain callbacks run while the registry mutex is held so the resolved raw
+// pointer cannot race with erase/destruction.  They are deliberately a
+// non-reentrant contract: returning false before taking the mutex turns an
+// accidental callback re-entry into a safe fail-closed result rather than a
+// self-deadlock in every build type.
+thread_local bool gWireRegistryRetainCallbackActive = false;
+
+bool wireRegistryRetainCallbackActive() noexcept {
+  return gWireRegistryRetainCallbackActive;
+}
+
+class WireRegistryRetainCallbackScope {
+ public:
+  WireRegistryRetainCallbackScope() noexcept {
+    gWireRegistryRetainCallbackActive = true;
+  }
+  ~WireRegistryRetainCallbackScope() {
+    gWireRegistryRetainCallbackActive = false;
+  }
+};
+
 std::uint32_t allocateWireRegistryId() {
   const auto id = gNextWireRegistryId.fetch_add(1u, std::memory_order_relaxed);
   if (id == 0u || id > std::numeric_limits<std::uint32_t>::max()) {
@@ -33,6 +54,9 @@ bool WireObjectRegistry::identityMatches(const Slot& slot, std::uint32_t kind,
 
 D9CWireObjectIdentity WireObjectRegistry::insert(std::uint32_t kind,
                                                  void* object) {
+  if (wireRegistryRetainCallbackActive()) {
+    return {};
+  }
   if (!object || kind > D9C_CHUNK_HANDLE_KIND_QUERY) {
     return {};
   }
@@ -67,6 +91,9 @@ D9CWireObjectIdentity WireObjectRegistry::insert(std::uint32_t kind,
 
 bool WireObjectRegistry::erase(const D9CWireObjectIdentity& identity,
                                const void* object) {
+  if (wireRegistryRetainCallbackActive()) {
+    return false;
+  }
   if (!object || identity.objectId == 0u || identity.generation == 0u) {
     return false;
   }
@@ -93,6 +120,9 @@ bool WireObjectRegistry::erase(const D9CWireObjectIdentity& identity,
 
 bool WireObjectRegistry::contains(const D9CWireObjectIdentity& identity,
                                   const void* object) const {
+  if (wireRegistryRetainCallbackActive()) {
+    return false;
+  }
   std::lock_guard lock(mutex_);
   const auto* slot = findLocked(identity.objectId);
   return slot && identityMatches(*slot, identity.kind, identity.generation) &&
@@ -103,6 +133,9 @@ bool WireObjectRegistry::resolveAndRetain(
     std::span<const D9CCommandChunkWireHandleEntry> entries,
     std::span<void*> objects,
     RetainFn retain) const {
+  if (wireRegistryRetainCallbackActive()) {
+    return false;
+  }
   if (objects.size() != entries.size() || (!entries.empty() && !retain)) {
     return false;
   }
@@ -115,6 +148,7 @@ bool WireObjectRegistry::resolveAndRetain(
     }
   }
 
+  WireRegistryRetainCallbackScope callbackScope;
   for (std::size_t i = 0; i < entries.size(); ++i) {
     const auto* slot = findLocked(entries[i].objectId);
     objects[i] = slot->object;
@@ -124,6 +158,9 @@ bool WireObjectRegistry::resolveAndRetain(
 }
 
 std::size_t WireObjectRegistry::activeCount() const {
+  if (wireRegistryRetainCallbackActive()) {
+    return 0u;
+  }
   std::lock_guard lock(mutex_);
   return activeCount_;
 }

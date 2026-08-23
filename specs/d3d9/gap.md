@@ -31,6 +31,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 | BeginScene / EndScene | ✅ | Nested-call validation |
 | StateBlock capture / restore | ⚠️ | Full-state copy exists. **T1 (2026-05-08)**: `D3DSBT_VERTEXSTATE` apply now copies the per-stage TSS slice (`D3DTSS_TEXCOORDINDEX`, `D3DTSS_TEXTURETRANSFORMFLAGS`) matching Wine `vertex_states_texture[]`; `kPixelStateRenderStates` and `kVertexStateRenderStates` already match Wine's `pixel_states_render[]` and `vertex_states_render[]`. **C5 (2026-05-10, `a4252db`)**: per-frequency dirty mask now invalidated on `IDirect3DStateBlock9::Apply` via new `CommandQueue::markPendingDirtyAll()` (uniform::DirtyState all 12 bits — VS/PS F/I/B + FFP_VS Transforms/Clip/Viewport + FFP_PS Fog/Alpha/TexFactor) so the next chunk re-uploads every uniform sub-block. The four `BeginStateBlock` / `EndStateBlock` / `CreateStateBlock` / Apply-during-record invalid-call cases already returned `INVALIDCALL` in master; commit added one missing test for EndStateBlock-without-Begin. Still needed: full Wine `test_state_block_savedstates` matrix coverage (per-state-byte equality across capture/apply cycles). |
 | Hot-path CommandChunk recording and data normalizers | ⚠️ | Canonical numeric-version-2 chunk records, sparse draw sections, `APPLY_STATE`, bulk retention, and draw-run paths exist. `makeCanonicalDrawStateFromState()` / draw-run helpers cover production state-to-flat-draw transforms, while `makeDrawDescFromState()` is fixture/offline coverage only. Current native evidence is `chunk_record_{validation,replay,allocation}_spec`, `pe_chunk_record_value_spec`, and `resource_hazard_spec`; the retired pointer-bearing declarations and import/replay fixture family are absent. Remaining alignment is auditing broader barrier/hazard behavior against R-CORE-11.14–R-CORE-11.18. |
+| PE recorder state/transaction closure (`R-CORE-REC-*`) | ⚠️ | The target [requirements](recorder/requirements.md) and [design](recorder/spec.md) have detailed status in [recorder gap](recorder/gap.md). The host-buildable production transition algebra, exhaustive native truth table, bounded `PeRecorderTransition` model plus expected counterexample, exact normal/oversized/inline/constant append acceptance, and fixed render/TSS/sampler/transform/constant state-block tracked sets are implemented. Open: seal/bridge/capture-journal settlement refinement, non-keyed category expansion, instruction-level disabled-path breadth, and Wine/wild runtime evidence. |
 | DrawPrimitive, DrawIndexedPrimitive, UP variants | ✅ | All four variants |
 | TriangleFan decomposition | ✅ | `decomposeTriangleFanIndices()` |
 | Half-pixel offset | ✅ | `halfPixelFixup()` |
@@ -946,41 +947,3 @@ isolated-chunk reruns:
   not eliminate the crash (1 of 4 still failed) because `-k` does not wait for
   the old server to exit; `wineserver -k -w` is the obvious next A/B before
   adopting any runner-level change.
-
-## Render-tape pending command-chunk ownership
-
-The PE render-tape registry has two independent bounded lifetime axes for a
-resource identity: wrapper references and pending command-chunk references.
-For one builder, `pendingChunkRefs` is a boolean-shaped bounded value: an
-identity has either zero or one pending ref. A wrapper can release, reacquire,
-and release again before the same builder drains without increasing that ref.
-When the last PE wrapper is released while `CommandChunkBuilder::referencesObject`
-is true, the release transfers to `pendingChunkRefs`; it does not retire the
-identity or emit `ObjectDestroy`. This preserves the generation-qualified
-registry entry while the command is still pending.
-
-The successful path is ordered:
-
-1. bridge-commit the sealed command;
-2. validate/materialize its referenced objects and append the command event;
-3. drain pending chunk references and append each admitted `ObjectDestroy` (and
-   parent-driven alias retirement) at most once;
-4. reset the builder, which releases the physical COM references.
-
-Bridge failure leaves the builder and pending references intact for retry.
-Clear/discard drains the logical pending references without journaling a
-command-dependent destroy. Texture-derived surfaces retain their identity
-until parent retirement, including when a pending command overlaps the last
-wrapper release. The native truth table is
-`tests/native/bridge/render_tape_capture_spec.cpp:testPendingChunkLifetimeTruthTable`.
-
-A pending texture-derived alias is not yet eligible for logical-slot
-replacement. `PendingChunkRequiresFlush` forces the capture-enabled registry to
-commit and capture the current builder, drain its pending ownership, and only
-then restart the replacement lookup. The restart is bounded to one; failure
-invalidates and aborts capture without changing capture-off chunk boundaries or
-the application result. This closes the GT2 r11 counterexample where pending
-identity `kind=1 generation=1 object_id=4294967602` was overwritten before
-exact-generation materialization. The production-bound native sequence fixture
-is `testPendingAliasFlushBeforeReplacementSequence`; GT2 r12 and cross-build
-evidence remain open.

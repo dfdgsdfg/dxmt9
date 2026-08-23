@@ -7,7 +7,7 @@
  *
  * All of it is gated on DXMT9_RENDER_TAPE_CAPTURE, default off, and every
  * entry point tests dxmt9PeRenderTapeCaptureEnabled() (a cached bool) or a
- * null renderTapeCapture_ before doing anything.
+ * null peCaptureState_ before doing anything.
  *
  * Out-lining the twelve virtual *ForChild overrides here is only safe because
  * d3d9_pe_device.cpp pins an explicit key function; without it the first cold
@@ -18,37 +18,37 @@
 
 RenderTapeLiveObject *D3D9DeviceImpl::findRenderTapeObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return nullptr;
     }
     const auto it = std::find_if(
-        renderTapeRegistry_->objects.begin(),
-        renderTapeRegistry_->objects.end(),
+        peCaptureState_->renderTapeRegistry.objects.begin(),
+        peCaptureState_->renderTapeRegistry.objects.end(),
         [&](const auto &entry) {
             return renderTapeSameIdentity(entry.identity, object.identity);
         });
-    return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
+    return it == peCaptureState_->renderTapeRegistry.objects.end() ? nullptr : &*it;
 }
 
 const RenderTapeLiveObject *D3D9DeviceImpl::findRenderTapeObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) const noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return nullptr;
     }
     const auto it = std::find_if(
-        renderTapeRegistry_->objects.begin(),
-        renderTapeRegistry_->objects.end(),
+        peCaptureState_->renderTapeRegistry.objects.begin(),
+        peCaptureState_->renderTapeRegistry.objects.end(),
         [&](const auto &entry) {
             return renderTapeSameIdentity(entry.identity, object.identity);
         });
-    return it == renderTapeRegistry_->objects.end() ? nullptr : &*it;
+    return it == peCaptureState_->renderTapeRegistry.objects.end() ? nullptr : &*it;
 }
 
 bool D3D9DeviceImpl::hasRenderTapeDeadObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) const noexcept {
-    return renderTapeRegistry_ &&
-           std::any_of(renderTapeRegistry_->knownDead.begin(),
-                       renderTapeRegistry_->knownDead.end(),
+    return peCaptureState_ &&
+           std::any_of(peCaptureState_->renderTapeRegistry.knownDead.begin(),
+                       peCaptureState_->renderTapeRegistry.knownDead.end(),
                        [&](const auto &identity) {
                            return renderTapeSameIdentity(identity,
                                                          object.identity);
@@ -60,38 +60,38 @@ void D3D9DeviceImpl::markRenderTapeInvalidOnce(
     const dxmt9::d3d9::pe::PeWireObjectRef *object,
     std::uint32_t subresource,
     const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic) noexcept {
-    if (!renderTapeRegistry_ || renderTapeRegistry_->invalid) {
+    if (!peCaptureState_ || peCaptureState_->renderTapeRegistry.invalid) {
         return;
     }
-    renderTapeRegistry_->invalid = true;
-    renderTapeRegistry_->invalidReason = reason;
-    renderTapeRegistry_->invalidSubresource = subresource;
-    renderTapeRegistry_->invalidLayout = diagnostic;
+    peCaptureState_->renderTapeRegistry.invalid = true;
+    peCaptureState_->renderTapeRegistry.invalidReason = reason;
+    peCaptureState_->renderTapeRegistry.invalidSubresource = subresource;
+    peCaptureState_->renderTapeRegistry.invalidLayout = diagnostic;
     if (object) {
-        renderTapeRegistry_->invalidKind = object->identity.kind;
-        renderTapeRegistry_->invalidGeneration = object->identity.generation;
-        renderTapeRegistry_->invalidObjectId = object->identity.objectId;
+        peCaptureState_->renderTapeRegistry.invalidKind = object->identity.kind;
+        peCaptureState_->renderTapeRegistry.invalidGeneration = object->identity.generation;
+        peCaptureState_->renderTapeRegistry.invalidObjectId = object->identity.objectId;
     }
 }
 
 void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
-    if (!renderTapeCapture_ || !renderTapeCapture_->enabled()) {
+    if (!peCaptureState_ || !peCaptureState_->renderTapeCapture.enabled()) {
         return;
     }
-    if (!renderTapeAbortReason_) {
-        renderTapeAbortReason_ = reason;
+    if (!peCaptureState_->renderTapeAbortReason) {
+        peCaptureState_->renderTapeAbortReason = reason;
         dxmt9DeviceInfoLog("render_tape_capture first_abort reason=%s",
                            reason);
     }
-    renderTapeCapture_->abort();
-    renderTapeArmBoundaryPhase_ =
+    peCaptureState_->renderTapeCapture.abort();
+    peCaptureState_->renderTapeArmBoundaryPhase =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
-    renderTapeArmSnapshots_.clear();
-    renderTapeExpectedDigest_.reset();
-    renderTapeExpectedPixels_.clear();
-    renderTapeExpectedSourcePixels_.clear();
-    renderTapeOutputDesc_.reset();
-    renderTapeActiveCaptureToken_ = 0u;
+    peCaptureState_->renderTapeArmSnapshots.clear();
+    peCaptureState_->renderTapeExpectedDigest.reset();
+    peCaptureState_->renderTapeExpectedPixels.clear();
+    peCaptureState_->renderTapeExpectedSourcePixels.clear();
+    peCaptureState_->renderTapeOutputDesc.reset();
+    peCaptureState_->renderTapeActiveCaptureToken = 0u;
 }
 
 RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
@@ -100,7 +100,7 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
     std::span<const std::byte> immutablePayload,
     RenderTapeLiveObject::Role role,
     std::uint32_t replacementRestart) noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return RenderTapeObjectRegistration::Rejected;
     }
     bool replacingRetainedAlias = false;
@@ -162,14 +162,14 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
                        !dxmt9::d3d9::renderTapeWireGenerationAdvances(
                            prior, object.identity);
             };
-        if (std::any_of(renderTapeRegistry_->objects.begin(),
-                        renderTapeRegistry_->objects.end(),
+        if (std::any_of(peCaptureState_->renderTapeRegistry.objects.begin(),
+                        peCaptureState_->renderTapeRegistry.objects.end(),
                         [&](const auto &candidate) {
                             return generationDoesNotAdvance(
                                 candidate.identity);
                         }) ||
-            std::any_of(renderTapeRegistry_->knownDead.begin(),
-                        renderTapeRegistry_->knownDead.end(),
+            std::any_of(peCaptureState_->renderTapeRegistry.knownDead.begin(),
+                        peCaptureState_->renderTapeRegistry.knownDead.end(),
                         generationDoesNotAdvance)) {
             markRenderTapeInvalidOnce("non_monotone_generation", &object);
             if (IsRenderTapeCaptureActiveForChild())
@@ -177,8 +177,8 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
             return RenderTapeObjectRegistration::Rejected;
         }
         const auto replacement = std::find_if(
-            renderTapeRegistry_->objects.begin(),
-            renderTapeRegistry_->objects.end(),
+            peCaptureState_->renderTapeRegistry.objects.begin(),
+            peCaptureState_->renderTapeRegistry.objects.end(),
             [&](const auto &candidate) {
                 const auto candidateSlot = dxmt9::d3d9::
                     renderTapeLogicalObjectSlot(candidate.identity,
@@ -190,7 +190,7 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
             });
         std::size_t replacementIndex =
             std::numeric_limits<std::size_t>::max();
-        if (replacement != renderTapeRegistry_->objects.end()) {
+        if (replacement != peCaptureState_->renderTapeRegistry.objects.end()) {
             const auto transition = dxmt9::d3d9::
                 renderTapeSurfaceAliasReplacementStatus(
                     replacement->identity, replacement->lifetime,
@@ -208,7 +208,7 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
                     "new_kind=%u new_generation=%u new_object_id=%llu "
                     "pending=%u admitted=%d known_dead=%d",
                     dxmt9PeRenderTapeCaptureProfile(), this,
-                    static_cast<void *>(&*renderTapeRegistry_),
+                    static_cast<void *>(&peCaptureState_->renderTapeRegistry),
                     replacementRestart, priorIdentity.kind,
                     priorIdentity.generation,
                     static_cast<unsigned long long>(priorIdentity.objectId),
@@ -267,7 +267,7 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
             }
             replacingRetainedAlias = true;
             replacementIndex = static_cast<std::size_t>(
-                replacement - renderTapeRegistry_->objects.begin());
+                replacement - peCaptureState_->renderTapeRegistry.objects.begin());
         }
         RenderTapeLiveObject entry{};
         entry.identity = object.identity;
@@ -338,13 +338,13 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
         }
         entry.content.resize(entry.contentCount);
         if (replacingRetainedAlias) {
-            auto &prior = renderTapeRegistry_->objects[replacementIndex];
+            auto &prior = peCaptureState_->renderTapeRegistry.objects[replacementIndex];
             const bool priorAdmitted = renderTapeObjectAdmitted(prior.identity);
-            renderTapeRegistry_->knownDead.reserve(
-                renderTapeRegistry_->knownDead.size() + 1u);
+            peCaptureState_->renderTapeRegistry.knownDead.reserve(
+                peCaptureState_->renderTapeRegistry.knownDead.size() + 1u);
             if (priorAdmitted && IsRenderTapeCaptureActiveForChild()) {
                 const auto destroyStatus =
-                    renderTapeCapture_->objectDestroy(prior.identity);
+                    peCaptureState_->renderTapeCapture.objectDestroy(prior.identity);
                 if (destroyStatus != dxmt9::d3d9::
                                          RenderTapeCaptureStatus::Accepted) {
                     markRenderTapeInvalidOnce(
@@ -360,11 +360,11 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
                 "old_generation=%u new_generation=%u object_id=%llu",
                 prior.identity.generation, object.identity.generation,
                 static_cast<unsigned long long>(object.identity.objectId));
-            renderTapeRegistry_->knownDead.push_back(prior.identity);
+            peCaptureState_->renderTapeRegistry.knownDead.push_back(prior.identity);
             prior = std::move(entry);
             return RenderTapeObjectRegistration::New;
         }
-        renderTapeRegistry_->objects.push_back(std::move(entry));
+        peCaptureState_->renderTapeRegistry.objects.push_back(std::move(entry));
         return RenderTapeObjectRegistration::New;
     } catch (...) {
         markRenderTapeInvalidOnce("object_registration_exception", &object);
@@ -376,19 +376,19 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
 
 void D3D9DeviceImpl::releaseRenderTapePresentOutputRole(
     const D9CWireObjectIdentity *next) noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return;
     }
     // Only a pre-arm or aborted lifecycle may move the role. An armed or
     // capturing interval owns its holder until it terminates.
-    if (renderTapeCapture_ &&
-        renderTapeCapture_->state() !=
+    if (peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Disabled &&
-        renderTapeCapture_->state() !=
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Aborted) {
         return;
     }
-    auto &role = renderTapeRegistry_->presentOutputRole;
+    auto &role = peCaptureState_->renderTapeRegistry.presentOutputRole;
     const dxmt9::d3d9::pe::PeWireObjectRef priorObject{
         .identity = role.identity,
     };
@@ -405,15 +405,15 @@ void D3D9DeviceImpl::releaseRenderTapePresentOutputRole(
     // took; an app-owned entry was merely re-roled in place.
     const bool releaseAdmissionRef = role.captureOwned;
     const auto priorContentCount =
-        renderTapeRegistry_->presentOutputPriorContentCount;
+        peCaptureState_->renderTapeRegistry.presentOutputPriorContentCount;
     auto priorDescriptor =
-        std::move(renderTapeRegistry_->presentOutputPriorDescriptor);
+        std::move(peCaptureState_->renderTapeRegistry.presentOutputPriorDescriptor);
     auto priorContent =
-        std::move(renderTapeRegistry_->presentOutputPriorContent);
+        std::move(peCaptureState_->renderTapeRegistry.presentOutputPriorContent);
     role = {};
-    renderTapeRegistry_->presentOutputPriorDescriptor.clear();
-    renderTapeRegistry_->presentOutputPriorContentCount = 0u;
-    renderTapeRegistry_->presentOutputPriorContent.clear();
+    peCaptureState_->renderTapeRegistry.presentOutputPriorDescriptor.clear();
+    peCaptureState_->renderTapeRegistry.presentOutputPriorContentCount = 0u;
+    peCaptureState_->renderTapeRegistry.presentOutputPriorContent.clear();
     if (transition ==
         dxmt9::d3d9::RenderTapePresentOutputRoleTransition::None) {
         return;
@@ -440,7 +440,7 @@ void D3D9DeviceImpl::releaseRenderTapePresentOutputRole(
         return;
     }
     try {
-        renderTapeRegistry_->knownDead.push_back(identity);
+        peCaptureState_->renderTapeRegistry.knownDead.push_back(identity);
     } catch (...) {
         markRenderTapeInvalidOnce("present_output_tombstone_allocation",
                                   &priorObject);
@@ -448,9 +448,9 @@ void D3D9DeviceImpl::releaseRenderTapePresentOutputRole(
     }
     if (releaseAdmissionRef)
         (void)prior->lifetime.releaseWrapper();
-    renderTapeRegistry_->objects.erase(
-        renderTapeRegistry_->objects.begin() +
-        (prior - renderTapeRegistry_->objects.data()));
+    peCaptureState_->renderTapeRegistry.objects.erase(
+        peCaptureState_->renderTapeRegistry.objects.begin() +
+        (prior - peCaptureState_->renderTapeRegistry.objects.data()));
     dxmt9DeviceInfoLog(
         "render_tape_capture present_output released transition=%s kind=%u "
         "generation=%u object_id=%llu",
@@ -460,7 +460,7 @@ void D3D9DeviceImpl::releaseRenderTapePresentOutputRole(
 }
 
 bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return false;
     }
     // Use the stable cached PE backbuffer wrapper. Calling the C getter
@@ -495,8 +495,7 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
     const bool rawIdentityOk =
         dxmt9c_surface_get_wire_identity(surface, &rawIdentity) >= 0;
     identity = rawIdentity;
-    const bool identityOk = cachedWireObject.valid(
-                                D9C_CHUNK_HANDLE_KIND_SURFACE) &&
+    const bool identityOk = cachedWireObject.valid() &&
         rawIdentityOk &&
         dxmt9::d3d9::renderTapePresentOutputIdentityMatchesCommand(
             cachedWireObject.identity, rawIdentity);
@@ -509,7 +508,7 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
             "render_tape_capture producer aborted reason=present_output_identity_or_descriptor_invalid");
         return false;
     }
-    renderTapeOutputDesc_ = descriptor;
+    peCaptureState_->renderTapeOutputDesc = descriptor;
     const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 outputDescriptor{
         .schemaVersion =
             dxmt9::d3d9::kRenderTapeSurfaceDescriptorVersion2,
@@ -531,16 +530,16 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
     releaseRenderTapePresentOutputRole(&identity);
     // A retained role already stashed this holder's displaced content on an
     // earlier admission; re-stashing would capture the cleared state.
-    const bool roleRetained = renderTapeRegistry_->presentOutputRole.held;
+    const bool roleRetained = peCaptureState_->renderTapeRegistry.presentOutputRole.held;
     auto *existing = findRenderTapeObject(object);
     const bool captureOwned = existing == nullptr;
     if (existing) {
         if (!roleRetained) {
-            renderTapeRegistry_->presentOutputPriorDescriptor =
+            peCaptureState_->renderTapeRegistry.presentOutputPriorDescriptor =
                 existing->descriptor;
-            renderTapeRegistry_->presentOutputPriorContentCount =
+            peCaptureState_->renderTapeRegistry.presentOutputPriorContentCount =
                 existing->contentCount;
-            renderTapeRegistry_->presentOutputPriorContent =
+            peCaptureState_->renderTapeRegistry.presentOutputPriorContent =
                 std::move(existing->content);
         }
         existing->role = RenderTapeLiveObject::Role::PresentOutput;
@@ -550,9 +549,9 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
         existing->contentCount = 0u;
         existing->content.clear();
     } else {
-        renderTapeRegistry_->presentOutputPriorDescriptor.clear();
-        renderTapeRegistry_->presentOutputPriorContentCount = 0u;
-        renderTapeRegistry_->presentOutputPriorContent.clear();
+        peCaptureState_->renderTapeRegistry.presentOutputPriorDescriptor.clear();
+        peCaptureState_->renderTapeRegistry.presentOutputPriorContentCount = 0u;
+        peCaptureState_->renderTapeRegistry.presentOutputPriorContent.clear();
         registerRenderTapeObject(
             object,
             std::span<const std::byte>(
@@ -570,7 +569,7 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
             static_cast<unsigned long long>(identity.objectId));
         return false;
     }
-    auto &role = renderTapeRegistry_->presentOutputRole;
+    auto &role = peCaptureState_->renderTapeRegistry.presentOutputRole;
     role.identity = identity;
     role.captureOwned = roleRetained ? role.captureOwned : captureOwned;
     role.held = true;
@@ -581,22 +580,22 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
         identity.kind, identity.generation,
         static_cast<unsigned long long>(identity.objectId),
         sizeof(outputDescriptor),
-        renderTapeRegistry_->presentOutputRole.captureOwned ? 1 : 0);
+        peCaptureState_->renderTapeRegistry.presentOutputRole.captureOwned ? 1 : 0);
     return true;
 }
 
 bool D3D9DeviceImpl::unregisterRenderTapeObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return false;
     }
     const auto it = std::find_if(
-        renderTapeRegistry_->objects.begin(),
-        renderTapeRegistry_->objects.end(),
+        peCaptureState_->renderTapeRegistry.objects.begin(),
+        peCaptureState_->renderTapeRegistry.objects.end(),
         [&](const auto &entry) {
             return renderTapeSameIdentity(entry.identity, object.identity);
         });
-    if (it == renderTapeRegistry_->objects.end()) {
+    if (it == peCaptureState_->renderTapeRegistry.objects.end()) {
         // Swap-chain-owned surfaces can be destroyed through the common
         // child path even though they were never admitted to the
         // value-owned capture registry. They are not part of the
@@ -742,37 +741,37 @@ dxmt9::d3d9::RenderTapeBlockMutationStatus D3D9DeviceImpl::recordRenderTapeLinea
 bool D3D9DeviceImpl::produceRenderTapeBootstrap(
     dxmt9::d3d9::RenderTapeCaptureBootstrapSeed &seed) noexcept {
     dxmt9DeviceInfoLog("render_tape_capture bootstrap_begin");
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         dxmt9DeviceInfoLog("render_tape_capture producer aborted reason=registry_missing");
         return false;
     }
-    if (renderTapeRegistry_->invalid) {
+    if (peCaptureState_->renderTapeRegistry.invalid) {
         dxmt9DeviceInfoLog(
             "render_tape_capture producer aborted reason=registry_invalid "
             "detail=%s kind=%u generation=%u object_id=%llu subresource=%u "
             "format=%u width=%u height=%u pitch=%d bytes=%llu objects=%zu",
-            renderTapeRegistry_->invalidReason
-                ? renderTapeRegistry_->invalidReason
+            peCaptureState_->renderTapeRegistry.invalidReason
+                ? peCaptureState_->renderTapeRegistry.invalidReason
                 : "unknown",
-            renderTapeRegistry_->invalidKind,
-            renderTapeRegistry_->invalidGeneration,
-            static_cast<unsigned long long>(renderTapeRegistry_->invalidObjectId),
-            renderTapeRegistry_->invalidSubresource,
-            renderTapeRegistry_->invalidLayout.format,
-            renderTapeRegistry_->invalidLayout.width,
-            renderTapeRegistry_->invalidLayout.height,
-            renderTapeRegistry_->invalidLayout.pitch,
+            peCaptureState_->renderTapeRegistry.invalidKind,
+            peCaptureState_->renderTapeRegistry.invalidGeneration,
+            static_cast<unsigned long long>(peCaptureState_->renderTapeRegistry.invalidObjectId),
+            peCaptureState_->renderTapeRegistry.invalidSubresource,
+            peCaptureState_->renderTapeRegistry.invalidLayout.format,
+            peCaptureState_->renderTapeRegistry.invalidLayout.width,
+            peCaptureState_->renderTapeRegistry.invalidLayout.height,
+            peCaptureState_->renderTapeRegistry.invalidLayout.pitch,
             static_cast<unsigned long long>(
-                renderTapeRegistry_->invalidLayout.bytes),
-            renderTapeRegistry_->objects.size());
+                peCaptureState_->renderTapeRegistry.invalidLayout.bytes),
+            peCaptureState_->renderTapeRegistry.objects.size());
         return false;
     }
-    if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
+    if (!admitRenderTapePresentOutput() || peCaptureState_->renderTapeRegistry.invalid) {
         return false;
     }
     const auto findArmSnapshot = [&](const auto &identity) {
         return std::find_if(
-            renderTapeArmSnapshots_.begin(), renderTapeArmSnapshots_.end(),
+            peCaptureState_->renderTapeArmSnapshots.begin(), peCaptureState_->renderTapeArmSnapshots.end(),
             [&](const auto &snapshot) {
                 return renderTapeSameIdentity(snapshot.identity, identity);
             });
@@ -861,8 +860,8 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             overlay.recordCount, overlay.handleCount, overlay.blob.size());
 
         std::vector<const RenderTapeLiveObject *> objects;
-        objects.reserve(renderTapeRegistry_->objects.size());
-        for (const auto &object : renderTapeRegistry_->objects) {
+        objects.reserve(peCaptureState_->renderTapeRegistry.objects.size());
+        for (const auto &object : peCaptureState_->renderTapeRegistry.objects) {
             objects.push_back(&object);
         }
         std::sort(objects.begin(), objects.end(), [](const auto *a, const auto *b) {
@@ -886,18 +885,18 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             const auto armOverlay = dxmt9::d3d9::
                 renderTapeSelectArmObjectSnapshotOverlay(
                     object->descriptor, object->content,
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? std::span<const std::byte>(
                               armSnapshot->descriptor)
                         : std::span<const std::byte>{},
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? std::span<const std::vector<std::byte>>(
                               armSnapshot->content)
                         : std::span<const std::vector<std::byte>>{},
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? armSnapshot->armOrdinal
                         : 0u,
-                    renderTapeArmSnapshotOrdinal_,
+                    peCaptureState_->renderTapeArmSnapshotOrdinal,
                     object->role == RenderTapeLiveObject::Role::PresentOutput
                         ? dxmt9::d3d9::
                               RenderTapeArmObjectSnapshotOverlayPolicy::
@@ -1099,18 +1098,18 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             const auto armOverlay = dxmt9::d3d9::
                 renderTapeSelectArmObjectSnapshotOverlay(
                     object->descriptor, object->content,
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? std::span<const std::byte>(
                               armSnapshot->descriptor)
                         : std::span<const std::byte>{},
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? std::span<const std::vector<std::byte>>(
                               armSnapshot->content)
                         : std::span<const std::vector<std::byte>>{},
-                    armSnapshot != renderTapeArmSnapshots_.end()
+                    armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                         ? armSnapshot->armOrdinal
                         : 0u,
-                    renderTapeArmSnapshotOrdinal_,
+                    peCaptureState_->renderTapeArmSnapshotOrdinal,
                     object->role == RenderTapeLiveObject::Role::PresentOutput
                         ? dxmt9::d3d9::
                               RenderTapeArmObjectSnapshotOverlayPolicy::
@@ -1308,33 +1307,35 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
 
 bool D3D9DeviceImpl::advanceRenderTapeArmBoundary(
     dxmt9::d3d9::RenderTapeArmBoundaryPhase requested) noexcept {
+    if (!peCaptureState_)
+        return false;
     const auto transition = dxmt9::d3d9::renderTapeAdvanceArmBoundary(
-        renderTapeArmBoundaryPhase_, requested);
+        peCaptureState_->renderTapeArmBoundaryPhase, requested);
     if (!transition.accepted) {
         dxmt9DeviceInfoLog(
             "render_tape_capture arm_boundary rejected current=%u requested=%u",
-            static_cast<unsigned>(renderTapeArmBoundaryPhase_),
+            static_cast<unsigned>(peCaptureState_->renderTapeArmBoundaryPhase),
             static_cast<unsigned>(requested));
         return false;
     }
-    renderTapeArmBoundaryPhase_ = transition.next;
+    peCaptureState_->renderTapeArmBoundaryPhase = transition.next;
     return true;
 }
 
 bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
-    if (!renderTapeRegistry_ || renderTapeRegistry_->invalid)
+    if (!peCaptureState_ || peCaptureState_->renderTapeRegistry.invalid)
         return false;
     try {
-        renderTapeArmSnapshots_.clear();
+        peCaptureState_->renderTapeArmSnapshots.clear();
         const auto epoch = dxmt9::d3d9::renderTapeNextArmSnapshotEpoch(
-            renderTapeArmSnapshotOrdinal_);
+            peCaptureState_->renderTapeArmSnapshotOrdinal);
         if (!epoch.valid) {
             return false;
         }
-        renderTapeArmSnapshotOrdinal_ = epoch.ordinal;
+        peCaptureState_->renderTapeArmSnapshotOrdinal = epoch.ordinal;
         for (std::size_t index = 0u;
-             index < renderTapeRegistry_->objects.size(); ++index) {
-            const auto &object = renderTapeRegistry_->objects[index];
+             index < peCaptureState_->renderTapeRegistry.objects.size(); ++index) {
+            const auto &object = peCaptureState_->renderTapeRegistry.objects[index];
             if (object.lifetime.textureAlias) {
                 continue;
             }
@@ -1542,7 +1543,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                         snapshot.content[subresource].size());
                 }
             }
-            renderTapeArmSnapshots_.push_back(std::move(snapshot));
+            peCaptureState_->renderTapeArmSnapshots.push_back(std::move(snapshot));
         }
         return advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::SnapshotComplete);
@@ -1562,16 +1563,16 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundary() {
 }
 
 bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
-    if (!renderTapeCapture_ ||
-        !renderTapeCapture_->enabled() ||
-        (renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        !peCaptureState_->renderTapeCapture.enabled() ||
+        (peCaptureState_->renderTapeCapture.state() !=
              dxmt9::d3d9::RenderTapeCaptureState::Disabled &&
-         renderTapeCapture_->state() !=
+         peCaptureState_->renderTapeCapture.state() !=
              dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
         return false;
     }
-    if (renderTapeArmPresentSkipRemaining_ != 0u) {
-        --renderTapeArmPresentSkipRemaining_;
+    if (peCaptureState_->renderTapeArmPresentSkipRemaining != 0u) {
+        --peCaptureState_->renderTapeArmPresentSkipRemaining;
         return false;
     }
     // An interval that aborted after arming still holds the role; release
@@ -1579,13 +1580,13 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     releaseRenderTapePresentOutputRole(nullptr);
     // Keep the first-abort marker sticky only for this arm/interval
     // lifecycle; a retry must get independent attribution.
-    renderTapeAbortReason_ = nullptr;
-    renderTapeAdmittedIdentities_.clear();
-    renderTapeExpectedDigest_.reset();
-    renderTapeExpectedPixels_.clear();
-    renderTapeExpectedSourcePixels_.clear();
-    renderTapeOutputDesc_.reset();
-    renderTapeFirstAccessLedger_ = {};
+    peCaptureState_->renderTapeAbortReason = nullptr;
+    peCaptureState_->renderTapeAdmittedIdentities.clear();
+    peCaptureState_->renderTapeExpectedDigest.reset();
+    peCaptureState_->renderTapeExpectedPixels.clear();
+    peCaptureState_->renderTapeExpectedSourcePixels.clear();
+    peCaptureState_->renderTapeOutputDesc.reset();
+    peCaptureState_->renderTapeFirstAccessLedger = {};
     const auto producer = dxmt9PeRenderTapeBootstrapProducer.load(
         std::memory_order_acquire);
     auto publisher = dxmt9PeRenderTapeArtifactPublisher.load(
@@ -1597,7 +1598,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         "render_tape_capture arm enabled=1 producer=%d publisher=%d",
         producer != nullptr ? 1 : 0, publisher != nullptr ? 1 : 0);
     if (!dxmt9PeRenderTapeCaptureCallbacksInstalled(
-            renderTapeCapture_->enabled(), producer, publisher)) {
+            peCaptureState_->renderTapeCapture.enabled(), producer, publisher)) {
         dxmt9DeviceInfoLog(
             "render_tape_capture requested without artifact publisher; "
             "capture remains off");
@@ -1605,7 +1606,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     }
     // Both callers reach this point only after the Present bridge call or
     // Present-record chunk commit returned success.
-    renderTapeArmBoundaryPhase_ =
+    peCaptureState_->renderTapeArmBoundaryPhase =
         dxmt9::d3d9::RenderTapeArmBoundaryPhase::Disabled;
     if (!advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::PresentFlushed)) {
@@ -1615,7 +1616,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     // snapshot. The backbuffer is the only capture identity whose role is
     // assigned lazily by the bootstrap producer; without this ordering its
     // actual post-arm bytes cannot be captured as starting content.
-    if (!admitRenderTapePresentOutput() || renderTapeRegistry_->invalid) {
+    if (!admitRenderTapePresentOutput() || peCaptureState_->renderTapeRegistry.invalid) {
         dxmt9DeviceInfoLog(
             "render_tape_capture arm aborted reason=present_output_admission");
         abortRenderTapeCapture("present_output_admission");
@@ -1650,10 +1651,10 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     auto armStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidInput;
     auto intervalStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidState;
     if (produced) {
-        armStatus = renderTapeCapture_->armWithBlobs(
+        armStatus = peCaptureState_->renderTapeCapture.armWithBlobs(
             seed.bootstrapOverlay, seed.blobs, seed.gammaRamp);
         if (armStatus == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            intervalStatus = renderTapeCapture_->beginPresentInterval();
+            intervalStatus = peCaptureState_->renderTapeCapture.beginPresentInterval();
         }
     }
     if (!produced ||
@@ -1670,7 +1671,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     }
     for (const auto& object : seed.objects) {
         dxmt9::d3d9::RenderTapeObjectDefineDisposition disposition{};
-        const auto status = renderTapeCapture_->objectDefine(
+        const auto status = peCaptureState_->renderTapeCapture.objectDefine(
                 object.identity, object.descriptorKind, object.descriptor,
                 object.immutableBytes, object.immutableDigest,
                 object.expectedContentBytes,
@@ -1694,14 +1695,14 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
             return false;
         }
         try {
-            renderTapeAdmittedIdentities_.push_back(object.identity);
+            peCaptureState_->renderTapeAdmittedIdentities.push_back(object.identity);
         } catch (...) {
             abortRenderTapeCapture("seed_identity_allocation");
             return false;
         }
     }
     for (const auto& mutation : seed.mutations) {
-        const auto status = renderTapeCapture_->resourceMutation(
+        const auto status = peCaptureState_->renderTapeCapture.resourceMutation(
             mutation.identity, mutation.kind, mutation.subresource,
             mutation.byteOffset, mutation.byteSize, mutation.digest,
             mutation.bufferDisposition);
@@ -1718,23 +1719,23 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
             return false;
         }
     }
-    renderTapeCaptureOracle_ = std::move(seed.oracleAttachments);
+    peCaptureState_->renderTapeCaptureOracle = std::move(seed.oracleAttachments);
     if (!advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::Armed)) {
         abortRenderTapeCapture("arm_boundary_order");
         return false;
     }
-    if (renderTapeNextCaptureToken_ ==
+    if (peCaptureState_->renderTapeNextCaptureToken ==
         std::numeric_limits<std::uint64_t>::max()) {
-        renderTapeNextCaptureToken_ = 1u;
+        peCaptureState_->renderTapeNextCaptureToken = 1u;
     } else {
-        ++renderTapeNextCaptureToken_;
+        ++peCaptureState_->renderTapeNextCaptureToken;
     }
-    renderTapeActiveCaptureToken_ = renderTapeNextCaptureToken_;
+    peCaptureState_->renderTapeActiveCaptureToken = peCaptureState_->renderTapeNextCaptureToken;
     dxmt9DeviceInfoLog(
         "render_tape_capture arm_complete token=%llu objects=%zu "
         "mutations=%zu blobs=%zu",
-        static_cast<unsigned long long>(renderTapeActiveCaptureToken_),
+        static_cast<unsigned long long>(peCaptureState_->renderTapeActiveCaptureToken),
         seed.objects.size(), seed.mutations.size(), seed.blobs.size());
     return true;
 }
@@ -1744,7 +1745,9 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint32_t subresource, std::uint64_t bytes,
     dxmt9::d3d9::RenderTapeCaptureStatus status) noexcept {
-    const auto &limits = renderTapeCapture_->limits();
+    if (!peCaptureState_)
+        return;
+    const auto &limits = peCaptureState_->renderTapeCapture.limits();
     dxmt9DeviceInfoLog(
         "render_tape_capture mutation_reject reason=%s detail=%s status=%u "
         "capture_state=%u kind=%u generation=%u object_id=%llu "
@@ -1752,18 +1755,18 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
         "buffered_bytes=%llu/%llu owned_blob_bytes=%llu/%llu "
         "owned_blob_entries=%u/%u",
         reason, detail, static_cast<unsigned>(status),
-        static_cast<unsigned>(renderTapeCapture_->state()),
+        static_cast<unsigned>(peCaptureState_->renderTapeCapture.state()),
         object.identity.kind, object.identity.generation,
         static_cast<unsigned long long>(object.identity.objectId),
         subresource, static_cast<unsigned long long>(bytes),
-        renderTapeCapture_->hasLiveObject(object.identity) ? 1 : 0,
-        renderTapeCapture_->eventCount(), limits.maxEvents,
-        static_cast<unsigned long long>(renderTapeCapture_->bufferedBytes()),
+        peCaptureState_->renderTapeCapture.hasLiveObject(object.identity) ? 1 : 0,
+        peCaptureState_->renderTapeCapture.eventCount(), limits.maxEvents,
+        static_cast<unsigned long long>(peCaptureState_->renderTapeCapture.bufferedBytes()),
         static_cast<unsigned long long>(limits.maxEventBytes),
         static_cast<unsigned long long>(
-            renderTapeCapture_->ownedBlobBytes()),
+            peCaptureState_->renderTapeCapture.ownedBlobBytes()),
         static_cast<unsigned long long>(limits.maxBlobBytes),
-        renderTapeCapture_->ownedBlobEntries(), limits.maxBlobEntries);
+        peCaptureState_->renderTapeCapture.ownedBlobEntries(), limits.maxBlobEntries);
 }
 
 bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
@@ -1784,14 +1787,14 @@ bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
     const auto &bytes = entry->content[subresource];
     dxmt9::d3d9::RenderTapeDigest digest{};
     const auto blobStatus =
-        renderTapeCapture_->registerBlobBytes(bytes, &digest);
+        peCaptureState_->renderTapeCapture.registerBlobBytes(bytes, &digest);
     if (blobStatus != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
         logRenderTapeMutationRejection(reason, "blob_register", object,
                                        subresource, bytes.size(),
                                        blobStatus);
         return false;
     }
-    const auto status = renderTapeCapture_->resourceMutation(
+    const auto status = peCaptureState_->renderTapeCapture.resourceMutation(
         object.identity, dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock,
         subresource, 0u, bytes.size(),
         std::span<const std::byte, dxmt9::d3d9::kRenderTapeDigestSize>(
@@ -1806,19 +1809,22 @@ bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
 
 bool D3D9DeviceImpl::renderTapeObjectAdmitted(
     const D9CWireObjectIdentity &identity) const noexcept {
-    return dxmt9::d3d9::renderTapeBootstrapClosureContains(
-        renderTapeAdmittedIdentities_, identity);
+    return peCaptureState_ &&
+        dxmt9::d3d9::renderTapeBootstrapClosureContains(
+            peCaptureState_->renderTapeAdmittedIdentities, identity);
 }
 
 void D3D9DeviceImpl::removeRenderTapeObjectAdmitted(
     const D9CWireObjectIdentity &identity) noexcept {
+    if (!peCaptureState_)
+        return;
     const auto it = std::find_if(
-        renderTapeAdmittedIdentities_.begin(),
-        renderTapeAdmittedIdentities_.end(), [&](const auto &candidate) {
+        peCaptureState_->renderTapeAdmittedIdentities.begin(),
+        peCaptureState_->renderTapeAdmittedIdentities.end(), [&](const auto &candidate) {
             return renderTapeSameIdentity(candidate, identity);
         });
-    if (it != renderTapeAdmittedIdentities_.end())
-        renderTapeAdmittedIdentities_.erase(it);
+    if (it != peCaptureState_->renderTapeAdmittedIdentities.end())
+        peCaptureState_->renderTapeAdmittedIdentities.erase(it);
 }
 
 bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
@@ -1828,14 +1834,11 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     std::uint32_t recordType,
     const dxmt9::d3d9::RenderTapeOriginLocator *originLocator,
     const dxmt9::d3d9::ImportedChunkView *currentChunk) noexcept {
+    if (!peCaptureState_)
+        return false;
     if (renderTapeObjectAdmitted(identity))
         return true;
-    if (!renderTapeRegistry_) {
-        abortRenderTapeCapture("jit_materialize_registry_missing");
-        return false;
-    }
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return false;
     }
@@ -1847,11 +1850,11 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
         return false;
     };
     const auto object = std::find_if(
-        renderTapeRegistry_->objects.begin(),
-        renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+        peCaptureState_->renderTapeRegistry.objects.begin(),
+        peCaptureState_->renderTapeRegistry.objects.end(), [&](const auto &candidate) {
             return renderTapeSameIdentity(candidate.identity, identity);
         });
-    if (object == renderTapeRegistry_->objects.end()) {
+    if (object == peCaptureState_->renderTapeRegistry.objects.end()) {
         const dxmt9::d3d9::pe::PeWireObjectRef reference{
             .identity = identity};
         dxmt9DeviceInfoLog(
@@ -1860,7 +1863,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
             "pending=0 admitted=%d known_dead=%d handle_index=%u "
             "record_index=%u record_type=%u",
             dxmt9PeRenderTapeCaptureProfile(), this,
-            static_cast<void *>(&*renderTapeRegistry_), identity.kind,
+            static_cast<void *>(&peCaptureState_->renderTapeRegistry), identity.kind,
             identity.generation,
             static_cast<unsigned long long>(identity.objectId),
             renderTapeObjectAdmitted(identity) ? 1 : 0,
@@ -1878,24 +1881,24 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
                           UnmaterializedPreArmObject);
     }
     const auto armSnapshot = std::find_if(
-        renderTapeArmSnapshots_.begin(), renderTapeArmSnapshots_.end(),
+        peCaptureState_->renderTapeArmSnapshots.begin(), peCaptureState_->renderTapeArmSnapshots.end(),
         [&](const auto &candidate) {
             return renderTapeSameIdentity(candidate.identity, identity);
         });
     const auto armOverlay = dxmt9::d3d9::
         renderTapeSelectArmObjectSnapshotOverlay(
             object->descriptor, object->content,
-            armSnapshot != renderTapeArmSnapshots_.end()
+            armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                 ? std::span<const std::byte>(armSnapshot->descriptor)
                 : std::span<const std::byte>{},
-            armSnapshot != renderTapeArmSnapshots_.end()
+            armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                 ? std::span<const std::vector<std::byte>>(
                       armSnapshot->content)
                 : std::span<const std::vector<std::byte>>{},
-            armSnapshot != renderTapeArmSnapshots_.end()
+            armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
                 ? armSnapshot->armOrdinal
                 : 0u,
-            renderTapeArmSnapshotOrdinal_,
+            peCaptureState_->renderTapeArmSnapshotOrdinal,
             object->role == RenderTapeLiveObject::Role::PresentOutput
                 ? dxmt9::d3d9::
                       RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput
@@ -1931,15 +1934,15 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
         RenderTapeTextureDescriptorV2 texture{};
         dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 alias{};
         const auto aliasObject = std::find_if(
-            renderTapeRegistry_->objects.begin(),
-            renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+            peCaptureState_->renderTapeRegistry.objects.begin(),
+            peCaptureState_->renderTapeRegistry.objects.end(), [&](const auto &candidate) {
                 return renderTapeSameIdentity(
                     candidate.identity, originLocator->originIdentity);
             });
         const bool exactTexture =
             renderTapeLoadTextureDescriptorV2(effectiveDescriptor, texture) &&
             dxmt9::d3d9::renderTapeProducedTextureShapeSupported(texture) &&
-            aliasObject != renderTapeRegistry_->objects.end() &&
+            aliasObject != peCaptureState_->renderTapeRegistry.objects.end() &&
             aliasObject->lifetime.textureAlias &&
             renderTapeSameIdentity(aliasObject->aliasParentTexture,
                                    object->identity) &&
@@ -1999,7 +2002,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
                 .recordType = locator.recordType,
             });
         dxmt9::d3d9::renderTapeFirstAccessArm(
-            renderTapeFirstAccessLedger_, locator.originIdentity,
+            peCaptureState_->renderTapeFirstAccessLedger, locator.originIdentity,
             object->identity);
         dxmt9DeviceInfoLog(
             "render_tape_capture missing_seed identity_kind=%u "
@@ -2079,7 +2082,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     dxmt9::d3d9::RenderTapeDigest immutableDigest{};
     std::uint64_t immutableBytes = 0u;
     if (!object->immutablePayload.empty()) {
-        if (renderTapeCapture_->registerBlobBytes(object->immutablePayload,
+        if (peCaptureState_->renderTapeCapture.registerBlobBytes(object->immutablePayload,
                                                   &immutableDigest) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             abortRenderTapeCapture("jit_object_define_blob");
@@ -2119,7 +2122,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
             std::memcpy(descriptor.data(), &surface, sizeof(surface));
         }
     }
-    if (renderTapeCapture_->objectDefine(
+    if (peCaptureState_->renderTapeCapture.objectDefine(
             identity, descriptorKind, descriptor, immutableBytes,
             immutableDigest,
             producedByCapturedPass || object->lifetime.textureAlias
@@ -2134,7 +2137,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     }
     if (producedByCapturedPass || object->lifetime.textureAlias) {
         try {
-            renderTapeAdmittedIdentities_.push_back(identity);
+            peCaptureState_->renderTapeAdmittedIdentities.push_back(identity);
         } catch (...) {
             abortRenderTapeCapture("jit_identity_allocation");
             return false;
@@ -2143,7 +2146,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     }
     for (std::uint32_t subresource = 0u;
          subresource < effectiveContent.size(); ++subresource) {
-        if (renderTapeCapture_->resourceMutationBytes(
+        if (peCaptureState_->renderTapeCapture.resourceMutationBytes(
                 identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
                 subresource, 0u, effectiveContent[subresource]) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
@@ -2152,7 +2155,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
         }
     }
     try {
-        renderTapeAdmittedIdentities_.push_back(identity);
+        peCaptureState_->renderTapeAdmittedIdentities.push_back(identity);
     } catch (...) {
         abortRenderTapeCapture("jit_identity_allocation");
         return false;
@@ -2236,7 +2239,7 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
         attribution.locator.aliasOrigin = !renderTapeSameIdentity(
             originLocator.originIdentity, identity);
         attribution.resolvedIdentity = identity;
-        attribution.registryPresent = renderTapeRegistry_.has_value();
+        attribution.registryPresent = peCaptureState_ != nullptr;
         attribution.admitted = renderTapeObjectAdmitted(identity);
         if (attribution.admitted) {
             attribution.admission =
@@ -2248,7 +2251,7 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
                 });
             return attribution;
         }
-        if (!renderTapeRegistry_) {
+        if (!peCaptureState_) {
             attribution.admission =
                 dxmt9::d3d9::renderTapeClassifyCommandAdmission({
                     .originAccepted = originLocator.status ==
@@ -2257,11 +2260,11 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
             return attribution;
         }
         const auto object = std::find_if(
-            renderTapeRegistry_->objects.begin(),
-            renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+            peCaptureState_->renderTapeRegistry.objects.begin(),
+            peCaptureState_->renderTapeRegistry.objects.end(), [&](const auto &candidate) {
                 return renderTapeSameIdentity(candidate.identity, identity);
             });
-        attribution.live = object != renderTapeRegistry_->objects.end();
+        attribution.live = object != peCaptureState_->renderTapeRegistry.objects.end();
         if (!attribution.live) {
             const dxmt9::d3d9::pe::PeWireObjectRef reference{
                 .identity = identity};
@@ -2277,12 +2280,12 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
         }
         attribution.textureAlias = object->lifetime.textureAlias;
         const auto armSnapshot = std::find_if(
-            renderTapeArmSnapshots_.begin(), renderTapeArmSnapshots_.end(),
+            peCaptureState_->renderTapeArmSnapshots.begin(), peCaptureState_->renderTapeArmSnapshots.end(),
             [&](const auto &candidate) {
                 return renderTapeSameIdentity(candidate.identity, identity);
             });
         attribution.armSnapshotPresent =
-            armSnapshot != renderTapeArmSnapshots_.end();
+            armSnapshot != peCaptureState_->renderTapeArmSnapshots.end();
         const auto armOverlay = dxmt9::d3d9::
             renderTapeSelectArmObjectSnapshotOverlay(
                 object->descriptor, object->content,
@@ -2296,7 +2299,7 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
                 attribution.armSnapshotPresent
                     ? armSnapshot->armOrdinal
                     : 0u,
-                renderTapeArmSnapshotOrdinal_,
+                peCaptureState_->renderTapeArmSnapshotOrdinal,
                 object->role == RenderTapeLiveObject::Role::PresentOutput
                     ? dxmt9::d3d9::
                           RenderTapeArmObjectSnapshotOverlayPolicy::
@@ -2378,13 +2381,13 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
         dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
         dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 alias{};
         const auto aliasObject = std::find_if(
-            renderTapeRegistry_->objects.begin(),
-            renderTapeRegistry_->objects.end(), [&](const auto &candidate) {
+            peCaptureState_->renderTapeRegistry.objects.begin(),
+            peCaptureState_->renderTapeRegistry.objects.end(), [&](const auto &candidate) {
                 return renderTapeSameIdentity(
                     candidate.identity, originLocator.originIdentity);
             });
         attribution.producedAliasPresent =
-            aliasObject != renderTapeRegistry_->objects.end();
+            aliasObject != peCaptureState_->renderTapeRegistry.objects.end();
         attribution.producedAliasDescriptorAccepted =
             attribution.producedAliasPresent &&
             renderTapeLoadSurfaceDescriptorV2(aliasObject->descriptor,
@@ -2604,7 +2607,8 @@ bool D3D9DeviceImpl::admitRenderTapeChunkHandles(
 void D3D9DeviceImpl::observeRenderTapeFirstAccessChunk(
     const D9CCommandChunk &chunk,
     const PeCommandChunkCommitInfo &info) noexcept {
-    if (!renderTapeFirstAccessLedger_.armed ||
+    if (!peCaptureState_ ||
+        !peCaptureState_->renderTapeFirstAccessLedger.armed ||
         chunk.recordBytes < sizeof(D9CCommandChunkWireHeader) ||
         d9cWireHandleValue(chunk.records) == 0u) {
         return;
@@ -2622,27 +2626,27 @@ void D3D9DeviceImpl::observeRenderTapeFirstAccessChunk(
                    .handleCount = info.handleCount},
         &imported, scratch);
     if (!validation.valid()) {
-        if (!renderTapeFirstAccessLedger_.terminal) {
-            renderTapeFirstAccessLedger_.terminal = true;
+        if (!peCaptureState_->renderTapeFirstAccessLedger.terminal) {
+            peCaptureState_->renderTapeFirstAccessLedger.terminal = true;
             dxmt9DeviceInfoLog(
                 "render_tape_capture first_access status=malformed "
                 "class=unknown reason=chunk_validation origin_kind=%u "
                 "origin_generation=%u origin_object_id=%llu "
                 "resolved_kind=%u resolved_generation=%u "
                 "resolved_object_id=%llu",
-                renderTapeFirstAccessLedger_.originIdentity.kind,
-                renderTapeFirstAccessLedger_.originIdentity.generation,
+                peCaptureState_->renderTapeFirstAccessLedger.originIdentity.kind,
+                peCaptureState_->renderTapeFirstAccessLedger.originIdentity.generation,
                 static_cast<unsigned long long>(
-                    renderTapeFirstAccessLedger_.originIdentity.objectId),
-                renderTapeFirstAccessLedger_.resolvedIdentity.kind,
-                renderTapeFirstAccessLedger_.resolvedIdentity.generation,
+                    peCaptureState_->renderTapeFirstAccessLedger.originIdentity.objectId),
+                peCaptureState_->renderTapeFirstAccessLedger.resolvedIdentity.kind,
+                peCaptureState_->renderTapeFirstAccessLedger.resolvedIdentity.generation,
                 static_cast<unsigned long long>(
-                    renderTapeFirstAccessLedger_.resolvedIdentity.objectId));
+                    peCaptureState_->renderTapeFirstAccessLedger.resolvedIdentity.objectId));
         }
         return;
     }
     const auto observation = dxmt9::d3d9::renderTapeFirstAccessObserve(
-        renderTapeFirstAccessLedger_, imported);
+        peCaptureState_->renderTapeFirstAccessLedger, imported);
     if (observation.status !=
             dxmt9::d3d9::RenderTapeFirstAccessStatus::Terminal &&
         observation.status !=
@@ -2675,19 +2679,19 @@ void D3D9DeviceImpl::observeRenderTapeFirstAccessChunk(
 bool D3D9DeviceImpl::prepareRenderTapeChunkCapture(
     const D9CCommandChunk& chunk,
     const PeCommandChunkCommitInfo& info) noexcept {
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return false;
     }
-    if (renderTapeArmBoundaryPhase_ ==
+    if (peCaptureState_->renderTapeArmBoundaryPhase ==
             dxmt9::d3d9::RenderTapeArmBoundaryPhase::Armed &&
         !advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::FirstCapturedChunk)) {
         abortRenderTapeCapture("arm_boundary_order");
         return false;
     }
-    if (renderTapeArmBoundaryPhase_ != dxmt9::d3d9::
+    if (peCaptureState_->renderTapeArmBoundaryPhase != dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::FirstCapturedChunk) {
         abortRenderTapeCapture("arm_boundary_order");
         return false;
@@ -2704,12 +2708,12 @@ bool D3D9DeviceImpl::prepareRenderTapeChunkCapture(
 void D3D9DeviceImpl::captureCommittedRenderTapeChunk(
     const D9CCommandChunk& chunk,
     const PeCommandChunkCommitInfo& info) noexcept {
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return;
     }
-    const auto status = renderTapeCapture_->commandChunk(
+    const auto status = peCaptureState_->renderTapeCapture.commandChunk(
         dxmt9::d3d9::CommandChunkEnvelope{
             .version = chunk.version,
             .recordCount = info.recordCount,
@@ -2729,35 +2733,35 @@ void D3D9DeviceImpl::captureCommittedRenderTapeChunk(
 }
 
 void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return;
     }
-    if (!renderTapeExpectedDigest_) {
+    if (!peCaptureState_->renderTapeExpectedDigest) {
         abortRenderTapeCapture("present_output_capture_missing");
         return;
     }
     const std::uint64_t capturedPresentOrdinal =
-        renderTapeCapture_->eventCount();
-    const auto status = renderTapeCapture_->completePresent(
+        peCaptureState_->renderTapeCapture.eventCount();
+    const auto status = peCaptureState_->renderTapeCapture.completePresent(
         capturedPresentOrdinal,
-        ++renderTapeCompletionOrdinal_,
+        ++peCaptureState_->renderTapeCompletionOrdinal,
         dxmt9::d3d9::RenderTapeDigestValidity::Sha256,
-        *renderTapeExpectedDigest_,
-        std::as_bytes(std::span(renderTapeCaptureOracle_)),
-        renderTapeExpectedPixels_, renderTapeExpectedSourcePixels_);
+        *peCaptureState_->renderTapeExpectedDigest,
+        std::as_bytes(std::span(peCaptureState_->renderTapeCaptureOracle)),
+        peCaptureState_->renderTapeExpectedPixels, peCaptureState_->renderTapeExpectedSourcePixels);
     if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
         status != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
         dxmt9DeviceInfoLog(
             "render_tape_capture completion aborted status=%u events=%u "
             "chunks=%llu present_chunk_seen=%d oracle_bytes=%zu validation=%u",
-            static_cast<unsigned>(status), renderTapeCapture_->eventCount(),
+            static_cast<unsigned>(status), peCaptureState_->renderTapeCapture.eventCount(),
             static_cast<unsigned long long>(commandChunkCommits_),
-            renderTapeCapture_->presentChunkSeen() ? 1 : 0,
-            std::as_bytes(std::span(renderTapeCaptureOracle_)).size(),
-            static_cast<unsigned>(renderTapeCapture_->validationStatus()));
-        const auto &validation = renderTapeCapture_->validationResult();
+            peCaptureState_->renderTapeCapture.presentChunkSeen() ? 1 : 0,
+            std::as_bytes(std::span(peCaptureState_->renderTapeCaptureOracle)).size(),
+            static_cast<unsigned>(peCaptureState_->renderTapeCapture.validationStatus()));
+        const auto &validation = peCaptureState_->renderTapeCapture.validationResult();
         dxmt9DeviceInfoLog(
             "render_tape_capture validation_failure status=%u name=%s "
             "failed_event_index=%u failed_event_type=%u chunk_status=%u "
@@ -2819,19 +2823,19 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
             abortRenderTapeCapture("snapshot_completion_policy");
             return;
         }
-        renderTapeExpectedDigest_.reset();
-        renderTapeExpectedPixels_.clear();
-        renderTapeExpectedSourcePixels_.clear();
+        peCaptureState_->renderTapeExpectedDigest.reset();
+        peCaptureState_->renderTapeExpectedPixels.clear();
+        peCaptureState_->renderTapeExpectedSourcePixels.clear();
         return;
     }
     D9CRenderTapeIdentityCaptureResult identityResult{};
-    if (renderTapeActiveCaptureToken_ == 0u ||
+    if (peCaptureState_->renderTapeActiveCaptureToken == 0u ||
         FAILED(hr32(dxmt9c_device_finish_render_tape_identity_capture(
-            dev_, renderTapeActiveCaptureToken_, &identityResult,
+            dev_, peCaptureState_->renderTapeActiveCaptureToken, &identityResult,
             nullptr, 0u))) ||
         identityResult.status !=
             D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE ||
-        identityResult.captureToken != renderTapeActiveCaptureToken_ ||
+        identityResult.captureToken != peCaptureState_->renderTapeActiveCaptureToken ||
         identityResult.sourceCount == 0u ||
         identityResult.rangeCount == 0u ||
         identityResult.reserved0 != 0u ||
@@ -2859,7 +2863,7 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
     }
     D9CRenderTapeIdentityCaptureResult copiedIdentity{};
     if (FAILED(hr32(dxmt9c_device_finish_render_tape_identity_capture(
-            dev_, renderTapeActiveCaptureToken_, &copiedIdentity,
+            dev_, peCaptureState_->renderTapeActiveCaptureToken, &copiedIdentity,
             identityBytes.data(), identityBytes.size()))) ||
         copiedIdentity.status !=
             D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE ||
@@ -2934,8 +2938,8 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
     std::memcpy(identitySettlements.data(),
                 identityBytes.data() + sourceBytes + rangeBytes,
                 settlementBytes);
-    if (renderTapeCapture_->attachCaptureIdentity(
-            renderTapeActiveCaptureToken_, capturedPresentOrdinal,
+    if (peCaptureState_->renderTapeCapture.attachCaptureIdentity(
+            peCaptureState_->renderTapeActiveCaptureToken, capturedPresentOrdinal,
             identitySources, identityRanges,
             dxmt9::d3d9::RenderTapeIdentityEventSettlement{
                 .eventOrdinal = copiedIdentity.eventOrdinal,
@@ -2945,7 +2949,7 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
             }, identitySettlements) !=
         dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
         const auto& identityValidation =
-            renderTapeCapture_->identityValidationResult();
+            peCaptureState_->renderTapeCapture.identityValidationResult();
         dxmt9DeviceInfoLog(
             "render_tape_capture identity_attach_failure status=%u name=%s "
             "failed_source=%u failed_range=%u sources=%zu ranges=%zu",
@@ -2964,7 +2968,7 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
         publisher = dxmt9PeDefaultRenderTapeArtifactPublisher();
     }
     const bool published =
-        publisher && publisher(renderTapeCapture_->publicationBundle());
+        publisher && publisher(peCaptureState_->renderTapeCapture.publicationBundle());
     dxmt9DeviceInfoLog("render_tape_capture publication published=%d",
                        published ? 1 : 0);
     if (!published) {
@@ -2972,20 +2976,20 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
     }
     if (dxmt9::d3d9::renderTapeArmSnapshotCompletionAction(true) ==
         dxmt9::d3d9::RenderTapeArmSnapshotCompletionAction::Clear) {
-        renderTapeArmSnapshots_.clear();
+        peCaptureState_->renderTapeArmSnapshots.clear();
     }
-    renderTapeExpectedDigest_.reset();
-    renderTapeExpectedPixels_.clear();
-    renderTapeExpectedSourcePixels_.clear();
-    renderTapeActiveCaptureToken_ = 0u;
+    peCaptureState_->renderTapeExpectedDigest.reset();
+    peCaptureState_->renderTapeExpectedPixels.clear();
+    peCaptureState_->renderTapeExpectedSourcePixels.clear();
+    peCaptureState_->renderTapeActiveCaptureToken = 0u;
 }
 
 void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::span<const std::byte> descriptor,
     std::span<const std::byte> immutablePayload) noexcept {
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return;
     }
@@ -2993,7 +2997,7 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
         dxmt9::d3d9::RenderTapeDigest digest{};
         std::uint64_t bytes = 0u;
         if (!immutablePayload.empty()) {
-            const auto status = renderTapeCapture_->registerBlobBytes(
+            const auto status = peCaptureState_->renderTapeCapture.registerBlobBytes(
                 immutablePayload, &digest);
             if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
                 abortRenderTapeCapture("object_define_blob");
@@ -3011,7 +3015,7 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
             return;
         }
         dxmt9::d3d9::RenderTapeObjectDefineDisposition disposition{};
-        const auto status = renderTapeCapture_->objectDefine(
+        const auto status = peCaptureState_->renderTapeCapture.objectDefine(
             object.identity, static_cast<std::uint32_t>(descriptorKind),
             descriptor, bytes, digest, 0u, 0u, &disposition);
         if (status == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
@@ -3048,13 +3052,13 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
 }
 
 bool D3D9DeviceImpl::IsRenderTapeCaptureActiveForChild() const noexcept {
-    return renderTapeCapture_ &&
-           renderTapeCapture_->state() ==
+    return peCaptureState_ &&
+           peCaptureState_->renderTapeCapture.state() ==
                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
 }
 
 bool D3D9DeviceImpl::IsRenderTapeCaptureTrackingEnabledForChild() const noexcept {
-    return renderTapeRegistry_.has_value();
+    return peCaptureState_ != nullptr;
 }
 
 void D3D9DeviceImpl::AbortRenderTapeCaptureForChild() noexcept {
@@ -3071,7 +3075,7 @@ void D3D9DeviceImpl::RejectRenderTapeCaptureForChild(
     noexcept {
     const char *name =
         dxmt9::d3d9::renderTapeCaptureRejectionReasonName(reason);
-    const bool first = renderTapeRegistry_ && !renderTapeRegistry_->invalid;
+    const bool first = peCaptureState_ && !peCaptureState_->renderTapeRegistry.invalid;
     markRenderTapeInvalidOnce(name, &object, subresource, diagnostic);
     if (first) {
         dxmt9DeviceInfoLog(
@@ -3094,7 +3098,7 @@ D3D9DeviceImpl::RenderTapeFullSnapshotStatusForChild(
     std::uint32_t subresource, std::uint32_t fullRowBytes,
     std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept {
     using Status = dxmt9::d3d9::RenderTapeFullSnapshotStatus;
-    if (!renderTapeRegistry_ ||
+    if (!peCaptureState_ ||
         (object.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE &&
          object.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER)) {
         return Status::NotRequired;
@@ -3255,7 +3259,7 @@ void D3D9DeviceImpl::NotifyRenderTapeLinearMutationForChild(
 void D3D9DeviceImpl::applyRenderTapeUpdateTextureClosure(
     const dxmt9::d3d9::pe::PeWireObjectRef &source,
     const dxmt9::d3d9::pe::PeWireObjectRef &destination) noexcept {
-    if (!renderTapeRegistry_ ||
+    if (!peCaptureState_ ||
         source.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
         destination.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE) {
         return;
@@ -3357,20 +3361,20 @@ void D3D9DeviceImpl::NotifyRenderTapeStandaloneSurfaceForChild(
 bool D3D9DeviceImpl::retireRenderTapeObject(
     const D9CWireObjectIdentity &identity, bool recordDestroy,
     const char *failureReason) noexcept {
-    if (!renderTapeRegistry_)
+    if (!peCaptureState_)
         return false;
     const auto it = std::find_if(
-        renderTapeRegistry_->objects.begin(),
-        renderTapeRegistry_->objects.end(), [&](const auto &entry) {
+        peCaptureState_->renderTapeRegistry.objects.begin(),
+        peCaptureState_->renderTapeRegistry.objects.end(), [&](const auto &entry) {
             return renderTapeSameIdentity(entry.identity, identity);
         });
-    if (it == renderTapeRegistry_->objects.end())
+    if (it == peCaptureState_->renderTapeRegistry.objects.end())
         return false;
     const bool admitted = renderTapeObjectAdmitted(identity);
-    if (recordDestroy && admitted && renderTapeCapture_ &&
-        renderTapeCapture_->state() ==
+    if (recordDestroy && admitted && peCaptureState_ &&
+        peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
-        const auto status = renderTapeCapture_->objectDestroy(identity);
+        const auto status = peCaptureState_->renderTapeCapture.objectDestroy(identity);
         dxmt9DeviceInfoLog(
             "render_tape_capture object_destroy status=%u kind=%u "
             "generation=%u object_id=%llu",
@@ -3384,24 +3388,24 @@ bool D3D9DeviceImpl::retireRenderTapeObject(
         }
     }
     try {
-        renderTapeRegistry_->knownDead.push_back(identity);
+        peCaptureState_->renderTapeRegistry.knownDead.push_back(identity);
     } catch (...) {
         const dxmt9::d3d9::pe::PeWireObjectRef object{.identity = identity};
         markRenderTapeInvalidOnce("object_destroy_tombstone_allocation",
                                  &object);
         return false;
     }
-    renderTapeRegistry_->objects.erase(it);
+    peCaptureState_->renderTapeRegistry.objects.erase(it);
     return true;
 }
 
 void D3D9DeviceImpl::retireRenderTapeAliasesForParent(
     const D9CWireObjectIdentity &parent, bool recordDestroy) noexcept {
-    if (!renderTapeRegistry_) {
+    if (!peCaptureState_) {
         return;
     }
-    for (auto it = renderTapeRegistry_->objects.begin();
-         it != renderTapeRegistry_->objects.end();) {
+    for (auto it = peCaptureState_->renderTapeRegistry.objects.begin();
+         it != peCaptureState_->renderTapeRegistry.objects.end();) {
         if (!it->lifetime.textureAlias ||
             !renderTapeSameIdentity(it->aliasParentTexture, parent)) {
             ++it;
@@ -3427,12 +3431,12 @@ void D3D9DeviceImpl::retireRenderTapeAliasesForParent(
                                       "alias_object_destroy");
         // The helper erases the identity. Restarting from a value lookup
         // keeps iterator invalidation out of this bounded registry walk.
-        it = renderTapeRegistry_->objects.begin();
+        it = peCaptureState_->renderTapeRegistry.objects.begin();
     }
 }
 
 void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
-    if (!renderTapeRegistry_)
+    if (!peCaptureState_)
         return;
     // Handles are intentionally walked after the command has been
     // materialized. Duplicate handles across records are harmless because
@@ -3462,7 +3466,7 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
 
 void D3D9DeviceImpl::NotifyRenderTapeObjectDestroyForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {
-    if (renderTapeRegistry_) {
+    if (peCaptureState_) {
         auto *entry = findRenderTapeObject(object);
         // The PE wrapper destructor has already delivered this callback.
         // Transfer the logical lifetime to the bounded pending chunk ref;
@@ -3506,15 +3510,15 @@ void D3D9DeviceImpl::NotifyRenderTapeResourceMutationForChild(
             abortRenderTapeCapture("resource_mutation_registry");
         return;
     }
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return;
     }
     if (!renderTapeObjectAdmitted(object.identity))
         return;
     try {
-        if (renderTapeCapture_->resourceMutationBytes(
+        if (peCaptureState_->renderTapeCapture.resourceMutationBytes(
                 object.identity, kind, subresource, byteOffset, bytes,
                 bufferDisposition) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
@@ -3528,8 +3532,8 @@ void D3D9DeviceImpl::NotifyRenderTapeResourceMutationForChild(
 void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
     const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
     std::span<const std::byte> payload) noexcept {
-    if (!renderTapeCapture_ ||
-        renderTapeCapture_->state() !=
+    if (!peCaptureState_ ||
+        peCaptureState_->renderTapeCapture.state() !=
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
         return;
     }
@@ -3538,8 +3542,8 @@ void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
         return;
     }
     auto recorded = fixed;
-    recorded.completionOrdinal = ++renderTapeCompletionOrdinal_;
-    if (renderTapeCapture_->orderedControl(recorded, payload) !=
+    recorded.completionOrdinal = ++peCaptureState_->renderTapeCompletionOrdinal;
+    if (peCaptureState_->renderTapeCapture.orderedControl(recorded, payload) !=
         dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
         abortRenderTapeCapture("ordered_control");
     }

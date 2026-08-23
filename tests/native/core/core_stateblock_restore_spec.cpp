@@ -279,6 +279,79 @@ void testRecordedDeltaStateBlockCapturesShaderConstantPayloads() {
           "recorded stateblock leaves unrecorded PS bool register alone");
 }
 
+Matrix4x4 scale(float value) {
+  Matrix4x4 matrix{};
+  matrix.m[0] = value;
+  matrix.m[5] = value;
+  matrix.m[10] = value;
+  matrix.m[15] = 1.0f;
+  return matrix;
+}
+
+void testRecordedCaptureKeepsFixedQualifiedTrackedSet() {
+  auto device = makeDevice();
+  DeviceState before;
+  before.reset();
+  before.renderStates.set(7u, 1u);
+  before.renderStates.set(8u, 10u);
+  before.textureStageStates[0].set(7u, 2u);
+  before.textureStageStates[1].set(7u, 20u);
+  before.samplerStates[0].set(7u, 3u);
+  before.samplerStates[1].set(7u, 30u);
+  before.transforms.set(2u, scale(4.0f));
+  before.transforms.set(3u, scale(40.0f));
+
+  DeviceState recorded = before;
+  recorded.renderStates.set(7u, 11u);
+  recorded.textureStageStates[0].set(7u, 12u);
+  recorded.samplerStates[0].set(7u, 13u);
+  recorded.transforms.set(2u, scale(14.0f));
+
+  StateBlock block;
+  block.captureDelta(before, recorded, {7u});
+
+  DeviceState captured = before;
+  captured.renderStates.set(7u, 21u);
+  captured.renderStates.set(8u, 210u);
+  captured.textureStageStates[0].set(7u, 22u);
+  captured.textureStageStates[1].set(7u, 220u);
+  captured.samplerStates[0].set(7u, 23u);
+  captured.samplerStates[1].set(7u, 230u);
+  captured.transforms.set(2u, scale(24.0f));
+  captured.transforms.set(3u, scale(240.0f));
+  block.capture(captured);
+
+  auto& target = device->mutableState();
+  target = before;
+  target.renderStates.set(7u, 31u);
+  target.renderStates.set(8u, 310u);
+  target.textureStageStates[0].set(7u, 32u);
+  target.textureStageStates[1].set(7u, 320u);
+  target.samplerStates[0].set(7u, 33u);
+  target.samplerStates[1].set(7u, 330u);
+  target.transforms.set(2u, scale(34.0f));
+  target.transforms.set(3u, scale(340.0f));
+  block.apply(*device);
+
+  const auto& state = device->state();
+  checkEq(state.renderStates.valueOr(7u, 0u), 21u,
+          "Capture refreshes tracked render key");
+  checkEq(state.renderStates.valueOr(8u, 0u), 310u,
+          "Capture never enlarges render tracked set");
+  checkEq(state.textureStageStates[0].valueOr(7u, 0u), 22u,
+          "Capture refreshes tracked TSS key");
+  checkEq(state.textureStageStates[1].valueOr(7u, 0u), 320u,
+          "Capture never enlarges TSS tracked set");
+  checkEq(state.samplerStates[0].valueOr(7u, 0u), 23u,
+          "Capture refreshes tracked sampler key");
+  checkEq(state.samplerStates[1].valueOr(7u, 0u), 330u,
+          "Capture never enlarges sampler tracked set");
+  checkEq(state.transforms.valueOr(2u, Matrix4x4{}), scale(24.0f),
+          "Capture refreshes tracked transform key");
+  checkEq(state.transforms.valueOr(3u, Matrix4x4{}), scale(340.0f),
+          "Capture never enlarges transform tracked set");
+}
+
 }  // namespace
 
 int main() {
@@ -286,6 +359,7 @@ int main() {
     testAllStateBlockRestoresTextureSamplerTssAndRenderTargets();
     testRecordedDeltaStateBlockAppliesOnlyChangedResourcePayloads();
     testRecordedDeltaStateBlockCapturesShaderConstantPayloads();
+    testRecordedCaptureKeepsFixedQualifiedTrackedSet();
   } catch (const TestFailure& e) {
     std::cerr << "core_stateblock_restore_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

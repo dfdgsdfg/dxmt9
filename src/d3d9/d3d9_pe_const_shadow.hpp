@@ -95,6 +95,113 @@ struct PeConstShadowBlock {
     }
 };
 
+// Wrapper-owned state-block constant snapshot.  `trackedElems` fixes the
+// register set at EndStateBlock; Capture refreshes bytes for those registers
+// only and never grows the set.  Values are byte-shaped so all six D3D9
+// constant kinds share one allocation-free-after-reserve adapter.
+struct StateBlockConstShadow {
+    std::vector<std::uint8_t> values;
+    std::vector<std::uint8_t> trackedElems;
+
+    void reserveCapacity(std::size_t byteCap, std::size_t elemCap) {
+        values.reserve(byteCap);
+        trackedElems.reserve(elemCap);
+    }
+
+    void clear() noexcept {
+        values.clear();
+        trackedElems.clear();
+    }
+
+    bool empty() const noexcept {
+        return std::none_of(trackedElems.begin(), trackedElems.end(),
+                            [](std::uint8_t value) { return value != 0u; });
+    }
+
+    bool contains(std::uint32_t reg) const noexcept {
+        return reg < trackedElems.size() && trackedElems[reg] != 0u;
+    }
+
+    void record(std::uint32_t start, std::uint32_t count, const void* data,
+                std::size_t elemSize) {
+        if (count == 0u) {
+            return;
+        }
+        const std::size_t end = static_cast<std::size_t>(start) + count;
+        const std::size_t byteEnd = end * elemSize;
+        if (values.size() < byteEnd) {
+            values.resize(byteEnd);
+        }
+        if (trackedElems.size() < end) {
+            trackedElems.resize(end);
+        }
+        std::memcpy(values.data() + static_cast<std::size_t>(start) * elemSize,
+                    data, static_cast<std::size_t>(count) * elemSize);
+        std::fill(trackedElems.begin() + start, trackedElems.begin() + end,
+                  std::uint8_t{1});
+    }
+
+    void refreshFrom(const ConstShadow& live, std::size_t elemSize) {
+        for (std::size_t reg = 0; reg < trackedElems.size(); ++reg) {
+            if (trackedElems[reg] == 0u) {
+                continue;
+            }
+            const std::size_t offset = reg * elemSize;
+            if (values.size() < offset + elemSize) {
+                values.resize(offset + elemSize);
+            }
+            if (live.values.size() >= offset + elemSize) {
+                std::memcpy(values.data() + offset,
+                            live.values.data() + offset, elemSize);
+            } else {
+                std::memset(values.data() + offset, 0, elemSize);
+            }
+        }
+    }
+
+    template<typename Fn>
+    bool forEachRange(std::size_t elemSize, Fn&& fn) const {
+        std::size_t begin = 0u;
+        while (begin < trackedElems.size()) {
+            while (begin < trackedElems.size() && trackedElems[begin] == 0u) {
+                ++begin;
+            }
+            if (begin == trackedElems.size()) {
+                break;
+            }
+            std::size_t end = begin + 1u;
+            while (end < trackedElems.size() && trackedElems[end] != 0u) {
+                ++end;
+            }
+            if (!fn(static_cast<std::uint32_t>(begin),
+                    static_cast<std::uint32_t>(end - begin),
+                    values.data() + begin * elemSize)) {
+                return false;
+            }
+            begin = end;
+        }
+        return true;
+    }
+};
+
+struct PeStateBlockConstRecorded {
+    StateBlockConstShadow vsConstF{};
+    StateBlockConstShadow vsConstI{};
+    StateBlockConstShadow vsConstB{};
+    StateBlockConstShadow psConstF{};
+    StateBlockConstShadow psConstI{};
+    StateBlockConstShadow psConstB{};
+
+    void clearForBegin() noexcept {
+        vsConstF.clear();
+        vsConstI.clear();
+        vsConstB.clear();
+        psConstF.clear();
+        psConstI.clear();
+        psConstB.clear();
+    }
+};
+
 // DXMT9_PE_STATS_DECIMATION diagnostic (const_setter scope): touchConstShadow
 // is a free function shared by all six VS/PS const-shadow call sites in
 // d3d9_pe_device.cpp, so the accumulator and its cached env value live as

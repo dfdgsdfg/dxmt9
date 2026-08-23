@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <thread>
 
 extern "C" int32_t dxmt9p_device_negotiate_command_chunk(
@@ -25,6 +26,11 @@ void check(bool condition, std::string_view message) {
   }
 }
 
+static_assert(dxmt9::d3d9::WireObjectRegistry::kRetainCallbackNonReentrant);
+static_assert(std::is_nothrow_invocable_r_v<void,
+                                            dxmt9::d3d9::WireObjectRegistry::RetainFn,
+                                            std::uint32_t, void*>);
+
 struct FakeObject {
   std::atomic<std::uint32_t> retains{0u};
 };
@@ -32,6 +38,35 @@ struct FakeObject {
 void retainFake(std::uint32_t, void* object) noexcept {
   static_cast<FakeObject*>(object)->retains.fetch_add(
       1u, std::memory_order_relaxed);
+}
+
+struct ReentrantRetainProbe {
+  dxmt9::d3d9::WireObjectRegistry* registry = nullptr;
+  D9CWireObjectIdentity identity{};
+  bool insertRejected = false;
+  bool eraseRejected = false;
+  bool containsRejected = false;
+  bool resolveRejected = false;
+  bool activeCountRejected = false;
+};
+
+ReentrantRetainProbe* gReentrantRetainProbe = nullptr;
+
+void retainWithRejectedRegistryReentry(std::uint32_t kind,
+                                       void* object) noexcept {
+  auto& probe = *gReentrantRetainProbe;
+  probe.insertRejected =
+      probe.registry->insert(kind, object).objectId == 0u;
+  probe.eraseRejected = !probe.registry->erase(probe.identity, object);
+  probe.containsRejected =
+      !probe.registry->contains(probe.identity, object);
+  const std::array entries = {
+      dxmt9::d3d9::wireHandleEntry(probe.identity)};
+  std::array<void*, 1> resolved{};
+  probe.resolveRejected = !probe.registry->resolveAndRetain(
+      entries, resolved, retainFake);
+  probe.activeCountRejected = probe.registry->activeCount() == 0u;
+  retainFake(kind, object);
 }
 
 void testInsertResolveEraseReuse() {
@@ -117,6 +152,33 @@ void testDuplicateIdentityRetainsEachEntry() {
         "duplicate identity resolves consistently");
   check(texture.retains == 2u,
         "each admitted handle-table entry owns one retain");
+}
+
+void testRetainCallbackReentryFailsClosed() {
+  dxmt9::d3d9::WireObjectRegistry registry;
+  FakeObject texture;
+  const auto identity =
+      registry.insert(D9C_CHUNK_HANDLE_KIND_TEXTURE, &texture);
+  const std::array entries = {
+      dxmt9::d3d9::wireHandleEntry(identity)};
+  std::array<void*, 1> resolved{};
+  ReentrantRetainProbe probe{
+      .registry = &registry,
+      .identity = identity,
+  };
+  gReentrantRetainProbe = &probe;
+  const bool retained = registry.resolveAndRetain(
+      entries, resolved, retainWithRejectedRegistryReentry);
+  gReentrantRetainProbe = nullptr;
+
+  check(retained && resolved[0] == &texture && texture.retains == 1u,
+        "outer resolve retains exactly once after rejected callback re-entry");
+  check(probe.insertRejected && probe.eraseRejected &&
+            probe.containsRejected && probe.resolveRejected &&
+            probe.activeCountRejected,
+        "every registry method fails closed during a retain callback");
+  check(registry.contains(identity, &texture) && registry.activeCount() == 1u,
+        "rejected callback re-entry leaves the registry intact");
 }
 
 void testCrossDeviceIdentityAndConcurrentErase() {
@@ -206,6 +268,7 @@ int main() {
     testInsertResolveEraseReuse();
     testTransactionalFailureAndWrongKind();
     testDuplicateIdentityRetainsEachEntry();
+    testRetainCallbackReentryFailsClosed();
     testCrossDeviceIdentityAndConcurrentErase();
     testGenerationWrapRetiresSlot();
     testPerDeviceVersionNegotiation();

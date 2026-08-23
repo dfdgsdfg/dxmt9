@@ -632,6 +632,10 @@ The core must follow the upstream DXMT performance shape: D3D API calls record w
 on the PE side, while unix-side Metal execution happens from committed command
 chunks.
 
+The detailed PE state-domain, append/commit, identity, observer, and evidence
+contracts are owned by
+[`recorder/requirements.md`](recorder/requirements.md) (`R-CORE-REC-*`).
+
 **R-CORE-11.1** D3D9 hot-path calls must not cross the Wine PE/unix boundary one
 call at a time. `Set*`, `Draw*`, `Clear`, and ordinary surface operations must be
 handled by PE-side state tracking and command recording.

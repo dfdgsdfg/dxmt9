@@ -9,9 +9,9 @@
 // retains, which is why it is separate -- that input is not available until
 // after the capacity precheck has sealed the previous chunk.
 //
-// buildSparseState is a pure read of its inputs apart from draining the
-// constant shadow's dirty ranges when asked to fold them inline. It does NOT
-// clear pending hot-state bits; callers do that on success. The
+// buildSparseState is a pure read of its inputs, including constant dirty
+// ranges when asked to fold them inline. It does NOT clear pending state;
+// callers settle the exact accepted record afterwards. The
 // DXMT9_PE_STATS_DECIMATION `draw_packet` scope stays on the device side, in the
 // forwarder, because that scope historically covered the COM-to-wire binding
 // translation too. Timing only this function would quietly shrink the measured
@@ -33,7 +33,7 @@
 namespace dxmt9::d3d9::pe {
 
 // DXMT9_PE_DRAW_FULL_SNAPSHOT: emit a self-contained packet with every valid
-// bit set, drained from the full shadow, instead of a delta. Costs ~10x wire
+// bit set, read from the full shadow, instead of a delta. Costs ~10x wire
 // bandwidth and defeats importer run-coalescing; debug / stress /
 // out-of-order-replay only.
 //
@@ -54,11 +54,10 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 // NOTE: no PeChunkContext. Destination-chunk re-emission is a draw-site step
 // applied after this function -- see the header comment in
 // d3d9_pe_producer_views.hpp.
-// `constants` is currently UNREAD: this producer emits no constant sections, so
-// callers must flush them as standalone SET_CONST records first. It is in the
-// signature because the draw sites can skip that flush under
-// DXMT9_PE_INLINE_CONST_DELTA=1 and fold the ranges into the record instead --
-// whoever migrates them owns that decision. Non-const for the same reason.
+// `constants` is read when DXMT9_PE_INLINE_CONST_DELTA=1 so draw sites can fold
+// dirty ranges into the record instead of flushing standalone SET_CONST
+// records. Preparation is non-consuming; acceptInlineConstantDelta settles the
+// exact ranges only after the builder accepts their record.
 bool buildSparseState(const PeHotStateShadow& shadow,
                         PeConstShadowBlock& constants,
                         const PeBindingView& bindings,
@@ -69,6 +68,20 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeader& header,
                         SparseStateInput& out) noexcept;
+
+// Settles only the constant ranges prepared by buildSparseState after the
+// builder has accepted their record. A failed append must skip this call.
+bool acceptInlineConstantDelta(PeConstShadowBlock& constants,
+                               const SparseStateInput& state,
+                               const AppendPlan& plan) noexcept;
+
+// Settles exactly the pending keys/ranges represented by `state`.  The same
+// AppendPlan vocabulary is shared by draw, barrier, oversized-category,
+// tail, and inline-constant append sites; prepare/fail/discard never consume.
+bool acceptPreparedSparseState(PeHotStateShadow& shadow,
+                               PeConstShadowBlock& constants,
+                               const SparseStateInput& state,
+                               const AppendPlan& plan) noexcept;
 
 // Builds the value-owned checkpoint form used by Render Tape. Unlike the
 // normal draw path this preserves the complete constant shadow rather than

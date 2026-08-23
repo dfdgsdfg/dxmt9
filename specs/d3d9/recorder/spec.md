@@ -1,0 +1,324 @@
+---
+type: "Spec"
+title: "PE Recorder Spec"
+description: "Chosen state algebra, transaction boundaries, ownership, identity, and verification design for the D3D9 PE recorder."
+tags: [specs, d3d9, recorder, pe, command-chunk]
+---
+
+# PE Recorder Spec
+
+Companion to [requirements.md](requirements.md). This document owns the target
+design; [gap.md](gap.md) records where the current implementation or evidence
+does not yet satisfy it.
+
+## 1. Ownership and boundaries
+
+| Concern | Exact owner | Must not own |
+|---|---|---|
+| COM validation, app-visible state, getters | `D3D9DeviceImpl` in `src/d3d9/d3d9_pe_device_impl.hpp` and its cold COM TUs | Metal objects, unix queue state |
+| State-domain value types and typed keys | `src/d3d9/d3d9_pe_state_shadow.hpp`, `d3d9_pe_const_shadow.hpp` | COM lifetime, capture journaling |
+| Sparse normalization | `buildSparseState` / `addChunkContextSections` in `src/d3d9/d3d9_pe_producer.cpp` | consuming pending state before append acceptance |
+| Record/chunk transaction | `CommandChunkBuilder` in `src/d3d9/d3d9_pe_chunk_builder.*` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk` | D3D9 getter authority, Metal execution |
+| PE local pinning | `D3D9PePendingCommandRetainer` in `src/d3d9/d3d9_pe_retainer.*` | wire identity semantics |
+| Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
+| Capture registry and settlement | Nullable heap-owned `PeCaptureState` in `src/d3d9/d3d9_pe_capture_state.hpp`, operated by `D3D9DeviceImpl` cold methods in `d3d9_pe_device_tape.cpp` | changes to app HRESULT or capture-off cadence |
+| PE recorder diagnostics | Optional `PeDiagnosticsState` in `src/d3d9/d3d9_pe_diagnostics_state.hpp`, operated by cold helpers in `d3d9_pe_device_diag.cpp` and nullable hot gates | recorder protocol counters, pacing limits, semantic shadows, capture transaction state |
+| State-block wrapper snapshot | `D3D9StateBlockImpl` and `D3D9StateBlockShadow` in `d3d9_pe_device_child_misc.cpp` / `d3d9_pe_device_child.hpp` | expanding the tracked set during Capture |
+| Import, replay, execution | unix importer and `CommandQueue` | reading PE `LiveShadow` or COM pointers |
+
+`D3D9DeviceImpl::FlushPeRecorderForChild` remains out-of-line in
+`src/d3d9/d3d9_pe_device.cpp`. It is the first declared non-pure, non-inline
+virtual and deliberately anchors the vtable and inline virtual bodies in the
+owning TU. Cold-interface cleanup must preserve that placement unless codegen
+measurement authorizes a different one.
+
+## 2. State model
+
+For a category `c` and qualified key `k`, recorder state is:
+
+```text
+S = <LiveShadow, PendingDelta, StateBlockRecorded, Builder, CaptureLedger>
+LiveShadow[c, k]          = current D3D9-visible value
+PendingDelta[c, k]        = newest value not represented by an accepted record
+StateBlockRecorded[c, k]  = value in the fixed tracked set of a state block
+```
+
+`LiveShadow` is total over supported getter-visible state after defaults are
+established. `PendingDelta` and `StateBlockRecorded` are partial maps. Typed
+keys prevent accidental equality across domains such as render-state slot 7
+and sampler slot 7.
+
+### 2.1 Category table
+
+| Category | Qualified key / value | `LiveShadow` owner | `PendingDelta` form | `StateBlockRecorded` policy | Wire/cold disposition |
+|---|---|---|---|---|---|
+| Render state | `RenderStateSlot -> u32` | `renderStateShadow` | `pendingRenderStates` | last explicit write per touched key; recording does not mutate primary state | render-state sparse section |
+| Texture-stage state | `(TextureStageIndex, TextureStageStateType) -> u32` | `tssShadow` | `pendingTss` | last write per touched pair | TSS sparse section |
+| Sampler state | `(SamplerIndex, SamplerStateType) -> u32` | `samplerStateShadow` | `pendingSamplerStates` | last write per touched pair | sampler sparse section |
+| Texture binding | `(TextureKind, SamplerIndex) -> PeWireObjectRef?` | `textures_` plus binding view | `pendingTextureMask` + live ref | last binding per touched slot | texture handle section |
+| Stream binding/frequency | `(BufferKind, stream) -> {ref, offset, stride, frequency}` | `streamSrc_`, `streamOff_`, `streamStr_`, `streamFreq_` | stream mask plus live binding | last binding per touched stream | stream section; frequency remains explicit |
+| Vertex/pixel shader | `(ShaderKind, stage) -> ref?` | `vs_`, `ps_` | `pendingVs`, `pendingPs` | last binding per touched stage | shader handle section |
+| Vertex input | `FvfKey` or `(VertexDeclKind, singleton)` | `fvf_`, `vdecl_` | `pendingFvf`, `pendingVdecl` | declaration touch fixes the tracked singleton; saved wrapper owns its AddRef | vertex-input section |
+| Index buffer | `(BufferKind, singleton) -> ref?` | `indexBuf_` | `pendingIb` | last binding | indexed-draw index section only |
+| Render targets/depth | `(SurfaceKind, rtSlot)` / `(SurfaceKind, depth)` | `rtSlots_`, `dsSurface_` and explicit masks | `pendingRtMask`, `pendingDs` | last binding per touched slot | attachment sections |
+| Viewport/scissor/material | singleton typed value | dedicated PE value | one pending bit each | last touched singleton | scalar sparse section |
+| Transform | `TransformState -> D9CMatrix` | `transformShadow` | `pendingTransforms` | `SetTransform` records last value; `MultiplyTransform` is the enumerated prior-value operation and Wine-compatible capture exception | transform sparse section |
+| Clip plane | `clipPlane[0..5] -> float4` | `clipPlaneShadow` | pending mask | last value per touched plane | clip-plane section |
+| Light / enable | `lightSlot -> D9CLight/bool` | light arrays/mask | separate value and enable masks | last value per touched slot | light and enable sections |
+| Shader constants | `(stage, scalarKind, registerRange) -> bytes` | `PeConstShadowBlock` values | dirty ranges | fixed tracked ranges; Capture refreshes values only | standalone or inline constant-range section |
+| Ordered commands | command ordinal | not state | not commutative state | not captured as ordinary state unless D3D9 explicitly says so | command record / barrier |
+
+`PeWireObjectRef::object` is a local lifetime aid in the table, never a wire
+field. The wire form is always `(kind, generation, objectId)`.
+
+### 2.2 Algebra
+
+For an ordinary validated setter outside state-block recording:
+
+```text
+Set(c, k, v):
+  if LiveShadow[c, k] = v and k notin PendingDelta[c]: no-op
+  else LiveShadow'[c, k] = v
+       PendingDelta'[c, k] = v
+```
+
+For the same key, `Set(k, a); Set(k, b)` is observationally equivalent to
+`Set(k, b)` at the next record boundary. For independent keys, the final maps
+commute and canonical serialization may order by qualified key. These equations
+do not permit reordering across a command ordinal, Begin/End, barrier,
+resource/alias transition, or prior-value operation.
+
+Preparing a record computes a non-owning candidate projection:
+
+```text
+Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
+```
+
+Only `commitRecord(Candidate)` may perform:
+
+```text
+PendingDelta' = PendingDelta \ represented(Candidate)
+```
+
+Thus an accepted record followed by ordered unix replay reconstructs the same
+effective state as `LiveShadow` at that record's ordinal. Failure returns the
+pre-attempt state, including dirty constant ranges and oversized-table rows.
+
+### 2.3 State-block transitions
+
+| Operation | Success transition | Failure transition |
+|---|---|---|
+| Begin | flush older pending work; create an empty recorded domain; enter Recording | preserve prior domains; do not enter Recording |
+| Explicit Set while Recording | validate; last-write-wins in `StateBlockRecorded` only; do not mutate `LiveShadow`, `PendingDelta`, or backend primary state | no new tracked key or value |
+| Prior-value operation while Recording | apply to primary live/backend state without enlarging `StateBlockRecorded`; `MultiplyTransform` is the current enumerated case | preserve primary and recorded domains on pre-effect failure |
+| End | flush ordering work; freeze the tracked set; create the wrapper-owned snapshot; leave Recording without a restore replay | pre-backend failure preserves Recording; wrapper allocation failure after backend End is fail-stop and discards the unpublished PE candidate |
+| Capture | refresh values for the existing tracked keys/ranges only | preserve prior captured snapshot |
+| Apply | replay exactly the fixed set through normal setters, then settle their pending records | do not invalidate unrelated live/pending state |
+
+The implemented PE recorder owns fixed typed recorded tables for render, TSS,
+sampler, and transform state, fixed recorded register ranges for all six
+shader-constant kinds, and the existing vertex-declaration singleton. Initial
+End snapshots copy exactly those sets; later Capture refreshes values only.
+`MultiplyTransform` uses the prior-value transition, persists primary live
+state, and never enlarges the recorded transform set. Consequently the
+sequence `SetTransform(B); MultiplyTransform(C)` inside Begin/End records `B`
+while the multiply reads the pre-Begin primary value and publishes only its
+result to primary state.
+
+## 3. Record and chunk transactions
+
+### 3.1 Append transaction
+
+The builder checkpoints record count, handle count, payload size, and retainer
+acquisition before mutation. `PendingDelta` needs an equivalent represented-set
+checkpoint even though it is owned outside the builder.
+
+| Outcome | Builder | Retainer | `PendingDelta` | App result |
+|---|---|---|---|---|
+| preparation/validation fails | unchanged | unchanged | unchanged | failure |
+| payload/handle/retain append fails | rollback to all checkpoints | rollback new pins | unchanged | failure |
+| `commitRecord` fails | rollback active record | rollback new pins | unchanged | failure |
+| `commitRecord` succeeds | record becomes durable in current builder | pins owned by builder | remove exactly represented entries | success or continue to capacity settlement |
+| post-append capacity commit fails | sealed accepted record remains retryable | pins retained | entries remain represented by sealed record, not reintroduced as a duplicate | failure without reset |
+
+`buildSparseState` and every typed `prepare*Batch` are non-consuming.
+`acceptPreparedSparseState`, `acceptInlineConstantDelta`, standalone constant
+flush, and the four oversized adapters all consume through an Accepted
+`AppendPlan`; Failed and Discarded plans retain pending state and the prepared
+retry witness.
+
+### 3.2 Seal, commit, retry, and capture settlement
+
+| Event | Command disposition | Capture disposition | Lifetime/reset disposition |
+|---|---|---|---|
+| seal allocation/validation failure | no bridge effect; retry or explicit discard | no event | builder and pins retained |
+| repeated seal | byte-identical view of the same builder | no duplicate event | no epoch advance |
+| capture preparation rejects before bridge | command may still proceed under normal semantics | abort/reject diagnostic | capture must not alter chunk boundary or HRESULT |
+| bridge commit fails | not accepted; exact sealed bytes retryable | abort current capture attempt if required | builder and pending refs retained; no reset |
+| bridge commit succeeds, capture off | accepted | no work beyond one disabled branch | drain logical refs without capture events as applicable; reset; warm epoch advances |
+| bridge commit succeeds, capture active | accepted | materialize referenced objects and append exact command event first | drain pending refs; emit each admitted alias-before-parent destroy once; reset; warm epoch advances |
+| explicit discard / Reset / teardown | never submitted | no command-dependent destroy | drain logical pending refs; release all current and warm pins; clear builder |
+
+For one builder, `pendingChunkRefs` is boolean-shaped: a logical identity owns
+zero or one pending reference regardless of wrapper release/reacquire churn.
+Last-wrapper release transfers to this pending reference while the builder names
+the identity. A successful commit settles command capture before the reference;
+a failed commit preserves both. Texture-derived aliases remain generation
+qualified until parent settlement. A pending alias may force one flush and one
+lookup restart before replacement; exhaustion rejects capture without changing
+capture-off behavior.
+
+## 4. Identity and callback contracts
+
+Two different relations are intentional:
+
+```text
+LocalIdentity = <kind, wrapperPointer>
+WireIdentity  = <kind, generation, objectId>
+```
+
+Local dedup may compare both relations to detect an impossible identity/pointer
+collision. Wire import first validates the complete handle array, then resolves
+and retains in entry order. The current `WireObjectRegistry::resolveAndRetain`
+holds its mutex while invoking the retain callback; this is safe only while the
+callback is `noexcept`, direct AddRef/pin work, and non-reentrant. That premise
+must be a predicate and a negative-control test, not an informal assumption.
+
+The PE `g_wireObjectCache` was written by publication and destruction paths
+but had no lookup consumer. It was dead global state, not an identity owner,
+and is removed; any future local cache must key by `LocalIdentity`, declare
+lifetime/eviction, and preserve the disabled-observer budget.
+
+`WireObjectRegistry::RetainFn` is a `noexcept`, direct-retain callback. The
+registry invokes it while holding the registry mutex so the resolved wrapper
+cannot be erased between validation and AddRef/pin. Every registry entry point
+fails callback re-entry closed before taking that mutex in every build type;
+moving the callback outside the lock would require a separate pin-before-unlock
+protocol and is not permitted as a shortcut.
+
+## 5. Hot/cold and observer boundary
+
+The release path is judged with every diagnostic disabled. `appendRecord`,
+state setters, draw construction, the builder, typed keys, and required pins are
+hot. Render Tape, PE call history, formatting, stack capture, failure reports,
+and state-block orchestration are cold, even where a hot method can branch to
+them.
+
+An enabled callback is synchronous and call-local. Its input includes the
+qualified identity and exact span; it cannot retain the span, reenter the
+recorder/registry, or add a flush. Disabled Render Tape and PE-call tracking do
+not justify a virtual call or RAII scope per COM call. The diagnostic methods
+have therefore been removed from `D3D9PeRecorderFlush`, and the device/child
+entry helpers branch on their cached nullable owner or observer before an
+enabled-only `PeCallScope` or `D3D9PeChildCallScope` lifetime begins. The null
+edge enters the functional core without scope construction, timestamp reads,
+TLS/sample mutation, or a diagnostic callback.
+
+`PeRecorderState` owns the producer-owned live/pending shadow, the separate
+`StateBlockRecorded` domain, constant shadows, reusable binding/build scratch,
+command builder, lock witness, and protocol counters. Keeping the recorded
+domain outside `PeHotStateShadow` prevents state-block-only tables from being
+part of the ordinary live/pending shadow layout.
+`D3D9DeviceImpl` keeps mechanical references during this migration so the COM
+surface and first declared virtual key-function placement remain unchanged.
+One nullable heap-owned `PeCaptureState` owns the complete Render Tape lifecycle: session,
+live registry, oracle/digest/pixel/output storage, arm phase and ordinals,
+tokens and skip selector, arm snapshots, admitted identities, first-access
+ledger, abort reason, and completion ordinal. `makePeCaptureState` leaves that
+owner null when capture/tracking is off, so the normal renderer carries only
+one pointer and constructs no capture storage.
+
+One independent optional `PeDiagnosticsState` owns PE recorder statistics,
+decimated-scope accumulators, append/call attribution, present-cadence atomics,
+VS-constant range buckets, and the sampler handle. It is allocated only when at
+least one PE diagnostic gate is enabled. Chunk-commit clocks and accumulation,
+UP-copy counters, append-family/call-name TLS writes, and hot setter timers are
+all reached through its nullable gate. Child wrappers keep a nullable concrete
+`D3D9PeDiagnosticObserver`; diagnostic entry/return methods are not virtuals on
+`D3D9PeRecorderFlush`, whose remaining methods are recorder protocol,
+state-block semantics, or Render Tape lifecycle operations.
+
+Ordinary PE COM wrappers retain non-atomic reference counts under the D3D9
+device/COM ownership contract. `D3D9StateBlockImpl` is the explicit atomic
+exception because its snapshot ownership crosses device/child lifetime paths;
+backend chunk retains remain private and do not alter public COM refcount
+observations. The prepare/accept boundary is non-reentrant: preparation reads
+into reusable scratch, and only acceptance settles pending state, so a failed
+append cannot erase a later mutation.
+
+## 6. Shared predicates and counterexamples
+
+Implementation must provide one host-buildable, production-used transition
+surface (names may follow local style) equivalent to:
+
+| Predicate / transition | Production caller | Required bounded pins |
+|---|---|---|
+| `applyRecorderStateWrite` | every PE state setter | same-value, A→B→A, same-key LWW, independent-key permutation, prior-value exception |
+| `settleRecorderAppend` | sparse append envelope and oversized/constant drains | failure at every allocation/append phase; no lost/duplicated pending entry |
+| `settleRecorderCommit` | `flushPendingCommandChunk` | seal fail, retry, bridge fail, success, discard |
+| `settleCapturePendingReference` | capture registry drain/replacement | wrapper churn, pending last release, alias-before-parent, bounded restart |
+| `wireIdentityMayResolve` | builder and `WireObjectRegistry` | all kinds, zero/wrong/stale/cross-registry, slot reuse/exhaustion |
+| `observerMayRun` | hot call and child-wrapper gates | disabled zero-work, enabled exact call-local callback, reentrancy rejection |
+
+Minimal counterexamples that must stay executable:
+
+1. Dirty constant range is projected, append fails, retry emits the range once.
+2. An oversized pending table removes one batch, append fails, retry loses no row.
+3. Two identity kinds reuse one pointer value; unqualified pointer caching must fail.
+4. Seal succeeds, bridge fails, retry exposes identical bytes and retains pins.
+5. A last wrapper releases while its alias is pending; replacement before
+   flush must fail, one flush-and-restart must preserve generation identity.
+6. Capture preparation/event append fails; accepted app command and HRESULT are
+   unchanged.
+7. Observer disabled; no callback/scope/timestamp/cache write occurs.
+8. Retain callback reenters registry while its lock is held; the guarded
+   configuration must reject or the expected-failure control must deadlock/fail.
+
+`PeRecorderTransition.tla` checks the qualified state-write and append
+prepare/accept/fail/discard transitions, including weak-fair settlement and
+replay. Its `ConsumeOnPrepare` configuration must violate `NoLostPending`.
+The model covers only pre-effect state-block failure; production Apply can fail
+after backend effects and remains an explicit gap. It also stops at
+accepted-record durability; seal/bridge/capture-journal settlement remains a
+separate open refinement.
+
+## 7. Acceptance matrix
+
+| Contract | Exact owner | Current evidence | Acceptance still required |
+|---|---|---|---|
+| `R-CORE-REC-1.*`, `2.*` | PE state/constant shadows and producer | `dxmt9-pe-transition-algebra-spec`, `dxmt9-pe-shadow-native-spec`, `dxmt9-pe-producer-differential-spec`, `dxmt9-core-stateblock-restore-spec`, state-block PE conformance | Wine/wild rerun for the changed PE wrapper; non-keyed category expansion remains outside this transition increment |
+| `R-CORE-REC-3.1` | builder + append envelope | production `settleRecorderAppend`; builder rollback; failed-retry/exactly-once tests for inline constants, normal sparse state, and all four oversized typed tables | no append-local gap in the scoped state families; bridge/seal settlement is tracked below |
+| `R-CORE-REC-3.2`–`3.4` | seal/commit/capture settlement | builder seal/rollback tests; `testPendingChunkLifetimeTruthTable` | bridge-failure retry, discard, capture-failure transaction model and native binding |
+| `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection, `WireObjectRegistry.tla`, render-tape identity tests | local kind+pointer collision coverage and remaining identity/model binding |
+| `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
+| `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | capture lifecycle tests plus `dxmt9-pe-diagnostics-spec` disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins; PE x64/x86 compile checks; representative x64 object inspection keeps the sole `D3D9DeviceImpl` vtable in `d3d9_pe_device.cpp.obj`, and `SetRenderState`/`Surface::GetDesc` enter diagnostics through a nullable branch with direct enabled-only calls | broaden the instruction/code-size audit across the remaining representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by these pins |
+| `R-CORE-REC-6.*` | new shared transition surface plus verification owners | related producer, registry, capture tests | dedicated bounded model/exhaustive checker, mutation controls, model/code matrix |
+
+The host suite can compile shared headers and extracted value/predicate owners,
+but cannot directly compile or execute the Windows-only COM TUs. Therefore
+host-native predicates and differential fixtures must be paired with PE x64/x86
+build/conformance evidence rather than described as substitutes for it.
+
+## 8. Sequential implementation DAG
+
+Ordering is normative because later steps depend on failure semantics proved by
+earlier steps and several steps touch the same hot files.
+
+```mermaid
+flowchart TD
+    I1["I1 Failure-injection baseline\ntests/native/bridge + PE differential"]
+    I2["I2 Observer and dead-cache cleanup\nchild interface, tape/diag gates, chunk builder cache"]
+    I3["I3 Append/commit transaction\nproducer + builder + device flush"]
+    I4["I4 State-domain and state-block decomposition\nstate shadow + COM cold owner"]
+    I5["I5 Identity and lifetime qualification\nPE local refs + wire/capture registries"]
+    I6["I6 Shared production predicates\nhost-buildable transition owner"]
+    I7["I7 Bounded model and code binding\nverification TLA/exhaustive + native specs"]
+    I8["I8 PE x64/x86 and Wine acceptance\ncodegen, conformance, capture retry"]
+
+    I1 --> I2 --> I3 --> I4 --> I5 --> I6 --> I7 --> I8
+```
+
+At each step, preserve the PE/unix ABI, `FlushPeRecorderForChild` key-function
+placement, and capture-off chunk cadence unless that step explicitly owns and
+measures the change. No step may use a later wild run to waive an earlier
+transaction or model/code gate.

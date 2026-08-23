@@ -1,8 +1,5 @@
 #pragma once
 
-#include "d3d9_pe.hpp"
-#include "d3d9_pe_wire_handle.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -336,10 +333,6 @@ inline const char* peRecorderFlushReasonName(PeRecorderFlushReason reason) {
     }
     return "unknown";
 }
-
-// toWireHandle / d9cWireHandleValue moved to d3d9_pe_wire_handle.hpp (which
-// this header includes) so the natively-built producer TU can share the exact
-// same encoding instead of duplicating it.
 
 struct PeCommandChunkCommitInfo {
     std::uint32_t recordCount = 0;

@@ -7,6 +7,7 @@
 #include <limits>
 #include <mutex>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace dxmt9::d3d9 {
@@ -14,6 +15,13 @@ namespace dxmt9::d3d9 {
 class WireObjectRegistry {
  public:
   using RetainFn = void (*)(std::uint32_t kind, void* object) noexcept;
+  // RetainFn runs under the registry lock and must only perform the direct
+  // AddRef/pin operation.  Re-entering any registry method is rejected before
+  // locking; this keeps object lifetime race-free without permitting a
+  // callback self-deadlock.
+  static constexpr bool kRetainCallbackNonReentrant = true;
+  static_assert(std::is_nothrow_invocable_r_v<void, RetainFn, std::uint32_t,
+                                              void*>);
 
   WireObjectRegistry();
   WireObjectRegistry(const WireObjectRegistry&) = delete;

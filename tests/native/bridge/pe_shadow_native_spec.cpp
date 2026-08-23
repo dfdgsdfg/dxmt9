@@ -10,6 +10,7 @@
 #include "d3d9_pe_state_shadow.hpp"
 
 #include <cstdint>
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,20 @@ void check(bool condition, std::string_view message) {
   if (!condition) {
     throw TestFailure(std::string(message));
   }
+}
+
+dxmt9::d3d9::pe::AppendPlan acceptedAppend() {
+  return dxmt9::d3d9::pe::settleRecorderAppend({
+      .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+}
+
+dxmt9::d3d9::pe::AppendPlan failedAppend() {
+  return dxmt9::d3d9::pe::settleRecorderAppend({
+      .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
+      .appendSucceeded = false,
+  });
 }
 
 void transformSlotsMatchD3DConstants() {
@@ -100,11 +115,139 @@ void pendingMasksAreThirtyTwoBitUnsigned() {
   check(shadow.pendingTextureMask == 0u, "mask must be zero after clear");
 }
 
+void oversizedBatchFailureIsNonConsuming() {
+  PeHotStateShadow shadow{};
+  auto pending = shadow.pendingRenderStatesTyped();
+  constexpr std::uint32_t total =
+      D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
+  for (std::uint32_t state = 0u; state < total; ++state) {
+    pending.set(renderStateSlotKey(state), state + 100u);
+  }
+
+  std::array<D9CCommandChunkWireRenderState,
+             D9C_DRAW_PACKET_MAX_RENDER_STATES> batch{};
+  const std::size_t prepared = shadow.prepareRenderStateBatch(batch);
+  check(prepared == batch.size(), "oversized preparation fills one wire batch");
+  check(pending.size() == total,
+        "injected append rejection must leave every prepared row pending");
+  for (std::size_t i = 0u; i < prepared; ++i) {
+    check(batch[i].state == i && batch[i].value == i + 100u,
+          "prepared oversized rows stay in canonical key order");
+  }
+
+  check(!shadow.acceptRenderStateBatch(
+            std::span(batch).first(prepared), failedAppend()) &&
+            pending.size() == total,
+        "failed settlement consumes no render-state rows");
+
+  shadow.acceptRenderStateBatch(
+      std::span(batch).first(prepared), acceptedAppend());
+  check(pending.size() == 1u,
+        "acceptance consumes exactly the represented oversized rows");
+  std::uint32_t remaining = 0u;
+  check(pending.get(renderStateSlotKey(total - 1u), remaining) &&
+            remaining == total - 1u + 100u,
+        "unrepresented oversized tail row remains retryable");
+}
+
+void allTypedBatchAdaptersAreExact() {
+  {
+    PeHotStateShadow shadow{};
+    auto pending = shadow.pendingTssTyped();
+    constexpr std::uint32_t total = D9C_DRAW_PACKET_MAX_TSS + 1u;
+    for (std::uint32_t i = 0u; i < total; ++i) {
+      pending.set(textureStageIndexKey(i / kPeTextureStageStateSlots),
+                  textureStageStateTypeKey(i % kPeTextureStageStateSlots),
+                  1000u + i);
+    }
+    std::array<D9CDrawPacketTextureStageState,
+               D9C_DRAW_PACKET_MAX_TSS> batch{};
+    const std::size_t count = shadow.prepareTextureStageStateBatch(batch);
+    check(count == batch.size(), "TSS prepare fills one capped batch");
+    for (std::size_t i = 1u; i < count; ++i) {
+      check(std::pair(batch[i - 1u].stage, batch[i - 1u].type) <
+                std::pair(batch[i].stage, batch[i].type),
+            "TSS prepare order is canonical");
+    }
+    check(!shadow.acceptTextureStageStateBatch(
+              std::span(batch).first(count), failedAppend()) &&
+              pending.size() == total,
+          "failed TSS settlement is non-consuming");
+    check(shadow.acceptTextureStageStateBatch(
+              std::span(batch).first(count), acceptedAppend()) &&
+              pending.size() == 1u,
+          "accepted TSS settlement preserves one oversized tail");
+  }
+
+  {
+    PeHotStateShadow shadow{};
+    auto pending = shadow.pendingSamplerStatesTyped();
+    constexpr std::uint32_t total = D9C_DRAW_PACKET_MAX_SAMPLER + 1u;
+    for (std::uint32_t i = 0u; i < total; ++i) {
+      pending.set(static_cast<SamplerIndex>(i / kPeSamplerStateSlots),
+                  static_cast<SamplerStateType>(i % kPeSamplerStateSlots),
+                  2000u + i);
+    }
+    std::array<D9CDrawPacketSamplerState,
+               D9C_DRAW_PACKET_MAX_SAMPLER> batch{};
+    const std::size_t count = shadow.prepareSamplerStateBatch(batch);
+    check(count == batch.size(), "sampler prepare fills one capped batch");
+    for (std::size_t i = 1u; i < count; ++i) {
+      check(std::pair(batch[i - 1u].sampler, batch[i - 1u].type) <
+                std::pair(batch[i].sampler, batch[i].type),
+            "sampler prepare order is canonical");
+    }
+    check(!shadow.acceptSamplerStateBatch(
+              std::span(batch).first(count), failedAppend()) &&
+              pending.size() == total,
+          "failed sampler settlement is non-consuming");
+    check(shadow.acceptSamplerStateBatch(
+              std::span(batch).first(count), acceptedAppend()) &&
+              pending.size() == 1u,
+          "accepted sampler settlement preserves one oversized tail");
+  }
+
+  {
+    PeHotStateShadow shadow{};
+    auto pending = shadow.pendingTransformsTyped();
+    constexpr std::uint32_t total = D9C_DRAW_PACKET_MAX_TRANSFORMS + 1u;
+    for (std::uint32_t i = 0u; i < total; ++i) {
+      D9CMatrix matrix{};
+      matrix.m[0] = static_cast<float>(3000u + i);
+      pending.set(transformStateKey(FixedTransformTable::stateForSlot(i)),
+                  matrix);
+    }
+    std::array<D9CDrawPacketTransform,
+               D9C_DRAW_PACKET_MAX_TRANSFORMS> batch{};
+    const std::size_t count = shadow.prepareTransformBatch(batch);
+    check(count == batch.size(), "transform prepare fills one capped batch");
+    for (std::size_t i = 1u; i < count; ++i) {
+      std::uint32_t priorSlot = 0u;
+      std::uint32_t nextSlot = 0u;
+      check(FixedTransformTable::slotForState(batch[i - 1u].state,
+                                               priorSlot) &&
+                FixedTransformTable::slotForState(batch[i].state, nextSlot) &&
+                priorSlot < nextSlot,
+            "transform prepare order is canonical slot order");
+    }
+    check(!shadow.acceptTransformBatch(
+              std::span(batch).first(count), failedAppend()) &&
+              pending.size() == total,
+          "failed transform settlement is non-consuming");
+    check(shadow.acceptTransformBatch(
+              std::span(batch).first(count), acceptedAppend()) &&
+              pending.size() == 1u,
+          "accepted transform settlement preserves one oversized tail");
+  }
+}
+
 int main() {
   try {
     transformSlotsMatchD3DConstants();
     vertexTextureSamplerSlotsMatchD3DConstants();
     pendingMasksAreThirtyTwoBitUnsigned();
+    oversizedBatchFailureIsNonConsuming();
+    allTypedBatchAdaptersAreExact();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_shadow_native_spec FAILED: " << failure.what() << "\n";
     return 1;

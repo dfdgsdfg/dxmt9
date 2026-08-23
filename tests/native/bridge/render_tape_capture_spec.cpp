@@ -1,6 +1,7 @@
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "d3d9_pe_capture_state.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_render_tape_capture.hpp"
 #include "dxmt9/device_c.h"
@@ -11,15 +12,52 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
+
+namespace capture_state_allocation_probe {
+
+bool enabled = false;
+std::size_t count = 0u;
+
+} // namespace capture_state_allocation_probe
+
+void* operator new(std::size_t size) {
+  if (capture_state_allocation_probe::enabled)
+    ++capture_state_allocation_probe::count;
+  if (void* value = std::malloc(size))
+    return value;
+  throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) {
+  return ::operator new(size);
+}
+
+void operator delete(void* value) noexcept {
+  std::free(value);
+}
+
+void operator delete[](void* value) noexcept {
+  ::operator delete(value);
+}
+
+void operator delete(void* value, std::size_t) noexcept {
+  ::operator delete(value);
+}
+
+void operator delete[](void* value, std::size_t) noexcept {
+  ::operator delete[](value);
+}
 
 namespace {
 
@@ -1205,6 +1243,81 @@ void testCaptureOffPreservesBytes() {
   check(chunk == original, "capture-off leaves canonical bytes unchanged");
 }
 
+void testOptionalPeCaptureStateLifecycle() {
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  auto disabled = makePeCaptureState(
+      false, RenderTapeCaptureLimits{}, kRenderTapeProfileFrame, 7u);
+  capture_state_allocation_probe::enabled = false;
+  std::uint32_t callbackCount = 0u;
+  const auto observer = [&](PeCaptureState&) { ++callbackCount; };
+  if (disabled)
+    observer(*disabled);
+  check(!disabled && capture_state_allocation_probe::count == 0u &&
+            callbackCount == 0u,
+        "capture-off cold owner is null without allocation or callback");
+
+  auto enabled = makePeCaptureState(
+      true, RenderTapeCaptureLimits{}, kRenderTapeProfileFrame, 2u);
+  check(enabled != nullptr &&
+            enabled->renderTapeArmPresentSkipRemaining == 2u &&
+            enabled->renderTapeCapture.state() ==
+                RenderTapeCaptureState::Disabled,
+        "capture-on cold owner constructs the complete idle lifecycle");
+  auto& capture = *enabled;
+  check(capture.renderTapeCapture.arm(bootstrapChunk()) ==
+                RenderTapeCaptureStatus::Accepted &&
+            capture.renderTapeCapture.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "capture-on cold owner arms and enters its first interval");
+  capture.renderTapeActiveCaptureToken = 9u;
+  capture.renderTapeArmSnapshotOrdinal = 3u;
+  capture.renderTapeAbortReason = "test_abort";
+  capture.renderTapeCapture.abort();
+  check(enabled != nullptr &&
+            capture.renderTapeCapture.state() == RenderTapeCaptureState::Aborted &&
+            capture.renderTapeActiveCaptureToken == 9u &&
+            capture.renderTapeArmSnapshotOrdinal == 3u &&
+            std::string_view(capture.renderTapeAbortReason) == "test_abort",
+        "capture abort preserves the cold owner and retry ledger");
+
+  check(capture.renderTapeCapture.arm(bootstrapChunk()) ==
+                RenderTapeCaptureStatus::Accepted &&
+            capture.renderTapeCapture.beginPresentInterval() ==
+                RenderTapeCaptureStatus::Accepted,
+        "aborted cold owner re-arms for retry");
+  const auto descriptor = standaloneSurfaceDescriptor();
+  const auto resource = blob();
+  const auto mutationDigest = digest();
+  auto present = presentChunk();
+  check(capture.renderTapeCapture.objectDefine(
+            kSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&descriptor, 1u)), 0u, {}, 4u, 1u) ==
+                RenderTapeCaptureStatus::Accepted &&
+            capture.renderTapeCapture.registerVerifiedBlob(
+                std::span<const std::byte, kRenderTapeDigestSize>(
+                    resource.digest),
+                resource.size) == RenderTapeCaptureStatus::Accepted &&
+            capture.renderTapeCapture.resourceMutation(
+                kSurface, RenderTapeMutationKind::Upload, 0u, 0u, 4u,
+                std::span<const std::byte, kRenderTapeDigestSize>(
+                    mutationDigest)) == RenderTapeCaptureStatus::Accepted &&
+            capture.renderTapeCapture.commandChunk(
+                CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+                present) == RenderTapeCaptureStatus::Accepted,
+        "retried cold owner retains the exact completion inputs");
+  const auto attachment = oracle();
+  check(capture.renderTapeCapture.completePresent(
+            capture.renderTapeCapture.eventCount(), 1u,
+            RenderTapeDigestValidity::NotCaptured, {},
+            std::as_bytes(std::span(&attachment, 1u))) ==
+                RenderTapeCaptureStatus::Complete &&
+            enabled != nullptr &&
+            capture.renderTapeCapture.state() == RenderTapeCaptureState::Sealed,
+        "retried cold owner survives through completion");
+}
+
 void testDescriptorKindAxisTruthTable() {
   constexpr std::array identityKinds{
       D9C_CHUNK_HANDLE_KIND_TEXTURE, D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -1319,14 +1432,13 @@ void testProfileSelectionTruthTable() {
 std::vector<std::byte> recorderPresentChunk() {
   CommandChunkBuilder recorder;
   RecorderSurface surface;
-  const PeWireObjectRef source{
-      .identity = D9CWireObjectIdentity{
-          .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
-          .generation = 2u,
-          .objectId = 17u,
-      },
-      .object = &surface,
+  dxmt9::d3d9::pe::SurfaceRef source{};
+  source.identity = D9CWireObjectIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u,
+      .objectId = 17u,
   };
+  source.object = &surface;
   check(dxmt9::d3d9::pe::appendPresent(
             recorder, D9CCommandChunkWirePresent{}, source),
         "PE recorder appends Present");
@@ -4517,6 +4629,7 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_capture_spec [--write-production-fixture dir]");
     testCaptureOffPreservesBytes();
+    testOptionalPeCaptureStateLifecycle();
     testDescriptorKindAxisTruthTable();
     testKindZeroIntervalDefineUsesNonZeroDescriptorTag();
     testProductionHookGateTruthTable();
