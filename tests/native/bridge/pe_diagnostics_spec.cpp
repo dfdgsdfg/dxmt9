@@ -198,20 +198,30 @@ void testSourceContracts(const std::filesystem::path &root) {
       root / "src/d3d9/d3d9_pe_child_scopes.hpp");
   const auto stateBlockShadow = readTextFile(
       root / "src/d3d9/d3d9_pe_stateblock_shadow.hpp");
-  auto device = readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
+  const auto device = readTextFile(
+      root / "src/d3d9/d3d9_pe_device_impl.hpp");
+  const auto deviceHot = readTextFile(
+      root / "src/d3d9/d3d9_pe_device_hot.cpp");
   for (const std::string_view fragment : {
            "d3d9_pe_device_state_core.inc.hpp",
            "d3d9_pe_device_state_texture_fvf.inc.hpp",
            "d3d9_pe_device_state_shader_stream.inc.hpp"}) {
-    const std::string marker = "#include \"" + std::string(fragment) + "\"";
-    const auto markerPos = device.find(marker);
-    check(markerPos != std::string::npos,
-          "device header contains each ordered class fragment");
-    device.replace(markerPos, marker.size(),
-                   readTextFile(root / "src/d3d9" / fragment));
+    check(device.find(fragment) == std::string::npos &&
+              deviceHot.find(fragment) == std::string::npos &&
+              !std::filesystem::exists(root / "src/d3d9" / fragment),
+          "retired state fragment is absent");
   }
-  check(std::count(device.begin(), device.end(), '\n') >= 6100,
-        "expanded device header retains the complete declaration surface");
+  check(std::count(device.begin(), device.end(), '\n') <= 3000,
+        "device declaration shell stays at or below 3000 physical lines");
+  for (const std::string_view owner : {
+           "D3D9DeviceImpl::Present(",
+           "D3D9DeviceImpl::PresentEx(",
+           "D3D9DeviceImpl::SetRenderState(",
+           "D3D9DeviceImpl::DrawIndexedPrimitiveUP("}) {
+    check(deviceHot.find(owner) != std::string::npos,
+          "hot state/draw method has a real translation-unit owner");
+  }
+  const auto deviceSource = device + deviceHot;
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
   const auto recorderHeader =
@@ -291,7 +301,7 @@ void testSourceContracts(const std::filesystem::path &root) {
     checkContains(diagnostics, field,
                   "diagnostic-only field remains in the cold owner");
   }
-  checkContains(device, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
+  checkContains(deviceSource, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
                 "device stores one nullable diagnostic owner pointer");
   checkContains(recorderState,
                 "PeStateBlockTransactionState stateBlockTransaction{};",
@@ -302,7 +312,7 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "recorder exposes entered-fault observability");
   checkContains(recorderHeader, "stateBlockFaultLastHr",
                 "recorder exposes fault HRESULT observability");
-  checkContains(device,
+  checkContains(deviceSource,
                 "dxmt9::d3d9::pe::PeRecorderState recorderState_{};",
                 "device stores the hot recorder owner directly");
   for (const std::string_view alias : {
@@ -312,7 +322,7 @@ void testSourceContracts(const std::filesystem::path &root) {
            "PeBindingView& bindingScratch_", "PeSparseScratch& sparseScratch_",
            "CommandChunkBuilder& commandChunk_",
            "bool& commandChunkNegotiated_"}) {
-    checkNotContains(device, alias,
+    checkNotContains(deviceSource, alias,
                      "device must not retain audited recorder-field aliases");
   }
   checkContains(stateBlockShadow, "class D3D9StateBlockShadow",
@@ -359,7 +369,7 @@ void testSourceContracts(const std::filesystem::path &root) {
   check(!std::filesystem::exists(
             root / "src/d3d9/d3d9_pe_trusted_handles.hpp"),
         "convention-only trusted wire extractors are removed");
-  checkNotContains(device, "std::array<void*, kPeTextureSlots> stagedApply",
+  checkNotContains(deviceSource, "std::array<void*, kPeTextureSlots> stagedApply",
                    "device cannot bypass typed StateBlock staging");
   checkContains(diagnostics, "struct PeDiagnosticsFeatureGates",
                 "diagnostic ownership has feature-specific cached gates");
@@ -368,55 +378,55 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "the exact scalar witness is a nullable cold owner");
   checkNotContains(recorderState, "PeScalarSemanticTokenLedger",
                    "the always-on recorder does not own the scalar ledger");
-  checkContains(device, "DXMT9_PE_SCALAR_SEMANTIC_OBSERVER",
+  checkContains(deviceSource, "DXMT9_PE_SCALAR_SEMANTIC_OBSERVER",
                 "the cold scalar witness has an explicit default-off gate");
-  checkContains(device, "if (!diagnostics->gates.callScope)",
+  checkContains(deviceSource, "if (!diagnostics->gates.callScope)",
                 "unrelated diagnostic gates skip call scope construction");
-  checkContains(device, "if (!diagnostics->gates.hotSetterTimer)",
+  checkContains(deviceSource, "if (!diagnostics->gates.hotSetterTimer)",
                 "unrelated diagnostic gates skip setter timer construction");
-  checkContains(device, "#define dxmt9DeviceDebugLog(...)",
+  checkContains(deviceSource, "#define dxmt9DeviceDebugLog(...)",
                 "disabled device debug logging is guarded at each call site");
   checkContains(recorder, "peDiagnosticsRead(\n                    chunkDiagnostics",
                 "chunk commit clocks are behind the nullable owner gate");
-  checkContains(device, "const auto t0 = phase.begin();",
+  checkContains(deviceSource, "const auto t0 = phase.begin();",
                 "append phase clocks use the nullable clock gate");
   checkNotContains(
-      device,
+      deviceSource,
       "dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? "
       "&diagnostics_->peEntryStateDecimatedStats_",
       "hot state setters use one combined nullable diagnostic scope");
   checkNotContains(
-      device,
+      deviceSource,
       "dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? "
       "&diagnostics_->peEntryDrawDecimatedStats_",
       "draw entry and call tracking share one nullable diagnostic scope");
-  const auto setRenderBegin = device.find(
-      "HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state");
+  const auto setRenderBegin = deviceHot.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetRenderState(D3DRENDERSTATETYPE state");
   const auto setRenderEnd = setRenderBegin == std::string::npos
       ? std::string::npos
-      : device.find("HRESULT STDMETHODCALLTYPE GetRenderState", setRenderBegin);
+      : deviceHot.find("bool D3D9DeviceImpl::isValidTextureStageStateType", setRenderBegin);
   check(setRenderBegin != std::string::npos && setRenderEnd != std::string::npos,
         "SetRenderState source contract is present");
   const std::string_view setRenderBody(
-      device.data() + setRenderBegin, setRenderEnd - setRenderBegin);
+      deviceHot.data() + setRenderBegin, setRenderEnd - setRenderBegin);
   checkBefore(
       setRenderBody,
-      "if (!recorderState_.stateBlockTransaction.writeAllowed()) {\n            return D3DERR_DEVICELOST;\n        }\n        PeDiagnosticsState* const diagnostics",
+      "if (!recorderState_.stateBlockTransaction.writeAllowed()) {\n        return D3DERR_DEVICELOST;\n    }\n    PeDiagnosticsState* const diagnostics",
       "return setRenderStateCore(state, value, peNullHotSetter_);",
       "SetRenderState fail-stops before its diagnostic/core bypass");
-  checkNotContains(device,
+  checkNotContains(deviceSource,
                    "PeStateBlockTransactionState& stateBlockTransaction_",
                    "device has no dependent StateBlock transaction pointer");
-  const auto appendRecordBegin = device.find(
+  const auto appendRecordBegin = deviceSource.find(
       "HRESULT appendRecord(uint32_t type, size_t sizeHint, EmitFn emit)");
   const auto appendRecordEnd = appendRecordBegin == std::string::npos
       ? std::string::npos
-      : device.find("HRESULT appendDrawPrimitiveRecord", appendRecordBegin);
+      : deviceSource.find("HRESULT appendDrawPrimitiveRecord", appendRecordBegin);
   check(appendRecordBegin != std::string::npos &&
             appendRecordEnd != std::string::npos,
         "common appendRecord source contract is present");
   const std::string_view appendRecordBody(
-      device.data() + appendRecordBegin, appendRecordEnd - appendRecordBegin);
+      deviceSource.data() + appendRecordBegin, appendRecordEnd - appendRecordBegin);
   checkBefore(
       appendRecordBody,
       "if (recorderState_.stateBlockTransaction.isPoisoned())",
@@ -463,39 +473,39 @@ void testSourceContracts(const std::filesystem::path &root) {
                 resetDispositionCall,
                 "ResetEx selects disposition from poisoned recovery state");
   checkContains(
-      device,
+      deviceSource,
       "HRESULT AppendQueryIssueForChild(\n        std::uint32_t flags",
       "Query::Issue remains routed through the common poisoned append gate");
   checkBefore(
       setRenderBody,
-      "if (!diagnostics || !diagnostics->gates.hotSetterTimer) {\n            return setRenderStateCore",
-      "PeHotStateSetterTimer hotSetter(\n            *this, *diagnostics",
+      "if (!diagnostics || !diagnostics->gates.hotSetterTimer) {\n        return setRenderStateCore",
+      "PeHotStateSetterTimer hotSetter(\n        *this, *diagnostics",
       "SetRenderState branches before the enabled timer lifetime begins");
-  const auto setFvfBegin = device.find(
-      "HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override");
+  const auto setFvfBegin = deviceHot.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetFVF(DWORD fvf) noexcept");
   const auto setFvfEnd = setFvfBegin == std::string::npos
       ? std::string::npos
-      : device.find("HRESULT STDMETHODCALLTYPE GetFVF", setFvfBegin);
+      : deviceHot.find("HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexDeclaration", setFvfBegin);
   check(setFvfBegin != std::string::npos && setFvfEnd != std::string::npos,
         "SetFVF noexcept source contract is present");
   const std::string_view setFvfBody(
-      device.data() + setFvfBegin, setFvfEnd - setFvfBegin);
+      deviceHot.data() + setFvfBegin, setFvfEnd - setFvfBegin);
   checkBefore(
       setFvfBody,
       "resolveImplicitDeclForFvf(fvf, &implicitDecl);",
       "fvf_ = fvf;",
       "SetFVF resolves its implicit declaration before shadow mutation");
   checkBefore(
-      device,
-      "if (!diagnostics || !diagnostics->gates.callScope) {\n            return drawPrimitiveCore",
-      "PeCallScope peCall(\n            *diagnostics, \"DrawPrimitive\"",
+      deviceHot,
+      "if (!diagnostics || !diagnostics->gates.callScope) {\n        return drawPrimitiveCore",
+      "PeCallScope peCall(\n        *diagnostics, \"DrawPrimitive\"",
       "DrawPrimitive branches before the enabled call scope lifetime begins");
   checkBefore(
       surface,
       "if (!diagnostics_)\n      return getDescCore",
       "D3D9PeChildCallScope peCall(*diagnostics_, \"Surface::GetDesc\"",
       "Surface::GetDesc branches before the enabled child scope lifetime");
-  checkContains(device, "__attribute__((always_inline)) noexcept",
+  checkContains(deviceSource, "__attribute__((always_inline)) noexcept",
                 "generic hot entry bodies are forced through the branch");
 
   for (const std::string_view removed : {
@@ -601,7 +611,7 @@ void testSourceContracts(const std::filesystem::path &root) {
         "End has one backend call site");
   checkContains(misc, "ULONG refs_ = 1;",
                 "ordinary child COM wrappers retain non-atomic ownership");
-  checkContains(device, "ULONG        refs_    = 1;",
+  checkContains(deviceSource, "ULONG        refs_    = 1;",
                 "the device retains ordinary non-atomic COM ownership");
   checkContains(registry, "WireRegistryRetainCallbackScope callbackScope;",
                 "registry retain callbacks keep a scoped re-entry guard");

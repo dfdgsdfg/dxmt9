@@ -1,6 +1,6 @@
-/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex owning TU.
- * The class and its file-local support live in d3d9_pe_device_impl.hpp;
- * this TU exists to define the factory entry point. */
+/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex ABI owner.
+ * QueryInterface deliberately anchors the vtable here; hot state/draw/present
+ * definitions live in d3d9_pe_device_hot.cpp. */
 
 #include "d3d9_pe_device_impl.hpp"
 

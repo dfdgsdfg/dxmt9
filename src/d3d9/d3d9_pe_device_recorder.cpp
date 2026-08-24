@@ -1,8 +1,9 @@
 /* src/d3d9/d3d9_pe_device_recorder.cpp — cold recorder settlement/flush.
  *
  * Commit, cleanup, and constant-drain paths are intentionally out of the
- * device class header. Hot appendRecord/timers/setters/draw/present code keeps
- * its existing placement and calls these semantic cold boundaries normally. */
+ * device class header. The hot owner calls these semantic cold boundaries
+ * normally; the generic append envelope remains header-defined for its
+ * recorder/cold-COM instantiations. */
 
 #include "d3d9_pe_device_impl.hpp"
 

@@ -812,22 +812,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     static constexpr size_t kDefaultMaxPendingCommandBytes = 1310720;
     static constexpr UINT kAbsoluteMaxPendingCommandRecords = 4096;
     static constexpr size_t kAbsoluteMaxPendingCommandBytes = 16 * 1024 * 1024;
-    static UINT maxPendingCommandRecords() {
-        static const UINT cached = []() -> UINT {
-            const auto envValue = dxmt9::util::getenvU32("DXMT9_PE_CHUNK_MAX_RECORDS");
-            if (!envValue || *envValue == 0) return kDefaultMaxPendingCommandRecords;
-            return std::min<UINT>(*envValue, kAbsoluteMaxPendingCommandRecords);
-        }();
-        return cached;
-    }
-    static size_t maxPendingCommandBytes() {
-        static const size_t cached = []() -> size_t {
-            const auto envValue = dxmt9::util::getenvU64("DXMT9_PE_CHUNK_MAX_BYTES");
-            if (!envValue || *envValue == 0) return kDefaultMaxPendingCommandBytes;
-            return std::min<size_t>(*envValue, kAbsoluteMaxPendingCommandBytes);
-        }();
-        return cached;
-    }
+    static UINT maxPendingCommandRecords();
+    static size_t maxPendingCommandBytes();
 
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
@@ -978,14 +964,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // from the constructor; the all-zero default-constructed state is
     // observably different from identity and would surprise apps that
     // never call SetGammaRamp.
-    void initGammaRampIdentity() noexcept {
-        for (UINT i = 0; i < 256; ++i) {
-            const WORD v = static_cast<WORD>(i << 8);
-            gammaRamp_.red[i]   = v;
-            gammaRamp_.green[i] = v;
-            gammaRamp_.blue[i]  = v;
-        }
-    }
+    void initGammaRampIdentity() noexcept;
 
     template<typename T>
     static void setRef(T*& slot, T* newVal) noexcept {
@@ -995,322 +974,78 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     }
 
     StateBlockTextureRef stateBlockTextureRef(
-        IDirect3DBaseTexture9* value) const noexcept {
-        D3D9PeValidatedTexture validated{};
-        if (FAILED(D3D9PeValidateTexture(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockTextureTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockTextureTag>());
-    }
+        IDirect3DBaseTexture9* value) const noexcept;
     StateBlockStreamSourceValue::BufferRef stateBlockBufferRef(
-        IDirect3DVertexBuffer9* value) const noexcept {
-        D3D9PeValidatedVertexBuffer validated{};
-        if (FAILED(D3D9PeValidateVertexBuffer(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockBufferRefFactory::fromValidated(
-            validated.stateBlockBufferCapability());
-    }
+        IDirect3DVertexBuffer9* value) const noexcept;
     StateBlockVertexShaderRef stateBlockVertexShaderRef(
-        IDirect3DVertexShader9* value) const noexcept {
-        D3D9PeValidatedVertexShader validated{};
-        if (FAILED(D3D9PeValidateVertexShader(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockVertexShaderTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockVertexShaderTag>());
-    }
+        IDirect3DVertexShader9* value) const noexcept;
     StateBlockPixelShaderRef stateBlockPixelShaderRef(
-        IDirect3DPixelShader9* value) const noexcept {
-        D3D9PeValidatedPixelShader validated{};
-        if (FAILED(D3D9PeValidatePixelShader(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockPixelShaderTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockPixelShaderTag>());
-    }
+        IDirect3DPixelShader9* value) const noexcept;
     StateBlockVertexDeclarationRef stateBlockVertexDeclarationRef(
-        IDirect3DVertexDeclaration9* value) const noexcept {
-        D3D9PeValidatedDeclaration validated{};
-        if (FAILED(D3D9PeValidateVertexDecl(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockVertexDeclarationTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockVertexDeclarationTag>());
-    }
+        IDirect3DVertexDeclaration9* value) const noexcept;
     StateBlockIndexBufferRef stateBlockIndexBufferRef(
-        IDirect3DIndexBuffer9* value) const noexcept {
-        D3D9PeValidatedIndexBuffer validated{};
-        if (FAILED(D3D9PeValidateIndexBuffer(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockIndexBufferTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockIndexBufferTag>());
-    }
+        IDirect3DIndexBuffer9* value) const noexcept;
     StateBlockRenderTargetRef stateBlockSurfaceRef(
-        IDirect3DSurface9* value) const noexcept {
-        D3D9PeValidatedSurface validated{};
-        if (FAILED(D3D9PeValidateSurface(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockRenderTargetTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockRenderTargetTag>());
-    }
+        IDirect3DSurface9* value) const noexcept;
     StateBlockDepthStencilRef stateBlockDepthStencilRef(
-        IDirect3DSurface9* value) const noexcept {
-        D3D9PeValidatedSurface validated{};
-        if (FAILED(D3D9PeValidateSurface(
-                value, static_cast<const IDirect3DDevice9*>(this), &validated)))
-            return {};
-        return StateBlockComRefFactory<StateBlockDepthStencilTag>::fromValidated(
-            validated.template stateBlockCapability<StateBlockDepthStencilTag>());
-    }
+        IDirect3DSurface9* value) const noexcept;
 
-    void discardPreparedStateBlockApply() noexcept {
-        if (recorderState_.stateBlockTransaction.isApplyPrepared()) {
-            recorderState_.stateBlockTransaction.failPreparedApply(
-                d3d9PeReleaseStateBlockRef);
-        } else {
-            recorderState_.stateBlockTransaction.discardPrepared(
-                d3d9PeReleaseStateBlockRef);
-        }
-    }
+    void discardPreparedStateBlockApply() noexcept;
 
-    void poisonStateBlockTransaction() noexcept {
-        recorderState_.stateBlockTransaction.poison(
-            d3d9PeReleaseStateBlockRef);
-    }
+    void poisonStateBlockTransaction() noexcept;
 
     template<typename Table, typename Key, typename Validated>
     static void setRecordedRef(Table table, Key slot,
-                                const Validated& validated) noexcept {
-        // Invalid capabilities are rejected before either mutation or retain.
-        if (!slot.valid()) return;
-        using Ref = typename Table::value_type;
-        Ref prior{};
-        (void)table.get(slot, prior);
-        using Tag = typename StateBlockComRefTagFor<Ref>::type;
-        if (prior.raw() == validated.publicIdentity()) return;
-        const Ref next = StateBlockComRefFactory<Tag>::fromValidated(
-            validated.template stateBlockCapability<Tag>());
-        d3d9PeRetainStateBlockRef(next);
-        d3d9PeReleaseStateBlockRef(prior);
-        table.set(slot, next);
-    }
+                                const Validated& validated) noexcept;
 
     template<typename Table, typename Key, typename Validated>
     static void setRecordedStreamRef(
-        Table table, Key slot, const Validated& validated) noexcept {
-        if (!slot.valid()) return;
-        StateBlockStreamSourceValue prior{};
-        (void)table.get(slot, prior);
-        if (prior.buffer == validated.publicIdentity()) return;
-        const auto next = StateBlockBufferRefFactory::fromValidated(
-            validated.stateBlockBufferCapability());
-        d3d9PeRetainStateBlockRef(next);
-        d3d9PeReleaseStateBlockRef(prior.buffer);
-        prior.buffer = next;
-        table.set(slot, prior);
-    }
+        Table table, Key slot, const Validated& validated) noexcept;
 
-    void releaseRecordedStateBlockRefs() noexcept {
-        recorderState_.stateBlockTransaction.abandonRecording(
-            d3d9PeReleaseStateBlockRef);
-    }
+    void releaseRecordedStateBlockRefs() noexcept;
 
-    D9CTexture* validatedRawTexture(IDirect3DBaseTexture9* texture) const noexcept {
-        D3D9PeValidatedTexture validated{};
-        return SUCCEEDED(D3D9PeValidateTexture(
-            texture, static_cast<const IDirect3DDevice9*>(this), &validated))
-            ? validated.raw() : nullptr;
-    }
+    D9CTexture* validatedRawTexture(IDirect3DBaseTexture9* texture) const noexcept;
 
-    D9CSurface* validatedRawSurface(IDirect3DSurface9* surface) const noexcept {
-        D3D9PeValidatedSurface validated{};
-        return SUCCEEDED(D3D9PeValidateSurface(
-            surface, static_cast<const IDirect3DDevice9*>(this), &validated))
-            ? validated.raw() : nullptr;
-    }
+    D9CSurface* validatedRawSurface(IDirect3DSurface9* surface) const noexcept;
 
-    bool applyCurrentPaletteToTexture(IDirect3DBaseTexture9* texture) {
-        if (!texture || !currentPaletteSet_) return false;
-        const auto it = palettes_.find(currentPaletteIndex_);
-        if (it == palettes_.end()) return false;
-        D9CTexture* raw = validatedRawTexture(texture);
-        if (!raw) return false;
-        std::array<uint32_t, 256> argb{};
-        for (UINT i = 0; i < 256; ++i) {
-            const PALETTEENTRY& entry = it->second[i];
-            argb[i] = (static_cast<uint32_t>(entry.peFlags) << 24) |
-                      (static_cast<uint32_t>(entry.peRed) << 16) |
-                      (static_cast<uint32_t>(entry.peGreen) << 8) |
-                      static_cast<uint32_t>(entry.peBlue);
-        }
-        return SUCCEEDED(hr32(dxmt9c_texture_set_palette(
-            raw, argb.data(), static_cast<uint32_t>(argb.size()))));
-    }
+    bool applyCurrentPaletteToTexture(IDirect3DBaseTexture9* texture);
 
-    void applyCurrentPaletteToBoundTextures() {
-        for (auto* texture : textures_) {
-            applyCurrentPaletteToTexture(texture);
-        }
-    }
+    void applyCurrentPaletteToBoundTextures();
 
-    DWORD renderStateValue(D3DRENDERSTATETYPE state) const {
-        uint32_t shadowValue = 0;
-        if (recorderState_.peState.renderStateShadowTyped().get(
-                renderStateSlotKey(static_cast<uint32_t>(state)), shadowValue)) {
-            return shadowValue;
-        }
-        return dxmt9c_device_get_render_state(dev_, static_cast<uint32_t>(state));
-    }
+    DWORD renderStateValue(D3DRENDERSTATETYPE state) const;
 
     /* Borrowed per-index unix swap-chain handle; see swapchainHandles_.
      * The returned pointer must NOT be released by the caller — it is dropped
      * with the rest of the swap-chain cache in releaseAllBound(). */
-    D9CSwapChain* borrowSwapChainHandle(UINT index) {
-        if (const auto it = swapchainHandles_.find(index);
-            it != swapchainHandles_.end()) {
-            return it->second;
-        }
-        D9CSwapChain* chain =
-            dev_ ? dxmt9c_device_get_swap_chain(dev_, index) : nullptr;
-        if (!chain) {
-            return nullptr;
-        }
-        try {
-            const auto [it, inserted] = swapchainHandles_.emplace(index, chain);
-            if (!inserted) {
-                dxmt9c_swapchain_release(chain);
-                return it->second;
-            }
-        } catch (...) {
-            dxmt9c_swapchain_release(chain);
-            return nullptr;
-        }
-        return chain;
-    }
+    D9CSwapChain* borrowSwapChainHandle(UINT index);
 
-    void releaseAllBound() {
-        for (auto& t : textures_)   setRef(t, (IDirect3DBaseTexture9*)nullptr);
-        setRef(vs_, (IDirect3DVertexShader9*)nullptr);
-        setRef(ps_, (IDirect3DPixelShader9*)nullptr);
-        for (auto& s : streamSrc_)  setRef(s, (IDirect3DVertexBuffer9*)nullptr);
-        setRef(indexBuf_, (IDirect3DIndexBuffer9*)nullptr);
-        /* vdecl_ is a borrowed pointer (Wine refcount semantics — see
-         * SetVertexDeclaration), so no Release here. The underlying
-         * decl is either user-owned (user keeps it alive while bound)
-         * or implicit-FVF and released via fvfDeclCache_ below. */
-        vdecl_ = nullptr;
-        /* Drop the FVF→decl shadow cache. The map owns one ref per entry
-         * (held since the cache miss in SetFVF created the decl). */
-        for (auto& [fvf, decl] : fvfDeclCache_) {
-            if (decl) decl->Release();
-        }
-        fvfDeclCache_.clear();
-        for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
-        for (auto& explicitRt : rtSlotExplicit_) explicitRt = false;
-        setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
-        dsSurfaceExplicit_ = false;
-        setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
-        for (auto& [idx, sc] : swapchainWrappers_) {
-            if (sc) sc->Release();
-        }
-        swapchainWrappers_.clear();
-        for (auto& [idx, chain] : swapchainHandles_) {
-            if (chain) dxmt9c_swapchain_release(chain);
-        }
-        swapchainHandles_.clear();
-        // T2 device-lost: explicitly nullify the device's primary RT slot
-        // and depth-stencil on the C side so no stale Metal surface handle
-        // survives a Reset(). The PE shadow's pendingRtMask/pendingDs is
-        // cleared via clearPendingHotState() in clearPeStateTracking, but
-        // the server-side core::Device state must also lose the prior
-        // attachment references — invalidateDefaultPoolResources() clears
-        // the resource itself but not the bound-slot pointer.
-        if (dev_) {
-            (void)dxmt9c_device_set_render_target(dev_, 0, nullptr);
-            (void)dxmt9c_device_set_depth_stencil(dev_, nullptr);
-        }
-    }
+    void releaseAllBound();
 
     void clearPendingCommandChunk(
         dxmt9::d3d9::pe::RecorderCommitEvent discardEvent =
             dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard);
 
     dxmt9::d3d9::pe::PeScalarSemanticTokenLedger*
-    scalarSemanticObserver() noexcept {
-        return diagnostics_ ? diagnostics_->scalarSemanticTokens.get() : nullptr;
-    }
+    scalarSemanticObserver() noexcept;
 
-    void clearPeStateTracking() {
-        recorderState_.peState.maintenance().clearServerShadowTables();
-        recorderState_.peState.consume().clearPendingHotState();
-        recorderState_.peConsts.reset();
-        recorderState_.peBindingView = {};
-        if (auto* tokens = scalarSemanticObserver()) tokens->clear();
-        recorderState_.stateBlockTransaction.clearRecordedCandidateForReset();
-        clearPendingCommandChunk(
-            dxmt9::d3d9::pe::RecorderCommitEvent::DeviceReset);
-        submittedIndexBufferWireValue_ = 0;
-        submittedIndexBufferKnown_ = false;
-        fvf_ = 0;
-        std::memset(streamOff_, 0, sizeof(streamOff_));
-        std::memset(streamStr_, 0, sizeof(streamStr_));
-        // D3D9 default stream-source frequency divider is 1 (not 0,
-        // which encodes an invalid value -- a zero divider with no
-        // INDEXED/INSTANCE flag is rejected at Set time). Restoring 1
-        // here keeps Reset()-then-Get round-trips consistent with
-        // test_stream_source_frequency_state.
-        for (UINT& freq : streamFreq_) {
-            freq = 1;
-        }
-    }
+    void clearPeStateTracking();
 
-    bool hasPendingHotState() const {
-        return recorderState_.peState.hasPendingHotState();
-    }
+    bool hasPendingHotState() const;
 
-    void clearPendingHotState() {
-        recorderState_.peState.consume().clearPendingHotState();
-    }
+    void clearPendingHotState();
 
-    bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
-        return recorderState_.peState.renderStateEqualsTyped(renderStateSlotKey(state), value);
-    }
+    bool shadowedRenderStateEquals(DWORD state, DWORD value) const;
 
     bool shadowedStreamSourceEquals(UINT stream,
                                     IDirect3DVertexBuffer9* buffer,
                                     UINT offset,
-                                    UINT stride) const {
-        return stream < 16 && streamSrc_[stream] == buffer &&
-               streamOff_[stream] == offset && streamStr_[stream] == stride;
-    }
+                                    UINT stride) const;
 
-    dxmt9::d3d9::pe::PeRtExplicitMask currentRtExplicitMask() const {
-        dxmt9::d3d9::pe::PeRtExplicitMask explicitMask{};
-        for (DWORD slot = 0; slot < 4; ++slot) {
-            explicitMask[slot] = rtSlotExplicit_[slot];
-        }
-        return explicitMask;
-    }
+    dxmt9::d3d9::pe::PeRtExplicitMask currentRtExplicitMask() const;
 
-    std::uint64_t currentVertexShaderHash() const noexcept {
-        if (!diagnostics_) return 0u;
-        D3D9PeValidatedVertexShader validated{};
-        return SUCCEEDED(D3D9PeValidateVertexShader(
-            vs_, static_cast<const IDirect3DDevice9*>(this), &validated))
-            ? validated.localMetadata() : 0u;
-    }
+    std::uint64_t currentVertexShaderHash() const noexcept;
 
-    std::uint64_t currentPixelShaderHash() const noexcept {
-        if (!diagnostics_) return 0u;
-        D3D9PeValidatedPixelShader validated{};
-        return SUCCEEDED(D3D9PeValidatePixelShader(
-            ps_, static_cast<const IDirect3DDevice9*>(this), &validated))
-            ? validated.localMetadata() : 0u;
-    }
+    std::uint64_t currentPixelShaderHash() const noexcept;
 
     static const char* vsConstSetterRangePhaseName(
         VsConstSetterRangePhase phase) noexcept;
@@ -1369,23 +1104,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // sites called currentDrawStreamSources(), which reads all 16 slots.
     void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
                              bool needAllSlots,
-                             bool allStreams = false) const {
-        // Object refs are admitted and cached only through the kind-qualified
-        // validation capabilities used by their public setters.  This helper
-        // therefore refreshes scalar binding metadata only; it never recovers
-        // a wire ref by convention-casting a public COM pointer.
-        (void)needAllSlots;
-        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            if (!needAllSlots && !allStreams &&
-                (recorderState_.peState.pendingStreamMask() & (1u << slot)) == 0) {
-                continue;
-            }
-            view.streams[slot].offset = streamOff_[slot];
-            view.streams[slot].stride = streamStr_[slot];
-        }
-        view.rtExplicitMask = currentRtExplicitMask();
-        view.fvf = fvf_;
-    }
+                             bool allStreams = false) const;
 
     // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
     // is deliberately unchanged so all six call sites -- which differ only in
@@ -1402,37 +1121,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // Destination-chunk retention, as data. MUST be read after any CapacityPre
     // flush has resealed the chunk -- that is why the draw sites build it inside
     // the append emitter and not before.
-    dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const {
-        dxmt9::d3d9::pe::PeChunkContext chunk{};
-        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            if (pendingChunkReferencesBuffer(recorderState_.peBindingView.streams[slot].buffer)) {
-                chunk.retainedStreamMask |= 1u << slot;
-            }
-        }
-        chunk.indexBufferKnown = submittedIndexBufferKnown_;
-        chunk.submittedIndexBufferWire = submittedIndexBufferWireValue_;
-        chunk.indexBufferRetained =
-            pendingChunkReferencesBuffer(recorderState_.peBindingView.indexBuffer);
-        return chunk;
-    }
+    dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const;
 
     // Bytes the drained constant ranges contribute, so the capacity precheck
     // sees a value on the same scale as the legacy record's
     // d9c_command_record_draw_*_total_size(), which included the folded const
     // payload. Without this, enabling DXMT9_PE_INLINE_CONST_DELTA would move
     // chunk boundaries.
-    std::size_t sparseConstPayloadBytes() const {
-        const dxmt9::d3d9::pe::SparseConstantRangeInput* ranges[] = {
-            &recorderState_.peSparseState.vsFloatConstants, &recorderState_.peSparseState.vsIntConstants,
-            &recorderState_.peSparseState.vsBoolConstants,  &recorderState_.peSparseState.psFloatConstants,
-            &recorderState_.peSparseState.psIntConstants,   &recorderState_.peSparseState.psBoolConstants,
-        };
-        std::size_t total = 0;
-        for (const auto* range : ranges) {
-            total += range->registerBytes.size();
-        }
-        return total;
-    }
+    std::size_t sparseConstPayloadBytes() const;
 
     // The recorder's sole state producer. Fills the reused
     // recorderState_.peSparseState / recorderState_.peSparseHeader from the shadows and the binding view --
@@ -1458,63 +1154,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     bool buildSparseStateForRecord(
         const dxmt9::d3d9::pe::PeDrawParams& params,
         bool forceFullSnapshot = false,
-        bool inlineConstDelta = false) {
-        const std::uint32_t recordType = params.recordType;
-        // Choke point for all three callers. addChunkContextSections carries the
-        // same guard and the full story of what an unstamped recordType did, but
-        // it is only reached by draws -- the chunkBarrierFlush APPLY_STATE path
-        // would slip past it and be misclassified as a draw by isDraw below.
-        // Returning false surfaces as a failed HRESULT, not silent corruption.
-        if (recordType == 0u) {
-            return false;
-        }
-        DxmtPeDecimatedScopeGuard decimatedScope;
-        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-        if (decimationN != 0 &&
-            PeDecimatedScopeTimer::shouldSample(
-                diagnostics_->peDrawPacketDecimatedStats_, decimationN)) {
-            decimatedScope.stats = &diagnostics_->peDrawPacketDecimatedStats_;
-            {
-                const auto n0 = std::chrono::steady_clock::now();
-                const auto n1 = std::chrono::steady_clock::now();
-                PeDecimatedScopeTimer::recordSample(
-                    peDecimatedNullScopeStats(),
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-            }
-            decimatedScope.t0 = std::chrono::steady_clock::now();
-        }
-        const bool needAllSlots =
-            forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
-        const bool isDraw =
-            recordType != D9C_COMMAND_RECORD_APPLY_STATE;
-        populateBindingView(recorderState_.peBindingView, needAllSlots, isDraw);
-        return dxmt9::d3d9::pe::buildSparseState(
-            recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparsePayloads, params,
-            forceFullSnapshot, inlineConstDelta, recorderState_.peSparseScratch,
-            recorderState_.peSparseHeader, recorderState_.peSparseState);
-    }
+        bool inlineConstDelta = false);
 
-    static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {
-        switch (type) {
-        case D3DPT_POINTLIST: return primitiveCount;
-        case D3DPT_LINELIST: return primitiveCount * 2u;
-        case D3DPT_LINESTRIP: return primitiveCount + 1u;
-        case D3DPT_TRIANGLELIST: return primitiveCount * 3u;
-        case D3DPT_TRIANGLESTRIP:
-        case D3DPT_TRIANGLEFAN: return primitiveCount + 2u;
-        default: return 0;
-        }
-    }
+    static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount);
 
-    static bool checkedByteCount(UINT count, UINT stride, std::uint32_t& bytes) {
-        const auto value = static_cast<std::uint64_t>(count) * stride;
-        if (value > 0xffffffffull) {
-            return false;
-        }
-        bytes = static_cast<std::uint32_t>(value);
-        return true;
-    }
+    static bool checkedByteCount(UINT count, UINT stride, std::uint32_t& bytes);
 
     struct SoftwareFfpDrawData {
         std::vector<std::uint8_t> vertices;
@@ -1665,33 +1309,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // has accepted the candidate. Keep the temporary UP stream override and
     // instancing offsets reversible even when vector growth throws.
     template <typename Prepare>
-    HRESULT prepareSoftwareDrawCandidate(Prepare&& prepare) noexcept {
-        IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
-        if (savedStream0) savedStream0->AddRef();
-        const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
-        const UINT savedOffset0 = streamOff_[0];
-        const UINT savedStride0 = streamStr_[0];
-        UINT savedOffsets[16]{};
-        for (UINT stream = 0; stream < 16u; ++stream) {
-            savedOffsets[stream] = streamOff_[stream];
-        }
-
-        HRESULT hr = S_FALSE;
-        const auto allocation = dxmt9::d3d9::pe::runPublicAllocationPhase(
-            [&] { hr = std::forward<Prepare>(prepare)(); });
-
-        setRef(streamSrc_[0], savedStream0);
-        streamOff_[0] = savedOffset0;
-        streamStr_[0] = savedStride0;
-        recorderState_.peBindingView.streams[0] = savedBindingStream0;
-        restoreSoftwareInstanceStreamOffsets(savedOffsets);
-        if (savedStream0) savedStream0->Release();
-        if (allocation ==
-            dxmt9::d3d9::pe::PublicAllocationResult::OutOfMemory) {
-            return E_OUTOFMEMORY;
-        }
-        return hr;
-    }
+    HRESULT prepareSoftwareDrawCandidate(Prepare&& prepare) noexcept;
 
     HRESULT describeSoftwareProgrammableDrawTarget(
         DWORD& outputFvf,
@@ -1804,26 +1422,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     using PePresentCallSample = D3D9PePresentCallToken;
 
-    PePresentCadenceClaim claimPeFirstCallAfterPresent() {
-        if (!dxmt9PeRecorderStatsEnabled()) {
-            return {};
-        }
-        std::uint64_t ordinal =
-            diagnostics_->pePresentCadencePendingOrdinal_.load(std::memory_order_acquire);
-        if (ordinal == 0) {
-            return {};
-        }
-        const auto entry = std::chrono::steady_clock::now();
-        if (!diagnostics_->pePresentCadencePendingOrdinal_.compare_exchange_strong(
-                ordinal, 0, std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            return {};
-        }
-        return PePresentCadenceClaim{
-            true, ordinal,
-            diagnostics_->pePresentCadenceReturnNs_.load(std::memory_order_acquire),
-            dxmt9SteadyClockNs(entry)};
-    }
+    PePresentCadenceClaim claimPeFirstCallAfterPresent();
 
     void logPeFirstCallAfterPresent(const char* callName,
                                     const PePresentCadenceClaim& claim,
@@ -1843,46 +1442,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // PeCallScope below. See "Observer boundary" in
     // agents/rules/codebase_conventions.rules.md.
     void notePeDeviceCallAfterPresent(const char* callName,
-                                      const void* callerPc = nullptr) {
-        if (!dxmt9PeCallTrackingEnabled()) {
-            return;
-        }
-        PePresentCallSample sample;
-        notePeDeviceCallAfterPresentTracked(callName, callerPc, sample);
-    }
+                                      const void* callerPc = nullptr);
 
     // Slot API behind PeCallScope / D3D9PeChildCallScope. Push answers
     // kD3D9PePresentCallSlotNone when nothing was tracked, which is the single
     // cached-bool test on the disabled path.
     D3D9PePresentCallSlot pushPeCallScope(const char* callName,
-                                          const void* callerPc) noexcept {
-        if (!dxmt9PeCallTrackingEnabled()) {
-            return kD3D9PePresentCallSlotNone;
-        }
-        if (dxmt9PeCallScopeDepth >= kPeCallScopeSlots) {
-            return kD3D9PePresentCallSlotNone;
-        }
-        const std::size_t slot = dxmt9PeCallScopeDepth++;
-        notePeDeviceCallAfterPresentTracked(callName, callerPc,
-                                            dxmt9PeCallScopeSlots[slot]);
-        return static_cast<D3D9PePresentCallSlot>(slot);
-    }
+                                          const void* callerPc) noexcept;
 
     void notePeCallScopeReturn(D3D9PePresentCallSlot slot,
-                               const char* callName, HRESULT hr) noexcept {
-        if (slot == kD3D9PePresentCallSlotNone) {
-            return;
-        }
-        logPeCallReturnAfterPresent(dxmt9PeCallScopeSlots[slot], callName, hr);
-    }
+                               const char* callName, HRESULT hr) noexcept;
 
-    void popPeCallScope(D3D9PePresentCallSlot slot) noexcept {
-        // Scopes nest, so the slot being released is always the top one.
-        if (slot != kD3D9PePresentCallSlotNone &&
-            dxmt9PeCallScopeDepth == static_cast<std::size_t>(slot) + 1u) {
-            dxmt9PeCallScopeDepth = slot;
-        }
-    }
+    void popPeCallScope(D3D9PePresentCallSlot slot) noexcept;
 
     // Enabled-only RAII scope for a device entry point that pairs its entry
     // note with a return log. Callers branch on the nullable diagnostics owner
@@ -1894,81 +1465,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // agents/rules/codebase_conventions.rules.md.
     class PeCallScope {
     public:
-        __attribute__((always_inline))
+
         PeCallScope(PeDiagnosticsState& diagnostics,
                     const char* callName,
                     const void* callerPc = nullptr,
                     PeDecimatedScopeStats PeDiagnosticsState::*
-                        entryStats = nullptr) noexcept
-            : diagnostics_(&diagnostics) {
-            startEnabled(callName, callerPc, entryStats);
-        }
+                        entryStats = nullptr) noexcept;
         PeCallScope(const PeCallScope&) = delete;
         PeCallScope& operator=(const PeCallScope&) = delete;
-        __attribute__((always_inline))
-        ~PeCallScope() noexcept {
-            finishEnabled();
-        }
+        ~PeCallScope() noexcept;
 
-        __attribute__((always_inline))
-        HRESULT finish(const char* callName, HRESULT hr) noexcept {
-            if (observer_) {
-                observer_->notifyCallScopeReturn(slot_, callName, hr);
-            }
-            return hr;
-        }
 
-        PeDecimatedScopeStats* decimatedStats() const noexcept {
-            return decimatedStats_;
-        }
+        HRESULT finish(const char* callName, HRESULT hr) noexcept;
+
+        PeDecimatedScopeStats* decimatedStats() const noexcept;
 
         DxmtPeDecimatedPhaseTimer phase(
-            PeDecimatedScopeStats PeDiagnosticsState::* stats) const noexcept {
-            return DxmtPeDecimatedPhaseTimer(
-                decimatedStats_ != nullptr, &(diagnostics_->*stats));
-        }
+            PeDecimatedScopeStats PeDiagnosticsState::* stats) const noexcept;
 
     private:
         __attribute__((noinline))
         void startEnabled(
             const char* callName, const void* callerPc,
-            PeDecimatedScopeStats PeDiagnosticsState::* entryStats) noexcept {
-            const std::uint32_t decimationN =
-                diagnostics_->config.statsDecimationN;
-            if (entryStats && decimationN != 0) {
-                auto& stats = diagnostics_->*entryStats;
-                if (PeDecimatedScopeTimer::shouldSample(stats, decimationN)) {
-                    decimatedStats_ = &stats;
-                    const auto n0 = std::chrono::steady_clock::now();
-                    const auto n1 = std::chrono::steady_clock::now();
-                    PeDecimatedScopeTimer::recordSample(
-                        peDecimatedNullScopeStats(),
-                        static_cast<std::uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                n1 - n0).count()));
-                    decimatedEntry_ = std::chrono::steady_clock::now();
-                }
-            }
-            if (diagnostics_->config.recorderStats) {
-                observer_ = &diagnostics_->childObserver;
-                slot_ = observer_->pushCallScope(callName, callerPc);
-            }
-        }
+            PeDecimatedScopeStats PeDiagnosticsState::* entryStats) noexcept;
 
         __attribute__((noinline))
-        void finishEnabled() noexcept {
-            if (observer_) {
-                observer_->popCallScope(slot_);
-            }
-            if (decimatedStats_) {
-                PeDecimatedScopeTimer::recordSample(
-                    *decimatedStats_,
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() -
-                            decimatedEntry_).count()));
-            }
-        }
+        void finishEnabled() noexcept;
 
         PeDiagnosticsState* diagnostics_ = nullptr;
         D3D9PeDiagnosticObserver* observer_ = nullptr;
@@ -1977,24 +1499,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         std::chrono::steady_clock::time_point decimatedEntry_{};
     };
 
-    void markPePresentReturnedForCadence() {
-        if (!dxmt9PeRecorderStatsEnabled()) {
-            return;
-        }
-        const auto now = std::chrono::steady_clock::now();
-        const std::uint64_t ordinal =
-            diagnostics_->pePresentCadenceOrdinal_.fetch_add(1, std::memory_order_relaxed) + 1;
-        diagnostics_->pePresentCadenceReturnNs_.store(dxmt9SteadyClockNs(now),
-                                        std::memory_order_release);
-        diagnostics_->pePresentCadencePendingOrdinal_.store(ordinal, std::memory_order_release);
-        diagnostics_->pePresentCallCount_.store(0, std::memory_order_release);
-        diagnostics_->pePresentCallMilestoneMask_.store(0, std::memory_order_release);
-        diagnostics_->pePresentCallMilestonePendingOrdinal_.store(ordinal,
-                                                   std::memory_order_release);
-        diagnostics_->pePresentChunkPendingOrdinal_.store(ordinal, std::memory_order_release);
-        diagnostics_->pePresentRecordMilestoneMask_.store(0, std::memory_order_release);
-        diagnostics_->pePresentRecordPendingOrdinal_.store(ordinal, std::memory_order_release);
-    }
+    void markPePresentReturnedForCadence();
 
     static bool peCallMilestoneBit(std::uint32_t callCount,
                                    std::uint32_t& bit) noexcept;
@@ -2126,26 +1631,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                           std::uint32_t payloadBytes,
                                           std::int64_t entryNs);
 
-    PePresentCadenceClaim claimPeFirstChunkAfterPresent() {
-        if (!dxmt9PeRecorderStatsEnabled()) {
-            return {};
-        }
-        std::uint64_t ordinal =
-            diagnostics_->pePresentChunkPendingOrdinal_.load(std::memory_order_acquire);
-        if (ordinal == 0) {
-            return {};
-        }
-        const auto entry = std::chrono::steady_clock::now();
-        if (!diagnostics_->pePresentChunkPendingOrdinal_.compare_exchange_strong(
-                ordinal, 0, std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            return {};
-        }
-        return PePresentCadenceClaim{
-            true, ordinal,
-            diagnostics_->pePresentCadenceReturnNs_.load(std::memory_order_acquire),
-            dxmt9SteadyClockNs(entry)};
-    }
+    PePresentCadenceClaim claimPeFirstChunkAfterPresent();
 
     void logPeFirstChunkAfterPresent(PeRecorderFlushReason reason,
                                      const PePresentCadenceClaim& claim,
@@ -2180,27 +1666,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                     std::int64_t entryNs,
                                     std::int64_t exitNs);
 
-    void resetPeBetweenCallsWindow() {
-        diagnostics_->peRecorderBetweenCallsActive_ = false;
-        diagnostics_->peRecorderBetweenCallsStartNs_ = 0;
-        diagnostics_->peRecorderBetweenCallFamilySamples_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameSamples_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameCpuNsTotal_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameCpuNsMax_.fill(0);
-        diagnostics_->peRecorderBetweenLastCallFamily_ = PeInterAppendCallFamily::Unknown;
-        diagnostics_->peRecorderBetweenLastCallName_ = PeInterAppendCallName::Unknown;
-        diagnostics_->peRecorderBetweenLastCallExitNs_ = 0;
-        diagnostics_->peRecorderBetweenCallTransitionSamples_.fill(0);
-        diagnostics_->peRecorderBetweenCallTransitionNsTotal_.fill(0);
-        diagnostics_->peRecorderBetweenCallTransitionNsMax_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameTransitionSamples_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameTransitionNsTotal_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameTransitionNsMax_.fill(0);
-        diagnostics_->peRecorderBetweenCallNameTransitionSites_.clear();
-        diagnostics_->peRecorderBetweenCallBodyCalls_ = 0;
-        diagnostics_->peRecorderBetweenCallBodyCpuNsTotal_ = 0;
-        diagnostics_->peRecorderBetweenCallBodyCpuNsMax_ = 0;
-    }
+    void resetPeBetweenCallsWindow();
 
     void recordPeChunkInterAppendFocusBetweenCallFamilies(std::size_t focusPair);
 
@@ -2227,76 +1693,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     class PeHotStateSetterTimer {
     public:
-        __attribute__((always_inline))
+
         PeHotStateSetterTimer(D3D9DeviceImpl& device,
                               PeDiagnosticsState& diagnostics,
                               PeHotStateSetterFamily family,
                               const char* callName = nullptr,
                               PeDecimatedScopeStats PeDiagnosticsState::*
                                   entryStats = nullptr,
-                              const void* callerPc = nullptr) noexcept
-            : device_(&device), diagnostics_(&diagnostics),
-              family_(family) {
-            startEnabled(callName, entryStats, callerPc);
-        }
+                              const void* callerPc = nullptr) noexcept;
 
-        __attribute__((always_inline))
-        ~PeHotStateSetterTimer() noexcept {
-            finishEnabled();
-        }
 
-        __attribute__((always_inline))
-        void markDirty() noexcept {
-            dirty_ = true;
-        }
+        ~PeHotStateSetterTimer() noexcept;
+
+
+        void markDirty() noexcept;
 
     private:
         __attribute__((noinline))
         void startEnabled(
             const char* callName,
             PeDecimatedScopeStats PeDiagnosticsState::* entryStats,
-            const void* callerPc) noexcept {
-            const std::uint32_t decimationN =
-                diagnostics_->config.statsDecimationN;
-            if (entryStats && decimationN != 0) {
-                auto& stats = diagnostics_->*entryStats;
-                if (PeDecimatedScopeTimer::shouldSample(stats, decimationN)) {
-                    decimatedStats_ = &stats;
-                    const auto n0 = std::chrono::steady_clock::now();
-                    const auto n1 = std::chrono::steady_clock::now();
-                    PeDecimatedScopeTimer::recordSample(
-                        peDecimatedNullScopeStats(),
-                        static_cast<std::uint64_t>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                n1 - n0).count()));
-                    decimatedEntry_ = std::chrono::steady_clock::now();
-                }
-            }
-            if (callName && diagnostics_->config.recorderStats) {
-                PePresentCallSample sample;
-                device_->notePeDeviceCallAfterPresentTracked(
-                    callName, callerPc, sample);
-            }
-            if (diagnostics_->config.recorderStats) {
-                entryNs_ = dxmt9SteadyClockNs(
-                    std::chrono::steady_clock::now());
-            }
-        }
+            const void* callerPc) noexcept;
 
         __attribute__((noinline))
-        void finishEnabled() noexcept {
-            if (entryNs_ > 0) {
-                device_->recordPeHotStateSetterCpu(family_, entryNs_, dirty_);
-            }
-            if (decimatedStats_) {
-                PeDecimatedScopeTimer::recordSample(
-                    *decimatedStats_,
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() -
-                            decimatedEntry_).count()));
-            }
-        }
+        void finishEnabled() noexcept;
 
         D3D9DeviceImpl* device_ = nullptr;
         PeDiagnosticsState* diagnostics_ = nullptr;
@@ -2356,23 +1776,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     HRESULT withPeHotStateSetter(
         PeHotStateSetterFamily family, const char* callName,
         PeDecimatedScopeStats PeDiagnosticsState::* entryStats,
-        const void* callerPc, Body&& body) noexcept {
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
-            return D3DERR_DEVICELOST;
-        }
-        PeDiagnosticsState* const diagnostics = diagnostics_.get();
-        if (!diagnostics) {
-            return std::forward<Body>(body)(peNullHotSetter_);
-        }
-        if (!diagnostics->gates.hotSetterTimer) {
-            return std::forward<Body>(body)(peNullHotSetter_);
-        }
-        PeHotStateSetterTimer hotSetter(
-            *this, *diagnostics, family, callName, entryStats, callerPc);
-        return std::forward<Body>(body)(hotSetter);
-    }
+        const void* callerPc, Body&& body) noexcept;
 
     template<typename Body>
     __attribute__((always_inline))
@@ -2381,27 +1785,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         PeDecimatedScopeStats PeDiagnosticsState::* callEntryStats,
         PeHotStateSetterFamily family,
         PeDecimatedScopeStats PeDiagnosticsState::* hotEntryStats,
-        Body&& body) noexcept {
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
-            return D3DERR_DEVICELOST;
-        }
-        PeDiagnosticsState* const diagnostics = diagnostics_.get();
-        if (!diagnostics) {
-            return std::forward<Body>(body)(
-                peNullCallScope_, peNullHotSetter_);
-        }
-        if (!diagnostics->gates.callScope) {
-            return std::forward<Body>(body)(
-                peNullCallScope_, peNullHotSetter_);
-        }
-        PeCallScope peCall(
-            *diagnostics, callName, callerPc, callEntryStats);
-        PeHotStateSetterTimer hotSetter(
-            *this, *diagnostics, family, nullptr, hotEntryStats, nullptr);
-        return std::forward<Body>(body)(peCall, hotSetter);
-    }
+        Body&& body) noexcept;
 
     void notePeChunkAppendBoundary(std::int64_t appendReturnNs,
                                    std::uint32_t type);
@@ -2421,13 +1805,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // whose PE-side samples xctrace cannot attribute.
     void startPeThreadSamplerIfRequested();
 
-    void stopPeThreadSampler() {
-        if (!diagnostics_ || !diagnostics_->peThreadSampler_) {
-            return;
-        }
-        dxmt9::d3d9::pe::PeThreadSampler::stopAndRelease(diagnostics_->peThreadSampler_);
-        diagnostics_->peThreadSampler_ = nullptr;
-    }
+    void stopPeThreadSampler();
 
     // Emits ONE cumulative [dxmt9-pe-sampler] group: a header line, one line
     // per module with a nonzero count (top 20 by count), then the self-module
@@ -2438,69 +1816,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // Present-cadence tick for the sampler dump, mirroring the decimation
     // cadence: cumulative line every 60 presents, plus a final line from the
     // destructor so the last partial interval is never lost.
-    void notePeThreadSamplerPresent() {
-        if (!diagnostics_ || !diagnostics_->peThreadSampler_) {
-            return;
-        }
-        // The sampler targets the thread that created the device on the
-        // assumption that it is also the thread that renders. If an app splits
-        // those, every sample describes the wrong thread and nothing else in
-        // the output would say so — the histogram would just look idle. Say it
-        // once, loudly, instead of leaving a silently wrong answer.
-        if (!diagnostics_->peThreadSamplerPresentThreadChecked_) {
-            diagnostics_->peThreadSamplerPresentThreadChecked_ = true;
-            const DWORD presentThread = GetCurrentThreadId();
-            if (presentThread != diagnostics_->peThreadSampler_->targetThreadId()) {
-                dxmt9PeThreadSamplerInfoLog(
-                    "target_thread_mismatch sampled=0x%lx present=0x%lx "
-                    "note=samples_describe_the_device_creating_thread_not_the_present_thread",
-                    static_cast<unsigned long>(diagnostics_->peThreadSampler_->targetThreadId()),
-                    static_cast<unsigned long>(presentThread));
-            }
-        }
-        ++diagnostics_->peThreadSamplerPresents_;
-        if (diagnostics_->peThreadSamplerPresents_ % 60 == 0) {
-            logPeThreadSampler();
-        }
-    }
+    void notePeThreadSamplerPresent();
 
     // Present-cadence tick for the decimated dump: increments a cumulative
     // present counter and emits the cumulative line every 60 presents. A
     // final line is also emitted unconditionally from the destructor so the
     // last partial interval is never lost. No-op when decimation is off.
-    void notePeStatsDecimationPresent() {
-        if (dxmt9PeStatsDecimationN() == 0) {
-            return;
-        }
-        ++diagnostics_->peStatsDecimationPresents_;
-        if (diagnostics_->peStatsDecimationPresents_ % 60 == 0) {
-            logPeStatsDecimation();
-        }
-    }
+    void notePeStatsDecimationPresent();
 
-    void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes) {
-        peDiagnosticsCall(diagnostics_.get(),
-            [vertexBytes](PeDiagnosticsState& diagnostics) noexcept {
-                if (!diagnostics.config.recorderStats) {
-                    return;
-                }
-                ++diagnostics.peRecorderStats_.drawPrimitiveUPCalls;
-                diagnostics.peRecorderStats_.upVertexBytes += vertexBytes;
-            });
-    }
+    void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes);
 
     void recordDrawIndexedPrimitiveUPCopy(std::uint32_t vertexBytes,
-                                          std::uint32_t indexBytes) {
-        peDiagnosticsCall(diagnostics_.get(),
-            [vertexBytes, indexBytes](PeDiagnosticsState& diagnostics) noexcept {
-                if (!diagnostics.config.recorderStats) {
-                    return;
-                }
-                ++diagnostics.peRecorderStats_.drawIndexedPrimitiveUPCalls;
-                diagnostics.peRecorderStats_.upVertexBytes += vertexBytes;
-                diagnostics.peRecorderStats_.upIndexBytes += indexBytes;
-            });
-    }
+                                          std::uint32_t indexBytes);
 
     RenderTapeLiveObject *findRenderTapeObject(
         const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept;
@@ -2645,35 +1972,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         const D9CCommandChunk& chunk,
         const PeCommandChunkCommitInfo& info) noexcept;
 
-    static bool chunkHasPresentRecord(const D9CCommandChunk& chunk) noexcept {
-        if (chunk.recordBytes < sizeof(D9CCommandChunkWireHeader) ||
-            d9cWireHandleValue(chunk.records) == 0u) {
-            return false;
-        }
-        const auto* bytes = reinterpret_cast<const std::byte*>(
-            static_cast<std::uintptr_t>(d9cWireHandleValue(chunk.records)));
-        D9CCommandChunkWireHeader header{};
-        std::memcpy(&header, bytes, sizeof(header));
-        if (header.recordCount != chunk.recordCount ||
-            header.recordHeaderSize != sizeof(D9CCommandChunkWireRecordHeader) ||
-            header.recordTableOffset > chunk.recordBytes ||
-            header.recordCount >
-                (chunk.recordBytes - header.recordTableOffset) /
-                    sizeof(D9CCommandChunkWireRecordHeader)) {
-            return false;
-        }
-        for (std::uint32_t index = 0u; index < header.recordCount; ++index) {
-            D9CCommandChunkWireRecordHeader record{};
-            std::memcpy(&record,
-                        bytes + header.recordTableOffset +
-                            static_cast<std::size_t>(index) * sizeof(record),
-                        sizeof(record));
-            if (record.type == D9C_COMMAND_RECORD_PRESENT) {
-                return true;
-            }
-        }
-        return false;
-    }
+    static bool chunkHasPresentRecord(const D9CCommandChunk& chunk) noexcept;
 
     void finishRenderTapeCaptureAtPresentBoundary() noexcept;
 
@@ -2694,34 +1993,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     struct AppendPhaseTimer {
         PeDiagnosticsState* diagnostics = nullptr;
 
-        std::chrono::steady_clock::time_point begin() const noexcept {
-            return peDiagnosticsRead(
-                diagnostics, [](PeDiagnosticsState&) noexcept {
-                    return std::chrono::steady_clock::now();
-                });
-        }
+        std::chrono::steady_clock::time_point begin() const noexcept;
         void recordEncode(
-            std::chrono::steady_clock::time_point t0) const noexcept {
-            if (!diagnostics) {
-                return;
-            }
-            PeDecimatedScopeTimer::recordSample(
-                diagnostics->peAppendPhaseEncode_,
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - t0).count()));
-        }
+            std::chrono::steady_clock::time_point t0) const noexcept;
         void recordFlush(
-            std::chrono::steady_clock::time_point t0) const noexcept {
-            if (!diagnostics) {
-                return;
-            }
-            PeDecimatedScopeTimer::recordSample(
-                diagnostics->peAppendPhaseFlush_,
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - t0).count()));
-        }
+            std::chrono::steady_clock::time_point t0) const noexcept;
     };
 
     // Append envelope. Owns the recorder mutex, the negotiation gate, the
@@ -2926,173 +2202,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     // Non-indexed draw: fold or flush pending constants, then emit one sparse
     // canonical draw record through the appendRecord envelope.
-    HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
-        Dxmt9PeAppendFamilyScope appendFamily(diagnostics_.get(), PeInterAppendCallFamily::Draw);
-        // Hold the recorder lock across the const-flush/fold + draw-record
-        // append pair: recorderState_.recorderMutex is recursive, so the nested per-append
-        // acquisitions below become cheap re-entries instead of repeated
-        // cold lock/unlock cycles on this hot path.
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
-        if (!inlineConstDelta) {
-            // Drain any accumulated const dirty ranges into chunk records
-            // FIRST, so the chunk replays "consts → draw" in API order.
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
-        }
-        dxmt9::d3d9::pe::PeDrawParams params{};
-        params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-        params.primitiveType = static_cast<std::uint32_t>(type);
-        params.startVertex = startVertex;
-        params.primitiveCount = count;
-        // Under inlineConstDelta the const shadows are still dirty here. The
-        // producer prepares their constant-range sections; the emitter settles
-        // them only after appendSparseRecord accepts the record.
-        if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
-                                       inlineConstDelta)) {
-            return D3DERR_INVALIDCALL;
-        }
-        return appendRecord(
-            D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-            kLegacyDrawPrimitiveSizeHint + sparseConstPayloadBytes(),
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                // Inside the emitter on purpose: CapacityPre may have sealed the
-                // old chunk, and the retention answers are about the chunk this
-                // record actually lands in.
-                if (!dxmt9::d3d9::pe::addChunkContextSections(
-                    currentChunkContext(), recorderState_.peState, recorderState_.peBindingView, params,
-                    recorderState_.peSparseScratch,
-                        recorderState_.peSparseState)) {
-                    return D3DERR_INVALIDCALL;
-                }
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                    builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, recorderState_.peSparseHeader,
-                    recorderState_.peSparseState);
-                const auto settlement =
-                    dxmt9::d3d9::pe::settleRecorderAppend({
-                        .phase =
-                            dxmt9::d3d9::pe::AppendSettlement::Prepared,
-                        .appendSucceeded = ok,
-                    });
-                const bool settled =
-                    dxmt9::d3d9::pe::acceptPreparedSparseState(
-                        recorderState_.peState, recorderState_.peConsts,
-                        recorderState_.peSparseState, settlement,
-                        scalarSemanticObserver(),
-                        builder.activeRecordOrdinal());
-                phase.recordEncode(t0);
-                if (ok && !settled) {
-                    // The record is already durable in the builder, but its
-                    // semantic settlement failed.  Retrying could duplicate
-                    // the accepted wire record, so enter the existing
-                    // recorder fail-stop state rather than returning S_OK
-                    // with stale PendingDelta.
-                    poisonStateBlockTransaction();
-                    return D3DERR_DEVICELOST;
-                }
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-    }
+    HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count);
 
     HRESULT appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
                                              INT baseVertex,
                                              UINT minVertex,
                                              UINT numVertices,
                                              UINT startIndex,
-                                             UINT count) {
-        Dxmt9PeAppendFamilyScope appendFamily(diagnostics_.get(), PeInterAppendCallFamily::Draw);
-        // See appendDrawPrimitiveRecord: recursive re-entry on an
-        // already-held recorderState_.recorderMutex is cheaper than the repeated cold
-        // acquisitions the nested const-flush + draw appends would do.
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
-        if (!inlineConstDelta) {
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
-        }
-        dxmt9::d3d9::pe::PeDrawParams params{};
-        params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-        params.primitiveType = static_cast<std::uint32_t>(type);
-        params.baseVertex = baseVertex;
-        params.minVertex = minVertex;
-        params.numVertices = numVertices;
-        params.startIndex = startIndex;
-        params.primitiveCount = count;
-        if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
-                                       inlineConstDelta)) {
-            return D3DERR_INVALIDCALL;
-        }
-        const std::uint64_t ibWireValue =
-            d9cWireHandleValue(toWireHandle(recorderState_.peBindingView.indexBuffer.object));
-        // Whether the index section was actually emitted decides the tracking
-        // update, exactly as the legacy code keyed it on the final ibValid --
-        // which the append-time dependency checkpoint could itself set.
-        bool indexSectionEmitted = false;
-        const HRESULT hr = appendRecord(
-            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-            kLegacyDrawIndexedPrimitiveSizeHint +
-                sparseConstPayloadBytes(),
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                if (!dxmt9::d3d9::pe::addChunkContextSections(
-                    currentChunkContext(), recorderState_.peState, recorderState_.peBindingView, params,
-                    recorderState_.peSparseScratch,
-                        recorderState_.peSparseState)) {
-                    return D3DERR_INVALIDCALL;
-                }
-                indexSectionEmitted = !recorderState_.peSparseState.indexBuffers.empty();
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                    builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-                    recorderState_.peSparseHeader, recorderState_.peSparseState);
-                const auto settlement =
-                    dxmt9::d3d9::pe::settleRecorderAppend({
-                        .phase =
-                            dxmt9::d3d9::pe::AppendSettlement::Prepared,
-                        .appendSucceeded = ok,
-                    });
-                const bool settled =
-                    dxmt9::d3d9::pe::acceptPreparedSparseState(
-                        recorderState_.peState, recorderState_.peConsts,
-                        recorderState_.peSparseState, settlement,
-                        scalarSemanticObserver(),
-                        builder.activeRecordOrdinal());
-                phase.recordEncode(t0);
-                if (ok && !settled) {
-                    poisonStateBlockTransaction();
-                    return D3DERR_DEVICELOST;
-                }
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        if (SUCCEEDED(hr)) {
-            if (indexSectionEmitted) {
-                submittedIndexBufferWireValue_ = ibWireValue;
-                submittedIndexBufferKnown_ = true;
-            }
-        }
-        return hr;
-    }
+                                             UINT count);
 
     bool pendingChunkReferencesBuffer(
-        const dxmt9::d3d9::pe::BufferRef &buffer) const {
-        if (!buffer.object) {
-            return false;
-        }
-        return recorderState_.commandChunk.referencesObject(
-            dxmt9::d3d9::pe::localIdentity(buffer));
-    }
+        const dxmt9::d3d9::pe::BufferRef &buffer) const;
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
                                         UINT count,
                                         const void* data,
-                                        UINT stride) {
-        return appendDrawPrimitiveUPRecordWithFvf(type, count, data, stride,
-                                                  false, 0);
-    }
+                                        UINT stride);
 
     HRESULT appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type,
                                                UINT count,
@@ -3101,133 +2226,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                                bool overrideFvf,
                                                DWORD packetFvf,
                                                bool overrideVertexShaderNull = false,
-                                               bool forceFullSnapshot = false) {
-        Dxmt9PeAppendFamilyScope appendFamily(diagnostics_.get(), PeInterAppendCallFamily::Draw);
-        // See appendDrawPrimitiveRecord: recursive re-entry on an
-        // already-held recorderState_.recorderMutex is cheaper than the repeated cold
-        // acquisitions the nested const-flush + draw appends would do.
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const HRESULT constHr = flushPendingConsts();
-        if (FAILED(constHr)) return constHr;
-        // Payload sizing moved AHEAD of the state build, because the producer
-        // reads the payload spans while building. It is pure input validation --
-        // type/count/stride/data only, nothing the state build produces -- and
-        // consumes no pending state, so failing here instead of after the build
-        // returns the same D3DERR_INVALIDCALL from the same inputs.
-        std::uint32_t vertexBytes = 0;
-        if (!checkedByteCount(primitiveVertexCount(type, count), stride, vertexBytes) ||
-            (vertexBytes != 0 && !data)) {
-            return D3DERR_INVALIDCALL;
-        }
-        IDirect3DVertexDeclaration9* overrideDecl = nullptr;
-        if (overrideFvf) {
-            const HRESULT fvfHr =
-                resolveImplicitDeclForFvf(packetFvf, &overrideDecl);
-            if (FAILED(fvfHr)) return fvfHr;
-        }
-        const DWORD savedFvf = fvf_;
-        IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
-        IDirect3DVertexShader9* savedVs = vs_;
-        const auto savedBindingFvf = recorderState_.peBindingView.fvf;
-        const auto savedBindingVdecl = recorderState_.peBindingView.vdecl;
-        const auto savedBindingVs = recorderState_.peBindingView.vs;
-        const bool savedPendingFvf = recorderState_.peState.pendingFvf();
-        const bool savedPendingVdecl = recorderState_.peState.pendingVdecl();
-        const bool savedPendingVs = recorderState_.peState.pendingVs();
-        if (overrideFvf) {
-            D3D9PeValidatedDeclaration validatedOverride{};
-            const HRESULT validationHr = D3D9PeValidateVertexDecl(
-                overrideDecl, static_cast<IDirect3DDevice9*>(this),
-                &validatedOverride);
-            if (FAILED(validationHr)) return validationHr;
-            fvf_ = packetFvf;
-            vdecl_ = overrideDecl;
-            recorderState_.peBindingView.fvf = packetFvf;
-            recorderState_.peBindingView.vdecl = validatedOverride.wire();
-            recorderState_.peState.maintenance().pendingFvf() = true;
-            recorderState_.peState.maintenance().pendingVdecl() = true;
-        }
-        if (overrideVertexShaderNull) {
-            vs_ = nullptr;
-            recorderState_.peBindingView.vs = {};
-            recorderState_.peState.maintenance().pendingVs() = true;
-        }
-        // The override window has to cover populateBindingView, which reads
-        // fvf_ / vdecl_ / vs_, so it wraps the whole state build exactly as it
-        // wrapped the fat-packet build before.
-        dxmt9::d3d9::pe::PeDrawParams params{};
-        params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
-        params.primitiveType = static_cast<std::uint32_t>(type);
-        params.primitiveCount = count;
-        params.stride = stride;
-        // Borrowed for this call only; cleared below so no later build can read
-        // a dangling span. Nothing else assigns recorderState_.peSparsePayloads, so empty is
-        // the invariant every non-UP record relies on.
-        recorderState_.peSparsePayloads.upVertex = std::span<const std::byte>(
-            static_cast<const std::byte*>(data), vertexBytes);
-        const bool built =
-            buildSparseStateForRecord(params, forceFullSnapshot);
-        if (overrideFvf) {
-            fvf_ = savedFvf;
-            vdecl_ = savedVdecl;
-            recorderState_.peBindingView.fvf = savedBindingFvf;
-            recorderState_.peBindingView.vdecl = savedBindingVdecl;
-            recorderState_.peState.maintenance().pendingFvf() = savedPendingFvf;
-            recorderState_.peState.maintenance().pendingVdecl() = savedPendingVdecl;
-        }
-        if (overrideVertexShaderNull) {
-            vs_ = savedVs;
-            recorderState_.peBindingView.vs = savedBindingVs;
-            recorderState_.peState.maintenance().pendingVs() = savedPendingVs;
-        }
-        if (!built) {
-            recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
-            return D3DERR_INVALIDCALL;
-        }
-
-        // sizeHint stays the legacy header+payload size the capacity precheck
-        // saw before, so chunk seal cadence is unchanged. No chunk-context step:
-        // a UP draw binds no app buffer, so there is nothing for the destination
-        // chunk to have retained -- matching both legacy UP call sites, which ran
-        // neither dependency checkpoint.
-        const HRESULT hr = appendRecord(
-            D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-            kLegacyDrawPrimitiveUPSizeHint + vertexBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                    builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-                    recorderState_.peSparseHeader, recorderState_.peSparseState);
-                if (!overrideFvf && !overrideVertexShaderNull) {
-                    const auto settlement =
-                        dxmt9::d3d9::pe::settleRecorderAppend({
-                            .phase =
-                                dxmt9::d3d9::pe::AppendSettlement::Prepared,
-                            .appendSucceeded = ok,
-                        });
-                    const bool settled =
-                        dxmt9::d3d9::pe::acceptPreparedSparseState(
-                            recorderState_.peState, recorderState_.peConsts,
-                            recorderState_.peSparseState, settlement,
-                            scalarSemanticObserver(),
-                            builder.activeRecordOrdinal());
-                    if (ok && !settled) {
-                        poisonStateBlockTransaction();
-                        phase.recordEncode(t0);
-                        return D3DERR_DEVICELOST;
-                    }
-                }
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
-        if (SUCCEEDED(hr)) {
-            recordDrawPrimitiveUPCopy(vertexBytes);
-        }
-        return hr;
-    }
+                                               bool forceFullSnapshot = false);
 
     HRESULT appendDrawIndexedPrimitiveUPRecord(D3DPRIMITIVETYPE type,
                                                UINT minVertex,
@@ -3236,11 +2235,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                                const void* indexData,
                                                D3DFORMAT indexFormat,
                                                const void* vertexData,
-                                               UINT stride) {
-        return appendDrawIndexedPrimitiveUPRecordWithFvf(
-            type, minVertex, numVertices, count, indexData, indexFormat,
-            vertexData, stride, false, 0);
-    }
+                                               UINT stride);
 
     HRESULT appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type,
                                                       UINT minVertex,
@@ -3253,139 +2248,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                                       bool overrideFvf,
                                                       DWORD packetFvf,
                                                       bool overrideVertexShaderNull = false,
-                                                      bool forceFullSnapshot = false) {
-        Dxmt9PeAppendFamilyScope appendFamily(diagnostics_.get(), PeInterAppendCallFamily::Draw);
-        // See appendDrawPrimitiveRecord: recursive re-entry on an
-        // already-held recorderState_.recorderMutex is cheaper than the repeated cold
-        // acquisitions the nested const-flush + draw appends would do.
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const HRESULT constHr = flushPendingConsts();
-        if (FAILED(constHr)) return constHr;
-        // Payload sizing moved AHEAD of the state build; see the non-indexed UP
-        // site for why that is behaviour-preserving.
-        const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
-        std::uint32_t indexBytes = 0;
-        std::uint32_t vertexBytes = 0;
-        if (minVertex > 0xffffffffu - numVertices) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (!checkedByteCount(primitiveVertexCount(type, count), indexSize, indexBytes) ||
-            !checkedByteCount(minVertex + numVertices, stride, vertexBytes) ||
-            (indexBytes != 0 && !indexData) ||
-            (vertexBytes != 0 && !vertexData)) {
-            return D3DERR_INVALIDCALL;
-        }
-        IDirect3DVertexDeclaration9* overrideDecl = nullptr;
-        if (overrideFvf) {
-            const HRESULT fvfHr =
-                resolveImplicitDeclForFvf(packetFvf, &overrideDecl);
-            if (FAILED(fvfHr)) return fvfHr;
-        }
-        const DWORD savedFvf = fvf_;
-        IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
-        IDirect3DVertexShader9* savedVs = vs_;
-        const auto savedBindingFvf = recorderState_.peBindingView.fvf;
-        const auto savedBindingVdecl = recorderState_.peBindingView.vdecl;
-        const auto savedBindingVs = recorderState_.peBindingView.vs;
-        const bool savedPendingFvf = recorderState_.peState.pendingFvf();
-        const bool savedPendingVdecl = recorderState_.peState.pendingVdecl();
-        const bool savedPendingVs = recorderState_.peState.pendingVs();
-        if (overrideFvf) {
-            D3D9PeValidatedDeclaration validatedOverride{};
-            const HRESULT validationHr = D3D9PeValidateVertexDecl(
-                overrideDecl, static_cast<IDirect3DDevice9*>(this),
-                &validatedOverride);
-            if (FAILED(validationHr)) return validationHr;
-            fvf_ = packetFvf;
-            vdecl_ = overrideDecl;
-            recorderState_.peBindingView.fvf = packetFvf;
-            recorderState_.peBindingView.vdecl = validatedOverride.wire();
-            recorderState_.peState.maintenance().pendingFvf() = true;
-            recorderState_.peState.maintenance().pendingVdecl() = true;
-        }
-        if (overrideVertexShaderNull) {
-            vs_ = nullptr;
-            recorderState_.peBindingView.vs = {};
-            recorderState_.peState.maintenance().pendingVs() = true;
-        }
-        dxmt9::d3d9::pe::PeDrawParams params{};
-        params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
-        params.primitiveType = static_cast<std::uint32_t>(type);
-        params.minVertex = minVertex;
-        params.numVertices = numVertices;
-        params.primitiveCount = count;
-        params.stride = stride;
-        params.indexFormat = static_cast<std::uint32_t>(indexFormat);
-        // Borrowed for this call only; cleared below. Index bytes precede vertex
-        // bytes in the record, and appendSparseRecord lays them out in that
-        // order from these two spans.
-        recorderState_.peSparsePayloads.upIndex = std::span<const std::byte>(
-            static_cast<const std::byte*>(indexData), indexBytes);
-        recorderState_.peSparsePayloads.upVertex = std::span<const std::byte>(
-            static_cast<const std::byte*>(vertexData), vertexBytes);
-        const bool built =
-            buildSparseStateForRecord(params, forceFullSnapshot);
-        if (overrideFvf) {
-            fvf_ = savedFvf;
-            vdecl_ = savedVdecl;
-            recorderState_.peBindingView.fvf = savedBindingFvf;
-            recorderState_.peBindingView.vdecl = savedBindingVdecl;
-            recorderState_.peState.maintenance().pendingFvf() = savedPendingFvf;
-            recorderState_.peState.maintenance().pendingVdecl() = savedPendingVdecl;
-        }
-        if (overrideVertexShaderNull) {
-            vs_ = savedVs;
-            recorderState_.peBindingView.vs = savedBindingVs;
-            recorderState_.peState.maintenance().pendingVs() = savedPendingVs;
-        }
-        if (!built) {
-            recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
-            return D3DERR_INVALIDCALL;
-        }
-
-        // No chunk-context step and, critically, no index-buffer section: an
-        // indexed UP draw carries its indices inline and binds no index buffer.
-        // dxmt9_pe_producer.cpp's indexedDraw predicate excludes _UP for exactly
-        // this reason.
-        const HRESULT hr = appendRecord(
-            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-            kLegacyDrawIndexedPrimitiveUPSizeHint + indexBytes +
-                vertexBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                    builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-                    recorderState_.peSparseHeader, recorderState_.peSparseState);
-                if (!overrideFvf && !overrideVertexShaderNull) {
-                    const auto settlement =
-                        dxmt9::d3d9::pe::settleRecorderAppend({
-                            .phase =
-                                dxmt9::d3d9::pe::AppendSettlement::Prepared,
-                            .appendSucceeded = ok,
-                        });
-                    const bool settled =
-                        dxmt9::d3d9::pe::acceptPreparedSparseState(
-                            recorderState_.peState, recorderState_.peConsts,
-                            recorderState_.peSparseState, settlement,
-                            scalarSemanticObserver(),
-                            builder.activeRecordOrdinal());
-                    if (ok && !settled) {
-                        poisonStateBlockTransaction();
-                        phase.recordEncode(t0);
-                        return D3DERR_DEVICELOST;
-                    }
-                }
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
-        if (SUCCEEDED(hr)) {
-            recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
-        }
-        return hr;
-    }
+                                                      bool forceFullSnapshot = false);
 
     HRESULT flushPeRecorder(
         PeRecorderFlushReason reason = PeRecorderFlushReason::Barrier,
@@ -3410,119 +2273,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                      recordedMember,
                                  std::uint32_t start, std::uint32_t count,
                                  const void* data,
-                                 std::size_t elemSize) noexcept {
-        using namespace dxmt9::d3d9::pe;
-        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
-            return D3DERR_DEVICELOST;
-        }
-        if (count == 0u) return S_OK;
-        const auto* bytes = static_cast<const std::uint8_t*>(data);
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            HRESULT recordingHr = D3DERR_INVALIDCALL;
-            const bool entered =
-                recorderState_.stateBlockTransaction.withRecordingWriter(
-                    [&](auto& writer) noexcept {
-                StateBlockConstShadow& recorded =
-                    writer.constants().*recordedMember;
-                try {
-                    for (std::uint32_t i = 0u; i < count; ++i) {
-                        const std::uint32_t reg = start + i;
-                        const std::size_t offset =
-                            static_cast<std::size_t>(reg) * elemSize;
-                        const bool liveContains =
-                            live.values.size() >= offset + elemSize;
-                        const bool pendingContains =
-                            reg < live.dirtyElems.size() &&
-                            live.dirtyElems[reg] != 0u;
-                        const StateWritePlan plan = planRecorderStateWrite(
-                            StateWriteFacts{
-                                .phase = RecorderPhase::Recording,
-                                .origin = WriteOrigin::ExplicitSet,
-                                .liveContains = liveContains,
-                                .liveEquals =
-                                    liveContains && constShadowElemEquals(
-                                        live, reg, bytes +
-                                            static_cast<std::size_t>(i) * elemSize,
-                                        elemSize),
-                                .pendingContains = pendingContains,
-                            });
-                        if (!plan.writeRecorded() || plan.writeLive() ||
-                            plan.writePending()) {
-                            recordingHr = D3DERR_INVALIDCALL;
-                            return;
-                        }
-                    }
-                    recorded.record(start, count, data, elemSize);
-                    recordingHr = S_OK;
-                } catch (const std::bad_alloc&) {
-                    recordingHr = E_OUTOFMEMORY;
-                }
-            });
-            return entered ? recordingHr : D3DERR_INVALIDCALL;
-        }
-
-        bool touch = false;
-        for (std::uint32_t i = 0u; i < count; ++i) {
-            const std::uint32_t reg = start + i;
-            const std::size_t offset =
-                static_cast<std::size_t>(reg) * elemSize;
-            const bool liveContains = live.values.size() >= offset + elemSize;
-            const bool pendingContains =
-                reg < live.dirtyElems.size() && live.dirtyElems[reg] != 0u;
-            const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-                .phase = RecorderPhase::Live,
-                .origin = WriteOrigin::ExplicitSet,
-                .liveContains = liveContains,
-                .liveEquals = liveContains && constShadowElemEquals(
-                    live, reg,
-                    bytes + static_cast<std::size_t>(i) * elemSize, elemSize),
-                .pendingContains = pendingContains,
-            });
-            touch = touch || plan.writePending();
-        }
-        if (touch) touchConstShadow(live, start, count, data, elemSize);
-        return S_OK;
-    }
+                                 std::size_t elemSize) noexcept;
 
     static VsConstRangeChange analyzeConstShadowChange(
         const ConstShadow& shadow,
         std::uint32_t start,
         std::uint32_t count,
         const void* data,
-        std::size_t elemSize) {
-        VsConstRangeChange change{};
-        if (count == 0u || !data) {
-            return change;
-        }
-        const auto* src = static_cast<const std::uint8_t*>(data);
-        std::uint32_t firstChanged = count;
-        std::uint32_t lastChanged = 0u;
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const auto* elem = src + static_cast<std::size_t>(i) * elemSize;
-            if (constShadowElemEquals(shadow, start + i, elem, elemSize)) {
-                continue;
-            }
-            ++change.changedRegs;
-            firstChanged = std::min<std::uint32_t>(firstChanged, i);
-            lastChanged = i + 1u;
-        }
-        if (change.changedRegs != 0u) {
-            change.changedSpanRegs = lastChanged - firstChanged;
-        }
-        return change;
-    }
+        std::size_t elemSize);
 
     static std::uint32_t countDirtyConstRegs(const ConstShadow& shadow,
                                              std::uint32_t start,
-                                             std::uint32_t end) {
-        std::uint32_t count = 0u;
-        const std::uint32_t dirtyEnd = std::min<std::uint32_t>(
-            end, static_cast<std::uint32_t>(shadow.dirtyElems.size()));
-        for (std::uint32_t reg = start; reg < dirtyEnd; ++reg) {
-            count += shadow.dirtyElems[reg] != 0u ? 1u : 0u;
-        }
-        return count;
-    }
+                                             std::uint32_t end);
 
     // Emit one record covering the pending merged dirty range, then clear it.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize);
@@ -3566,35 +2328,12 @@ private:
     HRESULT FlushPeRecorderForChild() noexcept;
 
 public:
-    void LockStateBlockOperationForChild() noexcept {
-        if (recorderState_.recorderLockRequired) recorderState_.recorderMutex.lock();
-    }
-    void UnlockStateBlockOperationForChild() noexcept {
-        if (recorderState_.recorderLockRequired) recorderState_.recorderMutex.unlock();
-    }
-    bool IsStateBlockRecorderPoisonedForChild() const noexcept {
-        return recorderState_.stateBlockTransaction.isPoisoned();
-    }
-    void DiscardPreparedStateBlockApplyForChild() noexcept {
-        discardPreparedStateBlockApply();
-    }
-    void PoisonStateBlockRecorderForChild() noexcept {
-        poisonStateBlockTransaction();
-    }
-    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept {
-        if (!buffer) {
-            return S_OK;
-        }
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const bool referenced = recorderState_.commandChunk.referencesObject(
-            dxmt9::d3d9::pe::PeLocalObjectIdentity{
-                .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .object = buffer});
-        if (!referenced) {
-            return S_OK;
-        }
-        return flushPeRecorder(PeRecorderFlushReason::Child);
-    }
+    void LockStateBlockOperationForChild() noexcept;
+    void UnlockStateBlockOperationForChild() noexcept;
+    bool IsStateBlockRecorderPoisonedForChild() const noexcept;
+    void DiscardPreparedStateBlockApplyForChild() noexcept;
+    void PoisonStateBlockRecorderForChild() noexcept;
+    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept;
     void NotifyRenderTapeObjectDefineForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
@@ -3688,42 +2427,15 @@ public:
         D9CShader *shader,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         uint32_t stage) noexcept;
-    bool IsStateBlockRecordingForChild() const noexcept {
-        return recorderState_.stateBlockTransaction.isRecording();
-    }
-    void InvalidateStateBlockShadowForChild() noexcept {
-        recorderState_.peState.maintenance().clearServerShadowTables();
-        clearPendingHotState();
-    }
-    void AddDefaultPoolResourceRefForChild() noexcept {
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        ++defaultPoolResourceRefs_;
-    }
-    void ReleaseDefaultPoolResourceRefForChild() noexcept {
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        if (defaultPoolResourceRefs_ != 0) {
-            --defaultPoolResourceRefs_;
-        }
-    }
-    bool IsChunkRecorderEnabledForChild() const noexcept {
-        return true;
-    }
+    bool IsStateBlockRecordingForChild() const noexcept;
+    void InvalidateStateBlockShadowForChild() noexcept;
+    void AddDefaultPoolResourceRefForChild() noexcept;
+    void ReleaseDefaultPoolResourceRefForChild() noexcept;
+    bool IsChunkRecorderEnabledForChild() const noexcept;
 
     HRESULT AppendQueryIssueForChild(
         std::uint32_t flags,
-        const dxmt9::d3d9::pe::QueryRef& query) noexcept {
-        return appendRecord(
-            D9C_COMMAND_RECORD_QUERY_ISSUE,
-            kLegacyQueryIssueSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendQueryIssue(
-                    builder, flags, query);
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-    }
+        const dxmt9::d3d9::pe::QueryRef& query) noexcept;
 
     // PE-shadow stateblock support.
     //
@@ -3751,31 +2463,16 @@ public:
                    HWND window, bool extended,
                    DWORD implicitSwapchainFlags);
 
-    bool commandChunkReady() const noexcept {
-        return recorderState_.commandChunkNegotiated;
-    }
+    bool commandChunkReady() const noexcept;
 
-    D3D9PeStateBlockContext *stateBlockContext() noexcept {
-        return &stateBlockContext_;
-    }
-    D3D9PeBufferContext *bufferContext() noexcept { return &bufferContext_; }
-    D3D9PeSurfaceTextureContext *surfaceTextureContext() noexcept {
-        return &surfaceTextureContext_;
-    }
-    D3D9PeQueryContext *queryContext() noexcept { return &queryContext_; }
-    D3D9PePresentationContext *presentationContext() noexcept {
-        return &presentationContext_;
-    }
-    D3D9PeShaderDeclarationContext *shaderDeclarationContext() noexcept {
-        return &shaderDeclarationContext_;
-    }
+    D3D9PeStateBlockContext *stateBlockContext() noexcept;
+    D3D9PeBufferContext *bufferContext() noexcept;
+    D3D9PeSurfaceTextureContext *surfaceTextureContext() noexcept;
+    D3D9PeQueryContext *queryContext() noexcept;
+    D3D9PePresentationContext *presentationContext() noexcept;
+    D3D9PeShaderDeclarationContext *shaderDeclarationContext() noexcept;
 
-    D3D9PeDiagnosticObserver* diagnosticObserverForChild() noexcept {
-        if (!diagnostics_ || !diagnostics_->config.recorderStats) {
-            return nullptr;
-        }
-        return &diagnostics_->childObserver;
-    }
+    D3D9PeDiagnosticObserver* diagnosticObserverForChild() noexcept;
 
     // Debug-only companion to recorderState_.recorderLockRequired: when the recorder lock
     // is being skipped (the app did not pass D3DCREATE_MULTITHREADED and
@@ -3788,10 +2485,7 @@ public:
     // R-BACK-43.5 shape (c): `recorderState_.recorderLockRequired` is the lock witness —
     // when it is set, recorderState_.recorderMutex (not thread confinement) is what makes
     // the recorder safe, so any thread may proceed.
-    void assertRecorderThreadConfined() const noexcept {
-        DXMT_ASSERT_OWNED_BY_OR_LOCKED(recorderState_.recorderOwnership,
-                                        recorderState_.recorderLockRequired);
-    }
+    void assertRecorderThreadConfined() const noexcept;
 
     ~D3D9DeviceImpl();
 
@@ -3836,165 +2530,7 @@ public:
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pPP) noexcept override;
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
-                                       HWND wnd, const RGNDATA* dirty) noexcept override {
-        dxmt9PeSetCurrentCallName("Present");
-        const bool recordPresentTiming = dxmt9PeRecorderStatsEnabled();
-        const std::uint32_t presentThreadId =
-            recordPresentTiming ? dxmt9PeCurrentThreadId() : 0u;
-        const auto presentTimingEnter = recordPresentTiming
-            ? std::chrono::steady_clock::now()
-            : std::chrono::steady_clock::time_point{};
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        const bool renderTapeCaptureWasActive =
-            peCaptureState_ &&
-            peCaptureState_->renderTapeCapture.state() ==
-                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
-        const auto presentTimingStart = recordPresentTiming
-            ? std::chrono::steady_clock::now()
-            : std::chrono::steady_clock::time_point{};
-        auto presentTimingBarrierEnd = presentTimingStart;
-        auto presentTimingAppendEnd = presentTimingStart;
-        auto presentTimingFlushEnd = presentTimingStart;
-        // T2 device-lost gate: render-path methods must early-return
-        // D3DERR_DEVICELOST while the device awaits Reset.
-        if (deviceNotReset_) {
-            if (peCaptureState_)
-                abortRenderTapeCapture("device_lost");
-            return D3DERR_DEVICELOST;
-        }
-        dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
-                            this, wnd,
-                            src ? "<custom>" : "<full>",
-                            dst ? "<custom>" : "<full>",
-                            dirty);
-        D9CRect cs{}, cd{};
-        if (src) cs = toR(*src); if (dst) cd = toR(*dst);
-        // Recorder-design Present: append a PRESENT record to the
-        // current chunk after draining hot state + const dirty ranges,
-        // then commit the chunk synchronously. The server-side
-        // importer dispatches dxmt9c_device_present after replaying
-        // every preceding draw / clear / state in the chunk — so
-        // ordering is preserved and Present serves as the natural
-        // chunk boundary. Dirty-region payload is dropped (the
-        // backend present path doesn't consume it).
-        const HRESULT barrierHr = chunkBarrierFlush();
-        if (recordPresentTiming) {
-            presentTimingBarrierEnd = std::chrono::steady_clock::now();
-            presentTimingAppendEnd = presentTimingBarrierEnd;
-            presentTimingFlushEnd = presentTimingBarrierEnd;
-        }
-        if (FAILED(barrierHr)) {
-            if (recordPresentTiming) {
-                dxmt9DeviceInfoLog(
-                    "pe_present_timing device=%p thread_id=0x%lx "
-                    "hr=0x%08x total_ms=%.3f "
-                    "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=0.000 "
-                    "flush_ms=0.000",
-                    this, static_cast<unsigned long>(presentThreadId),
-                    static_cast<unsigned>(barrierHr),
-                    dxmt9ElapsedMs(presentTimingEnter, presentTimingBarrierEnd),
-                    dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
-                    dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd));
-            }
-            return barrierHr;
-        }
-
-        IDirect3DSurface9* presentSource = nullptr;
-        const HRESULT presentSourceHr = GetBackBuffer(
-            0u, 0u, D3DBACKBUFFER_TYPE_MONO, &presentSource);
-        if (FAILED(presentSourceHr) || !presentSource) {
-            return FAILED(presentSourceHr) ? presentSourceHr
-                                           : D3DERR_INVALIDCALL;
-        }
-        D3D9PeValidatedSurface validatedPresentSource{};
-        const HRESULT presentValidationHr = D3D9PeValidateSurface(
-            presentSource, static_cast<IDirect3DDevice9*>(this),
-            &validatedPresentSource);
-        if (FAILED(presentValidationHr) || !validatedPresentSource.wire().valid()) {
-            presentSource->Release();
-            return D3DERR_INVALIDCALL;
-        }
-        const auto presentSourceWire = validatedPresentSource.wire();
-
-        // sizeHint stays kLegacyPresentSizeHint even though no legacy
-        // record is built: it is what the capacity precheck saw before, so
-        // chunk seal cadence is unchanged.
-        const D9CCommandChunkWirePresent presentWire{
-            .hwnd = (uint64_t)(uintptr_t)wnd,
-            .flags = 0,
-            .hasSrc = src ? 1u : 0u,
-            .hasDst = dst ? 1u : 0u,
-            .sourceHandleIndex = 0u,
-            .src = src ? cs : D9CRect{},
-            .dst = dst ? cd : D9CRect{},
-        };
-        const HRESULT appendHr = appendRecord(
-            D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok =
-                    dxmt9::d3d9::pe::appendPresent(
-                        builder, presentWire, presentSourceWire);
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        presentSource->Release();
-        if (recordPresentTiming) {
-            presentTimingAppendEnd = std::chrono::steady_clock::now();
-            presentTimingFlushEnd = presentTimingAppendEnd;
-        }
-        if (FAILED(appendHr)) {
-            if (recordPresentTiming) {
-                dxmt9DeviceInfoLog(
-                    "pe_present_timing device=%p thread_id=0x%lx "
-                    "hr=0x%08x total_ms=%.3f "
-                    "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
-                    "flush_ms=0.000",
-                    this, static_cast<unsigned long>(presentThreadId),
-                    static_cast<unsigned>(appendHr),
-                    dxmt9ElapsedMs(presentTimingEnter, presentTimingAppendEnd),
-                    dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
-                    dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
-                    dxmt9ElapsedMs(presentTimingBarrierEnd, presentTimingAppendEnd));
-            }
-            return appendHr;
-        }
-        // Force-commit so Present runs at the bridge boundary even
-        // if the chunk is below the byte/record threshold.
-        const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
-        if (recordPresentTiming) {
-            presentTimingFlushEnd = std::chrono::steady_clock::now();
-            dxmt9DeviceInfoLog(
-                "pe_present_timing device=%p thread_id=0x%lx "
-                "hr=0x%08x total_ms=%.3f "
-                "lock_wait_ms=%.3f barrier_ms=%.3f append_ms=%.3f "
-                "flush_ms=%.3f",
-                this, static_cast<unsigned long>(presentThreadId),
-                static_cast<unsigned>(flushHr),
-                dxmt9ElapsedMs(presentTimingEnter, presentTimingFlushEnd),
-                dxmt9ElapsedMs(presentTimingEnter, presentTimingStart),
-                dxmt9ElapsedMs(presentTimingStart, presentTimingBarrierEnd),
-                dxmt9ElapsedMs(presentTimingBarrierEnd, presentTimingAppendEnd),
-                dxmt9ElapsedMs(presentTimingAppendEnd, presentTimingFlushEnd));
-        }
-        if (SUCCEEDED(flushHr)) {
-            logVsConstSetterRangePerf("present");
-            logPeRecorderStats("present");
-            markPePresentReturnedForCadence();
-            notePeStatsDecimationPresent();
-            notePeThreadSamplerPresent();
-            if (renderTapeCaptureWasActive) {
-                finishRenderTapeCaptureAtPresentBoundary();
-            } else if (peCaptureState_) {
-                // The first successful Present is only the arm boundary;
-                // the next Present owns the one captured interval.
-                (void)armRenderTapeCaptureAtPresentBoundary();
-            }
-        }
-        return flushHr;
-    }
+                                       HWND wnd, const RGNDATA* dirty) noexcept override;
 
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT sc, UINT idx,
                                              D3DBACKBUFFER_TYPE type,
@@ -4090,934 +2626,300 @@ public:
     /* ── render targets ── */
 
     HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD idx,
-                                               IDirect3DSurface9* pSurf) noexcept override {
-        return withPeCallAndHotStateSetter(
-            "SetRenderTarget", DXMT9_PE_CALLSITE_PC(), nullptr,
-            PeHotStateSetterFamily::RenderTarget, nullptr,
-            [&](auto& peCall, auto& hotSetter)
-                __attribute__((always_inline)) noexcept -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("SetRenderTarget", hr);
-        };
-        dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
-                            this, (unsigned)idx, pSurf);
-        if (idx >= 4) return finishPeCall(D3DERR_INVALIDCALL);
-        D3D9PeValidatedSurface validatedSurface{};
-        const HRESULT membershipHr = D3D9PeValidateSurface(
-            pSurf, static_cast<IDirect3DDevice9*>(this), &validatedSurface);
-        if (FAILED(membershipHr)) return finishPeCall(membershipHr);
-        D3DSURFACE_DESC primaryDesc{};
-        if (idx == 0 && pSurf) {
-            const HRESULT descHr = pSurf->GetDesc(&primaryDesc);
-            if (FAILED(descHr)) return finishPeCall(descHr);
-        }
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    setRecordedRef(
-                        writer.renderTargets(),
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::renderTargets>(idx),
-                        validatedSurface);
-                });
-            hotSetter.markDirty();
-            return finishPeCall(S_OK);
-        }
-        if (idx == 0) {
-            setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
-        }
-        const bool wasExplicit = rtSlotExplicit_[idx];
-        const bool valueChanged = rtSlots_[idx] != pSurf;
-        if (valueChanged || !wasExplicit) {
-            recorderState_.peState.transition().bindRenderTarget(idx, [&]() noexcept {
-                rtSlotExplicit_[idx] = true;
-                if (valueChanged) setRef(rtSlots_[idx], pSurf);
-                recorderState_.peBindingView.renderTargets[idx] =
-                    validatedSurface.wire();
-                recorderState_.peBindingView.rtExplicitMask =
-                    currentRtExplicitMask();
-            });
-            hotSetter.markDirty();
-        } else {
-            rtSlotExplicit_[idx] = true;
-        }
-        if (idx == 0 && pSurf) {
-            const uint32_t w = std::max<uint32_t>(1u, primaryDesc.Width);
-            const uint32_t h = std::max<uint32_t>(1u, primaryDesc.Height);
-            recorderState_.peState.transition().setViewport(
-                D9CViewport{0, 0, w, h, 0.0f, 1.0f});
-            recorderState_.peState.transition().setScissor(
-                D9CRect{0, 0, static_cast<int32_t>(w),
-                        static_cast<int32_t>(h)});
-            hotSetter.markDirty();
-        }
-        return finishPeCall(S_OK);
-            });
-    }
+                                               IDirect3DSurface9* pSurf) noexcept override;
 
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD idx,
                                                IDirect3DSurface9** ppS) noexcept override;
 
-    HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::DepthStencil,
-            "SetDepthStencilSurface", nullptr, nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
-        D3D9PeValidatedSurface validatedSurface{};
-        const HRESULT membershipHr = D3D9PeValidateSurface(
-            pSurf, static_cast<IDirect3DDevice9*>(this), &validatedSurface);
-        if (FAILED(membershipHr)) return membershipHr;
-        if (pSurf) {
-            // visual_multisample_rt_ds_mismatch_policy: the DS multisample
-            // type must match the bound RT[0] multisample type. Query both
-            // descs (via the C ABI helpers) and reject the mismatch.
-            if (rtSlots_[0]) {
-                D9CSurface* dsRaw = validatedSurface.raw();
-                D9CSurface* rtRaw = validatedRawSurface(rtSlots_[0]);
-                if (dsRaw && rtRaw) {
-                    D9CSurfaceDesc dsDesc{};
-                    D9CSurfaceDesc rtDesc{};
-                    if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(dsRaw, &dsDesc)))
-                            && SUCCEEDED(hr32(dxmt9c_surface_get_desc(rtRaw, &rtDesc)))
-                            && dsDesc.multiSampleType != rtDesc.multiSampleType) {
-                        return D3DERR_INVALIDCALL;
-                    }
-                }
-            }
-        }
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    setRecordedRef(
-                        writer.depthStencil(),
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::depthStencil>(0u),
-                        validatedSurface);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        const bool wasExplicit = dsSurfaceExplicit_;
-        const bool valueChanged = dsSurface_ != pSurf;
-        if (valueChanged || !wasExplicit) {
-            recorderState_.peState.transition().bindDepthStencil([&]() noexcept {
-                dsSurfaceExplicit_ = true;
-                if (valueChanged) setRef(dsSurface_, pSurf);
-                recorderState_.peBindingView.depthStencil =
-                    validatedSurface.wire();
-            });
-            hotSetter.markDirty();
-        } else {
-            dsSurfaceExplicit_ = true;
-        }
-        return S_OK;
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override;
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override;
 
     /* ── scene ── */
-    HRESULT STDMETHODCALLTYPE BeginScene() noexcept override {
-        return withPeCallScope(
-            "BeginScene", DXMT9_PE_CALLSITE_PC(), nullptr,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("BeginScene", hr);
-        };
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_begin_scene device=%p", this);
-        const HRESULT hr = hr32(dxmt9c_device_begin_scene(dev_));
-        dxmt9DeviceDebugLog("device_begin_scene -> hr=0x%08x", (unsigned)hr);
-        return finishPeCall(hr);
-            });
-    }
-    HRESULT STDMETHODCALLTYPE EndScene()   noexcept override {
-        return withPeCallScope(
-            "EndScene", DXMT9_PE_CALLSITE_PC(), nullptr,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("EndScene", hr);
-        };
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_end_scene device=%p", this);
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return finishPeCall(flushHr);
-        const HRESULT hr = hr32(dxmt9c_device_end_scene(dev_));
-        dxmt9DeviceDebugLog("device_end_scene -> hr=0x%08x", (unsigned)hr);
-        return finishPeCall(hr);
-            });
-    }
+    HRESULT STDMETHODCALLTYPE BeginScene() noexcept override;
+    HRESULT STDMETHODCALLTYPE EndScene()   noexcept override;
 
     HRESULT STDMETHODCALLTYPE Clear(DWORD count, const D3DRECT* pRects,
                                      DWORD flags, D3DCOLOR color,
-                                     float z, DWORD stencil) noexcept override {
-        return withPeCallScope(
-            "Clear", DXMT9_PE_CALLSITE_PC(), nullptr,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("Clear", hr);
-        };
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        // Wine d3d9: Clear count/pRects must agree, and Z clears require
-        // a bound depth-stencil. visual_clear_color_only_policy /
-        // visual_depth_buffer_clear_policy.
-        if (count == 0 && pRects != nullptr) {
-            return finishPeCall(D3DERR_INVALIDCALL);
-        }
-        if (count > 0 && pRects == nullptr) {
-            return finishPeCall(D3DERR_INVALIDCALL);
-        }
-        if ((flags & D3DCLEAR_ZBUFFER) && !dsSurfaceExplicit_) {
-            D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-            if (!s) return finishPeCall(D3DERR_INVALIDCALL);
-            dxmt9c_surface_release(s);
-        } else if ((flags & D3DCLEAR_ZBUFFER) && dsSurfaceExplicit_ && !dsSurface_) {
-            return finishPeCall(D3DERR_INVALIDCALL);
-        }
-        dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
-                            this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
-                            (unsigned)stencil);
-        // Per recorder design: Clear is a standalone ordering record
-        // inside the chunk — drains pending hot state + const dirty
-        // ranges first so the chunk replays in API order, then
-        // appends a CLEAR record carrying flags + color + z + stencil
-        // + the optional rect array as a tail payload.
-        const HRESULT barrierHr = chunkBarrierFlush();
-        if (FAILED(barrierHr)) return finishPeCall(barrierHr);
-
-        const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
-        // rectCount / rectOffset are computed by appendClear from the span,
-        // so they stay zero here. sizeHint keeps the legacy header+payload size
-        // the capacity precheck saw before, so seal cadence is unchanged.
-        const D9CCommandChunkWireClear clearWire{
-            .flags = (uint32_t)flags,
-            .colorARGB = (uint32_t)color,
-            .z = z,
-            .stencil = (uint32_t)stencil,
-            .rectCount = 0u,
-            .rectOffset = 0u,
-        };
-        const std::span<const D9CRect> rects(
-            reinterpret_cast<const D9CRect*>(pRects),
-            pRects ? static_cast<std::size_t>(count) : 0u);
-        const HRESULT hr = appendRecord(
-            D9C_COMMAND_RECORD_CLEAR,
-            kLegacyClearSizeHint + rectBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok =
-                    dxmt9::d3d9::pe::appendClear(builder, clearWire, rects);
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        return finishPeCall(hr);
-            });
-    }
+                                     float z, DWORD stencil) noexcept override;
 
     /* ── transforms ── */
     template<typename HotSetter>
     HRESULT setTransformNormalized(D3DTRANSFORMSTATETYPE state,
                                    const D9CMatrix& wireM,
                                    dxmt9::d3d9::pe::WriteOrigin origin,
-                                   HotSetter& hotSetter) noexcept {
-        using namespace dxmt9::d3d9::pe;
-        const std::uint32_t stateKey = static_cast<std::uint32_t>(state);
-        std::uint32_t transformSlotIndex = 0u;
-        if (!FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
-            const HRESULT flushHr = flushPeRecorder();
-            if (FAILED(flushHr)) return flushHr;
-            const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, stateKey,
-                                                                 &wireM));
-            if (SUCCEEDED(hr)) hotSetter.markDirty();
-            return hr;
-        }
-
-        const TransformState key = transformStateKey(stateKey);
-        D9CMatrix liveValue{};
-        const bool liveContains =
-            recorderState_.peState.transformShadowTyped().get(key, liveValue);
-        const bool liveEquals = liveContains && matrixEquals(liveValue, wireM);
-        const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-            .phase = recorderState_.stateBlockTransaction.isRecording() ? RecorderPhase::Recording
-                                          : RecorderPhase::Live,
-            .origin = origin,
-            .liveContains = liveContains,
-            .liveEquals = liveEquals,
-            .pendingContains = recorderState_.peState.pendingTransformsTyped().contains(key),
-        });
-
-        if (plan.kind() == StateWriteKind::NoOp ||
-            plan.kind() == StateWriteKind::RetainPending) {
-            return S_OK;
-        }
-        if (plan.writePending() &&
-            !recorderState_.peState.pendingTransformsTyped().contains(key) &&
-            recorderState_.peState.pendingTransformsTyped().size() >=
-                D9C_DRAW_PACKET_MAX_TRANSFORMS) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-        }
-
-        // BeginStateBlock flushes all pending recorder state before entering
-        // Recording. A direct prior-value operation is therefore ordered only
-        // when no older transform delta survives. Fail closed if that
-        // lifecycle premise is ever violated instead of allowing a later
-        // pending replay to overwrite the direct result.
-        if (plan.directOrderedCall() &&
-            recorderState_.peState.pendingTransformsTyped().contains(key)) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (plan.directOrderedCall()) {
-            const HRESULT hr = hr32(
-                dxmt9c_device_set_transform(dev_, stateKey, &wireM));
-            if (FAILED(hr)) return hr;
-        }
-        if (plan.writeRecorded()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept { writer.transforms().set(key, wireM); });
-        }
-        if (plan.writeLive() && plan.writePending()) {
-            recorderState_.peState.transition().setTransform(key, wireM);
-        } else if (plan.writeLive()) {
-            recorderState_.peState.maintenance().transformShadowTyped().set(key, wireM);
-        } else if (plan.writePending()) {
-            recorderState_.peState.maintenance().pendingTransformsTyped().set(key, wireM);
-        }
-        if (plan.semanticTransition() || plan.directOrderedCall()) {
-            hotSetter.markDirty();
-        }
-        return S_OK;
-    }
+                                   HotSetter& hotSetter) noexcept;
 
     HRESULT STDMETHODCALLTYPE SetTransform(D3DTRANSFORMSTATETYPE state,
-                                            const D3DMATRIX* pM) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::Transform, "SetTransform", nullptr,
-            nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        if (!pM) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog(
-            "device_set_transform device=%p state=%u "
-            "m=[[%g,%g,%g,%g],[%g,%g,%g,%g],[%g,%g,%g,%g],[%g,%g,%g,%g]]",
-            this, (unsigned)state,
-            pM->m[0][0], pM->m[0][1], pM->m[0][2], pM->m[0][3],
-            pM->m[1][0], pM->m[1][1], pM->m[1][2], pM->m[1][3],
-            pM->m[2][0], pM->m[2][1], pM->m[2][2], pM->m[2][3],
-            pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
-        const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
-        return setTransformNormalized(
-            state, wireM, dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
-            hotSetter);
-            });
-    }
+                                            const D3DMATRIX* pM) noexcept override;
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
                                             D3DMATRIX* pM) noexcept override;
     HRESULT STDMETHODCALLTYPE MultiplyTransform(D3DTRANSFORMSTATETYPE state,
-                                                 const D3DMATRIX* pM) noexcept override {
-        notePeDeviceCallAfterPresent("MultiplyTransform");
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
-        if (!pM) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("device_multiply_transform device=%p state=%u", this, (unsigned)state);
-        D3DMATRIX cur{};
-        // GetTransform reads the primary PE shadow. Explicit SetTransform
-        // calls made while recording update only the recording value, while
-        // MultiplyTransform remains a prior-value operation on the primary
-        // live value (matching Wine's stateblock behavior).
-        GetTransform(state, &cur);
-        /* multiply 4x4 */
-        D3DMATRIX result{};
-        for (int r = 0; r < 4; ++r)
-            for (int c = 0; c < 4; ++c) {
-                float s = 0;
-                for (int k = 0; k < 4; ++k)
-                    s += cur.m[r][k] * pM->m[k][c];
-                result.m[r][c] = s;
-            }
-        const D9CMatrix& wireResult =
-            *reinterpret_cast<const D9CMatrix*>(&result);
-        return setTransformNormalized(
-            state, wireResult,
-            dxmt9::d3d9::pe::WriteOrigin::PriorValueOperation,
-            peNullHotSetter_);
-    }
+                                                 const D3DMATRIX* pM) noexcept override;
 
     /* ── viewport / scissor ── */
-    HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::ViewportScissor, "SetViewport", nullptr,
-            DXMT9_PE_CALLSITE_PC(),
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        if (!pVP) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("device_set_viewport device=%p x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
-                            this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
-        D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
-                        pVP->MinZ, pVP->MaxZ };
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.viewport().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::viewport>(0u), vp);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        // Phase 12: PE-shadow-only when chunk recorder is active. The
-        // packet built for the next draw carries viewportValid=1 + the
-        // shadow snapshot; server-side canonical state replay dispatches
-        // dxmt9c_device_set_viewport before the draw runs.
-        const auto viewportPlan = dxmt9::d3d9::pe::planRecorderStateWrite({
-            .phase = dxmt9::d3d9::pe::RecorderPhase::Live,
-            .origin = dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
-            .liveContains = true,
-            .liveEquals = std::memcmp(
-                &recorderState_.peState.viewportShadow(), &vp, sizeof(vp)) == 0,
-            .pendingContains = recorderState_.peState.pendingViewport(),
-        });
-        if (!viewportPlan.valid()) return D3DERR_INVALIDCALL;
-        if (!viewportPlan.writeLive()) {
-            return S_OK;
-        }
-        recorderState_.peState.transition().setViewport(vp);
-        hotSetter.markDirty();
-        return S_OK;
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) noexcept override;
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override;
-    HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::ViewportScissor, "SetScissorRect",
-            nullptr, DXMT9_PE_CALLSITE_PC(),
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        if (!pR) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
-                            this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
-        D9CRect cr = toR(*pR);
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.scissor().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::scissor>(0u), cr);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        const auto scissorPlan = dxmt9::d3d9::pe::planRecorderStateWrite({
-            .phase = dxmt9::d3d9::pe::RecorderPhase::Live,
-            .origin = dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
-            .liveContains = true,
-            .liveEquals = std::memcmp(
-                &recorderState_.peState.scissorShadow(), &cr, sizeof(cr)) == 0,
-            .pendingContains = recorderState_.peState.pendingScissor(),
-        });
-        if (!scissorPlan.valid()) return D3DERR_INVALIDCALL;
-        if (!scissorPlan.writeLive()) {
-            return S_OK;
-        }
-        recorderState_.peState.transition().setScissor(cr);
-        hotSetter.markDirty();
-        return S_OK;
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) noexcept override;
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override;
 
     /* ── material / lights ── */
-    HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::MaterialLightClip, "SetMaterial", nullptr,
-            nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        if (!pM) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.material().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::material>(0u),
-                        *reinterpret_cast<const D9CMaterial*>(pM));
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        const auto materialPlan = dxmt9::d3d9::pe::planRecorderStateWrite({
-            .phase = dxmt9::d3d9::pe::RecorderPhase::Live,
-            .origin = dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
-            .liveContains = true,
-            .liveEquals = std::memcmp(
-                &recorderState_.peState.materialShadow(), pM,
-                sizeof(D9CMaterial)) == 0,
-            .pendingContains = recorderState_.peState.pendingMaterial(),
-        });
-        if (!materialPlan.valid()) return D3DERR_INVALIDCALL;
-        if (!materialPlan.writeLive()) {
-            return S_OK;
-        }
-        recorderState_.peState.transition().setMaterial(
-            *reinterpret_cast<const D9CMaterial*>(pM));
-        hotSetter.markDirty();
-        return S_OK;
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override;
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override;
-    HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::MaterialLightClip, "SetLight", nullptr,
-            nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        if (!pL) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("device_set_light device=%p idx=%u type=%u", this, (unsigned)idx, (unsigned)pL->Type);
-        D9CLight cl{};
-        cl.type = (uint32_t)pL->Type;
-        memcpy(&cl.diffuse,  &pL->Diffuse,  sizeof(D9CColorRGBA));
-        memcpy(&cl.specular, &pL->Specular, sizeof(D9CColorRGBA));
-        memcpy(&cl.ambient,  &pL->Ambient,  sizeof(D9CColorRGBA));
-        cl.position[0] = pL->Position.x;
-        cl.position[1] = pL->Position.y;
-        cl.position[2] = pL->Position.z;
-        cl.direction[0] = pL->Direction.x;
-        cl.direction[1] = pL->Direction.y;
-        cl.direction[2] = pL->Direction.z;
-        cl.range  = pL->Range;  cl.falloff = pL->Falloff;
-        cl.attenuation0 = pL->Attenuation0;
-        cl.attenuation1 = pL->Attenuation1;
-        cl.attenuation2 = pL->Attenuation2;
-        cl.theta = pL->Theta; cl.phi = pL->Phi;
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.lights().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::lights>(idx), cl);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        // Phase 12: PE-shadow-only when chunk recorder is active. Up to
-        // D9C_DRAW_PACKET_MAX_LIGHTS (8) light slots ride on a single
-        // packet via lightSlotMask + lights[8]. Out-of-range idx falls
-        // back to legacy unix-call (rare, and the backend may also
-        // refuse).
-        if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
-            if ((recorderState_.peState.pendingLightSlotMask() & (1u << idx)) == 0 &&
-                std::memcmp(&recorderState_.peState.lightShadow()[idx], &cl, sizeof(D9CLight)) == 0) {
-                return S_OK;
-            }
-            recorderState_.peState.transition().setLight(idx, cl);
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        hotSetter.markDirty();
-        return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) noexcept override;
     HRESULT STDMETHODCALLTYPE GetLight(DWORD idx, D3DLIGHT9* pL) noexcept override;
-    HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::MaterialLightClip, "LightEnable", nullptr,
-            nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.lightEnables().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::lightEnables>(idx),
-                        en ? 1u : 0u);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
-            const DWORD bit = 1u << idx;
-            const bool wantEnabled = en != 0;
-            const bool shadowEnabled = (recorderState_.peState.lightEnableShadow() & bit) != 0;
-            if ((recorderState_.peState.pendingLightEnableValidMask() & bit) == 0 &&
-                wantEnabled == shadowEnabled) {
-                return S_OK;
-            }
-            recorderState_.peState.transition().setLightEnable(
-                idx, wantEnabled);
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        hotSetter.markDirty();
-        return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
-            });
-    }
+    HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override;
     HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD idx, BOOL* pEn) noexcept override;
 
     /* ── clip planes ── */
-    HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) noexcept override {
-        return withPeHotStateSetter(
-            PeHotStateSetterFamily::MaterialLightClip, "SetClipPlane", nullptr,
-            nullptr,
-            [&](auto& hotSetter) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
-        if (!pPlane) return D3DERR_INVALIDCALL;
-        if (idx >= 6) return D3DERR_INVALIDCALL;
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            std::array<float, 4> plane{};
-            std::memcpy(plane.data(), pPlane, sizeof(plane));
-            recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) noexcept {
-                    writer.clipPlanes().set(
-                        stateBlockFixedSlotKey<
-                            StateBlockApplyPhysicalStore::clipPlanes>(idx), plane);
-                });
-            hotSetter.markDirty();
-            return S_OK;
-        }
-        const std::size_t off = static_cast<std::size_t>(idx) * 4u;
-        if ((recorderState_.peState.pendingClipPlaneMask() & (1u << idx)) == 0 &&
-            std::memcmp(&recorderState_.peState.clipPlaneShadow()[off], pPlane, sizeof(float) * 4) == 0) {
-            return S_OK;
-        }
-        recorderState_.peState.transition().setClipPlane(idx, pPlane);
-        hotSetter.markDirty();
-        return S_OK;
-            });
-    }
+    HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) noexcept override;
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override;
     HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9* p) noexcept override;
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) noexcept override;
 
-    /* R-FORMAT-11 — service a RESZ depth-resolve sentinel write. Resolves the
-     * bound multisampled depth source (the bound depth-stencil surface) into
-     * the bound INTZ depth destination (the stage-0 texture). Returns S_OK
-     * unconditionally: D3D9 SetRenderState has no failure contract for a
-     * point-size write, and the RESZ idiom is fire-and-forget — a missing
-     * source/destination binding is a benign no-op on real hardware too.
-     *
-     * BACKEND STATUS: the winemetal ABI + backend primitive now exist.
-     * WMTDepthAttachmentInfo carries resolve_texture + resolve_filter
-     * (WMTMultisampleDepthResolveFilter) — the DEPTH twin of the color resolve
-     * that rides on WMTColorAttachmentInfo.resolve_texture +
-     * WMTStoreActionMultisampleResolve. The unix importer wires
-     * MTLRenderPassDescriptor.depthAttachment.resolveTexture /
-     * .depthResolveFilter (src/winemetal/unix/winemetal_private_api.mm), and
-     * the backend resolve is implemented as
-     * dxmt9::encoders::encodeDepthResolve(cmdbuf, pool, msaaDepthSrc, intzDst)
-     * in src/dxmt9/dxmt9_blit_encoders.cpp — a render pass whose depth
-     * attachment uses store=MultisampleResolve + resolve_texture +
-     * filter=Sample.
-     *
-     * PE->unix DISPATCH (this change): the request is carried across the
-     * bridge as a D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE chunk record
-     * (mirroring D9CCommandRecordReadback's two-handle shape) — msaaDepthHandle
-     * = the bound depth-stencil surface, intzDestHandle = the stage-0 INTZ
-     * texture. It is validated in device_c_record_validate.cpp, classified as
-     * a SurfaceOp ordering barrier in device_c_record_replay.cpp, and
-     * dispatched to dxmt9::encoders::encodeDepthResolve via
-     * dxmt9_draw_encoder_chunk.mm's surface-op Kind switch. The record is emitted
-     * exactly like StretchRect/ColorFill (chunkBarrierFlush, then append with
-     * source/dest retained), so it orders atomically with the surrounding
-     * draws/clears in the same chunk. */
-    HRESULT requestReszDepthResolve() noexcept {
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        // MSAA depth source = the currently bound depth-stencil surface.
-        D9CSurface* const depthSrcRaw = validatedRawSurface(dsSurface_);
-        // INTZ depth destination = the texture bound at fragment stage 0.
-        D9CTexture* const intzDstRaw = validatedRawTexture(textures_[0]);
-        dxmt9DeviceDebugLog(
-            "device_resz_depth_resolve device=%p depth_src=%p intz_dst=%p",
-            this, static_cast<void*>(depthSrcRaw),
-            static_cast<void*>(intzDstRaw));
-        // No bound source or destination: nothing to resolve. RESZ is a
-        // fire-and-forget idiom, so a missing binding is a benign no-op
-        // (matching real-hardware behavior). Don't emit an empty record.
-        if (!depthSrcRaw || !intzDstRaw) {
-            return S_OK;
-        }
-        // Surface-op emit pattern (mirrors StretchRect / ColorFill): drain any
-        // pending hot state to a barrier, then append the standalone record
-        // with both endpoints retained for the chunk's lifetime. INTZ dest is
-        // a texture handle, MSAA depth source a surface handle — canonicalized
-        // the same way the neighboring surface ops resolve their endpoints
-        // (rawSurf / rawTex → SERVER-SIDE wire cast), so the importer decodes
-        // them via the same wireValuePtr path.
-        const HRESULT barrierHr = chunkBarrierFlush();
-        if (FAILED(barrierHr)) return barrierHr;
-        const HRESULT appendHr = appendRecord(
-            D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
-            kLegacyReszDepthResolveSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendReszDepthResolve(
-                    builder, recorderState_.peBindingView.depthStencil,
-                    recorderState_.peBindingView.textures[0]);
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
-        if (FAILED(appendHr)) return appendHr;
-        return S_OK;
-    }
+    HRESULT requestReszDepthResolve() noexcept;
 
-    #include "d3d9_pe_device_state_core.inc.hpp"
-    #include "d3d9_pe_device_state_texture_fvf.inc.hpp"
+    /* ── render states ── */
+    template<typename HotSetter>
+    HRESULT setRenderStateCore(D3DRENDERSTATETYPE state, DWORD value,
+                               HotSetter& hotSetter) noexcept;
 
-    #include "d3d9_pe_device_state_shader_stream.inc.hpp"
+    HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
+                                              DWORD value) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
+                                              DWORD* pValue) noexcept override;
+
+    /* ── state blocks ── */
+    HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
+                                                IDirect3DStateBlock9** ppSB) noexcept override;
+    HRESULT STDMETHODCALLTYPE BeginStateBlock() noexcept override;
+    HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept override;
+
+    /* ── texture stage / sampler states ── */
+    // Wine d3d9 texture-stage-state input validation. Tested by
+    // test_texture_stage_states (line ~1535): the stage must be within
+    // [0..MaxTextureBlendStages-1] and the type id must be a defined
+    // D3DTSS_*. dxmt9 reports MaxTextureBlendStages=8.
+    static constexpr DWORD kFragmentBlendStageCount = 8;
+    static bool isValidTextureStageStateType(D3DTEXTURESTAGESTATETYPE type) noexcept;
+    HRESULT STDMETHODCALLTYPE SetTextureStageState(DWORD stage,
+                                                    D3DTEXTURESTAGESTATETYPE type,
+                                                    DWORD value) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD stage,
+                                                    D3DTEXTURESTAGESTATETYPE type,
+                                                    DWORD* pValue) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD sampler,
+                                               D3DSAMPLERSTATETYPE type,
+                                               DWORD value) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetSamplerState(DWORD sampler,
+                                               D3DSAMPLERSTATETYPE type,
+                                               DWORD* pValue) noexcept override;
+    HRESULT STDMETHODCALLTYPE ValidateDevice(DWORD* pPasses) noexcept override;
+
+    /* ── palette — PE shadow plus P8/A8P8 backend expansion
+     *    (test_set_palette_roundtrip, test_palette_alpha_caps_policy,
+     *     test_palette_current_entry_isolation, dxmt9-core-device-com-spec).
+     *     P8 resources keep index data PE/C-side and re-expand through
+     *     the active palette into the backend A8R8G8B8 backing texture.
+     * ─────────────────────────────────────────────────────────────── */
+    HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY* entries) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY* out) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetCurrentTexturePalette(UINT palette) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCurrentTexturePalette(UINT* p) noexcept override;
+
+    /* ── soft VP / NPatches ── */
+    HRESULT STDMETHODCALLTYPE SetSoftwareVertexProcessing(BOOL enable) noexcept override;
+    BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() noexcept override;
+    HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) noexcept override;
+    float   STDMETHODCALLTYPE GetNPatchMode() noexcept override;
+
+    /* ── textures ── */
+    // Wine d3d9 texture-stage validation (test_limits: "There are 16
+    // pixel samplers. We should be able to access all of them" —
+    // SetTexture/SetSamplerState succeed for stages 0..15 regardless of
+    // caps.MaxSimultaneousTextures, which only describes the FFP blend
+    // stage count). Valid stages are the ps_2_0+ fragment sampler range
+    // [0..15] plus the vertex texture sampler range
+    // D3DVERTEXTEXTURESAMPLER0..D3DVERTEXTEXTURESAMPLER3. A former
+    // guard capped this at 8 citing a nonexistent test_get_set_texture
+    // assertion; that dropped s8+ bindings (3DMark05 GT3 binds the
+    // water reflection at stage 8) and the translator's unbound-texture
+    // fallback then sampled constant black.
+    static constexpr DWORD kFragmentTextureStageCount = kPeFragmentSamplerSlots;
+    static bool fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexcept;
+    HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
+                                          IDirect3DBaseTexture9* pTex) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
+                                          IDirect3DBaseTexture9** ppTex) noexcept override;
+
+    /* ── FVF / vertex declaration ── */
+    /// Resolve (and cache) the implicit IDirect3DVertexDeclaration9 for an
+    /// FVF. The cache owns one ref per entry; this function does NOT add a
+    /// new reference for the caller. All allocation/backend/wrapper failures
+    /// are translated to HRESULT so noexcept COM entries cannot terminate.
+    HRESULT resolveImplicitDeclForFvf(
+        DWORD fvf, IDirect3DVertexDeclaration9** out) noexcept;
+
+    HRESULT PrepareStateBlockApplyForChild(
+        const D3D9StateBlockShadow& shadow) noexcept;
+
+    void CommitStateBlockApplyForChild(
+        const D3D9StateBlockShadow& shadow) noexcept;
+
+    HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override;
+    HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(
+            const D3DVERTEXELEMENT9* pElems,
+            IDirect3DVertexDeclaration9** ppVD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
+            IDirect3DVertexDeclaration9* pVD) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
+            IDirect3DVertexDeclaration9** ppVD) noexcept override;
+
+    /* ── vertex shaders ── */
+    HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* pFn,
+                                                  IDirect3DVertexShader9** ppVS) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** ppVS) noexcept override;
+    /* Constant register-file caps. The Wine constant-roundtrip tests use
+     * D3DCAPS9::MaxVertexShaderConst as the F-register cap (256 for the
+     * sm3-class caps we report); I/B are fixed at 16 across all real
+     * D3D9 hardware. */
+    static constexpr UINT kVsConstFMax = 256;
+    static constexpr UINT kVsConstIMax = 16;
+    static constexpr UINT kVsConstBMax = 16;
+    static constexpr UINT kPsConstFMax = 224;
+    static constexpr UINT kPsConstIMax = 16;
+    static constexpr UINT kPsConstBMax = 16;
+
+    /// Common range-validity check. count==0 short-circuits to S_OK (a
+    /// documented no-op); pData==NULL with count>0 fails INVALIDCALL.
+    /// Overflow-safe.
+    [[nodiscard]] static HRESULT validateConstRange(UINT start, UINT count,
+                                                    const void* pData,
+                                                    UINT maxRegisters);
+
+    // Keep the default-off virtual setter branch self-contained. The full
+    // validator above is a cold owner for diagnostics/getters; this identical
+    // checked kernel preserves the audited fast-path codegen.
+    [[nodiscard]] static inline HRESULT validateConstRangeFast(
+        UINT start, UINT count, const void* pData, UINT maxRegisters) noexcept;
+
+    /// Read a contiguous range out of a PE const shadow.
+    /// If the shadow has not been grown to cover [start, start+count),
+    /// the missing tail is zero-filled (matching the post-Reset default
+    /// register state).
+    static void readConstShadow(const ConstShadow& shadow,
+                                UINT start, void* pData, UINT count,
+                                std::size_t elemSize);
+
+    template <typename Scope>
+    HRESULT SetVertexShaderConstantFSlowBody(UINT start, const float* pData,
+                                               UINT count,
+                                               Scope& peCall) noexcept;
+    // Diagnostics-on body for SetVertexShaderConstantF, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantFSlow(UINT start, const float* pData,
+                                  UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
+                                                        UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
+                                                        UINT count) noexcept override;
+    // Diagnostics-on body for SetVertexShaderConstantI, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantISlow(UINT start, const INT* pData,
+                                  UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
+                                                        UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVertexShaderConstantI(UINT start, INT* pData,
+                                                        UINT count) noexcept override;
+    // Diagnostics-on body for SetVertexShaderConstantB, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetVertexShaderConstantBSlow(UINT start, const BOOL* pData,
+                                  UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
+                                                        UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVertexShaderConstantB(UINT start, BOOL* pData,
+                                                        UINT count) noexcept override;
+
+    /* ── stream sources ── */
+    HRESULT STDMETHODCALLTYPE SetStreamSource(UINT stream,
+                                               IDirect3DVertexBuffer9* pBuf,
+                                               UINT offset, UINT stride) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetStreamSource(UINT stream,
+                                               IDirect3DVertexBuffer9** ppBuf,
+                                               UINT* pOffset, UINT* pStride) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetStreamSourceFreq(UINT stream, UINT* pFreq) noexcept override;
+
+    /* ── indices ── */
+    HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) noexcept override;
+
+    /* ── pixel shaders ── */
+    HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* pFn,
+                                                 IDirect3DPixelShader9** ppPS) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppPS) noexcept override;
+    template <typename Scope>
+    HRESULT SetPixelShaderConstantFSlowBody(UINT start, const float* pData,
+                                              UINT count,
+                                              Scope& peCall) noexcept;
+    // Diagnostics-on body for SetPixelShaderConstantF, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantFSlow(UINT start, const float* pData,
+                                 UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
+                                                       UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
+                                                       UINT count) noexcept override;
+    // Diagnostics-on body for SetPixelShaderConstantI, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantISlow(UINT start, const INT* pData,
+                                 UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
+                                                       UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPixelShaderConstantI(UINT start, INT* pData,
+                                                       UINT count) noexcept override;
+    // Diagnostics-on body for SetPixelShaderConstantB, unchanged from
+    // before the fast-path split. Reached only when
+    // dxmt9PeConstSetterSlowPathRequired() is true.
+    HRESULT __attribute__((noinline))
+    SetPixelShaderConstantBSlow(UINT start, const BOOL* pData,
+                                 UINT count) noexcept;
+    HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
+                                                       UINT count) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPixelShaderConstantB(UINT start, BOOL* pData,
+                                                       UINT count) noexcept override;
 
     /* ── draw calls ── */
     template<typename CallScope>
     __attribute__((always_inline))
     HRESULT drawPrimitiveCore(D3DPRIMITIVETYPE type, UINT startVertex,
-                              UINT count, CallScope& peCall) noexcept {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("DrawPrimitive", hr);
-        };
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
-                            this, (unsigned)type, startVertex, count);
-        if (recorderState_.peState.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
-        }
-        auto drawSwvpPhase = peCall.phase(
-            &PeDiagnosticsState::peDrawPhaseSwvpDecimatedStats_);
-        SoftwareFfpDrawData swvpDraw{};
-        HRESULT hr = prepareSoftwareDrawCandidate([&] {
-            HRESULT candidateHr = trySoftwareFfpDrawPrimitive(
-                type, startVertex, count, swvpDraw);
-            if (candidateHr == S_FALSE) {
-                candidateHr = trySoftwareProgrammableDrawPrimitive(
-                    type, startVertex, count, swvpDraw);
-            }
-            if (candidateHr == S_OK) {
-                candidateHr = filterSoftwareDrawOutsideClipPrimitives(swvpDraw);
-            }
-            return candidateHr;
-        });
-        drawSwvpPhase.stop();
-        bool appendedDraw = false;
-        if (hr == S_OK) {
-            dxmt9DeviceDebugLog("device_draw_primitive swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
-                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
-                                swvpDraw.vertices.size());
-            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
-                ? swvpDraw.primitiveCount
-                : count;
-            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty()) {
-                hr = appendDrawPrimitiveUPRecordWithFvf(
-                    swvpDraw.primitiveType, swvpPrimitiveCount,
-                    swvpDraw.vertices.data(), swvpDraw.stride,
-                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader, true);
-                appendedDraw = SUCCEEDED(hr);
-            }
-        } else if (hr == S_FALSE) {
-            auto drawRecordPhase = peCall.phase(
-                &PeDiagnosticsState::peDrawPhaseRecordDecimatedStats_);
-            hr = appendDrawPrimitiveRecord(type, startVertex, count);
-            drawRecordPhase.stop();
-            appendedDraw = SUCCEEDED(hr);
-        }
-        if (SUCCEEDED(hr) && appendedDraw) {
-            if (!swvpDraw.vertices.empty()) {
-                clearPendingHotState();
-                recorderState_.peState.maintenance().pendingFvf() = true;
-                recorderState_.peState.maintenance().pendingVdecl() = true;
-                if (swvpDraw.bypassVertexShader) recorderState_.peState.maintenance().pendingVs() = true;
-            }
-        }
-        notePeCurrentCallReturnForInterAppendSplit();
-        return finishPeCall(hr);
-    }
+                              UINT count, CallScope& peCall) noexcept;
 
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
-                                             UINT count) noexcept override {
-        PeDiagnosticsState* const diagnostics = diagnostics_.get();
-        if (!diagnostics || !diagnostics->gates.callScope) {
-            return drawPrimitiveCore(
-                type, startVertex, count, peNullCallScope_);
-        }
-        PeCallScope peCall(
-            *diagnostics, "DrawPrimitive", DXMT9_PE_CALLSITE_PC(),
-            &PeDiagnosticsState::peEntryDrawDecimatedStats_);
-        return drawPrimitiveCore(type, startVertex, count, peCall);
-    }
+                                             UINT count) noexcept override;
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE type,
                                                     INT baseVertex,
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
-                                                    UINT count) noexcept override {
-        return withPeCallScope(
-            "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC(),
-            &PeDiagnosticsState::peEntryDrawDecimatedStats_,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("DrawIndexedPrimitive", hr);
-        };
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
-                            this, (unsigned)type, baseVertex, minVertex, numVertices,
-                            startIndex, count);
-        if (recorderState_.peState.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
-        }
-        auto drawSwvpPhase = peCall.phase(
-            &PeDiagnosticsState::peDrawPhaseSwvpDecimatedStats_);
-        SoftwareFfpDrawData swvpDraw{};
-        std::vector<std::uint8_t> swvpIndices{};
-        D3DFORMAT swvpIndexFormat = D3DFMT_UNKNOWN;
-        HRESULT hr = prepareSoftwareDrawCandidate([&] {
-            HRESULT candidateHr = trySoftwareFfpDrawIndexedPrimitive(
-                type, baseVertex, minVertex, numVertices, startIndex, count,
-                swvpDraw, swvpIndices, swvpIndexFormat);
-            if (candidateHr == S_FALSE) {
-                candidateHr = trySoftwareProgrammableDrawIndexedPrimitive(
-                    type, baseVertex, minVertex, numVertices, startIndex, count,
-                    swvpDraw, swvpIndices, swvpIndexFormat);
-            }
-            if (candidateHr == S_OK) {
-                candidateHr = filterSoftwareIndexedDrawOutsideClipPrimitives(
-                    swvpDraw, swvpIndices, swvpIndexFormat);
-            }
-            return candidateHr;
-        });
-        drawSwvpPhase.stop();
-        bool appendedDraw = false;
-        if (hr == S_OK) {
-            dxmt9DeviceDebugLog("device_draw_indexed_primitive swvp_fallback device=%p fvf=0x%x stride=%u vertexBytes=%zu indexBytes=%zu",
-                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
-                                swvpDraw.vertices.size(), swvpIndices.size());
-            const UINT swvpNumVertices = swvpDraw.stride
-                ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
-                : numVertices;
-            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
-                ? swvpDraw.primitiveCount
-                : count;
-            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
-                !swvpIndices.empty()) {
-                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
-                    swvpDraw.primitiveType, 0, swvpNumVertices, swvpPrimitiveCount,
-                    swvpIndices.data(), swvpIndexFormat, swvpDraw.vertices.data(),
-                    swvpDraw.stride, true, swvpDraw.fvf,
-                    swvpDraw.bypassVertexShader, true);
-                appendedDraw = SUCCEEDED(hr);
-            }
-        } else if (hr == S_FALSE) {
-            auto drawRecordPhase = peCall.phase(
-                &PeDiagnosticsState::peDrawPhaseRecordDecimatedStats_);
-            hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
-                                                 numVertices, startIndex, count);
-            drawRecordPhase.stop();
-            appendedDraw = SUCCEEDED(hr);
-        }
-        if (SUCCEEDED(hr) && appendedDraw) {
-            if (!swvpDraw.vertices.empty()) {
-                clearPendingHotState();
-                recorderState_.peState.maintenance().pendingFvf() = true;
-                recorderState_.peState.maintenance().pendingVdecl() = true;
-                recorderState_.peState.maintenance().pendingIb() = indexBuf_ != nullptr;
-                if (swvpDraw.bypassVertexShader) recorderState_.peState.maintenance().pendingVs() = true;
-            }
-        }
-        notePeCurrentCallReturnForInterAppendSplit();
-        return finishPeCall(hr);
-            });
-    }
+                                                    UINT count) noexcept override;
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,
                                                UINT count,
                                                const void* pData,
-                                               UINT stride) noexcept override {
-        return withPeCallScope(
-            "DrawPrimitiveUP", DXMT9_PE_CALLSITE_PC(),
-            &PeDiagnosticsState::peEntryDrawDecimatedStats_,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("DrawPrimitiveUP", hr);
-        };
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
-                            this, (unsigned)type, count, pData, stride);
-        if (recorderState_.peState.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
-        }
-        SoftwareFfpDrawData swvpDraw{};
-        HRESULT hr = prepareSoftwareDrawCandidate([&] {
-            HRESULT candidateHr = trySoftwareFfpDrawPrimitiveUP(
-                type, count, pData, stride, swvpDraw);
-            if (candidateHr == S_FALSE) {
-                candidateHr = trySoftwareProgrammableDrawPrimitiveUP(
-                    type, count, pData, stride, swvpDraw);
-            }
-            if (candidateHr == S_OK) {
-                candidateHr = filterSoftwareDrawOutsideClipPrimitives(swvpDraw);
-            }
-            return candidateHr;
-        });
-        bool appendedDraw = false;
-        if (hr == S_OK) {
-            dxmt9DeviceDebugLog("device_draw_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
-                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
-                                swvpDraw.vertices.size());
-            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
-                ? swvpDraw.primitiveCount
-                : count;
-            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty()) {
-                hr = appendDrawPrimitiveUPRecordWithFvf(
-                    swvpDraw.primitiveType, swvpPrimitiveCount,
-                    swvpDraw.vertices.data(), swvpDraw.stride,
-                    true, swvpDraw.fvf, swvpDraw.bypassVertexShader, true);
-                appendedDraw = SUCCEEDED(hr);
-            }
-        } else if (hr == S_FALSE) {
-            hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
-            appendedDraw = SUCCEEDED(hr);
-        }
-        if (SUCCEEDED(hr) && appendedDraw) {
-            if (!swvpDraw.vertices.empty()) {
-                clearPendingHotState();
-                recorderState_.peState.maintenance().pendingFvf() = true;
-                recorderState_.peState.maintenance().pendingVdecl() = true;
-                if (swvpDraw.bypassVertexShader) recorderState_.peState.maintenance().pendingVs() = true;
-            }
-        }
-        return finishPeCall(hr);
-            });
-    }
+                                               UINT stride) noexcept override;
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,
                                                       UINT minVertex,
                                                       UINT numVertices,
@@ -5025,108 +2927,7 @@ public:
                                                       const void* pIdxData,
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
-                                                      UINT stride) noexcept override {
-        return withPeCallScope(
-            "DrawIndexedPrimitiveUP", DXMT9_PE_CALLSITE_PC(),
-            &PeDiagnosticsState::peEntryDrawDecimatedStats_,
-            [&](auto& peCall) __attribute__((always_inline)) noexcept
-                -> HRESULT {
-        const auto finishPeCall = [&](HRESULT hr) noexcept {
-            return peCall.finish("DrawIndexedPrimitiveUP", hr);
-        };
-        // T2 device-lost gate.
-        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
-        dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
-                            this, (unsigned)type, minVertex, numVertices, count,
-                            pIdxData, (unsigned)idxFmt, pVtxData, stride);
-        if (recorderState_.peState.pendingRenderStatesTyped().size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
-        }
-        SoftwareFfpDrawData swvpDraw{};
-        std::vector<std::uint8_t> swvpIndices{};
-        D3DFORMAT swvpIndexFormat = idxFmt;
-        bool useSwvpIndices = false;
-        HRESULT hr = prepareSoftwareDrawCandidate([&] {
-            HRESULT candidateHr = trySoftwareFfpDrawIndexedPrimitiveUP(
-                type, minVertex, numVertices, count, pVtxData, stride, swvpDraw);
-            if (candidateHr == S_FALSE) {
-                candidateHr = trySoftwareProgrammableDrawIndexedPrimitiveUP(
-                    type, minVertex, numVertices, count, pVtxData, stride,
-                    swvpDraw);
-            }
-            if (candidateHr == S_OK &&
-                renderStateValue(D3DRS_CLIPPING) != FALSE) {
-                const UINT indexSize = idxFmt == D3DFMT_INDEX32 ? 4u : 2u;
-                std::uint32_t indexBytes = 0;
-                if (!checkedByteCount(primitiveVertexCount(type, count), indexSize,
-                                      indexBytes) ||
-                    (indexBytes != 0u && !pIdxData)) {
-                    return D3DERR_INVALIDCALL;
-                }
-                const auto preparation = dxmt9::d3d9::pe::prepareSwvpIndices(
-                    swvpIndices, pIdxData, indexBytes,
-                    [&](auto& candidate) {
-                        candidateHr = filterSoftwareIndexedDrawOutsideClipPrimitives(
-                            swvpDraw, candidate, swvpIndexFormat);
-                        return SUCCEEDED(candidateHr);
-                    });
-                if (preparation ==
-                    dxmt9::d3d9::pe::PublicAllocationResult::OutOfMemory) {
-                    return E_OUTOFMEMORY;
-                }
-                if (preparation ==
-                        dxmt9::d3d9::pe::PublicAllocationResult::Rejected &&
-                    SUCCEEDED(candidateHr)) {
-                    return D3DERR_INVALIDCALL;
-                }
-                useSwvpIndices = preparation ==
-                    dxmt9::d3d9::pe::PublicAllocationResult::Completed;
-            }
-            return candidateHr;
-        });
-        bool appendedDraw = false;
-        if (hr == S_OK) {
-            dxmt9DeviceDebugLog("device_draw_indexed_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
-                                this, (unsigned)swvpDraw.fvf, swvpDraw.stride,
-                                swvpDraw.vertices.size());
-            const UINT swvpPrimitiveCount = swvpDraw.primitiveCount
-                ? swvpDraw.primitiveCount
-                : count;
-            const void* indexData = useSwvpIndices ? swvpIndices.data() : pIdxData;
-            const D3DFORMAT indexFormat =
-                useSwvpIndices ? swvpIndexFormat : idxFmt;
-            const UINT swvpMinVertex = useSwvpIndices ? 0u : minVertex;
-            const UINT swvpNumVertices =
-                useSwvpIndices && swvpDraw.stride != 0u
-                    ? static_cast<UINT>(swvpDraw.vertices.size() / swvpDraw.stride)
-                    : numVertices;
-            if (swvpPrimitiveCount != 0u && !swvpDraw.vertices.empty() &&
-                indexData) {
-                hr = appendDrawIndexedPrimitiveUPRecordWithFvf(
-                    swvpDraw.primitiveType, swvpMinVertex, swvpNumVertices,
-                    swvpPrimitiveCount, indexData, indexFormat,
-                    swvpDraw.vertices.data(), swvpDraw.stride, true, swvpDraw.fvf,
-                    swvpDraw.bypassVertexShader, true);
-                appendedDraw = SUCCEEDED(hr);
-            }
-        } else if (hr == S_FALSE) {
-            hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
-                                                   count, pIdxData, idxFmt,
-                                                   pVtxData, stride);
-            appendedDraw = SUCCEEDED(hr);
-        }
-        if (SUCCEEDED(hr) && appendedDraw) {
-            if (!swvpDraw.vertices.empty()) {
-                clearPendingHotState();
-                recorderState_.peState.maintenance().pendingFvf() = true;
-                recorderState_.peState.maintenance().pendingVdecl() = true;
-                if (swvpDraw.bypassVertexShader) recorderState_.peState.maintenance().pendingVs() = true;
-            }
-        }
-        return finishPeCall(hr);
-            });
-    }
+                                                      UINT stride) noexcept override;
     HRESULT STDMETHODCALLTYPE ProcessVertices(UINT srcStart, UINT dstIndex,
                                                UINT vertexCount,
                                                IDirect3DVertexBuffer9* dstBuffer,
@@ -5150,37 +2951,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE PresentEx(const RECT* src, const RECT* dst,
                                          HWND wnd, const RGNDATA* dirty,
-                                         DWORD flags) noexcept override {
-        dxmt9PeSetCurrentCallName("PresentEx");
-        assertRecorderThreadConfined();
-        PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
-        // T2 device-lost gate.
-        if (deviceNotReset_) {
-            if (peCaptureState_)
-                abortRenderTapeCapture("device_lost");
-            return D3DERR_DEVICELOST;
-        }
-        const bool renderTapeCaptureWasActive =
-            peCaptureState_ &&
-            peCaptureState_->renderTapeCapture.state() ==
-                dxmt9::d3d9::RenderTapeCaptureState::Capturing;
-        D9CRect cs{}, cd{};
-        if (src) cs = toR(*src); if (dst) cd = toR(*dst);
-        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Present);
-        if (FAILED(flushHr)) return flushHr;
-        const HRESULT hr = hr32(dxmt9c_device_present(dev_,
-            src ? &cs : nullptr, dst ? &cd : nullptr,
-            (uint64_t)(uintptr_t)wnd, dirty, flags));
-        if (SUCCEEDED(hr)) {
-            logPeRecorderStats("present_ex");
-            markPePresentReturnedForCadence();
-            if (renderTapeCaptureWasActive)
-                finishRenderTapeCaptureAtPresentBoundary();
-            else if (peCaptureState_)
-                (void)armRenderTapeCaptureAtPresentBoundary();
-        }
-        return hr;
-    }
+                                         DWORD flags) noexcept override;
 
     HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT* p) noexcept override;
     HRESULT STDMETHODCALLTYPE SetGPUThreadPriority(INT) noexcept override;

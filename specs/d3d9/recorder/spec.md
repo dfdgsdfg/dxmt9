@@ -413,8 +413,8 @@ Binding setters cache the wire ref and StateBlock ownership traversal uses
 typed policies, so no public `void*` ownership callback or trusted raw-cast wire
 extractor remains.
 `D3D9DeviceImpl` remains one concrete COM object with direct `PeRecorderState`
-ownership. Ordered in-class fragments preserve declaration order while existing
-cold source owners retain staged method definitions. Six independent plain
+ownership. Its compact declaration shell preserves COM order while real hot and
+cold translation units retain staged method definitions. Six independent plain
 contexts — StateBlock, Buffer, SurfaceTexture, Query, Presentation, and
 ShaderDeclaration — each contain one device pointer and only family-consumed
 `noexcept` operations; `QueryInterface` remains the out-of-line key function in

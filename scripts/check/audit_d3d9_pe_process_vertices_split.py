@@ -7,16 +7,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
-# The D3D9DeviceImpl class declaration and its method bodies live in this
-# header, included by d3d9_pe_device.cpp and (as the hot/cold split proceeds)
-# by the cold-subsystem TUs. Assertions about the CLASS target this file;
-# assertions about the owning translation unit target DEVICE.
+# The D3D9DeviceImpl declaration/ownership shell lives in this header.
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
-DEVICE_FRAGMENTS = (
-    ROOT / "src/d3d9/d3d9_pe_device_state_core.inc.hpp",
-    ROOT / "src/d3d9/d3d9_pe_device_state_texture_fvf.inc.hpp",
-    ROOT / "src/d3d9/d3d9_pe_device_state_shader_stream.inc.hpp",
-)
+DEVICE_HOT = ROOT / "src/d3d9/d3d9_pe_device_hot.cpp"
 # ProcessVertices, and the rest of the cold COM surface, is DEFINED here since
 # step 10 of the hot/cold split; the class header keeps only its declaration.
 DEVICE_COLD = ROOT / "src/d3d9/d3d9_pe_device_com_cold.cpp"
@@ -54,12 +47,12 @@ def forbid(source: str, needle: str, label: str) -> None:
 def main() -> int:
     device = DEVICE.read_text()
     device_impl = DEVICE_IMPL.read_text()
-    device_fragments = "".join(path.read_text() for path in DEVICE_FRAGMENTS)
+    device_hot = DEVICE_HOT.read_text()
     device_cold = DEVICE_COLD.read_text()
     # Anything asserted "in the device implementation" must hold across the
     # pair; a forbid that looked at only one half could be defeated by
     # moving the offending code into the other.
-    device_all = (device + device_impl + device_fragments + device_cold +
+    device_all = (device + device_impl + device_hot + device_cold +
                   DEVICE_SWVP.read_text() + DEVICE_DIAG.read_text() +
                   DEVICE_TAPE.read_text())
     engine_hpp = ENGINE_HPP.read_text()
@@ -78,15 +71,21 @@ def main() -> int:
     if not ABI_AUDIT.exists():
         fail("missing stable PE ABI/codegen audit script")
     require(meson, "'d3d9_pe_device_com_cold.cpp'", "cold-COM Meson source")
+    require(meson, "'d3d9_pe_device_hot.cpp'", "hot state/draw Meson source")
     require(device, '#include "d3d9_pe_device_impl.hpp"',
             "device TU includes the class header")
     require(device_cold, '#include "d3d9_pe_device_impl.hpp"',
             "cold-COM TU includes the class header")
-    for fragment in DEVICE_FRAGMENTS:
-        require(device_impl, f'#include "{fragment.name}"',
-                "ordered device class fragment")
-    if len(device_impl.splitlines()) >= 5600:
-        fail("D3D9DeviceImpl primary header decomposition regressed")
+    for fragment in (
+        "d3d9_pe_device_state_core.inc.hpp",
+        "d3d9_pe_device_state_texture_fvf.inc.hpp",
+        "d3d9_pe_device_state_shader_stream.inc.hpp",
+    ):
+        forbid(device_impl + device_hot, fragment, "retired state fragment")
+        if (ROOT / "src/d3d9" / fragment).exists():
+            fail(f"retired state fragment still exists: {fragment}")
+    if len(device_impl.splitlines()) > 3000:
+        fail("D3D9DeviceImpl declaration shell exceeds 3000 physical lines")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")
@@ -162,10 +161,10 @@ def main() -> int:
            "removed broad recorder facade")
     key_position = device_impl.find(
         "HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override;")
-    fragment_position = device_impl.find(
-        '#include "d3d9_pe_device_state_core.inc.hpp"')
-    if key_position < 0 or fragment_position < 0 or key_position >= fragment_position:
-        fail("QueryInterface key declaration must precede every ordered class fragment")
+    state_position = device_impl.find(
+        "HRESULT STDMETHODCALLTYPE SetRenderState(")
+    if key_position < 0 or state_position < 0 or key_position >= state_position:
+        fail("QueryInterface key declaration must precede the state virtuals")
     require(device_impl, "HRESULT FlushPeRecorderForChild() noexcept;",
             "private nonvirtual child flush helper")
     forbid(device_impl, "virtual HRESULT FlushPeRecorderForChild() noexcept;",

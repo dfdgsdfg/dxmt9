@@ -19,10 +19,9 @@ critical_member_order = [
   "surfaceTextureContext_", "queryContext_", "presentationContext_",
   "shaderDeclarationContext_", "peCaptureState_", "diagnostics_"
 ]
-# The three state fragments remain class-body includes for the genuinely hot
-# transition kernels.  Cold extraction must keep their aggregate residual
-# below this gate; the pre-extraction baseline was 1,650 physical lines.
-state_fragment_residual_max_lines = 1400
+# State implementations have real translation-unit ownership; no class-body
+# include fragment is permitted.
+state_fragment_residual_max_lines = 0
 
 [exports]
 names = [
@@ -35,6 +34,7 @@ names = [
 
 [owners]
 query_interface = "src/d3d9/d3d9_pe_device.cpp"
+hot_state_draw = "src/d3d9/d3d9_pe_device_hot.cpp"
 vtable = "src/d3d9/d3d9_pe_device.cpp"
 rtti = "src/d3d9/d3d9_pe_device.cpp"
 recorder = "src/d3d9/d3d9_pe_device_recorder.cpp"

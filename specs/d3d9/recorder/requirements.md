@@ -353,8 +353,8 @@ hot-reachable. Moving virtual definitions must preserve
 the deliberate out-of-line `D3D9DeviceImpl::QueryInterface` key function
 unless an independently measured vtable/code-placement change is part of the task.
 The device remains one COM object with direct `PeRecorderState` ownership;
-ordered in-class header fragments and existing staged source owners must not
-introduce capability bases or reorder COM virtual declarations. Child wrappers
+the declaration shell and staged source owners must not introduce capability
+bases or reorder COM virtual declarations. Child wrappers
 use one nullable pointer to a device-owned, kind-qualified plain context;
 context operations are `noexcept` and allocation-free at dispatch. Fallible
 implementations translate failure to `HRESULT` or the recorder fail-stop

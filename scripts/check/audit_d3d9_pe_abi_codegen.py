@@ -104,8 +104,13 @@ def source_audit(manifest: dict) -> dict:
         fail("QueryInterface declaration/owner contract changed")
     if impl.index(q) < impl.index("class D3D9DeviceImpl"):
         fail("QueryInterface key declaration is not in the class")
+    hot = (ROOT / "src/d3d9/d3d9_pe_device_hot.cpp").read_text()
     state_fragments = [line.strip() for line in impl.splitlines()
                        if "d3d9_pe_device_state_" in line]
+    if state_fragments:
+        fail("state implementation fragment include remains")
+    if len(impl.splitlines()) > 3000:
+        fail("D3D9DeviceImpl declaration shell exceeds 3000 physical lines")
     for fragment in (
         "d3d9_pe_device_diag_log.inc.hpp",
         "d3d9_pe_device_diag_module.inc.hpp",
@@ -128,17 +133,17 @@ def source_audit(manifest: dict) -> dict:
     for arch, expected in manifest["recorder_state"].items():
         if arch.startswith("sizeof_") and str(expected) not in state:
             fail(f"PeRecorderState {arch} pin is missing")
-    shader = (ROOT / "src/d3d9/d3d9_pe_device_state_shader_stream.inc.hpp").read_text()
     for fast_symbol in manifest["hot"]["fast_path_symbols"]:
         if not re.search(
             re.escape(fast_symbol) + r"\(.*?validateConstRangeFast",
-            shader,
+            hot,
             re.S,
         ):
             fail(f"default-hot fast-path proof missing for {fast_symbol}")
 
     owner_checks = {
         "query_interface": ("src/d3d9/d3d9_pe_device.cpp", "D3D9DeviceImpl::QueryInterface"),
+        "hot_state_draw": ("src/d3d9/d3d9_pe_device_hot.cpp", "D3D9DeviceImpl::Present"),
         "recorder": ("src/d3d9/d3d9_pe_device_recorder.cpp", "D3D9DeviceImpl::commitPendingCommandChunk"),
         "com_cold": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::TestCooperativeLevel"),
         "state_block_prepare": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::PrepareStateBlockApplyForChild"),
@@ -172,9 +177,6 @@ def source_audit(manifest: dict) -> dict:
         fail("source export ordinal/name allowlist changed")
 
     residual_fragment_lines = 0
-    for fragment in state_fragments:
-        fragment_path = ROOT / "src/d3d9" / fragment.split('"')[1]
-        residual_fragment_lines += len(fragment_path.read_text().splitlines())
     if residual_fragment_lines > manifest["layout"]["state_fragment_residual_max_lines"]:
         fail("state-fragment cold extraction is below the material reduction gate")
 

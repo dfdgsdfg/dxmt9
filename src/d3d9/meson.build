@@ -59,6 +59,7 @@ dxmt9_pe_core_srcs = files(
   'd3d9_pe_chunk_nondraw.cpp',
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
+  'd3d9_pe_device_hot.cpp',
   'd3d9_pe_device_swvp.cpp',
   'd3d9_pe_device_com_cold.cpp',
   'd3d9_pe_device_recorder.cpp',

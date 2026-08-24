@@ -12,13 +12,10 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 The PE ABI/codegen audit is now source-checked by
 `scripts/check/audit_d3d9_pe_abi_codegen.py` and its stable manifest. Native
 execution uses `--source-only`; x64/x86 artifact evidence must prove
-`wine_builtin_dll=true`. Four diagnostic/tape helper fragments and the tape
-value fragment are folded into owner headers/TUs. The cold StateBlock/FVF/
-constant-validation/noinline-constant bodies are now owned by the COM-cold TU;
-the three state fragments retain 1,010 measured lines (from 1,650) for the
-genuinely hot setter kernels. Matched strict x64/x86 builtin audits prove
-zero-delta normalized metrics for the representative hot symbols and the
-default-hot VS/PS constant-F fast paths. The audit excludes addresses,
+`wine_builtin_dll=true`. State, draw, scene, and present bodies now have a real
+`d3d9_pe_device_hot.cpp` owner, the declaration shell is 2,997 physical lines,
+and no state implementation fragment remains. The cold StateBlock/FVF and
+constant-validation helpers remain owned by the COM-cold TU. The audit excludes addresses,
 timestamps, archive order, relocations, and whole assembly hashes.
 
 ## Architecture Layer
