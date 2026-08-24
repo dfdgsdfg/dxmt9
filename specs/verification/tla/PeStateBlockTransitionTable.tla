@@ -5,6 +5,11 @@ EXTENDS Naturals, Sequences
  * Do not hand-edit. This is the model/code isomorphism witness.
  ***************************************************************************)
 StateBlockRows == <<
+  [phase |-> "Idle", event |-> "PoisonRequested", next |-> "Poisoned", action |-> "FailStop", candidateEffect |-> "Discard", stagedRefEffect |-> "Release", captureEffect |-> "Preserve"],
+  [phase |-> "Recording", event |-> "PoisonRequested", next |-> "Poisoned", action |-> "FailStop", candidateEffect |-> "Discard", stagedRefEffect |-> "Release", captureEffect |-> "Preserve"],
+  [phase |-> "EndPublication", event |-> "PoisonRequested", next |-> "Poisoned", action |-> "FailStop", candidateEffect |-> "Discard", stagedRefEffect |-> "Release", captureEffect |-> "Preserve"],
+  [phase |-> "ApplyPrepared", event |-> "PoisonRequested", next |-> "Poisoned", action |-> "FailStop", candidateEffect |-> "Discard", stagedRefEffect |-> "Release", captureEffect |-> "Preserve"],
+  [phase |-> "Poisoned", event |-> "PoisonRequested", next |-> "Poisoned", action |-> "FailStop", candidateEffect |-> "Discard", stagedRefEffect |-> "Release", captureEffect |-> "Preserve"],
   [phase |-> "Idle", event |-> "BeginFailed", next |-> "Idle", action |-> "Preserve", candidateEffect |-> "Preserve", stagedRefEffect |-> "Preserve", captureEffect |-> "Preserve"],
   [phase |-> "Idle", event |-> "BeginAccepted", next |-> "Recording", action |-> "BeginRecording", candidateEffect |-> "Discard", stagedRefEffect |-> "Preserve", captureEffect |-> "Preserve"],
   [phase |-> "Recording", event |-> "EndPreEffectFailed", next |-> "Recording", action |-> "Preserve", candidateEffect |-> "Preserve", stagedRefEffect |-> "Preserve", captureEffect |-> "Preserve"],

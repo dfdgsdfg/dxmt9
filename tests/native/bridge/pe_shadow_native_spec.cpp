@@ -321,21 +321,18 @@ void scalarWriterAbaRetryPreservesLatestValue() {
   const D9CViewport a{1u, 2u, 640u, 480u, 0.0f, 1.0f};
   const D9CViewport b{3u, 4u, 800u, 600u, 0.1f, 0.9f};
   const D9CViewport c{5u, 6u, 1024u, 768u, 0.2f, 0.8f};
-  shadow.writer().viewportShadow() = a;
-  shadow.writer().pendingViewport() = true;
-  shadow.writer().viewportShadow() = b;
-  shadow.writer().pendingViewport() = true;
+  shadow.transition().setViewport(a);
+  shadow.transition().setViewport(b);
   check(shadow.viewportShadow().width == b.width &&
             shadow.viewportShadow().height == b.height &&
             shadow.pendingViewport(),
         "scalar A-B writes retain the latest live value and pending bit");
   // A failed append leaves the pending projection untouched; a retry can
   // replace it with C before the eventual accepted consume.
-  shadow.writer().viewportShadow() = c;
-  shadow.writer().pendingViewport() = true;
+  shadow.transition().setViewport(c);
   check(shadow.viewportShadow().width == c.width && shadow.pendingViewport(),
         "retry keeps the newest scalar value pending");
-  shadow.writer().pendingViewport() = false;
+  shadow.consume().acceptViewport();
   check(shadow.viewportShadow().width == c.width &&
             !shadow.pendingViewport(),
         "accepted consume clears only the represented scalar pending bit");

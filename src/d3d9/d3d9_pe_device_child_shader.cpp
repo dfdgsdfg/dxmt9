@@ -2,7 +2,7 @@
  * for IDirect3DVertexShader9 and IDirect3DPixelShader9. */
 
 #include "d3d9_pe_device_child.hpp"
-#include "d3d9_pe_trusted_handles.hpp"
+#include "d3d9_pe_validated_object_writer.hpp"
 
 #include <cstdint>
 #include <new>
@@ -187,11 +187,11 @@ IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
 }
 
 namespace {
-template <typename Impl, typename Interface>
+template <typename Impl, typename Interface, typename Validated>
 HRESULT validateShader(Interface* object, const void* expectedOwnerDevice,
                        dxmt9::d3d9::pe::PeConcreteObjectKind kind,
-                       D3D9PeValidatedShader* out) noexcept {
-  if (out) *out = {};
+                       Validated* out) noexcept {
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   auto* impl = dynamic_cast<Impl*>(object);
   if (!impl || static_cast<Interface*>(impl) != object) {
@@ -208,14 +208,15 @@ HRESULT validateShader(Interface* object, const void* expectedOwnerDevice,
           identity, kind, expectedOwnerDevice, object)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire, impl->hash(), kind);
   return S_OK;
 }
 }  // namespace
 
 HRESULT D3D9PeValidateVertexShader(
     IDirect3DVertexShader9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedShader* out) noexcept {
+    D3D9PeValidatedVertexShader* out) noexcept {
   return validateShader<D3D9VertexShaderImpl>(
       object, expectedOwnerDevice,
       dxmt9::d3d9::pe::PeConcreteObjectKind::VertexShader, out);
@@ -223,30 +224,8 @@ HRESULT D3D9PeValidateVertexShader(
 
 HRESULT D3D9PeValidatePixelShader(
     IDirect3DPixelShader9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedShader* out) noexcept {
+    D3D9PeValidatedPixelShader* out) noexcept {
   return validateShader<D3D9PixelShaderImpl>(
       object, expectedOwnerDevice,
       dxmt9::d3d9::pe::PeConcreteObjectKind::PixelShader, out);
-}
-
-const dxmt9::d3d9::pe::ShaderRef &
-D3D9PeVertexShaderRef(IDirect3DVertexShader9 *shader) {
-  static const dxmt9::d3d9::pe::ShaderRef empty{};
-  return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->wireObject()
-                : empty;
-}
-
-const dxmt9::d3d9::pe::ShaderRef &
-D3D9PePixelShaderRef(IDirect3DPixelShader9 *shader) {
-  static const dxmt9::d3d9::pe::ShaderRef empty{};
-  return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->wireObject()
-                : empty;
-}
-
-std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader) {
-  return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->hash() : 0;
-}
-
-std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader) {
-  return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->hash() : 0;
 }

@@ -12,6 +12,11 @@ DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
 # by the cold-subsystem TUs. Assertions about the CLASS target this file;
 # assertions about the owning translation unit target DEVICE.
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
+DEVICE_FRAGMENTS = (
+    ROOT / "src/d3d9/d3d9_pe_device_state_core.inc.hpp",
+    ROOT / "src/d3d9/d3d9_pe_device_state_texture_fvf.inc.hpp",
+    ROOT / "src/d3d9/d3d9_pe_device_state_shader_stream.inc.hpp",
+)
 # ProcessVertices, and the rest of the cold COM surface, is DEFINED here since
 # step 10 of the hot/cold split; the class header keeps only its declaration.
 DEVICE_COLD = ROOT / "src/d3d9/d3d9_pe_device_com_cold.cpp"
@@ -24,6 +29,7 @@ DEVICE_TAPE = ROOT / "src/d3d9/d3d9_pe_device_tape.cpp"
 ENGINE_HPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.hpp"
 ENGINE_CPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.cpp"
 CHILD_HPP = ROOT / "src/d3d9/d3d9_pe_device_child.hpp"
+RECORDER_FACADE = ROOT / "src/d3d9/d3d9_pe_recorder_flush_facade.inc.hpp"
 DIAGNOSTIC_OBSERVER_HPP = ROOT / "src/d3d9/d3d9_pe_diagnostic_observer.hpp"
 RECORDER_HPP = ROOT / "src/d3d9/d3d9_pe_recorder.hpp"
 MESON = ROOT / "src/d3d9/meson.build"
@@ -46,16 +52,18 @@ def forbid(source: str, needle: str, label: str) -> None:
 def main() -> int:
     device = DEVICE.read_text()
     device_impl = DEVICE_IMPL.read_text()
+    device_fragments = "".join(path.read_text() for path in DEVICE_FRAGMENTS)
     device_cold = DEVICE_COLD.read_text()
     # Anything asserted "in the device implementation" must hold across the
     # pair; a forbid that looked at only one half could be defeated by
     # moving the offending code into the other.
-    device_all = (device + device_impl + device_cold +
+    device_all = (device + device_impl + device_fragments + device_cold +
                   DEVICE_SWVP.read_text() + DEVICE_DIAG.read_text() +
                   DEVICE_TAPE.read_text())
     engine_hpp = ENGINE_HPP.read_text()
     engine_cpp = ENGINE_CPP.read_text()
     child_hpp = CHILD_HPP.read_text()
+    recorder_facade = RECORDER_FACADE.read_text()
     diagnostic_observer_hpp = DIAGNOSTIC_OBSERVER_HPP.read_text()
     recorder_hpp = RECORDER_HPP.read_text()
     meson = MESON.read_text()
@@ -66,6 +74,11 @@ def main() -> int:
             "device TU includes the class header")
     require(device_cold, '#include "d3d9_pe_device_impl.hpp"',
             "cold-COM TU includes the class header")
+    for fragment in DEVICE_FRAGMENTS:
+        require(device_impl, f'#include "{fragment.name}"',
+                "ordered device class fragment")
+    if len(device_impl.splitlines()) >= 5600:
+        fail("D3D9DeviceImpl primary header decomposition regressed")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")
@@ -142,16 +155,28 @@ def main() -> int:
     )
     if device_all.count("public D3D9PeRecorderFlush") != 1:
         fail("D3D9PeRecorderFlush must have exactly one derived implementation")
+    key_position = device_impl.find(
+        "HRESULT FlushPeRecorderForChild() noexcept override;")
+    fragment_position = device_impl.find(
+        '#include "d3d9_pe_device_state_core.inc.hpp"')
+    if key_position < 0 or fragment_position < 0 or key_position >= fragment_position:
+        fail("FlushPeRecorderForChild must precede every ordered class fragment")
     for removed_virtual in (
         "NotifyPeFirstCallAfterPresentForChild",
         "PushPeCallScopeForChild",
         "NotifyPeCallScopeReturnForChild",
         "PopPeCallScopeForChild",
     ):
-        forbid(child_hpp + device_all, removed_virtual,
+        forbid(child_hpp + recorder_facade + device_all, removed_virtual,
                "retired diagnostic recorder virtual")
-    require(child_hpp, "virtual HRESULT FlushPeRecorderForChild() = 0;",
+    require(recorder_facade, "virtual HRESULT FlushPeRecorderForChild() noexcept = 0;",
             "first recorder protocol virtual")
+    if recorder_facade.count("virtual ") != 29:
+        fail("D3D9PeRecorderFlush must retain exactly 29 virtual declarations")
+    if recorder_facade.count("noexcept") != 29:
+        fail("every D3D9PeRecorderFlush virtual must be noexcept")
+    require(child_hpp, '#include "d3d9_pe_recorder_flush_facade.inc.hpp"',
+            "ordered child callback facade fragment")
     require(child_hpp,
             "D3D9PeChildCallScope(D3D9PeDiagnosticObserver &observer,",
             "enabled-only concrete child observer scope")
@@ -166,7 +191,8 @@ def main() -> int:
     # d3d9_pe_device.cpp. Only the register-sized slot handle may cross this
     # header, and the device's own entry note must stay void -- returning the
     # sample by value put it back into 118 hot-path call-site contracts.
-    forbid(child_hpp, "D3D9PePresentCallToken", "diagnostic sample in child header")
+    forbid(child_hpp + recorder_facade, "D3D9PePresentCallToken",
+           "diagnostic sample in child header")
     require(
         device_impl,
         "void notePeDeviceCallAfterPresent(const char* callName,",

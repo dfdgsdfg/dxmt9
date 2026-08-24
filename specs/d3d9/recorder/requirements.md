@@ -269,16 +269,25 @@ sub-owner exclusively owns StateBlock Recording/inside-End/poison lifecycle,
 the `StateBlockRecorded` domain and constants, and occupied Apply staging.
 Staged COM values must remain category-qualified and lifecycle operations must
 release or transfer one retain per occupied category/slot, including repeated
-use of the same COM identity. `D3D9DeviceImpl` must reach the recorder owner
+use of the same COM identity. Candidate and staged ownership traversal must
+receive typed category references; `void*` AddRef/Release/transfer callbacks
+and convention-only casts from admitted public interfaces are forbidden. The
+TU-local membership result is the validated capability carrying the exact
+public-interface address, raw handle, wire reference, and concrete kind.
+`D3D9DeviceImpl` must reach the recorder owner
 through `recorderState_` directly and must not retain reference aliases to its
 fields, duplicate transaction flags/storage, or add allocation/virtual
 dispatch to draws. The allocation-free TU-local RTTI membership check is the
 explicit exception for non-null app-supplied COM operands at setter/copy
 boundaries; it must not enter internal draw emission. Flat fixed state tables must keep their value
 arrays, occupancy words, and counters private behind bounded
-`set`/`get`/`erase`/iteration operations. `LiveShadow`, `PendingDelta`, the
-StateBlock candidate, and wrapper snapshots must expose mutation only through
-explicit writer/consume capabilities and read-only snapshot views. This is
+`set`/`get`/`erase`/iteration operations. Ordinary live-plus-pending setter
+mutation must be one operation on a category-scoped, allocation-free
+transition capability; raw maintenance and bounded consume capabilities are
+private to semantic settlement and reset owners. `LiveShadow`, `PendingDelta`,
+the StateBlock candidate, and wrapper snapshots expose mutation only through
+explicit transition/maintenance/consume capabilities and read-only snapshot
+views. This is
 capability-based mutation closure, not a claim that the owner is globally
 immutable; no caller may obtain a mutable raw table/category enumeration. This closure must not add
 per-state allocation or change pinned hot footprints.
@@ -315,12 +324,26 @@ model owns value/ordinal refinement; native production truth tables and
 fake-COM witnesses own exact per-slot reference multiplicity, including one
 identity occupying multiple qualified slots across repeated cycles.
 
+The matrix includes an explicit `PoisonRequested` event for every non-terminal
+phase (`Idle`, `Recording`, `EndPublication`, `ApplyPrepared`, and `Poisoned`).
+Each row enters or remains in `Poisoned`, discards the candidate, releases every
+occupied staged retain, and preserves the last published capture. `Terminal`
+has no poison or write row and rejects every recording write. Setting only the
+phase while retaining candidate or staged ownership is non-conforming; the
+bounded model must contain an expected-failure mutation for that leak.
+
 **R-CORE-REC-5.2** The ordinary Set/Draw/append path and its flat value types
 must remain in the hot recorder owner. Render Tape, call-history diagnostics,
 failure reporting, and state-block orchestration are cold owners even when
 hot-reachable. Moving virtual definitions must preserve
 `D3D9DeviceImpl::FlushPeRecorderForChild` as the deliberate key function unless
 an independently measured vtable/code-placement change is part of the task.
+The device remains one `D3D9PeRecorderFlush` base with one object vptr; ordered
+in-class header fragments and existing staged source owners must not introduce
+capability bases, per-child pointers, or reorder virtual declarations. The
+child callback facade has exactly 29 virtual declarations, every declaration
+and override is `noexcept`, and fallible implementations translate failure to
+`HRESULT` or the recorder fail-stop transition.
 
 **R-CORE-REC-5.3** A disabled observer must cost at most one cached boolean or
 nullable-sink branch and perform no callback, virtual dispatch, scope-object

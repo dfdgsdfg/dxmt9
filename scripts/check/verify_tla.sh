@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tla_dir="$repo_root/specs/verification/tla"
+tlc_workers="${DXMT9_TLC_WORKERS:-auto}"
 
 # The PE recorder TLA module is generated from the same bounded decision table
 # included by the production C++ algebra.  A stale generated module is a
@@ -47,7 +48,7 @@ for spec in "$tla_dir"/*.tla; do
   [[ -f "$cfg" ]] || continue
   metadir="$(mktemp -d)"
   echo "=== $(basename "$spec") ==="
-  "${tlc_cmd[@]}" -workers auto -metadir "$metadir" -config "$cfg" "$spec"
+  "${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" -config "$cfg" "$spec"
   rm -rf "$metadir"
   unset metadir
 done
@@ -129,6 +130,9 @@ counterexample_models=(
   # Treating retained COM identities as a set loses one AddRef/Release when the
   # same object occupies multiple StateBlock categories or slots.
   "PeStateBlockTransaction|.lost-duplicate.counterexample|Invariant PreparedRefMultiplicity is violated"
+  # A generic fail-stop transition must clean both candidate and staged
+  # ownership before publishing the Poisoned phase.
+  "PeStateBlockTransaction|.poison-leak.counterexample|Invariant PoisonOwnsNoCandidateOrRefs is violated"
   # Capture refreshes the original frozen category-qualified key set only.
   "PeStateBlockValues|.mutable-tracked.counterexample|Invariant FrozenTrackedSet is violated"
   # A failed Capture may not publish its candidate values.
@@ -152,7 +156,7 @@ for row in "${counterexample_models[@]}"; do
   metadir="$(mktemp -d)"
   counterexample_log="$metadir/tlc.log"
   set +e
-  "${tlc_cmd[@]}" -workers auto -metadir "$metadir" \
+  "${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" \
     -config "$counterexample_cfg" "$counterexample_spec" >"$counterexample_log" 2>&1
   status=$?
   set -e

@@ -72,6 +72,7 @@ pe_full_snapshot_equivalence_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 
@@ -389,6 +390,7 @@ pe_chunk_record_value_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-chunk-record-value-spec',
@@ -403,6 +405,7 @@ pe_shadow_native_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-shadow-native-spec',
@@ -445,6 +448,7 @@ pe_typed_slot_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-typed-slot-spec',
@@ -459,7 +463,10 @@ pe_stateblock_category_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  cpp_args: ['-DDXMT9_STATEBLOCK_TEST_SEAM=1'],
+  cpp_args: [
+    '-DDXMT9_STATEBLOCK_TEST_SEAM=1',
+    '-DDXMT9_PE_SHADOW_TEST_SEAM=1',
+  ],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-stateblock-category-spec',
@@ -477,6 +484,7 @@ pe_producer_views_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-producer-views-spec',
@@ -498,6 +506,7 @@ pe_producer_differential_spec = executable(
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   cpp_args: [
+    '-DDXMT9_PE_SHADOW_TEST_SEAM=1',
     '-DDXMT9_PE_GOLDEN_PATH="' + meson.current_source_dir() +
     '/pe_producer_golden.txt"',
   ],
@@ -520,6 +529,21 @@ pe_com_membership_spec = executable(
 test('dxmt9-pe-com-membership-spec',
      pe_com_membership_spec,
      env: dxmt9_native_test_env)
+
+pe_shadow_capability_surface_spec = executable(
+  'dxmt9-pe-shadow-capability-surface-spec',
+  ['pe_shadow_capability_surface_spec.cpp'],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-shadow-capability-surface-spec',
+     pe_shadow_capability_surface_spec,
+     env: dxmt9_native_test_env)
+
 
 pe_com_cache_spec = executable(
   'dxmt9-pe-com-cache-spec',

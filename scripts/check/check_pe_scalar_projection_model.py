@@ -19,6 +19,11 @@ DIAGNOSTICS_STATE = ROOT / "src/d3d9/d3d9_pe_diagnostics_state.hpp"
 PRODUCER_HPP = ROOT / "src/d3d9/d3d9_pe_producer.hpp"
 PRODUCER_CPP = ROOT / "src/d3d9/d3d9_pe_producer.cpp"
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
+DEVICE_FRAGMENTS = (
+    ROOT / "src/d3d9/d3d9_pe_device_state_core.inc.hpp",
+    ROOT / "src/d3d9/d3d9_pe_device_state_texture_fvf.inc.hpp",
+    ROOT / "src/d3d9/d3d9_pe_device_state_shader_stream.inc.hpp",
+)
 DEVICE_RECORDER = ROOT / "src/d3d9/d3d9_pe_device_recorder.cpp"
 TLA = ROOT / "specs/verification/tla/PeRecorderScalarProjection.tla"
 TLA_DIR = TLA.parent
@@ -73,7 +78,7 @@ def main() -> int:
     diagnostics_state = read(DIAGNOSTICS_STATE)
     producer_hpp = read(PRODUCER_HPP)
     producer_cpp = read(PRODUCER_CPP)
-    device_impl = read(DEVICE_IMPL)
+    device_impl = read(DEVICE_IMPL) + "".join(read(path) for path in DEVICE_FRAGMENTS)
     device_recorder = read(DEVICE_RECORDER)
     tla = read(TLA)
 

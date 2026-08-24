@@ -2,6 +2,7 @@
 #include "d3d9_pe_stateblock_fault.hpp"
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -189,8 +190,24 @@ void testSourceContracts(const std::filesystem::path &root) {
       root / "src/d3d9/d3d9_pe_diagnostic_observer.hpp");
   const auto child =
       readTextFile(root / "src/d3d9/d3d9_pe_device_child.hpp");
-  const auto device =
-      readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
+  const auto validatedObject = readTextFile(
+      root / "src/d3d9/d3d9_pe_validated_object.hpp");
+  const auto recorderFacade = readTextFile(
+      root / "src/d3d9/d3d9_pe_recorder_flush_facade.inc.hpp");
+  auto device = readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
+  for (const std::string_view fragment : {
+           "d3d9_pe_device_state_core.inc.hpp",
+           "d3d9_pe_device_state_texture_fvf.inc.hpp",
+           "d3d9_pe_device_state_shader_stream.inc.hpp"}) {
+    const std::string marker = "#include \"" + std::string(fragment) + "\"";
+    const auto markerPos = device.find(marker);
+    check(markerPos != std::string::npos,
+          "device header contains each ordered class fragment");
+    device.replace(markerPos, marker.size(),
+                   readTextFile(root / "src/d3d9" / fragment));
+  }
+  check(std::count(device.begin(), device.end(), '\n') >= 6700,
+        "expanded device header retains the complete declaration surface");
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
   const auto recorderHeader =
@@ -292,6 +309,41 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(stateBlockTransaction,
                 "StateBlockVertexShaderRef stagedVertexShader_{};",
                 "Apply staging remains kind-qualified inside its owner");
+  checkContains(validatedObject, "struct D3D9PeValidatedObject",
+                "wrapper admission returns a typed local capability");
+  checkContains(validatedObject, "constexpr Public* publicIdentity() const noexcept",
+                "validated capability preserves the exact interface address");
+  checkContains(validatedObject, "Wire wire_{};",
+                "validated capability carries the kind-qualified wire ref");
+  checkContains(validatedObject, "constexpr D3D9PeValidatedObject() noexcept = default;",
+                "validated object construction is private");
+  checkContains(child, "d3d9_pe_validated_object.hpp",
+                "child surface imports the private validation object shape");
+  checkNotContains(child, "D3D9PeValidatedObjectWriter::clear",
+                   "child surface cannot mint validation evidence");
+  std::size_t validatedWriterIncludes = 0;
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(root / "src/d3d9")) {
+    if (!entry.is_regular_file()) continue;
+    const auto extension = entry.path().extension();
+    if (extension != ".cpp" && extension != ".hpp") continue;
+    validatedWriterIncludes += countOccurrences(
+        readTextFile(entry.path()),
+        "#include \"d3d9_pe_validated_object_writer.hpp\"");
+  }
+  check(validatedWriterIncludes == 4u,
+        "only the four concrete validator TUs can mint validation evidence");
+  checkNotContains(child, "operator()(void*",
+                   "StateBlock ownership policies reject untyped pointers");
+  checkNotContains(child, "reinterpret_cast<IUnknown",
+                   "StateBlock ownership preserves the exact interface address");
+  checkContains(child, "if (auto* object = value.raw()) object->AddRef();",
+                "typed retain policy calls the original interface pointer");
+  checkContains(child, "if (auto* object = value.raw()) object->Release();",
+                "typed release policy calls the original interface pointer");
+  check(!std::filesystem::exists(
+            root / "src/d3d9/d3d9_pe_trusted_handles.hpp"),
+        "convention-only trusted wire extractors are removed");
   checkNotContains(device, "std::array<void*, kPeTextureSlots> stagedApply",
                    "device cannot bypass typed StateBlock staging");
   checkContains(diagnostics, "struct PeDiagnosticsFeatureGates",
@@ -439,8 +491,16 @@ void testSourceContracts(const std::filesystem::path &root) {
     checkNotContains(child, removed,
                      "diagnostic virtual is absent from recorder protocol");
   }
-  checkContains(child, "virtual HRESULT FlushPeRecorderForChild() = 0;",
+  checkContains(recorderFacade,
+                "virtual HRESULT FlushPeRecorderForChild() noexcept = 0;",
                 "recorder protocol flush virtual remains first");
+  check(countOccurrences(recorderFacade, "virtual ") == 29u,
+        "recorder protocol retains exactly 29 virtual declarations");
+  check(countOccurrences(recorderFacade, "noexcept") == 29u,
+        "every recorder protocol virtual is noexcept");
+  checkContains(child,
+                "#include \"d3d9_pe_recorder_flush_facade.inc.hpp\"",
+                "child header includes the ordered callback facade fragment");
   checkNotContains(observer, "virtual ",
                    "the child diagnostic observer is concrete and nonvirtual");
   checkContains(deviceOwner,

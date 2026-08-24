@@ -12,7 +12,7 @@ EXTENDS Naturals, Sequences, TLC, PeStateBlockTransitionTable
 CONSTANTS StagedRefMultiplicity, Mutation
 ASSUME StagedRefMultiplicity \in Nat \ {0}
 ASSUME Mutation \in {"Guarded", "NoPoison", "NoRelease", "StaleOpen",
-                     "LostDuplicate"}
+                     "LostDuplicate", "PoisonLeak"}
 
 Phases == {"Idle", "Recording", "EndPublication", "ApplyPrepared",
            "Poisoned", "Terminal"}
@@ -26,6 +26,15 @@ vars == <<phase, candidateOpen, stagedRefCount, captureVersion, failure,
 Init ==
   /\ phase = "Idle" /\ candidateOpen = FALSE /\ stagedRefCount = 0
   /\ captureVersion = 0 /\ failure = "None" /\ resetStarted = FALSE
+
+PoisonRequested ==
+  /\ phase # "Terminal"
+  /\ StateBlockMatches(phase, "PoisonRequested", "Poisoned", "FailStop",
+                       "Discard", "Release", "Preserve")
+  /\ phase' = "Poisoned"
+  /\ candidateOpen' = IF Mutation = "PoisonLeak" THEN candidateOpen ELSE FALSE
+  /\ stagedRefCount' = IF Mutation = "PoisonLeak" THEN stagedRefCount ELSE 0
+  /\ UNCHANGED <<captureVersion, failure, resetStarted>>
 
 BeginFailed ==
   /\ phase = "Idle"
@@ -150,7 +159,7 @@ Teardown ==
   /\ failure' = "None" /\ resetStarted' = FALSE
   /\ UNCHANGED captureVersion
 
-Next == BeginFailed \/ BeginAccepted \/ EndPreEffectFailed \/
+Next == PoisonRequested \/ BeginFailed \/ BeginAccepted \/ EndPreEffectFailed \/
         EndBackendAccepted \/ EndBackendFailed \/ EndWrapperFailed \/
         EndPublished \/ CapturePreEffectFailed \/ CaptureBackendFailed \/
         CapturePublished \/ ApplyPrepareFailed \/ ApplyPrepared \/
@@ -169,6 +178,8 @@ NoStaleOpenAfterPostEffectFailure ==
   failure \in {"EndBackend", "EndWrapper", "CaptureBackend",
                "ApplyBackend"} => phase = "Poisoned"
 NoRefsOutsidePrepared == phase # "ApplyPrepared" => stagedRefCount = 0
+PoisonOwnsNoCandidateOrRefs ==
+  phase = "Poisoned" => ~candidateOpen /\ stagedRefCount = 0
 CaptureVersionOnlyPublishes == captureVersion \in 0..1
 PoisonEventuallyResolves ==
   [](phase = "Poisoned" ~> (phase = "Idle" \/ phase = "Terminal"))
@@ -178,5 +189,6 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(ResetStarted) /\
 THEOREM Spec => []TypeOK /\ []CandidateMatchesSerialPhase /\
                  []PreparedRefMultiplicity /\ []FailedRefsReleased /\
                  []NoStaleOpenAfterPostEffectFailure /\
-                 []NoRefsOutsidePrepared /\ []CaptureVersionOnlyPublishes
+                 []NoRefsOutsidePrepared /\ []PoisonOwnsNoCandidateOrRefs /\
+                 []CaptureVersionOnlyPublishes
 ====

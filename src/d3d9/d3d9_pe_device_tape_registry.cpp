@@ -465,11 +465,11 @@ bool D3D9DeviceImpl::admitRenderTapePresentOutput() noexcept {
             "render_tape_capture producer aborted reason=present_output_surface_foreign");
         return false;
     }
-    auto *surface = validatedSurface.raw;
+    auto *surface = validatedSurface.raw();
     D9CWireObjectIdentity identity{};
     D9CWireObjectIdentity rawIdentity{};
     D9CSurfaceDesc descriptor{};
-    const auto &cachedWireObject = validatedSurface.wire;
+    const auto &cachedWireObject = validatedSurface.wire();
     const bool rawIdentityOk =
         dxmt9c_surface_get_wire_identity(surface, &rawIdentity) >= 0;
     identity = rawIdentity;

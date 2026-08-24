@@ -3,7 +3,7 @@
  * IDirect3DVolumeTexture9 (and the inner IDirect3DVolume9 helper). */
 
 #include "d3d9_pe_device_child.hpp"
-#include "d3d9_pe_trusted_handles.hpp"
+#include "d3d9_pe_validated_object_writer.hpp"
 
 #include "d3d9_pe_level_surface_cache.hpp"
 #include "util/com/com_private_data.hpp"
@@ -2970,7 +2970,7 @@ HRESULT D3D9PeValidateSurface(
     IDirect3DSurface9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedSurface* out,
     dxmt9::d3d9::pe::PeSurfaceQualification qualification) noexcept {
-  if (out) *out = {};
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   auto* impl = dynamic_cast<D3D9SurfaceImpl*>(object);
   if (!impl || static_cast<IDirect3DSurface9*>(impl) != object) {
@@ -2989,19 +2989,11 @@ HRESULT D3D9PeValidateSurface(
           expectedOwnerDevice, object, qualification)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire,
+      impl->peLocked() ? 1u : 0u,
+      dxmt9::d3d9::pe::PeConcreteObjectKind::Surface);
   return S_OK;
-}
-
-const dxmt9::d3d9::pe::SurfaceRef &
-D3D9PeSurfaceRef(IDirect3DSurface9 *surface) {
-  static const dxmt9::d3d9::pe::SurfaceRef empty{};
-  return surface ? static_cast<D3D9SurfaceImpl *>(surface)->wireObject()
-                 : empty;
-}
-
-bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface) {
-  return surface ? static_cast<D3D9SurfaceImpl *>(surface)->peLocked() : false;
 }
 
 namespace {
@@ -3025,7 +3017,8 @@ HRESULT validateTextureKind(
           identity, kind, expectedOwnerDevice, object)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire, 0u, kind);
   return S_OK;
 }
 }  // namespace
@@ -3033,7 +3026,7 @@ HRESULT validateTextureKind(
 HRESULT D3D9PeValidateTexture(
     IDirect3DBaseTexture9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedTexture* out) noexcept {
-  if (out) *out = {};
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   if (dynamic_cast<D3D9TextureImpl*>(object)) {
     return validateTextureKind<D3D9TextureImpl>(
@@ -3051,21 +3044,4 @@ HRESULT D3D9PeValidateTexture(
         dxmt9::d3d9::pe::PeConcreteObjectKind::VolumeTexture, out);
   }
   return D3DERR_INVALIDCALL;
-}
-
-const dxmt9::d3d9::pe::TextureRef &
-D3D9PeTextureRef(IDirect3DBaseTexture9 *texture) {
-  static const dxmt9::d3d9::pe::TextureRef empty{};
-  if (!texture)
-    return empty;
-  switch (texture->GetType()) {
-  case D3DRTYPE_TEXTURE:
-    return static_cast<D3D9TextureImpl *>(texture)->wireObject();
-  case D3DRTYPE_CUBETEXTURE:
-    return static_cast<D3D9CubeTextureImpl *>(texture)->wireObject();
-  case D3DRTYPE_VOLUMETEXTURE:
-    return static_cast<D3D9VolumeTextureImpl *>(texture)->wireObject();
-  default:
-    return empty;
-  }
 }

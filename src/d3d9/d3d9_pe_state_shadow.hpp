@@ -14,6 +14,11 @@
 #include <type_traits>
 #include <vector>
 
+class D3D9DeviceImpl;
+
+template<typename Public, typename Raw, typename Wire>
+struct D3D9PeValidatedObject;
+
 // D3D9 constant mirrors. This header is compiled natively (no windows.h /
 // d3d9.h) so the sparse-state producer and its differential test can run
 // without Wine, so the values are inlined from the D3D9 SDK headers rather
@@ -403,6 +408,7 @@ struct IDirect3DPixelShader9;
 struct IDirect3DVertexDeclaration9;
 struct IDirect3DIndexBuffer9;
 struct IDirect3DSurface9;
+struct IDirect3DQuery9;
 
 struct StateBlockStreamSourceValue {
     struct BufferRef {
@@ -426,10 +432,23 @@ struct StateBlockStreamSourceValue {
     std::uint32_t stride = 0u;
 };
 
+class StateBlockBufferRefCapability {
+ public:
+  constexpr IDirect3DVertexBuffer9* raw() const noexcept { return value_; }
+
+ private:
+  constexpr explicit StateBlockBufferRefCapability(
+      IDirect3DVertexBuffer9* value) noexcept
+      : value_(value) {}
+  IDirect3DVertexBuffer9* value_ = nullptr;
+  template<typename Public, typename Raw, typename Wire>
+  friend struct D3D9PeValidatedObject;
+};
+
 struct StateBlockBufferRefFactory {
     static constexpr StateBlockStreamSourceValue::BufferRef fromValidated(
-        IDirect3DVertexBuffer9* raw) noexcept {
-        return StateBlockStreamSourceValue::BufferRef(raw);
+        StateBlockBufferRefCapability capability) noexcept {
+        return StateBlockStreamSourceValue::BufferRef(capability.raw());
     }
 };
 
@@ -495,6 +514,20 @@ struct StateBlockComRefTraits<StateBlockDepthStencilTag> {
 };
 
 template<typename Tag>
+class StateBlockComRefCapability {
+ public:
+    using raw_type = typename StateBlockComRefTraits<Tag>::raw_type;
+    constexpr raw_type* raw() const noexcept { return value_; }
+
+ private:
+    constexpr explicit StateBlockComRefCapability(raw_type* value) noexcept
+        : value_(value) {}
+    raw_type* value_ = nullptr;
+    template<typename Public, typename Raw, typename Wire>
+    friend struct D3D9PeValidatedObject;
+};
+
+template<typename Tag>
 struct StateBlockComRef {
     using raw_type = typename StateBlockComRefTraits<Tag>::raw_type;
     constexpr StateBlockComRef() noexcept = default;
@@ -521,8 +554,9 @@ template<typename Tag>
 struct StateBlockComRefFactory {
     using Ref = StateBlockComRef<Tag>;
     using raw_type = typename Ref::raw_type;
-    static constexpr Ref fromValidated(raw_type* raw) noexcept {
-        return Ref(raw);
+    static constexpr Ref fromValidated(
+        StateBlockComRefCapability<Tag> capability) noexcept {
+        return Ref(capability.raw());
     }
 };
 
@@ -1919,9 +1953,9 @@ private:
                           std::is_same_v<T, StateBlockStreamSourceValue>,
                           "owned StateBlock category needs a typed COM ref");
             if constexpr (requires { value.raw(); }) {
-                fn(value.raw());
+                fn(value);
             } else {
-                fn(value.buffer.raw());
+                fn(value.buffer);
             }
         } else {
             static_assert(!requires { value.raw(); } &&
@@ -1952,7 +1986,8 @@ private:
 #undef DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY
 
 struct PeHotStateShadow : LiveShadow, PendingDelta {
-    class Writer {
+private:
+    class Maintenance {
     public:
         // Scalar domains are only mutable through this capability.  The
         // references remain flat members of the hot shadow; this wrapper is
@@ -2043,7 +2078,117 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
         }
 
     private:
-        explicit Writer(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
+        explicit Maintenance(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
+        PeHotStateShadow& shadow_;
+        friend struct PeHotStateShadow;
+    };
+
+public:
+    class Transition {
+    public:
+        void setRenderState(RenderStateSlot key, std::uint32_t value) noexcept {
+            shadow_.LiveShadow::renderStates().set(key, value);
+            shadow_.PendingDelta::renderStates().set(key, value);
+        }
+        void setTextureStageState(TextureStageIndex stage,
+                                  TextureStageStateType type,
+                                  std::uint32_t value) noexcept {
+            shadow_.LiveShadow::textureStageStates().set(stage, type, value);
+            shadow_.PendingDelta::textureStageStates().set(stage, type, value);
+        }
+        void setSamplerState(SamplerIndex sampler, SamplerStateType type,
+                             std::uint32_t value) noexcept {
+            shadow_.LiveShadow::samplerStates().set(sampler, type, value);
+            shadow_.PendingDelta::samplerStates().set(sampler, type, value);
+        }
+        void setTransform(TransformState key,
+                          const D9CMatrix& value) noexcept {
+            shadow_.LiveShadow::transforms().set(key, value);
+            shadow_.PendingDelta::transforms().set(key, value);
+        }
+        void setViewport(const D9CViewport& value) noexcept {
+            shadow_.LiveShadow::viewportShadow_ = value;
+            shadow_.PendingDelta::pendingViewport_ = true;
+        }
+        void setScissor(const D9CRect& value) noexcept {
+            shadow_.LiveShadow::scissorShadow_ = value;
+            shadow_.PendingDelta::pendingScissor_ = true;
+        }
+        void setMaterial(const D9CMaterial& value) noexcept {
+            shadow_.LiveShadow::materialShadow_ = value;
+            shadow_.PendingDelta::pendingMaterial_ = true;
+        }
+        void setClipPlane(std::uint32_t slot, const float* value) noexcept {
+            if (slot >= 6u || !value) return;
+            std::memcpy(shadow_.LiveShadow::clipPlaneShadow_ + slot * 4u,
+                        value, sizeof(float) * 4u);
+            shadow_.PendingDelta::pendingClipPlaneMask_ |= 1u << slot;
+        }
+        void setLight(std::uint32_t slot, const D9CLight& value) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_LIGHTS) return;
+            shadow_.LiveShadow::lightShadow_[slot] = value;
+            shadow_.PendingDelta::pendingLightSlotMask_ |= 1u << slot;
+        }
+        void setLightEnable(std::uint32_t slot, bool enabled) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_LIGHTS) return;
+            const std::uint32_t bit = 1u << slot;
+            shadow_.PendingDelta::pendingLightEnableValidMask_ |= bit;
+            if (enabled) {
+                shadow_.PendingDelta::pendingLightEnableMask_ |= bit;
+                shadow_.LiveShadow::lightEnableShadow_ |= bit;
+            } else {
+                shadow_.PendingDelta::pendingLightEnableMask_ &= ~bit;
+                shadow_.LiveShadow::lightEnableShadow_ &= ~bit;
+            }
+        }
+
+        template<typename Fn>
+        void bindTexture(std::uint32_t slot, Fn&& bind) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_TEXTURES) return;
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingTextureMask_ |= 1u << slot;
+        }
+        template<typename Fn>
+        void bindStream(std::uint32_t slot, Fn&& bind) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_STREAMS) return;
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingStreamMask_ |= 1u << slot;
+        }
+        template<typename Fn>
+        void bindRenderTarget(std::uint32_t slot, Fn&& bind) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_RENDER_TARGETS) return;
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingRtMask_ |= 1u << slot;
+        }
+        template<typename Fn>
+        void bindDepthStencil(Fn&& bind) noexcept {
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingDs_ = true;
+        }
+        template<typename Fn>
+        void bindVertexInput(Fn&& bind) noexcept {
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingFvf_ = true;
+            shadow_.PendingDelta::pendingVdecl_ = true;
+        }
+        template<typename Fn>
+        void bindVertexShader(Fn&& bind) noexcept {
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingVs_ = true;
+        }
+        template<typename Fn>
+        void bindPixelShader(Fn&& bind) noexcept {
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingPs_ = true;
+        }
+        template<typename Fn>
+        void bindIndexBuffer(Fn&& bind) noexcept {
+            std::forward<Fn>(bind)();
+            shadow_.PendingDelta::pendingIb_ = true;
+        }
+
+    private:
+        explicit Transition(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
         PeHotStateShadow& shadow_;
         friend struct PeHotStateShadow;
     };
@@ -2165,6 +2310,60 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
         void clearPendingHotState() noexcept {
             shadow_.PendingDelta::clearHotState();
         }
+        void acceptTexture(std::uint32_t slot) noexcept {
+            if (slot < D9C_DRAW_PACKET_MAX_TEXTURES)
+                shadow_.PendingDelta::pendingTextureMask_ &= ~(1u << slot);
+        }
+        void acceptStream(std::uint32_t slot) noexcept {
+            if (slot < D9C_DRAW_PACKET_MAX_STREAMS)
+                shadow_.PendingDelta::pendingStreamMask_ &= ~(1u << slot);
+        }
+        void acceptVertexShader() noexcept {
+            shadow_.PendingDelta::pendingVs_ = false;
+        }
+        void acceptPixelShader() noexcept {
+            shadow_.PendingDelta::pendingPs_ = false;
+        }
+        void acceptVertexDeclaration() noexcept {
+            shadow_.PendingDelta::pendingVdecl_ = false;
+            shadow_.PendingDelta::pendingFvf_ = false;
+        }
+        void acceptFvf() noexcept {
+            shadow_.PendingDelta::pendingFvf_ = false;
+        }
+        void acceptIndexBuffer() noexcept {
+            shadow_.PendingDelta::pendingIb_ = false;
+        }
+        void acceptRenderTarget(std::uint32_t slot) noexcept {
+            if (slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS)
+                shadow_.PendingDelta::pendingRtMask_ &= ~(1u << slot);
+        }
+        void acceptDepthStencil() noexcept {
+            shadow_.PendingDelta::pendingDs_ = false;
+        }
+        void acceptViewport() noexcept {
+            shadow_.PendingDelta::pendingViewport_ = false;
+        }
+        void acceptScissor() noexcept {
+            shadow_.PendingDelta::pendingScissor_ = false;
+        }
+        void acceptMaterial() noexcept {
+            shadow_.PendingDelta::pendingMaterial_ = false;
+        }
+        void acceptClipPlane(std::uint32_t slot) noexcept {
+            if (slot < 6u)
+                shadow_.PendingDelta::pendingClipPlaneMask_ &= ~(1u << slot);
+        }
+        void acceptLight(std::uint32_t slot) noexcept {
+            if (slot < D9C_DRAW_PACKET_MAX_LIGHTS)
+                shadow_.PendingDelta::pendingLightSlotMask_ &= ~(1u << slot);
+        }
+        void acceptLightEnable(std::uint32_t slot) noexcept {
+            if (slot >= D9C_DRAW_PACKET_MAX_LIGHTS) return;
+            const std::uint32_t bit = 1u << slot;
+            shadow_.PendingDelta::pendingLightEnableValidMask_ &= ~bit;
+            shadow_.PendingDelta::pendingLightEnableMask_ &= ~bit;
+        }
 
     private:
         explicit Consumer(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
@@ -2172,9 +2371,14 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
         friend struct PeHotStateShadow;
     };
 
-    Writer writer() noexcept { return Writer(*this); }
+    Transition transition() noexcept { return Transition(*this); }
     Snapshot snapshot() const noexcept { return Snapshot(*this); }
     Consumer consume() noexcept { return Consumer(*this); }
+
+#if defined(DXMT9_PE_SHADOW_TEST_SEAM)
+    using Writer = Maintenance;
+    Writer writer() noexcept { return Writer(*this); }
+#endif
 
     ConstRenderStateTableView renderStateShadowTyped() const noexcept {
         return snapshot().renderStateShadowTyped();
@@ -2258,6 +2462,9 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
     }
 
 private:
+    Maintenance maintenance() noexcept { return Maintenance(*this); }
+    friend class D3D9DeviceImpl;
+
     // Keep the two hot domains naturally aligned without folding the cold
     // StateBlockRecorded owner back into this object.
     [[maybe_unused]] std::uint64_t reservedLayout_ = 0u;

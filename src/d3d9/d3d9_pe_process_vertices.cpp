@@ -2285,10 +2285,10 @@ HRESULT processVertices(const Context& context,
     if (!dstBuffer) return invalid("null destination buffer");
     if (!context.device || !context.deviceIdentity)
         return invalid("null device");
-    D3D9PeValidatedBuffer destination{};
+    D3D9PeValidatedVertexBuffer destination{};
     D3D9PeValidatedDeclaration outputDeclaration{};
     D3D9PeValidatedDeclaration inputDeclaration{};
-    D3D9PeValidatedShader vertexShader{};
+    D3D9PeValidatedVertexShader vertexShader{};
     if (FAILED(D3D9PeValidateVertexBuffer(
             dstBuffer, context.deviceIdentity, &destination)) ||
         FAILED(D3D9PeValidateVertexDecl(
@@ -2303,12 +2303,12 @@ HRESULT processVertices(const Context& context,
     std::array<D9CBuffer*, D9C_DRAW_PACKET_MAX_STREAMS> validatedStreamRaw{};
     for (std::size_t i = 0; i < context.streamSources.size(); ++i) {
         auto* stream = context.streamSources[i];
-        D3D9PeValidatedBuffer validatedStream{};
+        D3D9PeValidatedVertexBuffer validatedStream{};
         if (FAILED(D3D9PeValidateVertexBuffer(
                 stream, context.deviceIdentity, &validatedStream))) {
             return invalid("foreign or invalid source stream");
         }
-        validatedStreamRaw[i] = validatedStream.raw;
+        validatedStreamRaw[i] = validatedStream.raw();
     }
     std::array<D9CTexture*, D9C_DRAW_PACKET_MAX_TEXTURES> validatedTextureRaw{};
     for (std::size_t i = 0; i < context.textures.size(); ++i) {
@@ -2318,7 +2318,7 @@ HRESULT processVertices(const Context& context,
                 texture, context.deviceIdentity, &validatedTexture))) {
             return invalid("foreign or invalid texture");
         }
-        validatedTextureRaw[i] = validatedTexture.raw;
+        validatedTextureRaw[i] = validatedTexture.raw();
     }
     if (vertexCount == 0) return S_OK;
     if (flags & ~D3DPV_DONOTCOPYDATA) return invalid("flags unsupported");
@@ -2345,7 +2345,7 @@ HRESULT processVertices(const Context& context,
             return invalid("shader analysis failed");
         }
     }
-    D9CBuffer* dstRaw = destination.raw;
+    D9CBuffer* dstRaw = destination.raw();
     if (!dstRaw) return invalid("raw destination buffer missing");
     D9CBufferDesc dstDesc{};
     if (FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
@@ -2367,7 +2367,7 @@ HRESULT processVertices(const Context& context,
     } else if (context.vertexDeclaration) {
         sourceLayoutFromDeclaration = true;
         if (!describeProcessDeclaration(context.vertexDeclaration, srcLayout,
-                                        false, inputDeclaration.raw)) {
+                                        false, inputDeclaration.raw())) {
             return invalid("source declaration unsupported");
         }
     } else {
@@ -2375,7 +2375,7 @@ HRESULT processVertices(const Context& context,
     }
     if (declaration) {
         if (!describeProcessDeclaration(declaration, dstLayout, true,
-                                        outputDeclaration.raw)) {
+                                        outputDeclaration.raw())) {
             return invalid("destination declaration unsupported");
         }
     } else {
@@ -2719,7 +2719,7 @@ HRESULT processVertices(const Context& context,
         }
         return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
     }
-    D3D9PeInvalidateVertexBufferReadonlyCache(dstBuffer);
+    D3D9PeInvalidateVertexBufferReadonlyCache(destination);
 
     const auto& vp = context.state.viewportShadow();
     const float scaleX = static_cast<float>(vp.width) * 0.5f;

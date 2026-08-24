@@ -383,7 +383,8 @@ struct RefProbe {
 };
 
 struct RetainNoop {
-  void operator()(void*) const noexcept {}
+  template<typename Ref>
+  void operator()(Ref) const noexcept {}
 };
 
 template<typename T>
@@ -406,6 +407,7 @@ void testGeneratedTransitionTableIsomorphism() {
       PeStateBlockPhase::EndPublication, PeStateBlockPhase::ApplyPrepared,
       PeStateBlockPhase::Poisoned, PeStateBlockPhase::Terminal};
   constexpr std::array kEvents{
+      PeStateBlockEvent::PoisonRequested,
       PeStateBlockEvent::BeginFailed,
       PeStateBlockEvent::BeginAccepted,
       PeStateBlockEvent::EndPreEffectFailed,
@@ -469,6 +471,74 @@ void testGeneratedTransitionTableIsomorphism() {
     check(mapped, "every StateBlock event enum must have a shared row");
   for (const bool mapped : actionMapped)
     check(mapped, "every StateBlock action enum must have a shared row");
+
+  for (const auto phase : kPhases) {
+    const auto poison = planPeStateBlockTransition(
+        {phase, PeStateBlockEvent::PoisonRequested});
+    if (phase == PeStateBlockPhase::Terminal) {
+      check(!poison.valid() && !peStateBlockRecorderWriteAllowed(phase),
+            "Terminal has no poison row and rejects every recorder write");
+    } else {
+      check(poison.valid() && poison.next() == PeStateBlockPhase::Poisoned &&
+                poison.action() == PeStateBlockAction::FailStop &&
+                poison.candidateEffect() ==
+                    PeStateBlockCandidateEffect::Discard &&
+                poison.stagedRefEffect() ==
+                    PeStateBlockStagedRefEffect::Release,
+            "PoisonRequested is total with ownership cleanup before Terminal");
+    }
+  }
+}
+
+void testTotalPoisonOwnershipCleanup() {
+  auto retain = [](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->addRef();
+  };
+  auto release = [](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->release();
+  };
+
+  for (const bool enterPublication : {false, true}) {
+    RefProbe candidate{};
+    PeStateBlockTransactionState transaction{};
+    transaction.beginAccepted(release);
+    candidate.addRef();
+    check(transaction.withRecordingWriter([&](auto& writer) {
+            writer.textures().set(
+                fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
+                stateBlockRef<StateBlockTextureRef>(&candidate));
+          }),
+          "recording poison witness installs one owned candidate ref");
+    if (enterPublication) transaction.enterEndPublication();
+    transaction.poison(release);
+    check(transaction.phase() == PeStateBlockPhase::Poisoned &&
+              candidate.refs == 1u &&
+              transaction.recordedSnapshot().textures().empty(),
+          "PoisonRequested discards candidate ownership from Recording and EndPublication");
+  }
+
+  RefProbe staged{};
+  PeStateBlockTransactionState apply{};
+  check(apply.stageTexture(
+            stateBlockTextureSlotKey(0u),
+            stateBlockRef<StateBlockTextureRef>(&staged), retain),
+        "apply poison witness stages one retained reference");
+  apply.markApplyPrepared();
+  apply.poison(release);
+  check(apply.phase() == PeStateBlockPhase::Poisoned && staged.refs == 1u &&
+            !apply.hasPreparedApply(),
+        "PoisonRequested releases prepared Apply ownership");
+
+  apply.poison(release);
+  check(apply.phase() == PeStateBlockPhase::Poisoned && staged.refs == 1u,
+        "repeated PoisonRequested is idempotent after cleanup");
+  apply.discardAll(release);
+  check(apply.phase() == PeStateBlockPhase::Terminal &&
+            !apply.writeAllowed(),
+        "Terminal is a non-writable teardown sink");
+  apply.poison(release);
+  check(apply.phase() == PeStateBlockPhase::Terminal && staged.refs == 1u,
+        "Terminal rejects PoisonRequested without ownership effects");
 }
 
 void testTransactionOwnershipAndLifecycle() {
@@ -493,7 +563,7 @@ void testTransactionOwnershipAndLifecycle() {
   check(!transaction.recordingCapability(),
         "idle transaction must not issue a recording capability");
 
-  transaction.beginAccepted([](void*) noexcept {});
+  transaction.beginAccepted([](auto) noexcept {});
   check(transaction.isRecording() && transaction.recordingCapability(),
         "accepted Begin issues a recording capability");
   auto recording = transaction.recordingCapability();
@@ -515,8 +585,8 @@ void testTransactionOwnershipAndLifecycle() {
           writer.renderStates().set(renderStateSlotKey(7u), 19u);
         }),
         "recording capability scopes mutable writer access");
-  transaction.failEnd([&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
+  transaction.failEnd([&](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->release();
   });
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
             transaction.isPoisoned() && candidateRef.refs == 1u,
@@ -555,7 +625,7 @@ void testConstantRecordingWriterCapabilityTruthTable() {
     check(!invoked, names[i]);
   }
 
-  transaction.beginAccepted([](void*) noexcept {});
+  transaction.beginAccepted([](auto) noexcept {});
   check(transaction.isRecording(),
         "constant truth table enters the Recording phase");
   for (std::size_t i = 0; i < categories.size(); ++i) {
@@ -575,7 +645,7 @@ void testConstantRecordingWriterCapabilityTruthTable() {
             recorded.psConstI.contains(3u) && recorded.psConstB.contains(3u),
         "all six constants write only the recorded candidate");
 
-  transaction.failEnd([](void*) noexcept {});
+  transaction.failEnd([](auto) noexcept {});
   check(transaction.isPoisoned(),
         "failed transition poisons the constant recording domain");
   bool staleInvoked = false;
@@ -583,7 +653,7 @@ void testConstantRecordingWriterCapabilityTruthTable() {
             [&](auto&) noexcept { staleInvoked = true; }) && !staleInvoked,
         "stale-after-transition constant binding must be rejected");
 
-  transaction.resetSucceeded([](void*) noexcept {});
+  transaction.resetSucceeded([](auto) noexcept {});
   check(transaction.phase() == PeStateBlockPhase::Idle,
         "successful reset recovers the poisoned constant domain");
   bool recoveredInvoked = false;
@@ -596,11 +666,11 @@ void testConstantRecordingWriterCapabilityTruthTable() {
 void testTypedStagingRetentionMultiplicityAndReset() {
   PeStateBlockTransactionState transaction{};
   RefProbe shared{};
-  auto retain = [&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->addRef();
+  auto retain = [&](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->addRef();
   };
-  auto release = [&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
+  auto release = [&](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->release();
   };
 
   check(!transaction.stageTexture(
@@ -649,7 +719,7 @@ void testTypedStagingRetentionMultiplicityAndReset() {
   check(transferred.raw() == reinterpret_cast<StateBlockTextureRef::raw_type*>(&shared) && !transaction.hasPreparedApply() &&
             shared.refs == 2u,
         "commit take transfers the staged retain without releasing it");
-  release(transferred.raw());
+  release(transferred);
   transaction.finishPreparedApply();
 
   transaction.stageDepthStencil(StateBlockDepthStencilRef{}, retain);
@@ -663,7 +733,7 @@ void testTypedStagingRetentionMultiplicityAndReset() {
 
   transaction.stagePixelShader(
       stateBlockRef<StateBlockPixelShaderRef>(&shared), retain);
-  transaction.poison();
+  transaction.poison(release);
   const auto refsBeforeInvalidPhase = shared.refs;
   check(!transaction.stageTexture(
               stateBlockTextureSlotKey(2u),
@@ -671,13 +741,13 @@ void testTypedStagingRetentionMultiplicityAndReset() {
             transaction.takeTexture(stateBlockTextureSlotKey(0u)).raw() == nullptr &&
             shared.refs == refsBeforeInvalidPhase,
         "poisoned phase rejects stage/take without retain or consumption");
-  check(transaction.isPoisoned() && transaction.hasPreparedApply() &&
-            shared.refs == 2u,
-        "failed Reset preserves poison and pre-effect staging");
+  check(transaction.isPoisoned() && !transaction.hasPreparedApply() &&
+            shared.refs == 1u,
+        "generic poison releases pre-effect staging before fail-stop");
   transaction.resetSucceeded(release);
   check(transaction.writeAllowed() && !transaction.hasPreparedApply() &&
             shared.refs == 1u,
-        "successful Reset alone clears poison and staged ownership");
+        "successful Reset recovers poison without deferred staged ownership");
 }
 
 struct StagedRefProbe {
@@ -852,7 +922,9 @@ void testEndFailureAndPoisonWriteBoundary() {
 
   std::uint32_t renderShadow = 7u;
   const auto setRenderState = [&](std::uint32_t value) {
-    if (!peStateBlockRecorderWriteAllowed(backendFailure.poisoned)) {
+    if (!peStateBlockRecorderWriteAllowed(
+            backendFailure.poisoned ? PeStateBlockPhase::Poisoned
+                                    : PeStateBlockPhase::Idle)) {
       return false;
     }
     renderShadow = value;
@@ -873,7 +945,9 @@ void testEndFailureAndPoisonWriteBoundary() {
   check(!success.peRecording && !success.unixRecording &&
             !success.candidateOwned && !success.poisoned &&
             success.wrapperPublished &&
-            peStateBlockRecorderWriteAllowed(success.poisoned),
+            peStateBlockRecorderWriteAllowed(
+                success.poisoned ? PeStateBlockPhase::Poisoned
+                                 : PeStateBlockPhase::Idle),
         "accepted End publishes once and keeps later recorder writes legal");
 }
 
@@ -1008,16 +1082,16 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
   }
 
   RefProbe shared{};
-  auto retain = [&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->addRef();
+  auto retain = [&](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->addRef();
   };
-  auto release = [&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
+  auto release = [&](auto value) noexcept {
+    if (value.raw()) reinterpret_cast<RefProbe*>(value.raw())->release();
   };
   PeStateBlockTransactionState transaction{};
   // Two live slots independently own the same COM identity.
-  retain(&shared);
-  retain(&shared);
+  shared.addRef();
+  shared.addRef();
   for (std::uint32_t cycle = 0u; cycle < 3u; ++cycle) {
     transaction.stageTexture(
         stateBlockTextureSlotKey(0u),
@@ -1030,8 +1104,8 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
     transaction.markApplyPrepared();
     check(transaction.phase() == PeStateBlockPhase::ApplyPrepared,
           "production transition enters ApplyPrepared after per-slot retain");
-    release(&shared);
-    release(&shared);
+    shared.release();
+    shared.release();
     const auto slot0 = transaction.takeTexture(stateBlockTextureSlotKey(0u));
     const auto slot1 = transaction.takeTexture(stateBlockTextureSlotKey(1u));
     check(slot0.raw() == reinterpret_cast<StateBlockTextureRef::raw_type*>(&shared) &&
@@ -1042,8 +1116,8 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
     check(transaction.phase() == PeStateBlockPhase::Idle,
           "production transfer transition returns to Idle");
   }
-  release(&shared);
-  release(&shared);
+  shared.release();
+  shared.release();
   check(shared.refs == 1u,
         "final live teardown releases exactly one owner per qualified slot");
 
@@ -1066,6 +1140,7 @@ int main() {
     testEveryFixedWriterRejectsInvalidKindKey();
     testCandidateAbaAndDomains();
     testGeneratedTransitionTableIsomorphism();
+    testTotalPoisonOwnershipCleanup();
     testTransactionOwnershipAndLifecycle();
     testConstantRecordingWriterCapabilityTruthTable();
     testTypedStagingRetentionMultiplicityAndReset();

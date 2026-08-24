@@ -5,6 +5,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_com_membership.hpp"
 #include "d3d9_pe_diagnostic_observer.hpp"
+#include "d3d9_pe_validated_object.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
@@ -15,24 +16,26 @@
 #include <utility>
 #include <vector>
 
-template <typename Raw, typename Wire>
-struct D3D9PeValidatedObject {
-  Raw* raw = nullptr;
-  Wire wire{};
+
+// Local COM ownership policies consume only category-qualified references.
+// They preserve the exact interface subobject pointer used by the public D3D9
+// call and make a cross-kind IUnknown reinterpret_cast unrepresentable.
+struct D3D9PeRetainStateBlockRef {
+  template<typename Ref>
+  void operator()(Ref value) const noexcept {
+    if (auto* object = value.raw()) object->AddRef();
+  }
 };
 
-using D3D9PeValidatedSurface = D3D9PeValidatedObject<
-    D9CSurface, dxmt9::d3d9::pe::SurfaceRef>;
-using D3D9PeValidatedTexture = D3D9PeValidatedObject<
-    D9CTexture, dxmt9::d3d9::pe::TextureRef>;
-using D3D9PeValidatedBuffer = D3D9PeValidatedObject<
-    D9CBuffer, dxmt9::d3d9::pe::BufferRef>;
-using D3D9PeValidatedShader = D3D9PeValidatedObject<
-    D9CShader, dxmt9::d3d9::pe::ShaderRef>;
-using D3D9PeValidatedDeclaration = D3D9PeValidatedObject<
-    D9CVertexDecl, dxmt9::d3d9::pe::DeclarationRef>;
-using D3D9PeValidatedQuery = D3D9PeValidatedObject<
-    D9CQuery, dxmt9::d3d9::pe::QueryRef>;
+struct D3D9PeReleaseStateBlockRef {
+  template<typename Ref>
+  void operator()(Ref value) const noexcept {
+    if (auto* object = value.raw()) object->Release();
+  }
+};
+
+inline constexpr D3D9PeRetainStateBlockRef d3d9PeRetainStateBlockRef{};
+inline constexpr D3D9PeReleaseStateBlockRef d3d9PeReleaseStateBlockRef{};
 
 // Each implementation lives beside the concrete final wrapper class. RTTI
 // proves concrete membership before any member access; the returned value is
@@ -47,16 +50,16 @@ HRESULT D3D9PeValidateTexture(
     D3D9PeValidatedTexture* out) noexcept;
 HRESULT D3D9PeValidateVertexBuffer(
     IDirect3DVertexBuffer9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedBuffer* out) noexcept;
+    D3D9PeValidatedVertexBuffer* out) noexcept;
 HRESULT D3D9PeValidateIndexBuffer(
     IDirect3DIndexBuffer9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedBuffer* out) noexcept;
+    D3D9PeValidatedIndexBuffer* out) noexcept;
 HRESULT D3D9PeValidateVertexShader(
     IDirect3DVertexShader9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedShader* out) noexcept;
+    D3D9PeValidatedVertexShader* out) noexcept;
 HRESULT D3D9PeValidatePixelShader(
     IDirect3DPixelShader9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedShader* out) noexcept;
+    D3D9PeValidatedPixelShader* out) noexcept;
 HRESULT D3D9PeValidateVertexDecl(
     IDirect3DVertexDeclaration9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedDeclaration* out) noexcept;
@@ -232,22 +235,11 @@ class D3D9StateBlockShadow {
   void clearCategoriesOwned() noexcept { releaseCategoryRefs(); }
 
  private:
-  static void addRef(void* value) noexcept {
-    if (value) reinterpret_cast<IUnknown*>(value)->AddRef();
-  }
-  static void releaseRef(void*& value) noexcept {
-    if (value) {
-      reinterpret_cast<IUnknown*>(value)->Release();
-      value = nullptr;
-    }
-  }
   void addCategoryRefs() noexcept {
-    categories_.forEachOwnedComRef(
-        [](void* value) { D3D9StateBlockShadow::addRef(value); });
+    categories_.forEachOwnedComRef(d3d9PeRetainStateBlockRef);
   }
   void releaseCategoryRefs() noexcept {
-    categories_.forEachOwnedComRef(
-        [](void* value) { D3D9StateBlockShadow::releaseRef(value); });
+    categories_.forEachOwnedComRef(d3d9PeReleaseStateBlockRef);
     categories_.writer().clear();
   }
 
@@ -259,99 +251,7 @@ class D3D9StateBlockShadow {
   }
 };
 
-struct D3D9PeRecorderFlush {
-  // Child wrappers are owned by the D3D9 device/COM contract and therefore
-  // use ordinary non-atomic ULONG refs in their PE implementation.  Backend
-  // chunk pins are independent private retains.  D3D9StateBlockImpl is the
-  // documented exception: its snapshot can be owned through independent
-  // device/child paths and uses an atomic counter in its implementation.
-  virtual HRESULT FlushPeRecorderForChild() = 0;
-  virtual bool IsStateBlockRecordingForChild() const = 0;
-  // Capture/Apply are cold, compound operations.  The device implementation
-  // conditionally takes its existing recursive recorder mutex here (only for
-  // MULTITHREADED/forced-lock devices); the pair deliberately keeps the
-  // ordinary single-thread setter path untouched.
-  virtual void LockStateBlockOperationForChild() noexcept = 0;
-  virtual void UnlockStateBlockOperationForChild() noexcept = 0;
-  virtual bool IsStateBlockRecorderPoisonedForChild() const noexcept = 0;
-  virtual HRESULT PrepareStateBlockApplyForChild(
-      const D3D9StateBlockShadow &shadow) = 0;
-  virtual void CommitStateBlockApplyForChild(
-      const D3D9StateBlockShadow &shadow) noexcept = 0;
-  virtual void DiscardPreparedStateBlockApplyForChild() noexcept = 0;
-  virtual void PoisonStateBlockRecorderForChild() noexcept = 0;
-  virtual void InvalidateStateBlockShadowForChild() = 0;
-  virtual void AddDefaultPoolResourceRefForChild() noexcept = 0;
-  virtual void ReleaseDefaultPoolResourceRefForChild() noexcept = 0;
-  virtual bool IsChunkRecorderEnabledForChild() const = 0;
-  // Query::Issue is the only child-side record. It takes a PeWireObjectRef
-  // rather than opaque bytes because opaque legacy-record bytes cannot express
-  // a canonical handle reference -- the builder needs the ref to append and retain it.
-  // The former byte-oriented AppendRecordForChild died with the last legacy
-  // child record.
-  virtual HRESULT AppendQueryIssueForChild(
-      std::uint32_t flags,
-      const dxmt9::d3d9::pe::QueryRef &query) = 0;
-  virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
-  virtual void NotifyRenderTapeObjectDefineForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      std::span<const std::byte> descriptor,
-      std::span<const std::byte> immutablePayload = {}) noexcept = 0;
-  virtual void NotifyRenderTapeObjectDestroyForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept = 0;
-  virtual void NotifyRenderTapeResourceMutationForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
-      std::uint64_t byteOffset, std::span<const std::byte> bytes,
-      dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition =
-          dxmt9::d3d9::RenderTapeBufferMutationDisposition::Plain) noexcept = 0;
-  virtual void NotifyRenderTapeOrderedControlForChild(
-      const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
-      std::span<const std::byte> payload) noexcept = 0;
-  virtual bool IsRenderTapeCaptureActiveForChild() const noexcept = 0;
-  virtual bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept = 0;
-  virtual void AbortRenderTapeCaptureForChild() noexcept = 0;
-  virtual void RejectRenderTapeCaptureForChild(
-      dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      std::uint32_t subresource,
-      const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic =
-          {}) noexcept = 0;
-  virtual dxmt9::d3d9::RenderTapeFullSnapshotStatus
-  RenderTapeFullSnapshotStatusForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      std::uint32_t subresource, std::uint32_t fullRowBytes,
-      std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept = 0;
-  virtual void NotifyRenderTapeBlockMutationForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      std::uint32_t subresource,
-      const dxmt9::d3d9::RenderTapeBlockLockLayout &layout,
-      std::span<const std::byte> bytes) noexcept = 0;
-  virtual void NotifyRenderTapeLinearMutationForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &object,
-      std::uint32_t subresource,
-      const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
-      std::span<const std::byte> bytes) noexcept = 0;
-  virtual void NotifyRenderTapeSurfaceAliasForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &surface,
-      const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
-      std::uint32_t subresource,
-      const D9CSurfaceDesc &descriptor) noexcept = 0;
-  virtual void NotifyRenderTapeStandaloneSurfaceForChild(
-      const dxmt9::d3d9::pe::PeWireObjectRef &surface,
-      const D9CSurfaceDesc &descriptor) noexcept = 0;
-
-  // PE-shadow stateblock support. Captures the device's current transform /
-  // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM
-  // pointers. The caller (D3D9StateBlockImpl) owns the resulting shadow and
-  // is responsible for Release on destruction.
-  virtual HRESULT CaptureStateBlockShadowForChild(
-      D3D9StateBlockShadow &out,
-      StateBlockCaptureDisposition disposition) = 0;
-
-protected:
-  ~D3D9PeRecorderFlush() = default;
-};
+#include "d3d9_pe_recorder_flush_facade.inc.hpp"
 
 class D3D9PeChildOperationGuard final {
 public:
@@ -491,7 +391,5 @@ CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
 // True when the PE wrapper currently has a successful Lock outstanding.
 // Used by IDirect3DDevice9::UpdateSurface to enforce the wined3d invariant
 // that the source surface must not be locked when the copy is initiated.
-bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface);
-void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer);
-std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader);
-std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader);
+void D3D9PeInvalidateVertexBufferReadonlyCache(
+    const D3D9PeValidatedVertexBuffer& buffer) noexcept;

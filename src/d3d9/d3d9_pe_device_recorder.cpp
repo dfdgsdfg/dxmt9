@@ -166,7 +166,7 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 // sealed ownership for Reset/teardown cleanup, but poison the
                 // PE recorder so ordinary app traffic cannot retry it.
                 DXMT_ASSERT(composedBridgePlan.poison() && bridgePlan.poisons());
-                recorderState_.stateBlockTransaction.poison();
+                poisonStateBlockTransaction();
                 if (presentMirrorReserved) {
                     dxmt9c_device_cancel_render_tape_present_capture(dev_);
                 }
@@ -497,7 +497,7 @@ HRESULT D3D9DeviceImpl::appendSetConstRecord(uint32_t recordType, UINT start, UI
             if (ok && (!settlement.valid() ||
                        !settlement.consumeRepresentedPending() ||
                        !settlement.recordDurable())) {
-                recorderState_.stateBlockTransaction.poison();
+                poisonStateBlockTransaction();
                 phase.recordEncode(t0);
                 return D3DERR_DEVICELOST;
             }
@@ -630,7 +630,7 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
                         builder.activeRecordOrdinal());
                 phase.recordEncode(t0);
                 if (ok && !settled) {
-                    recorderState_.stateBlockTransaction.poison();
+                    poisonStateBlockTransaction();
                     return D3DERR_DEVICELOST;
                 }
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -669,7 +669,7 @@ HRESULT D3D9DeviceImpl::appendSingleCategoryApplyState(Fill fill, Accept accept)
             const bool settled = accept(settlement, builder.activeRecordOrdinal());
             phase.recordEncode(t0);
             if (ok && !settled) {
-                recorderState_.stateBlockTransaction.poison();
+                poisonStateBlockTransaction();
                 return D3DERR_DEVICELOST;
             }
             return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -806,7 +806,7 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                     builder.activeRecordOrdinal());
             phase.recordEncode(t0);
             if (ok && !settled) {
-                recorderState_.stateBlockTransaction.poison();
+                poisonStateBlockTransaction();
                 return D3DERR_DEVICELOST;
             }
             return ok ? S_OK : D3DERR_INVALIDCALL;

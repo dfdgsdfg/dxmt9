@@ -26,6 +26,7 @@ enum class PeStateBlockPhase : std::uint8_t {
 };
 
 enum class PeStateBlockEvent : std::uint8_t {
+    PoisonRequested,
     BeginFailed,
     BeginAccepted,
     EndPreEffectFailed,
@@ -160,8 +161,10 @@ constexpr PeStateBlockTransitionPlan planPeStateBlockTransition(
         PeStateBlockCaptureEffect::Preserve, false);
 }
 
-constexpr bool peStateBlockRecorderWriteAllowed(bool poisoned) noexcept {
-    return !poisoned;
+constexpr bool peStateBlockRecorderWriteAllowed(
+    PeStateBlockPhase phase) noexcept {
+    return phase != PeStateBlockPhase::Poisoned &&
+           phase != PeStateBlockPhase::Terminal;
 }
 
 constexpr bool peStateBlockPoisonAfterReset(bool backendResetSucceeded,
@@ -284,7 +287,7 @@ public:
         return phase_ == PeStateBlockPhase::ApplyPrepared;
     }
     bool writeAllowed() const noexcept {
-        return peStateBlockRecorderWriteAllowed(isPoisoned());
+        return peStateBlockRecorderWriteAllowed(phase_);
     }
 
     template<typename Release>
@@ -341,10 +344,15 @@ public:
         phase_ = plan.next();
     }
 
-    void poison() noexcept {
-        if (isPoisoned()) return;
-        const auto plan = transition(PeStateBlockEvent::CaptureBackendFailed);
-        if (plan.valid() && plan.poisons()) phase_ = plan.next();
+    template<typename Release>
+    void poison(Release&& release) noexcept {
+        const auto plan = transition(PeStateBlockEvent::PoisonRequested);
+        if (!plan.valid()) return;
+        if (plan.candidateEffect() == PeStateBlockCandidateEffect::Discard)
+            discardRecorded(release);
+        if (plan.stagedRefEffect() == PeStateBlockStagedRefEffect::Release)
+            discardPrepared(release);
+        phase_ = plan.next();
     }
 
     void markApplyPrepared() noexcept {
@@ -400,7 +408,7 @@ public:
     bool stageTexture(StateBlockTextureSlot slot, StateBlockTextureRef value,
                       Retain&& retain) noexcept {
         if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
-        retain(value.raw());
+        retain(value);
         stagedTextures_[rawSlot(slot)] = value;
         stagedTextureMask_ |= 1u << rawSlot(slot);
         return true;
@@ -409,7 +417,7 @@ public:
     bool stageStream(StateBlockStreamSlot slot, StateBlockStreamSourceValue value,
                      Retain&& retain) noexcept {
         if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
-        retain(value.buffer.raw());
+        retain(value.buffer);
         stagedStreams_[rawSlot(slot)] = value;
         stagedStreamMask_ |= 1u << rawSlot(slot);
         return true;
@@ -440,7 +448,7 @@ public:
                            StateBlockRenderTargetRef value,
                            Retain&& retain) noexcept {
         if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
-        retain(value.raw());
+        retain(value);
         stagedRenderTargets_[rawSlot(slot)] = value;
         stagedRenderTargetMask_ |= 1u << rawSlot(slot);
         return true;
@@ -500,17 +508,12 @@ public:
     template<typename Release>
     void discardPrepared(Release&& release) noexcept {
         auto& releaseRef = release;
-        discardArray(stagedTextures_, stagedTextureMask_, releaseRef,
-                     [](StateBlockTextureRef value) { return value.raw(); });
-        discardArray(stagedStreams_, stagedStreamMask_, releaseRef,
-                     [](const StateBlockStreamSourceValue& value) {
-                         return value.buffer.raw();
-                     });
+        discardArray(stagedTextures_, stagedTextureMask_, releaseRef);
+        discardArray(stagedStreams_, stagedStreamMask_, releaseRef);
         discardSingleton(stagedVertexShader_, stagedVertexShaderValid_, releaseRef);
         discardSingleton(stagedPixelShader_, stagedPixelShaderValid_, releaseRef);
         discardSingleton(stagedIndexBuffer_, stagedIndexBufferValid_, releaseRef);
-        discardArray(stagedRenderTargets_, stagedRenderTargetMask_, releaseRef,
-                     [](StateBlockRenderTargetRef value) { return value.raw(); });
+        discardArray(stagedRenderTargets_, stagedRenderTargetMask_, releaseRef);
         discardSingleton(stagedDepthStencil_, stagedDepthStencilValid_, releaseRef);
     }
 
@@ -530,7 +533,7 @@ private:
     template<typename Ref, typename Retain>
     static void stageSingleton(Ref& destination, bool& occupied, Ref value,
                                Retain&& retain) noexcept {
-        retain(value.raw());
+        retain(value);
         destination = value;
         occupied = true;
     }
@@ -543,19 +546,28 @@ private:
     template<typename Ref, typename Release>
     static void discardSingleton(Ref& value, bool& occupied,
                                  Release& release) noexcept {
-        if (occupied) release(value.raw());
+        if (occupied) release(ownedRef(value));
         value = Ref{};
         occupied = false;
     }
-    template<typename T, std::size_t Slots, typename Release, typename Raw>
+    template<typename T, std::size_t Slots, typename Release>
     static void discardArray(std::array<T, Slots>& values,
-                             std::uint32_t& mask, Release& release,
-                             Raw&& raw) noexcept {
+                             std::uint32_t& mask, Release& release) noexcept {
         for (std::size_t slot = 0; slot < Slots; ++slot) {
-            if ((mask & (1u << slot)) != 0u) release(raw(values[slot]));
+            if ((mask & (1u << slot)) != 0u)
+                release(ownedRef(values[slot]));
             values[slot] = T{};
         }
         mask = 0u;
+    }
+
+    template<typename Ref>
+    static Ref ownedRef(Ref value) noexcept {
+        return value;
+    }
+    static StateBlockStreamSourceValue::BufferRef ownedRef(
+        const StateBlockStreamSourceValue& value) noexcept {
+        return value.buffer;
     }
 
     PeStateBlockPhase phase_ = PeStateBlockPhase::Idle;

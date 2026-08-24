@@ -634,57 +634,54 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
 
   for (const auto& entry : state.textures) {
     if (entry.wire.slot < 32u) {
-      shadow.writer().pendingTextureMask() &= ~(1u << entry.wire.slot);
+      shadow.consume().acceptTexture(entry.wire.slot);
     }
   }
   for (const auto& entry : state.streams) {
     if (entry.wire.slot < 32u) {
-      shadow.writer().pendingStreamMask() &= ~(1u << entry.wire.slot);
+      shadow.consume().acceptStream(entry.wire.slot);
     }
   }
   for (const auto& entry : state.shaders) {
     if (entry.wire.stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX) {
-      shadow.writer().pendingVs() = false;
+      shadow.consume().acceptVertexShader();
     } else if (entry.wire.stage ==
                D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL) {
-      shadow.writer().pendingPs() = false;
+      shadow.consume().acceptPixelShader();
     }
   }
   for (const auto& entry : state.vertexInputs) {
     if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
       // Declaration wins over a co-pending FVF and carries its effective
       // value, so the single durable entry represents both pending writes.
-      shadow.writer().pendingVdecl() = false;
-      shadow.writer().pendingFvf() = false;
+      shadow.consume().acceptVertexDeclaration();
     } else if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
-      shadow.writer().pendingFvf() = false;
+      shadow.consume().acceptFvf();
     }
   }
-  if (!state.indexBuffers.empty()) shadow.writer().pendingIb() = false;
+  if (!state.indexBuffers.empty()) shadow.consume().acceptIndexBuffer();
   for (const auto& entry : state.renderTargets) {
     if (entry.wire.slot < 32u) {
-      shadow.writer().pendingRtMask() &= ~(1u << entry.wire.slot);
+      shadow.consume().acceptRenderTarget(entry.wire.slot);
     }
   }
-  if (!state.depthStencils.empty()) shadow.writer().pendingDs() = false;
-  if (!state.viewports.empty()) shadow.writer().pendingViewport() = false;
-  if (!state.scissors.empty()) shadow.writer().pendingScissor() = false;
-  if (!state.materials.empty()) shadow.writer().pendingMaterial() = false;
+  if (!state.depthStencils.empty()) shadow.consume().acceptDepthStencil();
+  if (!state.viewports.empty()) shadow.consume().acceptViewport();
+  if (!state.scissors.empty()) shadow.consume().acceptScissor();
+  if (!state.materials.empty()) shadow.consume().acceptMaterial();
   for (const auto& entry : state.clipPlanes) {
     if (entry.slot < 32u) {
-      shadow.writer().pendingClipPlaneMask() &= ~(1u << entry.slot);
+      shadow.consume().acceptClipPlane(entry.slot);
     }
   }
   for (const auto& entry : state.lights) {
     if (entry.slot < 32u) {
-      shadow.writer().pendingLightSlotMask() &= ~(1u << entry.slot);
+      shadow.consume().acceptLight(entry.slot);
     }
   }
   for (const auto& entry : state.lightEnables) {
     if (entry.slot < 32u) {
-      const std::uint32_t bit = 1u << entry.slot;
-      shadow.writer().pendingLightEnableValidMask() &= ~bit;
-      shadow.writer().pendingLightEnableMask() &= ~bit;
+      shadow.consume().acceptLightEnable(entry.slot);
     }
   }
   return true;

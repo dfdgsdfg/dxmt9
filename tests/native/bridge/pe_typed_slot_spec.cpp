@@ -140,9 +140,21 @@ static_assert(std::same_as<
                            .renderStateShadowTyped()),
               ConstRenderStateTableView>);
 static_assert(sizeof(PeHotStateShadow::Writer) == sizeof(void*) &&
+              sizeof(PeHotStateShadow::Transition) == sizeof(void*) &&
               sizeof(PeHotStateShadow::Snapshot) == sizeof(void*) &&
               sizeof(PeHotStateShadow::Consumer) == sizeof(void*),
               "phase capabilities must remain one-reference stack values");
+
+static_assert(requires(PeHotStateShadow& shadow, RenderStateSlot render,
+                       TextureStageIndex stage,
+                       TextureStageStateType tss,
+                       SamplerIndex sampler, SamplerStateType samplerType,
+                       TransformState transform, D9CMatrix matrix) {
+  shadow.transition().setRenderState(render, 1u);
+  shadow.transition().setTextureStageState(stage, tss, 2u);
+  shadow.transition().setSamplerState(sampler, samplerType, 3u);
+  shadow.transition().setTransform(transform, matrix);
+}, "ordinary scalar setters must use allocation-free atomic transitions");
 
 // The views themselves are single-reference façades, not extra state: each
 // must be exactly pointer-sized (a reference is implemented as a pointer),

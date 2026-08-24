@@ -3,7 +3,7 @@
  * and IDirect3DSwapChain9Ex (the non-resource families). */
 
 #include "d3d9_pe_device_child.hpp"
-#include "d3d9_pe_trusted_handles.hpp"
+#include "d3d9_pe_validated_object_writer.hpp"
 #include "d3d9_pe_com_cache.hpp"
 #include "d3d9_pe_stateblock_fault.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
@@ -926,16 +926,10 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
   return impl;
 }
 
-const dxmt9::d3d9::pe::DeclarationRef &
-D3D9PeVertexDeclRef(IDirect3DVertexDeclaration9 *decl) {
-  static const dxmt9::d3d9::pe::DeclarationRef empty{};
-  return decl ? static_cast<D3D9VertexDeclImpl *>(decl)->wireObject() : empty;
-}
-
 HRESULT D3D9PeValidateVertexDecl(
     IDirect3DVertexDeclaration9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedDeclaration* out) noexcept {
-  if (out) *out = {};
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   auto* impl = dynamic_cast<D3D9VertexDeclImpl*>(object);
   if (!impl || static_cast<IDirect3DVertexDeclaration9*>(impl) != object) {
@@ -954,14 +948,16 @@ HRESULT D3D9PeValidateVertexDecl(
           expectedOwnerDevice, object)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire, 0u,
+      dxmt9::d3d9::pe::PeConcreteObjectKind::VertexDeclaration);
   return S_OK;
 }
 
 HRESULT D3D9PeValidateQuery(
     IDirect3DQuery9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedQuery* out) noexcept {
-  if (out) *out = {};
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   auto* impl = dynamic_cast<D3D9QueryImpl*>(object);
   if (!impl || static_cast<IDirect3DQuery9*>(impl) != object) {
@@ -979,12 +975,8 @@ HRESULT D3D9PeValidateQuery(
           expectedOwnerDevice, object)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire, 0u,
+      dxmt9::d3d9::pe::PeConcreteObjectKind::Query);
   return S_OK;
-}
-
-const dxmt9::d3d9::pe::QueryRef &
-D3D9PeQueryRef(IDirect3DQuery9 *query) {
-  static const dxmt9::d3d9::pe::QueryRef empty{};
-  return query ? static_cast<D3D9QueryImpl *>(query)->wireObject() : empty;
 }

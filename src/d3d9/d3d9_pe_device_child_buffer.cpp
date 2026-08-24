@@ -2,7 +2,7 @@
  * for IDirect3DVertexBuffer9 and IDirect3DIndexBuffer9. */
 
 #include "d3d9_pe_device_child.hpp"
-#include "d3d9_pe_trusted_handles.hpp"
+#include "d3d9_pe_validated_object_writer.hpp"
 
 #include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "d3d9_pe_buffer_hazard.hpp"
@@ -774,11 +774,11 @@ IDirect3DIndexBuffer9 *CreatePeIndexBuffer(D9CBuffer *buffer,
 }
 
 namespace {
-template <typename Impl, typename Interface>
+template <typename Impl, typename Interface, typename Validated>
 HRESULT validateBuffer(Interface* object, const void* expectedOwnerDevice,
                        dxmt9::d3d9::pe::PeConcreteObjectKind kind,
-                       D3D9PeValidatedBuffer* out) noexcept {
-  if (out) *out = {};
+                       Validated* out) noexcept {
+  D3D9PeValidatedObjectWriter::clear(out);
   if (!object) return S_OK;
   auto* impl = dynamic_cast<Impl*>(object);
   if (!impl || static_cast<Interface*>(impl) != object) {
@@ -795,14 +795,15 @@ HRESULT validateBuffer(Interface* object, const void* expectedOwnerDevice,
           identity, kind, expectedOwnerDevice, object)) {
     return D3DERR_INVALIDCALL;
   }
-  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  D3D9PeValidatedObjectWriter::assign(
+      out, object, expectedOwnerDevice, impl->raw(), wire, 0u, kind);
   return S_OK;
 }
 }  // namespace
 
 HRESULT D3D9PeValidateVertexBuffer(
     IDirect3DVertexBuffer9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedBuffer* out) noexcept {
+    D3D9PeValidatedVertexBuffer* out) noexcept {
   return validateBuffer<D3D9VertexBufferImpl>(
       object, expectedOwnerDevice,
       dxmt9::d3d9::pe::PeConcreteObjectKind::VertexBuffer, out);
@@ -810,27 +811,20 @@ HRESULT D3D9PeValidateVertexBuffer(
 
 HRESULT D3D9PeValidateIndexBuffer(
     IDirect3DIndexBuffer9* object, const void* expectedOwnerDevice,
-    D3D9PeValidatedBuffer* out) noexcept {
+    D3D9PeValidatedIndexBuffer* out) noexcept {
   return validateBuffer<D3D9IndexBufferImpl>(
       object, expectedOwnerDevice,
       dxmt9::d3d9::pe::PeConcreteObjectKind::IndexBuffer, out);
 }
 
-const dxmt9::d3d9::pe::BufferRef &
-D3D9PeVertexBufferRef(IDirect3DVertexBuffer9 *buffer) {
-  static const dxmt9::d3d9::pe::BufferRef empty{};
-  return buffer ? static_cast<D3D9VertexBufferImpl *>(buffer)->wireObject()
-                : empty;
-}
-
-const dxmt9::d3d9::pe::BufferRef &
-D3D9PeIndexBufferRef(IDirect3DIndexBuffer9 *buffer) {
-  static const dxmt9::d3d9::pe::BufferRef empty{};
-  return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->wireObject()
-                : empty;
-}
-
-void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer) {
-  if (buffer)
-    static_cast<D3D9VertexBufferImpl *>(buffer)->invalidateReadonlyCache();
+void D3D9PeInvalidateVertexBufferReadonlyCache(
+    const D3D9PeValidatedVertexBuffer& buffer) noexcept {
+  D3D9PeValidatedVertexBuffer revalidated{};
+  if (FAILED(D3D9PeValidateVertexBuffer(
+          buffer.publicIdentity(), buffer.ownerDevice(), &revalidated)) ||
+      revalidated.raw() != buffer.raw()) {
+    return;
+  }
+  auto* impl = dynamic_cast<D3D9VertexBufferImpl*>(buffer.publicIdentity());
+  if (impl) impl->invalidateReadonlyCache();
 }

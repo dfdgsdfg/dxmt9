@@ -48,8 +48,9 @@ established. `PendingDelta` and `StateBlockRecorded` are partial maps. Typed
 keys prevent accidental equality across domains such as render-state slot 7
 and sampler slot 7. Their factories return a one-word bounded value or an
 invalid sentinel; recorder boundaries reject the sentinel before mutation or
-retain. `PeHotStateShadow::Writer`, `Snapshot`, and `Consumer` separate hot
-mutation, read-only observation, and exact pending settlement. “Snapshot” is
+retain. `PeHotStateShadow::Transition`, private `Maintenance`, `Snapshot`, and
+`Consumer` separate atomic live-plus-pending mutation, bounded maintenance,
+read-only observation, and exact pending settlement. “Snapshot” is
 a capability boundary, not global object immutability: the owning recorder may
 continue mutation through its writer while readers cannot obtain mutable table
 or category access. The StateBlock transaction exposes phase-checked
@@ -184,6 +185,12 @@ bounded model requires each step to match its generated row. The model carries
 duplicate-retain cardinality only. Native fake-COM tests separately demonstrate
 one retain and one release or transfer per occupied category/slot for repeated
 object identities; the model is not a proof of COM implementation behavior.
+The same table defines `PoisonRequested` for every non-terminal phase. Its
+production effect discards candidate ownership, releases all occupied Apply
+staging, preserves capture, and enters or remains in `Poisoned`. There is no
+`Terminal` poison row: teardown is absorbing and writes are rejected. The
+`PoisonLeak` TLC mutation preserves ownership and must violate
+`PoisonOwnsNoCandidateOrRefs`.
 
 The conditional recorder lock is one shared production guard. It covers
 Create/Begin/EndStateBlock, Capture, Apply, every PE shadow/recording setter,
@@ -383,10 +390,17 @@ auditable without changing the COM surface, adding a hot-path allocation or
 moving the first declared virtual key function. Non-null app-supplied COM
 operands take the TU-local concrete-membership gate; validation is confined to
 the public bind/copy call and is not repeated during internal draw packet
-construction.
-`D3D9DeviceImpl` nevertheless remains a roughly 6k-line implementation owner,
-not a thin facade; this ownership cleanup does not claim that the outstanding
-device-header decomposition debt is complete.
+construction. The result is a kind-qualified capability containing the exact
+public-interface address, raw provider handle, wire ref, and concrete kind.
+Binding setters cache the wire ref and StateBlock ownership traversal uses
+typed policies, so no public `void*` ownership callback or trusted raw-cast wire
+extractor remains.
+`D3D9DeviceImpl` remains one concrete COM object with one recorder base. Ordered
+in-class fragments preserve declaration order while existing cold source owners
+retain staged method definitions. The child callback facade contains exactly
+29 `noexcept` virtuals; `FlushPeRecorderForChild` remains the earliest
+non-inline declaration and its `d3d9_pe_device.cpp` definition remains the
+key-function/vtable owner.
 One nullable heap-owned `PeCaptureState` owns the complete Render Tape lifecycle: session,
 live registry, oracle/digest/pixel/output storage, arm phase and ordinals,
 tokens and skip selector, arm snapshots, admitted identities, first-access

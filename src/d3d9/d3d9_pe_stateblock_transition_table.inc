@@ -3,6 +3,11 @@
 // scripts/check/gen_pe_stateblock_transition_table.py.
 //
 // phase, event, next, action, candidate effect, staged-ref effect, capture effect
+DXMT9_PE_STATEBLOCK_ROW(Idle, PoisonRequested, Poisoned, FailStop, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Recording, PoisonRequested, Poisoned, FailStop, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(EndPublication, PoisonRequested, Poisoned, FailStop, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(ApplyPrepared, PoisonRequested, Poisoned, FailStop, Discard, Release, Preserve)
+DXMT9_PE_STATEBLOCK_ROW(Poisoned, PoisonRequested, Poisoned, FailStop, Discard, Release, Preserve)
 DXMT9_PE_STATEBLOCK_ROW(Idle, BeginFailed, Idle, Preserve, Preserve, Preserve, Preserve)
 DXMT9_PE_STATEBLOCK_ROW(Idle, BeginAccepted, Recording, BeginRecording, Discard, Preserve, Preserve)
 DXMT9_PE_STATEBLOCK_ROW(Recording, EndPreEffectFailed, Recording, Preserve, Preserve, Preserve, Preserve)

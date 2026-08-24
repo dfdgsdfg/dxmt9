@@ -546,7 +546,7 @@ HRESULT D3D9DeviceImpl::describeSoftwareFfpDrawTarget(DWORD& outputFvf,
                 vdecl_, static_cast<IDirect3DDevice9*>(this),
                 &validatedDeclaration)) ||
             !describeProcessDeclaration(vdecl_, srcLayout, false,
-                                         validatedDeclaration.raw)) {
+                                         validatedDeclaration.raw())) {
             return S_FALSE;
         }
         outputFvf = processFfpDeclarationOutputFvf(
@@ -1152,7 +1152,7 @@ HRESULT D3D9DeviceImpl::describeSoftwareProgrammableDrawTarget(
                 vdecl_, static_cast<IDirect3DDevice9*>(this),
                 &validatedDeclaration)) ||
             !describeProcessDeclaration(vdecl_, srcLayout, false,
-                                         validatedDeclaration.raw)) {
+                                         validatedDeclaration.raw())) {
             return S_FALSE;
         }
     } else {
@@ -1809,18 +1809,26 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
+    D3D9PeValidatedVertexBuffer validatedSource{};
+    hr = D3D9PeValidateVertexBuffer(
+        srcBuffer, static_cast<IDirect3DDevice9*>(this), &validatedSource);
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
+    const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
     const UINT savedOffset0 = streamOff_[0];
     const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    recorderState_.peBindingView.streams[0] = {
+        validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
         streamOff_[0] = savedOffset0;
         streamStr_[0] = savedStride0;
+        recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
     });
@@ -1887,18 +1895,26 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE 
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
+    D3D9PeValidatedVertexBuffer validatedSource{};
+    hr = D3D9PeValidateVertexBuffer(
+        srcBuffer, static_cast<IDirect3DDevice9*>(this), &validatedSource);
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
+    const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
     const UINT savedOffset0 = streamOff_[0];
     const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    recorderState_.peBindingView.streams[0] = {
+        validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
         streamOff_[0] = savedOffset0;
         streamStr_[0] = savedStride0;
+        recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
     });
@@ -1970,18 +1986,26 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE ty
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
+    D3D9PeValidatedVertexBuffer validatedSource{};
+    hr = D3D9PeValidateVertexBuffer(
+        srcBuffer, static_cast<IDirect3DDevice9*>(this), &validatedSource);
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
+    const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
     const UINT savedOffset0 = streamOff_[0];
     const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    recorderState_.peBindingView.streams[0] = {
+        validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
         streamOff_[0] = savedOffset0;
         streamStr_[0] = savedStride0;
+        recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
     });
@@ -2056,18 +2080,26 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitiveUP(
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
+    D3D9PeValidatedVertexBuffer validatedSource{};
+    hr = D3D9PeValidateVertexBuffer(
+        srcBuffer, static_cast<IDirect3DDevice9*>(this), &validatedSource);
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
+    const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
     const UINT savedOffset0 = streamOff_[0];
     const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    recorderState_.peBindingView.streams[0] = {
+        validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
         streamOff_[0] = savedOffset0;
         streamStr_[0] = savedStride0;
+        recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
     });
