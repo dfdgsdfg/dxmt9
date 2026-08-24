@@ -382,6 +382,27 @@ Tape, diagnostics, and SWVP behavior is defined out of line in its owning
 translation unit. Header decomposition must not reorder Windows COM virtuals,
 grow child wrapper storage, or move the deliberate key-function/vtable owner.
 
+**R-CORE-REC-5.2.2** The PE decomposition audit is a checked, architecture-
+stable manifest at `scripts/check/pe_device_abi_manifest.toml`, driven by
+`scripts/check/audit_d3d9_pe_abi_codegen.py`. It records the exact x64/x86
+builtin configuration, export ordinal/name allowlist, QueryInterface/vtable/
+RTTI ownership, `PeRecorderState` size pins, critical device member order, cold
+symbol owners, and normalized representative hot code metrics (bytes,
+instructions, and direct calls). The audit rejects app-local
+`wine_builtin_dll=false` artifacts and mismatched toolchain/configuration.
+Addresses, RVAs, timestamps, relocation order, archive order, whole-assembly
+hashes, and total-text comparisons are not evidence and must not enter the
+manifest. Native-only test lanes run its `--source-only` mode and never require
+PE artifacts.
+
+**R-CORE-REC-5.2.3** State implementation fragments and diagnostic/tape helper
+fragments are not always-included substitutes for ownership. Pure value types
+belong in narrow owner headers; cold definitions belong to recorder,
+diagnostic, SWVP, COM-cold, tape, tape-registry, or tape-child translation
+units. Any residual hot declaration/body mass above the target is recorded with
+the exact measured codegen reason in the recorder gap rather than hidden by a
+renamed include or an unstable size claim.
+
 **R-CORE-REC-5.3** A disabled observer must cost at most one cached boolean or
 nullable-sink branch and perform no callback, virtual dispatch, scope-object
 construction, sample-slot mutation, allocation, locking, timestamp read,

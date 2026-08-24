@@ -17,6 +17,104 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
+namespace {
+
+void dxmt9WriteStderrLineAtomic(const char *line, std::size_t len) noexcept {
+    if (!line || len == 0u) return;
+#if defined(_WIN32)
+    (void)_write(_fileno(stderr), line, static_cast<unsigned int>(len));
+#else
+    (void)::write(STDERR_FILENO, line, len);
+#endif
+}
+
+void dxmt9PerfLogStderrAtomic(const char *fmt, ...) noexcept {
+    char line[512]{};
+    va_list args;
+    va_start(args, fmt);
+    const int written = std::vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    if (written <= 0) return;
+    std::size_t len = static_cast<std::size_t>(written);
+    if (len >= sizeof(line)) {
+        len = sizeof(line) - 1u;
+        line[len - 1u] = '\n';
+    }
+    dxmt9WriteStderrLineAtomic(line, len);
+}
+
+const char *dxmt9PeCallerModuleLeaf(const Dxmt9PeCallerModuleInfo &info) {
+    const char *leaf = info.path.data();
+    for (const char *p = info.path.data(); *p; ++p) {
+        if (*p == '\\' || *p == '/') leaf = p + 1;
+    }
+    return *leaf ? leaf : "unknown";
+}
+
+Dxmt9PeCallerModuleInfo dxmt9PeResolveCallerModule(const void *callerPc) {
+    Dxmt9PeCallerModuleInfo info{};
+    if (!callerPc) return info;
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(callerPc, &mbi, sizeof(mbi)) || !mbi.AllocationBase)
+        return info;
+    info.base = mbi.AllocationBase;
+    info.rva = reinterpret_cast<std::uintptr_t>(callerPc) -
+               reinterpret_cast<std::uintptr_t>(mbi.AllocationBase);
+    const DWORD written = GetModuleFileNameA(
+        reinterpret_cast<HMODULE>(mbi.AllocationBase), info.path.data(),
+        static_cast<DWORD>(info.path.size()));
+    if (written == 0) {
+        std::strncpy(info.path.data(), "unknown", info.path.size() - 1);
+    } else {
+        info.path.back() = '\0';
+    }
+#else
+    (void)callerPc;
+#endif
+    return info;
+}
+
+void dxmt9PeCaptureCallStack(D3D9PePresentCallToken &sample) {
+#if defined(_WIN32)
+    void *frames[D3D9PePresentCallStackDepth]{};
+    const USHORT count = RtlCaptureStackBackTrace(
+        0, static_cast<DWORD>(D3D9PePresentCallStackDepth), frames, nullptr);
+    sample.callerStackCount = static_cast<std::uint8_t>(
+        std::min<std::size_t>(count, sample.callerStack.size()));
+    for (std::size_t i = 0; i < sample.callerStackCount; ++i)
+        sample.callerStack[i] = frames[i];
+#else
+    (void)sample;
+#endif
+}
+
+std::array<char, 2048> dxmt9PeFormatCallerStack(
+    const D3D9PePresentCallToken &sample) {
+    std::array<char, 2048> out{};
+    std::size_t used = 0;
+    if (sample.callerStackCount == 0) {
+        std::snprintf(out.data(), out.size(), "empty");
+        return out;
+    }
+    for (std::size_t i = 0; i < sample.callerStackCount && used < out.size(); ++i) {
+        const auto frameInfo = dxmt9PeResolveCallerModule(sample.callerStack[i]);
+        const int written = std::snprintf(
+            out.data() + used, out.size() - used, "%s%u:%s+0x%llx@%p",
+            i == 0 ? "" : ";", static_cast<unsigned>(i),
+            dxmt9PeCallerModuleLeaf(frameInfo),
+            static_cast<unsigned long long>(frameInfo.rva),
+            sample.callerStack[i]);
+        if (written <= 0) break;
+        used += std::min<std::size_t>(static_cast<std::size_t>(written),
+                                      out.size() - used);
+    }
+    out.back() = '\0';
+    return out;
+}
+
+}  // namespace
+
 void D3D9PeDiagnosticObserver::notifyFirstCallAfterPresent(
     const char *callName, const void *callerPc) noexcept {
     if (device_) {

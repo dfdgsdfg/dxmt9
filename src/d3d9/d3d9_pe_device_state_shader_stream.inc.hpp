@@ -167,7 +167,13 @@
     /// Overflow-safe.
     [[nodiscard]] static HRESULT validateConstRange(UINT start, UINT count,
                                                     const void* pData,
-                                                    UINT maxRegisters) {
+                                                    UINT maxRegisters);
+
+    // Keep the default-off virtual setter branch self-contained. The full
+    // validator above is a cold owner for diagnostics/getters; this identical
+    // checked kernel preserves the audited fast-path codegen.
+    [[nodiscard]] static inline HRESULT validateConstRangeFast(
+        UINT start, UINT count, const void* pData, UINT maxRegisters) noexcept {
         if (count == 0) return S_OK;
         if (!pData) return D3DERR_INVALIDCALL;
         const uint64_t end = static_cast<uint64_t>(start) + count;
@@ -181,16 +187,7 @@
     /// register state).
     static void readConstShadow(const ConstShadow& shadow,
                                 UINT start, void* pData, UINT count,
-                                std::size_t elemSize) {
-        if (count == 0 || !pData) return;
-        std::memset(pData, 0, count * elemSize);
-        const std::size_t base = static_cast<std::size_t>(start) * elemSize;
-        const std::size_t want = static_cast<std::size_t>(count) * elemSize;
-        if (shadow.values.size() <= base) return;
-        const std::size_t avail =
-            std::min<std::size_t>(want, shadow.values.size() - base);
-        std::memcpy(pData, shadow.values.data() + base, avail);
-    }
+                                std::size_t elemSize);
 
     template <typename Scope>
     HRESULT SetVertexShaderConstantFSlowBody(UINT start, const float* pData,
@@ -233,16 +230,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetVertexShaderConstantFSlow(UINT start, const float* pData,
-                                  UINT count) noexcept {
-        if (diagnostics_->gates.callScope) {
-            PeCallScope peCall(*diagnostics_, "SetVertexShaderConstantF",
-                               DXMT9_PE_CALLSITE_PC());
-            return SetVertexShaderConstantFSlowBody(start, pData, count,
-                                                    peCall);
-        }
-        return SetVertexShaderConstantFSlowBody(start, pData, count,
-                                                peNullCallScope_);
-    }
+                                  UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -251,7 +239,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantFSlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kVsConstFMax);
         if (FAILED(hr)) return hr;
         // Shadow-only: defer the record until the next flushPendingConsts()
         // (called before each draw record + at chunk commit).
@@ -266,18 +254,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetVertexShaderConstantISlow(UINT start, const INT* pData,
-                                  UINT count) noexcept {
-        DxmtPeDecimatedScopeGuard peEntryScope;
-        dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? &diagnostics_->peEntryConstDecimatedStats_ : nullptr);
-        notePeDeviceCallAfterPresent("SetVertexShaderConstantI");
-        dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
-                            this, start, count, pData);
-        const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
-        if (FAILED(hr)) return hr;
-        return applyConstStateWrite(
-            recorderState_.peConsts.vsConstI, &PeStateBlockConstRecorded::vsConstI,
-            start, count, pData, sizeof(int32_t) * 4);
-    }
+                                  UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -286,7 +263,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantISlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kVsConstIMax);
         if (FAILED(hr)) return hr;
         return applyConstStateWrite(
             recorderState_.peConsts.vsConstI, &PeStateBlockConstRecorded::vsConstI,
@@ -299,18 +276,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetVertexShaderConstantBSlow(UINT start, const BOOL* pData,
-                                  UINT count) noexcept {
-        DxmtPeDecimatedScopeGuard peEntryScope;
-        dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? &diagnostics_->peEntryConstDecimatedStats_ : nullptr);
-        notePeDeviceCallAfterPresent("SetVertexShaderConstantB");
-        dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
-                            this, start, count, pData);
-        const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
-        if (FAILED(hr)) return hr;
-        return applyConstStateWrite(
-            recorderState_.peConsts.vsConstB, &PeStateBlockConstRecorded::vsConstB,
-            start, count, pData, sizeof(uint32_t));
-    }
+                                  UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -319,7 +285,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetVertexShaderConstantBSlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kVsConstBMax);
         if (FAILED(hr)) return hr;
         return applyConstStateWrite(
             recorderState_.peConsts.vsConstB, &PeStateBlockConstRecorded::vsConstB,
@@ -583,16 +549,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetPixelShaderConstantFSlow(UINT start, const float* pData,
-                                 UINT count) noexcept {
-        if (diagnostics_->gates.callScope) {
-            PeCallScope peCall(*diagnostics_, "SetPixelShaderConstantF",
-                               DXMT9_PE_CALLSITE_PC());
-            return SetPixelShaderConstantFSlowBody(start, pData, count,
-                                                   peCall);
-        }
-        return SetPixelShaderConstantFSlowBody(start, pData, count,
-                                               peNullCallScope_);
-    }
+                                 UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -601,7 +558,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantFSlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstFMax);
         if (FAILED(hr)) return hr;
         return applyConstStateWrite(
             recorderState_.peConsts.psConstF, &PeStateBlockConstRecorded::psConstF,
@@ -614,18 +571,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetPixelShaderConstantISlow(UINT start, const INT* pData,
-                                 UINT count) noexcept {
-        DxmtPeDecimatedScopeGuard peEntryScope;
-        dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? &diagnostics_->peEntryConstDecimatedStats_ : nullptr);
-        notePeDeviceCallAfterPresent("SetPixelShaderConstantI");
-        dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
-                            this, start, count, pData);
-        const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
-        if (FAILED(hr)) return hr;
-        return applyConstStateWrite(
-            recorderState_.peConsts.psConstI, &PeStateBlockConstRecorded::psConstI,
-            start, count, pData, sizeof(int32_t) * 4);
-    }
+                                 UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -634,7 +580,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantISlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstIMax);
         if (FAILED(hr)) return hr;
         return applyConstStateWrite(
             recorderState_.peConsts.psConstI, &PeStateBlockConstRecorded::psConstI,
@@ -647,18 +593,7 @@
     // dxmt9PeConstSetterSlowPathRequired() is true.
     HRESULT __attribute__((noinline))
     SetPixelShaderConstantBSlow(UINT start, const BOOL* pData,
-                                 UINT count) noexcept {
-        DxmtPeDecimatedScopeGuard peEntryScope;
-        dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? &diagnostics_->peEntryConstDecimatedStats_ : nullptr);
-        notePeDeviceCallAfterPresent("SetPixelShaderConstantB");
-        dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
-                            this, start, count, pData);
-        const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
-        if (FAILED(hr)) return hr;
-        return applyConstStateWrite(
-            recorderState_.peConsts.psConstB, &PeStateBlockConstRecorded::psConstB,
-            start, count, pData, sizeof(uint32_t));
-    }
+                                 UINT count) noexcept;
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) noexcept override {
         assertRecorderThreadConfined();
@@ -667,7 +602,7 @@
         if (dxmt9PeConstSetterSlowPathRequired()) {
             return SetPixelShaderConstantBSlow(start, pData, count);
         }
-        const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
+        const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstBMax);
         if (FAILED(hr)) return hr;
         return applyConstStateWrite(
             recorderState_.peConsts.psConstB, &PeStateBlockConstRecorded::psConstB,

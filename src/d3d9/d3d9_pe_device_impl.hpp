@@ -143,8 +143,6 @@ inline void dxmt9DeviceInfoLog(const char* fmt, ...) noexcept {
     va_end(args);
 }
 
-#include "d3d9_pe_device_diag_log.inc.hpp"
-
 inline bool dxmt9PeRecorderStatsEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_STATS");
     return enabled;
@@ -545,8 +543,6 @@ struct Dxmt9PeCallerModuleInfo {
     std::array<char, 260> path{};
 };
 
-#include "d3d9_pe_device_diag_module.inc.hpp"
-
 // PE call-tracking diagnostic sample (DXMT9_PE_RECORDER_STATS only). This used
 // to live in d3d9_pe_device_child.hpp and be returned by value from every noted
 // D3D9 entry point; it is file-local now because no hot-path signature -- not
@@ -576,8 +572,6 @@ static constexpr std::size_t kPeCallScopeSlots = 16;
 inline thread_local D3D9PePresentCallToken
     dxmt9PeCallScopeSlots[kPeCallScopeSlots];
 inline thread_local std::size_t dxmt9PeCallScopeDepth = 0;
-
-#include "d3d9_pe_device_diag_callstack.inc.hpp"
 
 // Structural invariant: the chunk recorder and PE state shadow are the
 // production path. Draw / Set* hot paths have no runtime env opt-out to
@@ -660,8 +654,6 @@ constexpr uint32_t kShaderHeaderPS = 0xFFFFu;
 constexpr uint32_t kShaderMaxMajor = 3u; /* vs_3_0 / ps_3_0 are the cap */
 constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
 constexpr size_t kShaderBoundedScan = 1u << 16;
-
-#include "d3d9_pe_device_tape_helpers.inc.hpp"
 
 /// Convert a small set of FVF combinations to a Wine-compatible
 /// D3DVERTEXELEMENT9 array. Only the subset exercised by Wine's

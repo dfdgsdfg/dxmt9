@@ -16,7 +16,48 @@
 // These PE-local capture types are kept at global namespace scope because
 // D3D9DeviceImpl includes their owner from several translation units. Giving
 // them internal linkage would make the class definition violate the ODR.
-#include "d3d9_pe_device_tape_types.inc.hpp"
+struct RenderTapeLiveObject {
+  enum class Role : std::uint8_t { Ordinary, PresentOutput };
+
+  D9CWireObjectIdentity identity{};
+  std::vector<std::byte> descriptor{};
+  std::vector<std::byte> immutablePayload{};
+  std::uint32_t contentCount = 0u;
+  std::vector<std::vector<std::byte>> content{};
+  dxmt9::d3d9::RenderTapeSurfaceAliasLifetime lifetime{};
+  D9CWireObjectIdentity aliasParentTexture{};
+  Role role = Role::Ordinary;
+};
+
+struct RenderTapeArmObjectSnapshot {
+  std::size_t objectIndex = 0u;
+  std::uint64_t armOrdinal = 0u;
+  D9CWireObjectIdentity identity{};
+  std::vector<std::byte> descriptor{};
+  std::vector<std::vector<std::byte>> content{};
+};
+
+enum class RenderTapeObjectRegistration : std::uint8_t {
+  Rejected,
+  Existing,
+  New,
+};
+
+struct RenderTapeLiveRegistry {
+  std::vector<RenderTapeLiveObject> objects{};
+  std::vector<D9CWireObjectIdentity> knownDead{};
+  bool invalid = false;
+  const char *invalidReason = nullptr;
+  std::uint32_t invalidKind = 0u;
+  std::uint32_t invalidGeneration = 0u;
+  std::uint64_t invalidObjectId = 0u;
+  std::uint32_t invalidSubresource = std::numeric_limits<std::uint32_t>::max();
+  dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic invalidLayout{};
+  dxmt9::d3d9::RenderTapePresentOutputRole presentOutputRole{};
+  std::vector<std::byte> presentOutputPriorDescriptor{};
+  std::uint32_t presentOutputPriorContentCount = 0u;
+  std::vector<std::vector<std::byte>> presentOutputPriorContent{};
+};
 
 struct PeCaptureState {
   PeCaptureState(dxmt9::d3d9::RenderTapeCaptureLimits limits,

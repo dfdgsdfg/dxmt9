@@ -4,6 +4,7 @@
  * are kept together because they form the wrapper-to-tape ownership path. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_tape_support.hpp"
 
 void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,

@@ -5,6 +5,7 @@
  * visible in one cold translation unit. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_tape_support.hpp"
 
 RenderTapeLiveObject *D3D9DeviceImpl::findRenderTapeObject(
     const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept {

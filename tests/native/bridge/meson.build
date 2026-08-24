@@ -134,6 +134,15 @@ test('dxmt9-bridge-codegen-abi-spec', python3,
                        'tests/scripts/test_bridge_codegen_abi.py')],
      env: dxmt9_native_test_env)
 
+# PE ABI/codegen source audit is deliberately source-only here. Native tests
+# must not require PE artifacts; the same script accepts a true builtin x64/x86
+# build directory in the cross verification lane.
+test('dxmt9-pe-device-abi-source-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                       'scripts/check/audit_d3d9_pe_abi_codegen.py'),
+            '--source-only'],
+     env: dxmt9_native_test_env)
+
 bridge_marshalling_value_spec = executable(
   'dxmt9-bridge-marshalling-value-spec',
   'bridge_marshalling_value_spec.cpp',

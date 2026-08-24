@@ -6,6 +6,7 @@
  * adjacent semantic units; all remain one D3D9DeviceImpl implementation. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_tape_support.hpp"
 
 void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
     if (!peCaptureState_ || !peCaptureState_->renderTapeCapture.enabled()) {

@@ -210,7 +210,7 @@ void testSourceContracts(const std::filesystem::path &root) {
     device.replace(markerPos, marker.size(),
                    readTextFile(root / "src/d3d9" / fragment));
   }
-  check(std::count(device.begin(), device.end(), '\n') >= 6700,
+  check(std::count(device.begin(), device.end(), '\n') >= 6100,
         "expanded device header retains the complete declaration surface");
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
@@ -218,6 +218,17 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_recorder.hpp");
   const auto deviceCold =
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
+  for (const std::string_view coldOwner : {
+           "D3D9DeviceImpl::PrepareStateBlockApplyForChild",
+           "D3D9DeviceImpl::CommitStateBlockApplyForChild",
+           "D3D9DeviceImpl::resolveImplicitDeclForFvf",
+           "D3D9DeviceImpl::validateConstRange",
+           "D3D9DeviceImpl::readConstShadow",
+           "D3D9DeviceImpl::SetVertexShaderConstantFSlow",
+           "D3D9DeviceImpl::SetPixelShaderConstantFSlow"}) {
+    check(deviceCold.find(coldOwner) != std::string::npos,
+          "cold state body has a real COM-cold owner");
+  }
   const auto recorderState =
       readTextFile(root / "src/d3d9/d3d9_pe_recorder_state.hpp");
   const auto stateBlockTransaction = readTextFile(

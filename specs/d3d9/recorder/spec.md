@@ -536,6 +536,31 @@ capture rejection through the same pure helpers.
 
 ## 7. Acceptance matrix
 
+### 7.0 PE ABI and codegen audit
+
+The canonical audit is `scripts/check/audit_d3d9_pe_abi_codegen.py` with
+`scripts/check/pe_device_abi_manifest.toml`. Its source-only invocation is a
+native test and verifies declaration order, owner markers, state-size pins,
+export contract, and fragment removal without opening a PE artifact. Cross
+verification invokes the same tool once for each true builtin x64/x86 build.
+The artifact lane first proves `wine_builtin_dll=true` and a matching release
+toolchain/configuration; a directory name or a DLL's presence is never enough.
+Per-symbol hot measurements are normalized to byte length, non-padding
+instruction count, and direct-call count; linker fill instructions are
+excluded from instruction counts while retained in byte length. The default
+hot VS/PS constant-F setters additionally require a separate zero-delta proof
+for bytes, non-padding instructions, and direct calls. Absolute addresses, timestamps, archive/relocation
+ordering, whole-object hashes, and aggregate text size are intentionally
+excluded because they are unstable or compiler-noisy.
+The current manifest applies a strict zero-delta policy to every representative
+hot symbol; any future exception must be a narrow, per-symbol documented policy
+entry rather than an unbounded delta allowance.
+
+The key function remains the out-of-line `QueryInterface` in
+`d3d9_pe_device.cpp`; AddRef/Release and audited hot append/state/draw/Present
+definitions remain inline where their measurements require it. Cold symbol
+owners are explicit in the manifest, and the bridge schema/hash is unchanged.
+
 | Contract | Exact owner | Current evidence | Acceptance still required |
 |---|---|---|---|
 | `R-CORE-REC-1.*`, `2.*` | PE state/constant shadows and producer | `dxmt9-pe-transition-algebra-spec`, `dxmt9-pe-shadow-native-spec`, `dxmt9-pe-typed-slot-spec`, `dxmt9-pe-stateblock-category-spec`, `dxmt9-pe-producer-differential-spec`, `dxmt9-core-stateblock-restore-spec`; compile-time closure rejects raw construction and mutable table/transaction access, while native malformed-batch rows prove all-or-nothing consumption; canonical x64/x86 PE builds pass | Wine/wild rerun for the changed wrapper; non-keyed category expansion remains outside this transition increment |

@@ -34,6 +34,7 @@ CHILD_SCOPES_HPP = ROOT / "src/d3d9/d3d9_pe_child_scopes.hpp"
 DIAGNOSTIC_OBSERVER_HPP = ROOT / "src/d3d9/d3d9_pe_diagnostic_observer.hpp"
 RECORDER_HPP = ROOT / "src/d3d9/d3d9_pe_recorder.hpp"
 MESON = ROOT / "src/d3d9/meson.build"
+ABI_AUDIT = ROOT / "scripts/check/audit_d3d9_pe_abi_codegen.py"
 
 
 def fail(message: str) -> None:
@@ -71,6 +72,11 @@ def main() -> int:
     meson = MESON.read_text()
 
     require(meson, "'d3d9_pe_process_vertices.cpp'", "PE Meson source")
+    require(meson, "'d3d9_pe_device_recorder.cpp'", "recorder owner source")
+    require(meson, "'d3d9_pe_device_tape_registry.cpp'", "tape registry owner source")
+    require(meson, "'d3d9_pe_device_tape_child.cpp'", "tape child owner source")
+    if not ABI_AUDIT.exists():
+        fail("missing stable PE ABI/codegen audit script")
     require(meson, "'d3d9_pe_device_com_cold.cpp'", "cold-COM Meson source")
     require(device, '#include "d3d9_pe_device_impl.hpp"',
             "device TU includes the class header")

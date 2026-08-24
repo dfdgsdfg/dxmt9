@@ -1,0 +1,76 @@
+# Stable PE D3D9DeviceImpl audit contract.  This file describes identities and
+# ownership; it intentionally contains no RVAs, timestamps, archive order,
+# relocations, or whole-object hashes.
+schema = "dxmt9.pe_device.audit.v1"
+
+[toolchain]
+builtin_dll = true
+compiler_family = "llvm-mingw"
+configuration = "release"
+
+[recorder_state]
+sizeof_x64 = 104472
+sizeof_x86 = 103584
+
+[layout]
+critical_member_order = [
+  "refs_", "dev_", "factory_", "recorderState_", "stateBlockContext_",
+  "bufferContext_",
+  "surfaceTextureContext_", "queryContext_", "presentationContext_",
+  "shaderDeclarationContext_", "peCaptureState_", "diagnostics_"
+]
+# The three state fragments remain class-body includes for the genuinely hot
+# transition kernels.  Cold extraction must keep their aggregate residual
+# below this gate; the pre-extraction baseline was 1,650 physical lines.
+state_fragment_residual_max_lines = 1400
+
+[exports]
+names = [
+  "20 Direct3DCreate9On12", "24 Direct3DShaderValidatorCreate9",
+  "27 D3DPERF_BeginEvent", "28 D3DPERF_EndEvent", "29 D3DPERF_GetStatus",
+  "30 D3DPERF_QueryRepeatFrame", "31 D3DPERF_SetMarker",
+  "32 D3DPERF_SetOptions", "33 D3DPERF_SetRegion", "35 DebugSetMute",
+  "37 Direct3DCreate9", "38 Direct3DCreate9Ex"
+]
+
+[owners]
+query_interface = "src/d3d9/d3d9_pe_device.cpp"
+vtable = "src/d3d9/d3d9_pe_device.cpp"
+rtti = "src/d3d9/d3d9_pe_device.cpp"
+recorder = "src/d3d9/d3d9_pe_device_recorder.cpp"
+com_cold = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+state_block_prepare = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+state_block_commit = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+fvf_resolver = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+constant_validation = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+constant_slow_bodies = "src/d3d9/d3d9_pe_device_com_cold.cpp"
+diagnostics = "src/d3d9/d3d9_pe_device_diag.cpp"
+swvp = "src/d3d9/d3d9_pe_device_swvp.cpp"
+tape = "src/d3d9/d3d9_pe_device_tape.cpp"
+tape_registry = "src/d3d9/d3d9_pe_device_tape_registry.cpp"
+tape_child = "src/d3d9/d3d9_pe_device_tape_child.cpp"
+
+[hot]
+symbols = [
+  "QueryInterface", "BeginScene", "SetRenderState", "SetStreamSource",
+  "SetVertexShaderConstantF", "SetPixelShaderConstantF", "DrawPrimitive",
+  "DrawIndexedPrimitive", "Present", "appendRecord",
+  "setRenderStateCore", "applyConstStateWrite"
+]
+fast_path_symbols = ["SetVertexShaderConstantF", "SetPixelShaderConstantF"]
+
+[hot.max_delta]
+# Every representative hot symbol is currently required to match the strict
+# baseline.  A future intentional exception must be a narrow per-symbol entry
+# with a documented reason, not an unbounded pass through this audit.
+bytes = 0
+instructions = 0
+direct_calls = 0
+
+[hot.fast_path_max_delta]
+bytes = 0
+instructions = 0
+direct_calls = 0
+
+[forbidden_fields]
+unstable = ["address", "rva", "timestamp", "archive_order", "relocation", "assembly_hash"]
