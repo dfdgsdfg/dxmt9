@@ -200,28 +200,36 @@ void testSourceContracts(const std::filesystem::path &root) {
       root / "src/d3d9/d3d9_pe_stateblock_shadow.hpp");
   const auto device = readTextFile(
       root / "src/d3d9/d3d9_pe_device_impl.hpp");
-  const auto deviceHot = readTextFile(
-      root / "src/d3d9/d3d9_pe_device_hot.cpp");
+  const auto deviceOwner = readTextFile(
+      root / "src/d3d9/d3d9_pe_device.cpp");
   for (const std::string_view fragment : {
            "d3d9_pe_device_state_core.inc.hpp",
            "d3d9_pe_device_state_texture_fvf.inc.hpp",
            "d3d9_pe_device_state_shader_stream.inc.hpp"}) {
     check(device.find(fragment) == std::string::npos &&
-              deviceHot.find(fragment) == std::string::npos &&
+              deviceOwner.find(fragment) == std::string::npos &&
               !std::filesystem::exists(root / "src/d3d9" / fragment),
           "retired state fragment is absent");
   }
-  check(std::count(device.begin(), device.end(), '\n') <= 3000,
-        "device declaration shell stays at or below 3000 physical lines");
+  check(std::count(device.begin(), device.end(), '\n') <= 3677,
+        "device declaration shell stays within the measured 3677-line residual");
+  for (const std::string_view retainedInline : {
+           "HRESULT STDMETHODCALLTYPE Present(",
+           "HRESULT STDMETHODCALLTYPE SetStreamSource(",
+           "HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive("}) {
+    check(device.find(retainedInline) != std::string::npos,
+          "zero-delta inline entry remains legally reachable in the class header");
+  }
   for (const std::string_view owner : {
-           "D3D9DeviceImpl::Present(",
            "D3D9DeviceImpl::PresentEx(",
            "D3D9DeviceImpl::SetRenderState(",
            "D3D9DeviceImpl::DrawIndexedPrimitiveUP("}) {
-    check(deviceHot.find(owner) != std::string::npos,
+    check(deviceOwner.find(owner) != std::string::npos,
           "hot state/draw method has a real translation-unit owner");
   }
-  const auto deviceSource = device + deviceHot;
+  check(deviceOwner.find("d3d9_pe_device_hot.cpp") == std::string::npos,
+        "hot implementations are not hidden behind an included source fragment");
+  const auto deviceSource = device + deviceOwner;
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
   const auto recorderHeader =
@@ -243,8 +251,6 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_recorder_state.hpp");
   const auto stateBlockTransaction = readTextFile(
       root / "src/d3d9/d3d9_pe_stateblock_transaction.hpp");
-  const auto deviceOwner =
-      readTextFile(root / "src/d3d9/d3d9_pe_device.cpp");
   const auto misc = readTextFile(
       root / "src/d3d9/d3d9_pe_device_child_misc.cpp");
   const auto fault = readTextFile(
@@ -400,15 +406,15 @@ void testSourceContracts(const std::filesystem::path &root) {
       "dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? "
       "&diagnostics_->peEntryDrawDecimatedStats_",
       "draw entry and call tracking share one nullable diagnostic scope");
-  const auto setRenderBegin = deviceHot.find(
+  const auto setRenderBegin = deviceSource.find(
       "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetRenderState(D3DRENDERSTATETYPE state");
   const auto setRenderEnd = setRenderBegin == std::string::npos
       ? std::string::npos
-      : deviceHot.find("bool D3D9DeviceImpl::isValidTextureStageStateType", setRenderBegin);
+      : deviceSource.find("bool D3D9DeviceImpl::isValidTextureStageStateType", setRenderBegin);
   check(setRenderBegin != std::string::npos && setRenderEnd != std::string::npos,
         "SetRenderState source contract is present");
   const std::string_view setRenderBody(
-      deviceHot.data() + setRenderBegin, setRenderEnd - setRenderBegin);
+      deviceSource.data() + setRenderBegin, setRenderEnd - setRenderBegin);
   checkBefore(
       setRenderBody,
       "if (!recorderState_.stateBlockTransaction.writeAllowed()) {\n        return D3DERR_DEVICELOST;\n    }\n    PeDiagnosticsState* const diagnostics",
@@ -481,22 +487,22 @@ void testSourceContracts(const std::filesystem::path &root) {
       "if (!diagnostics || !diagnostics->gates.hotSetterTimer) {\n        return setRenderStateCore",
       "PeHotStateSetterTimer hotSetter(\n        *this, *diagnostics",
       "SetRenderState branches before the enabled timer lifetime begins");
-  const auto setFvfBegin = deviceHot.find(
+  const auto setFvfBegin = deviceSource.find(
       "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetFVF(DWORD fvf) noexcept");
   const auto setFvfEnd = setFvfBegin == std::string::npos
       ? std::string::npos
-      : deviceHot.find("HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexDeclaration", setFvfBegin);
+      : deviceSource.find("HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexDeclaration", setFvfBegin);
   check(setFvfBegin != std::string::npos && setFvfEnd != std::string::npos,
         "SetFVF noexcept source contract is present");
   const std::string_view setFvfBody(
-      deviceHot.data() + setFvfBegin, setFvfEnd - setFvfBegin);
+      deviceSource.data() + setFvfBegin, setFvfEnd - setFvfBegin);
   checkBefore(
       setFvfBody,
       "resolveImplicitDeclForFvf(fvf, &implicitDecl);",
       "fvf_ = fvf;",
       "SetFVF resolves its implicit declaration before shadow mutation");
   checkBefore(
-      deviceHot,
+      deviceSource,
       "if (!diagnostics || !diagnostics->gates.callScope) {\n        return drawPrimitiveCore",
       "PeCallScope peCall(\n        *diagnostics, \"DrawPrimitive\"",
       "DrawPrimitive branches before the enabled call scope lifetime begins");

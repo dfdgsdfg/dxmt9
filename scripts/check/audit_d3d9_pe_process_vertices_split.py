@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
 # The D3D9DeviceImpl declaration/ownership shell lives in this header.
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
-DEVICE_HOT = ROOT / "src/d3d9/d3d9_pe_device_hot.cpp"
 # ProcessVertices, and the rest of the cold COM surface, is DEFINED here since
 # step 10 of the hot/cold split; the class header keeps only its declaration.
 DEVICE_COLD = ROOT / "src/d3d9/d3d9_pe_device_com_cold.cpp"
@@ -47,12 +46,11 @@ def forbid(source: str, needle: str, label: str) -> None:
 def main() -> int:
     device = DEVICE.read_text()
     device_impl = DEVICE_IMPL.read_text()
-    device_hot = DEVICE_HOT.read_text()
     device_cold = DEVICE_COLD.read_text()
     # Anything asserted "in the device implementation" must hold across the
     # pair; a forbid that looked at only one half could be defeated by
     # moving the offending code into the other.
-    device_all = (device + device_impl + device_hot + device_cold +
+    device_all = (device + device_impl + device_cold +
                   DEVICE_SWVP.read_text() + DEVICE_DIAG.read_text() +
                   DEVICE_TAPE.read_text())
     engine_hpp = ENGINE_HPP.read_text()
@@ -71,7 +69,10 @@ def main() -> int:
     if not ABI_AUDIT.exists():
         fail("missing stable PE ABI/codegen audit script")
     require(meson, "'d3d9_pe_device_com_cold.cpp'", "cold-COM Meson source")
-    require(meson, "'d3d9_pe_device_hot.cpp'", "hot state/draw Meson source")
+    forbid(meson, "'d3d9_pe_device_hot.cpp'", "retired hot split source")
+    forbid(device, '#include "d3d9_pe_device_hot.cpp"', "included source fragment")
+    if (ROOT / "src/d3d9/d3d9_pe_device_hot.cpp").exists():
+        fail("retired hot split source still exists")
     require(device, '#include "d3d9_pe_device_impl.hpp"',
             "device TU includes the class header")
     require(device_cold, '#include "d3d9_pe_device_impl.hpp"',
@@ -81,11 +82,11 @@ def main() -> int:
         "d3d9_pe_device_state_texture_fvf.inc.hpp",
         "d3d9_pe_device_state_shader_stream.inc.hpp",
     ):
-        forbid(device_impl + device_hot, fragment, "retired state fragment")
+        forbid(device_impl + device, fragment, "retired state fragment")
         if (ROOT / "src/d3d9" / fragment).exists():
             fail(f"retired state fragment still exists: {fragment}")
-    if len(device_impl.splitlines()) > 3000:
-        fail("D3D9DeviceImpl declaration shell exceeds 3000 physical lines")
+    if len(device_impl.splitlines()) > 3677:
+        fail("D3D9DeviceImpl declaration shell exceeds 3677-line evidence residual")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")

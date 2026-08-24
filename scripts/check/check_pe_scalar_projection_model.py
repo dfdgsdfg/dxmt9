@@ -19,7 +19,7 @@ DIAGNOSTICS_STATE = ROOT / "src/d3d9/d3d9_pe_diagnostics_state.hpp"
 PRODUCER_HPP = ROOT / "src/d3d9/d3d9_pe_producer.hpp"
 PRODUCER_CPP = ROOT / "src/d3d9/d3d9_pe_producer.cpp"
 DEVICE_IMPL = ROOT / "src/d3d9/d3d9_pe_device_impl.hpp"
-DEVICE_HOT = ROOT / "src/d3d9/d3d9_pe_device_hot.cpp"
+DEVICE = ROOT / "src/d3d9/d3d9_pe_device.cpp"
 DEVICE_RECORDER = ROOT / "src/d3d9/d3d9_pe_device_recorder.cpp"
 TLA = ROOT / "specs/verification/tla/PeRecorderScalarProjection.tla"
 TLA_DIR = TLA.parent
@@ -74,7 +74,7 @@ def main() -> int:
     diagnostics_state = read(DIAGNOSTICS_STATE)
     producer_hpp = read(PRODUCER_HPP)
     producer_cpp = read(PRODUCER_CPP)
-    device_impl = read(DEVICE_IMPL) + read(DEVICE_HOT)
+    device_impl = read(DEVICE_IMPL) + read(DEVICE)
     device_recorder = read(DEVICE_RECORDER)
     tla = read(TLA)
 

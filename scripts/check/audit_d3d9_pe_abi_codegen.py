@@ -104,13 +104,39 @@ def source_audit(manifest: dict) -> dict:
         fail("QueryInterface declaration/owner contract changed")
     if impl.index(q) < impl.index("class D3D9DeviceImpl"):
         fail("QueryInterface key declaration is not in the class")
-    hot = (ROOT / "src/d3d9/d3d9_pe_device_hot.cpp").read_text()
     state_fragments = [line.strip() for line in impl.splitlines()
                        if "d3d9_pe_device_state_" in line]
     if state_fragments:
         fail("state implementation fragment include remains")
-    if len(impl.splitlines()) > 3000:
-        fail("D3D9DeviceImpl declaration shell exceeds 3000 physical lines")
+    impl_lines = len(impl.splitlines())
+    impl_max_lines = manifest["layout"]["device_impl_max_lines"]
+    if impl_lines > impl_max_lines:
+        fail(
+            "D3D9DeviceImpl declaration shell exceeds evidence residual: "
+            f"{impl_lines} > {impl_max_lines} physical lines"
+        )
+    retired_hot = ROOT / "src/d3d9/d3d9_pe_device_hot.cpp"
+    if retired_hot.exists() or '#include "d3d9_pe_device_hot.cpp"' in device:
+        fail("hot implementation remains a disguised source fragment")
+    device_cpp_sources = list((ROOT / "src/d3d9").glob("*.cpp"))
+    device_cpp_text = "\n".join(source.read_text() for source in device_cpp_sources)
+    if "DXMT9_PE_DEVICE_INLINE" in device_cpp_text or re.search(
+        r"(?m)^[^\n;{}]*\binline\b[^\n;{}]*D3D9DeviceImpl::",
+        device_cpp_text,
+    ) or "__attribute__((used))" in device_cpp_text:
+        fail("one-TU inline/used D3D9DeviceImpl workaround is forbidden")
+    for entry in manifest["layout"]["retained_inline_entries"]:
+        if not re.search(
+            re.escape(entry) + r"\([^;]*\)\s*noexcept\s+override\s*\{",
+            impl,
+            re.S,
+        ):
+            fail(f"retained legal inline entry body missing: {entry}")
+        if re.search(r"D3D9DeviceImpl::" + re.escape(entry) + r"\s*\(", device):
+            fail(f"retained inline entry also has an out-of-line body: {entry}")
+    for helper in manifest["layout"]["retained_inline_helpers"]:
+        if helper not in impl:
+            fail(f"retained inline helper body missing: {helper}")
     for fragment in (
         "d3d9_pe_device_diag_log.inc.hpp",
         "d3d9_pe_device_diag_module.inc.hpp",
@@ -133,36 +159,56 @@ def source_audit(manifest: dict) -> dict:
     for arch, expected in manifest["recorder_state"].items():
         if arch.startswith("sizeof_") and str(expected) not in state:
             fail(f"PeRecorderState {arch} pin is missing")
+    for arch in ("x64", "x86"):
+        size = manifest["device_layout"][f"sizeof_{arch}"]
+        alignment = manifest["device_layout"][f"alignof_{arch}"]
+        if f"static_assert(sizeof(D3D9DeviceImpl) == {size});" not in device:
+            fail(f"D3D9DeviceImpl {arch} sizeof pin is missing")
+        if f"static_assert(alignof(D3D9DeviceImpl) == {alignment});" not in device:
+            fail(f"D3D9DeviceImpl {arch} alignof pin is missing")
     for fast_symbol in manifest["hot"]["fast_path_symbols"]:
         if not re.search(
             re.escape(fast_symbol) + r"\(.*?validateConstRangeFast",
-            hot,
+            device,
             re.S,
         ):
             fail(f"default-hot fast-path proof missing for {fast_symbol}")
 
-    owner_checks = {
-        "query_interface": ("src/d3d9/d3d9_pe_device.cpp", "D3D9DeviceImpl::QueryInterface"),
-        "hot_state_draw": ("src/d3d9/d3d9_pe_device_hot.cpp", "D3D9DeviceImpl::Present"),
-        "recorder": ("src/d3d9/d3d9_pe_device_recorder.cpp", "D3D9DeviceImpl::commitPendingCommandChunk"),
-        "com_cold": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::TestCooperativeLevel"),
-        "state_block_prepare": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::PrepareStateBlockApplyForChild"),
-        "state_block_commit": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::CommitStateBlockApplyForChild"),
-        "fvf_resolver": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::resolveImplicitDeclForFvf"),
-        "constant_validation": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::validateConstRange"),
-        "constant_slow_bodies": ("src/d3d9/d3d9_pe_device_com_cold.cpp", "D3D9DeviceImpl::SetVertexShaderConstantFSlow"),
-        "diagnostics": ("src/d3d9/d3d9_pe_device_diag.cpp", "D3D9DeviceImpl::recordPeChunkCommit"),
-        "swvp": ("src/d3d9/d3d9_pe_device_swvp.cpp", "D3D9DeviceImpl::trySoftwareFfpDrawPrimitive"),
-        "tape": ("src/d3d9/d3d9_pe_device_tape.cpp", "D3D9DeviceImpl::produceRenderTapeBootstrap"),
-        "tape_registry": ("src/d3d9/d3d9_pe_device_tape_registry.cpp", "D3D9DeviceImpl::findRenderTapeObject"),
-        "tape_child": ("src/d3d9/d3d9_pe_device_tape_child.cpp", "D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild"),
+    owner_markers = {
+        "query_interface": "D3D9DeviceImpl::QueryInterface",
+        "hot_state_draw": "D3D9DeviceImpl::Present",
+        "recorder": "D3D9DeviceImpl::commitPendingCommandChunk",
+        "com_cold": "D3D9DeviceImpl::TestCooperativeLevel",
+        "state_block_prepare": "D3D9DeviceImpl::PrepareStateBlockApplyForChild",
+        "state_block_commit": "D3D9DeviceImpl::CommitStateBlockApplyForChild",
+        "fvf_resolver": "D3D9DeviceImpl::resolveImplicitDeclForFvf",
+        "constant_validation": "D3D9DeviceImpl::validateConstRange",
+        "constant_slow_bodies": "D3D9DeviceImpl::SetVertexShaderConstantFSlow",
+        "diagnostics": "D3D9DeviceImpl::recordPeChunkCommit",
+        "swvp": "D3D9DeviceImpl::trySoftwareFfpDrawPrimitive",
+        "tape": "D3D9DeviceImpl::produceRenderTapeBootstrap",
+        "tape_registry": "D3D9DeviceImpl::findRenderTapeObject",
+        "tape_child": "D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild",
     }
     owners = {}
-    for key, (relative, marker) in owner_checks.items():
+    for key, marker in owner_markers.items():
+        relative = manifest["owners"].get(key)
+        if not isinstance(relative, str):
+            fail(f"manifest owner missing for {key}")
         text = (ROOT / relative).read_text()
         if marker not in text:
             fail(f"owner marker missing for {key}: {marker}")
         owners[key] = relative
+    if manifest["owners"]["vtable"] != manifest["owners"]["query_interface"]:
+        fail("manifest vtable owner is not the QueryInterface key-function TU")
+    if manifest["owners"]["rtti"] != manifest["owners"]["query_interface"]:
+        fail("manifest RTTI owner is not the QueryInterface key-function TU")
+    query_definitions = sum(
+        count_owner_definitions(source.read_text(), "QueryInterface")
+        for source in device_cpp_sources
+    )
+    if query_definitions != 1:
+        fail(f"expected one D3D9DeviceImpl QueryInterface definition, found {query_definitions}")
 
     # The export contract is source-owned by the module definition.  Compare
     # ordinal/name pairs exactly here; the artifact lane repeats this check on
@@ -197,6 +243,11 @@ def source_audit(manifest: dict) -> dict:
         "state_fragment_residual_lines": residual_fragment_lines,
         "heavy_header_includers": includers,
         "heavy_header_includer_count": len(includers),
+        "device_impl_lines": impl_lines,
+        "device_impl_max_lines": impl_max_lines,
+        "retained_inline_entries": manifest["layout"]["retained_inline_entries"],
+        "retained_inline_helpers": manifest["layout"]["retained_inline_helpers"],
+        "heavy_header_aggregate_lines": impl_lines * len(includers),
         "owner_map": owners,
         "hot_metrics": hot_metrics,
         "source_contract": "pass",
@@ -210,17 +261,117 @@ def run_tool(args: list[str]) -> str:
         fail(f"audit tool failed: {' '.join(args)}: {exc}")
 
 
-def artifact_identity(build_dir: Path) -> dict:
+ARCH_MACHINES = {
+    "x64": {"system": "windows", "cpu_family": "x86_64",
+            "cpu": "x86_64", "is_64_bit": True},
+    "x86": {"system": "windows", "cpu_family": "x86",
+            "cpu": "i686", "is_64_bit": False},
+}
+
+COMPILER_IDENTITY_KEYS = (
+    "id", "version", "full_version", "exelist", "linker_id",
+    "linker_exelist",
+)
+
+
+def read_json(path: Path, label: str) -> object:
+    if not path.exists():
+        fail(f"missing {label}: {path}")
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"invalid {label}: {path}: {exc}")
+
+
+def validate_arch_identity(machines: dict, arch: str, label: str) -> dict:
+    expected = ARCH_MACHINES[arch]
+    actual = {}
+    for role in ("host", "target"):
+        machine = machines.get(role)
+        if not isinstance(machine, dict):
+            fail(f"{label} has no {role} machine identity")
+        actual[role] = {key: machine.get(key) for key in expected}
+        if actual[role] != expected:
+            fail(
+                f"{label} architecture does not match --arch {arch}: "
+                f"{role}={actual[role]!r}, expected={expected!r}"
+            )
+    return actual
+
+
+def compiler_identity(compilers: dict, label: str) -> dict:
+    host = compilers.get("host")
+    if not isinstance(host, dict):
+        fail(f"{label} has no host compiler identity")
+    identity = {}
+    for language in ("c", "cpp"):
+        compiler = host.get(language)
+        if not isinstance(compiler, dict):
+            fail(f"{label} has no host {language} compiler identity")
+        missing = [key for key in COMPILER_IDENTITY_KEYS if key not in compiler]
+        if missing:
+            fail(f"{label} host {language} compiler identity misses {missing}")
+        identity[language] = {
+            key: compiler[key] for key in COMPILER_IDENTITY_KEYS
+        }
+    return identity
+
+
+def artifact_identity(manifest: dict, build_dir: Path, arch: str,
+                      label: str) -> dict:
     options = build_dir / "meson-info/intro-buildoptions.json"
-    if not options.exists():
-        fail(f"missing build identity: {options}")
-    config = json.loads(options.read_text())
+    config = read_json(options, f"{label} build identity")
+    if not isinstance(config, list) or not all(
+        isinstance(entry, dict) and "name" in entry and "value" in entry
+        for entry in config
+    ):
+        fail(f"invalid {label} build identity shape")
     values = {entry["name"]: entry["value"] for entry in config}
-    if values.get("wine_builtin_dll") is not True:
-        fail("PE artifact is not from wine_builtin_dll=true")
-    if values.get("buildtype") != "release":
-        fail(f"PE artifact is not release-built: {values.get('buildtype')!r}")
-    return values
+    expected_builtin = manifest["toolchain"]["builtin_dll"]
+    expected_configuration = manifest["toolchain"]["configuration"]
+    if values.get("wine_builtin_dll") is not expected_builtin:
+        fail(
+            f"{label} PE artifact builtin identity mismatch: "
+            f"{values.get('wine_builtin_dll')!r}"
+        )
+    if values.get("buildtype") != expected_configuration:
+        fail(
+            f"{label} PE artifact configuration mismatch: "
+            f"{values.get('buildtype')!r}"
+        )
+    machines = read_json(
+        build_dir / "meson-info/intro-machines.json",
+        f"{label} machine identity",
+    )
+    machine_identity = validate_arch_identity(machines, arch, label)
+    compilers = read_json(
+        build_dir / "meson-info/intro-compilers.json",
+        f"{label} compiler identity",
+    )
+    compiler = compiler_identity(compilers, label)
+    expected_compiler_id = manifest["toolchain"]["compiler_id"]
+    expected_linker_id = manifest["toolchain"]["linker_id"]
+    for language, identity in compiler.items():
+        if identity["id"] != expected_compiler_id:
+            fail(f"{label} host {language} compiler is not {expected_compiler_id}")
+        if identity["linker_id"] != expected_linker_id:
+            fail(f"{label} host {language} linker is not {expected_linker_id}")
+        if manifest["toolchain"]["compiler_family"] == "llvm-mingw" and not all(
+            "w64-mingw32" in executable for executable in identity["exelist"]
+        ):
+            fail(f"{label} host {language} compiler is not llvm-mingw")
+    return {
+        "buildtype": values.get("buildtype"),
+        "wine_builtin_dll": values.get("wine_builtin_dll"),
+        "machines": machine_identity,
+        "compilers": compiler,
+    }
+
+
+def require_matching_artifact_identities(candidate: dict,
+                                         baseline: dict) -> None:
+    if candidate != baseline:
+        fail("candidate/baseline PE build identities differ")
 
 
 def artifact_dll(build_dir: Path) -> Path:
@@ -289,15 +440,17 @@ def select_hot_symbols(dll: Path, labels: list[str]) -> dict[str, str]:
         ]
         if not matches:
             fail(f"missing hot symbol for {label}")
-        selected[label] = min(matches)[1]
+        if len(matches) != 1:
+            fail(f"ambiguous hot symbol for {label}: {[row[1] for row in matches]}")
+        selected[label] = matches[0][1]
     return selected
 
 
-def disassembly_metrics(dll: Path, symbol: str) -> dict:
-    text = run_tool(["llvm-objdump", f"--disassemble-symbols={symbol}", str(dll)])
-    byte_count = 0
-    instruction_count = 0
-    direct_call_count = 0
+LINKER_FILL_MNEMONICS = {"int3", "nop", "nopl", "nopw"}
+
+
+def disassembly_text_metrics(text: str, symbol: str) -> dict:
+    rows = []
     instruction_re = re.compile(
         r"^\s*[0-9A-Fa-f]+:\s+((?:[0-9A-Fa-f]{2}\s+)+)(.*)$"
     )
@@ -305,17 +458,27 @@ def disassembly_metrics(dll: Path, symbol: str) -> dict:
         match = instruction_re.match(line)
         if not match:
             continue
-        byte_count += len(re.findall(r"[0-9A-Fa-f]{2}", match.group(1)))
-        # PE symbol disassembly includes linker fill bytes up to the next
-        # symbol. They are not function instructions and vary with section
-        # placement; retain them in byte length but normalize them out of the
-        # instruction count.
         mnemonic = match.group(2).lstrip().split(None, 1)[0]
-        if mnemonic in {"int3", "nop", "nopl", "nopw", "ud2"}:
-            continue
-        instruction_count += 1
-        if re.search(r"\bcall\w*\s+(?!\*)", match.group(2)):
-            direct_call_count += 1
+        rows.append({
+            "bytes": len(re.findall(r"[0-9A-Fa-f]{2}", match.group(1))),
+            "mnemonic": mnemonic,
+            "assembly": match.group(2),
+        })
+    # llvm-objdump disassembles through the next symbol boundary. COFF/lld
+    # fills only the trailing gap with INT3/NOP families. Trim that suffix
+    # from the byte metric, but keep identical mnemonics when they occur
+    # inside the function so a real code-generation change cannot hide.
+    byte_rows = list(rows)
+    while byte_rows and byte_rows[-1]["mnemonic"] in LINKER_FILL_MNEMONICS:
+        byte_rows.pop()
+    byte_count = sum(row["bytes"] for row in byte_rows)
+    instruction_count = sum(
+        row["mnemonic"] not in LINKER_FILL_MNEMONICS for row in rows
+    )
+    direct_call_count = sum(
+        bool(re.search(r"\bcall\w*\s+(?!\*)", row["assembly"]))
+        for row in rows
+    )
     if instruction_count == 0 or byte_count == 0:
         fail(f"disassembly produced no instructions for {symbol}")
     return {
@@ -323,6 +486,11 @@ def disassembly_metrics(dll: Path, symbol: str) -> dict:
         "instructions": instruction_count,
         "direct_calls": direct_call_count,
     }
+
+
+def disassembly_metrics(dll: Path, symbol: str) -> dict:
+    text = run_tool(["llvm-objdump", f"--disassemble-symbols={symbol}", str(dll)])
+    return disassembly_text_metrics(text, symbol)
 
 
 def measured_hot_metrics(manifest: dict, candidate: Path, baseline: Path) -> list[dict]:
@@ -346,54 +514,88 @@ def measured_hot_metrics(manifest: dict, candidate: Path, baseline: Path) -> lis
     return result
 
 
-def archive_owner_check(build_dir: Path) -> dict:
+def require_zero_hot_metrics(metrics: list[dict]) -> None:
+    for row in metrics:
+        if any(value != 0 for value in row["delta"].values()):
+            fail(f"hot codegen delta is nonzero: {row['symbol']}: {row['delta']}")
+
+
+def object_owner(line: str) -> str:
+    match = re.search(r":([^:\s]+\.cpp\.obj):\s", line)
+    if not match:
+        fail(f"cannot parse PE archive owner: {line}")
+    return Path(match.group(1)).name
+
+
+def expected_object_owner(source: str) -> str:
+    return Path(source).name + ".obj"
+
+
+def archive_owner_text_check(manifest: dict, text: str) -> dict:
+    real_markers = {
+        "query_interface": "ZN14D3D9DeviceImpl14QueryInterface",
+        "vtable": "ZTV14D3D9DeviceImpl",
+        "rtti": "ZTI14D3D9DeviceImpl",
+    }
+    owners = {}
+    for key, marker in real_markers.items():
+        lines = []
+        for line in text.splitlines():
+            symbol = line.rsplit(None, 1)[-1] if line.split() else ""
+            if ".refptr." in symbol:
+                continue
+            normalized = symbol.lstrip("_").split("@", 1)[0]
+            if normalized.startswith(marker):
+                lines.append(line)
+        if len(lines) != 1:
+            fail(f"expected exactly one real {key} owner, found {len(lines)}")
+        owner = object_owner(lines[0])
+        expected = expected_object_owner(manifest["owners"][key])
+        if owner != expected:
+            fail(f"{key} owner is {owner}, expected {expected}")
+        owners[key] = owner
+
+    refptr_marker = "ZTV14D3D9DeviceImpl"
+    actual_refptr_owners = sorted({
+        object_owner(line)
+        for line in text.splitlines()
+        if ".refptr." in line and refptr_marker in line
+    })
+    expected_refptr_owners = sorted(
+        expected_object_owner(source)
+        for source in manifest["owners"]["vtable_refptr"]
+    )
+    if actual_refptr_owners != expected_refptr_owners:
+        fail(
+            "D3D9DeviceImpl vtable .refptr owners changed: "
+            f"{actual_refptr_owners!r} != {expected_refptr_owners!r}"
+        )
+    owners["vtable_refptr"] = actual_refptr_owners
+    return owners
+
+
+def archive_owner_check(manifest: dict, build_dir: Path) -> dict:
     archive = build_dir / "src/d3d9/libdxmt9_pe_core.a"
     if not archive.exists():
         fail(f"missing PE core archive: {archive}")
     text = run_tool(["llvm-nm", "--defined-only", "--print-file-name", str(archive)])
-    required = {
-        "query_interface": "D3D9DeviceImpl14QueryInterface",
-        "vtable": "_ZTV14D3D9DeviceImpl",
-        "rtti": "_ZTI14D3D9DeviceImpl",
-    }
-    owners = {}
-    for key, marker in required.items():
-        lines = [line for line in text.splitlines() if marker in line]
-        if not lines:
-            fail(f"missing ABI owner symbol: {marker}")
-        if key != "query_interface" and not any(
-            "d3d9_pe_device.cpp.obj" in line for line in lines
-        ):
-            fail(f"ABI owner moved from d3d9_pe_device.cpp.obj: {marker}")
-        if key == "query_interface" and not any(
-            "d3d9_pe_device.cpp.obj" in line for line in lines
-        ):
-            fail("QueryInterface owner moved from d3d9_pe_device.cpp.obj")
-        owners[key] = "d3d9_pe_device.cpp.obj"
-    return owners
+    return archive_owner_text_check(manifest, text)
 
 
 def artifact_audit(manifest: dict, build_dir: Path, baseline_dir: Path, arch: str) -> dict:
-    artifact_identity(build_dir)
-    artifact_identity(baseline_dir)
+    candidate_identity = artifact_identity(
+        manifest, build_dir, arch, "candidate")
+    baseline_identity = artifact_identity(
+        manifest, baseline_dir, arch, "baseline")
+    require_matching_artifact_identities(candidate_identity, baseline_identity)
     candidate = artifact_dll(build_dir)
     baseline = artifact_dll(baseline_dir)
     metrics = measured_hot_metrics(manifest, candidate, baseline)
     by_symbol = {row["symbol"]: row for row in metrics}
-    hot_limit = manifest["hot"]["max_delta"]
-    for row in metrics:
-        if any(row["delta"][key] > hot_limit[key]
-               or row["delta"][key] < -hot_limit[key]
-               for key in hot_limit):
-            fail(f"hot codegen delta outside policy: {row['symbol']}")
-    fast_limit = manifest["hot"]["fast_path_max_delta"]
+    require_zero_hot_metrics(metrics)
     fast_proof = []
     for symbol in manifest["hot"]["fast_path_symbols"]:
         row = by_symbol[symbol]
-        if any(row["delta"][key] > fast_limit[key]
-               or row["delta"][key] < -fast_limit[key]
-               for key in fast_limit):
-            fail(f"default-hot fast-path codegen delta outside policy: {symbol}")
         fast_proof.append({"symbol": symbol, "delta": row["delta"],
                            "status": "zero-delta"})
     return {
@@ -401,8 +603,9 @@ def artifact_audit(manifest: dict, build_dir: Path, baseline_dir: Path, arch: st
         "build_dir": str(build_dir),
         "baseline_dir": str(baseline_dir),
         "builtin": True,
+        "identity": candidate_identity,
         "export_check": export_pairs(manifest, candidate),
-        "abi_owner_check": archive_owner_check(build_dir),
+        "abi_owner_check": archive_owner_check(manifest, build_dir),
         "hot_metrics": metrics,
         "fast_path_proof": fast_proof,
     }

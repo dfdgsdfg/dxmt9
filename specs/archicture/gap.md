@@ -12,13 +12,21 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 The PE ABI/codegen audit is now source-checked by
 `scripts/check/audit_d3d9_pe_abi_codegen.py` and its stable manifest. Native
 execution uses `--source-only`; x64/x86 artifact evidence must prove
-`wine_builtin_dll=true`. State, draw, scene, and present bodies now have a real
-`d3d9_pe_device_hot.cpp` owner, the declaration shell is 2,997 physical lines,
+`wine_builtin_dll=true`. State, draw, scene, and present bodies now remain in
+the real `d3d9_pe_device.cpp` owner, the declaration shell is 2,997 physical lines,
 and no state implementation fragment remains. The cold StateBlock/FVF and
 constant-validation helpers remain owned by the COM-cold TU. The audit excludes addresses,
 timestamps, archive order, relocations, and whole assembly hashes.
 
 ## Architecture Layer
+
+The final PE-device safety closure pins an honest 3,677-line compile-surface
+residual for `d3d9_pe_device_impl.hpp`, with zero state fragments. Exact x64
+and x86 codegen requires reachable in-class bodies for `SetStreamSource`,
+`Present`, and `DrawIndexedPrimitive` plus the helper/template set named in
+`pe_device_abi_manifest.toml`; all remaining hot definitions are physically
+owned by `d3d9_pe_device.cpp`, where `QueryInterface` remains the key-function,
+vtable, and RTTI anchor.
 
 | Area | Status | Notes |
 |---|---|---|

@@ -143,6 +143,11 @@ test('dxmt9-pe-device-abi-source-spec', python3,
             '--source-only'],
      env: dxmt9_native_test_env)
 
+test('dxmt9-pe-device-abi-audit-negative-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                       'tests/native/bridge/pe_abi_codegen_audit_spec.py')],
+     env: dxmt9_native_test_env)
+
 bridge_marshalling_value_spec = executable(
   'dxmt9-bridge-marshalling-value-spec',
   'bridge_marshalling_value_spec.cpp',
