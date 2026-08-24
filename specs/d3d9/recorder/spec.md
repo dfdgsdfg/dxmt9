@@ -156,6 +156,12 @@ at candidate replacement, End snapshot, Capture refresh, and Begin/reset
 boundaries. Apply staging uses category-qualified texture, stream, shader,
 index, render-target, and depth values with private occupancy masks; identical
 COM identities in multiple occupied slots retain and settle independently.
+A second write to one occupied qualified staging cell is rejected before
+AddRef and leaves the first value intact, so the occupancy bit and retained
+owner cannot diverge. A successful Begin increments a monotonic recording
+epoch. `RecordingCapability` captures that epoch and rechecks both it and the
+Recording phase on every scoped writer call; Reset does not rewind the epoch,
+and exhaustion poisons instead of wrapping.
 `CandidateOwnedVertexDeclaration` is the candidate snapshot's one owned retain
 of a vertex declaration. The device's bound `vdecl_` slot is borrowed: binding
 and clearing it do not AddRef/Release that slot; an implicit-FVF declaration is
@@ -185,6 +191,11 @@ bounded model requires each step to match its generated row. The model carries
 duplicate-retain cardinality only. Native fake-COM tests separately demonstrate
 one retain and one release or transfer per occupied category/slot for repeated
 object identities; the model is not a proof of COM implementation behavior.
+The same model retains an issued capability across End/Reset and a second
+Begin. `StaleCapability` deliberately checks phase without epoch and must
+violate `NoStaleCapabilityWrite`; the native witness binds that abstract ABA
+trace to the production capability. Concrete same-slot overwrite/AddRef
+conservation remains native evidence rather than an abstract COM model.
 The same table defines `PoisonRequested` for every non-terminal phase. Its
 production effect discards candidate ownership, releases all occupied Apply
 staging, preserves capture, and enters or remains in `Poisoned`. There is no
@@ -378,6 +389,10 @@ enabled owner, feature-specific cached gates ensure module-map, thread-sampler,
 and debug-only enablement does not construct unrelated call scopes/timers or
 read clocks. The null edge enters the functional core without scope
 construction, timestamp reads, TLS/sample mutation, or a diagnostic callback.
+Generic callbacks below a `noexcept` boundary are constrained by their exact
+invocation signature. Recording writers, binding transitions, and both child
+call-scope branches reject a potentially throwing callable at compile time;
+the constraint adds no runtime state or branch.
 
 `PeRecorderState` owns the producer-owned live/pending shadow, the separate
 `StateBlockRecorded` domain, constant shadows, reusable binding/build scratch,
@@ -395,12 +410,22 @@ public-interface address, raw provider handle, wire ref, and concrete kind.
 Binding setters cache the wire ref and StateBlock ownership traversal uses
 typed policies, so no public `void*` ownership callback or trusted raw-cast wire
 extractor remains.
-`D3D9DeviceImpl` remains one concrete COM object with one recorder base. Ordered
-in-class fragments preserve declaration order while existing cold source owners
-retain staged method definitions. The child callback facade contains exactly
-29 `noexcept` virtuals; `FlushPeRecorderForChild` remains the earliest
-non-inline declaration and its `d3d9_pe_device.cpp` definition remains the
-key-function/vtable owner.
+`D3D9DeviceImpl` currently remains one concrete COM object with one recorder
+base. Ordered in-class fragments preserve declaration order while existing cold
+source owners retain staged method definitions. The transitional child callback
+facade contains exactly 29 `noexcept` virtuals; `FlushPeRecorderForChild`
+remains the earliest non-inline declaration and its `d3d9_pe_device.cpp`
+definition remains the key-function/vtable owner.
+
+The target internal boundary does not remove the Windows COM vtable. It splits
+the broad recorder facade by consumer into typed StateBlock, resource-mutation,
+query, and presentation service contexts. Each wrapper replaces its existing
+recorder pointer with one kind-scoped non-owning context pointer and reaches
+`noexcept` free-function operations, so wrapper size and vptr count do not grow.
+The device header then becomes a COM declaration/ownership shell over DOD state
+aggregates; hot recorder, cold COM, Render Tape, diagnostics, and SWVP method
+bodies stay out of line in their owning translation units. This migration must
+preserve COM declaration order and the existing key-function anchor.
 One nullable heap-owned `PeCaptureState` owns the complete Render Tape lifecycle: session,
 live registry, oracle/digest/pixel/output storage, arm phase and ordinals,
 tokens and skip selector, arm snapshots, admitted identities, first-access
@@ -499,7 +524,8 @@ ordering and the conditional whole-operation lock interval. Production Apply
 backend failure is fail-stop rather than rollback because the backend can
 partially mutate; the poison latch is the explicit safety boundary. The
 companion `PeStateBlockTransaction.tla` model checks staged-reference release,
-capture disposition, poison, and Reset recovery; successful Reset is the
+capture disposition, poison, monotonic Recording epochs, stale-capability
+rejection, and Reset recovery; successful Reset is the
 coordinated task-1B policy, while Terminal is reserved for explicit teardown.
 The commit model includes seal/bridge/capture-journal settlement, and the
 native witness exercises bridge pre-effect retry, effect-unknown poison, and

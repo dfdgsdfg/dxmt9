@@ -29,6 +29,13 @@ void check(bool condition, std::string_view message) {
   if (!condition) throw Failure(std::string(message));
 }
 
+template<typename Callback>
+concept PeRecordingWriterCallback = requires(
+    PeStateBlockTransactionState::RecordingCapability& capability,
+    Callback&& callback) {
+  capability.withWriter(std::forward<Callback>(callback));
+};
+
 template<typename Ref>
 Ref stateBlockRef(std::uintptr_t value) {
   using Tag = typename StateBlockComRefTagFor<Ref>::type;
@@ -503,7 +510,7 @@ void testTotalPoisonOwnershipCleanup() {
     PeStateBlockTransactionState transaction{};
     transaction.beginAccepted(release);
     candidate.addRef();
-    check(transaction.withRecordingWriter([&](auto& writer) {
+    check(transaction.withRecordingWriter([&](auto& writer) noexcept {
             writer.textures().set(
                 fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
                 stateBlockRef<StateBlockTextureRef>(&candidate));
@@ -550,11 +557,21 @@ void testTransactionOwnershipAndLifecycle() {
   static_assert(!std::is_move_assignable_v<StateBlockRecorded::Writer>);
   using RecordingCapability =
       PeStateBlockTransactionState::RecordingCapability;
+  using NothrowWriterCallback =
+      decltype([](StateBlockRecorded::Writer&) noexcept {});
+  using ThrowingWriterCallback =
+      decltype([](StateBlockRecorded::Writer&) {});
+  static_assert(PeRecordingWriterCallback<NothrowWriterCallback>);
+  static_assert(!PeRecordingWriterCallback<ThrowingWriterCallback>);
   static_assert(!std::is_same_v<RecordingCapability,
                                 StateBlockRecorded::Writer>);
   static_assert(requires(RecordingCapability& capability) {
     { static_cast<bool>(capability) } -> std::same_as<bool>;
   });
+  static_assert(peStateBlockNextRecordingEpoch(0u).valid &&
+                peStateBlockNextRecordingEpoch(0u).value == 1u);
+  static_assert(!peStateBlockNextRecordingEpoch(
+                    std::numeric_limits<std::uint64_t>::max()).valid);
 
   PeStateBlockTransactionState transaction{};
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
@@ -572,7 +589,7 @@ void testTransactionOwnershipAndLifecycle() {
   candidateRef.addRef();
   candidateRef.addRef();
   candidateRef.addRef();
-  check(recording.withWriter([&](auto& writer) {
+  check(recording.withWriter([&](auto& writer) noexcept {
           writer.textures().set(
               fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
               stateBlockRef<StateBlockTextureRef>(&candidateRef));
@@ -597,6 +614,31 @@ void testTransactionOwnershipAndLifecycle() {
 
   check(!transaction.recordingCapability(),
         "poisoned transaction must not issue a recording capability");
+
+  // Reusing the Recording phase after Reset must not revive a capability
+  // retained from the previous Begin (ABA).  The new capability is valid,
+  // while the old one is rejected before its callback is entered.
+  PeStateBlockTransactionState epochTransaction{};
+  check(epochTransaction.beginAccepted([](auto) noexcept {}),
+        "first Begin obtains epoch one");
+  auto staleEpochCapability = epochTransaction.recordingCapability();
+  epochTransaction.failEnd([](auto) noexcept {});
+  epochTransaction.resetSucceeded([](auto) noexcept {});
+  check(epochTransaction.beginAccepted([](auto) noexcept {}),
+        "second Begin obtains a distinct epoch");
+  auto currentEpochCapability = epochTransaction.recordingCapability();
+  bool staleInvoked = false;
+  bool currentInvoked = false;
+  check(!staleEpochCapability &&
+            !staleEpochCapability.withWriter([&](auto&) noexcept {
+              staleInvoked = true;
+            }) && !staleInvoked,
+        "stale capability is rejected after epoch reuse");
+  check(currentEpochCapability &&
+            currentEpochCapability.withWriter([&](auto&) noexcept {
+              currentInvoked = true;
+            }) && currentInvoked,
+        "current epoch capability remains usable");
 }
 
 void testConstantRecordingWriterCapabilityTruthTable() {
@@ -707,6 +749,94 @@ void testTypedStagingRetentionMultiplicityAndReset() {
       stateBlockRef<StateBlockDepthStencilRef>(&shared), retain);
   check(transaction.hasPreparedApply() && shared.refs == 9u,
         "each typed occupied Apply category retains independently");
+
+  // A qualified slot is a single ownership cell.  Re-staging it must fail
+  // before AddRef and must preserve the first value; otherwise overwrite plus
+  // one-bit occupancy leaks the first reference and silently changes Apply.
+  RefProbe replacement{};
+  const auto secondTexture = stateBlockRef<StateBlockTextureRef>(&replacement);
+  const StateBlockStreamSourceValue secondStream{
+      .buffer = stateBlockBuffer<IDirect3DVertexBuffer9>(&replacement),
+      .offset = 64u,
+      .stride = 32u,
+  };
+  const auto secondRenderTarget =
+      stateBlockRef<StateBlockRenderTargetRef>(&replacement);
+  check(!transaction.stageTexture(stateBlockTextureSlotKey(0u), secondTexture,
+                                  retain) &&
+            !transaction.stageStream(stateBlockStreamSlotKey(0u), secondStream,
+                                     retain) &&
+            !transaction.stageRenderTarget(stateBlockRenderTargetSlotKey(0u),
+                                            secondRenderTarget, retain) &&
+            shared.refs == 9u && replacement.refs == 1u,
+        "duplicate bounded slots reject before retain and preserve first values");
+  transaction.markApplyPrepared();
+  const auto transferredFirstTexture =
+      transaction.takeTexture(stateBlockTextureSlotKey(0u));
+  const auto transferredFirstStream =
+      transaction.takeStream(stateBlockStreamSlotKey(0u));
+  const auto transferredFirstRenderTarget =
+      transaction.takeRenderTarget(stateBlockRenderTargetSlotKey(0u));
+  check(transferredFirstTexture.raw() == reinterpret_cast<
+            StateBlockTextureRef::raw_type*>(&shared) &&
+            transferredFirstStream.buffer.raw() == reinterpret_cast<
+                IDirect3DVertexBuffer9*>(&shared) &&
+            transferredFirstRenderTarget.raw() == reinterpret_cast<
+                StateBlockRenderTargetRef::raw_type*>(&shared),
+        "duplicate staging preserves every first qualified value");
+  release(transferredFirstTexture);
+  release(transferredFirstStream.buffer);
+  release(transferredFirstRenderTarget);
+  transaction.discardPrepared(release);
+  transaction.finishPreparedApply();
+
+  PeStateBlockTransactionState duplicateSingleton{};
+  check(duplicateSingleton.stageVertexShader(
+                stateBlockRef<StateBlockVertexShaderRef>(&shared), retain) &&
+            !duplicateSingleton.stageVertexShader(
+                stateBlockRef<StateBlockVertexShaderRef>(&replacement), retain) &&
+            shared.refs == 2u && replacement.refs == 1u,
+        "duplicate singleton rejects before retain and preserves first value");
+  check(duplicateSingleton.stagePixelShader(
+                stateBlockRef<StateBlockPixelShaderRef>(&shared), retain) &&
+            !duplicateSingleton.stagePixelShader(
+                stateBlockRef<StateBlockPixelShaderRef>(&replacement), retain) &&
+            shared.refs == 3u && replacement.refs == 1u,
+        "duplicate pixel singleton rejects before retain");
+  check(duplicateSingleton.stageIndexBuffer(
+                stateBlockRef<StateBlockIndexBufferRef>(&shared), retain) &&
+            !duplicateSingleton.stageIndexBuffer(
+                stateBlockRef<StateBlockIndexBufferRef>(&replacement), retain) &&
+            shared.refs == 4u && replacement.refs == 1u,
+        "duplicate index singleton rejects before retain");
+  check(duplicateSingleton.stageDepthStencil(
+                stateBlockRef<StateBlockDepthStencilRef>(&shared), retain) &&
+            !duplicateSingleton.stageDepthStencil(
+                stateBlockRef<StateBlockDepthStencilRef>(&replacement), retain) &&
+            shared.refs == 5u && replacement.refs == 1u,
+        "duplicate depth singleton rejects before retain");
+  duplicateSingleton.markApplyPrepared();
+  const auto firstVertexShader = duplicateSingleton.takeVertexShader();
+  const auto firstPixelShader = duplicateSingleton.takePixelShader();
+  const auto firstIndexBuffer = duplicateSingleton.takeIndexBuffer();
+  const auto firstDepthStencil = duplicateSingleton.takeDepthStencil();
+  check(firstVertexShader.raw() == reinterpret_cast<
+            StateBlockVertexShaderRef::raw_type*>(&shared) &&
+            firstPixelShader.raw() == reinterpret_cast<
+                StateBlockPixelShaderRef::raw_type*>(&shared) &&
+            firstIndexBuffer.raw() == reinterpret_cast<
+                StateBlockIndexBufferRef::raw_type*>(&shared) &&
+            firstDepthStencil.raw() == reinterpret_cast<
+                StateBlockDepthStencilRef::raw_type*>(&shared),
+        "duplicate singleton staging preserves every first qualified value");
+  release(firstVertexShader);
+  release(firstPixelShader);
+  release(firstIndexBuffer);
+  release(firstDepthStencil);
+  duplicateSingleton.finishPreparedApply();
+  check(shared.refs == 1u && replacement.refs == 1u,
+        "duplicate singleton transfer preserves exact accepted ref ownership");
+
   transaction.discardPrepared(release);
   check(!transaction.hasPreparedApply() && shared.refs == 1u,
         "discard releases every staged retain without deduplication");

@@ -4112,7 +4112,7 @@ public:
         }
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.renderTargets(),
                         stateBlockFixedSlotKey<
@@ -4128,7 +4128,7 @@ public:
         const bool wasExplicit = rtSlotExplicit_[idx];
         const bool valueChanged = rtSlots_[idx] != pSurf;
         if (valueChanged || !wasExplicit) {
-            recorderState_.peState.transition().bindRenderTarget(idx, [&] {
+            recorderState_.peState.transition().bindRenderTarget(idx, [&]() noexcept {
                 rtSlotExplicit_[idx] = true;
                 if (valueChanged) setRef(rtSlots_[idx], pSurf);
                 recorderState_.peBindingView.renderTargets[idx] =
@@ -4188,7 +4188,7 @@ public:
         }
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.depthStencil(),
                         stateBlockFixedSlotKey<
@@ -4201,7 +4201,7 @@ public:
         const bool wasExplicit = dsSurfaceExplicit_;
         const bool valueChanged = dsSurface_ != pSurf;
         if (valueChanged || !wasExplicit) {
-            recorderState_.peState.transition().bindDepthStencil([&] {
+            recorderState_.peState.transition().bindDepthStencil([&]() noexcept {
                 dsSurfaceExplicit_ = true;
                 if (valueChanged) setRef(dsSurface_, pSurf);
                 recorderState_.peBindingView.depthStencil =
@@ -4386,7 +4386,7 @@ public:
         }
         if (plan.writeRecorded()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) { writer.transforms().set(key, wireM); });
+                [&](auto& writer) noexcept { writer.transforms().set(key, wireM); });
         }
         if (plan.writeLive() && plan.writePending()) {
             recorderState_.peState.transition().setTransform(key, wireM);
@@ -4470,7 +4470,7 @@ public:
                         pVP->MinZ, pVP->MaxZ };
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.viewport().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::viewport>(0u), vp);
@@ -4512,7 +4512,7 @@ public:
         D9CRect cr = toR(*pR);
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.scissor().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::scissor>(0u), cr);
@@ -4551,7 +4551,7 @@ public:
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.material().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::material>(0u),
@@ -4607,7 +4607,7 @@ public:
         if (recorderState_.stateBlockTransaction.isRecording()) {
             if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.lights().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::lights>(idx), cl);
@@ -4646,7 +4646,7 @@ public:
         if (recorderState_.stateBlockTransaction.isRecording()) {
             if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) return D3DERR_INVALIDCALL;
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.lightEnables().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::lightEnables>(idx),
@@ -4691,7 +4691,7 @@ public:
             std::array<float, 4> plane{};
             std::memcpy(plane.data(), pPlane, sizeof(plane));
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.clipPlanes().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::clipPlanes>(idx), plane);

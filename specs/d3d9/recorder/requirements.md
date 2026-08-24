@@ -269,8 +269,15 @@ sub-owner exclusively owns StateBlock Recording/inside-End/poison lifecycle,
 the `StateBlockRecorded` domain and constants, and occupied Apply staging.
 Staged COM values must remain category-qualified and lifecycle operations must
 release or transfer one retain per occupied category/slot, including repeated
-use of the same COM identity. Candidate and staged ownership traversal must
-receive typed category references; `void*` AddRef/Release/transfer callbacks
+use of the same COM identity in distinct qualified cells. A second stage into
+an already occupied qualified cell must fail before retaining and must preserve
+the first staged value; one-bit occupancy must never hide an overwritten
+retain. Each successful Begin must advance a non-wrapping recording epoch, and
+`RecordingCapability` must carry that epoch as well as the Recording phase.
+End, Reset, and a later Begin must not revive an older capability; epoch
+exhaustion is fail-stop rather than wraparound. Candidate and staged ownership
+traversal must receive typed category references; `void*`
+AddRef/Release/transfer callbacks
 and convention-only casts from admitted public interfaces are forbidden. The
 TU-local membership result is the validated capability carrying the exact
 public-interface address, raw handle, wire reference, and concrete kind.
@@ -315,6 +322,13 @@ with every shared row. The bounded model proves only abstract staged-reference
 cardinality; exact COM AddRef/Release/transfer multiplicity remains concrete
 native fake-object evidence.
 
+The lifecycle model must retain one issued Recording capability across an
+End/Reset/Begin cycle. The guarded model rejects a write whose captured epoch
+does not equal the active epoch, while an explicit phase-only capability
+mutation must violate `NoStaleCapabilityWrite`. Epoch wraparound is outside the
+bounded state space; production fails closed before wrap as required by
+`R-CORE-REC-5.1.1`.
+
 The same generated binding must cover at least two category-qualified tracked
 values and repeated Capture/Apply cycles. Capture success refreshes values for
 exactly the frozen tracked set, capture failure preserves the prior snapshot,
@@ -344,6 +358,29 @@ capability bases, per-child pointers, or reorder virtual declarations. The
 child callback facade has exactly 29 virtual declarations, every declaration
 and override is `noexcept`, and fallible implementations translate failure to
 `HRESULT` or the recorder fail-stop transition.
+
+Every generic callable invoked by a `noexcept` recorder boundary must itself be
+constrained as nothrow-invocable for the exact typed arguments. This includes
+StateBlock recording writers, live/pending binding transitions, and enabled or
+disabled child call-scope bodies. A merely conventional non-throwing lambda is
+not sufficient; throwing callables must be rejected during overload resolution.
+
+**R-CORE-REC-5.2.1** The broad `D3D9PeRecorderFlush` child facade is a migration
+surface, not the final DOD boundary. It must be replaced by kind-scoped,
+non-polymorphic child-service contexts for StateBlock, resource mutation,
+query, and presentation responsibilities. A wrapper may replace its existing
+recorder pointer with one typed non-owning context pointer but must not gain a
+second vptr, capability base, allocation, or additional per-child pointer for
+this migration. Service entry points must be `noexcept` free functions or an
+equivalent allocation-free value dispatch and expose only the operations used
+by that wrapper kind. Until that migration lands, the existing single base
+retains its 29-entry order and `noexcept` contract.
+
+The device implementation header must converge on a declaration and ownership
+shell: DOD state aggregates own data, while hot recorder, cold COM, Render
+Tape, diagnostics, and SWVP behavior is defined out of line in its owning
+translation unit. Header decomposition must not reorder Windows COM virtuals,
+grow child wrapper storage, or move the deliberate key-function/vtable owner.
 
 **R-CORE-REC-5.3** A disabled observer must cost at most one cached boolean or
 nullable-sink branch and perform no callback, virtual dispatch, scope-object

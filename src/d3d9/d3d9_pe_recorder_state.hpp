@@ -53,11 +53,11 @@ struct PeRecorderState {
 // always-on recorder owner. These are the pre-observer canonical footprints;
 // the host ABI carries eight additional bytes in std::recursive_mutex.
 #if defined(_WIN64)
-static_assert(sizeof(PeRecorderState) == 104464u);
+static_assert(sizeof(PeRecorderState) == 104472u);
 #elif defined(_WIN32)
-static_assert(sizeof(PeRecorderState) == 103576u);
+static_assert(sizeof(PeRecorderState) == 103584u);
 #else
-static_assert(sizeof(PeRecorderState) == 104488u);
+static_assert(sizeof(PeRecorderState) == 104496u);
 #endif
 
 }  // namespace dxmt9::d3d9::pe

@@ -60,7 +60,7 @@
         if (FAILED(membershipHr)) return membershipHr;
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.textures(),
                         stateBlockFixedSlotKey<
@@ -73,7 +73,7 @@
         if (textures_[textureSlot] == pTex) {
             return S_OK;
         }
-        recorderState_.peState.transition().bindTexture(textureSlot, [&] {
+        recorderState_.peState.transition().bindTexture(textureSlot, [&]() noexcept {
             setRef(textures_[textureSlot], pTex);
             recorderState_.peBindingView.textures[textureSlot] =
                 validatedTexture.wire();
@@ -286,20 +286,26 @@
                 } else if constexpr (
                     role == StateBlockApplyCategoryRole::StagedVertexShader) {
                     values.forEach([&](std::size_t, auto value) {
-                        recorderState_.stateBlockTransaction.stageVertexShader(
-                            value, d3d9PeRetainStateBlockRef);
+                        if (!recorderState_.stateBlockTransaction.stageVertexShader(
+                                value, d3d9PeRetainStateBlockRef)) {
+                            categoryHr = D3DERR_INVALIDCALL;
+                        }
                     });
                 } else if constexpr (
                     role == StateBlockApplyCategoryRole::StagedPixelShader) {
                     values.forEach([&](std::size_t, auto value) {
-                        recorderState_.stateBlockTransaction.stagePixelShader(
-                            value, d3d9PeRetainStateBlockRef);
+                        if (!recorderState_.stateBlockTransaction.stagePixelShader(
+                                value, d3d9PeRetainStateBlockRef)) {
+                            categoryHr = D3DERR_INVALIDCALL;
+                        }
                     });
                 } else if constexpr (
                     role == StateBlockApplyCategoryRole::StagedIndexBuffer) {
                     values.forEach([&](std::size_t, auto value) {
-                        recorderState_.stateBlockTransaction.stageIndexBuffer(
-                            value, d3d9PeRetainStateBlockRef);
+                        if (!recorderState_.stateBlockTransaction.stageIndexBuffer(
+                                value, d3d9PeRetainStateBlockRef)) {
+                            categoryHr = D3DERR_INVALIDCALL;
+                        }
                     });
                 } else if constexpr (
                     role == StateBlockApplyCategoryRole::StagedRenderTarget) {
@@ -313,8 +319,10 @@
                 } else if constexpr (
                     role == StateBlockApplyCategoryRole::StagedDepthStencil) {
                     values.forEach([&](std::size_t, auto value) {
-                        recorderState_.stateBlockTransaction.stageDepthStencil(
-                            value, d3d9PeRetainStateBlockRef);
+                        if (!recorderState_.stateBlockTransaction.stageDepthStencil(
+                                value, d3d9PeRetainStateBlockRef)) {
+                            categoryHr = D3DERR_INVALIDCALL;
+                        }
                     });
                 } else {
                     if constexpr (descriptor.kind ==

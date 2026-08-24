@@ -501,6 +501,10 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(child,
                 "#include \"d3d9_pe_recorder_flush_facade.inc.hpp\"",
                 "child header includes the ordered callback facade fragment");
+  checkContains(
+      child,
+      "requires std::is_nothrow_invocable_v<Body&&, D3D9PeChildCallScope&>",
+      "child call-scope bodies are constrained at the noexcept boundary");
   checkNotContains(observer, "virtual ",
                    "the child diagnostic observer is concrete and nonvirtual");
   checkContains(deviceOwner,

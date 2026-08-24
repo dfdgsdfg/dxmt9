@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstddef>
 #include <iostream>
+#include <utility>
 
 using namespace dxmt9::d3d9::pe;
 
@@ -12,6 +13,17 @@ concept HasPublicWriter = requires(T& value) { value.writer(); };
 
 template<typename T>
 concept HasPublicMaintenance = requires(T& value) { value.maintenance(); };
+
+template<typename Callback>
+concept PeTransitionCallback = requires(PeHotStateShadow& shadow,
+                                        Callback&& callback) {
+  shadow.transition().bindDepthStencil(std::forward<Callback>(callback));
+};
+
+using NothrowTransitionCallback = decltype([]() noexcept {});
+using ThrowingTransitionCallback = decltype([]() {});
+static_assert(PeTransitionCallback<NothrowTransitionCallback>);
+static_assert(!PeTransitionCallback<ThrowingTransitionCallback>);
 
 static_assert(!HasPublicWriter<PeHotStateShadow>);
 static_assert(!HasPublicMaintenance<PeHotStateShadow>);

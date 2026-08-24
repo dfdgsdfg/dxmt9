@@ -7,7 +7,7 @@
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.fvf().set(
                         stateBlockFixedSlotKey<StateBlockApplyPhysicalStore::fvf>(0u),
                         fvf);
@@ -28,7 +28,7 @@
             implicitDecl, static_cast<IDirect3DDevice9*>(this),
             &validatedDeclaration);
         if (FAILED(membershipHr)) return membershipHr;
-        recorderState_.peState.transition().bindVertexInput([&] {
+        recorderState_.peState.transition().bindVertexInput([&]() noexcept {
             fvf_ = fvf;
             vdecl_ = implicitDecl;
             recorderState_.peBindingView.fvf = fvf;
@@ -69,7 +69,7 @@
         // CaptureStateBlockShadowForChild and cleared in EndStateBlock.
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.setVertexDeclarationRecorded(true);
                     setRecordedRef(
                         writer.vertexDeclaration(),
@@ -98,7 +98,7 @@
          * test_vertex_declaration_fvf_policy line ~692). User-supplied
          * decls do not back-convert to an FVF in this PE shadow; that
          * mapping is intentionally lossy. */
-        recorderState_.peState.transition().bindVertexInput([&] {
+        recorderState_.peState.transition().bindVertexInput([&]() noexcept {
             vdecl_ = pVD;
             fvf_ = 0;
             recorderState_.peBindingView.vdecl = validatedDeclaration.wire();
@@ -127,7 +127,7 @@
         if (FAILED(membershipHr)) return membershipHr;
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.vertexShader(),
                         stateBlockFixedSlotKey<
@@ -142,7 +142,7 @@
         // wire handle; server-side canonical state replay dispatches the
         // dxmt9c_device_set_vertex_shader call before the draw runs.
         if (vs_ == pVS) return S_OK;
-        recorderState_.peState.transition().bindVertexShader([&] {
+        recorderState_.peState.transition().bindVertexShader([&]() noexcept {
             setRef(vs_, pVS);
             recorderState_.peBindingView.vs = validatedShader.wire();
         });
@@ -364,7 +364,7 @@
                 const auto recordedStream = stateBlockFixedSlotKey<
                     StateBlockApplyPhysicalStore::streamSources>(stream);
                 recorderState_.stateBlockTransaction.withRecordingWriter(
-                    [&](auto& writer) {
+                    [&](auto& writer) noexcept {
                         setRecordedStreamRef(
                             writer.streamSources(), recordedStream,
                             validatedBuffer);
@@ -376,7 +376,7 @@
             if (streamSrc_[stream] == nullptr) {
                 return finishPeCall(S_OK);
             }
-            recorderState_.peState.transition().bindStream(stream, [&] {
+            recorderState_.peState.transition().bindStream(stream, [&]() noexcept {
                 setRef(streamSrc_[stream],
                        static_cast<IDirect3DVertexBuffer9*>(nullptr));
                 recorderState_.peBindingView.streams[stream].buffer = {};
@@ -395,7 +395,7 @@
                 StateBlockApplyPhysicalStore::streamSources>(stream);
             StateBlockStreamSourceValue prior{};
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedStreamRef(
                         writer.streamSources(), recordedStream,
                         validatedBuffer);
@@ -409,7 +409,7 @@
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return finishPeCall(S_OK);
         }
-        recorderState_.peState.transition().bindStream(stream, [&] {
+        recorderState_.peState.transition().bindStream(stream, [&]() noexcept {
             setRef(streamSrc_[stream], pBuf);
             streamOff_[stream] = offset;
             streamStr_[stream] = stride;
@@ -462,7 +462,7 @@
             // Frequency is an independent state-block aspect. Do not
             // implicitly capture or replay the source tuple.
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.streamFrequencies().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::streamFrequencies>(stream),
@@ -497,7 +497,7 @@
         if (FAILED(membershipHr)) return finishPeCall(membershipHr);
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.indexBuffer(),
                         stateBlockFixedSlotKey<
@@ -508,7 +508,7 @@
             return finishPeCall(S_OK);
         }
         if (indexBuf_ == pIBuf) return finishPeCall(S_OK);
-        recorderState_.peState.transition().bindIndexBuffer([&] {
+        recorderState_.peState.transition().bindIndexBuffer([&]() noexcept {
             setRef(indexBuf_, pIBuf);
             recorderState_.peBindingView.indexBuffer = validatedBuffer.wire();
         });
@@ -534,7 +534,7 @@
         if (FAILED(membershipHr)) return membershipHr;
         if (recorderState_.stateBlockTransaction.isRecording()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     setRecordedRef(
                         writer.pixelShader(),
                         stateBlockFixedSlotKey<
@@ -545,7 +545,7 @@
             return S_OK;
         }
         if (ps_ == pPS) return S_OK;
-        recorderState_.peState.transition().bindPixelShader([&] {
+        recorderState_.peState.transition().bindPixelShader([&]() noexcept {
             setRef(ps_, pPS);
             recorderState_.peBindingView.ps = validatedShader.wire();
         });

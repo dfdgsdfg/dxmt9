@@ -2143,45 +2143,53 @@ public:
         }
 
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindTexture(std::uint32_t slot, Fn&& bind) noexcept {
             if (slot >= D9C_DRAW_PACKET_MAX_TEXTURES) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingTextureMask_ |= 1u << slot;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindStream(std::uint32_t slot, Fn&& bind) noexcept {
             if (slot >= D9C_DRAW_PACKET_MAX_STREAMS) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingStreamMask_ |= 1u << slot;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindRenderTarget(std::uint32_t slot, Fn&& bind) noexcept {
             if (slot >= D9C_DRAW_PACKET_MAX_RENDER_TARGETS) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingRtMask_ |= 1u << slot;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindDepthStencil(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingDs_ = true;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindVertexInput(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingFvf_ = true;
             shadow_.PendingDelta::pendingVdecl_ = true;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindVertexShader(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingVs_ = true;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindPixelShader(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingPs_ = true;
         }
         template<typename Fn>
+            requires std::is_nothrow_invocable_v<Fn&&>
         void bindIndexBuffer(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingIb_ = true;

@@ -59,7 +59,7 @@
         }
         if (plan.writeRecorded()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) { writer.renderStates().set(renderKey, value); });
+                [&](auto& writer) noexcept { writer.renderStates().set(renderKey, value); });
         }
         if (plan.writeLive() && plan.writePending()) {
             recorderState_.peState.transition().setRenderState(renderKey, value);
@@ -185,7 +185,7 @@
         }
         if (plan.writeRecorded()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.textureStageStates().set(stageKey, typeKey, value);
                 });
         }
@@ -267,7 +267,7 @@
         }
         if (plan.writeRecorded()) {
             recorderState_.stateBlockTransaction.withRecordingWriter(
-                [&](auto& writer) {
+                [&](auto& writer) noexcept {
                     writer.samplerStates().set(
                         samplerIndexKeyVal, stateTypeKeyVal, value);
                 });

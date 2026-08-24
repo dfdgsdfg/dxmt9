@@ -133,6 +133,9 @@ counterexample_models=(
   # A generic fail-stop transition must clean both candidate and staged
   # ownership before publishing the Poisoned phase.
   "PeStateBlockTransaction|.poison-leak.counterexample|Invariant PoisonOwnsNoCandidateOrRefs is violated"
+  # A capability retained across End/Reset must not write into the next
+  # monotonic recording epoch (the concrete ABA witness is also native).
+  "PeStateBlockTransaction|.stale-capability.counterexample|Invariant NoStaleCapabilityWrite is violated"
   # Capture refreshes the original frozen category-qualified key set only.
   "PeStateBlockValues|.mutable-tracked.counterexample|Invariant FrozenTrackedSet is violated"
   # A failed Capture may not publish its candidate values.

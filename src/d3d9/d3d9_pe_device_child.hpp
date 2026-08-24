@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -314,6 +315,8 @@ struct D3D9PeNullChildCallScope {
 inline constexpr D3D9PeNullChildCallScope d3d9PeNullChildCallScope{};
 
 template<typename Body>
+  requires std::is_nothrow_invocable_v<Body&&, D3D9PeChildCallScope&> &&
+           std::is_nothrow_invocable_v<Body&&, const D3D9PeNullChildCallScope&>
 __attribute__((always_inline))
 inline HRESULT d3d9PeWithChildCallScope(
     D3D9PeDiagnosticObserver *observer, const char *callName,

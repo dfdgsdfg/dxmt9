@@ -2175,8 +2175,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginStateBlock() noexcept {
     dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
     const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
     if (SUCCEEDED(hr)) {
-        recorderState_.stateBlockTransaction.beginAccepted(
-            d3d9PeReleaseStateBlockRef);
+        if (!recorderState_.stateBlockTransaction.beginAccepted(
+                d3d9PeReleaseStateBlockRef)) {
+            // The recording epoch is monotonic and intentionally fails closed
+            // on exhaustion; do not expose a backend-accepted Begin without a
+            // fresh capability witness.
+            return D3DERR_DEVICELOST;
+        }
     } else {
         recorderState_.stateBlockTransaction.beginFailed();
     }

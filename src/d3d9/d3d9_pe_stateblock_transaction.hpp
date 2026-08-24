@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 #include <utility>
 
 #include "d3d9_pe_state_shadow.hpp"
@@ -167,6 +169,32 @@ constexpr bool peStateBlockRecorderWriteAllowed(
            phase != PeStateBlockPhase::Terminal;
 }
 
+struct PeStateBlockRecordingEpochStep {
+    std::uint64_t value = 0;
+    bool valid = false;
+};
+
+template<typename Fn>
+concept PeStateBlockNothrowRelease =
+    std::is_nothrow_invocable_v<Fn&, StateBlockTextureRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockStreamSourceValue::BufferRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockVertexShaderRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockPixelShaderRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockVertexDeclarationRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockIndexBufferRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockRenderTargetRef> &&
+    std::is_nothrow_invocable_v<Fn&, StateBlockDepthStencilRef>;
+
+// The epoch is deliberately monotonic across Reset.  Reusing an epoch would
+// make a capability retained from an earlier Begin indistinguishable from a
+// capability issued after the reset (an ABA write witness).
+constexpr PeStateBlockRecordingEpochStep peStateBlockNextRecordingEpoch(
+    std::uint64_t current) noexcept {
+    if (current == std::numeric_limits<std::uint64_t>::max())
+        return {current, false};
+    return {current + 1u, true};
+}
+
 constexpr bool peStateBlockPoisonAfterReset(bool backendResetSucceeded,
                                             bool priorPoison) noexcept {
     return backendResetSucceeded ? false : priorPoison;
@@ -235,10 +263,14 @@ public:
     class RecordingCapability {
     public:
         explicit operator bool() const noexcept {
-            return valid_ && owner_->phase_ == PeStateBlockPhase::Recording;
+            return valid_ && owner_ != nullptr &&
+                   owner_->phase_ == PeStateBlockPhase::Recording &&
+                   owner_->recordingEpoch_ == epoch_;
         }
 
         template <typename Fn>
+            requires std::is_nothrow_invocable_v<
+                Fn&&, StateBlockRecorded::Writer&>
         bool withWriter(Fn&& fn) noexcept {
             if (!static_cast<bool>(*this)) return false;
             auto writer = owner_->recorded_.writer();
@@ -248,8 +280,10 @@ public:
 
     private:
         explicit RecordingCapability(PeStateBlockTransactionState& owner) noexcept
-            : owner_(&owner), valid_(owner.phase_ == PeStateBlockPhase::Recording) {}
+            : owner_(&owner), epoch_(owner.recordingEpoch_),
+              valid_(owner.phase_ == PeStateBlockPhase::Recording) {}
         PeStateBlockTransactionState* owner_ = nullptr;
+        std::uint64_t epoch_ = 0;
         bool valid_ = false;
         friend class PeStateBlockTransactionState;
     };
@@ -259,6 +293,8 @@ public:
     }
 
     template <typename Fn>
+        requires std::is_nothrow_invocable_v<
+            Fn&&, StateBlockRecorded::Writer&>
     bool withRecordingWriter(Fn&& fn) noexcept {
         return recordingCapability().withWriter(std::forward<Fn>(fn));
     }
@@ -291,12 +327,20 @@ public:
     }
 
     template<typename Release>
-    void beginAccepted(Release&& release) noexcept {
+        requires PeStateBlockNothrowRelease<Release>
+    bool beginAccepted(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::BeginAccepted);
-        if (!plan.valid()) return;
+        if (!plan.valid()) return false;
+        const auto epoch = peStateBlockNextRecordingEpoch(recordingEpoch_);
+        if (!epoch.valid) {
+            poison(std::forward<Release>(release));
+            return false;
+        }
         if (plan.candidateEffect() == PeStateBlockCandidateEffect::Discard)
             discardRecorded(std::forward<Release>(release));
+        recordingEpoch_ = epoch.value;
         phase_ = plan.next();
+        return true;
     }
 
     void beginFailed() noexcept {
@@ -308,6 +352,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void abandonRecording(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::ResetStarted);
         if (!plan.valid()) return;
@@ -317,6 +362,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void failEnd(Release&& release) noexcept {
         const auto event = isInsideEnd()
             ? PeStateBlockEvent::EndWrapperFailed
@@ -334,6 +380,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void finishEndPublication(bool published, Release&& release) noexcept {
         const auto event = published ? PeStateBlockEvent::EndPublished
                                      : PeStateBlockEvent::EndWrapperFailed;
@@ -345,6 +392,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void poison(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::PoisonRequested);
         if (!plan.valid()) return;
@@ -364,6 +412,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void failPreparedApply(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::ApplyBackendFailed);
         if (!plan.valid()) return;
@@ -381,6 +430,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void resetSucceeded(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::ResetAccepted);
         if (!plan.valid()) return;
@@ -394,6 +444,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void discardAll(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::Teardown);
         if (!plan.valid()) return;
@@ -405,60 +456,71 @@ public:
     }
 
     template<typename Retain>
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockTextureRef>
     bool stageTexture(StateBlockTextureSlot slot, StateBlockTextureRef value,
                       Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid() ||
+            (stagedTextureMask_ & (1u << rawSlot(slot))) != 0u) return false;
         retain(value);
         stagedTextures_[rawSlot(slot)] = value;
         stagedTextureMask_ |= 1u << rawSlot(slot);
         return true;
     }
     template<typename Retain>
+        requires std::is_nothrow_invocable_v<
+            Retain&, StateBlockStreamSourceValue::BufferRef>
     bool stageStream(StateBlockStreamSlot slot, StateBlockStreamSourceValue value,
                      Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid() ||
+            (stagedStreamMask_ & (1u << rawSlot(slot))) != 0u) return false;
         retain(value.buffer);
         stagedStreams_[rawSlot(slot)] = value;
         stagedStreamMask_ |= 1u << rawSlot(slot);
         return true;
     }
     template<typename Retain>
-    void stageVertexShader(StateBlockVertexShaderRef value,
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockVertexShaderRef>
+    bool stageVertexShader(StateBlockVertexShaderRef value,
                            Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle) return;
-        stageSingleton(stagedVertexShader_, stagedVertexShaderValid_, value,
-                       std::forward<Retain>(retain));
+        if (phase_ != PeStateBlockPhase::Idle) return false;
+        return stageSingleton(stagedVertexShader_, stagedVertexShaderValid_, value,
+                              std::forward<Retain>(retain));
     }
     template<typename Retain>
-    void stagePixelShader(StateBlockPixelShaderRef value,
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockPixelShaderRef>
+    bool stagePixelShader(StateBlockPixelShaderRef value,
                           Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle) return;
-        stageSingleton(stagedPixelShader_, stagedPixelShaderValid_, value,
-                       std::forward<Retain>(retain));
+        if (phase_ != PeStateBlockPhase::Idle) return false;
+        return stageSingleton(stagedPixelShader_, stagedPixelShaderValid_, value,
+                              std::forward<Retain>(retain));
     }
     template<typename Retain>
-    void stageIndexBuffer(StateBlockIndexBufferRef value,
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockIndexBufferRef>
+    bool stageIndexBuffer(StateBlockIndexBufferRef value,
                           Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle) return;
-        stageSingleton(stagedIndexBuffer_, stagedIndexBufferValid_, value,
-                       std::forward<Retain>(retain));
+        if (phase_ != PeStateBlockPhase::Idle) return false;
+        return stageSingleton(stagedIndexBuffer_, stagedIndexBufferValid_, value,
+                              std::forward<Retain>(retain));
     }
     template<typename Retain>
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockRenderTargetRef>
     bool stageRenderTarget(StateBlockRenderTargetSlot slot,
                            StateBlockRenderTargetRef value,
                            Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid() ||
+            (stagedRenderTargetMask_ & (1u << rawSlot(slot))) != 0u) return false;
         retain(value);
         stagedRenderTargets_[rawSlot(slot)] = value;
         stagedRenderTargetMask_ |= 1u << rawSlot(slot);
         return true;
     }
     template<typename Retain>
-    void stageDepthStencil(StateBlockDepthStencilRef value,
+        requires std::is_nothrow_invocable_v<Retain&, StateBlockDepthStencilRef>
+    bool stageDepthStencil(StateBlockDepthStencilRef value,
                            Retain&& retain) noexcept {
-        if (phase_ != PeStateBlockPhase::Idle) return;
-        stageSingleton(stagedDepthStencil_, stagedDepthStencilValid_, value,
-                       std::forward<Retain>(retain));
+        if (phase_ != PeStateBlockPhase::Idle) return false;
+        return stageSingleton(stagedDepthStencil_, stagedDepthStencilValid_, value,
+                              std::forward<Retain>(retain));
     }
 
     StateBlockTextureRef takeTexture(StateBlockTextureSlot slot) noexcept {
@@ -506,6 +568,7 @@ public:
     }
 
     template<typename Release>
+        requires PeStateBlockNothrowRelease<Release>
     void discardPrepared(Release&& release) noexcept {
         auto& releaseRef = release;
         discardArray(stagedTextures_, stagedTextureMask_, releaseRef);
@@ -531,11 +594,14 @@ private:
         recorded_.writer().clear();
     }
     template<typename Ref, typename Retain>
-    static void stageSingleton(Ref& destination, bool& occupied, Ref value,
+        requires std::is_nothrow_invocable_v<Retain&, Ref>
+    static bool stageSingleton(Ref& destination, bool& occupied, Ref value,
                                Retain&& retain) noexcept {
+        if (occupied) return false;
         retain(value);
         destination = value;
         occupied = true;
+        return true;
     }
     template<typename T>
     static T take(T& value) noexcept {
@@ -571,6 +637,7 @@ private:
     }
 
     PeStateBlockPhase phase_ = PeStateBlockPhase::Idle;
+    std::uint64_t recordingEpoch_ = 0u;
     StateBlockRecorded recorded_{};
     std::array<StateBlockTextureRef, kPeTextureSlots> stagedTextures_{};
     std::uint32_t stagedTextureMask_ = 0u;
