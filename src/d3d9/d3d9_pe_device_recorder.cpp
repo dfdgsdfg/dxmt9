@@ -29,6 +29,7 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
     // retainer pins too, so nothing is still holding a unix object when
     // dxmt9c_device_reset* / dxmt9c_device_release runs.
     recorderState_.commandChunk.resetAndReleaseRetained();
+    if (auto* tokens = scalarSemanticObserver()) tokens->clear();
 }
 
 HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
@@ -493,6 +494,13 @@ HRESULT D3D9DeviceImpl::appendSetConstRecord(uint32_t recordType, UINT start, UI
                     .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
                     .appendSucceeded = ok,
                 });
+            if (ok && (!settlement.valid() ||
+                       !settlement.consumeRepresentedPending() ||
+                       !settlement.recordDurable())) {
+                recorderState_.stateBlockTransaction.poison();
+                phase.recordEncode(t0);
+                return D3DERR_DEVICELOST;
+            }
             if (settlement.consumeRepresentedPending() &&
                 settlement.recordDurable()) {
                 settlementOwner.clear();
@@ -616,10 +624,15 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
                     });
                 const bool settled =
                     dxmt9::d3d9::pe::acceptPreparedSparseState(
-                        recorderState_.peState, recorderState_.peConsts, recorderState_.peSparseState, settlement);
-                DXMT_ASSERT(!ok || settled);
-                (void)settled;
+                        recorderState_.peState, recorderState_.peConsts,
+                        recorderState_.peSparseState, settlement,
+                        scalarSemanticObserver(),
+                        builder.activeRecordOrdinal());
                 phase.recordEncode(t0);
+                if (ok && !settled) {
+                    recorderState_.stateBlockTransaction.poison();
+                    return D3DERR_DEVICELOST;
+                }
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
         if (FAILED(appendHr)) return appendHr;
@@ -653,8 +666,12 @@ HRESULT D3D9DeviceImpl::appendSingleCategoryApplyState(Fill fill, Accept accept)
                         dxmt9::d3d9::pe::AppendSettlement::Prepared,
                     .appendSucceeded = ok,
                 });
-            accept(settlement);
+            const bool settled = accept(settlement, builder.activeRecordOrdinal());
             phase.recordEncode(t0);
+            if (ok && !settled) {
+                recorderState_.stateBlockTransaction.poison();
+                return D3DERR_DEVICELOST;
+            }
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
 }
@@ -679,10 +696,14 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                 recorderState_.peSparseState.renderStates =
                     std::span(recorderState_.peSparseScratch.renderStates).first(n);
             },
-            [&](const dxmt9::d3d9::pe::AppendPlan& settlement) {
-                recorderState_.peState.consume().acceptRenderStateBatch(
-                    std::span(recorderState_.peSparseScratch.renderStates).first(n),
-                    settlement);
+            [&](const dxmt9::d3d9::pe::AppendPlan& settlement,
+                std::uint64_t recordOrdinal) -> bool {
+                const bool settled =
+                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                        recorderState_.peState, recorderState_.peConsts,
+                        recorderState_.peSparseState, settlement,
+                        scalarSemanticObserver(), recordOrdinal);
+                return settled;
             });
         if (FAILED(hr)) return hr;
     }
@@ -695,10 +716,14 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                 recorderState_.peSparseState.textureStageStates =
                     std::span(recorderState_.peSparseScratch.textureStageStates).first(n);
             },
-            [&](const dxmt9::d3d9::pe::AppendPlan& settlement) {
-                recorderState_.peState.consume().acceptTextureStageStateBatch(
-                    std::span(recorderState_.peSparseScratch.textureStageStates).first(n),
-                    settlement);
+            [&](const dxmt9::d3d9::pe::AppendPlan& settlement,
+                std::uint64_t recordOrdinal) -> bool {
+                const bool settled =
+                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                        recorderState_.peState, recorderState_.peConsts,
+                        recorderState_.peSparseState, settlement,
+                        scalarSemanticObserver(), recordOrdinal);
+                return settled;
             });
         if (FAILED(hr)) return hr;
     }
@@ -711,10 +736,14 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                 recorderState_.peSparseState.samplerStates =
                     std::span(recorderState_.peSparseScratch.samplerStates).first(n);
             },
-            [&](const dxmt9::d3d9::pe::AppendPlan& settlement) {
-                recorderState_.peState.consume().acceptSamplerStateBatch(
-                    std::span(recorderState_.peSparseScratch.samplerStates).first(n),
-                    settlement);
+            [&](const dxmt9::d3d9::pe::AppendPlan& settlement,
+                std::uint64_t recordOrdinal) -> bool {
+                const bool settled =
+                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                        recorderState_.peState, recorderState_.peConsts,
+                        recorderState_.peSparseState, settlement,
+                        scalarSemanticObserver(), recordOrdinal);
+                return settled;
             });
         if (FAILED(hr)) return hr;
     }
@@ -727,8 +756,9 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                 recorderState_.peSparseState.transforms =
                     std::span(recorderState_.peSparseScratch.transforms).first(n);
             },
-            [&](const dxmt9::d3d9::pe::AppendPlan& settlement) {
-                recorderState_.peState.consume().acceptTransformBatch(
+            [&](const dxmt9::d3d9::pe::AppendPlan& settlement,
+                std::uint64_t) -> bool {
+                return recorderState_.peState.consume().acceptTransformBatch(
                     std::span(recorderState_.peSparseScratch.transforms).first(n),
                     settlement);
             });
@@ -770,10 +800,15 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                 });
             const bool settled =
                 dxmt9::d3d9::pe::acceptPreparedSparseState(
-                    recorderState_.peState, recorderState_.peConsts, recorderState_.peSparseState, settlement);
-            DXMT_ASSERT(!ok || settled);
-            (void)settled;
+                    recorderState_.peState, recorderState_.peConsts,
+                    recorderState_.peSparseState, settlement,
+                    scalarSemanticObserver(),
+                    builder.activeRecordOrdinal());
             phase.recordEncode(t0);
+            if (ok && !settled) {
+                recorderState_.stateBlockTransaction.poison();
+                return D3DERR_DEVICELOST;
+            }
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
     if (FAILED(hr)) return hr;

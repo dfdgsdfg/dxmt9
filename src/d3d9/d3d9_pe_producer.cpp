@@ -33,6 +33,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // packet producer used.
   const bool snapshot = forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
   out = SparseStateInput{};
+  out.fullSnapshot = snapshot;
 
   // --- render states -------------------------------------------------------
   const auto renderStateTable =
@@ -50,9 +51,9 @@ bool buildSparseState(const PeHotStateShadow& shadow,
 
   // --- textures ------------------------------------------------------------
   std::size_t textureCount = 0;
-  if (snapshot || shadow.pendingTextureMask != 0u) {
+  if (snapshot || shadow.pendingTextureMask() != 0u) {
     for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-      if (!snapshot && (shadow.pendingTextureMask & (1u << slot)) == 0u) {
+      if (!snapshot && (shadow.pendingTextureMask() & (1u << slot)) == 0u) {
         continue;
       }
       auto& entry = scratch.textures[textureCount++];
@@ -66,9 +67,9 @@ bool buildSparseState(const PeHotStateShadow& shadow,
 
   // --- streams -------------------------------------------------------------
   std::size_t streamCount = 0;
-  if (snapshot || shadow.pendingStreamMask != 0u) {
+  if (snapshot || shadow.pendingStreamMask() != 0u) {
     for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-      if (!snapshot && (shadow.pendingStreamMask & (1u << slot)) == 0u) {
+      if (!snapshot && (shadow.pendingStreamMask() & (1u << slot)) == 0u) {
         continue;
       }
       auto& entry = scratch.streams[streamCount++];
@@ -97,16 +98,16 @@ bool buildSparseState(const PeHotStateShadow& shadow,
     entry.object = ref;
   };
   appendShader(D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
-               snapshot || shadow.pendingVs, bindings.vs);
+               snapshot || shadow.pendingVs(), bindings.vs);
   appendShader(D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
-               snapshot || shadow.pendingPs, bindings.ps);
+               snapshot || shadow.pendingPs(), bindings.ps);
   out.shaders = std::span(scratch.shaders).first(shaderCount);
 
   // --- vertex input --------------------------------------------------------
   // One entry, never two: declaration wins when both are dirty and `value`
   // carries the FVF either way.
   std::size_t vertexInputCount = 0;
-  if (snapshot || shadow.pendingVdecl || shadow.pendingFvf) {
+  if (snapshot || shadow.pendingVdecl() || shadow.pendingFvf()) {
     auto& entry = scratch.vertexInputs[vertexInputCount++];
     // Reset BOTH halves. PeSparseScratch is a reused device member, so the FVF
     // branch below must not inherit a vdecl ref left by an earlier
@@ -119,7 +120,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
     // In snapshot mode the fat-packet producer set BOTH vdeclValid and
     // fvfValid, and the shim's declaration-wins rule then selected the
     // declaration. Keep that outcome.
-    if (snapshot || shadow.pendingVdecl) {
+    if (snapshot || shadow.pendingVdecl()) {
       entry.wire.kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION;
       entry.object = bindings.vdecl;
     } else {
@@ -144,7 +145,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // wired: 3 handles / 408 bytes against legacy's 2 / 368.
   const bool indexedDraw =
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-  if (indexedDraw && shadow.pendingIb) {
+  if (indexedDraw && shadow.pendingIb()) {
     auto& entry = scratch.indexBuffers[indexBufferCount++];
     entry.wire = D9CCommandChunkWireIndexBinding{};
     entry.wire.valid = 1u;
@@ -154,7 +155,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
 
   // --- attachments ---------------------------------------------------------
   std::size_t renderTargetCount = 0;
-  if (snapshot || shadow.pendingRtMask != 0u) {
+  if (snapshot || shadow.pendingRtMask() != 0u) {
     for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS;
          ++slot) {
       // populateDrawPacketAttachmentSnapshot's rule: a slot is present when it
@@ -162,7 +163,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
       const bool present =
           snapshot ? (bindings.rtExplicitMask[slot] ||
                       bindings.renderTargets[slot].object != nullptr)
-                   : (shadow.pendingRtMask & (1u << slot)) != 0u;
+                   : (shadow.pendingRtMask() & (1u << slot)) != 0u;
       if (!present) {
         continue;
       }
@@ -176,7 +177,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   out.renderTargets = std::span(scratch.renderTargets).first(renderTargetCount);
 
   std::size_t depthStencilCount = 0;
-  if (snapshot || shadow.pendingDs) {
+  if (snapshot || shadow.pendingDs()) {
     auto& entry = scratch.depthStencils[depthStencilCount++];
     entry.wire = D9CCommandChunkWireDepthStencilBinding{};
     entry.wire.valid = 1u;
@@ -185,30 +186,30 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   out.depthStencils = std::span(scratch.depthStencils).first(depthStencilCount);
 
   // --- scalar sections -----------------------------------------------------
-  if (snapshot || shadow.pendingViewport) {
-    scratch.viewports[0] = shadow.viewportShadow;
+  if (snapshot || shadow.pendingViewport()) {
+    scratch.viewports[0] = shadow.viewportShadow();
     out.viewports = scratch.viewports;
   }
-  if (snapshot || shadow.pendingScissor) {
-    scratch.scissors[0] = shadow.scissorShadow;
+  if (snapshot || shadow.pendingScissor()) {
+    scratch.scissors[0] = shadow.scissorShadow();
     out.scissors = scratch.scissors;
   }
-  if (snapshot || shadow.pendingMaterial) {
-    scratch.materials[0] = shadow.materialShadow;
+  if (snapshot || shadow.pendingMaterial()) {
+    scratch.materials[0] = shadow.materialShadow();
     out.materials = scratch.materials;
   }
 
   // --- clip planes ---------------------------------------------------------
   std::size_t clipPlaneCount = 0;
-  if (snapshot || shadow.pendingClipPlaneMask != 0u) {
+  if (snapshot || shadow.pendingClipPlaneMask() != 0u) {
     for (std::uint32_t slot = 0; slot < 6u; ++slot) {
       // Snapshot emits every plane (the packet set clipPlaneMask = 0x3F).
-      if (!snapshot && (shadow.pendingClipPlaneMask & (1u << slot)) == 0u) {
+      if (!snapshot && (shadow.pendingClipPlaneMask() & (1u << slot)) == 0u) {
         continue;
       }
       auto& entry = scratch.clipPlanes[clipPlaneCount++];
       entry.slot = slot;
-      std::memcpy(entry.values, &shadow.clipPlaneShadow[slot * 4u],
+      std::memcpy(entry.values, &shadow.clipPlaneShadow()[slot * 4u],
                   sizeof(entry.values));
     }
   }
@@ -260,21 +261,21 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   std::size_t lightCount = 0;
   std::size_t lightEnableCount = 0;
   if (snapshot ||
-      (shadow.pendingLightSlotMask | shadow.pendingLightEnableValidMask) !=
+      (shadow.pendingLightSlotMask() | shadow.pendingLightEnableValidMask()) !=
           0u) {
     for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-      if (snapshot || (shadow.pendingLightSlotMask & (1u << slot)) != 0u) {
+      if (snapshot || (shadow.pendingLightSlotMask() & (1u << slot)) != 0u) {
         auto& entry = scratch.lights[lightCount++];
         entry.slot = slot;
-        entry.light = shadow.lightShadow[slot];
+        entry.light = shadow.lightShadow()[slot];
       }
       if (snapshot ||
-          (shadow.pendingLightEnableValidMask & (1u << slot)) != 0u) {
+          (shadow.pendingLightEnableValidMask() & (1u << slot)) != 0u) {
         auto& entry = scratch.lightEnables[lightEnableCount++];
         entry.slot = slot;
         // Snapshot reads the shadow; delta reads the pending value mask.
-        const std::uint32_t source = snapshot ? shadow.lightEnableShadow
-                                              : shadow.pendingLightEnableMask;
+        const std::uint32_t source = snapshot ? shadow.lightEnableShadow()
+                                              : shadow.pendingLightEnableMask();
         entry.enabled = (source & (1u << slot)) != 0u;
       }
     }
@@ -446,8 +447,8 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // heuristic exactly, or the emitted flags differ.
   constexpr auto allTextures = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
   constexpr auto allStreams = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
-  if (snapshot || (shadow.pendingTextureMask == allTextures &&
-                   shadow.pendingStreamMask == allStreams)) {
+  if (snapshot || (shadow.pendingTextureMask() == allTextures &&
+                   shadow.pendingStreamMask() == allStreams)) {
     header.flags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   }
   return true;
@@ -494,16 +495,98 @@ bool acceptInlineConstantDelta(PeConstShadowBlock& constants,
 bool acceptPreparedSparseState(PeHotStateShadow& shadow,
                                PeConstShadowBlock& constants,
                                const SparseStateInput& state,
-                               const AppendPlan& plan) noexcept {
+                               const AppendPlan& plan,
+                               PeScalarSemanticTokenLedger* tokens,
+                               std::uint64_t recordOrdinal) noexcept {
   if (!plan.valid() || !plan.consumeRepresentedPending() ||
       !plan.recordDurable()) {
     return false;
   }
-  // Preflight every allocation-free constant witness before touching any
-  // pending owner so a stale/mismatched projection fails atomically.
-  if (!acceptInlineConstantDelta(constants, state, plan)) {
+  // The allocation-free production preflight owns category/key/index/value
+  // exactness. Canonical preparation is strictly ordered, so a duplicate or
+  // permutation is rejected before constants, PendingDelta, or the optional
+  // source-ordinal observer can be consumed.
+  const auto strictlyOrdered = [](auto rows, auto key) noexcept {
+    std::uint64_t prior = 0u;
+    bool first = true;
+    for (const auto& row : rows) {
+      const std::uint64_t current = key(row);
+      if (!first && current <= prior) return false;
+      prior = current;
+      first = false;
+    }
+    return true;
+  };
+  if (!strictlyOrdered(state.renderStates, [](const auto& row) noexcept {
+        return static_cast<std::uint64_t>(row.state);
+      }) ||
+      !strictlyOrdered(state.textureStageStates, [](const auto& row) noexcept {
+        return (static_cast<std::uint64_t>(row.stage) << 32u) | row.type;
+      }) ||
+      !strictlyOrdered(state.samplerStates, [](const auto& row) noexcept {
+        return (static_cast<std::uint64_t>(row.sampler) << 32u) | row.type;
+      })) {
     return false;
   }
+
+  // When explicitly enabled, the cold observer strengthens the same
+  // production transition with exact source and record ordinals. It is proof
+  // instrumentation, not a premise of default-path correctness.
+  const auto validateToken = [&](ScalarSemanticCategory category,
+                                 std::uint32_t key, std::uint32_t index,
+                                 std::uint32_t value) noexcept {
+    if (!tokens) return true;
+    ScalarSemanticProjectionTuple tuple{};
+    return tokens->project(category, key, index, value, recordOrdinal,
+                           tuple) &&
+           tokens->canConsumeProjected(tuple);
+  };
+  for (const auto& entry : state.renderStates) {
+    std::uint32_t pending = 0u;
+    const bool hasPending = shadow.pendingRenderStatesTyped().get(
+        renderStateSlotKey(entry.state), pending);
+    if (state.fullSnapshot && !hasPending) {
+      if (tokens && tokens->has(ScalarSemanticCategory::RenderState,
+                                entry.state, 0u)) return false;
+      continue;
+    }
+    if (!hasPending || pending != entry.value ||
+        !validateToken(ScalarSemanticCategory::RenderState, entry.state, 0u,
+                       entry.value)) return false;
+  }
+  for (const auto& entry : state.textureStageStates) {
+    std::uint32_t pending = 0u;
+    const bool hasPending = shadow.pendingTssTyped().get(
+        textureStageIndexKey(entry.stage),
+        textureStageStateTypeKey(entry.type), pending);
+    if (state.fullSnapshot && !hasPending) {
+      if (tokens && tokens->has(ScalarSemanticCategory::TextureStageState,
+                                entry.stage, entry.type)) return false;
+      continue;
+    }
+    if (!hasPending || pending != entry.value ||
+        !validateToken(ScalarSemanticCategory::TextureStageState, entry.stage,
+                       entry.type, entry.value)) return false;
+  }
+  for (const auto& entry : state.samplerStates) {
+    std::uint32_t pending = 0u;
+    const bool hasPending = shadow.pendingSamplerStatesTyped().get(
+        SamplerIndex::fromRaw(entry.sampler),
+        SamplerStateType::fromRaw(entry.type), pending);
+    if (state.fullSnapshot && !hasPending) {
+      if (tokens && tokens->has(ScalarSemanticCategory::SamplerState,
+                                entry.sampler, entry.type)) return false;
+      continue;
+    }
+    if (!hasPending || pending != entry.value ||
+        !validateToken(ScalarSemanticCategory::SamplerState, entry.sampler,
+                       entry.type, entry.value)) return false;
+  }
+
+  // All scalar PendingDelta/value/ordinal checks have passed. Only now may a
+  // second preflight consume constant dirty ranges; every subsequent consume
+  // is therefore effect-free with respect to validation failures.
+  if (!acceptInlineConstantDelta(constants, state, plan)) return false;
 
   auto consumer = shadow.consume();
   consumer.acceptRenderStateBatch(state.renderStates, plan);
@@ -511,59 +594,97 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
   consumer.acceptSamplerStateBatch(state.samplerStates, plan);
   consumer.acceptTransformBatch(state.transforms, plan);
 
+  if (tokens) {
+    const auto consume = [&](ScalarSemanticCategory category,
+                             std::uint32_t key, std::uint32_t index,
+                             std::uint32_t value) noexcept {
+      ScalarSemanticProjectionTuple tuple{};
+      return tokens->project(category, key, index, value, recordOrdinal,
+                             tuple) &&
+             tokens->consumeProjected(tuple);
+    };
+    for (const auto& entry : state.renderStates) {
+      if (state.fullSnapshot &&
+          !tokens->has(ScalarSemanticCategory::RenderState, entry.state,
+                       0u)) {
+        continue;
+      }
+      if (!consume(ScalarSemanticCategory::RenderState, entry.state, 0u,
+                   entry.value)) return false;
+    }
+    for (const auto& entry : state.textureStageStates) {
+      if (state.fullSnapshot &&
+          !tokens->has(ScalarSemanticCategory::TextureStageState, entry.stage,
+                       entry.type)) {
+        continue;
+      }
+      if (!consume(ScalarSemanticCategory::TextureStageState, entry.stage,
+                   entry.type, entry.value)) return false;
+    }
+    for (const auto& entry : state.samplerStates) {
+      if (state.fullSnapshot &&
+          !tokens->has(ScalarSemanticCategory::SamplerState, entry.sampler,
+                       entry.type)) {
+        continue;
+      }
+      if (!consume(ScalarSemanticCategory::SamplerState, entry.sampler,
+                   entry.type, entry.value)) return false;
+    }
+  }
+
   for (const auto& entry : state.textures) {
     if (entry.wire.slot < 32u) {
-      shadow.pendingTextureMask &= ~(1u << entry.wire.slot);
+      shadow.writer().pendingTextureMask() &= ~(1u << entry.wire.slot);
     }
   }
   for (const auto& entry : state.streams) {
     if (entry.wire.slot < 32u) {
-      shadow.pendingStreamMask &= ~(1u << entry.wire.slot);
+      shadow.writer().pendingStreamMask() &= ~(1u << entry.wire.slot);
     }
   }
   for (const auto& entry : state.shaders) {
     if (entry.wire.stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX) {
-      shadow.pendingVs = false;
+      shadow.writer().pendingVs() = false;
     } else if (entry.wire.stage ==
                D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL) {
-      shadow.pendingPs = false;
+      shadow.writer().pendingPs() = false;
     }
   }
   for (const auto& entry : state.vertexInputs) {
     if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
       // Declaration wins over a co-pending FVF and carries its effective
       // value, so the single durable entry represents both pending writes.
-      shadow.pendingVdecl = false;
-      shadow.pendingFvf = false;
+      shadow.writer().pendingVdecl() = false;
+      shadow.writer().pendingFvf() = false;
     } else if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
-      shadow.pendingFvf = false;
+      shadow.writer().pendingFvf() = false;
     }
   }
-  if (!state.indexBuffers.empty()) shadow.pendingIb = false;
+  if (!state.indexBuffers.empty()) shadow.writer().pendingIb() = false;
   for (const auto& entry : state.renderTargets) {
     if (entry.wire.slot < 32u) {
-      shadow.pendingRtMask &= ~(1u << entry.wire.slot);
+      shadow.writer().pendingRtMask() &= ~(1u << entry.wire.slot);
     }
   }
-  if (!state.depthStencils.empty()) shadow.pendingDs = false;
-  if (!state.viewports.empty()) shadow.pendingViewport = false;
-  if (!state.scissors.empty()) shadow.pendingScissor = false;
-  if (!state.materials.empty()) shadow.pendingMaterial = false;
+  if (!state.depthStencils.empty()) shadow.writer().pendingDs() = false;
+  if (!state.viewports.empty()) shadow.writer().pendingViewport() = false;
+  if (!state.scissors.empty()) shadow.writer().pendingScissor() = false;
+  if (!state.materials.empty()) shadow.writer().pendingMaterial() = false;
   for (const auto& entry : state.clipPlanes) {
     if (entry.slot < 32u) {
-      shadow.pendingClipPlaneMask &= ~(1u << entry.slot);
+      shadow.writer().pendingClipPlaneMask() &= ~(1u << entry.slot);
     }
   }
   for (const auto& entry : state.lights) {
     if (entry.slot < 32u) {
-      shadow.pendingLightSlotMask &= ~(1u << entry.slot);
+      shadow.writer().pendingLightSlotMask() &= ~(1u << entry.slot);
     }
   }
   for (const auto& entry : state.lightEnables) {
     if (entry.slot < 32u) {
       const std::uint32_t bit = 1u << entry.slot;
-      shadow.pendingLightEnableValidMask &= ~bit;
-      shadow.pendingLightEnableMask &= ~bit;
+      shadow.writer().pendingLightEnableValidMask() &= ~bit;
+      shadow.writer().pendingLightEnableMask() &= ~bit;
     }
   }
   return true;
@@ -654,7 +775,6 @@ bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeHotStateShadow& shadow,
                              const PeBindingView& bindings,
                              const PeDrawParams& params,
-                             bool forceFullSnapshot,
                              PeSparseScratch& scratch,
                              SparseStateInput& out) noexcept {
   if (!validRecordType(params, "addChunkContextSections")) {
@@ -668,13 +788,13 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   // stream section" fixture (legacy 2396 bytes / 3 handles against a rebuilt
   // 1916 / 2). The emitted set is already a superset of anything retention could
   // add, so there is nothing to do.
-  const bool snapshot = forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
+  const bool snapshot = out.fullSnapshot;
   // Streams: dirty, OR bound and not yet retained by this chunk. One ascending
   // pass so the section order is correct by construction.
   std::size_t streamCount = 0;
   for (std::uint32_t slot = 0; !snapshot && slot < D9C_DRAW_PACKET_MAX_STREAMS;
        ++slot) {
-    const bool dirty = (shadow.pendingStreamMask & (1u << slot)) != 0u;
+    const bool dirty = (shadow.pendingStreamMask() & (1u << slot)) != 0u;
     const bool bound = bindings.streams[slot].buffer.object != nullptr;
     const bool retained = (chunk.retainedStreamMask & (1u << slot)) != 0u;
     if (!dirty && !(bound && !retained)) {
@@ -719,7 +839,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   const bool ibBound = bindings.indexBuffer.object != nullptr;
   const bool emitIndex =
       indexedDraw &&
-      (shadow.pendingIb || !chunk.indexBufferKnown ||
+      (shadow.pendingIb() || !chunk.indexBufferKnown ||
        chunk.submittedIndexBufferWire != ibWire ||
        (!chunk.indexBufferRetained && ibBound));
   std::size_t indexCount = 0;

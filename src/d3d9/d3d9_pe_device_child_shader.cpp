@@ -2,6 +2,7 @@
  * for IDirect3DVertexShader9 and IDirect3DPixelShader9. */
 
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_trusted_handles.hpp"
 
 #include <cstdint>
 #include <new>
@@ -168,7 +169,7 @@ public:
 };
 
 /* =========================================================================
- * Public factory + raw-handle extractors for shader family.
+ * Public factory + trusted reference helpers for shader family.
  * ========================================================================= */
 
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
@@ -183,10 +184,6 @@ IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
                                            std::uint64_t hash,
                                            D3D9PeRecorderFlush *recorder) noexcept {
   return peNewNoexcept<D3D9PixelShaderImpl>(shader, device, hash, recorder);
-}
-
-D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader) {
-  return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->raw() : nullptr;
 }
 
 namespace {
@@ -232,19 +229,15 @@ HRESULT D3D9PeValidatePixelShader(
       dxmt9::d3d9::pe::PeConcreteObjectKind::PixelShader, out);
 }
 
-D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader) {
-  return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->raw() : nullptr;
-}
-
 const dxmt9::d3d9::pe::ShaderRef &
-D3D9PeWireVertexShader(IDirect3DVertexShader9 *shader) {
+D3D9PeVertexShaderRef(IDirect3DVertexShader9 *shader) {
   static const dxmt9::d3d9::pe::ShaderRef empty{};
   return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->wireObject()
                 : empty;
 }
 
 const dxmt9::d3d9::pe::ShaderRef &
-D3D9PeWirePixelShader(IDirect3DPixelShader9 *shader) {
+D3D9PePixelShaderRef(IDirect3DPixelShader9 *shader) {
   static const dxmt9::d3d9::pe::ShaderRef empty{};
   return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->wireObject()
                 : empty;

@@ -2,6 +2,7 @@
 
 #include "d3d9_pe_diagnostic_observer.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "dxmt9/device_c.h"
 
@@ -26,11 +27,13 @@ struct PeDiagnosticsConfig {
   bool moduleMap = false;
   bool threadSampler = false;
   bool debugLog = false;
+  bool scalarSemanticObserver = false;
   std::uint32_t threadSamplerHz = 250;
 
   constexpr bool enabled() const noexcept {
     return recorderStats || recorderChunkLog || statsDecimationN != 0 ||
-           vsConstSetterRange || moduleMap || threadSampler || debugLog;
+           vsConstSetterRange || moduleMap || threadSampler || debugLog ||
+           scalarSemanticObserver;
   }
 
   constexpr bool chunkCommitTimingEnabled() const noexcept {
@@ -50,10 +53,12 @@ struct PeDiagnosticsFeatureGates {
   bool moduleMap = false;
   bool threadSampler = false;
   bool debugLog = false;
+  bool scalarSemanticObserver = false;
 
   constexpr bool any() const noexcept {
     return callScope || hotSetterTimer || chunkCommitTiming ||
-           vsConstSetterRange || moduleMap || threadSampler || debugLog;
+           vsConstSetterRange || moduleMap || threadSampler || debugLog ||
+           scalarSemanticObserver;
   }
 
   static constexpr PeDiagnosticsFeatureGates fromConfig(
@@ -67,6 +72,7 @@ struct PeDiagnosticsFeatureGates {
         .moduleMap = config.moduleMap,
         .threadSampler = config.threadSampler,
         .debugLog = config.debugLog,
+        .scalarSemanticObserver = config.scalarSemanticObserver,
     };
   }
 };
@@ -164,9 +170,12 @@ struct PeInterAppendCallSiteStats {
 
 struct PeDiagnosticsState {
   explicit PeDiagnosticsState(D3D9DeviceImpl *device,
-                              const PeDiagnosticsConfig &resolved) noexcept
+                              const PeDiagnosticsConfig &resolved)
       : config(resolved), gates(PeDiagnosticsFeatureGates::fromConfig(resolved)),
-        childObserver(device) {}
+        childObserver(device),
+        scalarSemanticTokens(resolved.scalarSemanticObserver
+            ? std::make_unique<dxmt9::d3d9::pe::PeScalarSemanticTokenLedger>()
+            : nullptr) {}
 
   static constexpr std::size_t kPeAppendTypeBuckets = 8;
   static std::size_t peAppendTypeBucket(std::uint32_t type) noexcept {
@@ -198,6 +207,12 @@ struct PeDiagnosticsState {
   PeDiagnosticsConfig config{};
   PeDiagnosticsFeatureGates gates{};
   D3D9PeDiagnosticObserver childObserver;
+  // Cold exact semantic witness. The default-off owner is absent, so the
+  // production recorder retains its pinned footprint and setters allocate
+  // nothing. When enabled, this bounded 8,864-byte diagnostic ledger records
+  // the source ordinal that PendingDelta intentionally does not retain.
+  std::unique_ptr<dxmt9::d3d9::pe::PeScalarSemanticTokenLedger>
+      scalarSemanticTokens{};
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
   PeRecorderStats peRecorderStats_{};
   PeDecimatedScopeStats peChunkAppendDecimatedStats_{};
@@ -279,6 +294,11 @@ struct PeDiagnosticsState {
   std::atomic<std::uint32_t> pePresentRecordMilestoneMask_{0};
   std::atomic<std::int64_t> pePresentCadenceReturnNs_{0};
 };
+
+static_assert(
+    sizeof(decltype(PeDiagnosticsState::scalarSemanticTokens)) ==
+        sizeof(void*),
+    "cold scalar observer owner must remain one nullable pointer");
 
 inline std::unique_ptr<PeDiagnosticsState>
 makePeDiagnosticsState(D3D9DeviceImpl *device,

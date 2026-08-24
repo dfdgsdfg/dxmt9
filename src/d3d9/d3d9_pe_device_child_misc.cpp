@@ -3,7 +3,9 @@
  * and IDirect3DSwapChain9Ex (the non-resource families). */
 
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_trusted_handles.hpp"
 #include "d3d9_pe_com_cache.hpp"
+#include "d3d9_pe_stateblock_fault.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 #include "d3d9_pe_stateblock_value.hpp"
 
@@ -388,6 +390,13 @@ public:
     if (recorder_ && recorder_->IsStateBlockRecorderPoisonedForChild()) {
       return D3DERR_DEVICELOST;
     }
+    std::int32_t injectedHr = 0;
+    if (dxmt9PeConsumeStateBlockFault(
+            PeStateBlockFaultPoint::CapturePre, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(false, injectedHr);
+      return hr32(injectedHr);
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -418,6 +427,14 @@ public:
       }
     }
     const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
+    if (recorder_ && SUCCEEDED(hr) &&
+        dxmt9PeConsumeStateBlockEnteredFault(
+            PeStateBlockFaultPoint::CaptureEntered, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(true, injectedHr);
+      recorder_->PoisonStateBlockRecorderForChild();
+      return hr32(injectedHr);
+    }
     const auto valuePlan = planPeStateBlockValue(
         FAILED(hr) ? PeStateBlockValueEvent::CaptureBackendFailed
                    : PeStateBlockValueEvent::CaptureAccepted);
@@ -449,6 +466,13 @@ public:
     if (recorder_ && recorder_->IsStateBlockRecorderPoisonedForChild()) {
       return D3DERR_DEVICELOST;
     }
+    std::int32_t injectedHr = 0;
+    if (dxmt9PeConsumeStateBlockFault(
+            PeStateBlockFaultPoint::ApplyPre, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(false, injectedHr);
+      return hr32(injectedHr);
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -466,6 +490,15 @@ public:
       }
     }
     const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
+    if (recorder_ && SUCCEEDED(hr) &&
+        dxmt9PeConsumeStateBlockEnteredFault(
+            PeStateBlockFaultPoint::ApplyEntered, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(true, injectedHr);
+      recorder_->DiscardPreparedStateBlockApplyForChild();
+      recorder_->PoisonStateBlockRecorderForChild();
+      return hr32(injectedHr);
+    }
     const auto valuePlan = planPeStateBlockValue(
         FAILED(hr) ? PeStateBlockValueEvent::ApplyBackendFailed
                    : PeStateBlockValueEvent::ApplyAccepted);
@@ -839,7 +872,7 @@ public:
 };
 
 /* =========================================================================
- * Public factory + raw-handle extractors for misc family.
+ * Public factory + trusted reference helpers for misc family.
  * ========================================================================= */
 
 IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
@@ -893,18 +926,10 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
   return impl;
 }
 
-D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl) {
-  return decl ? static_cast<D3D9VertexDeclImpl *>(decl)->raw() : nullptr;
-}
-
 const dxmt9::d3d9::pe::DeclarationRef &
-D3D9PeWireVertexDecl(IDirect3DVertexDeclaration9 *decl) {
+D3D9PeVertexDeclRef(IDirect3DVertexDeclaration9 *decl) {
   static const dxmt9::d3d9::pe::DeclarationRef empty{};
   return decl ? static_cast<D3D9VertexDeclImpl *>(decl)->wireObject() : empty;
-}
-
-D9CQuery *D3D9PeRawQuery(IDirect3DQuery9 *query) {
-  return query ? static_cast<D3D9QueryImpl *>(query)->raw() : nullptr;
 }
 
 HRESULT D3D9PeValidateVertexDecl(
@@ -959,7 +984,7 @@ HRESULT D3D9PeValidateQuery(
 }
 
 const dxmt9::d3d9::pe::QueryRef &
-D3D9PeWireQuery(IDirect3DQuery9 *query) {
+D3D9PeQueryRef(IDirect3DQuery9 *query) {
   static const dxmt9::d3d9::pe::QueryRef empty{};
   return query ? static_cast<D3D9QueryImpl *>(query)->wireObject() : empty;
 }

@@ -352,6 +352,16 @@ class CommandChunkBuilder {
   std::size_t handleCount() const noexcept { return handles_.size(); }
   std::size_t payloadBytes() const noexcept { return payload_.size(); }
   std::size_t retainedObjectCount() const noexcept { return retainer_.size(); }
+  // Unique local ordinal of the most recently committed record. This is PE
+  // bookkeeping only; it never enters the D9C wire ABI.
+  std::uint64_t lastCommittedRecordOrdinal() const noexcept {
+    return lastCommittedRecordOrdinal_;
+  }
+  // The active ordinal is assigned by beginRecord() before emission. Emitters
+  // must bind semantic witnesses to this record, not to the prior commit.
+  std::uint64_t activeRecordOrdinal() const noexcept {
+    return active_.active ? active_.recordOrdinal : 0u;
+  }
   bool referencesObject(PeLocalObjectIdentity identity) const noexcept;
 
   const std::vector<D9CCommandChunkWireRecordHeader>& recordsForTest()
@@ -726,6 +736,7 @@ class CommandChunkBuilder {
   // stamp can never alias a later record. Starts at 1 so 0 stays a safe
   // "no record" sentinel, though nothing currently relies on that.
   std::uint64_t nextRecordOrdinal_ = 1u;
+  std::uint64_t lastCommittedRecordOrdinal_ = 0u;
   bool sealed_ = false;
 };
 
@@ -746,6 +757,11 @@ struct SparseConstantRangeInput {
 };
 
 struct SparseStateInput {
+  // This is producer metadata, not wire data.  It carries the effective
+  // disposition from state preparation through append and settlement so a
+  // full snapshot may project clean LiveShadow rows without inventing
+  // PendingDelta tokens.
+  bool fullSnapshot = false;
   std::span<const D9CCommandChunkWireRenderState> renderStates{};
   std::span<const SparseBindingInput<
       D9CCommandChunkWireTextureBinding>> textures{};

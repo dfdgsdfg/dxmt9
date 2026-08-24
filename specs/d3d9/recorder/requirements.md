@@ -147,8 +147,27 @@ must qualify a pending token by semantic category, key, value, and ordinal.
 The generic append/commit envelope may bind only acceptance, ordinal, counts,
 and disposition when an emitter does not expose that semantic tuple; it must
 not manufacture category/key/value from a wire record type or byte-size hint.
-An exact cross-projection witness remains an explicit gap until such an emitter
-projection is production-used. These projections may prove finite transition/
+The render-state, texture-stage-state, and sampler-state scalar emitters must
+always validate canonical order and exact PendingDelta
+`(category,key,index,value)` before settlement. The optional, default-off
+`DXMT9_PE_SCALAR_SEMANTIC_OBSERVER` may strengthen this transition with a cold
+category-aligned ordinal ledger and an ephemeral
+`(category,key,index,value,sourceOrdinal,recordOrdinal)` tuple, but that ledger
+must not reside in `PeRecorderState`, allocate per setter, or add virtual
+dispatch. Its bounded proof applies only while the observer is enabled; the
+default path does not retain or claim a source ordinal.
+An effective `FULL_SNAPSHOT` disposition is carried with the prepared state
+through emission and settlement: snapshot rows projected from clean
+`LiveShadow` do not require a pending token, while every represented
+`PendingDelta` row is still value-validated and consumed exactly once, and an
+observer-backed row is additionally source/record-ordinal validated. Pending
+rows not represented by a bounded projection remain
+pending for retry. If an accepted append cannot settle its prepared state, the
+recorder enters the existing fail-stop/device-lost state; it must not return
+`S_OK` with stale pending state.
+Matrices, COM bindings, constants, and heterogeneous records remain an
+explicit no-token subset and are not claimed by the scalar proof. These
+projections may prove finite transition/
 refinement properties only; they must not claim C++ object layout, allocator
 internals, ABI bytes, or unbounded execution.
 Capacity-pre success must include settlement of the already-full builder across

@@ -105,6 +105,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--exe-dir", type=Path, default=DEFAULT_EXE_DIR,
                    help="Directory holding auxiliary conformance .exes "
                         "(default: same directory as --exe).")
+    p.add_argument("--pe-dll-dir", type=Path, default=None,
+                   help="Builtin PE build root containing src/win32/d3d9.dll "
+                        "and src/winemetal/winemetal.dll (default: infer from --exe).")
+    p.add_argument("--pe-arch", choices=("auto", "x64", "x86"), default="auto",
+                   help="Builtin PE staging lane (default: infer from d3d9.dll).")
     p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
                    help=f"MANIFEST.toml describing all cases "
                         f"(default: {DEFAULT_MANIFEST.relative_to(REPO_ROOT)}).")
@@ -116,6 +121,8 @@ def parse_args() -> argparse.Namespace:
                         "or DXMT9_CONFORMANCE_WINEMETAL_SO).")
     p.add_argument("--skip-aux", action="store_true",
                    help="Skip auxiliary executables; only run the main chunked exe.")
+    p.add_argument("--aux-exe", action="append", default=[],
+                   help="Run only this auxiliary executable (repeatable).")
     p.add_argument("--aux-timeout", type=float, default=120.0,
                    help="Per-auxiliary-exe timeout in seconds (default: 120).")
     p.add_argument("--wine", type=Path, default=DEFAULT_WINE,
@@ -284,7 +291,8 @@ def stage_app_local_unixlib(args: argparse.Namespace) -> None:
 # signature. That makes Wine resolve them from ITS OWN dll directory no matter
 # what path LoadLibrary was given, so the copy beside the exe and the copy in
 # the prefix's system32 are both inert -- Wine loads
-# $WINE_ROOT/lib/wine/<arch>-windows/d3d9.dll.
+# $WINE_ROOT/lib/wine/<arch>-windows/d3d9.dll; the PE machine field selects
+# i386-windows for the 32-bit staging lane.
 #
 # Nothing in this runner used to write that file. It was written by 3DMark
 # wild-run staging (install_heroic_wine.sh), at unrelated times, from whichever
@@ -296,6 +304,72 @@ def stage_app_local_unixlib(args: argparse.Namespace) -> None:
 BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal.dll")
 
 
+def detect_pe_arch(path: Path) -> str:
+    """Read the PE machine field so x86 runs stage into i386-windows."""
+    data = path.read_bytes()
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        sys.exit(f"cannot identify PE architecture: invalid DOS header {path}")
+    pe_offset = int.from_bytes(data[0x3c:0x40], "little")
+    if pe_offset + 6 > len(data) or data[pe_offset:pe_offset + 4] != b"PE\0\0":
+        sys.exit(f"cannot identify PE architecture: invalid PE header {path}")
+    machine = int.from_bytes(data[pe_offset + 4:pe_offset + 6], "little")
+    if machine == 0x8664:
+        return "x64"
+    if machine == 0x014c:
+        return "x86"
+    sys.exit(f"unsupported PE machine 0x{machine:04x}: {path}")
+
+
+def canonical_pe_dlls(args: argparse.Namespace) -> tuple[Path, Path, str]:
+    """Return the canonical postprocessed PE pair and its machine lane.
+
+    The conformance executables are copied into their test directory by some
+    build targets, but those copies are not the builtin DLLs Wine resolves.
+    Only the two artifacts under the build root's ``src`` tree are eligible
+    for builtin staging.  ``--pe-dll-dir`` is deliberately a build-root
+    selector rather than an arbitrary pair of files, keeping this operation
+    bounded to Meson's canonical output layout.
+    """
+    build_root = getattr(args, "pe_dll_dir", None)
+    if build_root is None:
+        # DEFAULT_EXE is .../<build>/tests/conformance/d3d9/<exe>.  Resolve
+        # ancestors rather than relying on a fixed number of parents so an
+        # explicitly supplied --exe remains safe when its layout differs.
+        exe = args.exe.resolve()
+        candidates = []
+        for parent in exe.parents:
+            if ((parent / "src/win32/d3d9.dll").is_file() and
+                    (parent / "src/winemetal/winemetal.dll").is_file()):
+                candidates.append(parent)
+        if len(candidates) != 1:
+            detail = "no canonical PE build root found" if not candidates \
+                else "ambiguous canonical PE build roots: " + \
+                ", ".join(str(path) for path in candidates)
+            sys.exit(f"{detail}; pass --pe-dll-dir explicitly")
+        build_root = candidates[0]
+    else:
+        build_root = build_root.resolve()
+
+    d3d9 = build_root / "src/win32/d3d9.dll"
+    winemetal = build_root / "src/winemetal/winemetal.dll"
+    for dll in (d3d9, winemetal):
+        if not dll.is_file():
+            sys.exit(f"canonical builtin PE DLL missing: {dll}")
+        stamp = Path(str(dll) + ".postproc")
+        if not stamp.is_file():
+            sys.exit(f"canonical builtin PE DLL has no postprocess stamp: {stamp}")
+        if stamp.stat().st_mtime_ns < dll.stat().st_mtime_ns:
+            sys.exit(f"postprocess stamp is older than DLL: {stamp} < {dll}")
+
+    pe_arch = detect_pe_arch(d3d9)
+    if detect_pe_arch(winemetal) != pe_arch:
+        sys.exit(f"canonical builtin PE DLL architecture mismatch: {d3d9} vs {winemetal}")
+    requested_arch = getattr(args, "pe_arch", "auto")
+    if requested_arch != "auto" and requested_arch != pe_arch:
+        sys.exit(f"--pe-arch={requested_arch} does not match canonical DLL machine ({pe_arch})")
+    return d3d9, winemetal, pe_arch
+
+
 def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     """Copy the built PE DLLs AND the unix provider into the Wine root.
 
@@ -304,23 +378,25 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     next to the exe (and DXMT9_WINEMETAL_SO) is inert in the builtin lane. Until
     2026-08-02 nothing here wrote that file either, so conformance ran against
     whichever winemetal.so a 3DMark wild run last staged -- the PE half of this
-    bug was fixed first and left the unix half live.
+    bug was fixed first and left the unix half live.  The unix provider remains
+    x86_64-unix for both PE lanes under Sikarugir WoW64.
     """
     staged: dict[str, dict[str, object]] = {}
-    wine_dll_dir = args.wine.parent.parent / "lib" / "wine" / "x86_64-windows"
+    d3d9_src, winemetal_src, pe_arch = canonical_pe_dlls(args)
+    wine_dll_dir = args.wine.parent.parent / "lib" / "wine" / (
+        "i386-windows" if pe_arch == "x86" else "x86_64-windows")
     if not wine_dll_dir.is_dir():
         sys.exit(f"wine dll dir not found: {wine_dll_dir}")
-    src_dir = args.exe.parent
+    sources = {"d3d9.dll": d3d9_src, "winemetal.dll": winemetal_src}
     for name in BUILTIN_PE_DLLS:
-        src = src_dir / name
-        if not src.is_file():
-            sys.exit(f"cannot stage {name}: missing {src} (build build-win32-x64-builtin first)")
+        src = sources[name]
         dst = wine_dll_dir / name
         shutil.copy2(src, dst)
         data = dst.read_bytes()
         if data != src.read_bytes():
             sys.exit(f"staging {name} into the wine root did not take effect: {dst}")
         staged[str(dst)] = {
+            "source": str(src),
             "sha256": hashlib.sha256(data).hexdigest()[:16],
             "bytes": len(data),
         }
@@ -347,11 +423,13 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     if so_data != so_src.read_bytes():
         sys.exit(f"staging winemetal.so into the wine root did not take effect: {so_dst}")
     staged[str(so_dst)] = {
+        "source": str(so_src),
         "sha256": hashlib.sha256(so_data).hexdigest()[:16],
         "bytes": len(so_data),
     }
 
     args.staged_wine_dll_dir = wine_dll_dir
+    args.staged_pe_arch = pe_arch
     args.staged_build = staged
 
 
@@ -579,6 +657,9 @@ def main() -> int:
             aux_exes = sorted(
                 exe for exe in by_exe.keys() if exe not in CHUNKED_EXECUTABLES
             )
+            if args.aux_exe:
+                wanted = set(args.aux_exe)
+                aux_exes = [exe for exe in aux_exes if exe in wanted]
             print(f"[runner] driving {len(aux_exes)} auxiliary executable(s)",
                   file=sys.stderr)
             for exe_name in aux_exes:

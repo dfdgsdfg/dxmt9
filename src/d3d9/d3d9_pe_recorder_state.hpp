@@ -49,4 +49,15 @@ struct PeRecorderState {
   std::uint64_t commandChunkBytes = 0;
 };
 
+// R-CORE-REC-5.1.1: scalar proof instrumentation must not enlarge the
+// always-on recorder owner. These are the pre-observer canonical footprints;
+// the host ABI carries eight additional bytes in std::recursive_mutex.
+#if defined(_WIN64)
+static_assert(sizeof(PeRecorderState) == 104464u);
+#elif defined(_WIN32)
+static_assert(sizeof(PeRecorderState) == 103576u);
+#else
+static_assert(sizeof(PeRecorderState) == 104488u);
+#endif
+
 }  // namespace dxmt9::d3d9::pe

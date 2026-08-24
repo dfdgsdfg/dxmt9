@@ -250,8 +250,8 @@ LaneResult runDirectDrawLane(const Fixture& fixture) {
     return LaneResult{};
   }
   if (!pe::addChunkContextSections(fixture.chunk, fixture.shadow,
-                                   fixture.bindings, fixture.params,
-                                   fixture.forceFullSnapshot, scratch, state)) {
+                                   fixture.bindings, fixture.params, scratch,
+                                   state)) {
     return LaneResult{};
   }
   const bool ok =
@@ -459,11 +459,11 @@ void singleRenderStateDirty() {
 void scalarCategoriesDirty() {
   Fixture f;
   f.name = "viewport, scissor and material dirty";
-  f.shadow.pendingViewport = true;
-  f.shadow.pendingScissor = true;
-  f.shadow.pendingMaterial = true;
-  f.shadow.viewportShadow = D9CViewport{0u, 0u, 640u, 480u, 0.0f, 1.0f};
-  f.shadow.scissorShadow = D9CRect{1, 2, 3, 4};
+  f.shadow.writer().pendingViewport() = true;
+  f.shadow.writer().pendingScissor() = true;
+  f.shadow.writer().pendingMaterial() = true;
+  f.shadow.writer().viewportShadow() = D9CViewport{0u, 0u, 640u, 480u, 0.0f, 1.0f};
+  f.shadow.writer().scissorShadow() = D9CRect{1, 2, 3, 4};
   requirePinnedOutput(f);
 }
 
@@ -471,18 +471,18 @@ void everyCategoryDirty() {
   Fixture f;
   f.name = "every category dirty";
   f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
-  f.shadow.pendingTextureMask = 0x1u;
-  f.shadow.pendingStreamMask = 0x1u;
-  f.shadow.pendingVs = true;
-  f.shadow.pendingPs = true;
-  f.shadow.pendingVdecl = true;
-  f.shadow.pendingViewport = true;
-  f.shadow.pendingScissor = true;
-  f.shadow.pendingMaterial = true;
-  f.shadow.pendingClipPlaneMask = 0x3u;
-  f.shadow.pendingLightSlotMask = 0x1u;
-  f.shadow.pendingLightEnableValidMask = 0x1u;
-  f.shadow.pendingLightEnableMask = 0x1u;
+  f.shadow.writer().pendingTextureMask() = 0x1u;
+  f.shadow.writer().pendingStreamMask() = 0x1u;
+  f.shadow.writer().pendingVs() = true;
+  f.shadow.writer().pendingPs() = true;
+  f.shadow.writer().pendingVdecl() = true;
+  f.shadow.writer().pendingViewport() = true;
+  f.shadow.writer().pendingScissor() = true;
+  f.shadow.writer().pendingMaterial() = true;
+  f.shadow.writer().pendingClipPlaneMask() = 0x3u;
+  f.shadow.writer().pendingLightSlotMask() = 0x1u;
+  f.shadow.writer().pendingLightEnableValidMask() = 0x1u;
+  f.shadow.writer().pendingLightEnableMask() = 0x1u;
   f.shadow.writer().pendingTssTyped().set(textureStageIndexKey(0u),
                                  textureStageStateTypeKey(1u), 42u);
   SamplerIndex sampler{};
@@ -506,8 +506,8 @@ void everyCategoryDirty() {
 void attachmentsDirty() {
   Fixture f;
   f.name = "render target and depth stencil dirty";
-  f.shadow.pendingRtMask = 0x1u;
-  f.shadow.pendingDs = true;
+  f.shadow.writer().pendingRtMask() = 0x1u;
+  f.shadow.writer().pendingDs() = true;
   f.bindings.renderTargets[0] =
       publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
   f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
@@ -550,7 +550,7 @@ void renderStatesOverCapFails() {
 void unpublishedHandleStillEncodes() {
   Fixture f;
   f.name = "texture bound but never published";
-  f.shadow.pendingTextureMask = 0x1u;
+  f.shadow.writer().pendingTextureMask() = 0x1u;
   f.bindings.textures[0] =
       unpublishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
   // Deliberately NOT goldened. The legacy lane failed on this input by design, so
@@ -593,8 +593,8 @@ void fullSnapshotMode() {
 void allSlotsDirtyTriggersSnapshotFlagHeuristic() {
   Fixture f;
   f.name = "all texture and stream slots dirty (snapshot flag heuristic)";
-  f.shadow.pendingTextureMask = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
-  f.shadow.pendingStreamMask = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  f.shadow.writer().pendingTextureMask() = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  f.shadow.writer().pendingStreamMask() = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
     f.bindings.textures[i] =
         publishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
@@ -617,14 +617,14 @@ void fvfOnlyAfterDeclaration() {
   {
     Fixture decl;
     decl.name = "vertex declaration bound (primes the shared scratch)";
-    decl.shadow.pendingVdecl = true;
+    decl.shadow.writer().pendingVdecl() = true;
     decl.bindings.vdecl =
         publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
     requirePinnedOutput(decl);
   }
   Fixture f;
   f.name = "FVF only, after a declaration build (stale-scratch guard)";
-  f.shadow.pendingFvf = true;
+  f.shadow.writer().pendingFvf() = true;
   f.bindings.fvf = 0x1C4u;
   requirePinnedOutput(f);
 }
@@ -655,8 +655,8 @@ void snapshotDrainsEveryTable() {
                                       identityTransformMatrix());
   // lightEnableShadow is the snapshot source; pendingLightEnableMask is the
   // delta source. Make them DIFFER so reading the wrong one is visible.
-  f.shadow.lightEnableShadow = 0x5u;
-  f.shadow.pendingLightEnableMask = 0xAu;
+  f.shadow.writer().lightEnableShadow() = 0x5u;
+  f.shadow.writer().pendingLightEnableMask() = 0xAu;
   f.bindings.vdecl = publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
     f.bindings.textures[i] =
@@ -682,7 +682,7 @@ void distinctObjectPerTextureSlot() {
   Fixture f;
   f.name = "four texture slots with four distinct objects";
   static D9CTexture slotTex[4];
-  f.shadow.pendingTextureMask = 0xFu;
+  f.shadow.writer().pendingTextureMask() = 0xFu;
   for (std::uint32_t i = 0; i < 4u; ++i) {
     f.bindings.textures[i] =
         publishedRef(&slotTex[i], D9C_CHUNK_HANDLE_KIND_TEXTURE);
@@ -700,7 +700,7 @@ Fixture baseDraw(const char* name, std::uint32_t recordType) {
   f.params.primitiveType = 4u;  // D3DPT_TRIANGLELIST
   f.params.primitiveCount = 12u;
   f.params.stride = 32u;
-  f.shadow.pendingStreamMask = 0x1u;
+  f.shadow.writer().pendingStreamMask() = 0x1u;
   f.bindings.streams[0].buffer = publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   f.bindings.streams[0].offset = 64u;
   f.bindings.streams[0].stride = 32u;
@@ -722,7 +722,7 @@ void indexedDrawWithBaseVertex() {
   f.params.minVertex = 8u;
   f.params.numVertices = 256u;
   f.params.startIndex = 12u;
-  f.shadow.pendingIb = true;
+  f.shadow.writer().pendingIb() = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   requirePinnedOutput(f);
 }
@@ -731,7 +731,7 @@ void indexedDrawNegativeBaseVertex() {
   Fixture f = baseDraw("indexed draw, negative base vertex",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.params.baseVertex = -32;  // int32_t on the wire; must not wrap
-  f.shadow.pendingIb = true;
+  f.shadow.writer().pendingIb() = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   requirePinnedOutput(f);
 }
@@ -741,7 +741,7 @@ void indexedDrawNegativeBaseVertex() {
 void streamBoundNotDirtyNotRetained() {
   Fixture f = baseDraw("stream bound, not dirty, not retained: must re-emit",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
-  f.shadow.pendingStreamMask = 0u;   // not dirty
+  f.shadow.writer().pendingStreamMask() = 0u;   // not dirty
   f.chunk.retainedStreamMask = 0u;   // not retained
   requirePinnedOutput(f);
 }
@@ -749,7 +749,7 @@ void streamBoundNotDirtyNotRetained() {
 void streamBoundNotDirtyButRetained() {
   Fixture f = baseDraw("stream bound, not dirty, already retained: no re-emit",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
-  f.shadow.pendingStreamMask = 0u;
+  f.shadow.writer().pendingStreamMask() = 0u;
   f.chunk.retainedStreamMask = 0x1u;
   requirePinnedOutput(f);
 }
@@ -757,7 +757,7 @@ void streamBoundNotDirtyButRetained() {
 void streamDirtyAndRetained() {
   Fixture f = baseDraw("stream dirty and retained: dirty still wins",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
-  f.shadow.pendingStreamMask = 0x1u;
+  f.shadow.writer().pendingStreamMask() = 0x1u;
   f.chunk.retainedStreamMask = 0x1u;
   requirePinnedOutput(f);
 }
@@ -766,7 +766,7 @@ void multipleStreamsMixedRetention() {
   Fixture f = baseDraw("four streams, mixed dirty/retained",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   static D9CBuffer slotVb[4];
-  f.shadow.pendingStreamMask = 0x5u;   // slots 0 and 2 dirty
+  f.shadow.writer().pendingStreamMask() = 0x5u;   // slots 0 and 2 dirty
   f.chunk.retainedStreamMask = 0x3u;   // slots 0 and 1 retained
   for (std::uint32_t i = 0; i < 4u; ++i) {
     f.bindings.streams[i].buffer =
@@ -783,7 +783,7 @@ void indexBufferKnownUnchangedNotRetained() {
   Fixture f = baseDraw("IB known and unchanged but not retained: must re-emit",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = false;
+  f.shadow.writer().pendingIb() = false;
   f.chunk.indexBufferKnown = true;
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
@@ -795,7 +795,7 @@ void indexBufferKnownUnchangedAndRetained() {
   Fixture f = baseDraw("IB known, unchanged and retained: no re-emit",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = false;
+  f.shadow.writer().pendingIb() = false;
   f.chunk.indexBufferKnown = true;
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
@@ -807,7 +807,7 @@ void indexBufferChanged() {
   Fixture f = baseDraw("IB known but changed: must re-emit",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = false;
+  f.shadow.writer().pendingIb() = false;
   f.chunk.indexBufferKnown = true;
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(&ib1));  // a different buffer
@@ -819,7 +819,7 @@ void indexBufferUnknown() {
   Fixture f = baseDraw("IB not yet known to the chunk: must emit",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = false;
+  f.shadow.writer().pendingIb() = false;
   f.chunk.indexBufferKnown = false;
   requirePinnedOutput(f);
 }
@@ -832,7 +832,7 @@ void indexBufferUnknownButRetained() {
   Fixture f = baseDraw("IB not known but already retained: not-known leg alone",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = false;
+  f.shadow.writer().pendingIb() = false;
   f.chunk.indexBufferKnown = false;
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
@@ -846,7 +846,7 @@ void indexBufferPendingOnly() {
   Fixture f = baseDraw("IB dirty only: pendingIb leg alone",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  f.shadow.pendingIb = true;
+  f.shadow.writer().pendingIb() = true;
   f.chunk.indexBufferKnown = true;
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
@@ -860,7 +860,7 @@ void inlineConstDeltaAllSixRanges() {
   Fixture f = baseDraw("inline const delta, all six ranges dirty",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
   f.inlineConstDelta = true;
-  f.shadow.pendingIb = true;
+  f.shadow.writer().pendingIb() = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
 
   struct Spec { ConstShadow* shadow; std::size_t elemSize; std::uint32_t regs; };
@@ -947,8 +947,8 @@ void sparseSettlementNormalAndOversizedAreExact() {
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(2u), 20u);
   f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 70u);
-  f.shadow.pendingTextureMask = 1u << 3u;
-  f.shadow.pendingViewport = true;
+  f.shadow.writer().pendingTextureMask() = 1u << 3u;
+  f.shadow.writer().pendingViewport() = true;
   f.inlineConstDelta = true;
   std::uint32_t constant[4] = {1u, 2u, 3u, 4u};
   touchConstShadow(f.constants.vsConstF, 5u, 1u, constant,
@@ -968,8 +968,8 @@ void sparseSettlementNormalAndOversizedAreExact() {
   });
   check(!pe::acceptPreparedSparseState(shadow, constants, state, failed) &&
             shadow.writer().pendingRenderStatesTyped().size() == 2u &&
-            shadow.pendingTextureMask == (1u << 3u) &&
-            shadow.pendingViewport && constants.vsConstF.dirty(),
+            shadow.pendingTextureMask() == (1u << 3u) &&
+            shadow.pendingViewport() && constants.vsConstF.dirty(),
         "failed normal settlement retains every represented owner");
 
   const auto accepted = pe::settleRecorderAppend({
@@ -978,7 +978,7 @@ void sparseSettlementNormalAndOversizedAreExact() {
   });
   check(pe::acceptPreparedSparseState(shadow, constants, state, accepted) &&
             shadow.writer().pendingRenderStatesTyped().empty() &&
-            shadow.pendingTextureMask == 0u && !shadow.pendingViewport &&
+            shadow.pendingTextureMask() == 0u && !shadow.pendingViewport() &&
             !constants.vsConstF.dirty(),
         "accepted normal settlement consumes exactly represented owners");
   check(!pe::acceptPreparedSparseState(
@@ -1040,8 +1040,8 @@ Fixture baseUpDraw(const char* name, std::uint32_t recordType) {
   // UP draws bind no vertex buffer, so the shadow carries no dirty stream.
   f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
   f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
-  f.shadow.pendingVs = true;
-  f.shadow.pendingPs = true;
+  f.shadow.writer().pendingVs() = true;
+  f.shadow.writer().pendingPs() = true;
   return f;
 }
 
@@ -1077,7 +1077,7 @@ void upIndexedDrawIgnoresDirtyIndexBuffer() {
   f.params.numVertices = 4u;
   f.params.indexFormat = 101u;
   f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
-  f.shadow.pendingIb = true;
+  f.shadow.writer().pendingIb() = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   // Every chunk-context reason to emit is true as well, so nothing but the
   // record type can suppress the section.
@@ -1117,7 +1117,7 @@ void snapshotDrawKeepsEveryStreamSection() {
   f.forceFullSnapshot = true;
   // Bound, retained by the destination chunk, and NOT dirty: the exact slot the
   // context step's rebuild would drop.
-  f.shadow.pendingStreamMask = 0u;
+  f.shadow.writer().pendingStreamMask() = 0u;
   f.chunk.retainedStreamMask = 0x1u;
   requirePinnedOutput(f);
 }
@@ -1128,7 +1128,7 @@ void snapshotIndexedDrawKeepsEveryStreamSection() {
   f.forceFullSnapshot = true;
   f.params.minVertex = 4u;
   f.params.numVertices = 64u;
-  f.shadow.pendingStreamMask = 0u;
+  f.shadow.writer().pendingStreamMask() = 0u;
   f.chunk.retainedStreamMask = 0x1u;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   f.chunk.indexBufferKnown = false;
@@ -1161,18 +1161,18 @@ void randomizedRecordSequences() {
       const auto slot = rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
       f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(slot), rng());
     }
-    f.shadow.pendingTextureMask =
+    f.shadow.writer().pendingTextureMask() =
         rng() & ((1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u);
-    f.shadow.pendingStreamMask =
+    f.shadow.writer().pendingStreamMask() =
         rng() & ((1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u);
-    f.shadow.pendingVs = (rng() & 1u) != 0u;
-    f.shadow.pendingPs = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingVs() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingPs() = (rng() & 1u) != 0u;
     // Independently: either, both, or neither -- this is what exercises the
     // FVF wire kind and the declaration-wins rule.
-    f.shadow.pendingVdecl = (rng() & 1u) != 0u;
-    f.shadow.pendingFvf = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingVdecl() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingFvf() = (rng() & 1u) != 0u;
     f.bindings.vdecl = publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
-    f.shadow.lightEnableShadow = rng() & 0xFFu;
+    f.shadow.writer().lightEnableShadow() = rng() & 0xFFu;
     f.params.recordType = recordType;
     f.forceFullSnapshot = (rng() & 1u) != 0u;
     // Draw scalars. Kept small and valid so primitiveVertexCount and the byte
@@ -1195,7 +1195,7 @@ void randomizedRecordSequences() {
     // "known and unchanged" leg actually fires rather than always differing.
     f.chunk.submittedIndexBufferWire =
         (rng() & 1u) ? d9cWireHandleValue(toWireHandle(&ib0)) : (rng() | 1u);
-    f.shadow.pendingIb = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingIb() = (rng() & 1u) != 0u;
     f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
     if (isUpRecord(recordType)) {
       // UP records carry geometry inline. Vary the payload sizes, including
@@ -1207,15 +1207,15 @@ void randomizedRecordSequences() {
             upIndexBytes.data(), (rng() % (upIndexBytes.size() + 1u)) & ~3u);
       }
     }
-    f.shadow.pendingViewport = (rng() & 1u) != 0u;
-    f.shadow.pendingScissor = (rng() & 1u) != 0u;
-    f.shadow.pendingMaterial = (rng() & 1u) != 0u;
-    f.shadow.pendingRtMask = rng() & 0xFu;
-    f.shadow.pendingDs = (rng() & 1u) != 0u;
-    f.shadow.pendingClipPlaneMask = rng() & 0x3Fu;
-    f.shadow.pendingLightSlotMask = rng() & 0xFFu;
-    f.shadow.pendingLightEnableValidMask = rng() & 0xFFu;
-    f.shadow.pendingLightEnableMask = rng() & 0xFFu;
+    f.shadow.writer().pendingViewport() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingScissor() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingMaterial() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingRtMask() = rng() & 0xFu;
+    f.shadow.writer().pendingDs() = (rng() & 1u) != 0u;
+    f.shadow.writer().pendingClipPlaneMask() = rng() & 0x3Fu;
+    f.shadow.writer().pendingLightSlotMask() = rng() & 0xFFu;
+    f.shadow.writer().pendingLightEnableValidMask() = rng() & 0xFFu;
+    f.shadow.writer().pendingLightEnableMask() = rng() & 0xFFu;
     for (std::uint32_t k = 0; k < D9C_DRAW_PACKET_MAX_TEXTURES; ++k) {
       f.bindings.textures[k] =
           publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);

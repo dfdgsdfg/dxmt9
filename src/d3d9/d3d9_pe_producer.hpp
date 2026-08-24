@@ -24,6 +24,7 @@
 // See docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §4.
 
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "dxmt9/device_c.h"
 #include "util/config/config.hpp"
@@ -81,7 +82,9 @@ bool acceptInlineConstantDelta(PeConstShadowBlock& constants,
 bool acceptPreparedSparseState(PeHotStateShadow& shadow,
                                PeConstShadowBlock& constants,
                                const SparseStateInput& state,
-                               const AppendPlan& plan) noexcept;
+                               const AppendPlan& plan,
+                               PeScalarSemanticTokenLedger* tokens = nullptr,
+                               std::uint64_t recordOrdinal = 0u) noexcept;
 
 // Builds the value-owned checkpoint form used by Render Tape. Unlike the
 // normal draw path this preserves the complete constant shadow rather than
@@ -106,9 +109,9 @@ bool buildFullSnapshotState(
 // resealed the chunk -- the retention answers are about the DESTINATION chunk.
 // `bindings.streams` must be authoritative for every slot, not just pending
 // ones; see populateBindingView's allStreams parameter.
-// forceFullSnapshot must be the SAME value the paired buildSparseState call
-// received. Under snapshot that call emits all 16 stream sections, including null
-// unbinds, and this function must then leave them alone: legacy's
+// The paired buildSparseState call records the effective disposition in
+// `out.fullSnapshot`. Under snapshot that call emits all 16 stream sections,
+// including null unbinds, and this function must then leave them alone: legacy's
 // populateDrawPacketStreamDependencies only ever ADDED mask bits, so an all-ones
 // snapshot mask survived the dependency checkpoint untouched. Rebuilding the span
 // here would drop every bound-but-retained-and-clean slot and every null unbind,
@@ -118,7 +121,6 @@ bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeHotStateShadow& shadow,
                              const PeBindingView& bindings,
                              const PeDrawParams& params,
-                             bool forceFullSnapshot,
                              PeSparseScratch& scratch,
                              SparseStateInput& out) noexcept;
 

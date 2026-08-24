@@ -3,6 +3,7 @@
  * IDirect3DVolumeTexture9 (and the inner IDirect3DVolume9 helper). */
 
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_trusted_handles.hpp"
 
 #include "d3d9_pe_level_surface_cache.hpp"
 #include "util/com/com_private_data.hpp"
@@ -2923,7 +2924,7 @@ public:
 };
 
 /* =========================================================================
- * Public factory + raw-handle extractors for surface/texture family.
+ * Public factory + trusted reference helpers for surface/texture family.
  * ========================================================================= */
 
 IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
@@ -2965,10 +2966,6 @@ IDirect3DCubeTexture9 *CreatePeCubeTexture(D9CTexture *texture,
       texture, device, recorder, diagnostics);
 }
 
-D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface) {
-  return surface ? static_cast<D3D9SurfaceImpl *>(surface)->raw() : nullptr;
-}
-
 HRESULT D3D9PeValidateSurface(
     IDirect3DSurface9* object, const void* expectedOwnerDevice,
     D3D9PeValidatedSurface* out,
@@ -2997,7 +2994,7 @@ HRESULT D3D9PeValidateSurface(
 }
 
 const dxmt9::d3d9::pe::SurfaceRef &
-D3D9PeWireSurface(IDirect3DSurface9 *surface) {
+D3D9PeSurfaceRef(IDirect3DSurface9 *surface) {
   static const dxmt9::d3d9::pe::SurfaceRef empty{};
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->wireObject()
                  : empty;
@@ -3005,21 +3002,6 @@ D3D9PeWireSurface(IDirect3DSurface9 *surface) {
 
 bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->peLocked() : false;
-}
-
-D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture) {
-  if (!texture)
-    return nullptr;
-  switch (texture->GetType()) {
-  case D3DRTYPE_TEXTURE:
-    return static_cast<D3D9TextureImpl *>(texture)->raw();
-  case D3DRTYPE_CUBETEXTURE:
-    return static_cast<D3D9CubeTextureImpl *>(texture)->raw();
-  case D3DRTYPE_VOLUMETEXTURE:
-    return static_cast<D3D9VolumeTextureImpl *>(texture)->raw();
-  default:
-    return nullptr;
-  }
 }
 
 namespace {
@@ -3072,7 +3054,7 @@ HRESULT D3D9PeValidateTexture(
 }
 
 const dxmt9::d3d9::pe::TextureRef &
-D3D9PeWireTexture(IDirect3DBaseTexture9 *texture) {
+D3D9PeTextureRef(IDirect3DBaseTexture9 *texture) {
   static const dxmt9::d3d9::pe::TextureRef empty{};
   if (!texture)
     return empty;

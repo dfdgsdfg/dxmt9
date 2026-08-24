@@ -226,11 +226,48 @@ public:
     PeStateBlockTransactionState& operator=(
         const PeStateBlockTransactionState&) = delete;
 
-    StateBlockRecorded::Writer recordWriter() noexcept {
-        return recorded_.writer();
+    // A capability is issued only while the transaction is in Recording.
+    // The constructor is private, so callers cannot forge a phase witness;
+    // mutable writer access is scoped to withWriter and rechecks the phase.
+    class RecordingCapability {
+    public:
+        explicit operator bool() const noexcept {
+            return valid_ && owner_->phase_ == PeStateBlockPhase::Recording;
+        }
+
+        template <typename Fn>
+        bool withWriter(Fn&& fn) noexcept {
+            if (!static_cast<bool>(*this)) return false;
+            auto writer = owner_->recorded_.writer();
+            std::forward<Fn>(fn)(writer);
+            return true;
+        }
+
+    private:
+        explicit RecordingCapability(PeStateBlockTransactionState& owner) noexcept
+            : owner_(&owner), valid_(owner.phase_ == PeStateBlockPhase::Recording) {}
+        PeStateBlockTransactionState* owner_ = nullptr;
+        bool valid_ = false;
+        friend class PeStateBlockTransactionState;
+    };
+
+    RecordingCapability recordingCapability() noexcept {
+        return RecordingCapability(*this);
     }
+
+    template <typename Fn>
+    bool withRecordingWriter(Fn&& fn) noexcept {
+        return recordingCapability().withWriter(std::forward<Fn>(fn));
+    }
+
     const StateBlockRecorded& recordedSnapshot() const noexcept {
         return recorded_.snapshot();
+    }
+
+    // Reset owns candidate cleanup while the phase is not Recording; this is
+    // deliberately separate from the issued recording capability.
+    void clearRecordedCandidateForReset() noexcept {
+        recorded_.writer().constants().clearForBegin();
     }
 
     PeStateBlockPhase phase() const noexcept { return phase_; }
@@ -362,7 +399,7 @@ public:
     template<typename Retain>
     bool stageTexture(StateBlockTextureSlot slot, StateBlockTextureRef value,
                       Retain&& retain) noexcept {
-        if (!slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
         retain(value.raw());
         stagedTextures_[rawSlot(slot)] = value;
         stagedTextureMask_ |= 1u << rawSlot(slot);
@@ -371,7 +408,7 @@ public:
     template<typename Retain>
     bool stageStream(StateBlockStreamSlot slot, StateBlockStreamSourceValue value,
                      Retain&& retain) noexcept {
-        if (!slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
         retain(value.buffer.raw());
         stagedStreams_[rawSlot(slot)] = value;
         stagedStreamMask_ |= 1u << rawSlot(slot);
@@ -380,18 +417,21 @@ public:
     template<typename Retain>
     void stageVertexShader(StateBlockVertexShaderRef value,
                            Retain&& retain) noexcept {
+        if (phase_ != PeStateBlockPhase::Idle) return;
         stageSingleton(stagedVertexShader_, stagedVertexShaderValid_, value,
                        std::forward<Retain>(retain));
     }
     template<typename Retain>
     void stagePixelShader(StateBlockPixelShaderRef value,
                           Retain&& retain) noexcept {
+        if (phase_ != PeStateBlockPhase::Idle) return;
         stageSingleton(stagedPixelShader_, stagedPixelShaderValid_, value,
                        std::forward<Retain>(retain));
     }
     template<typename Retain>
     void stageIndexBuffer(StateBlockIndexBufferRef value,
                           Retain&& retain) noexcept {
+        if (phase_ != PeStateBlockPhase::Idle) return;
         stageSingleton(stagedIndexBuffer_, stagedIndexBufferValid_, value,
                        std::forward<Retain>(retain));
     }
@@ -399,7 +439,7 @@ public:
     bool stageRenderTarget(StateBlockRenderTargetSlot slot,
                            StateBlockRenderTargetRef value,
                            Retain&& retain) noexcept {
-        if (!slot.valid()) return false;
+        if (phase_ != PeStateBlockPhase::Idle || !slot.valid()) return false;
         retain(value.raw());
         stagedRenderTargets_[rawSlot(slot)] = value;
         stagedRenderTargetMask_ |= 1u << rawSlot(slot);
@@ -408,39 +448,44 @@ public:
     template<typename Retain>
     void stageDepthStencil(StateBlockDepthStencilRef value,
                            Retain&& retain) noexcept {
+        if (phase_ != PeStateBlockPhase::Idle) return;
         stageSingleton(stagedDepthStencil_, stagedDepthStencilValid_, value,
                        std::forward<Retain>(retain));
     }
 
     StateBlockTextureRef takeTexture(StateBlockTextureSlot slot) noexcept {
-        if (!slot.valid()) return {};
+        if (phase_ != PeStateBlockPhase::ApplyPrepared || !slot.valid()) return {};
         stagedTextureMask_ &= ~(1u << rawSlot(slot));
         return take(stagedTextures_[rawSlot(slot)]);
     }
     StateBlockStreamSourceValue takeStream(StateBlockStreamSlot slot) noexcept {
-        if (!slot.valid()) return {};
+        if (phase_ != PeStateBlockPhase::ApplyPrepared || !slot.valid()) return {};
         stagedStreamMask_ &= ~(1u << rawSlot(slot));
         return take(stagedStreams_[rawSlot(slot)]);
     }
     StateBlockVertexShaderRef takeVertexShader() noexcept {
+        if (phase_ != PeStateBlockPhase::ApplyPrepared) return {};
         stagedVertexShaderValid_ = false;
         return take(stagedVertexShader_);
     }
     StateBlockPixelShaderRef takePixelShader() noexcept {
+        if (phase_ != PeStateBlockPhase::ApplyPrepared) return {};
         stagedPixelShaderValid_ = false;
         return take(stagedPixelShader_);
     }
     StateBlockIndexBufferRef takeIndexBuffer() noexcept {
+        if (phase_ != PeStateBlockPhase::ApplyPrepared) return {};
         stagedIndexBufferValid_ = false;
         return take(stagedIndexBuffer_);
     }
     StateBlockRenderTargetRef takeRenderTarget(
         StateBlockRenderTargetSlot slot) noexcept {
-        if (!slot.valid()) return {};
+        if (phase_ != PeStateBlockPhase::ApplyPrepared || !slot.valid()) return {};
         stagedRenderTargetMask_ &= ~(1u << rawSlot(slot));
         return take(stagedRenderTargets_[rawSlot(slot)]);
     }
     StateBlockDepthStencilRef takeDepthStencil() noexcept {
+        if (phase_ != PeStateBlockPhase::ApplyPrepared) return {};
         stagedDepthStencilValid_ = false;
         return take(stagedDepthStencil_);
     }

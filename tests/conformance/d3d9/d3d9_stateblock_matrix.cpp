@@ -14,8 +14,10 @@
 #include <d3d9.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -75,6 +77,18 @@ IDirect3DDevice9 *create_device(IDirect3D9 *d3d9, HWND window) {
   }
 
   return nullptr;
+}
+
+D3DPRESENT_PARAMETERS make_present_parameters(HWND window) {
+  D3DPRESENT_PARAMETERS pp = {};
+  pp.BackBufferWidth = 64;
+  pp.BackBufferHeight = 64;
+  pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+  pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+  pp.hDeviceWindow = window;
+  pp.Windowed = TRUE;
+  pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+  return pp;
 }
 
 struct Fixture {
@@ -216,16 +230,226 @@ void stateblock_capture_apply_transform_matrix() {
   stateblock->Release();
 }
 
+void stateblock_reset_recovery() {
+  Fixture fixture;
+  if (!fixture.init("stateblock_reset_recovery")) return;
+
+  IDirect3DStateBlock9 *before_reset = nullptr;
+  CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &before_reset), D3D_OK);
+  CHECK(before_reset != nullptr);
+  if (!before_reset) return;
+  CHECK_HR(before_reset->Capture(), D3D_OK);
+
+  D3DPRESENT_PARAMETERS pp = make_present_parameters(fixture.window);
+  pp.BackBufferWidth = 32;
+  pp.BackBufferHeight = 32;
+  CHECK_HR(fixture.device->Reset(&pp), D3D_OK);
+
+  IDirect3DStateBlock9 *after_reset = nullptr;
+  CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &after_reset), D3D_OK);
+  CHECK(after_reset != nullptr);
+  if (after_reset) {
+    CHECK_HR(after_reset->Capture(), D3D_OK);
+    CHECK_HR(after_reset->Apply(), D3D_OK);
+    after_reset->Release();
+  }
+  before_reset->Release();
+}
+
+void stateblock_reject_foreign_wrapper() {
+  Fixture fixture;
+  if (!fixture.init("stateblock_reject_foreign_wrapper")) return;
+
+  IDirect3DDevice9 *foreign_device = create_device(fixture.d3d9, fixture.window);
+  CHECK(foreign_device != nullptr);
+  if (!foreign_device) return;
+
+  D3DVERTEXELEMENT9 elements[] = {
+      {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+       D3DDECLUSAGE_POSITION, 0},
+      D3DDECL_END(),
+  };
+  IDirect3DVertexDeclaration9 *foreign_decl = nullptr;
+  CHECK_HR(foreign_device->CreateVertexDeclaration(elements, &foreign_decl),
+           D3D_OK);
+  CHECK(foreign_decl != nullptr);
+  if (foreign_decl) {
+    IDirect3DStateBlock9 *stateblock = nullptr;
+    CHECK_HR(fixture.device->BeginStateBlock(), D3D_OK);
+    CHECK_HR(fixture.device->SetVertexDeclaration(foreign_decl),
+             D3DERR_INVALIDCALL);
+    CHECK_HR(fixture.device->EndStateBlock(&stateblock), D3D_OK);
+    if (stateblock) stateblock->Release();
+    foreign_decl->Release();
+  }
+  foreign_device->Release();
+}
+
+HRESULT configured_fault_hr(const char *fault) {
+  const char *equals = std::strchr(fault, '=');
+  if (!equals || !equals[1]) {
+    return std::strstr(fault, "alloc_pre")
+               ? static_cast<HRESULT>(0x8007000e)
+               : static_cast<HRESULT>(0x80004005);
+  }
+  return static_cast<HRESULT>(std::strtoul(equals + 1, nullptr, 0));
+}
+
+bool fault_is(const char *fault, const char *name) {
+  const std::size_t name_length = std::strlen(name);
+  return std::strncmp(fault, name, name_length) == 0 &&
+      (fault[name_length] == '\0' || fault[name_length] == '=');
+}
+
+void fault_reset_recovery(Fixture &fixture,
+                          IDirect3DVertexBuffer9 *reset_blocker) {
+  CHECK(reset_blocker != nullptr);
+  CHECK_HR(fixture.device->Reset(nullptr), D3DERR_INVALIDCALL);
+  D3DPRESENT_PARAMETERS failed_pp = make_present_parameters(fixture.window);
+  CHECK_HR(fixture.device->Reset(&failed_pp), D3DERR_INVALIDCALL);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE),
+      D3DERR_DEVICELOST);
+  reset_blocker->Release();
+  D3DPRESENT_PARAMETERS pp = make_present_parameters(fixture.window);
+  pp.BackBufferWidth = 32;
+  pp.BackBufferHeight = 32;
+  CHECK_HR(fixture.device->Reset(&pp), D3D_OK);
+  IDirect3DStateBlock9 *fresh = nullptr;
+  CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &fresh), D3D_OK);
+  CHECK(fresh != nullptr);
+  if (fresh) {
+    CHECK_HR(fresh->Capture(), D3D_OK);
+    fresh->Release();
+  }
+}
+
+void stateblock_fault_pre(const char *fault) {
+  Fixture fixture;
+  if (!fixture.init("stateblock_fault_pre")) return;
+  const HRESULT expected = configured_fault_hr(fault);
+
+  if (fault_is(fault, "alloc_pre")) {
+    IDirect3DStateBlock9 *stateblock =
+        reinterpret_cast<IDirect3DStateBlock9 *>(static_cast<uintptr_t>(1));
+    CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &stateblock), expected);
+    CHECK(stateblock == nullptr);
+    CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &stateblock), D3D_OK);
+    CHECK(stateblock != nullptr);
+    if (stateblock) stateblock->Release();
+    return;
+  }
+
+  if (fault_is(fault, "end_pre")) {
+    IDirect3DStateBlock9 *stateblock = nullptr;
+    CHECK_HR(fixture.device->BeginStateBlock(), D3D_OK);
+    CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+    CHECK_HR(fixture.device->EndStateBlock(&stateblock), expected);
+    CHECK(stateblock == nullptr);
+    if (stateblock) stateblock->Release();
+    CHECK_HR(fixture.device->EndStateBlock(&stateblock), D3D_OK);
+    CHECK(stateblock != nullptr);
+    if (stateblock) stateblock->Release();
+    return;
+  }
+
+  IDirect3DStateBlock9 *stateblock = nullptr;
+  CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &stateblock), D3D_OK);
+  CHECK(stateblock != nullptr);
+  if (!stateblock) return;
+  if (fault_is(fault, "capture_pre")) {
+    CHECK_HR(stateblock->Capture(), expected);
+    CHECK_HR(stateblock->Capture(), D3D_OK);
+  } else {
+    CHECK_HR(stateblock->Capture(), D3D_OK);
+    CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+    CHECK_HR(stateblock->Apply(), expected);
+    CHECK_HR(stateblock->Apply(), D3D_OK);
+  }
+  stateblock->Release();
+}
+
+void stateblock_fault_entered(const char *fault) {
+  Fixture fixture;
+  if (!fixture.init("stateblock_fault_entered")) return;
+  const HRESULT expected = configured_fault_hr(fault);
+  const bool end_fault = fault_is(fault, "end_entered");
+  // The generic bridge seam is consumed by the first Capture in this
+  // fixture.  It is intentionally not a preparatory Capture: entered faults
+  // are one-shot observations of the actual backend entry point.
+  const bool capture_fault = fault_is(fault, "capture_entered") ||
+      fault_is(fault, "bridge_entered");
+
+  if (end_fault) {
+    IDirect3DVertexBuffer9 *reset_blocker = nullptr;
+    CHECK_HR(fixture.device->CreateVertexBuffer(
+        64, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+        &reset_blocker, nullptr), D3D_OK);
+    if (!reset_blocker) return;
+    IDirect3DStateBlock9 *stateblock = nullptr;
+    CHECK_HR(fixture.device->BeginStateBlock(), D3D_OK);
+    CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+    CHECK_HR(fixture.device->EndStateBlock(&stateblock), expected);
+    CHECK(stateblock == nullptr);
+    CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, TRUE),
+        D3DERR_DEVICELOST);
+    fault_reset_recovery(fixture, reset_blocker);
+    return;
+  }
+
+  IDirect3DVertexBuffer9 *reset_blocker = nullptr;
+  CHECK_HR(fixture.device->CreateVertexBuffer(
+      64, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+      &reset_blocker, nullptr), D3D_OK);
+  if (!reset_blocker) return;
+  IDirect3DStateBlock9 *stateblock = nullptr;
+  CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &stateblock), D3D_OK);
+  CHECK(stateblock != nullptr);
+  if (!stateblock) {
+    reset_blocker->Release();
+    return;
+  }
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  if (capture_fault) {
+    CHECK_HR(stateblock->Capture(), expected);
+    // CaptureEntered/BridgeEntered poison after the backend call.  The
+    // disposition is effect-unknown, so only fail-stop/reset behavior is
+    // asserted here; no snapshot value is inferred.
+  } else {
+    CHECK_HR(stateblock->Capture(), D3D_OK);
+    CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, TRUE), D3D_OK);
+    // ApplyEntered enters the backend before reporting its injected HRESULT.
+    // Its post-call state is effect-unknown across the unchanged C ABI, so
+    // this fixture deliberately records only the HRESULT and fail-stop path.
+    CHECK_HR(stateblock->Apply(), expected);
+  }
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, TRUE),
+      D3DERR_DEVICELOST);
+  stateblock->Release();
+  fault_reset_recovery(fixture, reset_blocker);
+}
+
 void stateblock_state_management_matrix() {
   stateblock_type_create_matrix();
   stateblock_capture_apply_render_state();
   stateblock_capture_apply_transform_matrix();
+  stateblock_reset_recovery();
+  stateblock_reject_foreign_wrapper();
 }
 
 }  // namespace
 
 int main() {
-  stateblock_state_management_matrix();
+  const char *fault = std::getenv("DXMT9_PE_STATEBLOCK_FAULT");
+  if (fault && *fault) {
+    if (fault_is(fault, "capture_pre") || fault_is(fault, "apply_pre") ||
+        fault_is(fault, "end_pre") || fault_is(fault, "alloc_pre")) {
+      stateblock_fault_pre(fault);
+    } else {
+      stateblock_fault_entered(fault);
+    }
+  } else {
+    stateblock_state_management_matrix();
+  }
 
   if (failures) {
     std::printf("d3d9_stateblock_x64: %d failure(s), %d skip(s)\n",

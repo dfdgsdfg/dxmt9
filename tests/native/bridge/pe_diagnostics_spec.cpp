@@ -1,4 +1,5 @@
 #include "d3d9_pe_diagnostics_state.hpp"
+#include "d3d9_pe_stateblock_fault.hpp"
 
 #include <array>
 #include <atomic>
@@ -55,6 +56,17 @@ void checkBefore(std::string_view source, std::string_view first,
         message);
 }
 
+std::size_t countOccurrences(std::string_view source,
+                             std::string_view needle) {
+  std::size_t count = 0;
+  for (std::size_t pos = 0; (pos = source.find(needle, pos)) !=
+                             std::string_view::npos;
+       pos += needle.size()) {
+    ++count;
+  }
+  return count;
+}
+
 void testOptionalOwnerAllocationAndConfig() {
   const PeDiagnosticsConfig disabled{};
   const auto disabledBefore = gAllocations.load(std::memory_order_relaxed);
@@ -72,6 +84,7 @@ void testOptionalOwnerAllocationAndConfig() {
       PeDiagnosticsConfig{.moduleMap = true},
       PeDiagnosticsConfig{.threadSampler = true, .threadSamplerHz = 733},
       PeDiagnosticsConfig{.debugLog = true},
+      PeDiagnosticsConfig{.scalarSemanticObserver = true},
       PeDiagnosticsConfig{.moduleMap = true, .threadSampler = true},
       PeDiagnosticsConfig{.moduleMap = true, .debugLog = true},
       PeDiagnosticsConfig{.threadSampler = true, .debugLog = true},
@@ -86,8 +99,10 @@ void testOptionalOwnerAllocationAndConfig() {
     const auto after = gAllocations.load(std::memory_order_relaxed);
     check(diagnostics != nullptr,
           "each individual diagnostic gate constructs the cold owner");
-    check(after == before + 1u,
-          "an enabled diagnostic owner uses one lazy allocation");
+    const auto expectedAllocations =
+        config.scalarSemanticObserver ? 2u : 1u;
+    check(after == before + expectedAllocations,
+          "the optional scalar observer adds only its cold allocation");
     check(diagnostics->config.recorderStats == config.recorderStats &&
               diagnostics->config.recorderChunkLog ==
                   config.recorderChunkLog &&
@@ -97,6 +112,8 @@ void testOptionalOwnerAllocationAndConfig() {
                   config.vsConstSetterRange &&
               diagnostics->config.moduleMap == config.moduleMap &&
               diagnostics->config.threadSampler == config.threadSampler &&
+              diagnostics->config.scalarSemanticObserver ==
+                  config.scalarSemanticObserver &&
               diagnostics->config.threadSamplerHz == config.threadSamplerHz,
           "the owner preserves the resolved immutable diagnostic config");
     const bool scopeExpected =
@@ -106,8 +123,13 @@ void testOptionalOwnerAllocationAndConfig() {
           "call and setter scopes are enabled only by their owning gates");
     check(diagnostics->gates.moduleMap == config.moduleMap &&
               diagnostics->gates.threadSampler == config.threadSampler &&
-              diagnostics->gates.debugLog == config.debugLog,
+              diagnostics->gates.debugLog == config.debugLog &&
+              diagnostics->gates.scalarSemanticObserver ==
+                  config.scalarSemanticObserver,
           "observer-only gates remain independently cached");
+    check(static_cast<bool>(diagnostics->scalarSemanticTokens) ==
+              config.scalarSemanticObserver,
+          "the exact semantic ledger exists only behind its own gate");
   }
 }
 
@@ -139,6 +161,27 @@ void testNullableDiagnosticDispatchAndClock() {
         "enabled diagnostic clock path performs exactly one clock callback");
 }
 
+void testStateBlockFaultSelector() {
+  const auto config = peStateBlockFaultConfigFromString(
+      "capture_pre=0x80070057,apply_entered=0x8876086c,bridge_entered");
+  check((config.mask & peStateBlockFaultBit(
+                         PeStateBlockFaultPoint::CapturePre)) != 0u,
+        "fault selector parses pre-effect point");
+  check(config.hresult[static_cast<std::size_t>(
+            PeStateBlockFaultPoint::CapturePre)] ==
+            static_cast<std::int32_t>(0x80070057u),
+        "fault selector preserves exact HRESULT");
+  check(config.hresult[static_cast<std::size_t>(
+            PeStateBlockFaultPoint::ApplyEntered)] ==
+            static_cast<std::int32_t>(0x8876086cu),
+        "fault selector preserves entered HRESULT");
+  check((config.mask & peStateBlockFaultBit(
+                         PeStateBlockFaultPoint::BridgeEntered)) != 0u,
+        "fault selector parses generic bridge point");
+  const auto empty = peStateBlockFaultConfigFromString(nullptr);
+  check(empty.mask == 0u, "fault selector is default-off");
+}
+
 void testSourceContracts(const std::filesystem::path &root) {
   const auto diagnostics = readTextFile(
       root / "src/d3d9/d3d9_pe_diagnostics_state.hpp");
@@ -150,6 +193,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
+  const auto recorderHeader =
+      readTextFile(root / "src/d3d9/d3d9_pe_recorder.hpp");
   const auto deviceCold =
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
   const auto recorderState =
@@ -160,6 +205,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device.cpp");
   const auto misc = readTextFile(
       root / "src/d3d9/d3d9_pe_device_child_misc.cpp");
+  const auto fault = readTextFile(
+      root / "src/d3d9/d3d9_pe_stateblock_fault.hpp");
   const auto surface = readTextFile(
       root / "src/d3d9/d3d9_pe_device_child_surface.cpp");
   const auto registry =
@@ -217,6 +264,12 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(recorderState,
                 "PeStateBlockTransactionState stateBlockTransaction{};",
                 "recorder state owns the closed StateBlock transaction");
+  checkContains(recorderHeader, "stateBlockFaultPreCalls",
+                "recorder exposes pre-fault observability");
+  checkContains(recorderHeader, "stateBlockFaultEnteredCalls",
+                "recorder exposes entered-fault observability");
+  checkContains(recorderHeader, "stateBlockFaultLastHr",
+                "recorder exposes fault HRESULT observability");
   checkContains(device,
                 "dxmt9::d3d9::pe::PeRecorderState recorderState_{};",
                 "device stores the hot recorder owner directly");
@@ -243,6 +296,13 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "device cannot bypass typed StateBlock staging");
   checkContains(diagnostics, "struct PeDiagnosticsFeatureGates",
                 "diagnostic ownership has feature-specific cached gates");
+  checkContains(diagnostics,
+                "std::unique_ptr<dxmt9::d3d9::pe::PeScalarSemanticTokenLedger>",
+                "the exact scalar witness is a nullable cold owner");
+  checkNotContains(recorderState, "PeScalarSemanticTokenLedger",
+                   "the always-on recorder does not own the scalar ledger");
+  checkContains(device, "DXMT9_PE_SCALAR_SEMANTIC_OBSERVER",
+                "the cold scalar witness has an explicit default-off gate");
   checkContains(device, "if (!diagnostics->gates.callScope)",
                 "unrelated diagnostic gates skip call scope construction");
   checkContains(device, "if (!diagnostics->gates.hotSetterTimer)",
@@ -393,6 +453,58 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "StateBlock AddRef stays atomic");
   checkContains(misc, "const ULONG refs = refs_.fetch_sub(1) - 1;",
                 "StateBlock Release stays atomic");
+  checkContains(fault, "DXMT9_PE_STATEBLOCK_FAULT",
+                "StateBlock fault seam is explicitly named");
+  checkBefore(misc, "const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));",
+              "dxmt9PeConsumeStateBlockEnteredFault(",
+              "CaptureEntered is sampled only after the backend call");
+  check(countOccurrences(misc,
+                         "if (diagnostics_)\n        diagnostics_->notifyStateBlockFault(true") >= 2u,
+        "Capture and Apply entered observability tolerate a null observer");
+  const auto captureBegin = misc.find("HRESULT STDMETHODCALLTYPE Capture()");
+  const auto captureEnd = misc.find("HRESULT STDMETHODCALLTYPE Apply()", captureBegin);
+  check(captureBegin != std::string::npos && captureEnd != std::string::npos,
+        "Capture source contract is present");
+  const auto captureBody = std::string_view(misc).substr(
+      captureBegin, captureEnd - captureBegin);
+  checkBefore(captureBody, "PeStateBlockFaultPoint::CapturePre",
+              "dxmt9c_stateblock_capture(sb_)",
+              "CapturePre precedes the sole backend call");
+  check(countOccurrences(misc, "dxmt9c_stateblock_capture(sb_)") == 1u,
+        "Capture has one backend call site");
+  checkBefore(misc, "const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));",
+              "dxmt9PeConsumeStateBlockEnteredFault(",
+              "ApplyEntered is sampled only after the backend call");
+  const auto applyBegin = misc.find("HRESULT STDMETHODCALLTYPE Apply()");
+  const auto applyEnd = misc.find("/* ── SwapChain", applyBegin);
+  check(applyBegin != std::string::npos && applyEnd != std::string::npos,
+        "Apply source contract is present");
+  const auto applyBody = std::string_view(misc).substr(
+      applyBegin, applyEnd - applyBegin);
+  checkBefore(applyBody, "PeStateBlockFaultPoint::ApplyPre",
+              "dxmt9c_stateblock_apply(sb_)",
+              "ApplyPre precedes the sole backend call");
+  check(countOccurrences(misc, "dxmt9c_stateblock_apply(sb_)") == 1u,
+        "Apply has one backend call site");
+  checkBefore(deviceCold,
+              "HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));",
+              "dxmt9PeConsumeStateBlockEnteredFault(",
+              "EndEntered is sampled only after the backend call");
+  const auto endBegin = deviceCold.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(");
+  const auto endEnd = deviceCold.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetTextureStageState(",
+      endBegin);
+  check(endBegin != std::string::npos && endEnd != std::string::npos,
+        "End source contract is present");
+  const auto endBody = std::string_view(deviceCold).substr(
+      endBegin, endEnd - endBegin);
+  checkBefore(endBody, "PeStateBlockFaultPoint::EndPre",
+              "dxmt9c_device_end_state_block(dev_, &sb)",
+              "EndPre precedes the sole backend call");
+  check(countOccurrences(deviceCold,
+                         "dxmt9c_device_end_state_block(dev_, &sb)") == 1u,
+        "End has one backend call site");
   checkContains(misc, "ULONG refs_ = 1;",
                 "ordinary child COM wrappers retain non-atomic ownership");
   checkContains(device, "ULONG        refs_    = 1;",
@@ -427,6 +539,7 @@ int main(int argc, char **argv) {
     check(argc == 2, "project source root argument is present");
     testOptionalOwnerAllocationAndConfig();
     testNullableDiagnosticDispatchAndClock();
+    testStateBlockFaultSelector();
     testSourceContracts(argv[1]);
   } catch (const TestFailure &error) {
     std::cerr << "pe_diagnostics_spec failed: " << error.what() << '\n';

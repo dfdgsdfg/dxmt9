@@ -342,6 +342,9 @@ struct PeRecorderStats {
     std::uint64_t drawIndexedPrimitiveUPCalls = 0;
     std::uint64_t upVertexBytes = 0;
     std::uint64_t upIndexBytes = 0;
+    std::uint64_t stateBlockFaultPreCalls = 0;
+    std::uint64_t stateBlockFaultEnteredCalls = 0;
+    std::int32_t stateBlockFaultLastHr = 0;
 };
 
 inline const char* peRecorderFlushReasonName(PeRecorderFlushReason reason) {

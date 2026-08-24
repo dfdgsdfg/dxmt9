@@ -8,6 +8,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_producer_views.hpp"
 
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -142,12 +143,11 @@ void unstampedRecordTypeIsRefused() {
   bindings.indexBuffer.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
   bindings.indexBuffer.identity.generation = 1u;
   bindings.indexBuffer.identity.objectId = 7u;
-  shadow.pendingIb = true;
+  shadow.writer().pendingIb() = true;
 
   pe::PeDrawParams unstamped{};  // recordType stays 0
   check(!pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                     unstamped, /*forceFullSnapshot=*/false,
-                                     scratch, out),
+                                     unstamped, scratch, out),
         "an unstamped recordType must be refused, not treated as non-indexed");
 }
 
@@ -160,7 +160,7 @@ void indexedDrawKeepsItsIndexSection() {
   bindings.indexBuffer.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
   bindings.indexBuffer.identity.generation = 1u;
   bindings.indexBuffer.identity.objectId = 7u;
-  shadow.pendingIb = true;
+  shadow.writer().pendingIb() = true;
 
   // Seed the section the way buildSparseState would have, so a rebuild that
   // wrongly drops it is visible rather than merely absent.
@@ -173,8 +173,7 @@ void indexedDrawKeepsItsIndexSection() {
   pe::PeDrawParams indexed{};
   indexed.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                    indexed, /*forceFullSnapshot=*/false,
-                                    scratch, out),
+                                    indexed, scratch, out),
         "an indexed draw with a dirty IB must succeed");
   check(out.indexBuffers.size() == 1,
         "an indexed draw with a dirty IB must keep its index section");
@@ -186,11 +185,244 @@ void indexedDrawKeepsItsIndexSection() {
   pe::PeDrawParams nonIndexed{};
   nonIndexed.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
   check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                    nonIndexed, /*forceFullSnapshot=*/false,
-                                    scratch, nonIndexedOut),
+                                    nonIndexed, scratch, nonIndexedOut),
         "a non-indexed draw must succeed");
   check(nonIndexedOut.indexBuffers.empty(),
         "a non-indexed draw must carry no index section");
+}
+
+void acceptedScalarProjectionConsumesExactValues() {
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeScalarSemanticTokenLedger tokens{};
+  auto pending = shadow.writer().pendingRenderStatesTyped();
+  const auto key = renderStateSlotKey(7u);
+  pending.set(key, 42u);
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState, 7u),
+        "production scalar source ordinal records");
+
+  const std::array<float, 4> constantValue{1.0f, 0.0f, 0.0f, 0.0f};
+  touchConstShadow(constants.vsConstF, 0u, 1u, constantValue.data(),
+                   sizeof(constantValue));
+  std::array<D9CCommandChunkWireRenderState, 1> renderStates{
+      D9CCommandChunkWireRenderState{.state = 7u, .value = 41u}};
+  pe::SparseStateInput state{};
+  state.renderStates = renderStates;
+  state.vsFloatConstants = pe::SparseConstantRangeInput{
+      .startRegister = 0u,
+      .registerCount = 1u,
+      .registerBytes = std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(constants.vsConstF.values.data()),
+          sizeof(float) * 4u),
+  };
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  check(!pe::acceptPreparedSparseState(shadow, constants, state, accepted,
+                                       nullptr, 11u),
+        "default production preflight rejects scalar value mismatch");
+  check(pending.contains(key) && constants.vsConstF.dirty() && tokens.size() == 1u,
+        "default value mismatch preserves scalar, constant, and observer state");
+  check(!pe::acceptPreparedSparseState(shadow, constants, state, accepted,
+                                       &tokens, 11u),
+        "scalar value mismatch rejects before any consumer");
+  check(pending.contains(key) && constants.vsConstF.dirty() && tokens.size() == 1u,
+        "value mismatch preserves scalar, constant, and ordinal state");
+
+  renderStates[0].value = 42u;
+  check(pe::acceptPreparedSparseState(shadow, constants, state, accepted,
+                                      &tokens, 11u),
+        "exact production projection accepts");
+  check(!pending.contains(key) && !constants.vsConstF.dirty() && tokens.empty(),
+        "accepted projection consumes scalar and constant state exactly once");
+}
+
+void scalarProjectionRejectsDuplicateAndOrderMismatchAtomically() {
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeScalarSemanticTokenLedger tokens{};
+  auto pending = shadow.writer().pendingRenderStatesTyped();
+  pending.set(renderStateSlotKey(3u), 30u);
+  pending.set(renderStateSlotKey(7u), 70u);
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState, 3u) &&
+            tokens.record(pe::ScalarSemanticCategory::RenderState, 7u),
+        "two ordered source tokens record");
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+
+  std::array<D9CCommandChunkWireRenderState, 2> rows{{
+      {.state = 3u, .value = 30u},
+      {.state = 3u, .value = 30u},
+  }};
+  pe::SparseStateInput state{};
+  state.renderStates = rows;
+  check(!pe::acceptPreparedSparseState(shadow, constants, state, accepted,
+                                       &tokens, 21u),
+        "duplicate scalar tuple is rejected");
+  check(pending.size() == 2u && tokens.size() == 2u,
+        "duplicate rejection is atomic");
+
+  rows = {{{.state = 7u, .value = 70u},
+           {.state = 3u, .value = 30u}}};
+  check(!pe::acceptPreparedSparseState(shadow, constants, state, accepted,
+                                       &tokens, 21u),
+        "non-canonical scalar order is rejected");
+  check(pending.size() == 2u && tokens.size() == 2u,
+        "order rejection is atomic");
+}
+
+void oversizedScalarProjectionConservesTokensAcrossBatches() {
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeScalarSemanticTokenLedger tokens{};
+  auto pending = shadow.writer().pendingRenderStatesTyped();
+  constexpr std::size_t firstBatchCount = D9C_DRAW_PACKET_MAX_RENDER_STATES;
+  constexpr std::size_t totalCount = firstBatchCount + 1u;
+  std::array<D9CCommandChunkWireRenderState, firstBatchCount> firstBatch{};
+  std::array<D9CCommandChunkWireRenderState, 1> secondBatch{};
+  for (std::size_t i = 0u; i < totalCount; ++i) {
+    const auto key = renderStateSlotKey(static_cast<std::uint32_t>(i));
+    const auto value = static_cast<std::uint32_t>(100u + i);
+    pending.set(key, value);
+    check(tokens.record(pe::ScalarSemanticCategory::RenderState,
+                        static_cast<std::uint32_t>(i)),
+          "oversized batch source ordinal records");
+    if (i < firstBatchCount) {
+      firstBatch[i] = {
+          .state = static_cast<std::uint32_t>(i), .value = value};
+    } else {
+      secondBatch[0] = {
+          .state = static_cast<std::uint32_t>(i), .value = value};
+    }
+  }
+  pe::SparseStateInput firstState{};
+  firstState.renderStates = firstBatch;
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  check(pe::acceptPreparedSparseState(shadow, constants, firstState, accepted,
+                                      &tokens, 17u),
+        "first oversized scalar batch accepts exactly");
+  check(pending.size() == 1u && tokens.size() == 1u,
+        "first oversized batch leaves one pending scalar and token");
+  pe::SparseStateInput secondState{};
+  secondState.renderStates = secondBatch;
+  check(pe::acceptPreparedSparseState(shadow, constants, secondState, accepted,
+                                      &tokens, 18u),
+        "second oversized scalar batch accepts exactly");
+  check(pending.empty() && tokens.empty(),
+        "oversized scalar batches conserve pending and token state");
+}
+
+void fullSnapshotScalarSettlementRoutes() {
+  const std::array<std::uint32_t, 5> recordTypes = {
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+      D9C_COMMAND_RECORD_APPLY_STATE,
+  };
+  for (const std::uint32_t recordType : recordTypes) {
+    PeHotStateShadow shadow{};
+    PeConstShadowBlock constants{};
+    pe::PeScalarSemanticTokenLedger tokens{};
+    const auto cleanKey = renderStateSlotKey(3u);
+    const auto pendingKey = renderStateSlotKey(7u);
+    shadow.writer().renderStateShadowTyped().set(cleanKey, 30u);
+    shadow.writer().renderStateShadowTyped().set(pendingKey, 70u);
+    shadow.writer().pendingRenderStatesTyped().set(pendingKey, 70u);
+    check(tokens.record(pe::ScalarSemanticCategory::RenderState, 7u),
+          "full snapshot route records the pending source token");
+
+    pe::PeBindingView bindings{};
+    pe::PeDrawPayloads payloads{};
+    pe::PeDrawParams params{};
+    params.recordType = recordType;
+    params.primitiveType = 4u;
+    params.primitiveCount = 1u;
+    pe::PeSparseScratch scratch{};
+    pe::SparseStateInput state{};
+    D9CCommandChunkWireDrawHeader header{};
+    check(pe::buildSparseState(shadow, constants, bindings, payloads, params,
+                               /*forceFullSnapshot=*/true,
+                               /*inlineConstDelta=*/false, scratch, header,
+                               state),
+          "full snapshot route builds");
+    check(state.fullSnapshot && state.renderStates.size() == 2u,
+          "full snapshot route carries effective disposition and clean row");
+
+    const auto accepted = pe::settleRecorderAppend({
+        .phase = pe::AppendSettlement::Prepared,
+        .appendSucceeded = true,
+    });
+    check(pe::acceptPreparedSparseState(
+              shadow, constants, state, accepted, &tokens,
+              /*recordOrdinal=*/1u),
+          "full snapshot route settles");
+    check(shadow.pendingRenderStatesTyped().empty() && tokens.empty(),
+          "full snapshot route consumes represented pending row exactly once");
+  }
+
+  // A prepared snapshot may be a deliberately narrower projection (for
+  // example, a bounded retry/test seam). An unrepresented pending row remains
+  // available; only rows actually represented by the accepted record settle.
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeScalarSemanticTokenLedger tokens{};
+  const auto cleanKey = renderStateSlotKey(3u);
+  const auto unrepresentedKey = renderStateSlotKey(9u);
+  shadow.writer().renderStateShadowTyped().set(cleanKey, 30u);
+  shadow.writer().renderStateShadowTyped().set(unrepresentedKey, 90u);
+  shadow.writer().pendingRenderStatesTyped().set(unrepresentedKey, 90u);
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState, 9u),
+        "unrepresented snapshot row records its token");
+  std::array<D9CCommandChunkWireRenderState, 1> cleanOnly = {{
+      {.state = 3u, .value = 30u},
+  }};
+  pe::SparseStateInput cleanOnlyState{};
+  cleanOnlyState.fullSnapshot = true;
+  cleanOnlyState.renderStates = cleanOnly;
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  check(pe::acceptPreparedSparseState(shadow, constants, cleanOnlyState,
+                                      accepted, &tokens, 1u),
+        "clean-only snapshot projection settles");
+  check(shadow.pendingRenderStatesTyped().contains(unrepresentedKey) &&
+            tokens.has(pe::ScalarSemanticCategory::RenderState, 9u),
+        "unrepresented pending row is preserved");
+
+  // Append failure is retryable and must leave the mixed snapshot inputs
+  // untouched, including the clean/live projection and pending token.
+  check(!pe::acceptPreparedSparseState(
+            shadow, constants, cleanOnlyState,
+            pe::settleRecorderAppend({
+                .phase = pe::AppendSettlement::Prepared,
+                .appendSucceeded = false,
+            }),
+            &tokens, 2u),
+        "failed full snapshot settlement rejects");
+  check(shadow.pendingRenderStatesTyped().contains(unrepresentedKey) &&
+            tokens.has(pe::ScalarSemanticCategory::RenderState, 9u),
+        "failed full snapshot settlement preserves retry state");
+
+  check(!pe::acceptPreparedSparseState(
+            shadow, constants, cleanOnlyState,
+            pe::settleRecorderAppend({
+                .phase = pe::AppendSettlement::Prepared,
+                .appendSucceeded = false,
+                .explicitDiscard = true,
+            }),
+            &tokens, 2u),
+        "discarded full snapshot settlement rejects");
+  check(shadow.pendingRenderStatesTyped().contains(unrepresentedKey) &&
+            tokens.has(pe::ScalarSemanticCategory::RenderState, 9u),
+        "discarded full snapshot settlement preserves semantic state");
 }
 
 int main() {
@@ -204,6 +436,10 @@ int main() {
     scratchCapacityMatchesSectionCaps();
     unstampedRecordTypeIsRefused();
     indexedDrawKeepsItsIndexSection();
+    acceptedScalarProjectionConsumesExactValues();
+    scalarProjectionRejectsDuplicateAndOrderMismatchAtomically();
+    oversizedScalarProjectionConservesTokensAcrossBatches();
+    fullSnapshotScalarSettlementRoutes();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_views_spec FAILED: " << failure.what() << "\n";
     return 1;

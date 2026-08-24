@@ -2,6 +2,7 @@
  * for IDirect3DVertexBuffer9 and IDirect3DIndexBuffer9. */
 
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_trusted_handles.hpp"
 
 #include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "d3d9_pe_buffer_hazard.hpp"
@@ -753,7 +754,7 @@ public:
 };
 
 /* =========================================================================
- * Public factory + raw-handle extractors for buffer family.
+ * Public factory + trusted reference helpers for buffer family.
  * ========================================================================= */
 
 IDirect3DVertexBuffer9 *CreatePeVertexBuffer(D9CBuffer *buffer,
@@ -770,14 +771,6 @@ IDirect3DIndexBuffer9 *CreatePeIndexBuffer(D9CBuffer *buffer,
                                            D3D9PeDiagnosticObserver *diagnostics) noexcept {
   return peNewNoexcept<D3D9IndexBufferImpl>(buffer, device, recorder,
                                             diagnostics);
-}
-
-D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer) {
-  return buffer ? static_cast<D3D9VertexBufferImpl *>(buffer)->raw() : nullptr;
-}
-
-D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer) {
-  return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->raw() : nullptr;
 }
 
 namespace {
@@ -824,14 +817,14 @@ HRESULT D3D9PeValidateIndexBuffer(
 }
 
 const dxmt9::d3d9::pe::BufferRef &
-D3D9PeWireVertexBuffer(IDirect3DVertexBuffer9 *buffer) {
+D3D9PeVertexBufferRef(IDirect3DVertexBuffer9 *buffer) {
   static const dxmt9::d3d9::pe::BufferRef empty{};
   return buffer ? static_cast<D3D9VertexBufferImpl *>(buffer)->wireObject()
                 : empty;
 }
 
 const dxmt9::d3d9::pe::BufferRef &
-D3D9PeWireIndexBuffer(IDirect3DIndexBuffer9 *buffer) {
+D3D9PeIndexBufferRef(IDirect3DIndexBuffer9 *buffer) {
   static const dxmt9::d3d9::pe::BufferRef empty{};
   return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->wireObject()
                 : empty;

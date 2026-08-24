@@ -29,6 +29,28 @@ void check(bool condition, std::string_view message) {
   if (!condition) throw Failure(std::string(message));
 }
 
+template<typename Ref>
+Ref stateBlockRef(std::uintptr_t value) {
+  using Tag = typename StateBlockComRefTagFor<Ref>::type;
+  return StateBlockComTestFactory<Tag>::fromFake(value);
+}
+
+template<typename Ref, typename P>
+Ref stateBlockRef(P* value) {
+  using Tag = typename StateBlockComRefTagFor<Ref>::type;
+  return StateBlockComTestFactory<Tag>::fromFake(value);
+}
+
+template<typename P>
+StateBlockStreamSourceValue::BufferRef stateBlockBuffer(std::uintptr_t value) {
+  return StateBlockBufferTestFactory::fromFake(reinterpret_cast<P*>(value));
+}
+
+template<typename P, typename T>
+StateBlockStreamSourceValue::BufferRef stateBlockBuffer(T* value) {
+  return StateBlockBufferTestFactory::fromFake(reinterpret_cast<P*>(value));
+}
+
 template<StateBlockApplyPhysicalStore Store>
 constexpr auto fixedKey(std::uint32_t slot) noexcept {
   return stateBlockFixedSlotKey<Store>(slot);
@@ -72,6 +94,14 @@ static_assert(!ExposesMutableFixedStorage<StateBlockRecorded>,
               "Writer must expose a bounded capability, not fixed storage");
 static_assert(!ExposesVertexDeclarationRecorded<StateBlockRecorded>,
               "vertex-declaration recording metadata must stay private");
+template<typename Ref>
+concept HasPublicStateBlockRefFactory = requires(void* value) {
+  Ref::fromRaw(value);
+};
+static_assert(!HasPublicStateBlockRefFactory<StateBlockTextureRef> &&
+                  !HasPublicStateBlockRefFactory<StateBlockVertexShaderRef> &&
+                  !HasPublicStateBlockRefFactory<StateBlockRenderTargetRef>,
+              "StateBlock COM refs must require their kind-specific interface type");
 static_assert(sizeof(StateBlockRecorded::Writer) == sizeof(void*),
               "StateBlock writer capability must be one reference");
 static_assert(std::same_as<
@@ -195,18 +225,18 @@ void testCandidateAbaAndDomains() {
 
   // Every remaining PE-shadow category has a bounded tracked slot and can be
   // captured without changing the ordinary live domain.
-  candidateWriter.textures().set(fixedKey<StateBlockApplyPhysicalStore::textures>(0u), StateBlockTextureRef::fromRaw(reinterpret_cast<void*>(0x10u)));
+  candidateWriter.textures().set(fixedKey<StateBlockApplyPhysicalStore::textures>(0u), stateBlockRef<StateBlockTextureRef>(0x10u));
   candidateWriter.streamSources().set(fixedKey<StateBlockApplyPhysicalStore::streamSources>(0u), StateBlockStreamSourceValue{
-      .buffer = {reinterpret_cast<void*>(0x20u)}, .offset = 4u,
+      .buffer = stateBlockBuffer<IDirect3DVertexBuffer9>(0x20u), .offset = 4u,
       .stride = 16u});
   candidateWriter.streamFrequencies().set(fixedKey<StateBlockApplyPhysicalStore::streamFrequencies>(0u), 2u);
-  candidateWriter.indexBuffer().set(fixedKey<StateBlockApplyPhysicalStore::indexBuffer>(0u), StateBlockIndexBufferRef::fromRaw(reinterpret_cast<void*>(0x30u)));
-  candidateWriter.vertexShader().set(fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u), StateBlockVertexShaderRef::fromRaw(reinterpret_cast<void*>(0x40u)));
-  candidateWriter.pixelShader().set(fixedKey<StateBlockApplyPhysicalStore::pixelShader>(0u), StateBlockPixelShaderRef::fromRaw(reinterpret_cast<void*>(0x50u)));
+  candidateWriter.indexBuffer().set(fixedKey<StateBlockApplyPhysicalStore::indexBuffer>(0u), stateBlockRef<StateBlockIndexBufferRef>(0x30u));
+  candidateWriter.vertexShader().set(fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u), stateBlockRef<StateBlockVertexShaderRef>(0x40u));
+  candidateWriter.pixelShader().set(fixedKey<StateBlockApplyPhysicalStore::pixelShader>(0u), stateBlockRef<StateBlockPixelShaderRef>(0x50u));
   candidateWriter.fvf().set(fixedKey<StateBlockApplyPhysicalStore::fvf>(0u), 0x1122u);
-  candidateWriter.vertexDeclaration().set(fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u), StateBlockVertexDeclarationRef::fromRaw(reinterpret_cast<void*>(0x60u)));
-  candidateWriter.renderTargets().set(fixedKey<StateBlockApplyPhysicalStore::renderTargets>(0u), StateBlockRenderTargetRef::fromRaw(reinterpret_cast<void*>(0x70u)));
-  candidateWriter.depthStencil().set(fixedKey<StateBlockApplyPhysicalStore::depthStencil>(0u), StateBlockDepthStencilRef::fromRaw(reinterpret_cast<void*>(0x80u)));
+  candidateWriter.vertexDeclaration().set(fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u), stateBlockRef<StateBlockVertexDeclarationRef>(0x60u));
+  candidateWriter.renderTargets().set(fixedKey<StateBlockApplyPhysicalStore::renderTargets>(0u), stateBlockRef<StateBlockRenderTargetRef>(0x70u));
+  candidateWriter.depthStencil().set(fixedKey<StateBlockApplyPhysicalStore::depthStencil>(0u), stateBlockRef<StateBlockDepthStencilRef>(0x80u));
   candidateWriter.viewport().set(fixedKey<StateBlockApplyPhysicalStore::viewport>(0u), D9CViewport{1u, 2u, 640u, 480u, 0.0f, 1.0f});
   candidateWriter.scissor().set(fixedKey<StateBlockApplyPhysicalStore::scissor>(0u), D9CRect{1, 2, 639, 479});
   candidateWriter.material().set(fixedKey<StateBlockApplyPhysicalStore::material>(0u), D9CMaterial{});
@@ -256,24 +286,24 @@ void testCandidateAbaAndDomains() {
   StateBlockRecorded sourceOnly{};
   sourceOnly.writer().streamSources().set(
       fixedKey<StateBlockApplyPhysicalStore::streamSources>(0u),
-      StateBlockStreamSourceValue{{reinterpret_cast<void*>(0x90u)}, 8u, 32u});
+      StateBlockStreamSourceValue{stateBlockBuffer<IDirect3DVertexBuffer9>(0x90u), 8u, 32u});
   StateBlockRecorded frequencyOnly{};
   frequencyOnly.writer().streamFrequencies().set(
       fixedKey<StateBlockApplyPhysicalStore::streamFrequencies>(0u), 9u);
   StateBlockStreamSourceValue liveSource{
-      reinterpret_cast<void*>(0x91u), 4u, 16u};
+      stateBlockBuffer<IDirect3DVertexBuffer9>(0x91u), 4u, 16u};
   std::uint32_t liveFrequency = 7u;
   sourceOnly.streamSources().forEach(
       [&](std::size_t, const StateBlockStreamSourceValue& value) {
         liveSource = value;
       });
-  check(liveSource.buffer == reinterpret_cast<void*>(0x90u) &&
+  check(liveSource.buffer == reinterpret_cast<IDirect3DVertexBuffer9*>(0x90u) &&
             liveSource.offset == 8u && liveSource.stride == 32u &&
             liveFrequency == 7u,
         "source Apply must preserve an unrecorded frequency");
   frequencyOnly.streamFrequencies().forEach(
       [&](std::size_t, std::uint32_t value) { liveFrequency = value; });
-  check(liveSource.buffer == reinterpret_cast<void*>(0x90u) &&
+  check(liveSource.buffer == reinterpret_cast<IDirect3DVertexBuffer9*>(0x90u) &&
             liveSource.offset == 8u && liveSource.stride == 32u &&
             liveFrequency == 9u,
         "frequency Apply must preserve an unrecorded source tuple");
@@ -444,63 +474,123 @@ void testGeneratedTransitionTableIsomorphism() {
 void testTransactionOwnershipAndLifecycle() {
   using dxmt9::d3d9::pe::PeRecorderState;
   static_assert(!std::is_copy_constructible_v<PeStateBlockTransactionState>);
-  static_assert(std::is_same_v<
-                decltype(std::declval<PeRecorderState&>()
-                             .stateBlockTransaction.recordWriter()),
-                StateBlockRecorded::Writer>);
+  static_assert(!std::is_copy_constructible_v<StateBlockRecorded::Writer>);
+  static_assert(!std::is_move_constructible_v<StateBlockRecorded::Writer>);
+  static_assert(!std::is_copy_assignable_v<StateBlockRecorded::Writer>);
+  static_assert(!std::is_move_assignable_v<StateBlockRecorded::Writer>);
+  using RecordingCapability =
+      PeStateBlockTransactionState::RecordingCapability;
+  static_assert(!std::is_same_v<RecordingCapability,
+                                StateBlockRecorded::Writer>);
+  static_assert(requires(RecordingCapability& capability) {
+    { static_cast<bool>(capability) } -> std::same_as<bool>;
+  });
 
   PeStateBlockTransactionState transaction{};
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
             transaction.writeAllowed(),
         "fresh transaction must be idle and writable");
+  check(!transaction.recordingCapability(),
+        "idle transaction must not issue a recording capability");
+
+  transaction.beginAccepted([](void*) noexcept {});
+  check(transaction.isRecording() && transaction.recordingCapability(),
+        "accepted Begin issues a recording capability");
+  auto recording = transaction.recordingCapability();
 
   RefProbe candidateRef{};
   candidateRef.addRef();
   candidateRef.addRef();
   candidateRef.addRef();
-  transaction.recordWriter().textures().set(
-      fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
-      StateBlockTextureRef::fromRaw(&candidateRef));
-  transaction.recordWriter().vertexShader().set(
-      fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u),
-      StateBlockVertexShaderRef::fromRaw(&candidateRef));
-  transaction.recordWriter().vertexDeclaration().set(
-      fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u),
-      StateBlockVertexDeclarationRef::fromRaw(&candidateRef));
-  transaction.beginAccepted([&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
-  });
-  check(transaction.isRecording() &&
-            transaction.recordedSnapshot().textures().empty() &&
-            transaction.recordedSnapshot().vertexShader().empty() &&
-            transaction.recordedSnapshot().vertexDeclaration().empty() &&
-            candidateRef.refs == 1u,
-        "candidate-owned vdecl and staged categories release each retain by multiplicity");
-
-  transaction.recordWriter().renderStates().set(renderStateSlotKey(7u), 19u);
-  transaction.enterEndPublication();
-  check(!transaction.isRecording() && transaction.isInsideEnd(),
-        "accepted backend End enters the closed publication scope");
-  transaction.finishEndPublication(true, [&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
-  });
-  check(!transaction.isRecording() && !transaction.isInsideEnd() &&
-            transaction.writeAllowed() &&
-            transaction.recordedSnapshot().renderStates().empty(),
-        "successful End leaves no candidate or inside-End state");
-
-  transaction.beginAccepted([&](void* raw) noexcept {
-    if (raw) static_cast<RefProbe*>(raw)->release();
-  });
-  // A pre-effect failure makes no lifecycle call and remains retryable.
-  check(transaction.isRecording() && transaction.writeAllowed(),
-        "pre-effect End failure preserves the recording transaction");
+  check(recording.withWriter([&](auto& writer) {
+          writer.textures().set(
+              fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
+              stateBlockRef<StateBlockTextureRef>(&candidateRef));
+          writer.vertexShader().set(
+              fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u),
+              stateBlockRef<StateBlockVertexShaderRef>(&candidateRef));
+          writer.vertexDeclaration().set(
+              fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u),
+              stateBlockRef<StateBlockVertexDeclarationRef>(&candidateRef));
+          writer.renderStates().set(renderStateSlotKey(7u), 19u);
+        }),
+        "recording capability scopes mutable writer access");
   transaction.failEnd([&](void* raw) noexcept {
     if (raw) static_cast<RefProbe*>(raw)->release();
   });
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
-            transaction.isPoisoned() && !transaction.writeAllowed(),
-        "post-effect End failure closes and poisons the transaction");
+            transaction.isPoisoned() && candidateRef.refs == 1u,
+        "failed End releases candidate refs with exact multiplicity");
+  check(!recording &&
+            !recording.withWriter([&](auto&) noexcept { candidateRef.addRef(); }),
+        "issued recording capability rejects mutation after phase transition");
+
+  check(!transaction.recordingCapability(),
+        "poisoned transaction must not issue a recording capability");
+}
+
+void testConstantRecordingWriterCapabilityTruthTable() {
+  using Member = StateBlockConstShadow PeStateBlockConstRecorded::*;
+  constexpr std::array<Member, 6> categories{
+      &PeStateBlockConstRecorded::vsConstF,
+      &PeStateBlockConstRecorded::vsConstI,
+      &PeStateBlockConstRecorded::vsConstB,
+      &PeStateBlockConstRecorded::psConstF,
+      &PeStateBlockConstRecorded::psConstI,
+      &PeStateBlockConstRecorded::psConstB,
+  };
+  constexpr std::array<std::string_view, 6> names{
+      "VS F", "VS I", "VS B", "PS F", "PS I", "PS B"};
+  PeStateBlockTransactionState transaction{};
+  std::array<std::uint32_t, 4> values{{1u, 2u, 3u, 4u}};
+
+  for (std::size_t i = 0; i < categories.size(); ++i) {
+    bool invoked = false;
+    check(!transaction.withRecordingWriter(
+              [&](auto& writer) noexcept {
+                invoked = true;
+                (void)writer.constants();
+              }),
+          "Idle constant binding must not issue a candidate writer");
+    check(!invoked, names[i]);
+  }
+
+  transaction.beginAccepted([](void*) noexcept {});
+  check(transaction.isRecording(),
+        "constant truth table enters the Recording phase");
+  for (std::size_t i = 0; i < categories.size(); ++i) {
+    bool invoked = false;
+    check(transaction.withRecordingWriter(
+              [&](auto& writer) noexcept {
+                invoked = true;
+                (writer.constants().*categories[i]).record(
+                    3u, 1u, values.data(), sizeof(values));
+              }),
+          names[i]);
+    check(invoked, "Recording constant binding must invoke its callback");
+  }
+  const auto& recorded = transaction.recordedSnapshot().constantSnapshot();
+  check(recorded.vsConstF.contains(3u) && recorded.vsConstI.contains(3u) &&
+            recorded.vsConstB.contains(3u) && recorded.psConstF.contains(3u) &&
+            recorded.psConstI.contains(3u) && recorded.psConstB.contains(3u),
+        "all six constants write only the recorded candidate");
+
+  transaction.failEnd([](void*) noexcept {});
+  check(transaction.isPoisoned(),
+        "failed transition poisons the constant recording domain");
+  bool staleInvoked = false;
+  check(!transaction.withRecordingWriter(
+            [&](auto&) noexcept { staleInvoked = true; }) && !staleInvoked,
+        "stale-after-transition constant binding must be rejected");
+
+  transaction.resetSucceeded([](void*) noexcept {});
+  check(transaction.phase() == PeStateBlockPhase::Idle,
+        "successful reset recovers the poisoned constant domain");
+  bool recoveredInvoked = false;
+  check(!transaction.withRecordingWriter(
+            [&](auto&) noexcept { recoveredInvoked = true; }) &&
+            !recoveredInvoked,
+        "reset recovery returns constant binding to Idle");
 }
 
 void testTypedStagingRetentionMultiplicityAndReset() {
@@ -515,36 +605,36 @@ void testTypedStagingRetentionMultiplicityAndReset() {
 
   check(!transaction.stageTexture(
             stateBlockTextureSlotKey(kPeTextureSlots),
-            StateBlockTextureRef::fromRaw(&shared), retain) &&
+            stateBlockRef<StateBlockTextureRef>(&shared), retain) &&
             !transaction.stageStream(
                 stateBlockStreamSlotKey(D9C_DRAW_PACKET_MAX_STREAMS),
-                StateBlockStreamSourceValue{.buffer = {&shared}}, retain) &&
+                StateBlockStreamSourceValue{.buffer = stateBlockBuffer<IDirect3DVertexBuffer9>(&shared)}, retain) &&
             !transaction.stageRenderTarget(
                 stateBlockRenderTargetSlotKey(
                     D9C_DRAW_PACKET_MAX_RENDER_TARGETS),
-                StateBlockRenderTargetRef::fromRaw(&shared), retain) &&
+                stateBlockRef<StateBlockRenderTargetRef>(&shared), retain) &&
             !transaction.hasPreparedApply() && shared.refs == 1u,
         "invalid bounded staging keys fail before retain or occupancy");
 
   transaction.stageTexture(stateBlockTextureSlotKey(0u),
-                           StateBlockTextureRef::fromRaw(&shared), retain);
+                           stateBlockRef<StateBlockTextureRef>(&shared), retain);
   transaction.stageTexture(stateBlockTextureSlotKey(1u),
-                           StateBlockTextureRef::fromRaw(&shared), retain);
+                           stateBlockRef<StateBlockTextureRef>(&shared), retain);
   transaction.stageStream(
       stateBlockStreamSlotKey(0u), StateBlockStreamSourceValue{
-              .buffer = {&shared}, .offset = 4u, .stride = 16u},
+              .buffer = stateBlockBuffer<IDirect3DVertexBuffer9>(&shared), .offset = 4u, .stride = 16u},
       retain);
   transaction.stageVertexShader(
-      StateBlockVertexShaderRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockVertexShaderRef>(&shared), retain);
   transaction.stagePixelShader(
-      StateBlockPixelShaderRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockPixelShaderRef>(&shared), retain);
   transaction.stageIndexBuffer(
-      StateBlockIndexBufferRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockIndexBufferRef>(&shared), retain);
   transaction.stageRenderTarget(
       stateBlockRenderTargetSlotKey(0u),
-      StateBlockRenderTargetRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockRenderTargetRef>(&shared), retain);
   transaction.stageDepthStencil(
-      StateBlockDepthStencilRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockDepthStencilRef>(&shared), retain);
   check(transaction.hasPreparedApply() && shared.refs == 9u,
         "each typed occupied Apply category retains independently");
   transaction.discardPrepared(release);
@@ -552,24 +642,35 @@ void testTypedStagingRetentionMultiplicityAndReset() {
         "discard releases every staged retain without deduplication");
 
   transaction.stageTexture(stateBlockTextureSlotKey(0u),
-                           StateBlockTextureRef::fromRaw(&shared), retain);
+                           stateBlockRef<StateBlockTextureRef>(&shared), retain);
+  transaction.markApplyPrepared();
   const auto transferred =
       transaction.takeTexture(stateBlockTextureSlotKey(0u));
-  check(transferred.raw() == &shared && !transaction.hasPreparedApply() &&
+  check(transferred.raw() == reinterpret_cast<StateBlockTextureRef::raw_type*>(&shared) && !transaction.hasPreparedApply() &&
             shared.refs == 2u,
         "commit take transfers the staged retain without releasing it");
   release(transferred.raw());
+  transaction.finishPreparedApply();
 
   transaction.stageDepthStencil(StateBlockDepthStencilRef{}, retain);
   check(transaction.hasPreparedApply(),
         "typed null staging preserves occupied clear semantics");
+  transaction.markApplyPrepared();
   check(transaction.takeDepthStencil().raw() == nullptr &&
             !transaction.hasPreparedApply(),
         "typed null commit clears occupancy exactly once");
+  transaction.finishPreparedApply();
 
   transaction.stagePixelShader(
-      StateBlockPixelShaderRef::fromRaw(&shared), retain);
+      stateBlockRef<StateBlockPixelShaderRef>(&shared), retain);
   transaction.poison();
+  const auto refsBeforeInvalidPhase = shared.refs;
+  check(!transaction.stageTexture(
+              stateBlockTextureSlotKey(2u),
+              stateBlockRef<StateBlockTextureRef>(&shared), retain) &&
+            transaction.takeTexture(stateBlockTextureSlotKey(0u)).raw() == nullptr &&
+            shared.refs == refsBeforeInvalidPhase,
+        "poisoned phase rejects stage/take without retain or consumption");
   check(transaction.isPoisoned() && transaction.hasPreparedApply() &&
             shared.refs == 2u,
         "failed Reset preserves poison and pre-effect staging");
@@ -920,10 +1021,10 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
   for (std::uint32_t cycle = 0u; cycle < 3u; ++cycle) {
     transaction.stageTexture(
         stateBlockTextureSlotKey(0u),
-        StateBlockTextureRef::fromRaw(&shared), retain);
+        stateBlockRef<StateBlockTextureRef>(&shared), retain);
     transaction.stageTexture(
         stateBlockTextureSlotKey(1u),
-        StateBlockTextureRef::fromRaw(&shared), retain);
+        stateBlockRef<StateBlockTextureRef>(&shared), retain);
     check(shared.refs == 5u,
           "same COM identity retains once per qualified slot per cycle");
     transaction.markApplyPrepared();
@@ -933,7 +1034,8 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
     release(&shared);
     const auto slot0 = transaction.takeTexture(stateBlockTextureSlotKey(0u));
     const auto slot1 = transaction.takeTexture(stateBlockTextureSlotKey(1u));
-    check(slot0.raw() == &shared && slot1.raw() == &shared &&
+    check(slot0.raw() == reinterpret_cast<StateBlockTextureRef::raw_type*>(&shared) &&
+              slot1.raw() == reinterpret_cast<StateBlockTextureRef::raw_type*>(&shared) &&
               shared.refs == 3u && !transaction.hasPreparedApply(),
           "successful Apply transfers exactly two same-identity slot retains");
     transaction.finishPreparedApply();
@@ -947,9 +1049,9 @@ void testRepeatedQualifiedValueAndComMultiplicity() {
 
   PeStateBlockTransactionState failed{};
   failed.stageTexture(stateBlockTextureSlotKey(0u),
-                      StateBlockTextureRef::fromRaw(&shared), retain);
+                      stateBlockRef<StateBlockTextureRef>(&shared), retain);
   failed.stageTexture(stateBlockTextureSlotKey(1u),
-                      StateBlockTextureRef::fromRaw(&shared), retain);
+                      stateBlockRef<StateBlockTextureRef>(&shared), retain);
   failed.markApplyPrepared();
   failed.failPreparedApply(release);
   check(failed.phase() == PeStateBlockPhase::Poisoned && shared.refs == 1u,
@@ -965,6 +1067,7 @@ int main() {
     testCandidateAbaAndDomains();
     testGeneratedTransitionTableIsomorphism();
     testTransactionOwnershipAndLifecycle();
+    testConstantRecordingWriterCapabilityTruthTable();
     testTypedStagingRetentionMultiplicityAndReset();
     testStagedFailureAndIntervalWitness();
     testPoisonResetFaultSequence();

@@ -49,14 +49,6 @@ UINT vertexElementTypeSize(UINT type) noexcept {
     }
 }
 
-static D9CBuffer* rawVBuf(IDirect3DVertexBuffer9* p) {
-    return D3D9PeRawVertexBuffer(p);
-}
-
-static D9CTexture* rawTex(IDirect3DBaseTexture9* p) {
-    return D3D9PeRawTexture(p);
-}
-
 static UINT fvfTexcoordBytes(DWORD fvf, UINT index) {
     const DWORD sizeBits = (fvf >> (index * 2u + 16u)) & 0x3u;
     if (sizeBits == 1u) return 12u;
@@ -248,13 +240,14 @@ bool describeProcessFvf(DWORD fvf, FvfProcessLayout& layout) {
 
 bool describeProcessDeclaration(IDirect3DVertexDeclaration9* declaration,
                                        FvfProcessLayout& layout,
-                                       bool destination) {
+                                       bool destination,
+                                       D9CVertexDecl* validatedRaw) {
     layout = {};
     if (!declaration) return false;
     D9CVertexElement elements[MAXD3DDECLLENGTH + 1]{};
     uint32_t count = MAXD3DDECLLENGTH + 1;
-    if (FAILED(hr32(dxmt9c_vdecl_get_declaration(
-            D3D9PeRawVertexDecl(declaration), elements, &count)))) {
+    if (!validatedRaw || FAILED(hr32(dxmt9c_vdecl_get_declaration(
+            validatedRaw, elements, &count)))) {
         return false;
     }
     for (uint32_t i = 0; i < count; ++i) {
@@ -2307,19 +2300,25 @@ HRESULT processVertices(const Context& context,
             context.vertexShader, context.deviceIdentity, &vertexShader))) {
         return invalid("foreign or invalid destination state");
     }
-    for (auto* stream : context.streamSources) {
+    std::array<D9CBuffer*, D9C_DRAW_PACKET_MAX_STREAMS> validatedStreamRaw{};
+    for (std::size_t i = 0; i < context.streamSources.size(); ++i) {
+        auto* stream = context.streamSources[i];
         D3D9PeValidatedBuffer validatedStream{};
         if (FAILED(D3D9PeValidateVertexBuffer(
                 stream, context.deviceIdentity, &validatedStream))) {
             return invalid("foreign or invalid source stream");
         }
+        validatedStreamRaw[i] = validatedStream.raw;
     }
-    for (auto* texture : context.textures) {
+    std::array<D9CTexture*, D9C_DRAW_PACKET_MAX_TEXTURES> validatedTextureRaw{};
+    for (std::size_t i = 0; i < context.textures.size(); ++i) {
+        auto* texture = context.textures[i];
         D3D9PeValidatedTexture validatedTexture{};
         if (FAILED(D3D9PeValidateTexture(
                 texture, context.deviceIdentity, &validatedTexture))) {
             return invalid("foreign or invalid texture");
         }
+        validatedTextureRaw[i] = validatedTexture.raw;
     }
     if (vertexCount == 0) return S_OK;
     if (flags & ~D3DPV_DONOTCOPYDATA) return invalid("flags unsupported");
@@ -2346,7 +2345,7 @@ HRESULT processVertices(const Context& context,
             return invalid("shader analysis failed");
         }
     }
-    D9CBuffer* dstRaw = rawVBuf(dstBuffer);
+    D9CBuffer* dstRaw = destination.raw;
     if (!dstRaw) return invalid("raw destination buffer missing");
     D9CBufferDesc dstDesc{};
     if (FAILED(hr32(dxmt9c_buffer_get_desc(dstRaw, &dstDesc)))) {
@@ -2367,14 +2366,16 @@ HRESULT processVertices(const Context& context,
         }
     } else if (context.vertexDeclaration) {
         sourceLayoutFromDeclaration = true;
-        if (!describeProcessDeclaration(context.vertexDeclaration, srcLayout, false)) {
+        if (!describeProcessDeclaration(context.vertexDeclaration, srcLayout,
+                                        false, inputDeclaration.raw)) {
             return invalid("source declaration unsupported");
         }
     } else {
         return invalid("no source layout");
     }
     if (declaration) {
-        if (!describeProcessDeclaration(declaration, dstLayout, true)) {
+        if (!describeProcessDeclaration(declaration, dstLayout, true,
+                                        outputDeclaration.raw)) {
             return invalid("destination declaration unsupported");
         }
     } else {
@@ -2647,7 +2648,7 @@ HRESULT processVertices(const Context& context,
         if (!context.streamSources[stream] || context.streamStrides[stream] < srcLayout.streamStride[stream]) {
             return invalid("source stream missing or stride too small");
         }
-        srcRaw[stream] = rawVBuf(context.streamSources[stream]);
+        srcRaw[stream] = validatedStreamRaw[stream];
         if (!srcRaw[stream] ||
             FAILED(hr32(dxmt9c_buffer_get_desc(srcRaw[stream], &srcDesc[stream])))) {
             return invalid("source stream desc failed");
@@ -2720,7 +2721,7 @@ HRESULT processVertices(const Context& context,
     }
     D3D9PeInvalidateVertexBufferReadonlyCache(dstBuffer);
 
-    const auto& vp = context.state.viewportShadow;
+    const auto& vp = context.state.viewportShadow();
     const float scaleX = static_cast<float>(vp.width) * 0.5f;
     const float scaleY = static_cast<float>(vp.height) * 0.5f;
     const float offsetX = static_cast<float>(vp.x) + scaleX;
@@ -2776,8 +2777,7 @@ HRESULT processVertices(const Context& context,
                     return dxmt9c_device_get_sampler_state(
                         context.device, samplerSlot, static_cast<uint32_t>(type));
                 };
-            shaderTextures.vertexTextures[sampler] =
-                rawTex(context.textures[samplerSlot]);
+            shaderTextures.vertexTextures[sampler] = validatedTextureRaw[samplerSlot];
             shaderTextures.addressU[sampler] =
                 samplerStateValue(D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
             shaderTextures.addressV[sampler] =
@@ -3398,7 +3398,7 @@ HRESULT processVertices(const Context& context,
                     return lightingColors;
                 }
                 float normal[3]{normalIn[0], normalIn[1], normalIn[2]};
-                D9CMaterial material = context.state.materialShadow;
+                D9CMaterial material = context.state.materialShadow();
                 auto readMaterialColor = [&](DWORD source,
                                              D9CColorRGBA& target) {
                     if (!processColorVertex || source == D3DMCS_MATERIAL) {
@@ -3438,7 +3438,7 @@ HRESULT processVertices(const Context& context,
                 }
                 lightingColors = processFixedFunctionLightingColors(
                     fixedPosition, normal, material, processAmbient,
-                    context.state.lightShadow, context.state.lightEnableShadow,
+                    context.state.lightShadow(), context.state.lightEnableShadow(),
                     processSpecularLighting);
                 lightingColorsReady = true;
             }

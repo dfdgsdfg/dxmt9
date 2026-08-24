@@ -13,6 +13,7 @@ python3 "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
 python3 "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
 python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
 python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
+python3 "$repo_root/scripts/check/check_pe_scalar_projection_model.py"
 
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then
@@ -91,6 +92,16 @@ counterexample_models=(
   # Dropping the value from a durable key/token lets the model accept a stale
   # payload even though the key and ordinal still look valid.
   "PeRecorderTransition|.stale.counterexample|Invariant DurableTokenMatchesPayload is violated"
+  # Scalar semantic projection must preserve exact value/source and bind one
+  # accepted record ordinal; each mutation is independent evidence.
+  "PeRecorderScalarProjection|.no-token.counterexample|Invariant NoTokenIsExplicit is violated"
+  "PeRecorderScalarProjection|.missing.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.duplicate.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.value.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.source-ordinal.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.record-ordinal.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.category.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderScalarProjection|.key.counterexample|Invariant ExactProjection is violated"
   # Parent destruction before alias retirement breaks the ordering contract.
   "PeRecorderCommit|.parent-before-alias.counterexample|Invariant AliasBeforeParent is violated"
   # Builder reset while pending references remain breaks no-early-drain/reset.

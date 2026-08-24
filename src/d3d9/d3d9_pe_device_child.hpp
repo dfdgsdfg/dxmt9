@@ -488,34 +488,10 @@ CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   bool extended = false,
                   DWORD presentFlagsShadow = 0) noexcept;
 
-D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface);
-const dxmt9::d3d9::pe::SurfaceRef &
-D3D9PeWireSurface(IDirect3DSurface9 *surface);
 // True when the PE wrapper currently has a successful Lock outstanding.
 // Used by IDirect3DDevice9::UpdateSurface to enforce the wined3d invariant
 // that the source surface must not be locked when the copy is initiated.
 bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface);
-D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture);
-const dxmt9::d3d9::pe::TextureRef &
-D3D9PeWireTexture(IDirect3DBaseTexture9 *texture);
-D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer);
-D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer);
-const dxmt9::d3d9::pe::BufferRef &
-D3D9PeWireVertexBuffer(IDirect3DVertexBuffer9 *buffer);
-const dxmt9::d3d9::pe::BufferRef &
-D3D9PeWireIndexBuffer(IDirect3DIndexBuffer9 *buffer);
 void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer);
-D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader);
-D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader);
-const dxmt9::d3d9::pe::ShaderRef &
-D3D9PeWireVertexShader(IDirect3DVertexShader9 *shader);
-const dxmt9::d3d9::pe::ShaderRef &
-D3D9PeWirePixelShader(IDirect3DPixelShader9 *shader);
 std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader);
 std::uint64_t D3D9PePixelShaderHash(IDirect3DPixelShader9 *shader);
-D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl);
-const dxmt9::d3d9::pe::DeclarationRef &
-D3D9PeWireVertexDecl(IDirect3DVertexDeclaration9 *decl);
-D9CQuery *D3D9PeRawQuery(IDirect3DQuery9 *query);
-const dxmt9::d3d9::pe::QueryRef &
-D3D9PeWireQuery(IDirect3DQuery9 *query);

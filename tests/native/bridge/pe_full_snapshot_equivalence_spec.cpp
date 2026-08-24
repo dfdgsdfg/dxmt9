@@ -159,7 +159,7 @@ void build(Built& out, const PeHotStateShadow& shadow,
   }
   if (params.recordType != D9C_COMMAND_RECORD_APPLY_STATE) {
     out.ok = pe::addChunkContextSections(chunk, shadow, bindings, params,
-                                         snapshot, out.scratch, out.state);
+                                         out.scratch, out.state);
   }
 }
 
@@ -282,38 +282,38 @@ PeHotStateShadow nothingDirty() { return PeHotStateShadow{}; }
 
 PeHotStateShadow someDirty() {
   PeHotStateShadow s{};
-  s.pendingStreamMask = 0x5u;
-  s.pendingTextureMask = 0x3u;
-  s.pendingVs = true;
-  s.pendingVdecl = true;
-  s.pendingIb = true;
-  s.pendingViewport = true;
+  s.writer().pendingStreamMask() = 0x5u;
+  s.writer().pendingTextureMask() = 0x3u;
+  s.writer().pendingVs() = true;
+  s.writer().pendingVdecl() = true;
+  s.writer().pendingIb() = true;
+  s.writer().pendingViewport() = true;
   setRenderState(s, 7u, 3u);
-  s.pendingRtMask = 0x1u;
+  s.writer().pendingRtMask() = 0x1u;
   return s;
 }
 
 PeHotStateShadow everythingDirty() {
   PeHotStateShadow s{};
-  s.pendingStreamMask = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
-  s.pendingTextureMask = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
-  s.pendingVs = true;
-  s.pendingPs = true;
-  s.pendingVdecl = true;
-  s.pendingFvf = true;
-  s.pendingIb = true;
-  s.pendingViewport = true;
-  s.pendingScissor = true;
-  s.pendingMaterial = true;
-  s.pendingDs = true;
-  s.pendingRtMask = (1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u;
-  s.pendingClipPlaneMask = 0x3Fu;
+  s.writer().pendingStreamMask() = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  s.writer().pendingTextureMask() = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  s.writer().pendingVs() = true;
+  s.writer().pendingPs() = true;
+  s.writer().pendingVdecl() = true;
+  s.writer().pendingFvf() = true;
+  s.writer().pendingIb() = true;
+  s.writer().pendingViewport() = true;
+  s.writer().pendingScissor() = true;
+  s.writer().pendingMaterial() = true;
+  s.writer().pendingDs() = true;
+  s.writer().pendingRtMask() = (1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u;
+  s.writer().pendingClipPlaneMask() = 0x3Fu;
   for (std::uint32_t i = 0; i < 8u; ++i) {
     setRenderState(s, i, i + 1u);
   }
-  s.lightEnableShadow = 0xFFu;
-  s.pendingLightEnableMask = 0xFFu;
-  s.pendingLightEnableValidMask = 0xFFu;
+  s.writer().lightEnableShadow() = 0xFFu;
+  s.writer().pendingLightEnableMask() = 0xFFu;
+  s.writer().pendingLightEnableValidMask() = 0xFFu;
   return s;
 }
 

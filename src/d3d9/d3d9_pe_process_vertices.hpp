@@ -117,7 +117,8 @@ bool processFvfXyzbPosition(DWORD positionMask);
 bool describeProcessFvf(DWORD fvf, FvfProcessLayout &layout);
 bool describeProcessDeclaration(IDirect3DVertexDeclaration9 *declaration,
                                 FvfProcessLayout &layout,
-                                bool destination);
+                                bool destination,
+                                D9CVertexDecl *validatedRaw = nullptr);
 bool analyzeSimpleProcessVertexShader(const std::vector<DWORD> &words,
                                       ProcessShaderIo &io);
 

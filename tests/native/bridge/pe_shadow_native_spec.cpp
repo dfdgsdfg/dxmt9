@@ -104,15 +104,15 @@ void pendingMasksAreThirtyTwoBitUnsigned() {
 
   // The pending masks were DWORD. After the change they must still hold all
   // 32 bits without sign extension.
-  shadow.pendingTextureMask = 0xFFFFFFFFu;
-  check(shadow.pendingTextureMask == 0xFFFFFFFFu,
+  shadow.writer().pendingTextureMask() = 0xFFFFFFFFu;
+  check(shadow.pendingTextureMask() == 0xFFFFFFFFu,
         "pendingTextureMask must hold 32 bits unsigned");
   check(shadow.hasPendingHotState(), "a set mask must be pending");
 
   shadow.consume().clearPendingHotState();
   check(!shadow.hasPendingHotState(),
         "clearPendingHotState must clear the mask");
-  check(shadow.pendingTextureMask == 0u, "mask must be zero after clear");
+  check(shadow.pendingTextureMask() == 0u, "mask must be zero after clear");
 }
 
 void oversizedBatchFailureIsNonConsuming() {
@@ -302,6 +302,45 @@ void malformedAcceptedBatchIsFailClosedAndNonConsuming() {
   }
 }
 
+void scalarWriterAbaRetryPreservesLatestValue() {
+  using dxmt9::d3d9::pe::RecorderPhase;
+  using dxmt9::d3d9::pe::StateWriteKind;
+  using dxmt9::d3d9::pe::StateWriteFacts;
+  using dxmt9::d3d9::pe::WriteOrigin;
+  check(dxmt9::d3d9::pe::planRecorderStateWrite(
+            StateWriteFacts{RecorderPhase::Live, WriteOrigin::ExplicitSet,
+                             true, false, false})
+                .kind() == StateWriteKind::QueueDelta,
+        "scalar transition plan queues a changed live value");
+  check(dxmt9::d3d9::pe::planRecorderStateWrite(
+            StateWriteFacts{RecorderPhase::Live, WriteOrigin::ExplicitSet,
+                             true, true, true})
+                .kind() == StateWriteKind::RetainPending,
+        "scalar transition plan retains an already-pending equal value");
+  PeHotStateShadow shadow{};
+  const D9CViewport a{1u, 2u, 640u, 480u, 0.0f, 1.0f};
+  const D9CViewport b{3u, 4u, 800u, 600u, 0.1f, 0.9f};
+  const D9CViewport c{5u, 6u, 1024u, 768u, 0.2f, 0.8f};
+  shadow.writer().viewportShadow() = a;
+  shadow.writer().pendingViewport() = true;
+  shadow.writer().viewportShadow() = b;
+  shadow.writer().pendingViewport() = true;
+  check(shadow.viewportShadow().width == b.width &&
+            shadow.viewportShadow().height == b.height &&
+            shadow.pendingViewport(),
+        "scalar A-B writes retain the latest live value and pending bit");
+  // A failed append leaves the pending projection untouched; a retry can
+  // replace it with C before the eventual accepted consume.
+  shadow.writer().viewportShadow() = c;
+  shadow.writer().pendingViewport() = true;
+  check(shadow.viewportShadow().width == c.width && shadow.pendingViewport(),
+        "retry keeps the newest scalar value pending");
+  shadow.writer().pendingViewport() = false;
+  check(shadow.viewportShadow().width == c.width &&
+            !shadow.pendingViewport(),
+        "accepted consume clears only the represented scalar pending bit");
+}
+
 int main() {
   try {
     transformSlotsMatchD3DConstants();
@@ -310,6 +349,7 @@ int main() {
     oversizedBatchFailureIsNonConsuming();
     allTypedBatchAdaptersAreExact();
     malformedAcceptedBatchIsFailClosedAndNonConsuming();
+    scalarWriterAbaRetryPreservesLatestValue();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_shadow_native_spec FAILED: " << failure.what() << "\n";
     return 1;

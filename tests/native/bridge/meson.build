@@ -12,6 +12,15 @@ pe_retainer_spec = executable(
 
 test('dxmt9-pe-retainer-spec', pe_retainer_spec)
 
+pe_semantic_projection_spec = executable(
+  'dxmt9-pe-semantic-projection-spec',
+  'pe_semantic_projection_spec.cpp',
+  include_directories: include_directories('../../../src/d3d9'),
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-semantic-projection-spec', pe_semantic_projection_spec)
+
 pe_fvf_transaction_spec = executable(
   'dxmt9-pe-fvf-transaction-spec',
   'pe_fvf_transaction_spec.cpp',
@@ -450,6 +459,7 @@ pe_stateblock_category_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_STATEBLOCK_TEST_SEAM=1'],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-stateblock-category-spec',
@@ -520,3 +530,12 @@ pe_com_cache_spec = executable(
 )
 test('dxmt9-pe-com-cache-spec', pe_com_cache_spec,
      env: dxmt9_native_test_env)
+
+pe_public_allocation_spec = executable(
+  'dxmt9-pe-public-allocation-spec',
+  'pe_public_allocation_spec.cpp',
+  include_directories: include_directories('../../../src/d3d9'),
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-public-allocation-spec', pe_public_allocation_spec)

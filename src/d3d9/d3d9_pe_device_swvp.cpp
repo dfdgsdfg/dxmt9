@@ -13,6 +13,76 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
+namespace {
+
+template <typename Fn>
+class SwvpScopeGuard final {
+public:
+    explicit SwvpScopeGuard(Fn&& fn) noexcept
+        : fn_(std::forward<Fn>(fn)) {}
+    ~SwvpScopeGuard() noexcept { fn_(); }
+
+    SwvpScopeGuard(const SwvpScopeGuard&) = delete;
+    SwvpScopeGuard& operator=(const SwvpScopeGuard&) = delete;
+
+private:
+    Fn fn_;
+};
+
+template <typename T>
+class SwvpComReleaseGuard final {
+public:
+    explicit SwvpComReleaseGuard(T*& value) noexcept : value_(value) {}
+    ~SwvpComReleaseGuard() noexcept {
+        if (value_) {
+            value_->Release();
+            value_ = nullptr;
+        }
+    }
+
+    SwvpComReleaseGuard(const SwvpComReleaseGuard&) = delete;
+    SwvpComReleaseGuard& operator=(const SwvpComReleaseGuard&) = delete;
+
+private:
+    T*& value_;
+};
+
+class SwvpUnlockGuard final {
+public:
+    explicit SwvpUnlockGuard(IDirect3DVertexBuffer9* buffer) noexcept
+        : buffer_(buffer) {}
+    ~SwvpUnlockGuard() noexcept {
+        if (buffer_) (void)buffer_->Unlock();
+    }
+
+    void dismiss() noexcept { buffer_ = nullptr; }
+
+    SwvpUnlockGuard(const SwvpUnlockGuard&) = delete;
+    SwvpUnlockGuard& operator=(const SwvpUnlockGuard&) = delete;
+
+private:
+    IDirect3DVertexBuffer9* buffer_;
+};
+
+class SwvpIndexUnlockGuard final {
+public:
+    explicit SwvpIndexUnlockGuard(IDirect3DIndexBuffer9* buffer) noexcept
+        : buffer_(buffer) {}
+    ~SwvpIndexUnlockGuard() noexcept {
+        if (buffer_) (void)buffer_->Unlock();
+    }
+
+    void dismiss() noexcept { buffer_ = nullptr; }
+
+    SwvpIndexUnlockGuard(const SwvpIndexUnlockGuard&) = delete;
+    SwvpIndexUnlockGuard& operator=(const SwvpIndexUnlockGuard&) = delete;
+
+private:
+    IDirect3DIndexBuffer9* buffer_;
+};
+
+}  // namespace
+
 std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
         const std::vector<std::uint8_t>& vertices,
         UINT stride,
@@ -41,7 +111,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
     std::uint32_t flags = 0u;
     if (rhw <= 0.0f) flags |= kSwvpClipOutsideEye;
 
-    const auto& vp = recorderState_.peState.viewportShadow;
+    const auto& vp = recorderState_.peState.viewportShadow();
     const float left = static_cast<float>(vp.x);
     const float right = left + static_cast<float>(vp.width);
     const float top = static_cast<float>(vp.y);
@@ -76,7 +146,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
         };
         for (UINT i = 0; i < 6u; ++i) {
             if ((userClipMask & (1u << i)) == 0u) continue;
-            const float* plane = &recorderState_.peState.clipPlaneShadow[i * 4u];
+            const float* plane = &recorderState_.peState.clipPlaneShadow()[i * 4u];
             const float distance = plane[0] * clip[0] +
                                    plane[1] * clip[1] +
                                    plane[2] * clip[2] +
@@ -230,7 +300,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	        std::vector<std::uint32_t> planes;
 	        planes.reserve(13u);
 	        planes.push_back(kSwvpClipOutsideEye);
-	        const auto& vp = recorderState_.peState.viewportShadow;
+	        const auto& vp = recorderState_.peState.viewportShadow();
 	        if (vp.width != 0u) {
 	            planes.push_back(kSwvpClipOutsideLeft);
 	            planes.push_back(kSwvpClipOutsideRight);
@@ -262,7 +332,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	            !std::isfinite(z) || !std::isfinite(rhw)) {
 	            return -1.0f;
 	        }
-	        const auto& vp = recorderState_.peState.viewportShadow;
+	        const auto& vp = recorderState_.peState.viewportShadow();
 	        const float left = static_cast<float>(vp.x);
 	        const float right = left + static_cast<float>(vp.width);
 	        const float top = static_cast<float>(vp.y);
@@ -305,7 +375,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	                    ((z - vp.minZ) / (vp.maxZ - vp.minZ)) * w,
 	                    w,
 	                };
-	                const float* plane = &recorderState_.peState.clipPlaneShadow[userPlane * 4u];
+	                const float* plane = &recorderState_.peState.clipPlaneShadow()[userPlane * 4u];
 	                const float distance = plane[0] * clip[0] +
 	                                       plane[1] * clip[1] +
 	                                       plane[2] * clip[2] +
@@ -471,7 +541,12 @@ HRESULT D3D9DeviceImpl::describeSoftwareFfpDrawTarget(DWORD& outputFvf,
             srcLayout, lighting, specularLighting, true);
         if (outputFvf == 0u) return S_FALSE;
     } else if (vdecl_) {
-        if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
+        D3D9PeValidatedDeclaration validatedDeclaration{};
+        if (FAILED(D3D9PeValidateVertexDecl(
+                vdecl_, static_cast<IDirect3DDevice9*>(this),
+                &validatedDeclaration)) ||
+            !describeProcessDeclaration(vdecl_, srcLayout, false,
+                                         validatedDeclaration.raw)) {
             return S_FALSE;
         }
         outputFvf = processFfpDeclarationOutputFvf(
@@ -1072,7 +1147,12 @@ HRESULT D3D9DeviceImpl::describeSoftwareProgrammableDrawTarget(
             return S_FALSE;
         }
     } else if (vdecl_) {
-        if (!describeProcessDeclaration(vdecl_, srcLayout, false)) {
+        D3D9PeValidatedDeclaration validatedDeclaration{};
+        if (FAILED(D3D9PeValidateVertexDecl(
+                vdecl_, static_cast<IDirect3DDevice9*>(this),
+                &validatedDeclaration)) ||
+            !describeProcessDeclaration(vdecl_, srcLayout, false,
+                                         validatedDeclaration.raw)) {
             return S_FALSE;
         }
     } else {
@@ -1111,13 +1191,14 @@ HRESULT D3D9DeviceImpl::readTransformedVertexBuffer(IDirect3DVertexBuffer9* dstB
     void* mapped = nullptr;
     HRESULT hr = dstBuffer->Lock(0, bytes, &mapped, D3DLOCK_READONLY);
     if (FAILED(hr)) return hr;
+    SwvpUnlockGuard unlockGuard(dstBuffer);
     if (!mapped) {
-        (void)dstBuffer->Unlock();
         return D3DERR_INVALIDCALL;
     }
     out.vertices.resize(bytes);
     std::memcpy(out.vertices.data(), mapped, bytes);
     hr = dstBuffer->Unlock();
+    unlockGuard.dismiss();
     if (FAILED(hr)) return hr;
     out.fvf = outputFvf;
     out.stride = outputStride;
@@ -1141,6 +1222,7 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableTransformBoundVertices(
         return D3DERR_INVALIDCALL;
     }
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
@@ -1150,7 +1232,6 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableTransformBoundVertices(
                                          outputFvf, dstLayout.stride);
         if (SUCCEEDED(hr)) out.bypassVertexShader = true;
     }
-    dstBuffer->Release();
     return hr;
 }
 
@@ -1172,6 +1253,7 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpTransformBoundVertices(UINT startVertex,
         return D3DERR_INVALIDCALL;
     }
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
     if (FAILED(hr)) return hr;
@@ -1180,7 +1262,6 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpTransformBoundVertices(UINT startVertex,
         hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
                                          outputFvf, dstLayout.stride);
     }
-    dstBuffer->Release();
     return hr;
 }
 
@@ -1328,8 +1409,8 @@ HRESULT D3D9DeviceImpl::readSoftwareFfpAdjustedIndices(UINT startIndex,
     hr = indexBuf_->Lock(static_cast<UINT>(byteOffset), indexBytes,
                          &mapped, D3DLOCK_READONLY);
     if (FAILED(hr)) return S_FALSE;
+    SwvpIndexUnlockGuard unlockGuard(indexBuf_);
     if (!mapped) {
-        (void)indexBuf_->Unlock();
         return D3DERR_INVALIDCALL;
     }
     out.resize(indexBytes);
@@ -1360,6 +1441,7 @@ HRESULT D3D9DeviceImpl::readSoftwareFfpAdjustedIndices(UINT startIndex,
         }
     }
     hr = indexBuf_->Unlock();
+    unlockGuard.dismiss();
     if (FAILED(hr)) return hr;
     if (!supportedRange) {
         out.clear();
@@ -1705,27 +1787,28 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
     }
     IDirect3DVertexBuffer9* srcBuffer = nullptr;
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard srcBufferGuard(srcBuffer);
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
                             &srcBuffer, nullptr);
     if (FAILED(hr)) return hr;
     void* mapped = nullptr;
     hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
-    if (SUCCEEDED(hr) && mapped) {
+    if (FAILED(hr)) return hr;
+    SwvpUnlockGuard srcUnlockGuard(srcBuffer);
+    if (mapped) {
         std::memcpy(mapped, data, inputBytes);
         hr = srcBuffer->Unlock();
-    } else if (SUCCEEDED(hr)) {
+        srcUnlockGuard.dismiss();
+    } else {
         hr = D3DERR_INVALIDCALL;
     }
     if (FAILED(hr)) {
-        srcBuffer->Release();
         return hr;
     }
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
-    if (FAILED(hr)) {
-        srcBuffer->Release();
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
@@ -1734,11 +1817,14 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    auto restoreStream = SwvpScopeGuard([&]() noexcept {
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+        savedStream0 = nullptr;
+    });
     hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
-    setRef(streamSrc_[0], savedStream0);
-    streamOff_[0] = savedOffset0;
-    streamStr_[0] = savedStride0;
-    if (savedStream0) savedStream0->Release();
 
     if (SUCCEEDED(hr)) {
         hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
@@ -1748,8 +1834,6 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
             out.primitiveCount = primitiveCount;
         }
     }
-    dstBuffer->Release();
-    srcBuffer->Release();
     return hr;
 }
 
@@ -1781,27 +1865,28 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE 
     }
     IDirect3DVertexBuffer9* srcBuffer = nullptr;
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard srcBufferGuard(srcBuffer);
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
                             &srcBuffer, nullptr);
     if (FAILED(hr)) return hr;
     void* mapped = nullptr;
     hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
-    if (SUCCEEDED(hr) && mapped) {
+    if (FAILED(hr)) return hr;
+    SwvpUnlockGuard srcUnlockGuard(srcBuffer);
+    if (mapped) {
         std::memcpy(mapped, data, inputBytes);
         hr = srcBuffer->Unlock();
-    } else if (SUCCEEDED(hr)) {
+        srcUnlockGuard.dismiss();
+    } else {
         hr = D3DERR_INVALIDCALL;
     }
     if (FAILED(hr)) {
-        srcBuffer->Release();
         return hr;
     }
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
-    if (FAILED(hr)) {
-        srcBuffer->Release();
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
@@ -1810,11 +1895,14 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE 
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    auto restoreStream = SwvpScopeGuard([&]() noexcept {
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+        savedStream0 = nullptr;
+    });
     hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
-    setRef(streamSrc_[0], savedStream0);
-    streamOff_[0] = savedOffset0;
-    streamStr_[0] = savedStride0;
-    if (savedStream0) savedStream0->Release();
 
     if (SUCCEEDED(hr)) {
         hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
@@ -1825,8 +1913,6 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE 
             out.bypassVertexShader = true;
         }
     }
-    dstBuffer->Release();
-    srcBuffer->Release();
     return hr;
 }
 
@@ -1862,27 +1948,28 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE ty
     }
     IDirect3DVertexBuffer9* srcBuffer = nullptr;
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard srcBufferGuard(srcBuffer);
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
                             &srcBuffer, nullptr);
     if (FAILED(hr)) return hr;
     void* mapped = nullptr;
     hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
-    if (SUCCEEDED(hr) && mapped) {
+    if (FAILED(hr)) return hr;
+    SwvpUnlockGuard srcUnlockGuard(srcBuffer);
+    if (mapped) {
         std::memcpy(mapped, vertexData, inputBytes);
         hr = srcBuffer->Unlock();
-    } else if (SUCCEEDED(hr)) {
+        srcUnlockGuard.dismiss();
+    } else {
         hr = D3DERR_INVALIDCALL;
     }
     if (FAILED(hr)) {
-        srcBuffer->Release();
         return hr;
     }
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
-    if (FAILED(hr)) {
-        srcBuffer->Release();
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
@@ -1891,11 +1978,14 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE ty
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    auto restoreStream = SwvpScopeGuard([&]() noexcept {
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+        savedStream0 = nullptr;
+    });
     hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
-    setRef(streamSrc_[0], savedStream0);
-    streamOff_[0] = savedOffset0;
-    streamStr_[0] = savedStride0;
-    if (savedStream0) savedStream0->Release();
 
     if (SUCCEEDED(hr)) {
         hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
@@ -1905,8 +1995,6 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE ty
             out.primitiveCount = primitiveCount;
         }
     }
-    dstBuffer->Release();
-    srcBuffer->Release();
     return hr;
 }
 
@@ -1946,27 +2034,28 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitiveUP(
     }
     IDirect3DVertexBuffer9* srcBuffer = nullptr;
     IDirect3DVertexBuffer9* dstBuffer = nullptr;
+    SwvpComReleaseGuard srcBufferGuard(srcBuffer);
+    SwvpComReleaseGuard dstBufferGuard(dstBuffer);
     hr = CreateVertexBuffer(inputBytes, 0, fvf_, D3DPOOL_SYSTEMMEM,
                             &srcBuffer, nullptr);
     if (FAILED(hr)) return hr;
     void* mapped = nullptr;
     hr = srcBuffer->Lock(0, inputBytes, &mapped, 0);
-    if (SUCCEEDED(hr) && mapped) {
+    if (FAILED(hr)) return hr;
+    SwvpUnlockGuard srcUnlockGuard(srcBuffer);
+    if (mapped) {
         std::memcpy(mapped, vertexData, inputBytes);
         hr = srcBuffer->Unlock();
-    } else if (SUCCEEDED(hr)) {
+        srcUnlockGuard.dismiss();
+    } else {
         hr = D3DERR_INVALIDCALL;
     }
     if (FAILED(hr)) {
-        srcBuffer->Release();
         return hr;
     }
     hr = CreateVertexBuffer(outputBytes, 0, outputFvf, D3DPOOL_SYSTEMMEM,
                             &dstBuffer, nullptr);
-    if (FAILED(hr)) {
-        srcBuffer->Release();
-        return hr;
-    }
+    if (FAILED(hr)) return hr;
 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
@@ -1975,11 +2064,14 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitiveUP(
     setRef(streamSrc_[0], srcBuffer);
     streamOff_[0] = 0;
     streamStr_[0] = stride;
+    auto restoreStream = SwvpScopeGuard([&]() noexcept {
+        setRef(streamSrc_[0], savedStream0);
+        streamOff_[0] = savedOffset0;
+        streamStr_[0] = savedStride0;
+        if (savedStream0) savedStream0->Release();
+        savedStream0 = nullptr;
+    });
     hr = ProcessVertices(0, 0, vertexCount, dstBuffer, nullptr, 0);
-    setRef(streamSrc_[0], savedStream0);
-    streamOff_[0] = savedOffset0;
-    streamStr_[0] = savedStride0;
-    if (savedStream0) savedStream0->Release();
 
     if (SUCCEEDED(hr)) {
         hr = readTransformedVertexBuffer(dstBuffer, outputBytes, out,
@@ -1990,7 +2082,5 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitiveUP(
             out.bypassVertexShader = true;
         }
     }
-    dstBuffer->Release();
-    srcBuffer->Release();
     return hr;
 }

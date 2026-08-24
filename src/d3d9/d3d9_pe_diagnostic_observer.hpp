@@ -26,6 +26,7 @@ public:
   void notifyCallScopeReturn(D3D9PePresentCallSlot slot, const char *callName,
                              std::int32_t hr) noexcept;
   void popCallScope(D3D9PePresentCallSlot slot) noexcept;
+  void notifyStateBlockFault(bool entered, std::int32_t hr) noexcept;
 
 private:
   D3D9DeviceImpl *device_ = nullptr;

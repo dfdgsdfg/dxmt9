@@ -392,43 +392,61 @@ private:
     std::uint32_t count = 0u;
 };
 
+// These interfaces are deliberately only forward-declared here.  The shadow
+// stores COM identity tokens, never dereferences them; this keeps the native
+// state algebra independent of the Windows SDK while making each category's
+// token type explicit.
+struct IDirect3DBaseTexture9;
+struct IDirect3DVertexBuffer9;
+struct IDirect3DVertexShader9;
+struct IDirect3DPixelShader9;
+struct IDirect3DVertexDeclaration9;
+struct IDirect3DIndexBuffer9;
+struct IDirect3DSurface9;
+
 struct StateBlockStreamSourceValue {
     struct BufferRef {
-        void* value = nullptr;
         constexpr BufferRef() noexcept = default;
-        constexpr BufferRef(void* rawValue) noexcept : value(rawValue) {}
-        constexpr void* raw() const noexcept { return value; }
-        constexpr void*& rawRef() noexcept { return value; }
-        constexpr operator void*() const noexcept { return value; }
-        friend constexpr bool operator==(BufferRef a, void* b) noexcept {
-            return a.value == b;
+        constexpr IDirect3DVertexBuffer9* raw() const noexcept { return value; }
+        friend constexpr bool operator==(BufferRef a,
+                                         IDirect3DVertexBuffer9* b) noexcept {
+            return a.raw() == b;
         }
+    private:
+        IDirect3DVertexBuffer9* value = nullptr;
+        constexpr explicit BufferRef(IDirect3DVertexBuffer9* rawValue) noexcept
+            : value(rawValue) {}
+        friend struct StateBlockBufferRefFactory;
+#if defined(DXMT9_STATEBLOCK_TEST_SEAM)
+        friend struct StateBlockBufferTestFactory;
+#endif
     };
     BufferRef buffer{};
     std::uint32_t offset = 0u;
     std::uint32_t stride = 0u;
 };
 
-template<typename Tag>
-struct StateBlockComRef {
-    void* value = nullptr;
-    constexpr StateBlockComRef() noexcept = default;
-    template<typename P>
-    constexpr StateBlockComRef(P* rawValue) noexcept
-        : value(static_cast<void*>(rawValue)) {}
-    static constexpr StateBlockComRef fromRaw(void* raw) noexcept {
-        return StateBlockComRef{raw};
-    }
-    constexpr void* raw() const noexcept { return value; }
-    constexpr operator void*() const noexcept { return value; }
-    friend constexpr bool operator==(StateBlockComRef a,
-                                     StateBlockComRef b) noexcept {
-        return a.value == b.value;
-    }
-    friend constexpr bool operator==(StateBlockComRef a, void* b) noexcept {
-        return a.value == b;
+struct StateBlockBufferRefFactory {
+    static constexpr StateBlockStreamSourceValue::BufferRef fromValidated(
+        IDirect3DVertexBuffer9* raw) noexcept {
+        return StateBlockStreamSourceValue::BufferRef(raw);
     }
 };
+
+#if defined(DXMT9_STATEBLOCK_TEST_SEAM)
+struct StateBlockBufferTestFactory {
+    template<typename P>
+    static StateBlockStreamSourceValue::BufferRef fromFake(P* raw) noexcept {
+        return StateBlockStreamSourceValue::BufferRef(
+            reinterpret_cast<IDirect3DVertexBuffer9*>(raw));
+    }
+    static StateBlockStreamSourceValue::BufferRef fromFake(
+        std::uintptr_t raw) noexcept {
+        return StateBlockStreamSourceValue::BufferRef(
+            reinterpret_cast<IDirect3DVertexBuffer9*>(raw));
+    }
+};
+#endif
 
 struct StateBlockTextureTag;
 struct StateBlockVertexShaderTag;
@@ -437,6 +455,91 @@ struct StateBlockVertexDeclarationTag;
 struct StateBlockIndexBufferTag;
 struct StateBlockRenderTargetTag;
 struct StateBlockDepthStencilTag;
+
+template<typename Tag>
+struct StateBlockComRefTraits;
+template<typename Tag>
+struct StateBlockComRefFactory;
+#if defined(DXMT9_STATEBLOCK_TEST_SEAM)
+template<typename Tag>
+struct StateBlockComTestFactory;
+#endif
+
+template<>
+struct StateBlockComRefTraits<StateBlockTextureTag> {
+    using raw_type = IDirect3DBaseTexture9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockVertexShaderTag> {
+    using raw_type = IDirect3DVertexShader9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockPixelShaderTag> {
+    using raw_type = IDirect3DPixelShader9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockVertexDeclarationTag> {
+    using raw_type = IDirect3DVertexDeclaration9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockIndexBufferTag> {
+    using raw_type = IDirect3DIndexBuffer9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockRenderTargetTag> {
+    using raw_type = IDirect3DSurface9;
+};
+template<>
+struct StateBlockComRefTraits<StateBlockDepthStencilTag> {
+    using raw_type = IDirect3DSurface9;
+};
+
+template<typename Tag>
+struct StateBlockComRef {
+    using raw_type = typename StateBlockComRefTraits<Tag>::raw_type;
+    constexpr StateBlockComRef() noexcept = default;
+    constexpr raw_type* raw() const noexcept { return value; }
+    friend constexpr bool operator==(StateBlockComRef a,
+                                     StateBlockComRef b) noexcept {
+        return a.raw() == b.raw();
+    }
+    friend constexpr bool operator==(StateBlockComRef a,
+                                     raw_type* b) noexcept {
+        return a.raw() == b;
+    }
+private:
+    raw_type* value = nullptr;
+    constexpr explicit StateBlockComRef(raw_type* rawValue) noexcept
+        : value(rawValue) {}
+    friend struct StateBlockComRefFactory<Tag>;
+#if defined(DXMT9_STATEBLOCK_TEST_SEAM)
+    friend struct StateBlockComTestFactory<Tag>;
+#endif
+};
+
+template<typename Tag>
+struct StateBlockComRefFactory {
+    using Ref = StateBlockComRef<Tag>;
+    using raw_type = typename Ref::raw_type;
+    static constexpr Ref fromValidated(raw_type* raw) noexcept {
+        return Ref(raw);
+    }
+};
+
+#if defined(DXMT9_STATEBLOCK_TEST_SEAM)
+template<typename Tag>
+struct StateBlockComTestFactory {
+    using Ref = StateBlockComRef<Tag>;
+    using raw_type = typename Ref::raw_type;
+    template<typename P>
+    static constexpr Ref fromFake(P* raw) noexcept {
+        return Ref(reinterpret_cast<raw_type*>(raw));
+    }
+    static constexpr Ref fromFake(std::uintptr_t raw) noexcept {
+        return Ref(reinterpret_cast<raw_type*>(raw));
+    }
+};
+#endif
 using StateBlockTextureRef = StateBlockComRef<StateBlockTextureTag>;
 using StateBlockVertexShaderRef = StateBlockComRef<StateBlockVertexShaderTag>;
 using StateBlockPixelShaderRef = StateBlockComRef<StateBlockPixelShaderTag>;
@@ -445,6 +548,20 @@ using StateBlockVertexDeclarationRef =
 using StateBlockIndexBufferRef = StateBlockComRef<StateBlockIndexBufferTag>;
 using StateBlockRenderTargetRef = StateBlockComRef<StateBlockRenderTargetTag>;
 using StateBlockDepthStencilRef = StateBlockComRef<StateBlockDepthStencilTag>;
+
+template<typename Ref>
+struct StateBlockComRefTagFor;
+#define DXMT9_STATEBLOCK_REF_TAG(ref_, tag_) \
+    template<> struct StateBlockComRefTagFor<ref_> { using type = tag_; };
+DXMT9_STATEBLOCK_REF_TAG(StateBlockTextureRef, StateBlockTextureTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockVertexShaderRef, StateBlockVertexShaderTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockPixelShaderRef, StateBlockPixelShaderTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockVertexDeclarationRef,
+                         StateBlockVertexDeclarationTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockIndexBufferRef, StateBlockIndexBufferTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockRenderTargetRef, StateBlockRenderTargetTag)
+DXMT9_STATEBLOCK_REF_TAG(StateBlockDepthStencilRef, StateBlockDepthStencilTag)
+#undef DXMT9_STATEBLOCK_REF_TAG
 
 enum class StateBlockApplyCategoryRole : std::uint8_t {
     Value,
@@ -1192,15 +1309,14 @@ inline bool matrixEquals(const D9CMatrix& a, const D9CMatrix& b) noexcept {
 struct PeHotStateShadow;
 
 class LiveShadow {
-public:
-    D9CViewport viewportShadow{};
-    D9CRect scissorShadow{};
-    D9CMaterial materialShadow{};
-    float clipPlaneShadow[6 * 4]{};
-    D9CLight lightShadow[D9C_DRAW_PACKET_MAX_LIGHTS]{};
-    std::uint32_t lightEnableShadow = 0;
-
 private:
+    D9CViewport viewportShadow_{};
+    D9CRect scissorShadow_{};
+    D9CMaterial materialShadow_{};
+    float clipPlaneShadow_[6 * 4]{};
+    D9CLight lightShadow_[D9C_DRAW_PACKET_MAX_LIGHTS]{};
+    std::uint32_t lightEnableShadow_ = 0;
+
     RenderStateTableView renderStates() noexcept {
         return RenderStateTableView(renderStates_);
     }
@@ -1245,25 +1361,25 @@ private:
 };
 
 class PendingDelta {
-public:
+private:
     // Scalar pending categories stay flat and allocation-free. Keyed tables
     // are private so production code cannot bypass their typed category APIs.
-    std::uint32_t pendingTextureMask = 0;
-    std::uint32_t pendingStreamMask = 0;
-    bool pendingFvf = false;
-    bool pendingVs = false;
-    bool pendingPs = false;
-    bool pendingVdecl = false;
-    bool pendingIb = false;
-    std::uint32_t pendingRtMask = 0;
-    bool pendingDs = false;
-    bool pendingViewport = false;
-    bool pendingScissor = false;
-    bool pendingMaterial = false;
-    std::uint32_t pendingClipPlaneMask = 0;
-    std::uint32_t pendingLightSlotMask = 0;
-    std::uint32_t pendingLightEnableValidMask = 0;
-    std::uint32_t pendingLightEnableMask = 0;
+    std::uint32_t pendingTextureMask_ = 0;
+    std::uint32_t pendingStreamMask_ = 0;
+    bool pendingFvf_ = false;
+    bool pendingVs_ = false;
+    bool pendingPs_ = false;
+    bool pendingVdecl_ = false;
+    bool pendingIb_ = false;
+    std::uint32_t pendingRtMask_ = 0;
+    bool pendingDs_ = false;
+    bool pendingViewport_ = false;
+    bool pendingScissor_ = false;
+    bool pendingMaterial_ = false;
+    std::uint32_t pendingClipPlaneMask_ = 0;
+    std::uint32_t pendingLightSlotMask_ = 0;
+    std::uint32_t pendingLightEnableValidMask_ = 0;
+    std::uint32_t pendingLightEnableMask_ = 0;
 
 private:
     RenderStateTableView renderStates() noexcept {
@@ -1419,40 +1535,40 @@ private:
 public:
 
     bool hasHotState() const noexcept {
-        return !renderStates_.empty() || pendingTextureMask != 0 ||
-               pendingStreamMask != 0 || pendingFvf ||
-               pendingVs || pendingPs || pendingVdecl ||
-               pendingIb || pendingRtMask != 0 || pendingDs ||
-               pendingViewport || pendingScissor ||
+        return !renderStates_.empty() || pendingTextureMask_ != 0 ||
+               pendingStreamMask_ != 0 || pendingFvf_ ||
+               pendingVs_ || pendingPs_ || pendingVdecl_ ||
+               pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
+               pendingViewport_ || pendingScissor_ ||
                !textureStageStates_.empty() || !samplerStates_.empty() ||
-               pendingMaterial || pendingClipPlaneMask != 0 ||
+               pendingMaterial_ || pendingClipPlaneMask_ != 0 ||
                !transforms_.empty() ||
-               pendingLightSlotMask != 0 ||
-               pendingLightEnableValidMask != 0;
+               pendingLightSlotMask_ != 0 ||
+               pendingLightEnableValidMask_ != 0;
     }
 
 private:
     void clearHotState() noexcept {
         renderStates_.clear();
-        pendingTextureMask = 0;
-        pendingStreamMask = 0;
-        pendingFvf = false;
-        pendingVs = false;
-        pendingPs = false;
-        pendingVdecl = false;
-        pendingIb = false;
-        pendingRtMask = 0;
-        pendingDs = false;
-        pendingViewport = false;
-        pendingScissor = false;
+        pendingTextureMask_ = 0;
+        pendingStreamMask_ = 0;
+        pendingFvf_ = false;
+        pendingVs_ = false;
+        pendingPs_ = false;
+        pendingVdecl_ = false;
+        pendingIb_ = false;
+        pendingRtMask_ = 0;
+        pendingDs_ = false;
+        pendingViewport_ = false;
+        pendingScissor_ = false;
         textureStageStates_.clear();
         samplerStates_.clear();
-        pendingMaterial = false;
-        pendingClipPlaneMask = 0;
+        pendingMaterial_ = false;
+        pendingClipPlaneMask_ = 0;
         transforms_.clear();
-        pendingLightSlotMask = 0;
-        pendingLightEnableValidMask = 0;
-        pendingLightEnableMask = 0;
+        pendingLightSlotMask_ = 0;
+        pendingLightEnableValidMask_ = 0;
+        pendingLightEnableMask_ = 0;
     }
 
 private:
@@ -1487,6 +1603,11 @@ public:
     using TextureState = FixedTrackedState<StateBlockTextureRef, kPeTextureSlots>;
     class Writer {
     public:
+        Writer(const Writer&) = delete;
+        Writer& operator=(const Writer&) = delete;
+        Writer(Writer&&) = delete;
+        Writer& operator=(Writer&&) = delete;
+
         RenderStateTableView renderStates() noexcept {
             return state_.renderStates();
         }
@@ -1833,6 +1954,66 @@ private:
 struct PeHotStateShadow : LiveShadow, PendingDelta {
     class Writer {
     public:
+        // Scalar domains are only mutable through this capability.  The
+        // references remain flat members of the hot shadow; this wrapper is
+        // a borrowed, allocation-free phase token for bounded production
+        // writers.
+        D9CViewport& viewportShadow() noexcept {
+            return shadow_.LiveShadow::viewportShadow_;
+        }
+        D9CRect& scissorShadow() noexcept {
+            return shadow_.LiveShadow::scissorShadow_;
+        }
+        D9CMaterial& materialShadow() noexcept {
+            return shadow_.LiveShadow::materialShadow_;
+        }
+        float* clipPlaneShadow() noexcept {
+            return shadow_.LiveShadow::clipPlaneShadow_;
+        }
+        D9CLight* lightShadow() noexcept {
+            return shadow_.LiveShadow::lightShadow_;
+        }
+        std::uint32_t& lightEnableShadow() noexcept {
+            return shadow_.LiveShadow::lightEnableShadow_;
+        }
+        std::uint32_t& pendingTextureMask() noexcept {
+            return shadow_.PendingDelta::pendingTextureMask_;
+        }
+        std::uint32_t& pendingStreamMask() noexcept {
+            return shadow_.PendingDelta::pendingStreamMask_;
+        }
+        bool& pendingFvf() noexcept { return shadow_.PendingDelta::pendingFvf_; }
+        bool& pendingVs() noexcept { return shadow_.PendingDelta::pendingVs_; }
+        bool& pendingPs() noexcept { return shadow_.PendingDelta::pendingPs_; }
+        bool& pendingVdecl() noexcept {
+            return shadow_.PendingDelta::pendingVdecl_;
+        }
+        bool& pendingIb() noexcept { return shadow_.PendingDelta::pendingIb_; }
+        std::uint32_t& pendingRtMask() noexcept {
+            return shadow_.PendingDelta::pendingRtMask_;
+        }
+        bool& pendingDs() noexcept { return shadow_.PendingDelta::pendingDs_; }
+        bool& pendingViewport() noexcept {
+            return shadow_.PendingDelta::pendingViewport_;
+        }
+        bool& pendingScissor() noexcept {
+            return shadow_.PendingDelta::pendingScissor_;
+        }
+        bool& pendingMaterial() noexcept {
+            return shadow_.PendingDelta::pendingMaterial_;
+        }
+        std::uint32_t& pendingClipPlaneMask() noexcept {
+            return shadow_.PendingDelta::pendingClipPlaneMask_;
+        }
+        std::uint32_t& pendingLightSlotMask() noexcept {
+            return shadow_.PendingDelta::pendingLightSlotMask_;
+        }
+        std::uint32_t& pendingLightEnableValidMask() noexcept {
+            return shadow_.PendingDelta::pendingLightEnableValidMask_;
+        }
+        std::uint32_t& pendingLightEnableMask() noexcept {
+            return shadow_.PendingDelta::pendingLightEnableMask_;
+        }
         RenderStateTableView renderStateShadowTyped() noexcept {
             return shadow_.LiveShadow::renderStates();
         }
@@ -1869,6 +2050,62 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
 
     class Snapshot {
     public:
+        const D9CViewport& viewportShadow() const noexcept {
+            return shadow_.LiveShadow::viewportShadow_;
+        }
+        const D9CRect& scissorShadow() const noexcept {
+            return shadow_.LiveShadow::scissorShadow_;
+        }
+        const D9CMaterial& materialShadow() const noexcept {
+            return shadow_.LiveShadow::materialShadow_;
+        }
+        const float* clipPlaneShadow() const noexcept {
+            return shadow_.LiveShadow::clipPlaneShadow_;
+        }
+        const D9CLight* lightShadow() const noexcept {
+            return shadow_.LiveShadow::lightShadow_;
+        }
+        std::uint32_t lightEnableShadow() const noexcept {
+            return shadow_.LiveShadow::lightEnableShadow_;
+        }
+        std::uint32_t pendingTextureMask() const noexcept {
+            return shadow_.PendingDelta::pendingTextureMask_;
+        }
+        std::uint32_t pendingStreamMask() const noexcept {
+            return shadow_.PendingDelta::pendingStreamMask_;
+        }
+        bool pendingFvf() const noexcept { return shadow_.PendingDelta::pendingFvf_; }
+        bool pendingVs() const noexcept { return shadow_.PendingDelta::pendingVs_; }
+        bool pendingPs() const noexcept { return shadow_.PendingDelta::pendingPs_; }
+        bool pendingVdecl() const noexcept {
+            return shadow_.PendingDelta::pendingVdecl_;
+        }
+        bool pendingIb() const noexcept { return shadow_.PendingDelta::pendingIb_; }
+        std::uint32_t pendingRtMask() const noexcept {
+            return shadow_.PendingDelta::pendingRtMask_;
+        }
+        bool pendingDs() const noexcept { return shadow_.PendingDelta::pendingDs_; }
+        bool pendingViewport() const noexcept {
+            return shadow_.PendingDelta::pendingViewport_;
+        }
+        bool pendingScissor() const noexcept {
+            return shadow_.PendingDelta::pendingScissor_;
+        }
+        bool pendingMaterial() const noexcept {
+            return shadow_.PendingDelta::pendingMaterial_;
+        }
+        std::uint32_t pendingClipPlaneMask() const noexcept {
+            return shadow_.PendingDelta::pendingClipPlaneMask_;
+        }
+        std::uint32_t pendingLightSlotMask() const noexcept {
+            return shadow_.PendingDelta::pendingLightSlotMask_;
+        }
+        std::uint32_t pendingLightEnableValidMask() const noexcept {
+            return shadow_.PendingDelta::pendingLightEnableValidMask_;
+        }
+        std::uint32_t pendingLightEnableMask() const noexcept {
+            return shadow_.PendingDelta::pendingLightEnableMask_;
+        }
         ConstRenderStateTableView renderStateShadowTyped() const noexcept {
             return shadow_.LiveShadow::renderStates();
         }
@@ -1941,6 +2178,52 @@ struct PeHotStateShadow : LiveShadow, PendingDelta {
 
     ConstRenderStateTableView renderStateShadowTyped() const noexcept {
         return snapshot().renderStateShadowTyped();
+    }
+    const D9CViewport& viewportShadow() const noexcept {
+        return LiveShadow::viewportShadow_;
+    }
+    const D9CRect& scissorShadow() const noexcept {
+        return LiveShadow::scissorShadow_;
+    }
+    const D9CMaterial& materialShadow() const noexcept {
+        return LiveShadow::materialShadow_;
+    }
+    const float* clipPlaneShadow() const noexcept {
+        return LiveShadow::clipPlaneShadow_;
+    }
+    const D9CLight* lightShadow() const noexcept {
+        return LiveShadow::lightShadow_;
+    }
+    std::uint32_t lightEnableShadow() const noexcept {
+        return LiveShadow::lightEnableShadow_;
+    }
+    std::uint32_t pendingTextureMask() const noexcept {
+        return PendingDelta::pendingTextureMask_;
+    }
+    std::uint32_t pendingStreamMask() const noexcept {
+        return PendingDelta::pendingStreamMask_;
+    }
+    bool pendingFvf() const noexcept { return PendingDelta::pendingFvf_; }
+    bool pendingVs() const noexcept { return PendingDelta::pendingVs_; }
+    bool pendingPs() const noexcept { return PendingDelta::pendingPs_; }
+    bool pendingVdecl() const noexcept { return PendingDelta::pendingVdecl_; }
+    bool pendingIb() const noexcept { return PendingDelta::pendingIb_; }
+    std::uint32_t pendingRtMask() const noexcept { return PendingDelta::pendingRtMask_; }
+    bool pendingDs() const noexcept { return PendingDelta::pendingDs_; }
+    bool pendingViewport() const noexcept { return PendingDelta::pendingViewport_; }
+    bool pendingScissor() const noexcept { return PendingDelta::pendingScissor_; }
+    bool pendingMaterial() const noexcept { return PendingDelta::pendingMaterial_; }
+    std::uint32_t pendingClipPlaneMask() const noexcept {
+        return PendingDelta::pendingClipPlaneMask_;
+    }
+    std::uint32_t pendingLightSlotMask() const noexcept {
+        return PendingDelta::pendingLightSlotMask_;
+    }
+    std::uint32_t pendingLightEnableValidMask() const noexcept {
+        return PendingDelta::pendingLightEnableValidMask_;
+    }
+    std::uint32_t pendingLightEnableMask() const noexcept {
+        return PendingDelta::pendingLightEnableMask_;
     }
     ConstRenderStateTableView pendingRenderStatesTyped() const noexcept {
         return snapshot().pendingRenderStatesTyped();

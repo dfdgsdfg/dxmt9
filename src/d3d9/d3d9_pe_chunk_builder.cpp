@@ -460,6 +460,7 @@ bool CommandChunkBuilder::commitRecord() noexcept {
   } catch (...) {
     return failActiveRecord();
   }
+  lastCommittedRecordOrdinal_ = active_.recordOrdinal;
   active_ = {};
   return true;
 }

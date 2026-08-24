@@ -43,7 +43,27 @@ void D3D9PeDiagnosticObserver::popCallScope(
     D3D9PePresentCallSlot slot) noexcept {
     if (device_) {
         device_->popPeCallScope(slot);
-    }
+  }
+}
+
+void D3D9PeDiagnosticObserver::notifyStateBlockFault(
+    bool entered, std::int32_t hr) noexcept {
+  if (device_) {
+    device_->recordPeStateBlockFault(entered, hr);
+  }
+}
+
+void D3D9DeviceImpl::recordPeStateBlockFault(bool entered,
+                                              std::int32_t hr) noexcept {
+  if (!dxmt9PeRecorderStatsEnabled() || !diagnostics_) {
+    return;
+  }
+  if (entered) {
+    ++diagnostics_->peRecorderStats_.stateBlockFaultEnteredCalls;
+  } else {
+    ++diagnostics_->peRecorderStats_.stateBlockFaultPreCalls;
+  }
+  diagnostics_->peRecorderStats_.stateBlockFaultLastHr = hr;
 }
 
 const char* D3D9DeviceImpl::vsConstSetterRangePhaseName(
@@ -2097,7 +2117,9 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         "barrier=%llu present=%llu readback=%llu reset=%llu "
         "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu} "
         "up{drawPrimitiveUPCalls=%llu drawIndexedPrimitiveUPCalls=%llu "
-        "vertexBytes=%llu indexBytes=%llu}",
+        "vertexBytes=%llu indexBytes=%llu} "
+        "stateBlockFaultPre=%llu stateBlockFaultEntered=%llu "
+        "stateBlockFaultLastHr=0x%08x",
         event ? event : "unknown", this,
         static_cast<unsigned long long>(diagnostics_->peRecorderStats_.commitCount),
         static_cast<unsigned long long>(diagnostics_->peRecorderStats_.recordCountTotal),
@@ -2388,7 +2410,12 @@ void D3D9DeviceImpl::logPeRecorderStats(const char* event, bool force) {
         static_cast<unsigned long long>(diagnostics_->peRecorderStats_.drawPrimitiveUPCalls),
         static_cast<unsigned long long>(diagnostics_->peRecorderStats_.drawIndexedPrimitiveUPCalls),
         static_cast<unsigned long long>(diagnostics_->peRecorderStats_.upVertexBytes),
-        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.upIndexBytes));
+        static_cast<unsigned long long>(diagnostics_->peRecorderStats_.upIndexBytes),
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.stateBlockFaultPreCalls),
+        static_cast<unsigned long long>(
+            diagnostics_->peRecorderStats_.stateBlockFaultEnteredCalls),
+        static_cast<unsigned>(diagnostics_->peRecorderStats_.stateBlockFaultLastHr));
     dxmt9DeviceInfoLog(
         "pe_recorder_gap_call_stats event=%s device=%p "
         "gapDrawIndexedVsConstFTop1CallFamily=%s "

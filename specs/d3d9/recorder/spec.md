@@ -52,10 +52,10 @@ retain. `PeHotStateShadow::Writer`, `Snapshot`, and `Consumer` separate hot
 mutation, read-only observation, and exact pending settlement. “Snapshot” is
 a capability boundary, not global object immutability: the owning recorder may
 continue mutation through its writer while readers cannot obtain mutable table
-or category access. The StateBlock
-transaction similarly exposes `recordWriter()` and `recordedSnapshot()`;
-wrapper snapshots use their own writer/snapshot views. Flat storage and raw
-category enumeration remain implementation details.
+or category access. The StateBlock transaction exposes phase-checked
+`withRecordingWriter` callbacks and
+`recordedSnapshot()`; wrapper snapshots use their own writer/snapshot views.
+Flat storage and raw category enumeration remain implementation details.
 
 ### 2.1 Category table
 
@@ -117,6 +117,18 @@ effective state as `LiveShadow` at that record's ordinal. Failure returns the
 pre-attempt state, including dirty constant ranges and oversized-table rows.
 Acceptance validates every bounded wire key first, so one malformed row cannot
 partially erase an otherwise valid batch.
+
+The effective `FULL_SNAPSHOT` disposition is part of the prepared producer
+state and remains attached through emission and settlement. A snapshot
+projects clean `LiveShadow` scalar rows without requiring fabricated
+`PendingDelta` tokens. Every represented pending row undergoes canonical-order
+and exact category/key/index/value validation and is consumed exactly once.
+When the default-off cold scalar observer is enabled, that same transition also
+checks its setter-source and builder-record ordinals; this conditional witness
+does not prove that the default path retains a source ordinal. Rows not
+represented by a bounded projection remain pending. If an accepted append
+cannot settle, the recorder enters the existing fail-stop state instead of
+returning `S_OK` with stale state.
 
 ### 2.3 State-block transitions
 
@@ -488,7 +500,7 @@ capture rejection through the same pure helpers.
 | `R-CORE-REC-3.2`–`3.6` | seal/commit/capture settlement and public failure containment | builder seal/rollback tests; production composed settlement and commit tables; composed capacity-pre flush/capture/drain/reset/warm plus CapacityPost model; four composed controls; `testPendingChunkLifetimeTruthTable`; `dxmt9-replay-offload-queue-spec` uses a real failing allocator and throwing replay callbacks with exact wrapper ownership checks, while labeling the post-adoption ambiguity control synthetic. Exact changed-model state counts are intentionally not reused. | Wine bridge/capture fault injection remains open; entered-call ambiguity is fail-stop under the unchanged ABI and recovers only through explicit Reset/teardown discard |
 | `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry, TU-local concrete COM membership | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection; `WireObjectRegistry.tla`; render-tape identity tests; `dxmt9-pe-com-membership-spec` covers the post-RTTI ten-kind owner/public/wire/alias member matrix; canonical x64/x86 PE builds instantiate the RTTI boundary | Wine foreign-wrapper COM-boundary conformance remains required; native predicates do not prove runtime Wine membership behavior |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
-| `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | direct `recorderState_` ownership with audited reference aliases removed; capture lifecycle tests plus `dxmt9-pe-diagnostics-spec` disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins; canonical x64/x86 PE builds pass and each defines the sole `D3D9DeviceImpl` vtable in `d3d9_pe_device.cpp.obj`; `FlushPeRecorderForChild` placement is unchanged | broaden instruction/code-size coverage across representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by native pins |
+| `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | direct `recorderState_` ownership with audited reference aliases removed; compile-time `PeRecorderState` pins exclude the default-off scalar ledger, whose nullable cold owner allocates only under its explicit gate; capture/diagnostic lifecycle tests cover disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins | broaden instruction/code-size coverage across representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by native pins |
 | `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables feed generated TLA tables; freshness checks precede TLC; native exhaustive rows cover state-write, recorder settlement, repeated Capture/Apply values, and failure controls. The complete `dxmt9-verify-tla` multi-model bundle passes in the integrated tree. | exact semantic cross-projection across the heterogeneous append envelope and Wine bridge/capture fault injection remain open |
 
 The host suite can compile shared headers and extracted value/predicate owners,
