@@ -1,4 +1,5 @@
 #include "d3d9_pe_commit_transition.hpp"
+#include "d3d9_pe_recorder.hpp"
 
 #include <array>
 #include <cstdint>
@@ -12,6 +13,7 @@ namespace pe = dxmt9::d3d9::pe;
 namespace {
 
 static_assert(!std::is_aggregate_v<pe::RecorderCommitPlan>);
+static_assert(!std::is_aggregate_v<pe::RecorderSettlementPlan>);
 
 int failures = 0;
 
@@ -82,10 +84,17 @@ void testRetryAndAcceptedCapture() {
   const auto sealedBytes = witness.bytes;
   check(witness.apply({
             .phase = pe::RecorderCommitPhase::Sealed,
-            .event = pe::RecorderCommitEvent::BridgeFailed}) &&
+            .event = pe::RecorderCommitEvent::BridgePreEffectFailed}) &&
             witness.phase == pe::RecorderCommitPhase::Sealed &&
             witness.bytes == sealedBytes,
-        "bridge failure preserves sealed retry bytes");
+        "pre-effect bridge failure preserves sealed retry bytes");
+  const auto effectUnknown = pe::settleRecorderCommit({
+      .phase = pe::RecorderCommitPhase::Sealed,
+      .event = pe::RecorderCommitEvent::BridgeEffectUnknown});
+  check(effectUnknown.valid() && effectUnknown.poisons() &&
+            effectUnknown.next() == pe::RecorderCommitPhase::Poisoned &&
+            !effectUnknown.preserveRetryBytes(),
+        "entered bridge failure is effect-unknown fail-stop");
   check(witness.apply({
             .phase = pe::RecorderCommitPhase::Sealed,
             .event = pe::RecorderCommitEvent::BridgeAccepted}) &&
@@ -181,12 +190,26 @@ void testDrainOrderingAndReset() {
 }
 
 void testDiscardAndFailureMatrix() {
-  constexpr std::array<pe::RecorderCommitPhase, 8> phases = {
+  check(peRecorderResetDisposition(false) ==
+                PeRecorderFlushDisposition::Submit &&
+            peRecorderResetDisposition(true) ==
+                PeRecorderFlushDisposition::DiscardForRecovery,
+        "healthy Reset submits queued work while poisoned recovery discards");
+  check(planPeRecorderFlush(PeRecorderFlushDisposition::Submit, false) ==
+            PeRecorderFlushAction::Submit &&
+            planPeRecorderFlush(PeRecorderFlushDisposition::Submit, true) ==
+                PeRecorderFlushAction::RejectPoisoned &&
+            planPeRecorderFlush(
+                PeRecorderFlushDisposition::DiscardForRecovery, true) ==
+                PeRecorderFlushAction::Discard,
+        "production flush seam rejects poisoned resubmission and admits recovery discard");
+  constexpr std::array<pe::RecorderCommitPhase, 9> phases = {
       pe::RecorderCommitPhase::Unsealed, pe::RecorderCommitPhase::Sealed,
       pe::RecorderCommitPhase::Accepted,
       pe::RecorderCommitPhase::CaptureSettled,
       pe::RecorderCommitPhase::Draining, pe::RecorderCommitPhase::Drained,
-      pe::RecorderCommitPhase::Reset, pe::RecorderCommitPhase::WarmAdvanced};
+      pe::RecorderCommitPhase::Reset, pe::RecorderCommitPhase::WarmAdvanced,
+      pe::RecorderCommitPhase::Poisoned};
   for (const auto phase : phases) {
     CommitWitness witness{};
     witness.phase = phase;
@@ -210,12 +233,131 @@ void testDiscardAndFailureMatrix() {
   }
 }
 
+void testComposedSettlementPredicates() {
+  constexpr std::array points{
+      pe::RecorderSettlementPoint::CapacityPre,
+      pe::RecorderSettlementPoint::Emitter,
+      pe::RecorderSettlementPoint::CapacityPost,
+      pe::RecorderSettlementPoint::Bridge};
+  constexpr std::array results{
+      pe::RecorderSettlementResult::Succeeded,
+      pe::RecorderSettlementResult::FailedPreEffect,
+      pe::RecorderSettlementResult::FailedEffectUnknown};
+  std::size_t valid = 0u;
+  for (const auto point : points) {
+    for (const auto result : results) {
+      const auto plan = pe::planRecorderSettlement({point, result});
+      std::size_t matches = 0u;
+      for (const auto& row : pe::kRecorderSettlementTable) {
+        if (row.point == point && row.result == result) ++matches;
+      }
+      check(matches <= 1u && plan.valid() == (matches == 1u),
+            "composed settlement table is exhaustive and unambiguous");
+      valid += plan.valid() ? 1u : 0u;
+      if (plan.valid()) {
+        check(plan.poison() == (result ==
+                  pe::RecorderSettlementResult::FailedEffectUnknown),
+              "effect-unknown rows alone fail-stop");
+      }
+    }
+  }
+  check(valid == pe::kRecorderSettlementTable.size() && valid == 11u,
+        "all composed production settlement rows are reachable");
+
+  const auto pre = pe::planRecorderSettlement({
+      pe::RecorderSettlementPoint::CapacityPre,
+      pe::RecorderSettlementResult::FailedPreEffect});
+  const auto emitter = pe::planRecorderSettlement({
+      pe::RecorderSettlementPoint::Emitter,
+      pe::RecorderSettlementResult::FailedPreEffect});
+  const auto post = pe::planRecorderSettlement({
+      pe::RecorderSettlementPoint::CapacityPost,
+      pe::RecorderSettlementResult::FailedPreEffect});
+  const auto unknown = pe::planRecorderSettlement({
+      pe::RecorderSettlementPoint::Bridge,
+      pe::RecorderSettlementResult::FailedEffectUnknown});
+  const auto preUnknown = pe::planRecorderSettlement({
+      pe::RecorderSettlementPoint::CapacityPre,
+      pe::RecorderSettlementResult::FailedEffectUnknown});
+  check(pre.retryable() && !pre.acceptedRecord() &&
+            emitter.rollbackEmitter() && !emitter.acceptedRecord() &&
+            post.retryable() && post.acceptedRecord() && unknown.poison() &&
+            !unknown.retryable() && preUnknown.poison() &&
+            !preUnknown.retryable() &&
+            pe::recorderFlushSettlementResult(true, false) ==
+                pe::RecorderSettlementResult::Succeeded &&
+            pe::recorderFlushSettlementResult(false, false) ==
+                pe::RecorderSettlementResult::FailedPreEffect &&
+            pe::recorderFlushSettlementResult(false, true) ==
+                pe::RecorderSettlementResult::FailedEffectUnknown,
+        "capacity/emitter/bridge dispositions remain distinct");
+
+  check(!pe::recorderCaptureMayRetract(true) &&
+            pe::recorderParentDrainAllowed(false, true) &&
+            !pe::recorderParentDrainAllowed(true, true) &&
+            pe::recorderResetAfterDrainAllowed(false, false, false) &&
+            !pe::recorderResetAfterDrainAllowed(true, false, false) &&
+            pe::recorderWarmAdvanceAllowed(true, true) &&
+            !pe::recorderWarmAdvanceAllowed(false, true),
+        "capture/drain/reset/warm predicates enforce composed order");
+}
+
+void testCapacityPreFlushComposition() {
+  constexpr std::array captureEvents{
+      pe::RecorderCommitEvent::CaptureMaterialized,
+      pe::RecorderCommitEvent::CaptureRejected,
+      pe::RecorderCommitEvent::CaptureSkipped};
+  for (const auto captureEvent : captureEvents) {
+    CommitWitness prior{};
+    const auto retry = pe::planRecorderSettlement({
+        pe::RecorderSettlementPoint::CapacityPre,
+        pe::recorderFlushSettlementResult(false, false)});
+    check(retry.valid() && retry.retryable() && !retry.acceptedRecord(),
+          "capacity-pre local failure leaves proposed append unattempted");
+    check(prior.apply({.phase = pe::RecorderCommitPhase::Unsealed,
+                       .event = pe::RecorderCommitEvent::SealAccepted}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Sealed,
+                           .event = pe::RecorderCommitEvent::BridgeAccepted}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Accepted,
+                           .event = captureEvent}) &&
+              prior.commandAccepted,
+          "capacity-pre flush crosses seal, bridge, and capture settlement");
+    check(prior.apply({.phase = pe::RecorderCommitPhase::CaptureSettled,
+                       .event = pe::RecorderCommitEvent::DrainPending}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Draining,
+                           .event = pe::RecorderCommitEvent::DrainAlias,
+                           .aliasesRemain = true}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Draining,
+                           .event = pe::RecorderCommitEvent::DrainParent,
+                           .parentPending = true}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Drained,
+                           .event = pe::RecorderCommitEvent::BuilderReset}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::Reset,
+                           .event = pe::RecorderCommitEvent::WarmEpochAdvance}) &&
+              prior.apply({.phase = pe::RecorderCommitPhase::WarmAdvanced,
+                           .event = pe::RecorderCommitEvent::DrainComplete}),
+          "capacity-pre flush drains aliases before parent, resets, then warms");
+    const auto success = pe::planRecorderSettlement({
+        pe::RecorderSettlementPoint::CapacityPre,
+        pe::recorderFlushSettlementResult(true, false)});
+    const auto emit = pe::planRecorderSettlement({
+        pe::RecorderSettlementPoint::Emitter,
+        pe::RecorderSettlementResult::Succeeded});
+    check(prior.phase == pe::RecorderCommitPhase::Unsealed &&
+              success.valid() && !success.acceptedRecord() && emit.valid() &&
+              emit.acceptedRecord(),
+          "only the post-flush emitter accepts the proposed append");
+  }
+}
+
 }  // namespace
 
 int main() {
   testRetryAndAcceptedCapture();
   testDrainOrderingAndReset();
   testDiscardAndFailureMatrix();
+  testComposedSettlementPredicates();
+  testCapacityPreFlushComposition();
   if (failures != 0) return 1;
   std::puts("pe commit transition spec: PASS");
   return 0;

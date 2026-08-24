@@ -6,8 +6,8 @@
 
 #include "dxmt9/device_c.h"
 
-IDirect3D9* CreateFactoryImpl(D9CFactory* f);
-IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f);
+IDirect3D9* CreateFactoryImpl(D9CFactory* f) noexcept;
+IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f) noexcept;
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
                                      IDirect3D9Ex* pFactory,
                                      UINT adapter,
@@ -15,5 +15,6 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
                                      DWORD behaviorFlags,
                                      HWND window,
                                      bool extended,
-                                     DWORD implicitSwapchainFlags);
+                                     DWORD implicitSwapchainFlags,
+                                     HRESULT* failureReason) noexcept;
 void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);

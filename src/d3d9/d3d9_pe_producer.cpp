@@ -505,10 +505,11 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
     return false;
   }
 
-  shadow.acceptRenderStateBatch(state.renderStates, plan);
-  shadow.acceptTextureStageStateBatch(state.textureStageStates, plan);
-  shadow.acceptSamplerStateBatch(state.samplerStates, plan);
-  shadow.acceptTransformBatch(state.transforms, plan);
+  auto consumer = shadow.consume();
+  consumer.acceptRenderStateBatch(state.renderStates, plan);
+  consumer.acceptTextureStageStateBatch(state.textureStageStates, plan);
+  consumer.acceptSamplerStateBatch(state.samplerStates, plan);
+  consumer.acceptTransformBatch(state.transforms, plan);
 
   for (const auto& entry : state.textures) {
     if (entry.wire.slot < 32u) {

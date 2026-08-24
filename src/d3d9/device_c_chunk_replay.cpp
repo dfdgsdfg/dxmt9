@@ -7,6 +7,7 @@
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_ordered_control.hpp"
 #include "device_c_chunk_replay.hpp"
+#include "device_c_presence_table.hpp"
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_offload.hpp"
 #include "util/unixcall_marshal.hpp"
@@ -26,6 +27,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <vector>
@@ -154,158 +156,31 @@ extern "C" int32_t dxmt9c_device_get_render_target_data(D9CDevice* d, D9CSurface
 
 namespace {
 
-// Open-addressed pointer-presence accelerator for the mark-phase ledger-
-// target dedup (state-churn-encode-append-decomposition.{26,28}: measured
-// 0.17 ms/present, `commit_chunk_phase_mark_dedup_cpu_ms`). It only ever
-// answers "have I already inserted this key", never owns the retained data —
-// `raw.ledgerTargets` stays the single source of truth. On overflow it stops
-// answering (rather than growing on the hot path) and the caller falls back
-// to the original O(n) linear scan over `raw.ledgerTargets`, which remains
-// correct because every accepted key was always pushed there too. Slots grow
-// monotonically call-to-call (never shrink), the same reserve-and-keep shape
-// as `D3D9PePendingCommandRetainer::entries_`.
-struct LedgerTargetPresence {
-  std::vector<dxmt9::d3d9::ReplayDrainTarget*> slots;
-  std::size_t occupied = 0;
-  bool overflowed = false;
-
-  void reset(std::size_t capacityHint) noexcept {
-    std::size_t capacity = slots.empty() ? 64u : slots.size();
-    const std::size_t target = std::max<std::size_t>(capacityHint * 2u, 64u);
-    while (capacity < target) {
-      capacity <<= 1u;
-    }
-    if (capacity != slots.size()) {
-      slots.assign(capacity, nullptr);
-    } else {
-      std::fill(slots.begin(), slots.end(), nullptr);
-    }
-    occupied = 0u;
-    overflowed = false;
-  }
-
-  bool contains(dxmt9::d3d9::ReplayDrainTarget* key) const noexcept {
-    if (slots.empty()) {
-      return false;
-    }
-    const auto mask = slots.size() - 1u;
-    auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
-    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
-      if (slots[idx] == key) {
-        return true;
-      }
-      if (slots[idx] == nullptr) {
-        return false;
-      }
-      idx = (idx + 1u) & mask;
-    }
-    return false;
-  }
-
-  // Precondition: contains(key) == false. Returns false (and sets
-  // overflowed) if the table has no room for another entry.
-  bool insert(dxmt9::d3d9::ReplayDrainTarget* key) noexcept {
-    if (overflowed || slots.empty() || occupied * 4u >= slots.size() * 3u) {
-      overflowed = true;
-      return false;
-    }
-    const auto mask = slots.size() - 1u;
-    auto idx = (reinterpret_cast<std::uintptr_t>(key) >> 4u) & mask;
-    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
-      if (slots[idx] == nullptr) {
-        slots[idx] = key;
-        ++occupied;
-        return true;
-      }
-      idx = (idx + 1u) & mask;
-    }
-    overflowed = true;
-    return false;
+struct LedgerTargetHash {
+  std::size_t operator()(
+      dxmt9::d3d9::ReplayDrainTarget* value) const noexcept {
+    return reinterpret_cast<std::uintptr_t>(value) >> 4u;
   }
 };
+using LedgerTargetPresence = dxmt9::d3d9::PresenceTable<
+    dxmt9::d3d9::ReplayDrainTarget*, LedgerTargetHash>;
 
-// Same accelerator shape for the mark-phase core-resource-entry dedup, keyed
-// by (kind, handle) instead of a raw pointer. `scratch.coreEntries` remains
-// the source of truth for the same overflow-fallback reason as above.
-struct CoreEntryPresence {
-  struct Slot {
-    bool occupiedSlot = false;
-    dxmt9::core::ChunkHandleKind kind{};
-    std::uint64_t handleValue = 0;
-  };
-
-  std::vector<Slot> slots;
-  std::size_t occupied = 0;
-  bool overflowed = false;
-
-  static std::size_t hashOf(dxmt9::core::ChunkHandleKind kind,
-                            std::uint64_t handleValue) noexcept {
-    std::uint64_t h = handleValue * 0x9E3779B97F4A7C15ull;
-    h ^= static_cast<std::uint64_t>(kind) + 0x517CC1B727220A95ull;
-    h ^= h >> 33;
-    return static_cast<std::size_t>(h);
-  }
-
-  void reset(std::size_t capacityHint) noexcept {
-    std::size_t capacity = slots.empty() ? 64u : slots.size();
-    const std::size_t target = std::max<std::size_t>(capacityHint * 2u, 64u);
-    while (capacity < target) {
-      capacity <<= 1u;
-    }
-    if (capacity != slots.size()) {
-      slots.assign(capacity, Slot{});
-    } else {
-      std::fill(slots.begin(), slots.end(), Slot{});
-    }
-    occupied = 0u;
-    overflowed = false;
-  }
-
-  bool contains(dxmt9::core::ChunkHandleKind kind,
-               dxmt9::core::Handle handle) const noexcept {
-    if (slots.empty()) {
-      return false;
-    }
-    const auto mask = slots.size() - 1u;
-    auto idx = hashOf(kind, handle.value) & mask;
-    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
-      const auto& s = slots[idx];
-      if (!s.occupiedSlot) {
-        return false;
-      }
-      if (s.kind == kind && s.handleValue == handle.value) {
-        return true;
-      }
-      idx = (idx + 1u) & mask;
-    }
-    return false;
-  }
-
-  // Precondition: contains(kind, handle) == false. Returns false (and sets
-  // overflowed) if the table has no room for another entry.
-  bool insert(dxmt9::core::ChunkHandleKind kind,
-             dxmt9::core::Handle handle) noexcept {
-    if (overflowed || slots.empty() || occupied * 4u >= slots.size() * 3u) {
-      overflowed = true;
-      return false;
-    }
-    const auto mask = slots.size() - 1u;
-    auto idx = hashOf(kind, handle.value) & mask;
-    for (std::size_t probes = 0; probes < slots.size(); ++probes) {
-      auto& s = slots[idx];
-      if (!s.occupiedSlot) {
-        s.occupiedSlot = true;
-        s.kind = kind;
-        s.handleValue = handle.value;
-        ++occupied;
-        return true;
-      }
-      idx = (idx + 1u) & mask;
-    }
-    overflowed = true;
-    return false;
+struct CoreEntryPresenceKey {
+  dxmt9::core::ChunkHandleKind kind{};
+  dxmt9::core::Handle handle{};
+  friend bool operator==(const CoreEntryPresenceKey&,
+                         const CoreEntryPresenceKey&) = default;
+};
+struct CoreEntryPresenceHash {
+  std::size_t operator()(const CoreEntryPresenceKey& key) const noexcept {
+    std::uint64_t hash = key.handle.value * 0x9E3779B97F4A7C15ull;
+    hash ^= static_cast<std::uint64_t>(key.kind) + 0x517CC1B727220A95ull;
+    hash ^= hash >> 33u;
+    return static_cast<std::size_t>(hash);
   }
 };
+using CoreEntryPresence = dxmt9::d3d9::PresenceTable<
+    CoreEntryPresenceKey, CoreEntryPresenceHash>;
 
 struct ReplayScratchArena {
   std::vector<dxmt9::core::DrawRunSubmission> submissions;
@@ -1469,7 +1344,7 @@ bool persistResolvedResourcesAndCaptureBindings(
         ++bufferHandleCount;
         auto* target = value->replayDrainTarget.get();
         bool targetDuplicate;
-        if (!scratch.ledgerTargetPresence.overflowed) {
+        if (!scratch.ledgerTargetPresence.overflowed()) {
           targetDuplicate = scratch.ledgerTargetPresence.contains(target);
         } else {
           // Overflow fallback: raw.ledgerTargets is always kept complete, so
@@ -1480,7 +1355,7 @@ bool persistResolvedResourcesAndCaptureBindings(
         }
         if (!targetDuplicate) {
           raw.ledgerTargets.push_back(target);
-          if (!scratch.ledgerTargetPresence.overflowed) {
+        if (!scratch.ledgerTargetPresence.overflowed()) {
             scratch.ledgerTargetPresence.insert(target);
           }
         }
@@ -1494,8 +1369,8 @@ bool persistResolvedResourcesAndCaptureBindings(
     const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(
         imported.handles[i].kind);
     bool duplicate;
-    if (!scratch.coreEntryPresence.overflowed) {
-      duplicate = scratch.coreEntryPresence.contains(kind, handle);
+    if (!scratch.coreEntryPresence.overflowed()) {
+      duplicate = scratch.coreEntryPresence.contains({kind, handle});
     } else {
       // Overflow fallback: scratch.coreEntries is always kept complete, so
       // the linear scan is still correct, just the pre-overflow O(n).
@@ -1507,8 +1382,8 @@ bool persistResolvedResourcesAndCaptureBindings(
     }
     if (!duplicate) {
       scratch.coreEntries.push_back({.kind = kind, .handle = handle});
-      if (!scratch.coreEntryPresence.overflowed) {
-        scratch.coreEntryPresence.insert(kind, handle);
+      if (!scratch.coreEntryPresence.overflowed()) {
+        scratch.coreEntryPresence.insert({kind, handle});
       }
     }
   }
@@ -1992,6 +1867,23 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
   return hr;
 }
 
+namespace {
+class ScopedRetainedWrapperRelease {
+public:
+  explicit ScopedRetainedWrapperRelease(
+      dxmt9::d3d9::RawCommandChunk& chunk) noexcept
+      : chunk_(chunk) {}
+  ~ScopedRetainedWrapperRelease() noexcept {
+    if (armed_) dxmt9::d3d9::releaseRetainedWrappers(chunk_);
+  }
+  void dismiss() noexcept { armed_ = false; }
+
+private:
+  dxmt9::d3d9::RawCommandChunk& chunk_;
+  bool armed_ = true;
+};
+}  // namespace
+
 int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
     D9CDevice* d, std::span<const std::byte> bytes,
     const dxmt9::d3d9::CommandChunkEnvelope& envelope,
@@ -2009,58 +1901,67 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
   }
 
   dxmt9::d3d9::RawCommandChunk raw;
-  raw.recordBlob.assign(
-      reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
-      reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
-  raw.wireVersion = envelope.version;
-  raw.recordCount = envelope.recordCount;
-  raw.recordBytes = static_cast<std::uint32_t>(bytes.size());
-  raw.handleCount = envelope.handleCount;
-  raw.preflightValidated = true;
-  raw.resolvedObjects.assign(resolvedObjects.begin(), resolvedObjects.end());
-  for (std::size_t index = 0; index < imported.handles.size(); ++index) {
-    const auto kind = imported.handles[index].kind;
-    void* object = resolvedObjects[index];
-    if (!object) {
-      dxmt9::d3d9::releaseRetainedWrappers(raw);
-      return commitChunkFail("provider-replay-null-object",
-                             static_cast<std::uint32_t>(index), kind);
+  ScopedRetainedWrapperRelease retainedRelease(raw);
+  bool ledgerPublished = false;
+  try {
+    raw.recordBlob.assign(
+        reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
+        reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
+    raw.wireVersion = envelope.version;
+    raw.recordCount = envelope.recordCount;
+    raw.recordBytes = static_cast<std::uint32_t>(bytes.size());
+    raw.handleCount = envelope.handleCount;
+    raw.preflightValidated = true;
+    raw.resolvedObjects.assign(resolvedObjects.begin(), resolvedObjects.end());
+    raw.retainedWrappers.reserve(imported.handles.size());
+    for (std::size_t index = 0; index < imported.handles.size(); ++index) {
+      const auto kind = imported.handles[index].kind;
+      void* object = resolvedObjects[index];
+      if (!object) {
+        return commitChunkFail("provider-replay-null-object",
+                               static_cast<std::uint32_t>(index), kind);
+      }
+      raw.retainedWrappers.push_back({.kind = kind, .ptr = object});
+      retainWrapper(kind, object);
     }
-    retainWrapper(kind, object);
-    raw.retainedWrappers.push_back({.kind = kind, .ptr = object});
-  }
-  raw.hasPresent = std::any_of(
-      imported.records.begin(), imported.records.end(),
-      [](const D9CCommandChunkWireRecordHeader& record) {
-        return record.type == D9C_COMMAND_RECORD_PRESENT;
-      });
+    raw.hasPresent = std::any_of(
+        imported.records.begin(), imported.records.end(),
+        [](const D9CCommandChunkWireRecordHeader& record) {
+          return record.type == D9C_COMMAND_RECORD_PRESENT;
+        });
 
-  if (!persistResolvedResourcesAndCaptureBindings(d, raw, imported)) {
-    dxmt9::d3d9::releaseRetainedWrappers(raw);
-    return commitChunkFail("provider-replay-resource-capture");
-  }
-  if (!dxmt9::d3d9::drainDeferredReplay(d, "provider-render-tape")) {
-    dxmt9::d3d9::releaseRetainedWrappers(raw);
-    return commitChunkFail("provider-replay-drain");
-  }
-  if (!d->replayDrainLedger.publishInline(raw)) {
-    dxmt9::d3d9::releaseRetainedWrappers(raw);
-    return commitChunkFail("provider-replay-ledger");
-  }
+    if (!persistResolvedResourcesAndCaptureBindings(d, raw, imported)) {
+      return commitChunkFail("provider-replay-resource-capture");
+    }
+    if (!dxmt9::d3d9::drainDeferredReplay(d, "provider-render-tape")) {
+      return commitChunkFail("provider-replay-drain");
+    }
+    if (!d->replayDrainLedger.publishInline(raw)) {
+      return commitChunkFail("provider-replay-ledger");
+    }
+    ledgerPublished = true;
 
-  const int32_t hr = replayPlannedChunk(
-      d, raw, /*pacedByPresentOrdinal=*/false,
-      /*allowDirectArena=*/false);
-  if (!failed(hr)) {
-    d->replayDrainLedger.publishReplayed(raw);
-  } else {
-    d->replayDrainLedger.poison();
+    const int32_t hr = replayPlannedChunk(
+        d, raw, /*pacedByPresentOrdinal=*/false,
+        /*allowDirectArena=*/false);
+    if (!failed(hr)) {
+      d->replayDrainLedger.publishReplayed(raw);
+    } else {
+      d->replayDrainLedger.poison();
+    }
+    return hr;
+  } catch (const std::bad_alloc&) {
+    if (ledgerPublished) d->replayDrainLedger.poison();
+    return commitChunkFail("provider-replay-allocation", 0xffffffffu, 0u,
+                           dxmt9::core::E_OUTOFMEMORY);
+  } catch (...) {
+    if (ledgerPublished) d->replayDrainLedger.poison();
+    return commitChunkFail("provider-replay-exception");
   }
-  dxmt9::d3d9::releaseRetainedWrappers(raw);
-  return hr;
 }
 
-extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
+static int32_t dxmt9c_device_commit_chunk_impl(
+    D9CDevice* d, const D9CCommandChunk* chunk) {
   // Boundary B2 — wall-clock latency of one commit_chunk bridge call.
   // This includes importer validation, handle/resource marking, record
   // replay, and queue submission construction. It excludes asynchronous
@@ -2121,6 +2022,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       dxmt9::perf::countCommitChunkPhaseCall();
     }
     dxmt9::d3d9::RawCommandChunk raw;
+    ScopedRetainedWrapperRelease retainedRelease(raw);
     CommitChunkPhaseTimer preparePhase(phaseSplit);
     const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
         blob, envelope, d->wireObjects, retainWrapper, raw);
@@ -2165,9 +2067,21 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (dxmt9::d3d9::offloadCommitReplayEnabled() &&
         !chunkRequiresInlineReplay(imported)) {
       if (!d->replayOffload) {
-        d->replayOffload =
-            std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>();
-        d->replayOffload->start(d);
+        std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> worker;
+        try {
+          worker =
+              std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>();
+        } catch (...) {
+          dxmt9::d3d9::releaseRetainedWrappers(raw);
+          dxmt9::perf::countCommandChunkReject();
+          return dxmt9::core::E_OUTOFMEMORY;
+        }
+        if (!worker->start(d)) {
+          dxmt9::d3d9::releaseRetainedWrappers(raw);
+          dxmt9::perf::countCommandChunkReject();
+          return dxmt9::core::E_OUTOFMEMORY;
+        }
+        d->replayOffload = std::move(worker);
       }
       if (d->replayOffload->failed()) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -2178,13 +2092,25 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       CommitChunkPhaseTimer enqueuePhase(phaseSplit);
       dxmt9::perf::countOffloadReplayQueueDepth(
           static_cast<std::uint64_t>(d->replayOffload->queue().depth()));
-      const bool pushed = d->replayOffload->queue().push(
+      const auto pushDisposition =
+          d->replayOffload->queue().pushWithDisposition(
           std::move(raw), &d->replayDrainLedger);
       enqueuePhase.stop(dxmt9::perf::countCommitChunkPhaseEnqueueCpuTime);
-      if (!pushed) {
+      if (pushDisposition ==
+          dxmt9::d3d9::ReplayQueuePushDisposition::RejectedPreEffect) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
         dxmt9::perf::countCommandChunkReject();
         return commitChunkFail("chunk-offload-queue-stopped");
+      }
+      // Accepted and EffectUnknown both mean the queue adopted the chunk.
+      // Transfer wrapper-release authority explicitly instead of relying on
+      // the moved-from vectors in `raw` being empty.
+      retainedRelease.dismiss();
+      if (pushDisposition ==
+          dxmt9::d3d9::ReplayQueuePushDisposition::EffectUnknown) {
+        d->replayDrainLedger.poison();
+        dxmt9::perf::countCommandChunkReject();
+        return commitChunkFail("chunk-offload-queue-effect-unknown");
       }
       if (hasPresent) {
         ++d->presentOrdinal;
@@ -2258,5 +2184,24 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       dxmt9::perf::countCommandChunkReject();
     }
     return hr;
+  }
+}
+
+extern "C" int32_t dxmt9c_device_commit_chunk(
+    D9CDevice* d, const D9CCommandChunk* chunk) {
+  try {
+    return dxmt9c_device_commit_chunk_impl(d, chunk);
+  } catch (const std::bad_alloc&) {
+    // Any exception that escapes the implementation may have followed a
+    // ledger publication.  Poison conservatively; the local RawCommandChunk
+    // guard has already released only the wrapper references it still owns.
+    if (d) d->replayDrainLedger.poison();
+    dxmt9::perf::countCommandChunkReject();
+    return commitChunkFail("chunk-boundary-allocation", 0xffffffffu, 0u,
+                           dxmt9::core::E_OUTOFMEMORY);
+  } catch (...) {
+    if (d) d->replayDrainLedger.poison();
+    dxmt9::perf::countCommandChunkReject();
+    return commitChunkFail("chunk-boundary-exception");
   }
 }

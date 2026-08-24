@@ -143,7 +143,7 @@ grammar, and GPU completion scheduling remain outside this bounded claim.
 
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
-| `d3d9/recorder/requirements.md` R-CORE-REC-1.1–3.1, 5.1.3–5.1.4, 6.1–6.3 | `PeRecorderTransition.tla` plus `PeRecorderCommit.tla`, generated matrix freshness, expected-failure controls, and focused native transition specs bind state-write, append, and seal/bridge/capture settlement; generated `PeStateBlockTransitionTable.tla` and `PeStateBlockTransaction.tla` bind bounded Begin/End/Capture/Apply/reset serial and staged-ref-cardinality effects | `planRecorderStateWrite` / `settleRecorderCommit` / `planPeStateBlockTransition`; typed owners in `d3d9_pe_state_shadow.hpp` and `d3d9_pe_stateblock_transaction.hpp`; production settlement in `d3d9_pe_producer.cpp`, `D3D9StateBlockImpl`, and `D3D9DeviceImpl` |
+| `d3d9/recorder/requirements.md` R-CORE-REC-1.1–3.5, 5.1.3–5.1.4, 6.1–6.3 / R-VERIF-6.7 | `PeRecorderTransition.tla` binds the production semantic pending tuple; `PeRecorderCommit.tla` and composed `PeRecorderSettlement.tla` bind generic acceptance/count/ordinal and CapacityPost dispositions through bridge/capture, drain/reset, and recovery without inventing a semantic tuple from wire type/size. `PeStateBlockTransitionTable.tla`, `PeStateBlockTransaction.tla`, and repeated-value `PeStateBlockValues.tla` bind lifecycle rows, frozen tracked sets, repeated Capture/Apply, and staged-ref cardinality | `planRecorderStateWrite` / `settleRecorderAppend` / `settleRecorderCommit` / `planPeStateBlockTransition` / `planPeStateBlockValue`; production settlement remains in `d3d9_pe_producer.cpp`, `D3D9StateBlockImpl`, and `D3D9DeviceImpl`. Exact semantic cross-projection through the heterogeneous append envelope remains open. |
 | `archicture/spec.md` §6 / `backend/spec.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
 | `archicture/spec.md` §6 / `backend/spec.md` §2.2 | `tla/QueueLifecycleRefinement.tla` | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` |
 | `backend/spec.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
@@ -222,6 +222,12 @@ specs/verification/
     ├── PeRecorderCommit.parent-before-alias.counterexample.cfg  expected ordering failure
     ├── PeRecorderCommit.early-reset.counterexample.cfg  expected early-reset failure
     ├── PeRecorderCommit.stuck-success.counterexample.cfg  expected reuse-liveness failure
+    ├── PeRecorderSettlement.tla  composed append/capacity/commit/reset refinement
+    ├── PeRecorderSettlement.cfg
+    ├── PeRecorderSettlement.bridge-retry.counterexample.cfg
+    ├── PeRecorderSettlement.capacity-pre-consume.counterexample.cfg
+    ├── PeRecorderSettlement.capture-retract.counterexample.cfg
+    ├── PeRecorderSettlement.early-reset.counterexample.cfg
     ├── PeStateBlockTransitionTable.tla  generated StateBlock matrix
     ├── PeStateBlockTransaction.tla  serial/reference/Reset temporal model
     ├── PeStateBlockTransaction.cfg  successful Reset recovery
@@ -229,6 +235,11 @@ specs/verification/
     ├── PeStateBlockTransaction.no-release.counterexample.cfg  expected reset/teardown staged-release violation
     ├── PeStateBlockTransaction.stale-open.counterexample.cfg  expected stale Recording interval violation
     ├── PeStateBlockTransaction.lost-duplicate.counterexample.cfg  expected duplicate-retain loss
+    ├── PeStateBlockValues.tla  repeated qualified Capture/Apply value refinement
+    ├── PeStateBlockValues.cfg
+    ├── PeStateBlockValues.mutable-tracked.counterexample.cfg
+    ├── PeStateBlockValues.failed-capture.counterexample.cfg
+    ├── PeStateBlockValues.stale-apply.counterexample.cfg
     ├── ReplayScopedDrain.tla  scoped raw-replay drain ledger
     ├── ReplayScopedDrain.cfg
     ├── PresentIdAba.tla   (slot, generation) tagged-handle ABA-safety

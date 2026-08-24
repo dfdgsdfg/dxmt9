@@ -8,6 +8,7 @@
 #include <barrier>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -91,6 +92,65 @@ void testStopReleasesEverything() {
   q.stop();
   popper.join();
   check(!q.push(makeChunk(8)), "push refused after stop");
+}
+
+void testFailureDispositionAndByteAdoption() {
+  using namespace dxmt9::d3d9;
+  ReplayQueueAllocationFailure allocationFailure;
+  ReplayOffloadQueue q(64, 1u << 20, &allocationFailure);
+
+  auto* retained = new D9CBuffer(nullptr);
+  retained->refs.fetch_add(1u);
+  auto before = makeChunk(17);
+  before.retainedWrappers.push_back({
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .ptr = retained});
+  q.failNextAllocationForTest();
+  check(q.pushWithDisposition(std::move(before)) ==
+            ReplayQueuePushDisposition::RejectedPreEffect,
+        "actual deque allocator failure before adoption is retryable");
+  check(before.recordBlob.size() == 17u && q.queuedBytesForTest() == 0u &&
+            retained->refs.load() == 2u,
+        "allocator failure preserves caller wrapper ownership and byte count");
+  releaseRetainedWrappers(before);
+  check(retained->refs.load() == 1u,
+        "caller releases the allocation-rejected wrapper exactly once");
+  delete retained;
+
+  ReplayDrainLedger ledger;
+  ReplayDrainTarget target;
+  auto* adoptedRetained = new D9CBuffer(nullptr);
+  adoptedRetained->refs.fetch_add(1u);
+  auto after = makeChunk(23);
+  after.ledgerTargets.push_back(&target);
+  after.retainedWrappers.push_back({
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .ptr = adoptedRetained});
+  q.failNextPushForTest(ReplayQueueFailurePoint::AfterAdoption);
+  check(q.pushWithDisposition(std::move(after), &ledger) ==
+            ReplayQueuePushDisposition::EffectUnknown,
+        "synthetic post-adoption disposition is effect-unknown");
+  check(q.queuedBytesForTest() == 23u && target.lastQueuedSeq != 0u,
+        "post-adoption bytes and ledger publish exactly once");
+  RawCommandChunk adopted;
+  check(q.pop(adopted) && adopted.recordBytes == 23u,
+        "effect-unknown queue retains adopted chunk ownership");
+  check(q.queuedBytesForTest() == 0u,
+        "queued byte count changes only at adoption and pop");
+  releaseRetainedWrappers(adopted);
+  check(adoptedRetained->refs.load() == 1u,
+        "effect-unknown queue releases its adopted wrapper exactly once");
+  delete adoptedRetained;
+  q.markReplayDone();
+}
+
+void testWorkerStartFailureRollsBack() {
+  using namespace dxmt9::d3d9;
+  D9CDevice device(nullptr);
+  ReplayOffloadWorker worker;
+  worker.failNextStartForTest();
+  check(!worker.start(&device),
+        "injected thread startup failure is reported");
+  check(!worker.startedForTest(),
+        "failed thread startup leaves no owner or joinable thread");
 }
 
 // waitDrained() must be stop-aware: once stop() has been called, a waiter
@@ -443,6 +503,16 @@ int32_t injectedReplayFailure(D9CDevice*,
   return dxmt9::core::D3DERR_INVALIDCALL;
 }
 
+int32_t injectedReplayAllocationException(
+    D9CDevice*, dxmt9::d3d9::RawCommandChunk&) {
+  throw std::bad_alloc();
+}
+
+int32_t injectedReplayException(
+    D9CDevice*, dxmt9::d3d9::RawCommandChunk&) {
+  throw std::runtime_error("injected replay exception");
+}
+
 void waitAtPublishedFailure(void* opaque) {
   auto& context = *static_cast<FailureBarrierContext*>(opaque);
   context.published.arrive_and_wait();
@@ -493,6 +563,52 @@ void testActualReplayFailurePublishesTerminalBeforeCompletion() {
         "failed chunk completion is published only after terminal barrier");
   check(failedTarget.lastReplayedSeq == 0u,
         "failed replay never advances its target replay watermark");
+}
+
+void testThrowingReplaySettlesEveryOwnedWrapperExactlyOnce() {
+  using namespace dxmt9::d3d9;
+  constexpr std::array<ReplayOffloadWorker::ReplayFn, 2> throwingReplay{
+      injectedReplayAllocationException, injectedReplayException};
+  for (const auto replay : throwingReplay) {
+    D9CDevice device(nullptr);
+    ReplayDrainTarget failedTarget;
+    ReplayDrainTarget queuedTarget;
+    FailureBarrierContext barriers;
+    device.replayOffload = std::make_unique<ReplayOffloadWorker>(
+        replay, waitAtPublishedFailure, &barriers);
+    check(device.replayOffload->start(&device),
+          "throwing replay worker starts");
+
+    auto* retained = new D9CBuffer(nullptr);
+    retained->refs.fetch_add(2u);
+    auto failedChunk = makeChunk(8);
+    failedChunk.ledgerTargets.push_back(&failedTarget);
+    failedChunk.retainedWrappers.push_back({
+        .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .ptr = retained});
+    auto queuedChunk = makeChunk(8);
+    queuedChunk.ledgerTargets.push_back(&queuedTarget);
+    queuedChunk.retainedWrappers.push_back({
+        .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .ptr = retained});
+    check(device.replayOffload->queue().push(
+              std::move(failedChunk), &device.replayDrainLedger) &&
+              device.replayOffload->queue().push(
+                  std::move(queuedChunk), &device.replayDrainLedger),
+          "throwing replay fixture owns one retain per queued chunk");
+
+    barriers.published.arrive_and_wait();
+    check(device.replayOffload->failed() &&
+              device.replayDrainLedger.poisoned() &&
+              retained->refs.load() == 3u,
+          "exception is contained and terminal state precedes ownership release");
+    barriers.release.arrive_and_wait();
+    device.replayOffload->stop();
+    check(retained->refs.load() == 1u &&
+              failedTarget.lastReplayedSeq == 0u &&
+              queuedTarget.lastReplayedSeq == 0u &&
+              device.replayOffload->queue().depth() == 0u,
+          "failed and unreplayed queued chunks each release once without ledger catch-up");
+    delete retained;
+  }
 }
 
 void testLedgerTerminalStatesWakeWithoutSuccess() {
@@ -643,6 +759,8 @@ int main() {
     testDrainWaitsForInFlight();
     testBoundedPushBlocksUntilPop();
     testStopReleasesEverything();
+    testFailureDispositionAndByteAdoption();
+    testWorkerStartFailureRollsBack();
     testWaitDrainedIsStopAware();
     testOversizedChunkAdmittedWhenQueueEmpty();
     testPopDrainsQueuedItemsAfterStop();
@@ -657,6 +775,7 @@ int main() {
     testGlobalDrainReportsTerminalOutcome();
     testNoDrainProviderEntrySpiesRejectTerminal();
     testActualReplayFailurePublishesTerminalBeforeCompletion();
+    testThrowingReplaySettlesEveryOwnedWrapperExactlyOnce();
     testLedgerTerminalStatesWakeWithoutSuccess();
     testBackpressuredStopLeaksNoSecondWatermark();
     testCleanWorkerStopAndDestructorWakeScopedWaiters();

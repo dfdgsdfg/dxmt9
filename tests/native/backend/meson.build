@@ -686,6 +686,16 @@ replay_offload_queue_spec = executable(
 test('dxmt9-replay-offload-queue-spec', replay_offload_queue_spec,
      env: dxmt9_native_test_env)
 
+presence_table_spec = executable(
+  'dxmt9-presence-table-spec',
+  'presence_table_spec.cpp',
+  include_directories: include_directories('../../../src/d3d9'),
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-presence-table-spec', presence_table_spec,
+     env: dxmt9_native_test_env)
+
 replay_byte_identity_spec = executable(
   'dxmt9-replay-byte-identity-spec',
   'replay_byte_identity_spec.cpp',

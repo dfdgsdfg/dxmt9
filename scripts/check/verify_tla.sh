@@ -11,6 +11,8 @@ tla_dir="$repo_root/specs/verification/tla"
 python3 "$repo_root/scripts/check/gen_pe_transition_table.py" --check
 python3 "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
 python3 "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
+python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
+python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
 
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then
@@ -96,6 +98,16 @@ counterexample_models=(
   # The old success cycle left commandAccepted set in WarmAdvanced and could
   # never prove return to a reusable Unsealed builder.
   "PeRecorderCommit|.stuck-success.counterexample|Temporal properties were violated"
+  # An entered bridge failure has unknown unix effect under the unchanged ABI
+  # and must poison instead of retrying the sealed projection.
+  "PeRecorderSettlement|.bridge-retry.counterexample|Invariant BridgeEffectUnknownFailStop is violated"
+  # CapacityPre failure leaves the proposed record unattempted and cannot
+  # consume its qualified pending token.
+  "PeRecorderSettlement|.capacity-pre-consume.counterexample|Invariant CapacityPreDoesNotConsume is violated"
+  # Capture settlement follows command acceptance and cannot retract it.
+  "PeRecorderSettlement|.capture-retract.counterexample|Invariant CaptureAfterAccept is violated"
+  # Builder reset cannot precede pending/alias/parent drain.
+  "PeRecorderSettlement|.early-reset.counterexample|Invariant NoEarlyDrainReset is violated"
   # StateBlock Apply backend failure must poison before Reset recovery.
   "PeStateBlockTransaction|.no-poison.counterexample|Invariant NoStaleOpenAfterPostEffectFailure is violated"
   # Every poisoned Apply path releases staged references before recovery.
@@ -106,6 +118,12 @@ counterexample_models=(
   # Treating retained COM identities as a set loses one AddRef/Release when the
   # same object occupies multiple StateBlock categories or slots.
   "PeStateBlockTransaction|.lost-duplicate.counterexample|Invariant PreparedRefMultiplicity is violated"
+  # Capture refreshes the original frozen category-qualified key set only.
+  "PeStateBlockValues|.mutable-tracked.counterexample|Invariant FrozenTrackedSet is violated"
+  # A failed Capture may not publish its candidate values.
+  "PeStateBlockValues|.failed-capture.counterexample|Invariant FailedCapturePreservesSnapshot is violated"
+  # Apply must publish the latest successful captured ordinal and value.
+  "PeStateBlockValues|.stale-apply.counterexample|Invariant LatestCapturedApplied is violated"
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"

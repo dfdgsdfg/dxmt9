@@ -1,10 +1,9 @@
 #pragma once
 
-// The recorder state is deliberately a flat owner.  D3D9DeviceImpl keeps
-// references to these members for the mechanical migration below; the
-// references do not add an allocation, virtual call, or setter-side work.
-// Keeping the owner separate also gives item 6 a stable seam for moving the
-// pure setter/settlement transitions without widening the COM object.
+// The recorder state is deliberately a flat owner. D3D9DeviceImpl reaches
+// these members through recorderState_ directly: it carries no reference
+// aliases that could obscure ownership or outlive a future owner move. The
+// owner adds no allocation or virtual dispatch to setter and draw paths.
 
 #include <mutex>
 #include <type_traits>

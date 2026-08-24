@@ -226,11 +226,11 @@ public:
     PeStateBlockTransactionState& operator=(
         const PeStateBlockTransactionState&) = delete;
 
-    StateBlockRecorded& recorded() noexcept { return recorded_; }
-    const StateBlockRecorded& recorded() const noexcept { return recorded_; }
-    PeStateBlockConstRecorded& constants() noexcept { return recorded_.constants; }
-    const PeStateBlockConstRecorded& constants() const noexcept {
-        return recorded_.constants;
+    StateBlockRecorded::Writer recordWriter() noexcept {
+        return recorded_.writer();
+    }
+    const StateBlockRecorded& recordedSnapshot() const noexcept {
+        return recorded_.snapshot();
     }
 
     PeStateBlockPhase phase() const noexcept { return phase_; }
@@ -360,18 +360,22 @@ public:
     }
 
     template<typename Retain>
-    void stageTexture(std::size_t slot, StateBlockTextureRef value,
+    bool stageTexture(StateBlockTextureSlot slot, StateBlockTextureRef value,
                       Retain&& retain) noexcept {
+        if (!slot.valid()) return false;
         retain(value.raw());
-        stagedTextures_[slot] = value;
-        stagedTextureMask_ |= 1u << slot;
+        stagedTextures_[rawSlot(slot)] = value;
+        stagedTextureMask_ |= 1u << rawSlot(slot);
+        return true;
     }
     template<typename Retain>
-    void stageStream(std::size_t slot, StateBlockStreamSourceValue value,
+    bool stageStream(StateBlockStreamSlot slot, StateBlockStreamSourceValue value,
                      Retain&& retain) noexcept {
+        if (!slot.valid()) return false;
         retain(value.buffer.raw());
-        stagedStreams_[slot] = value;
-        stagedStreamMask_ |= 1u << slot;
+        stagedStreams_[rawSlot(slot)] = value;
+        stagedStreamMask_ |= 1u << rawSlot(slot);
+        return true;
     }
     template<typename Retain>
     void stageVertexShader(StateBlockVertexShaderRef value,
@@ -392,11 +396,14 @@ public:
                        std::forward<Retain>(retain));
     }
     template<typename Retain>
-    void stageRenderTarget(std::size_t slot, StateBlockRenderTargetRef value,
+    bool stageRenderTarget(StateBlockRenderTargetSlot slot,
+                           StateBlockRenderTargetRef value,
                            Retain&& retain) noexcept {
+        if (!slot.valid()) return false;
         retain(value.raw());
-        stagedRenderTargets_[slot] = value;
-        stagedRenderTargetMask_ |= 1u << slot;
+        stagedRenderTargets_[rawSlot(slot)] = value;
+        stagedRenderTargetMask_ |= 1u << rawSlot(slot);
+        return true;
     }
     template<typename Retain>
     void stageDepthStencil(StateBlockDepthStencilRef value,
@@ -405,13 +412,15 @@ public:
                        std::forward<Retain>(retain));
     }
 
-    StateBlockTextureRef takeTexture(std::size_t slot) noexcept {
-        stagedTextureMask_ &= ~(1u << slot);
-        return take(stagedTextures_[slot]);
+    StateBlockTextureRef takeTexture(StateBlockTextureSlot slot) noexcept {
+        if (!slot.valid()) return {};
+        stagedTextureMask_ &= ~(1u << rawSlot(slot));
+        return take(stagedTextures_[rawSlot(slot)]);
     }
-    StateBlockStreamSourceValue takeStream(std::size_t slot) noexcept {
-        stagedStreamMask_ &= ~(1u << slot);
-        return take(stagedStreams_[slot]);
+    StateBlockStreamSourceValue takeStream(StateBlockStreamSlot slot) noexcept {
+        if (!slot.valid()) return {};
+        stagedStreamMask_ &= ~(1u << rawSlot(slot));
+        return take(stagedStreams_[rawSlot(slot)]);
     }
     StateBlockVertexShaderRef takeVertexShader() noexcept {
         stagedVertexShaderValid_ = false;
@@ -425,9 +434,11 @@ public:
         stagedIndexBufferValid_ = false;
         return take(stagedIndexBuffer_);
     }
-    StateBlockRenderTargetRef takeRenderTarget(std::size_t slot) noexcept {
-        stagedRenderTargetMask_ &= ~(1u << slot);
-        return take(stagedRenderTargets_[slot]);
+    StateBlockRenderTargetRef takeRenderTarget(
+        StateBlockRenderTargetSlot slot) noexcept {
+        if (!slot.valid()) return {};
+        stagedRenderTargetMask_ &= ~(1u << rawSlot(slot));
+        return take(stagedRenderTargets_[rawSlot(slot)]);
     }
     StateBlockDepthStencilRef takeDepthStencil() noexcept {
         stagedDepthStencilValid_ = false;
@@ -468,8 +479,8 @@ private:
 
     template<typename Release>
     void discardRecorded(Release&& release) noexcept {
-        recorded_.forEachOwnedComRef(release);
-        recorded_.clearForBegin();
+        recorded_.snapshot().forEachOwnedComRef(release);
+        recorded_.writer().clear();
     }
     template<typename Ref, typename Retain>
     static void stageSingleton(Ref& destination, bool& occupied, Ref value,

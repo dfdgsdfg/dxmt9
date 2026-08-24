@@ -3,6 +3,7 @@
 #include "d3d9_pe.hpp"
 
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_com_membership.hpp"
 #include "d3d9_pe_diagnostic_observer.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_render_tape_capture.hpp"
@@ -13,6 +14,55 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+
+template <typename Raw, typename Wire>
+struct D3D9PeValidatedObject {
+  Raw* raw = nullptr;
+  Wire wire{};
+};
+
+using D3D9PeValidatedSurface = D3D9PeValidatedObject<
+    D9CSurface, dxmt9::d3d9::pe::SurfaceRef>;
+using D3D9PeValidatedTexture = D3D9PeValidatedObject<
+    D9CTexture, dxmt9::d3d9::pe::TextureRef>;
+using D3D9PeValidatedBuffer = D3D9PeValidatedObject<
+    D9CBuffer, dxmt9::d3d9::pe::BufferRef>;
+using D3D9PeValidatedShader = D3D9PeValidatedObject<
+    D9CShader, dxmt9::d3d9::pe::ShaderRef>;
+using D3D9PeValidatedDeclaration = D3D9PeValidatedObject<
+    D9CVertexDecl, dxmt9::d3d9::pe::DeclarationRef>;
+using D3D9PeValidatedQuery = D3D9PeValidatedObject<
+    D9CQuery, dxmt9::d3d9::pe::QueryRef>;
+
+// Each implementation lives beside the concrete final wrapper class. RTTI
+// proves concrete membership before any member access; the returned value is
+// a kind-qualified POD snapshot suitable for device/recorder code.
+HRESULT D3D9PeValidateSurface(
+    IDirect3DSurface9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedSurface* out,
+    dxmt9::d3d9::pe::PeSurfaceQualification qualification =
+        dxmt9::d3d9::pe::PeSurfaceQualification::Any) noexcept;
+HRESULT D3D9PeValidateTexture(
+    IDirect3DBaseTexture9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedTexture* out) noexcept;
+HRESULT D3D9PeValidateVertexBuffer(
+    IDirect3DVertexBuffer9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedBuffer* out) noexcept;
+HRESULT D3D9PeValidateIndexBuffer(
+    IDirect3DIndexBuffer9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedBuffer* out) noexcept;
+HRESULT D3D9PeValidateVertexShader(
+    IDirect3DVertexShader9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedShader* out) noexcept;
+HRESULT D3D9PeValidatePixelShader(
+    IDirect3DPixelShader9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedShader* out) noexcept;
+HRESULT D3D9PeValidateVertexDecl(
+    IDirect3DVertexDeclaration9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedDeclaration* out) noexcept;
+HRESULT D3D9PeValidateQuery(
+    IDirect3DQuery9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedQuery* out) noexcept;
 
 #if defined(__GNUC__) || defined(__clang__)
 #define DXMT9_PE_CALLSITE_PC() (__builtin_return_address(0))
@@ -25,55 +75,108 @@
 // restore the transforms / shader constants / vertex declaration the test
 // suite checks via IDirect3DStateBlock9 round-trips. AddRef policy: vdecl is
 // AddRef'd by the snapshot owner; release in the destructor and on overwrite.
-struct D3D9StateBlockShadow {
+class D3D9StateBlockShadow {
  private:
   FixedStateTable<kPeRenderStateSlots> renderStates_{};
   FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots>
       textureStageStates_{};
   FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
   FixedTransformTable transforms_{};
-
- public:
   // Fixed candidate categories beyond the four keyed scalar tables.  Pointer
   // entries are owned by this wrapper snapshot (copying the shadow AddRefs
   // them); the recorder candidate uses the same value shape but has its own
   // release boundary.
-  StateBlockRecorded categories{};
-  PeStateBlockConstRecorded constants{};
-  bool hasVdecl = false;
-  IDirect3DVertexDeclaration9 *vdecl = nullptr;
+  StateBlockRecorded categories_{};
+  PeStateBlockConstRecorded constants_{};
+  bool hasVdecl_ = false;
+  IDirect3DVertexDeclaration9 *vdecl_ = nullptr;
 
   // True once D3D9StateBlockImpl::ctor has populated the shadow once.
   // CaptureStateBlockShadowForChild uses this to distinguish the initial
   // snapshot (which fixes the tracked-keys set) from a later
   // D3D9StateBlockImpl::Capture() call (which only refreshes values of
   // already-tracked keys).
-  bool initialized = false;
+  bool initialized_ = false;
 
-  RenderStateTableView renderStates() noexcept {
-    return RenderStateTableView(renderStates_);
-  }
-  ConstRenderStateTableView renderStates() const noexcept {
-    return ConstRenderStateTableView(renderStates_);
-  }
-  TssTableView textureStageStates() noexcept {
-    return TssTableView(textureStageStates_);
-  }
-  ConstTssTableView textureStageStates() const noexcept {
-    return ConstTssTableView(textureStageStates_);
-  }
-  SamplerStateTableView samplerStates() noexcept {
-    return SamplerStateTableView(samplerStates_);
-  }
-  ConstSamplerStateTableView samplerStates() const noexcept {
-    return ConstSamplerStateTableView(samplerStates_);
-  }
-  TypedTransformTableView transforms() noexcept {
-    return TypedTransformTableView(transforms_);
-  }
-  ConstTypedTransformTableView transforms() const noexcept {
-    return ConstTypedTransformTableView(transforms_);
-  }
+ public:
+  class Writer {
+   public:
+    RenderStateTableView renderStates() noexcept {
+      return RenderStateTableView(shadow_.renderStates_);
+    }
+    TssTableView textureStageStates() noexcept {
+      return TssTableView(shadow_.textureStageStates_);
+    }
+    SamplerStateTableView samplerStates() noexcept {
+      return SamplerStateTableView(shadow_.samplerStates_);
+    }
+    TypedTransformTableView transforms() noexcept {
+      return TypedTransformTableView(shadow_.transforms_);
+    }
+    StateBlockRecorded::Writer categories() noexcept {
+      return shadow_.categories_.writer();
+    }
+    PeStateBlockConstRecorded& constants() noexcept {
+      return shadow_.constants_;
+    }
+    void setInitialized(bool initialized) noexcept {
+      shadow_.initialized_ = initialized;
+    }
+    void replaceVdecl(bool tracked,
+                      IDirect3DVertexDeclaration9 *value) noexcept {
+      shadow_.releaseSavedVdecl();
+      shadow_.hasVdecl_ = tracked && value != nullptr;
+      if (tracked && value) {
+        value->AddRef();
+        shadow_.vdecl_ = value;
+      }
+    }
+    void discardVdecl() noexcept {
+      shadow_.releaseSavedVdecl();
+      shadow_.hasVdecl_ = false;
+    }
+
+   private:
+    explicit Writer(D3D9StateBlockShadow& shadow) noexcept : shadow_(shadow) {}
+    D3D9StateBlockShadow& shadow_;
+    friend class D3D9StateBlockShadow;
+  };
+
+  class Snapshot {
+   public:
+    ConstRenderStateTableView renderStates() const noexcept {
+      return ConstRenderStateTableView(shadow_.renderStates_);
+    }
+    ConstTssTableView textureStageStates() const noexcept {
+      return ConstTssTableView(shadow_.textureStageStates_);
+    }
+    ConstSamplerStateTableView samplerStates() const noexcept {
+      return ConstSamplerStateTableView(shadow_.samplerStates_);
+    }
+    ConstTypedTransformTableView transforms() const noexcept {
+      return ConstTypedTransformTableView(shadow_.transforms_);
+    }
+    const StateBlockRecorded& categories() const noexcept {
+      return shadow_.categories_.snapshot();
+    }
+    const PeStateBlockConstRecorded& constants() const noexcept {
+      return shadow_.constants_;
+    }
+    bool initialized() const noexcept { return shadow_.initialized_; }
+    bool hasVdecl() const noexcept { return shadow_.hasVdecl_; }
+    IDirect3DVertexDeclaration9 *vdecl() const noexcept {
+      return shadow_.vdecl_;
+    }
+
+   private:
+    explicit Snapshot(const D3D9StateBlockShadow& shadow) noexcept
+        : shadow_(shadow) {}
+    const D3D9StateBlockShadow& shadow_;
+    friend class D3D9StateBlockShadow;
+  };
+
+  Writer writer() noexcept { return Writer(*this); }
+  Snapshot snapshot() const noexcept { return Snapshot(*this); }
 
   D3D9StateBlockShadow() = default;
   D3D9StateBlockShadow(const D3D9StateBlockShadow& other) { *this = other; }
@@ -85,12 +188,12 @@ struct D3D9StateBlockShadow {
     textureStageStates_ = other.textureStageStates_;
     samplerStates_ = other.samplerStates_;
     transforms_ = other.transforms_;
-    categories = other.categories;
-    constants = other.constants;
-    hasVdecl = other.hasVdecl;
-    initialized = other.initialized;
-    vdecl = other.vdecl;
-    if (vdecl) vdecl->AddRef();
+    categories_ = other.categories_;
+    constants_ = other.constants_;
+    hasVdecl_ = other.hasVdecl_;
+    initialized_ = other.initialized_;
+    vdecl_ = other.vdecl_;
+    if (vdecl_) vdecl_->AddRef();
     addCategoryRefs();
     return *this;
   }
@@ -105,15 +208,15 @@ struct D3D9StateBlockShadow {
     textureStageStates_ = other.textureStageStates_;
     samplerStates_ = other.samplerStates_;
     transforms_ = other.transforms_;
-    categories = other.categories;
-    constants = other.constants;
-    hasVdecl = other.hasVdecl;
-    initialized = other.initialized;
-    vdecl = other.vdecl;
-    other.vdecl = nullptr;
-    other.hasVdecl = false;
-    other.initialized = false;
-    other.categories.clearForBegin();
+    categories_ = other.categories_;
+    constants_ = other.constants_;
+    hasVdecl_ = other.hasVdecl_;
+    initialized_ = other.initialized_;
+    vdecl_ = other.vdecl_;
+    other.vdecl_ = nullptr;
+    other.hasVdecl_ = false;
+    other.initialized_ = false;
+    other.categories_.writer().clear();
     return *this;
   }
   ~D3D9StateBlockShadow() {
@@ -123,7 +226,7 @@ struct D3D9StateBlockShadow {
 
   void copyCategoriesFrom(const StateBlockRecorded& source) noexcept {
     releaseCategoryRefs();
-    categories = source;
+    categories_ = source;
     addCategoryRefs();
   }
   void clearCategoriesOwned() noexcept { releaseCategoryRefs(); }
@@ -139,19 +242,19 @@ struct D3D9StateBlockShadow {
     }
   }
   void addCategoryRefs() noexcept {
-    categories.forEachOwnedComRef(
+    categories_.forEachOwnedComRef(
         [](void* value) { D3D9StateBlockShadow::addRef(value); });
   }
   void releaseCategoryRefs() noexcept {
-    categories.forEachOwnedComRef(
+    categories_.forEachOwnedComRef(
         [](void* value) { D3D9StateBlockShadow::releaseRef(value); });
-    categories.clearForBegin();
+    categories_.writer().clear();
   }
 
   void releaseSavedVdecl() noexcept {
-    if (vdecl) {
-      vdecl->Release();
-      vdecl = nullptr;
+    if (vdecl_) {
+      vdecl_->Release();
+      vdecl_ = nullptr;
     }
   }
 };
@@ -178,8 +281,8 @@ struct D3D9PeRecorderFlush {
   virtual void DiscardPreparedStateBlockApplyForChild() noexcept = 0;
   virtual void PoisonStateBlockRecorderForChild() noexcept = 0;
   virtual void InvalidateStateBlockShadowForChild() = 0;
-  virtual void AddDefaultPoolResourceRefForChild() = 0;
-  virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
+  virtual void AddDefaultPoolResourceRefForChild() noexcept = 0;
+  virtual void ReleaseDefaultPoolResourceRefForChild() noexcept = 0;
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
   // Query::Issue is the only child-side record. It takes a PeWireObjectRef
   // rather than opaque bytes because opaque legacy-record bytes cannot express
@@ -250,6 +353,24 @@ protected:
   ~D3D9PeRecorderFlush() = default;
 };
 
+class D3D9PeChildOperationGuard final {
+public:
+  explicit D3D9PeChildOperationGuard(
+      D3D9PeRecorderFlush* recorder) noexcept : recorder_(recorder) {
+    if (recorder_) recorder_->LockStateBlockOperationForChild();
+  }
+  ~D3D9PeChildOperationGuard() noexcept {
+    if (recorder_) recorder_->UnlockStateBlockOperationForChild();
+  }
+
+  D3D9PeChildOperationGuard(const D3D9PeChildOperationGuard&) = delete;
+  D3D9PeChildOperationGuard& operator=(
+      const D3D9PeChildOperationGuard&) = delete;
+
+private:
+  D3D9PeRecorderFlush* recorder_ = nullptr;
+};
+
 // Enabled-only RAII scope for tracked child calls. Entry helpers branch on the
 // wrapper's cached nullable concrete observer before this object's lifetime
 // begins, so the disabled edge constructs no scope and performs no diagnostic
@@ -317,55 +438,55 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    D3D9PeDiagnosticObserver *diagnostics = nullptr,
                                    bool trackDefaultPool = true,
                                    void *userMemory = nullptr,
-                                   int32_t userMemoryPitch = 0);
+                                   int32_t userMemoryPitch = 0) noexcept;
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
                                    D3D9PeRecorderFlush *recorder = nullptr,
                                    D3D9PeDiagnosticObserver *diagnostics = nullptr,
                                    void *userMemory = nullptr,
-                                   int32_t userMemoryPitch = 0);
+                                   int32_t userMemoryPitch = 0) noexcept;
 IDirect3DVolumeTexture9 *
 CreatePeVolumeTexture(D9CTexture *texture, IDirect3DDevice9 *device,
                       D3D9PeRecorderFlush *recorder = nullptr,
-                      D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                      D3D9PeDiagnosticObserver *diagnostics = nullptr) noexcept;
 IDirect3DCubeTexture9 *
 CreatePeCubeTexture(D9CTexture *texture, IDirect3DDevice9 *device,
                     D3D9PeRecorderFlush *recorder = nullptr,
-                    D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                    D3D9PeDiagnosticObserver *diagnostics = nullptr) noexcept;
 IDirect3DVertexBuffer9 *
 CreatePeVertexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
                      D3D9PeRecorderFlush *recorder = nullptr,
-                     D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                     D3D9PeDiagnosticObserver *diagnostics = nullptr) noexcept;
 IDirect3DIndexBuffer9 *
 CreatePeIndexBuffer(D9CBuffer *buffer, IDirect3DDevice9 *device,
                     D3D9PeRecorderFlush *recorder = nullptr,
-                    D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                    D3D9PeDiagnosticObserver *diagnostics = nullptr) noexcept;
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
                                              IDirect3DDevice9 *device,
                                              std::uint64_t hash,
-                                             D3D9PeRecorderFlush *recorder = nullptr);
+                                             D3D9PeRecorderFlush *recorder = nullptr) noexcept;
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
                                            IDirect3DDevice9 *device,
                                            std::uint64_t hash,
-                                           D3D9PeRecorderFlush *recorder = nullptr);
+                                           D3D9PeRecorderFlush *recorder = nullptr) noexcept;
 IDirect3DVertexDeclaration9 *CreatePeVertexDecl(D9CVertexDecl *decl,
                                                 IDirect3DDevice9 *device,
-                                                D3D9PeRecorderFlush *recorder = nullptr);
+                                                D3D9PeRecorderFlush *recorder = nullptr) noexcept;
 IDirect3DQuery9 *CreatePeQuery(D9CQuery *query, IDirect3DDevice9 *device,
                                D3D9PeRecorderFlush *recorder = nullptr,
-                               D3D9PeDiagnosticObserver *diagnostics = nullptr);
+                               D3D9PeDiagnosticObserver *diagnostics = nullptr) noexcept;
 IDirect3DStateBlock9 *
 CreatePeStateBlock(D9CStateBlock *stateBlock, IDirect3DDevice9 *device,
                    D3D9PeRecorderFlush *recorder = nullptr,
                    D3D9PeDiagnosticObserver *diagnostics = nullptr,
                    StateBlockCaptureDisposition disposition =
-                       StateBlockCaptureDisposition::All);
+                       StateBlockCaptureDisposition::All) noexcept;
 IDirect3DSwapChain9Ex *
 CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   D3D9PeRecorderFlush *recorder = nullptr,
                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   bool extended = false,
-                  DWORD presentFlagsShadow = 0);
+                  DWORD presentFlagsShadow = 0) noexcept;
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface);
 const dxmt9::d3d9::pe::SurfaceRef &

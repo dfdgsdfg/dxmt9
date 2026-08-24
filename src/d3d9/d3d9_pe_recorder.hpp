@@ -24,6 +24,36 @@ enum class PeRecorderFlushReason : std::uint32_t {
     Count,
 };
 
+enum class PeRecorderFlushDisposition : std::uint8_t {
+    Submit,
+    DiscardForRecovery,
+};
+
+enum class PeRecorderFlushAction : std::uint8_t {
+    Submit,
+    RejectPoisoned,
+    Discard,
+};
+
+constexpr PeRecorderFlushAction planPeRecorderFlush(
+    PeRecorderFlushDisposition disposition, bool recorderPoisoned) noexcept {
+    if (disposition == PeRecorderFlushDisposition::DiscardForRecovery) {
+        return PeRecorderFlushAction::Discard;
+    }
+    return recorderPoisoned ? PeRecorderFlushAction::RejectPoisoned
+                            : PeRecorderFlushAction::Submit;
+}
+
+// A healthy Reset is an ordering boundary: queued command work must reach the
+// unix device before the backend reset. Only poisoned recovery may discard the
+// sealed projection, because its earlier bridge effect is unknown.
+constexpr PeRecorderFlushDisposition peRecorderResetDisposition(
+    bool recorderPoisoned) noexcept {
+    return recorderPoisoned
+        ? PeRecorderFlushDisposition::DiscardForRecovery
+        : PeRecorderFlushDisposition::Submit;
+}
+
 static constexpr std::size_t kPeRecorderFlushReasonCount =
     static_cast<std::size_t>(PeRecorderFlushReason::Count);
 

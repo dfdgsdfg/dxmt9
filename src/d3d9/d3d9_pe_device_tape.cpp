@@ -76,14 +76,14 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
         // last draw packet. Rebuild every binding slot immediately before
         // producing it so streams, null unbinds, and the current index
         // binding are authoritative even when no draw made them pending.
-        populateBindingView(peBindingView_, true, true);
+        populateBindingView(recorderState_.peBindingView, true, true);
         const bool snapshotBuilt = dxmt9::d3d9::pe::buildFullSnapshotState(
-            peState_, peConsts_, peBindingView_, peSparseScratch_,
-            peSparseHeader_, peSparseState_);
+            recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparseScratch,
+            recorderState_.peSparseHeader, recorderState_.peSparseState);
         const bool snapshotAppended =
             snapshotBuilt && dxmt9::d3d9::pe::appendApplyState(
-                                 builder, peSparseHeader_.flags,
-                                 peSparseState_);
+                                 builder, recorderState_.peSparseHeader.flags,
+                                 recorderState_.peSparseState);
         if (!snapshotBuilt || !snapshotAppended) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture producer aborted reason=bootstrap_state "
@@ -1054,7 +1054,7 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
             "render_tape_capture completion aborted status=%u events=%u "
             "chunks=%llu present_chunk_seen=%d oracle_bytes=%zu validation=%u",
             static_cast<unsigned>(status), peCaptureState_->renderTapeCapture.eventCount(),
-            static_cast<unsigned long long>(commandChunkCommits_),
+            static_cast<unsigned long long>(recorderState_.commandChunkCommits),
             peCaptureState_->renderTapeCapture.presentChunkSeen() ? 1 : 0,
             std::as_bytes(std::span(peCaptureState_->renderTapeCaptureOracle)).size(),
             static_cast<unsigned>(peCaptureState_->renderTapeCapture.validationStatus()));

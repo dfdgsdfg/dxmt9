@@ -311,6 +311,58 @@ void noteReplayInflightRaw(bool inFlight);
 std::size_t offloadQueueMaxChunks();
 std::size_t offloadQueueMaxBytes();
 
+enum class ReplayQueuePushDisposition : std::uint8_t {
+  Accepted,
+  RejectedPreEffect,
+  EffectUnknown,
+};
+
+enum class ReplayQueueFailurePoint : std::uint8_t {
+  None,
+  BeforeAdoption,
+  AfterAdoption,
+};
+
+// Host-test allocator control for exercising the real std::deque growth
+// failure path. Production queues pass no control and use the same allocator
+// as a zero-branch forwarding wrapper around std::allocator.
+struct ReplayQueueAllocationFailure {
+  std::atomic<bool> failNext{false};
+};
+
+template <typename T>
+class ReplayQueueAllocator {
+ public:
+  using value_type = T;
+
+  ReplayQueueAllocator() noexcept = default;
+  explicit ReplayQueueAllocator(ReplayQueueAllocationFailure* failure) noexcept
+      : failure_(failure) {}
+  template <typename U>
+  ReplayQueueAllocator(const ReplayQueueAllocator<U>& other) noexcept
+      : failure_(other.failure_) {}
+
+  T* allocate(std::size_t count) {
+    if (failure_ && failure_->failNext.exchange(false)) {
+      throw std::bad_alloc();
+    }
+    return std::allocator<T>{}.allocate(count);
+  }
+  void deallocate(T* value, std::size_t count) noexcept {
+    std::allocator<T>{}.deallocate(value, count);
+  }
+
+  template <typename U>
+  bool operator==(const ReplayQueueAllocator<U>& other) const noexcept {
+    return failure_ == other.failure_;
+  }
+
+ private:
+  template <typename>
+  friend class ReplayQueueAllocator;
+  ReplayQueueAllocationFailure* failure_ = nullptr;
+};
+
 // Single-consumer queue: exactly one ReplayOffloadWorker thread is expected
 // to call pop() / markReplayDone(); any number of producer threads may call
 // push() concurrently. `inFlight_` is a plain bool (not a counter) because
@@ -319,20 +371,20 @@ std::size_t offloadQueueMaxBytes();
 // meaningless.
 class ReplayOffloadQueue {
  public:
-  ReplayOffloadQueue(std::size_t maxChunks, std::size_t maxBytes)
+  ReplayOffloadQueue(std::size_t maxChunks, std::size_t maxBytes,
+                     ReplayQueueAllocationFailure* allocationFailure = nullptr)
       : maxChunks_(maxChunks), maxBytes_(maxBytes),
-        observabilityEnabled_(replayOffloadObservabilityEnabled()) {}
+        observabilityEnabled_(replayOffloadObservabilityEnabled()),
+        queue_(ReplayQueueAllocator<RawCommandChunk>(allocationFailure)),
+        testOnlyAllocationFailure_(allocationFailure) {}
 
-  // No-move-on-failure guarantee: `chunk` is only ever std::move()'d into
-  // the internal deque on the success (post-stop-check) path below. If this
-  // returns false, `chunk` is left completely untouched (its recordBytes is
-  // only read, never consumed, by the wait predicate) -- callers may safely
-  // inspect or release it (e.g. releaseRetainedWrappers()) afterwards
-  // without any moved-from concerns. This is load-bearing for the
-  // commit_chunk offload-queue-stopped path in device_c_chunk_replay.cpp,
-  // which retains wrapper refs before calling push() and must release them
-  // itself when push() refuses the chunk.
-  bool push(RawCommandChunk&& chunk, ReplayDrainLedger* ledger = nullptr) {
+  // RejectedPreEffect preserves caller ownership. Accepted adopts the chunk
+  // and publishes its byte count (and optional ledger sequence) exactly once.
+  // EffectUnknown means adoption completed but a later bridge-visible effect
+  // could not be proven; callers must poison/fail-stop and must not release the
+  // moved wrapper refs themselves.
+  ReplayQueuePushDisposition pushWithDisposition(
+      RawCommandChunk&& chunk, ReplayDrainLedger* ledger = nullptr) noexcept try {
     std::unique_lock lock(mutex_);
     const auto admissible = [&] {
       // Oversized-chunk admission: a chunk bigger than maxBytes_ must still
@@ -357,24 +409,56 @@ class ReplayOffloadQueue {
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - waitStart).count()));
     }
-    if (stop_) return false;  // chunk not touched -- see guarantee above.
+    if (stop_) return ReplayQueuePushDisposition::RejectedPreEffect;
+    if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::BeforeAdoption) {
+      testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;
+      return ReplayQueuePushDisposition::RejectedPreEffect;
+    }
     if (ledger) {
       // The only nested order in this subsystem is queue -> ledger. Check
       // terminal state before moving the caller's entry, then publish the
       // owned deque entry before either lock can be released.
       std::unique_lock ledgerLock(ledger->mutex_);
       if (!ledger->accepting_ || ledger->terminal()) {
-        return false;
+        return ReplayQueuePushDisposition::RejectedPreEffect;
       }
-      queuedBytes_ += chunk.recordBytes;
-      queue_.push_back(std::move(chunk));
+      try {
+        queue_.push_back(std::move(chunk));
+      } catch (...) {
+        return ReplayQueuePushDisposition::RejectedPreEffect;
+      }
+      queuedBytes_ += queue_.back().recordBytes;
       ledger->publishAcceptedLocked(queue_.back());
     } else {
-      queuedBytes_ += chunk.recordBytes;
-      queue_.push_back(std::move(chunk));
+      try {
+        queue_.push_back(std::move(chunk));
+      } catch (...) {
+        return ReplayQueuePushDisposition::RejectedPreEffect;
+      }
+      queuedBytes_ += queue_.back().recordBytes;
+    }
+    if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::AfterAdoption) {
+      testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;
+      stop_ = true;
+      workCv_.notify_all();
+      spaceCv_.notify_all();
+      drainCv_.notify_all();
+      return ReplayQueuePushDisposition::EffectUnknown;
     }
     workCv_.notify_one();
-    return true;
+    return ReplayQueuePushDisposition::Accepted;
+  } catch (...) {
+    // Every potentially throwing operation precedes deque adoption; push_back
+    // itself is caught at the adoption site. Later publication/accounting and
+    // notifications are noexcept, so an outer failure preserves caller
+    // ownership and is explicitly pre-effect.
+    return ReplayQueuePushDisposition::RejectedPreEffect;
+  }
+
+  bool push(RawCommandChunk&& chunk,
+            ReplayDrainLedger* ledger = nullptr) noexcept {
+    return pushWithDisposition(std::move(chunk), ledger) ==
+           ReplayQueuePushDisposition::Accepted;
   }
 
   bool pop(RawCommandChunk& out) {
@@ -463,6 +547,22 @@ class ReplayOffloadQueue {
     return queue_.size() + (inFlight_ ? 1 : 0);
   }
 
+  std::size_t queuedBytesForTest() const {
+    std::lock_guard lock(mutex_);
+    return queuedBytes_;
+  }
+
+  void failNextPushForTest(ReplayQueueFailurePoint point) {
+    std::lock_guard lock(mutex_);
+    testOnlyFailurePoint_ = point;
+  }
+
+  void failNextAllocationForTest() noexcept {
+    if (testOnlyAllocationFailure_) {
+      testOnlyAllocationFailure_->failNext.store(true);
+    }
+  }
+
  private:
   const std::size_t maxChunks_;
   const std::size_t maxBytes_;
@@ -471,12 +571,15 @@ class ReplayOffloadQueue {
   std::condition_variable workCv_;
   std::condition_variable spaceCv_;
   std::condition_variable drainCv_;
-  std::deque<RawCommandChunk> queue_;
+  std::deque<RawCommandChunk, ReplayQueueAllocator<RawCommandChunk>> queue_;
   std::size_t queuedBytes_ = 0;
   bool inFlight_ = false;
   bool stop_ = false;
   bool testOnlyDrainWaitObservationEnabled_ = false;
   std::uint64_t testOnlyDrainWaitEntries_ = 0;
+  ReplayQueueFailurePoint testOnlyFailurePoint_ =
+      ReplayQueueFailurePoint::None;
+  ReplayQueueAllocationFailure* testOnlyAllocationFailure_ = nullptr;
 };
 
 // getenv("DXMT9_OFFLOAD_COMMIT_REPLAY"), read once. Defined in
@@ -591,10 +694,14 @@ class ReplayOffloadWorker {
   ReplayOffloadWorker(const ReplayOffloadWorker&) = delete;
   ReplayOffloadWorker& operator=(const ReplayOffloadWorker&) = delete;
 
-  void start(D9CDevice* device);   // spawns thread_ running run(device)
+  bool start(D9CDevice* device) noexcept;  // rolls owner back if spawn fails
   void stop();                     // queue_.stop(); join; drain; idempotent
   ReplayOffloadQueue& queue() { return queue_; }
   bool failed() const { return failed_.load(std::memory_order_acquire); }
+  void failNextStartForTest() noexcept { testOnlyFailStart_ = true; }
+  bool startedForTest() const noexcept {
+    return owner_ != nullptr || thread_.joinable();
+  }
 
  private:
   void run(D9CDevice* device);     // pop loop -> replayRawChunk -> markReplayDone, then drain
@@ -605,6 +712,7 @@ class ReplayOffloadWorker {
   ReplayFn replay_ = nullptr;
   FailurePublishedHook failureHook_ = nullptr;
   void* failureHookContext_ = nullptr;
+  bool testOnlyFailStart_ = false;
 };
 
 // Replays a prevalidated, resolved canonical chunk. The worker publishes ledger

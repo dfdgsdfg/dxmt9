@@ -274,8 +274,8 @@ void runScenario(const std::string& name, std::uint32_t recordType,
 // is the trap this helper exists to avoid.
 void setRenderState(PeHotStateShadow& s, std::uint32_t state,
                     std::uint32_t value) {
-  s.pendingRenderStatesTyped().set(renderStateSlotKey(state), value);
-  s.renderStateShadowTyped().set(renderStateSlotKey(state), value);
+  s.writer().pendingRenderStatesTyped().set(renderStateSlotKey(state), value);
+  s.writer().renderStateShadowTyped().set(renderStateSlotKey(state), value);
 }
 
 PeHotStateShadow nothingDirty() { return PeHotStateShadow{}; }

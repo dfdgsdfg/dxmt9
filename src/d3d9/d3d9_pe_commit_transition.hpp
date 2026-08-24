@@ -1,5 +1,7 @@
 #pragma once
 
+#include "d3d9_pe_recorder_settlement.hpp"
+
 #include <cstdint>
 
 namespace dxmt9::d3d9::pe {
@@ -16,6 +18,7 @@ enum class RecorderCommitPhase : std::uint8_t {
   Drained,
   Reset,
   WarmAdvanced,
+  Poisoned,
   Discarded,
 };
 
@@ -23,7 +26,8 @@ enum class RecorderCommitEvent : std::uint8_t {
   SealAccepted,
   SealFailed,
   BridgeAccepted,
-  BridgeFailed,
+  BridgePreEffectFailed,
+  BridgeEffectUnknown,
   CaptureMaterialized,
   CaptureRejected,
   CaptureSkipped,
@@ -51,6 +55,7 @@ enum class RecorderCommitAction : std::uint8_t {
   ResetBuilder,
   AdvanceWarmEpoch,
   DiscardAll,
+  FailStop,
   Invalid,
 };
 
@@ -82,6 +87,9 @@ class RecorderCommitPlan {
   }
   constexpr bool advanceWarmEpoch() const noexcept {
     return action_ == RecorderCommitAction::AdvanceWarmEpoch;
+  }
+  constexpr bool poisons() const noexcept {
+    return action_ == RecorderCommitAction::FailStop;
   }
 
  private:
@@ -117,6 +125,8 @@ class RecorderCommitPlan {
       return next == RecorderCommitPhase::WarmAdvanced;
     case RecorderCommitAction::DiscardAll:
       return next == RecorderCommitPhase::Discarded;
+    case RecorderCommitAction::FailStop:
+      return next == RecorderCommitPhase::Poisoned;
     case RecorderCommitAction::Invalid:
       return false;
     }
@@ -148,10 +158,10 @@ constexpr RecorderCommitPlan invalidCommitPlan() noexcept {
 }
 
 // The production commit/discard paths and native/TLA witnesses use this exact
-// transition.  In particular, bridge failure remains Sealed and preserves the
-// sealed bytes; capture rejection occurs only after command acceptance; parent
-// destruction is illegal while an alias remains; and reset/epoch advancement
-// are distinct post-drain effects.
+// transition. A locally proven pre-effect bridge failure remains retryable;
+// an entered-call failure is effect-unknown and fail-stop. Capture rejection
+// occurs only after command acceptance; parent destruction is illegal while an
+// alias remains; and reset/epoch advancement are distinct post-drain effects.
 constexpr RecorderCommitPlan settleRecorderCommit(
     RecorderCommitFacts facts) noexcept {
   if (facts.event == RecorderCommitEvent::ExplicitDiscard ||
@@ -176,9 +186,12 @@ constexpr RecorderCommitPlan settleRecorderCommit(
     if (facts.event == RecorderCommitEvent::BridgeAccepted)
       return commitPlan(RecorderCommitPhase::Accepted,
                         RecorderCommitAction::AcceptCommand);
-    if (facts.event == RecorderCommitEvent::BridgeFailed)
+    if (facts.event == RecorderCommitEvent::BridgePreEffectFailed)
       return commitPlan(RecorderCommitPhase::Sealed,
                         RecorderCommitAction::Retry);
+    if (facts.event == RecorderCommitEvent::BridgeEffectUnknown)
+      return commitPlan(RecorderCommitPhase::Poisoned,
+                        RecorderCommitAction::FailStop);
     break;
   case RecorderCommitPhase::Accepted:
     if (facts.event == RecorderCommitEvent::CaptureMaterialized)
@@ -201,7 +214,8 @@ constexpr RecorderCommitPlan settleRecorderCommit(
       return commitPlan(RecorderCommitPhase::Draining,
                         RecorderCommitAction::DestroyAlias);
     if (facts.event == RecorderCommitEvent::DrainParent &&
-        !facts.aliasesRemain && facts.parentPending) {
+        recorderParentDrainAllowed(facts.aliasesRemain,
+                                   facts.parentPending)) {
       return commitPlan(RecorderCommitPhase::Drained,
                         RecorderCommitAction::DestroyParent);
     }
@@ -227,6 +241,7 @@ constexpr RecorderCommitPlan settleRecorderCommit(
                         RecorderCommitAction::NoOp);
     break;
   case RecorderCommitPhase::Discarded:
+  case RecorderCommitPhase::Poisoned:
     break;
   }
   return invalidCommitPlan();

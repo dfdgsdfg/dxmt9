@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 
 namespace dxmt9::d3d9 {
 
@@ -300,9 +301,21 @@ bool prepareOffloadChunk(
   return true;
 }
 
-void ReplayOffloadWorker::start(D9CDevice* device) {
+bool ReplayOffloadWorker::start(D9CDevice* device) noexcept {
+  if (!device || owner_ || thread_.joinable()) return false;
+  if (testOnlyFailStart_) {
+    testOnlyFailStart_ = false;
+    owner_ = nullptr;
+    return false;
+  }
+  try {
+    thread_ = std::thread([this, device] { run(device); });
+  } catch (...) {
+    owner_ = nullptr;
+    return false;
+  }
   owner_ = device;
-  thread_ = std::thread([this, device] { run(device); });
+  return true;
 }
 
 void ReplayOffloadWorker::stop() {
@@ -328,8 +341,15 @@ void ReplayOffloadWorker::stop() {
 void ReplayOffloadWorker::run(D9CDevice* device) {
   RawCommandChunk chunk;
   while (queue_.pop(chunk)) {
-    const int32_t hr = replay_ ? replay_(device, chunk)
-                               : replayRawChunk(device, chunk);
+    int32_t hr = dxmt9::core::D3D_OK;
+    try {
+      hr = replay_ ? replay_(device, chunk)
+                   : replayRawChunk(device, chunk);
+    } catch (const std::bad_alloc&) {
+      hr = dxmt9::core::E_OUTOFMEMORY;
+    } catch (...) {
+      hr = dxmt9::core::D3DERR_INVALIDCALL;
+    }
     if (hr < 0) {
       // Fail-stop is visible before any completion notification. A producer
       // linearized after poison() observes the same terminal state under the
@@ -342,7 +362,12 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
         DXMT_ASSERT(false && "deferred commit replay failed");
       }
       if (failureHook_) {
-        failureHook_(failureHookContext_);
+        try {
+          failureHook_(failureHookContext_);
+        } catch (...) {
+          // A test/diagnostic hook cannot interrupt terminal ownership
+          // settlement for the failed chunk or its queued successors.
+        }
       }
       // Release-build safety net: abort any app thread waiting on an ordinal
       // this now-dead worker can never retire. Native failure-injection tests

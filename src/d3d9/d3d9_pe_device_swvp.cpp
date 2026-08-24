@@ -41,7 +41,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
     std::uint32_t flags = 0u;
     if (rhw <= 0.0f) flags |= kSwvpClipOutsideEye;
 
-    const auto& vp = peState_.viewportShadow;
+    const auto& vp = recorderState_.peState.viewportShadow;
     const float left = static_cast<float>(vp.x);
     const float right = left + static_cast<float>(vp.width);
     const float top = static_cast<float>(vp.y);
@@ -76,7 +76,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
         };
         for (UINT i = 0; i < 6u; ++i) {
             if ((userClipMask & (1u << i)) == 0u) continue;
-            const float* plane = &peState_.clipPlaneShadow[i * 4u];
+            const float* plane = &recorderState_.peState.clipPlaneShadow[i * 4u];
             const float distance = plane[0] * clip[0] +
                                    plane[1] * clip[1] +
                                    plane[2] * clip[2] +
@@ -230,7 +230,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	        std::vector<std::uint32_t> planes;
 	        planes.reserve(13u);
 	        planes.push_back(kSwvpClipOutsideEye);
-	        const auto& vp = peState_.viewportShadow;
+	        const auto& vp = recorderState_.peState.viewportShadow;
 	        if (vp.width != 0u) {
 	            planes.push_back(kSwvpClipOutsideLeft);
 	            planes.push_back(kSwvpClipOutsideRight);
@@ -262,7 +262,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	            !std::isfinite(z) || !std::isfinite(rhw)) {
 	            return -1.0f;
 	        }
-	        const auto& vp = peState_.viewportShadow;
+	        const auto& vp = recorderState_.peState.viewportShadow;
 	        const float left = static_cast<float>(vp.x);
 	        const float right = left + static_cast<float>(vp.width);
 	        const float top = static_cast<float>(vp.y);
@@ -305,7 +305,7 @@ std::uint32_t D3D9DeviceImpl::transformedSwvpVertexClipFlags(
 	                    ((z - vp.minZ) / (vp.maxZ - vp.minZ)) * w,
 	                    w,
 	                };
-	                const float* plane = &peState_.clipPlaneShadow[userPlane * 4u];
+	                const float* plane = &recorderState_.peState.clipPlaneShadow[userPlane * 4u];
 	                const float distance = plane[0] * clip[0] +
 	                                       plane[1] * clip[1] +
 	                                       plane[2] * clip[2] +

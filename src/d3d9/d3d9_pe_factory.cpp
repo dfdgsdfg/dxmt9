@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include "d3d9_pe.hpp"
 
 // Pull in only the inline capability-pair helpers from core_format_utils.hpp.
@@ -117,10 +118,16 @@ static D3DDEVTYPE fromCDeviceType(uint32_t type) {
     }
 }
 
-static void dxmt9FactoryDebugLog(const char* fmt, ...) {
+static void dxmt9FactoryDebugLog(const char* fmt, ...) noexcept {
     va_list args;
     va_start(args, fmt);
-    dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-factory", fmt, args);
+    try {
+        dxmt9::util::vlogf(
+            dxmt9::util::LogLevel::Debug, "dxmt9-factory", fmt, args);
+    } catch (...) {
+        // Logging is best-effort; allocation failure must not escape a COM
+        // factory method or constructor/destructor.
+    }
     va_end(args);
 }
 
@@ -755,12 +762,13 @@ public:
             dxmt9FactoryDebugLog("CreateDevice -> succeeded without device");
             return D3DERR_INVALIDCALL;
         }
+        HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags);
+                                     pPP->Flags, &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDevice -> command chunk negotiation failed");
-            return D3DERR_NOTAVAILABLE;
+            return createFailure;
         }
         dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
@@ -887,12 +895,13 @@ public:
             dxmt9FactoryDebugLog("CreateDeviceEx -> succeeded without device");
             return D3DERR_INVALIDCALL;
         }
+        HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags);
+                                     pPP->Flags, &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> command chunk negotiation failed");
-            return D3DERR_NOTAVAILABLE;
+            return createFailure;
         }
         dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
@@ -919,13 +928,33 @@ public:
 
 /* ── factory constructors (called from entry.cpp) ────────────────────────── */
 
-IDirect3D9* CreateFactoryImpl(D9CFactory* f) {
-    auto* impl = new D3D9FactoryImpl(f, false);
+IDirect3D9* CreateFactoryImpl(D9CFactory* f) noexcept {
+    D3D9FactoryImpl* impl = nullptr;
+    try {
+        impl = new (std::nothrow) D3D9FactoryImpl(f, false);
+    } catch (...) {
+        if (f) dxmt9c_factory_release(f);
+        return nullptr;
+    }
+    if (!impl) {
+        if (f) dxmt9c_factory_release(f);
+        return nullptr;
+    }
     dxmt9FactoryDebugLog("CreateFactoryImpl impl=%p", impl);
     return impl;
 }
-IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f) {
-    auto* impl = new D3D9FactoryImpl(f, true);
+IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f) noexcept {
+    D3D9FactoryImpl* impl = nullptr;
+    try {
+        impl = new (std::nothrow) D3D9FactoryImpl(f, true);
+    } catch (...) {
+        if (f) dxmt9c_factory_release(f);
+        return nullptr;
+    }
+    if (!impl) {
+        if (f) dxmt9c_factory_release(f);
+        return nullptr;
+    }
     dxmt9FactoryDebugLog("CreateFactoryExImpl impl=%p", impl);
     return impl;
 }

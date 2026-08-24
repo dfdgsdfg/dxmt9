@@ -1253,7 +1253,7 @@ void testKindQualifiedHazardAndPendingDestroyQueries() {
 
 void testOversizedPendingBatchAppendFailure() {
   PeHotStateShadow shadow{};
-  auto pending = shadow.pendingRenderStatesTyped();
+  auto pending = shadow.writer().pendingRenderStatesTyped();
   constexpr std::uint32_t total =
       D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
   for (std::uint32_t state = 0u; state < total; ++state) {
@@ -1278,7 +1278,7 @@ void testOversizedPendingBatchAppendFailure() {
   CommandChunkBuilder accepted;
   check(dxmt9::d3d9::pe::appendApplyState(accepted, 0u, state),
         "the exact oversized batch remains appendable on retry");
-  shadow.acceptRenderStateBatch(
+  shadow.consume().acceptRenderStateBatch(
       state.renderStates,
       dxmt9::d3d9::pe::settleRecorderAppend({
           .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,

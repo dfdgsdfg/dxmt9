@@ -496,3 +496,27 @@ pe_producer_differential_spec = executable(
 test('dxmt9-pe-producer-differential-spec',
      pe_producer_differential_spec,
      env: dxmt9_native_test_env)
+
+pe_com_membership_spec = executable(
+  'dxmt9-pe-com-membership-spec',
+  ['pe_com_membership_spec.cpp'],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-com-membership-spec',
+     pe_com_membership_spec,
+     env: dxmt9_native_test_env)
+
+pe_com_cache_spec = executable(
+  'dxmt9-pe-com-cache-spec',
+  ['pe_com_cache_spec.cpp'],
+  include_directories: [include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-com-cache-spec', pe_com_cache_spec,
+     env: dxmt9_native_test_env)

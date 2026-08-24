@@ -33,6 +33,7 @@ constexpr HRESULT S_OK = 0;
 constexpr HRESULT S_FALSE = 1;
 constexpr HRESULT D3D_OK = 0;
 constexpr HRESULT E_NOTIMPL = static_cast<HRESULT>(0x80004001);
+constexpr HRESULT E_OUTOFMEMORY = static_cast<HRESULT>(0x8007000e);
 constexpr HRESULT D3DERR_INVALIDCALL = static_cast<HRESULT>(0x8876086c);
 constexpr HRESULT D3DERR_NOTAVAILABLE = static_cast<HRESULT>(0x8876086a);
 constexpr HRESULT D3DERR_DEVICELOST = static_cast<HRESULT>(0x88760868);

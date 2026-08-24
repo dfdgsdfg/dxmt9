@@ -1796,7 +1796,7 @@ void D3D9DeviceImpl::recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
 void D3D9DeviceImpl::notePeChunkAppendBoundary(std::int64_t appendReturnNs,
                                std::uint32_t type) {
     if (!dxmt9PeRecorderStatsEnabled() ||
-        commandChunk_.recordCount() == 0) {
+        recorderState_.commandChunk.recordCount() == 0) {
         return;
     }
     if (diagnostics_->peRecorderCurrentChunkFirstAppendNs_ == 0) {

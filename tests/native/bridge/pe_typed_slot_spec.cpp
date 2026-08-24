@@ -21,6 +21,7 @@
 
 #include "d3d9_pe_state_shadow.hpp"
 
+#include <concepts>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -42,14 +43,9 @@ void check(bool condition, std::string_view message) {
 // ---------------------------------------------------------------------------
 // Zero-overhead evidence for the key types themselves.
 //
-// Each key is `enum class Tag : std::uint32_t {}` with NO enumerators and NO
-// user-provided constructors -- not a wrapper struct/class. The standard
-// guarantees a scoped enum's object representation is exactly its fixed
-// underlying type's (basic.compound / dcl.enum), so there is no wrapper-ABI
-// question to hand-wave: these six checks are true by the language rule,
-// and pinned here so a future edit that turns one of these into something
-// class-like (a constructor, a base class, extra members) fails the build
-// immediately instead of silently changing parameter-passing ABI.
+// Each key remains one register-sized, trivially copied value. Unlike the old
+// empty enum tags, its raw constructor is closed and invalid construction
+// produces a fail-closed sentinel.
 #define DXMT9_PE_STATIC_ASSERT_ZERO_OVERHEAD_KEY(Key)                        \
   static_assert(sizeof(Key) == sizeof(std::uint32_t),                       \
                 #Key " must be exactly one uint32_t wide");                 \
@@ -61,8 +57,8 @@ void check(bool condition, std::string_view message) {
   static_assert(std::is_standard_layout_v<Key>,                             \
                 #Key " must be standard-layout (no hidden base/vtable "     \
                      "state)");                                             \
-  static_assert(std::is_trivially_default_constructible_v<Key>,             \
-                #Key " must have no user-provided constructor")
+  static_assert(!std::is_constructible_v<Key, std::uint32_t>,               \
+                #Key " must reject direct raw construction")
 
 DXMT9_PE_STATIC_ASSERT_ZERO_OVERHEAD_KEY(RenderStateSlot);
 DXMT9_PE_STATIC_ASSERT_ZERO_OVERHEAD_KEY(TextureStageIndex);
@@ -112,6 +108,41 @@ static_assert(!ExposesRawValues<TrackedTableProbe> &&
               !ExposesRawOccupancy<TrackedTableProbe> &&
               !ExposesRawCount<TrackedTableProbe>,
               "FixedTrackedState raw arrays/counter must remain private");
+
+template<typename T>
+concept ExposesMutableRenderTable = requires(T& value) {
+  { value.renderStates() } -> std::same_as<RenderStateTableView>;
+};
+template<typename T>
+concept ExposesDirectAcceptance = requires(
+    T& value, std::span<const D9CCommandChunkWireRenderState> rows,
+    const dxmt9::d3d9::pe::AppendPlan& plan) {
+  value.acceptRenderStateBatch(rows, plan);
+};
+template<typename T>
+concept ExposesMutableHotTable = requires(T& value) {
+  { value.renderStateShadowTyped() } -> std::same_as<RenderStateTableView>;
+};
+
+static_assert(!ExposesMutableRenderTable<LiveShadow> &&
+              !ExposesMutableRenderTable<PendingDelta>,
+              "live and pending tables must not expose mutable views");
+static_assert(!ExposesDirectAcceptance<PendingDelta> &&
+              !ExposesDirectAcceptance<PeHotStateShadow>,
+              "pending settlement must require an explicit consume capability");
+static_assert(!ExposesMutableHotTable<PeHotStateShadow>);
+static_assert(std::same_as<
+              decltype(std::declval<PeHotStateShadow::Writer&>()
+                           .renderStateShadowTyped()),
+              RenderStateTableView>);
+static_assert(std::same_as<
+              decltype(std::declval<const PeHotStateShadow::Snapshot&>()
+                           .renderStateShadowTyped()),
+              ConstRenderStateTableView>);
+static_assert(sizeof(PeHotStateShadow::Writer) == sizeof(void*) &&
+              sizeof(PeHotStateShadow::Snapshot) == sizeof(void*) &&
+              sizeof(PeHotStateShadow::Consumer) == sizeof(void*),
+              "phase capabilities must remain one-reference stack values");
 
 // The views themselves are single-reference façades, not extra state: each
 // must be exactly pointer-sized (a reference is implemented as a pointer),
@@ -236,16 +267,16 @@ static_assert(!HasRawSlot<int>::value, "rawSlot must reject a bare int");
 void renderStateTypedMatchesUntyped() {
   PeHotStateShadow shadow{};
   const RenderStateSlot lighting = renderStateSlotKey(2u);  // D3DRS_ZENABLE-ish
-  shadow.renderStateShadowTyped().set(lighting, 7u);
+  shadow.writer().renderStateShadowTyped().set(lighting, 7u);
 
   std::uint32_t typedValue = 0;
-  check(shadow.renderStateShadowTyped().get(lighting, typedValue),
+  check(shadow.writer().renderStateShadowTyped().get(lighting, typedValue),
         "typed get must see the value");
   check(typedValue == 7u, "typed get must match untyped get");
 
-  shadow.pendingRenderStatesTyped().set(renderStateSlotKey(9u), 42u);
+  shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(9u), 42u);
   std::uint32_t viaTyped = 0;
-  check(shadow.pendingRenderStatesTyped().get(renderStateSlotKey(9u),
+  check(shadow.writer().pendingRenderStatesTyped().get(renderStateSlotKey(9u),
                                               viaTyped),
         "pending category API must retain its value");
   check(viaTyped == 42u, "pending value must round-trip unchanged");
@@ -270,17 +301,19 @@ void tssTypedMatchesUntyped() {
   check(rawSlot(typeKey) == textureStageStateSlot(type),
         "textureStageStateTypeKey must match the untyped clamp function");
 
-  shadow.tssShadowTyped().set(stageKey, typeKey, 123u);
+  shadow.writer().tssShadowTyped().set(stageKey, typeKey, 123u);
   std::uint32_t value = 0;
-  check(shadow.tssShadowTyped().get(stageKey, typeKey, value),
+  check(shadow.writer().tssShadowTyped().get(stageKey, typeKey, value),
         "typed matrix view must retain its value");
   check(value == 123u, "value must round-trip unchanged");
 
-  // Clamping behavior must be preserved: an out-of-range stage/type clamps
-  // to the last valid slot, exactly like the untyped clamp functions.
-  const auto clampedStage = textureStageIndexKey(999u);
-  check(rawSlot(clampedStage) == kPeTextureStageSlots - 1u,
-        "out-of-range stage must clamp like textureStageSlot() does");
+  const auto rejectedStage = textureStageIndexKey(999u);
+  const auto rejectedType = textureStageStateTypeKey(999u);
+  check(!rejectedStage.valid() && !rejectedType.valid(),
+        "out-of-range TSS axes must fail closed rather than alias a valid key");
+  shadow.writer().tssShadowTyped().set(rejectedStage, typeKey, 999u);
+  check(shadow.writer().tssShadowTyped().size() == 1u,
+        "an invalid bounded key must not mutate the table");
 }
 
 void samplerTypedMatchesUntyped() {
@@ -304,9 +337,9 @@ void samplerTypedMatchesUntyped() {
   check(samplerStateTypeKey(1u, stateType),  // D3DSAMP_ADDRESSU
         "D3DSAMP_ADDRESSU must resolve to a SamplerStateType");
 
-  shadow.samplerStateShadowTyped().set(samplerIndex, stateType, 55u);
+  shadow.writer().samplerStateShadowTyped().set(samplerIndex, stateType, 55u);
   std::uint32_t value = 0;
-  check(shadow.samplerStateShadowTyped().get(samplerIndex, stateType, value),
+  check(shadow.writer().samplerStateShadowTyped().get(samplerIndex, stateType, value),
         "typed sampler matrix must retain its value");
   check(value == 55u, "value must round-trip unchanged");
 }
@@ -315,10 +348,10 @@ void transformTypedMatchesUntyped() {
   PeHotStateShadow shadow{};
   const D9CMatrix view = identityTransformMatrix();
   const auto viewState = transformStateKey(2u);  // D3DTS_VIEW
-  shadow.transformShadowTyped().set(viewState, view);
+  shadow.writer().transformShadowTyped().set(viewState, view);
 
   D9CMatrix typedValue{};
-  check(shadow.transformShadowTyped().get(viewState, typedValue),
+  check(shadow.writer().transformShadowTyped().get(viewState, typedValue),
         "typed get must see the value");
   check(matrixEquals(typedValue, view), "typed get must match untyped get");
 }

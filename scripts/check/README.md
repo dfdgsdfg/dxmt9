@@ -22,6 +22,11 @@ under `tests/meson.build`.
 - `gen_pe_stateblock_transition_table.py` — generates or checks the TLA
   translation of the production StateBlock serial/reference transition table;
   it also rejects enum events/actions/phases without a mapped row.
+- `gen_pe_composed_tables.py` — generates or checks the TLA translations of
+  the production recorder-settlement and StateBlock repeated-value tables;
+  generation atomically replaces each distinct module, and
+  `--verify-generation` exercises that separate-output path in a temporary
+  directory. `verify_tla.sh` rejects either generated module when stale.
 - `assert_perf_counters.py` — fails when expected perf counter keys are
   missing from a run JSON; intended to extend draw-uniforms coverage.
 - `audit_perf_counter_table.py` — text-based audit detecting fields added to

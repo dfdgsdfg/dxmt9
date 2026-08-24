@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <vector>
 
 namespace dxmt9::d3d9::pe::process_vertices {
@@ -2289,6 +2290,37 @@ HRESULT processVertices(const Context& context,
         return D3DERR_INVALIDCALL;
     };
     if (!dstBuffer) return invalid("null destination buffer");
+    if (!context.device || !context.deviceIdentity)
+        return invalid("null device");
+    D3D9PeValidatedBuffer destination{};
+    D3D9PeValidatedDeclaration outputDeclaration{};
+    D3D9PeValidatedDeclaration inputDeclaration{};
+    D3D9PeValidatedShader vertexShader{};
+    if (FAILED(D3D9PeValidateVertexBuffer(
+            dstBuffer, context.deviceIdentity, &destination)) ||
+        FAILED(D3D9PeValidateVertexDecl(
+            declaration, context.deviceIdentity, &outputDeclaration)) ||
+        FAILED(D3D9PeValidateVertexDecl(
+            context.vertexDeclaration, context.deviceIdentity,
+            &inputDeclaration)) ||
+        FAILED(D3D9PeValidateVertexShader(
+            context.vertexShader, context.deviceIdentity, &vertexShader))) {
+        return invalid("foreign or invalid destination state");
+    }
+    for (auto* stream : context.streamSources) {
+        D3D9PeValidatedBuffer validatedStream{};
+        if (FAILED(D3D9PeValidateVertexBuffer(
+                stream, context.deviceIdentity, &validatedStream))) {
+            return invalid("foreign or invalid source stream");
+        }
+    }
+    for (auto* texture : context.textures) {
+        D3D9PeValidatedTexture validatedTexture{};
+        if (FAILED(D3D9PeValidateTexture(
+                texture, context.deviceIdentity, &validatedTexture))) {
+            return invalid("foreign or invalid texture");
+        }
+    }
     if (vertexCount == 0) return S_OK;
     if (flags & ~D3DPV_DONOTCOPYDATA) return invalid("flags unsupported");
     const bool programmable = context.vertexShader != nullptr;
@@ -2301,7 +2333,13 @@ HRESULT processVertices(const Context& context,
             (shaderBytes % sizeof(DWORD)) != 0) {
             return invalid("shader bytecode query failed");
         }
-        shaderWords.resize(shaderBytes / sizeof(DWORD));
+        try {
+            shaderWords.resize(shaderBytes / sizeof(DWORD));
+        } catch (const std::bad_alloc&) {
+            return E_OUTOFMEMORY;
+        } catch (...) {
+            return D3DERR_INVALIDCALL;
+        }
         shaderHr = context.vertexShader->GetFunction(shaderWords.data(), &shaderBytes);
         if (FAILED(shaderHr) ||
             !analyzeSimpleProcessVertexShader(shaderWords, shaderIo)) {
@@ -2723,7 +2761,7 @@ HRESULT processVertices(const Context& context,
     if (programmable) {
         for (UINT sampler = 0; sampler < shaderTextures.vertexTextures.size(); ++sampler) {
             const UINT samplerSlot = kPeFragmentSamplerSlots + sampler;
-            const SamplerIndex samplerIndex = static_cast<SamplerIndex>(samplerSlot);
+            const SamplerIndex samplerIndex = SamplerIndex::fromRaw(samplerSlot);
             const auto samplerStateValue =
                 [&](D3DSAMPLERSTATETYPE type, DWORD fallback) -> DWORD {
                     SamplerStateType stateType{};

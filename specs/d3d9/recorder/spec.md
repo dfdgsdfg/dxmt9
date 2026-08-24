@@ -46,7 +46,16 @@ StateBlockRecorded[c, k]  = value in the fixed tracked set of a state block
 `LiveShadow` is total over supported getter-visible state after defaults are
 established. `PendingDelta` and `StateBlockRecorded` are partial maps. Typed
 keys prevent accidental equality across domains such as render-state slot 7
-and sampler slot 7.
+and sampler slot 7. Their factories return a one-word bounded value or an
+invalid sentinel; recorder boundaries reject the sentinel before mutation or
+retain. `PeHotStateShadow::Writer`, `Snapshot`, and `Consumer` separate hot
+mutation, read-only observation, and exact pending settlement. “Snapshot” is
+a capability boundary, not global object immutability: the owning recorder may
+continue mutation through its writer while readers cannot obtain mutable table
+or category access. The StateBlock
+transaction similarly exposes `recordWriter()` and `recordedSnapshot()`;
+wrapper snapshots use their own writer/snapshot views. Flat storage and raw
+category enumeration remain implementation details.
 
 ### 2.1 Category table
 
@@ -97,7 +106,7 @@ Preparing a record computes a non-owning candidate projection:
 Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
 ```
 
-Only `commitRecord(Candidate)` may perform:
+Only accepted settlement through the consume capability may perform:
 
 ```text
 PendingDelta' = PendingDelta \ represented(Candidate)
@@ -106,6 +115,8 @@ PendingDelta' = PendingDelta \ represented(Candidate)
 Thus an accepted record followed by ordered unix replay reconstructs the same
 effective state as `LiveShadow` at that record's ordinal. Failure returns the
 pre-attempt state, including dirty constant ranges and oversized-table rows.
+Acceptance validates every bounded wire key first, so one malformed row cannot
+partially erase an otherwise valid batch.
 
 ### 2.3 State-block transitions
 
@@ -202,11 +213,12 @@ checkpoint even though it is owned outside the builder.
 
 | Outcome | Builder | Retainer | `PendingDelta` | App result |
 |---|---|---|---|---|
+| pre-capacity flush fails | prior builder remains sealed or unsealed according to its own settlement; new record is unattempted | prior pins retained | new prepared token unchanged | failure; no emitter call |
 | preparation/validation fails | unchanged | unchanged | unchanged | failure |
 | payload/handle/retain append fails | rollback to all checkpoints | rollback new pins | unchanged | failure |
 | `commitRecord` fails | rollback active record | rollback new pins | unchanged | failure |
 | `commitRecord` succeeds | record becomes durable in current builder | pins owned by builder | remove exactly represented entries | success or continue to capacity settlement |
-| post-append capacity commit fails | sealed accepted record remains retryable | pins retained | entries remain represented by sealed record, not reintroduced as a duplicate | failure without reset |
+| post-append capacity commit is effect-unknown | sealed accepted record remains owned for Reset/teardown cleanup, not ordinary retry | pins retained | entries remain represented by the accepted record, not reintroduced as a duplicate | failure and recorder poison |
 
 `buildSparseState` and every typed `prepare*Batch` are non-consuming.
 `acceptPreparedSparseState`, `acceptInlineConstantDelta`, standalone constant
@@ -221,24 +233,62 @@ retry witness.
 | seal allocation/validation failure | no bridge effect; retry or explicit discard | no event | builder and pins retained |
 | repeated seal | byte-identical view of the same builder | no duplicate event | no epoch advance |
 | capture preparation rejects before bridge | command may still proceed under normal semantics | abort/reject diagnostic | capture must not alter chunk boundary or HRESULT |
-| bridge commit fails | not accepted; exact sealed bytes retryable | abort current capture attempt if required | builder and pending refs retained; no reset |
+| commit call not entered because a local pre-effect gate fails | no unix effect; exact sealed projection retryable | no materialization | builder and pending refs retained; no reset |
+| entered bridge commit fails with no ABI disposition | effect unknown; fail-stop, never ordinary retry | abort current capture attempt; no capture publication | sealed builder and refs retained until successful Reset/teardown discard |
 | bridge commit succeeds, capture off | accepted | no work beyond one disabled branch | drain logical refs without capture events as applicable; reset; warm epoch advances |
 | bridge commit succeeds, capture active | accepted | materialize referenced objects and append exact command event first | drain pending refs; emit each admitted alias-before-parent destroy once; reset; warm epoch advances |
-| explicit discard / Reset / teardown | never submitted | no command-dependent destroy | drain logical pending refs; release all current and warm pins; clear builder |
+| explicit discard / poisoned Reset / teardown | never submitted | no command-dependent destroy | drain logical pending refs; release all current and warm pins; clear builder |
+| healthy Reset/ResetEx | queued chunk is submitted at the ordering boundary before backend reset | settle as an ordinary accepted command | backend reset then clears PE state; a failed flush preserves the queue and does not enter reset teardown |
 
 The production source of truth for this settlement is the fixed-size
 `settleRecorderCommit` algebra in
 `src/d3d9/d3d9_pe_commit_transition.hpp`. `flushPendingCommandChunk` binds
 each seal, bridge, capture, drain, builder-reset, and warm-retainer transition
 to that algebra while retaining the existing successful command cadence.
-Bridge failure returns to the same sealed phase with byte/count/handle/pin
-tokens intact, and capture materialization rejection settles only the capture
-disposition after an accepted command; it never retracts the command or
-resets the builder. Pending Render Tape aliases are retired before their
+The current PE/unix ABI returns one HRESULT and cannot distinguish a
+pre-effect rejection from a failure after publication or replay. Production
+therefore maps every failed entered bridge call to the conservative
+effect-unknown/fail-stop disposition. The sealed byte/count/handle/pin
+projection remains intact only for Reset/teardown cleanup, not for ordinary
+retry. Capture materialization rejection settles only the capture disposition
+after an accepted command; it never retracts the command or resets the builder.
+Pending Render Tape aliases are retired before their
 parent, each ObjectDestroy is admitted once, and reset/warm-epoch advancement
-occurs only after all pending references are drained. Explicit discard and
-device reset clear the logical builder and retained pins without command
-dependent destroy events or a warm-epoch advance.
+occurs only after all pending references are drained. Explicit discard,
+poisoned device reset, and teardown clear the logical builder and retained pins
+without command-dependent destroy events or a warm-epoch advance. A healthy
+device reset uses ordinary submit first, so queued observable work is not
+silently dropped before the backend reset; only after that flush succeeds does
+the existing reset-state teardown run.
+
+### 3.3 Public failure containment
+
+PE wrapper factories use non-throwing allocation plus constructor-exception
+containment, clear caller outputs before creation, and release a backend handle
+when wrapper publication fails. The device takes its factory reference only
+after fallible construction work, and device/factory logging swallows its own
+diagnostic allocation failures. Cache insertion catches allocation separately
+so a recoverable failure maps to `E_OUTOFMEMORY` with both the cache and caller
+retains balanced. Provider replay owns retained wrappers through an RAII guard;
+presence-accelerator allocation failure selects the complete linear truth
+source instead of escaping the C boundary. The unix
+offload queue reports `RejectedPreEffect`, `Accepted`, or `EffectUnknown`:
+`queuedBytes` and the ledger watermark publish only after deque adoption, and
+effect-unknown ownership is drained by the fail-stop queue rather than released
+again by the producer. Worker ownership is installed only after thread startup.
+Deterministic native injection covers allocation before/after adoption and
+thread-start rollback; the recorder settlement matrix separately covers bridge
+pre-effect and entered-call effect-unknown behavior.
+
+`RecorderSettlementProjection` is the bounded composition witness. It carries
+one category/key/value/ordinal pending token, the concrete builder's active
+record ordinal plus record/handle/payload counts, and the seal/bridge/capture/
+drain/reset phase. `appendRecord`, `CommandChunkBuilder`, and
+`flushPendingCommandChunk` use the same pure dispositions at their existing
+branches; no new allocation, virtual call, wire field, or Metal owner is added.
+Exact sealed bytes remain a native equality witness. The finite projection is
+not a proof of vector layout, allocator behavior, C++ object representation,
+or the cross-process ABI.
 
 For one builder, `pendingChunkRefs` is boolean-shaped: a logical identity owns
 zero or one pending reference regardless of wrapper release/reacquire churn.
@@ -277,6 +327,19 @@ fails callback re-entry closed before taking that mutex in every build type;
 moving the callback outside the lock would require a separate pin-before-unlock
 protocol and is not permitted as a shortcut.
 
+PE COM operands use allocation-free concrete membership boundaries beside the
+final wrapper classes. Each boundary first `dynamic_cast`s the public interface
+to the exact local final type, then validates the owner, canonical public
+subobject address, concrete/wire kind, nonzero generation/object ID, and any
+surface-alias qualification before copying a kind-qualified raw/wire POD ref to
+device code. SetTexture, render/depth targets, declarations/shaders,
+streams/indices, UpdateTexture/UpdateSurface, StretchRect, ColorFill,
+GetRenderTargetData, and ProcessVertices all use these gates before mutation.
+Wrappers carry neither a second private `IUnknown` vptr nor a stored token.
+This check rejects malformed cached identities but does not prove that a
+generation remains live; live stale-generation rejection belongs to the unix
+`WireObjectRegistry` batch-resolution boundary.
+
 ## 5. Hot/cold and observer boundary
 
 The release path is judged with every diagnostic disabled. `appendRecord`,
@@ -303,7 +366,15 @@ command builder, lock witness, and protocol counters. Keeping the recorded
 domain outside `PeHotStateShadow` prevents state-block-only tables from being
 part of the ordinary live/pending shadow layout.
 `D3D9DeviceImpl` reads the transaction through `recorderState_` directly; the
-COM surface and first declared virtual key-function placement remain unchanged.
+device carries no reference aliases to recorder fields. This keeps ownership
+auditable without changing the COM surface, adding a hot-path allocation or
+moving the first declared virtual key function. Non-null app-supplied COM
+operands take the TU-local concrete-membership gate; validation is confined to
+the public bind/copy call and is not repeated during internal draw packet
+construction.
+`D3D9DeviceImpl` nevertheless remains a roughly 6k-line implementation owner,
+not a thin facade; this ownership cleanup does not claim that the outstanding
+device-header decomposition debt is complete.
 One nullable heap-owned `PeCaptureState` owns the complete Render Tape lifecycle: session,
 live registry, oracle/digest/pixel/output storage, arm phase and ordinals,
 tokens and skip selector, arm snapshots, admitted identities, first-access
@@ -341,7 +412,7 @@ surface (names may follow local style) equivalent to:
 |---|---|---|
 | `applyRecorderStateWrite` | every PE state setter | same-value, A→B→A, same-key LWW, independent-key permutation, prior-value exception |
 | `settleRecorderAppend` | sparse append envelope and oversized/constant drains | failure at every allocation/append phase; no lost/duplicated pending entry |
-| `settleRecorderCommit` | `flushPendingCommandChunk` | seal fail, retry, bridge fail, success, discard |
+| `settleRecorderCommit` / `planRecorderSettlement` | `flushPendingCommandChunk` / append capacity edges | seal fail, pre-effect retry, effect-unknown fail-stop, success, discard |
 | `settleCapturePendingReference` | capture registry drain/replacement | wrapper churn, pending last release, alias-before-parent, bounded restart |
 | `wireIdentityMayResolve` | builder and `WireObjectRegistry` | all kinds, zero/wrong/stale/cross-registry, slot reuse/exhaustion |
 | `observerMayRun` | hot call and child-wrapper gates | disabled zero-work, enabled exact call-local callback, reentrancy rejection |
@@ -351,7 +422,8 @@ Minimal counterexamples that must stay executable:
 1. Dirty constant range is projected, append fails, retry emits the range once.
 2. An oversized pending table removes one batch, append fails, retry loses no row.
 3. Two identity kinds reuse one pointer value; unqualified pointer caching must fail.
-4. Seal succeeds, bridge fails, retry exposes identical bytes and retains pins.
+4. A local bridge pre-effect gate fails and preserves identical sealed bytes for
+   retry; a failed entered call instead poisons and retains pins for recovery.
 5. A last wrapper releases while its alias is pending; replacement before
    flush must fail, one flush-and-restart must preserve generation identity.
 6. Capture preparation/event append fails; accepted app command and HRESULT are
@@ -387,7 +459,7 @@ live `A -> B -> A` replacement and keeps End enabled so `Begin -> Set -> End`
 still completes at the bound. Longer state-block write compositions remain in
 the exhaustive native and PE layers rather than this temporal state space.
 The `PeRecorderCommit.tla` model carries byte/count/handle/pin/pending-reference
-tokens through retry, all three capture dispositions (materialized, rejected,
+tokens through pre-effect retry, all three capture dispositions (materialized, rejected,
 and skipped), alias-before-parent destruction, reset, warm advancement, and
 discard. `MaxOperations=8` bounds the combined seal/bridge retry budget while
 successful phase/token transitions are finite. A successful settlement clears
@@ -404,20 +476,20 @@ companion `PeStateBlockTransaction.tla` model checks staged-reference release,
 capture disposition, poison, and Reset recovery; successful Reset is the
 coordinated task-1B policy, while Terminal is reserved for explicit teardown.
 The commit model includes seal/bridge/capture-journal settlement, and the
-native witness exercises bridge failure plus capture rejection through the
-same pure helper.
+native witness exercises bridge pre-effect retry, effect-unknown poison, and
+capture rejection through the same pure helpers.
 
 ## 7. Acceptance matrix
 
 | Contract | Exact owner | Current evidence | Acceptance still required |
 |---|---|---|---|
-| `R-CORE-REC-1.*`, `2.*` | PE state/constant shadows and producer | `dxmt9-pe-transition-algebra-spec`, `dxmt9-pe-shadow-native-spec`, `dxmt9-pe-producer-differential-spec`, `dxmt9-core-stateblock-restore-spec`, state-block PE conformance | Wine/wild rerun for the changed PE wrapper; non-keyed category expansion remains outside this transition increment |
+| `R-CORE-REC-1.*`, `2.*` | PE state/constant shadows and producer | `dxmt9-pe-transition-algebra-spec`, `dxmt9-pe-shadow-native-spec`, `dxmt9-pe-typed-slot-spec`, `dxmt9-pe-stateblock-category-spec`, `dxmt9-pe-producer-differential-spec`, `dxmt9-core-stateblock-restore-spec`; compile-time closure rejects raw construction and mutable table/transaction access, while native malformed-batch rows prove all-or-nothing consumption; canonical x64/x86 PE builds pass | Wine/wild rerun for the changed wrapper; non-keyed category expansion remains outside this transition increment |
 | `R-CORE-REC-3.1`, `3.1.1` | builder + append envelope | production `settleRecorderAppend`; builder rollback; failed-retry/exactly-once tests for inline constants, normal sparse state, and all four oversized typed tables. `CommandChunkBuilder` keeps raw byte append/overwrite private; closed POD registries and rule-checked section/constant/UP/Clear/table adapters cover every production variable-size callsite. Native concepts reject raw access and pointer-bearing/unregistered section types, while producer-matrix tests execute the typed paths. | no append-local gap in the scoped state families; the closed registry proves admission/type shape, not compiler-independent recursive reflection over arbitrary C structs; bridge/seal settlement is tracked below |
-| `R-CORE-REC-3.2`–`3.4` | seal/commit/capture settlement | builder seal/rollback tests; `testPendingChunkLifetimeTruthTable` | bridge-failure retry, discard, capture-failure transaction model and native binding |
-| `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection, `WireObjectRegistry.tla`, render-tape identity tests | local kind+pointer collision coverage and remaining identity/model binding |
+| `R-CORE-REC-3.2`–`3.6` | seal/commit/capture settlement and public failure containment | builder seal/rollback tests; production composed settlement and commit tables; composed capacity-pre flush/capture/drain/reset/warm plus CapacityPost model; four composed controls; `testPendingChunkLifetimeTruthTable`; `dxmt9-replay-offload-queue-spec` uses a real failing allocator and throwing replay callbacks with exact wrapper ownership checks, while labeling the post-adoption ambiguity control synthetic. Exact changed-model state counts are intentionally not reused. | Wine bridge/capture fault injection remains open; entered-call ambiguity is fail-stop under the unchanged ABI and recovers only through explicit Reset/teardown discard |
+| `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry, TU-local concrete COM membership | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection; `WireObjectRegistry.tla`; render-tape identity tests; `dxmt9-pe-com-membership-spec` covers the post-RTTI ten-kind owner/public/wire/alias member matrix; canonical x64/x86 PE builds instantiate the RTTI boundary | Wine foreign-wrapper COM-boundary conformance remains required; native predicates do not prove runtime Wine membership behavior |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
-| `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | capture lifecycle tests plus `dxmt9-pe-diagnostics-spec` disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins; PE x64/x86 compile checks; representative x64 object inspection keeps the sole `D3D9DeviceImpl` vtable in `d3d9_pe_device.cpp.obj`, and `SetRenderState`/`Surface::GetDesc` enter diagnostics through a nullable branch with direct enabled-only calls | broaden the instruction/code-size audit across the remaining representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by these pins |
-| `R-CORE-REC-6.*` | shared transition table plus verification owners | `d3d9_pe_transition_table.inc` feeds the production C++ algebra and generated TLA table; `gen_pe_transition_table.py --check` is wired before TLC; native exhaustive rows plus five independent expected failures cover model/code drift, qualified-token loss, acceptance witnesses, and live prior-value replacement. Single-worker production TLC checks 20,478 generated / 4,998 distinct states at depth 12. | seal/bridge/capture continuation, broader category matrix, and PE/Wine promotion evidence remain open; the complete multi-model verifier rerun belongs to final wave integration |
+| `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | direct `recorderState_` ownership with audited reference aliases removed; capture lifecycle tests plus `dxmt9-pe-diagnostics-spec` disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins; canonical x64/x86 PE builds pass and each defines the sole `D3D9DeviceImpl` vtable in `d3d9_pe_device.cpp.obj`; `FlushPeRecorderForChild` placement is unchanged | broaden instruction/code-size coverage across representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by native pins |
+| `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables feed generated TLA tables; freshness checks precede TLC; native exhaustive rows cover state-write, recorder settlement, repeated Capture/Apply values, and failure controls. The complete `dxmt9-verify-tla` multi-model bundle passes in the integrated tree. | exact semantic cross-projection across the heterogeneous append envelope and Wine bridge/capture fault injection remain open |
 
 The host suite can compile shared headers and extracted value/predicate owners,
 but cannot directly compile or execute the Windows-only COM TUs. Therefore

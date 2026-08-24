@@ -13,7 +13,17 @@
 #include <cstdarg>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <vector>
+
+template <typename T, typename... Args>
+T* peNewNoexcept(Args&&... args) noexcept {
+  try {
+    return new (std::nothrow) T(std::forward<Args>(args)...);
+  } catch (...) {
+    return nullptr;
+  }
+}
 
 namespace rt_format = dxmt9::d3d9::render_tape_d3d_format;
 static_assert(rt_format::R8G8B8 == D3DFMT_R8G8B8);
@@ -768,6 +778,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   dxmt9::d3d9::RenderTapeLockBitsOrigin linearBitsOrigin_ =
       dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
   dxmt9::d3d9::pe::SurfaceRef wireObject_{};
+  bool textureAlias_ = false;
   dxmt9::d3d9::pe::PeWireObjectRef mutationObject_{};
   std::uint32_t mutationSubresource_ = 0u;
   // Wine d3d9 conformance: surfaces obtained through
@@ -799,7 +810,7 @@ public:
                   std::uint32_t parentSubresource = 0u,
                   const PeBorrowedSurfaceHandle *borrowed = nullptr)
       : s_(s), device_(device), container_(container), recorder_(recorder),
-        diagnostics_(diagnostics),
+        diagnostics_(diagnostics), textureAlias_(parentTexture != nullptr),
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch),
         ownsHandle_(borrowed == nullptr) {
     if (device_)
@@ -882,6 +893,8 @@ public:
   }
 
   D9CSurface *raw() const { return s_; }
+  IDirect3DDevice9 *ownerDevice() const { return device_; }
+  bool textureAlias() const { return textureAlias_; }
   const dxmt9::d3d9::pe::SurfaceRef &wireObject() const {
     return wireObject_;
   }
@@ -1546,6 +1559,7 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  IDirect3DDevice9 *ownerDevice() const { return device_; }
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
@@ -1697,10 +1711,12 @@ public:
       if (entry) {
         const PeBorrowedSurfaceHandle borrowed{&entry->wire, &entry->desc,
                                                entry->descValid};
-        *ppS = new D3D9SurfaceImpl(entry->handle, device_,
-                                   static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, diagnostics_, true, nullptr, 0,
-                                   &wireObject_, level, &borrowed);
+        *ppS = peNewNoexcept<D3D9SurfaceImpl>(entry->handle, device_,
+                            static_cast<IDirect3DBaseTexture9 *>(this),
+                            recorder_, diagnostics_, true, nullptr, 0,
+                            &wireObject_, level, &borrowed);
+        if (!*ppS)
+          return finishPeCall(E_OUTOFMEMORY);
         dxmt9DeviceDebugLog(
             "texture_get_surface_level this=%p level=%u -> surface=%p (cached)",
             this, level, *ppS);
@@ -1719,9 +1735,13 @@ public:
           "texture_get_surface_level this=%p level=%u -> invalid", this, level);
       return finishPeCall(D3DERR_INVALIDCALL);
     }
-    *ppS = new D3D9SurfaceImpl(
+    *ppS = peNewNoexcept<D3D9SurfaceImpl>(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
         diagnostics_, true, nullptr, 0, &wireObject_, level);
+    if (!*ppS) {
+      dxmt9c_surface_release(s);
+      return finishPeCall(E_OUTOFMEMORY);
+    }
     dxmt9DeviceDebugLog(
         "texture_get_surface_level this=%p level=%u -> surface=%p", this, level,
         *ppS);
@@ -2192,6 +2212,7 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  IDirect3DDevice9 *ownerDevice() const { return device_; }
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
@@ -2358,10 +2379,12 @@ public:
       if (entry) {
         const PeBorrowedSurfaceHandle borrowed{&entry->wire, &entry->desc,
                                                entry->descValid};
-        *ppS = new D3D9SurfaceImpl(entry->handle, device_,
-                                   static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, diagnostics_, true, nullptr, 0,
-                                   &wireObject_, idx, &borrowed);
+        *ppS = peNewNoexcept<D3D9SurfaceImpl>(entry->handle, device_,
+                            static_cast<IDirect3DBaseTexture9 *>(this),
+                            recorder_, diagnostics_, true, nullptr, 0,
+                            &wireObject_, idx, &borrowed);
+        if (!*ppS)
+          return finishPeCall(E_OUTOFMEMORY);
         dxmt9DeviceDebugLog(
             "cube_get_surface_level this=%p face=%u level=%u -> surface=%p "
             "(cached)",
@@ -2382,9 +2405,13 @@ public:
           static_cast<unsigned>(face), level);
       return finishPeCall(D3DERR_INVALIDCALL);
     }
-    *ppS = new D3D9SurfaceImpl(
+    *ppS = peNewNoexcept<D3D9SurfaceImpl>(
         s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
         diagnostics_, true, nullptr, 0, &wireObject_, idx);
+    if (!*ppS) {
+      dxmt9c_surface_release(s);
+      return finishPeCall(E_OUTOFMEMORY);
+    }
     dxmt9DeviceDebugLog(
         "cube_get_surface_level this=%p face=%u level=%u -> surface=%p", this,
         static_cast<unsigned>(face), level, *ppS);
@@ -2701,6 +2728,7 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  IDirect3DDevice9 *ownerDevice() const { return device_; }
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
@@ -2841,9 +2869,11 @@ public:
     *ppVolume = nullptr;
     if (level >= dxmt9c_texture_get_level_count(t_))
       return finishPeCall(D3DERR_INVALIDCALL);
-    *ppVolume = new D3D9VolumeImpl(t_, device_,
-                                   static_cast<IDirect3DBaseTexture9 *>(this),
-                                   recorder_, diagnostics_, level);
+    *ppVolume = peNewNoexcept<D3D9VolumeImpl>(t_, device_,
+                       static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
+                       diagnostics_, level);
+    if (!*ppVolume)
+      return finishPeCall(E_OUTOFMEMORY);
     return finishPeCall(S_OK);
         });
   }
@@ -2903,9 +2933,10 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    D3D9PeDiagnosticObserver *diagnostics,
                                    bool trackDefaultPool,
                                    void *userMemory,
-                                   int32_t userMemoryPitch) {
-  return new D3D9SurfaceImpl(surface, device, container, recorder, diagnostics,
-                             trackDefaultPool, userMemory, userMemoryPitch);
+                                   int32_t userMemoryPitch) noexcept {
+  return peNewNoexcept<D3D9SurfaceImpl>(
+      surface, device, container, recorder, diagnostics, trackDefaultPool,
+      userMemory, userMemoryPitch);
 }
 
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
@@ -2913,27 +2944,56 @@ IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    D3D9PeRecorderFlush *recorder,
                                    D3D9PeDiagnosticObserver *diagnostics,
                                    void *userMemory,
-                                   int32_t userMemoryPitch) {
-  return new D3D9TextureImpl(texture, device, recorder, diagnostics, userMemory,
-                             userMemoryPitch);
+                                   int32_t userMemoryPitch) noexcept {
+  return peNewNoexcept<D3D9TextureImpl>(
+      texture, device, recorder, diagnostics, userMemory, userMemoryPitch);
 }
 
 IDirect3DVolumeTexture9 *CreatePeVolumeTexture(D9CTexture *texture,
                                                IDirect3DDevice9 *device,
                                                D3D9PeRecorderFlush *recorder,
-                                               D3D9PeDiagnosticObserver *diagnostics) {
-  return new D3D9VolumeTextureImpl(texture, device, recorder, diagnostics);
+                                               D3D9PeDiagnosticObserver *diagnostics) noexcept {
+  return peNewNoexcept<D3D9VolumeTextureImpl>(
+      texture, device, recorder, diagnostics);
 }
 
 IDirect3DCubeTexture9 *CreatePeCubeTexture(D9CTexture *texture,
                                            IDirect3DDevice9 *device,
                                            D3D9PeRecorderFlush *recorder,
-                                           D3D9PeDiagnosticObserver *diagnostics) {
-  return new D3D9CubeTextureImpl(texture, device, recorder, diagnostics);
+                                           D3D9PeDiagnosticObserver *diagnostics) noexcept {
+  return peNewNoexcept<D3D9CubeTextureImpl>(
+      texture, device, recorder, diagnostics);
 }
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->raw() : nullptr;
+}
+
+HRESULT D3D9PeValidateSurface(
+    IDirect3DSurface9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedSurface* out,
+    dxmt9::d3d9::pe::PeSurfaceQualification qualification) noexcept {
+  if (out) *out = {};
+  if (!object) return S_OK;
+  auto* impl = dynamic_cast<D3D9SurfaceImpl*>(object);
+  if (!impl || static_cast<IDirect3DSurface9*>(impl) != object) {
+    return D3DERR_INVALIDCALL;
+  }
+  const auto& wire = impl->wireObject();
+  const dxmt9::d3d9::pe::PeConcreteMemberIdentity identity{
+      .kind = dxmt9::d3d9::pe::PeConcreteObjectKind::Surface,
+      .ownerDevice = impl->ownerDevice(),
+      .publicIdentity = static_cast<IDirect3DSurface9*>(impl),
+      .wireIdentity = wire.identity,
+      .surfaceAlias = impl->textureAlias(),
+  };
+  if (!dxmt9::d3d9::pe::validateConcreteMemberIdentity(
+          identity, dxmt9::d3d9::pe::PeConcreteObjectKind::Surface,
+          expectedOwnerDevice, object, qualification)) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  return S_OK;
 }
 
 const dxmt9::d3d9::pe::SurfaceRef &
@@ -2960,6 +3020,55 @@ D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture) {
   default:
     return nullptr;
   }
+}
+
+namespace {
+template <typename Impl>
+HRESULT validateTextureKind(
+    IDirect3DBaseTexture9* object, const void* expectedOwnerDevice,
+    dxmt9::d3d9::pe::PeConcreteObjectKind kind,
+    D3D9PeValidatedTexture* out) noexcept {
+  auto* impl = dynamic_cast<Impl*>(object);
+  if (!impl || static_cast<IDirect3DBaseTexture9*>(impl) != object) {
+    return D3DERR_INVALIDCALL;
+  }
+  const auto& wire = impl->wireObject();
+  const dxmt9::d3d9::pe::PeConcreteMemberIdentity identity{
+      .kind = kind,
+      .ownerDevice = impl->ownerDevice(),
+      .publicIdentity = static_cast<IDirect3DBaseTexture9*>(impl),
+      .wireIdentity = wire.identity,
+  };
+  if (!dxmt9::d3d9::pe::validateConcreteMemberIdentity(
+          identity, kind, expectedOwnerDevice, object)) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (out) *out = {.raw = impl->raw(), .wire = wire};
+  return S_OK;
+}
+}  // namespace
+
+HRESULT D3D9PeValidateTexture(
+    IDirect3DBaseTexture9* object, const void* expectedOwnerDevice,
+    D3D9PeValidatedTexture* out) noexcept {
+  if (out) *out = {};
+  if (!object) return S_OK;
+  if (dynamic_cast<D3D9TextureImpl*>(object)) {
+    return validateTextureKind<D3D9TextureImpl>(
+        object, expectedOwnerDevice,
+        dxmt9::d3d9::pe::PeConcreteObjectKind::Texture2D, out);
+  }
+  if (dynamic_cast<D3D9CubeTextureImpl*>(object)) {
+    return validateTextureKind<D3D9CubeTextureImpl>(
+        object, expectedOwnerDevice,
+        dxmt9::d3d9::pe::PeConcreteObjectKind::CubeTexture, out);
+  }
+  if (dynamic_cast<D3D9VolumeTextureImpl*>(object)) {
+    return validateTextureKind<D3D9VolumeTextureImpl>(
+        object, expectedOwnerDevice,
+        dxmt9::d3d9::pe::PeConcreteObjectKind::VolumeTexture, out);
+  }
+  return D3DERR_INVALIDCALL;
 }
 
 const dxmt9::d3d9::pe::TextureRef &

@@ -452,7 +452,7 @@ void emptyDelta() {
 void singleRenderStateDirty() {
   Fixture f;
   f.name = "one render state dirty";
-  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
+  f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
   requirePinnedOutput(f);
 }
 
@@ -470,7 +470,7 @@ void scalarCategoriesDirty() {
 void everyCategoryDirty() {
   Fixture f;
   f.name = "every category dirty";
-  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
+  f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 1u);
   f.shadow.pendingTextureMask = 0x1u;
   f.shadow.pendingStreamMask = 0x1u;
   f.shadow.pendingVs = true;
@@ -483,14 +483,14 @@ void everyCategoryDirty() {
   f.shadow.pendingLightSlotMask = 0x1u;
   f.shadow.pendingLightEnableValidMask = 0x1u;
   f.shadow.pendingLightEnableMask = 0x1u;
-  f.shadow.pendingTssTyped().set(textureStageIndexKey(0u),
+  f.shadow.writer().pendingTssTyped().set(textureStageIndexKey(0u),
                                  textureStageStateTypeKey(1u), 42u);
   SamplerIndex sampler{};
   SamplerStateType samplerType{};
   check(samplerIndexKey(0u, sampler) && samplerStateTypeKey(1u, samplerType),
         "fixture sampler key must be valid");
-  f.shadow.pendingSamplerStatesTyped().set(sampler, samplerType, 7u);
-  f.shadow.pendingTransformsTyped().set(transformStateKey(kD3dTsView),
+  f.shadow.writer().pendingSamplerStatesTyped().set(sampler, samplerType, 7u);
+  f.shadow.writer().pendingTransformsTyped().set(transformStateKey(kD3dTsView),
                                         identityTransformMatrix());
   f.bindings.textures[0] = publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
   f.bindings.streams[0].buffer =
@@ -519,7 +519,7 @@ void renderStatesAtCap() {
   f.name = "render states at the section cap";
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_STATES;
        ++slot) {
-    f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot),
+    f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(slot),
                                             slot + 1u);
   }
   requirePinnedOutput(f);
@@ -533,7 +533,7 @@ void renderStatesOverCapFails() {
   // really do over-fill rather than being silently dropped by the table.
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
        ++slot) {
-    f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot),
+    f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(slot),
                                             slot + 1u);
   }
   // Over-cap must be refused, never silently truncated -- a truncated section
@@ -567,7 +567,7 @@ void fullSnapshotMode() {
   Fixture f;
   f.name = "forced full snapshot";
   f.forceFullSnapshot = true;
-  f.shadow.renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
+  f.shadow.writer().renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
   for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
     f.bindings.textures[i] =
         publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
@@ -636,22 +636,22 @@ void snapshotDrainsEveryTable() {
   Fixture f;
   f.name = "snapshot drains tss, sampler, transform and light shadows";
   f.forceFullSnapshot = true;
-  f.shadow.renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
-  f.shadow.tssShadowTyped().set(textureStageIndexKey(0u),
+  f.shadow.writer().renderStateShadowTyped().set(renderStateSlotKey(3u), 9u);
+  f.shadow.writer().tssShadowTyped().set(textureStageIndexKey(0u),
                                 textureStageStateTypeKey(1u), 11u);
-  f.shadow.tssShadowTyped().set(textureStageIndexKey(2u),
+  f.shadow.writer().tssShadowTyped().set(textureStageIndexKey(2u),
                                 textureStageStateTypeKey(4u), 22u);
   SamplerIndex sampler{};
   SamplerStateType samplerType{};
   check(samplerIndexKey(1u, sampler) && samplerStateTypeKey(2u, samplerType),
         "fixture sampler key must be valid");
-  f.shadow.samplerStateShadowTyped().set(sampler, samplerType, 33u);
+  f.shadow.writer().samplerStateShadowTyped().set(sampler, samplerType, 33u);
   // FixedTransformTable::set takes a STATE, not a slot: 0 and 1 are not valid
   // D3DTRANSFORMSTATETYPE values, so slotForState rejects them and the set is a
   // silent no-op. Use the real mirrored constants (VIEW=2, PROJECTION=3).
-  f.shadow.transformShadowTyped().set(transformStateKey(kD3dTsView),
+  f.shadow.writer().transformShadowTyped().set(transformStateKey(kD3dTsView),
                                       identityTransformMatrix());
-  f.shadow.transformShadowTyped().set(transformStateKey(kD3dTsProjection),
+  f.shadow.writer().transformShadowTyped().set(transformStateKey(kD3dTsProjection),
                                       identityTransformMatrix());
   // lightEnableShadow is the snapshot source; pendingLightEnableMask is the
   // delta source. Make them DIFFER so reading the wrong one is visible.
@@ -945,8 +945,8 @@ void inlineConstAppendFailurePreservesDirtyRange() {
 void sparseSettlementNormalAndOversizedAreExact() {
   Fixture f = baseDraw("settlement-only fixture",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
-  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(2u), 20u);
-  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 70u);
+  f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(2u), 20u);
+  f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 70u);
   f.shadow.pendingTextureMask = 1u << 3u;
   f.shadow.pendingViewport = true;
   f.inlineConstDelta = true;
@@ -967,7 +967,7 @@ void sparseSettlementNormalAndOversizedAreExact() {
       .appendSucceeded = false,
   });
   check(!pe::acceptPreparedSparseState(shadow, constants, state, failed) &&
-            shadow.pendingRenderStatesTyped().size() == 2u &&
+            shadow.writer().pendingRenderStatesTyped().size() == 2u &&
             shadow.pendingTextureMask == (1u << 3u) &&
             shadow.pendingViewport && constants.vsConstF.dirty(),
         "failed normal settlement retains every represented owner");
@@ -977,7 +977,7 @@ void sparseSettlementNormalAndOversizedAreExact() {
       .appendSucceeded = true,
   });
   check(pe::acceptPreparedSparseState(shadow, constants, state, accepted) &&
-            shadow.pendingRenderStatesTyped().empty() &&
+            shadow.writer().pendingRenderStatesTyped().empty() &&
             shadow.pendingTextureMask == 0u && !shadow.pendingViewport &&
             !constants.vsConstF.dirty(),
         "accepted normal settlement consumes exactly represented owners");
@@ -990,7 +990,7 @@ void sparseSettlementNormalAndOversizedAreExact() {
         "normal sparse projection cannot settle twice");
 
   PeHotStateShadow oversized{};
-  auto pending = oversized.pendingRenderStatesTyped();
+  auto pending = oversized.writer().pendingRenderStatesTyped();
   constexpr std::uint32_t total =
       D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
   for (std::uint32_t i = 0u; i < total; ++i) {
@@ -1054,7 +1054,7 @@ void upDrawCarriesVertexPayload() {
 void upDrawWithDirtyState() {
   Fixture f = baseUpDraw("UP draw, inline payload plus dirty render state",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
-  f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 3u);
+  f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 3u);
   requirePinnedOutput(f);
 }
 
@@ -1159,7 +1159,7 @@ void randomizedRecordSequences() {
         rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
     for (std::uint32_t k = 0; k < stateCount; ++k) {
       const auto slot = rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
-      f.shadow.pendingRenderStatesTyped().set(renderStateSlotKey(slot), rng());
+      f.shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(slot), rng());
     }
     f.shadow.pendingTextureMask =
         rng() & ((1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u);

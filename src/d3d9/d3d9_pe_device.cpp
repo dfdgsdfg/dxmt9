@@ -4,6 +4,8 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
+#include <new>
+
 /* =========================================================================
  * Key function -- see the declaration comment in d3d9_pe_device_impl.hpp.
  * Its only job here is to be the first non-pure, non-inline virtual in
@@ -22,10 +24,28 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
                                      UINT adapter, D3DDEVTYPE deviceType,
                                      DWORD behaviorFlags,
                                      HWND window, bool extended,
-                                     DWORD implicitSwapchainFlags) {
-    auto* device = new D3D9DeviceImpl(
-        dev, pFactory, adapter, deviceType, behaviorFlags, window, extended,
-        implicitSwapchainFlags);
+                                     DWORD implicitSwapchainFlags,
+                                     HRESULT* failureReason) noexcept {
+    if (failureReason) *failureReason = D3DERR_NOTAVAILABLE;
+    D3D9DeviceImpl* device = nullptr;
+    try {
+        device = new (std::nothrow) D3D9DeviceImpl(
+            dev, pFactory, adapter, deviceType, behaviorFlags, window, extended,
+            implicitSwapchainFlags);
+    } catch (const std::bad_alloc&) {
+        if (dev) dxmt9c_device_release(dev);
+        if (failureReason) *failureReason = E_OUTOFMEMORY;
+        return nullptr;
+    } catch (...) {
+        if (dev) dxmt9c_device_release(dev);
+        if (failureReason) *failureReason = D3DERR_INVALIDCALL;
+        return nullptr;
+    }
+    if (!device) {
+        if (dev) dxmt9c_device_release(dev);
+        if (failureReason) *failureReason = E_OUTOFMEMORY;
+        return nullptr;
+    }
     if (!device->commandChunkReady()) {
         delete device;
         return nullptr;

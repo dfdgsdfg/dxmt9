@@ -386,6 +386,36 @@ flattened identity order, pass-piece continuity across segment edges, atomic
 whole-event failure, and per-segment completion/final event settlement. A v1
 artifact or event-order-derived mapping cannot satisfy this evidence.
 
+**R-VERIF-6.7** PE recorder settlement evidence must include one bounded
+composition model that crosses append-capacity, emitter rollback, accepted
+record sealing, bridge-effect disposition, every capture disposition, pending-reference
+drain, alias-before-parent destruction, builder reset, warm-retainer advance,
+emitter acceptance, every production CapacityPost outcome, discard, and
+successful device-reset recovery. The evidence must bind generated production
+rows or production-used pure predicates. Its semantic state-write projection
+must conserve category/key/value/ordinal-qualified pending tokens exactly; a
+heterogeneous generic append envelope that lacks those semantic fields may bind
+only acceptance, ordinal, counts, and disposition and must name exact cross-
+projection binding as a gap rather than encode record type or byte size as a
+surrogate semantic token. The bundle must include independent expected
+counterexamples for retrying an effect-unknown bridge failure, consuming an
+unattempted capacity-pre record, retracting capture after command acceptance,
+and resetting before drain completion.
+Capacity-pre success must settle an already-full builder across that complete
+sequence before the proposed emitter may consume its token. Any liveness claim
+must be limited to fair internal progress after successful settlement, not
+retry/failure outcomes controlled by the environment.
+
+The same evidence bundle must include a repeated StateBlock value model over at
+least two category-qualified tracked values and one untracked category for two
+or more Capture/Apply cycles. It must prove frozen tracked-set preservation,
+successful Capture refresh, pre/backend failed Capture preservation, live
+mutation between Capture and Apply, untracked isolation, latest-snapshot Apply
+publication only on success, pre-effect Apply preservation, and post-entry
+Apply fail-stop. Abstract
+cardinality does not replace native fake-COM evidence for exact per-slot
+AddRef/Release/transfer multiplicity.
+
 ---
 
 ## 7. Data-Oriented / DXMT Merge Acceptance

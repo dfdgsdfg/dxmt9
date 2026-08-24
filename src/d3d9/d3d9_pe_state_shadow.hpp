@@ -766,48 +766,86 @@ inline bool samplerStateSlot(std::uint32_t type,
 //                             accept directly (it does its own internal
 //                             slotForState()/stateForSlot() remapping).
 //
-// Key design: each space is a distinct `enum class Tag : std::uint32_t {}`
-// with no enumerators ("opaque newtype" pattern) rather than a
-// std::variant<...> over the six spaces. A variant would need a runtime
-// discriminant, pay a branch/visit to get the value back out, and -- worse
-// for this use -- would let one variable hold "a slot from some space",
-// which is exactly the untyped hazard being removed. An `enum class` with a
-// fixed uint32_t underlying type has the same object representation and
-// value semantics as a plain uint32_t (guaranteed by the standard: no
-// hidden state, trivially copyable, standard-layout), so every conversion
-// to/from the underlying value below is a single `static_cast` that
-// optimizes to a no-op, and the typed accessors below compile down to the
-// exact same array indexing FixedStateTable/FixedStateMatrix/
-// FixedTransformTable already did -- zero-overhead in the same sense the
-// hot DOD tables above already are. What the enum class actually buys is
-// static overload resolution: RenderStateSlot and SamplerIndex are
-// unrelated types with no implicit conversion between them (and none to
-// plain uint32_t either), so a call site that mixes them fails to compile
-// instead of silently indexing the wrong table at runtime.
-enum class RenderStateSlot : std::uint32_t {};
-enum class TextureStageIndex : std::uint32_t {};
-enum class TextureStageStateType : std::uint32_t {};
-enum class SamplerIndex : std::uint32_t {};
-enum class SamplerStateType : std::uint32_t {};
-enum class TransformState : std::uint32_t {};
+// Each index space is a one-word bounded value. Construction is centralized:
+// invalid external ordinals produce the invalid sentinel and every table API
+// consequently fails closed. The private raw constructor prevents callers
+// from laundering an arbitrary integer through static_cast as the former
+// empty enum-class tags allowed.
+template<typename Tag, std::uint32_t Limit>
+class BoundedSlotKey {
+public:
+    constexpr BoundedSlotKey() noexcept = default;
 
-constexpr std::uint32_t rawSlot(RenderStateSlot key) noexcept {
-    return static_cast<std::uint32_t>(key);
-}
-constexpr std::uint32_t rawSlot(TextureStageIndex key) noexcept {
-    return static_cast<std::uint32_t>(key);
-}
-constexpr std::uint32_t rawSlot(TextureStageStateType key) noexcept {
-    return static_cast<std::uint32_t>(key);
-}
-constexpr std::uint32_t rawSlot(SamplerIndex key) noexcept {
-    return static_cast<std::uint32_t>(key);
-}
-constexpr std::uint32_t rawSlot(SamplerStateType key) noexcept {
-    return static_cast<std::uint32_t>(key);
+    static constexpr BoundedSlotKey fromRaw(std::uint32_t value) noexcept {
+        return BoundedSlotKey(value < Limit ? value : kInvalid);
+    }
+    constexpr bool valid() const noexcept { return value_ < Limit; }
+    constexpr std::uint32_t raw() const noexcept { return value_; }
+    friend constexpr bool operator==(BoundedSlotKey, BoundedSlotKey) = default;
+
+private:
+    static constexpr std::uint32_t kInvalid = UINT32_MAX;
+    explicit constexpr BoundedSlotKey(std::uint32_t value) noexcept
+        : value_(value) {}
+
+    std::uint32_t value_ = kInvalid;
+};
+
+struct RenderStateSlotTag;
+struct TextureStageIndexTag;
+struct TextureStageStateTypeTag;
+struct SamplerIndexTag;
+struct SamplerStateTypeTag;
+struct TransformStateTag;
+using RenderStateSlot =
+    BoundedSlotKey<RenderStateSlotTag, kPeRenderStateSlots>;
+using TextureStageIndex =
+    BoundedSlotKey<TextureStageIndexTag, kPeTextureStageSlots>;
+using TextureStageStateType =
+    BoundedSlotKey<TextureStageStateTypeTag, kPeTextureStageStateSlots>;
+using SamplerIndex = BoundedSlotKey<SamplerIndexTag, kPeSamplerSlots>;
+using SamplerStateType =
+    BoundedSlotKey<SamplerStateTypeTag, kPeSamplerStateSlots>;
+struct StateBlockTextureSlotTag;
+struct StateBlockStreamSlotTag;
+struct StateBlockRenderTargetSlotTag;
+using StateBlockTextureSlot =
+    BoundedSlotKey<StateBlockTextureSlotTag, kPeTextureSlots>;
+using StateBlockStreamSlot =
+    BoundedSlotKey<StateBlockStreamSlotTag, D9C_DRAW_PACKET_MAX_STREAMS>;
+using StateBlockRenderTargetSlot =
+    BoundedSlotKey<StateBlockRenderTargetSlotTag,
+                   D9C_DRAW_PACKET_MAX_RENDER_TARGETS>;
+
+class TransformState {
+public:
+    constexpr TransformState() noexcept = default;
+
+    static TransformState fromRaw(std::uint32_t value) noexcept {
+        std::uint32_t slot = 0u;
+        return FixedTransformTable::slotForState(value, slot)
+            ? TransformState(value) : TransformState();
+    }
+    bool valid() const noexcept {
+        std::uint32_t slot = 0u;
+        return FixedTransformTable::slotForState(value_, slot);
+    }
+    constexpr std::uint32_t raw() const noexcept { return value_; }
+    friend constexpr bool operator==(TransformState, TransformState) = default;
+
+private:
+    explicit constexpr TransformState(std::uint32_t value) noexcept
+        : value_(value) {}
+
+    std::uint32_t value_ = UINT32_MAX;
+};
+
+template<typename Tag, std::uint32_t Limit>
+constexpr std::uint32_t rawSlot(BoundedSlotKey<Tag, Limit> key) noexcept {
+    return key.raw();
 }
 constexpr std::uint32_t rawSlot(TransformState key) noexcept {
-    return static_cast<std::uint32_t>(key);
+    return key.raw();
 }
 
 // Typed constructors. These wrap the existing untyped clamp/lookup
@@ -816,20 +854,20 @@ constexpr std::uint32_t rawSlot(TransformState key) noexcept {
 // untyped surfaces can never disagree about what a given external D3D9
 // ordinal maps to.
 constexpr RenderStateSlot renderStateSlotKey(std::uint32_t state) noexcept {
-    return static_cast<RenderStateSlot>(state);
+    return RenderStateSlot::fromRaw(state);
 }
 constexpr TextureStageIndex textureStageIndexKey(std::uint32_t stage) noexcept {
-    return static_cast<TextureStageIndex>(textureStageSlot(stage));
+    return TextureStageIndex::fromRaw(stage);
 }
 constexpr TextureStageStateType textureStageStateTypeKey(std::uint32_t type) noexcept {
-    return static_cast<TextureStageStateType>(textureStageStateSlot(type));
+    return TextureStageStateType::fromRaw(type);
 }
 inline bool samplerIndexKey(std::uint32_t sampler, SamplerIndex& out) noexcept {
     std::uint32_t slot = 0;
     if (!samplerSlot(sampler, slot)) {
         return false;
     }
-    out = static_cast<SamplerIndex>(slot);
+    out = SamplerIndex::fromRaw(slot);
     return true;
 }
 constexpr std::uint32_t samplerForSlot(SamplerIndex sampler) noexcept {
@@ -844,12 +882,102 @@ inline bool samplerStateTypeKey(std::uint32_t type, SamplerStateType& out) noexc
     if (!samplerStateSlot(type, slot)) {
         return false;
     }
-    out = static_cast<SamplerStateType>(slot);
+    out = SamplerStateType::fromRaw(slot);
     return true;
 }
-constexpr TransformState transformStateKey(std::uint32_t state) noexcept {
-    return static_cast<TransformState>(state);
+inline TransformState transformStateKey(std::uint32_t state) noexcept {
+    return TransformState::fromRaw(state);
 }
+constexpr StateBlockTextureSlot stateBlockTextureSlotKey(
+    std::uint32_t slot) noexcept {
+    return StateBlockTextureSlot::fromRaw(slot);
+}
+constexpr StateBlockStreamSlot stateBlockStreamSlotKey(
+    std::uint32_t slot) noexcept {
+    return StateBlockStreamSlot::fromRaw(slot);
+}
+constexpr StateBlockRenderTargetSlot stateBlockRenderTargetSlotKey(
+    std::uint32_t slot) noexcept {
+    return StateBlockRenderTargetSlot::fromRaw(slot);
+}
+
+template<StateBlockApplyPhysicalStore Store>
+struct StateBlockFixedSlotTag;
+
+template<StateBlockApplyPhysicalStore Store>
+consteval std::uint32_t stateBlockFixedSlotLimit() {
+#define DXMT9_STATEBLOCK_FIXED_LIMIT_KEYED(name)
+#define DXMT9_STATEBLOCK_FIXED_LIMIT(name, storage, type, slots, role)       \
+    if constexpr (Store == StateBlockApplyPhysicalStore::name) {           \
+        return static_cast<std::uint32_t>(slots);                           \
+    } else
+#define DXMT9_STATEBLOCK_FIXED_LIMIT_CONSTANT(name)
+    DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+        DXMT9_STATEBLOCK_FIXED_LIMIT_KEYED,
+        DXMT9_STATEBLOCK_FIXED_LIMIT,
+        DXMT9_STATEBLOCK_FIXED_LIMIT_CONSTANT)
+#undef DXMT9_STATEBLOCK_FIXED_LIMIT_KEYED
+#undef DXMT9_STATEBLOCK_FIXED_LIMIT
+#undef DXMT9_STATEBLOCK_FIXED_LIMIT_CONSTANT
+    {
+        static_assert(Store != Store,
+                      "StateBlock store is not a fixed tracked store");
+        return 0u;
+    }
+}
+
+template<StateBlockApplyPhysicalStore Store>
+using StateBlockFixedSlotKey = BoundedSlotKey<
+    StateBlockFixedSlotTag<Store>, stateBlockFixedSlotLimit<Store>()>;
+
+template<StateBlockApplyPhysicalStore Store>
+constexpr StateBlockFixedSlotKey<Store> stateBlockFixedSlotKey(
+    std::uint32_t slot) noexcept {
+    return StateBlockFixedSlotKey<Store>::fromRaw(slot);
+}
+
+// Mutation-only façade for a single fixed store.  The store kind is part of
+// the key type, and every operation validates that key before touching the
+// flat occupancy/value arrays.  The façade itself is one reference and does
+// not allocate or duplicate storage.
+template<typename Key, typename T, std::size_t Slots>
+class FixedTrackedStateWriter {
+public:
+    using value_type = T;
+
+    explicit FixedTrackedStateWriter(FixedTrackedState<T, Slots>& state) noexcept
+        : state_(state) {}
+
+    bool contains(Key key) const noexcept {
+        return key.valid() && state_.contains(rawSlot(key));
+    }
+    bool get(Key key, T& value) const noexcept {
+        return key.valid() && state_.get(rawSlot(key), value);
+    }
+    bool set(Key key, const T& value) noexcept {
+        if (!key.valid()) return false;
+        state_.set(rawSlot(key), value);
+        return true;
+    }
+    bool erase(Key key) noexcept {
+        if (!key.valid()) return false;
+        state_.erase(rawSlot(key));
+        return true;
+    }
+    void clear() noexcept { state_.clear(); }
+    std::uint32_t size() const noexcept { return state_.size(); }
+    bool empty() const noexcept { return state_.empty(); }
+    template<typename Fn>
+    void forEach(Fn&& fn) const {
+        state_.forEach([&](std::size_t slot, const T& value) {
+            const Key key = Key::fromRaw(static_cast<std::uint32_t>(slot));
+            if (key.valid()) fn(key, value);
+        });
+    }
+
+private:
+    FixedTrackedState<T, Slots>& state_;
+};
 
 // Typed façades over the existing untyped tables. Each view holds a single
 // reference to the same storage the untyped surface uses (no duplicated
@@ -876,7 +1004,8 @@ public:
     template<typename Fn>
     void forEach(Fn&& fn) const {
         table_.forEach([&](std::uint32_t slot, std::uint32_t value) {
-            fn(static_cast<Key>(slot), value);
+            const Key key = Key::fromRaw(slot);
+            if (key.valid()) fn(key, value);
         });
     }
 
@@ -909,7 +1038,9 @@ public:
     void forEach(Fn&& fn) const {
         matrix_.forEach([&](std::uint32_t row, std::uint32_t col,
                             std::uint32_t value) {
-            fn(static_cast<RowKey>(row), static_cast<ColKey>(col), value);
+            const RowKey rowKey = RowKey::fromRaw(row);
+            const ColKey colKey = ColKey::fromRaw(col);
+            if (rowKey.valid() && colKey.valid()) fn(rowKey, colKey, value);
         });
     }
 
@@ -938,7 +1069,8 @@ public:
     template<typename Fn>
     void forEach(Fn&& fn) const {
         table_.forEach([&](std::uint32_t state, const D9CMatrix& value) {
-            fn(static_cast<TransformState>(state), value);
+            const TransformState key = TransformState::fromRaw(state);
+            if (key.valid()) fn(key, value);
         });
     }
 
@@ -972,7 +1104,8 @@ public:
     template<typename Fn>
     void forEach(Fn&& fn) const {
         table_.forEach([&](std::uint32_t slot, std::uint32_t value) {
-            fn(static_cast<Key>(slot), value);
+            const Key key = Key::fromRaw(slot);
+            if (key.valid()) fn(key, value);
         });
     }
 
@@ -999,7 +1132,9 @@ public:
     void forEach(Fn&& fn) const {
         matrix_.forEach([&](std::uint32_t row, std::uint32_t col,
                             std::uint32_t value) {
-            fn(static_cast<RowKey>(row), static_cast<ColKey>(col), value);
+            const RowKey rowKey = RowKey::fromRaw(row);
+            const ColKey colKey = ColKey::fromRaw(col);
+            if (rowKey.valid() && colKey.valid()) fn(rowKey, colKey, value);
         });
     }
 
@@ -1023,7 +1158,8 @@ public:
     template<typename Fn>
     void forEach(Fn&& fn) const {
         table_.forEach([&](std::uint32_t state, const D9CMatrix& value) {
-            fn(static_cast<TransformState>(state), value);
+            const TransformState key = TransformState::fromRaw(state);
+            if (key.valid()) fn(key, value);
         });
     }
 
@@ -1053,6 +1189,8 @@ inline bool matrixEquals(const D9CMatrix& a, const D9CMatrix& b) noexcept {
     return std::memcmp(&a, &b, sizeof(D9CMatrix)) == 0;
 }
 
+struct PeHotStateShadow;
+
 class LiveShadow {
 public:
     D9CViewport viewportShadow{};
@@ -1062,6 +1200,7 @@ public:
     D9CLight lightShadow[D9C_DRAW_PACKET_MAX_LIGHTS]{};
     std::uint32_t lightEnableShadow = 0;
 
+private:
     RenderStateTableView renderStates() noexcept {
         return RenderStateTableView(renderStates_);
     }
@@ -1074,6 +1213,7 @@ public:
     TypedTransformTableView transforms() noexcept {
         return TypedTransformTableView(transforms_);
     }
+public:
     ConstRenderStateTableView renderStates() const noexcept {
         return ConstRenderStateTableView(renderStates_);
     }
@@ -1087,6 +1227,7 @@ public:
         return ConstTypedTransformTableView(transforms_);
     }
 
+private:
     void clearServerTables() noexcept {
         renderStates_.clear();
         textureStageStates_.clear();
@@ -1100,6 +1241,7 @@ private:
         textureStageStates_{};
     FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
     FixedTransformTable transforms_{};
+    friend struct PeHotStateShadow;
 };
 
 class PendingDelta {
@@ -1123,6 +1265,7 @@ public:
     std::uint32_t pendingLightEnableValidMask = 0;
     std::uint32_t pendingLightEnableMask = 0;
 
+private:
     RenderStateTableView renderStates() noexcept {
         return RenderStateTableView(renderStates_);
     }
@@ -1135,6 +1278,7 @@ public:
     TypedTransformTableView transforms() noexcept {
         return TypedTransformTableView(transforms_);
     }
+public:
     ConstRenderStateTableView renderStates() const noexcept {
         return ConstRenderStateTableView(renderStates_);
     }
@@ -1158,6 +1302,7 @@ public:
         });
         return count;
     }
+private:
     bool acceptRenderStateBatch(
         std::span<const D9CCommandChunkWireRenderState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
@@ -1165,12 +1310,16 @@ public:
             !plan.recordDurable()) {
             return false;
         }
+        for (const auto& entry : accepted) {
+            if (!renderStateSlotKey(entry.state).valid()) return false;
+        }
         auto table = renderStates();
         for (const auto& entry : accepted) {
             table.erase(renderStateSlotKey(entry.state));
         }
         return true;
     }
+public:
     std::size_t prepareTextureStageStateBatch(
         std::span<D9CDrawPacketTextureStageState> out) const noexcept {
         std::size_t count = 0u;
@@ -1183,12 +1332,19 @@ public:
             });
         return count;
     }
+private:
     bool acceptTextureStageStateBatch(
         std::span<const D9CDrawPacketTextureStageState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
         if (!plan.valid() || !plan.consumeRepresentedPending() ||
             !plan.recordDurable()) {
             return false;
+        }
+        for (const auto& entry : accepted) {
+            if (!textureStageIndexKey(entry.stage).valid() ||
+                !textureStageStateTypeKey(entry.type).valid()) {
+                return false;
+            }
         }
         auto table = textureStageStates();
         for (const auto& entry : accepted) {
@@ -1197,6 +1353,7 @@ public:
         }
         return true;
     }
+public:
     std::size_t prepareSamplerStateBatch(
         std::span<D9CDrawPacketSamplerState> out) const noexcept {
         std::size_t count = 0u;
@@ -1209,6 +1366,7 @@ public:
             });
         return count;
     }
+private:
     bool acceptSamplerStateBatch(
         std::span<const D9CDrawPacketSamplerState> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
@@ -1216,16 +1374,20 @@ public:
             !plan.recordDurable()) {
             return false;
         }
+        for (const auto& entry : accepted) {
+            if (!SamplerIndex::fromRaw(entry.sampler).valid() ||
+                !SamplerStateType::fromRaw(entry.type).valid()) {
+                return false;
+            }
+        }
         auto table = samplerStates();
         for (const auto& entry : accepted) {
-            SamplerStateType type{};
-            if (entry.sampler < kPeSamplerSlots &&
-                samplerStateTypeKey(entry.type, type)) {
-                table.erase(static_cast<SamplerIndex>(entry.sampler), type);
-            }
+            table.erase(SamplerIndex::fromRaw(entry.sampler),
+                        SamplerStateType::fromRaw(entry.type));
         }
         return true;
     }
+public:
     std::size_t prepareTransformBatch(
         std::span<D9CDrawPacketTransform> out) const noexcept {
         std::size_t count = 0u;
@@ -1236,6 +1398,7 @@ public:
         });
         return count;
     }
+private:
     bool acceptTransformBatch(
         std::span<const D9CDrawPacketTransform> accepted,
         const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
@@ -1243,12 +1406,17 @@ public:
             !plan.recordDurable()) {
             return false;
         }
+        for (const auto& entry : accepted) {
+            if (!transformStateKey(entry.state).valid()) return false;
+        }
         auto table = transforms();
         for (const auto& entry : accepted) {
             table.erase(transformStateKey(entry.state));
         }
         return true;
     }
+
+public:
 
     bool hasHotState() const noexcept {
         return !renderStates_.empty() || pendingTextureMask != 0 ||
@@ -1263,6 +1431,7 @@ public:
                pendingLightEnableValidMask != 0;
     }
 
+private:
     void clearHotState() noexcept {
         renderStates_.clear();
         pendingTextureMask = 0;
@@ -1292,6 +1461,7 @@ private:
         textureStageStates_{};
     FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
     FixedTransformTable transforms_{};
+    friend struct PeHotStateShadow;
 };
 
 class StateBlockRecorded {
@@ -1310,18 +1480,59 @@ public:
         Count,
     };
 
-    // Fixed, kind-qualified recorded sets. Explicit recording writes are
-    // last-write-wins; MultiplyTransform never enters transforms_.
-    bool vertexDeclarationRecorded = false;
-
     // The remaining categories are intentionally explicit rather than a
     // heterogeneous map.  Their occupancy bits are the tracked-key set;
     // values are written only by recording-phase setters and are never read
     // by ordinary getters or the producer's pending/live paths.
     using TextureState = FixedTrackedState<StateBlockTextureRef, kPeTextureSlots>;
+    class Writer {
+    public:
+        RenderStateTableView renderStates() noexcept {
+            return state_.renderStates();
+        }
+        TssTableView textureStageStates() noexcept {
+            return state_.textureStageStates();
+        }
+        SamplerStateTableView samplerStates() noexcept {
+            return state_.samplerStates();
+        }
+        TypedTransformTableView transforms() noexcept {
+            return state_.transforms();
+        }
+#define DXMT9_STATEBLOCK_WRITER_ACCESSOR(name, storage, type, slots, role)   \
+        auto name() noexcept {                                               \
+            using Key = StateBlockFixedSlotKey<                              \
+                StateBlockApplyPhysicalStore::name>;                         \
+            return FixedTrackedStateWriter<Key, type, slots>(state_.storage); \
+        }
+#define DXMT9_STATEBLOCK_WRITER_ACCESSOR_KEYED(name)
+#define DXMT9_STATEBLOCK_WRITER_ACCESSOR_CONSTANT(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_WRITER_ACCESSOR_KEYED,
+            DXMT9_STATEBLOCK_WRITER_ACCESSOR,
+            DXMT9_STATEBLOCK_WRITER_ACCESSOR_CONSTANT)
+#undef DXMT9_STATEBLOCK_WRITER_ACCESSOR_KEYED
+#undef DXMT9_STATEBLOCK_WRITER_ACCESSOR_CONSTANT
+#undef DXMT9_STATEBLOCK_WRITER_ACCESSOR
+        PeStateBlockConstRecorded& constants() noexcept {
+            return state_.constants;
+        }
+        void setVertexDeclarationRecorded(bool value) noexcept {
+            state_.vertexDeclarationRecorded = value;
+        }
+        void clear() noexcept { state_.clearForBegin(); }
+
+    private:
+        explicit Writer(StateBlockRecorded& state) noexcept : state_(state) {}
+        StateBlockRecorded& state_;
+        friend class StateBlockRecorded;
+    };
+
+    Writer writer() noexcept { return Writer(*this); }
+    const StateBlockRecorded& snapshot() const noexcept { return *this; }
+
 #define DXMT9_STATEBLOCK_DECLARE_ACCESSOR(name, storage, type, slots, role) \
     using name##State = FixedTrackedState<type, slots>;                     \
-    name##State& name() noexcept { return storage; }                        \
     const name##State& name() const noexcept { return storage; }
 #define DXMT9_STATEBLOCK_ACCESSOR_KEYED(name)
 #define DXMT9_STATEBLOCK_ACCESSOR_CONSTANT(name)
@@ -1336,9 +1547,10 @@ public:
     bool vertexDeclarationWasRecorded() const noexcept {
         return vertexDeclarationRecorded;
     }
-    void setVertexDeclarationRecorded(bool value) noexcept {
-        vertexDeclarationRecorded = value;
-    }
+private:
+    // Fixed, kind-qualified recorded sets. Explicit recording writes are
+    // last-write-wins; MultiplyTransform never enters transforms_.
+    bool vertexDeclarationRecorded = false;
 
     template<typename Fn>
     void forEachCategory(Fn&& fn) noexcept {
@@ -1355,6 +1567,7 @@ public:
 #undef DXMT9_STATEBLOCK_VISIT_CATEGORY
     }
 
+public:
     template<typename Fn>
     void forEachCategory(Fn&& fn) const noexcept {
 #define DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST(name, storage, type, slots, role) \
@@ -1370,6 +1583,7 @@ public:
 #undef DXMT9_STATEBLOCK_VISIT_CATEGORY_CONST
     }
 
+private:
     template<typename Fn>
     void forEachTypedCategory(Fn&& fn) noexcept {
 #define DXMT9_STATEBLOCK_VISIT_TYPED(name, storage, type, slots, role)       \
@@ -1385,6 +1599,7 @@ public:
 #undef DXMT9_STATEBLOCK_VISIT_TYPED
     }
 
+public:
     template<typename Fn>
     void forEachTypedCategory(Fn&& fn) const noexcept {
 #define DXMT9_STATEBLOCK_VISIT_TYPED_CONST(name, storage, type, slots, role) \
@@ -1400,6 +1615,7 @@ public:
 #undef DXMT9_STATEBLOCK_VISIT_TYPED_CONST
     }
 
+private:
     template<StateBlockApplyPhysicalStore Store>
     decltype(auto) applyPhysicalStorage() noexcept {
         if constexpr (Store == StateBlockApplyPhysicalStore::renderStates) {
@@ -1434,12 +1650,42 @@ public:
         }
     }
 
+public:
     template<StateBlockApplyPhysicalStore Store>
     decltype(auto) applyPhysicalStorage() const noexcept {
-        return const_cast<StateBlockRecorded*>(this)
-            ->template applyPhysicalStorage<Store>();
+        if constexpr (Store == StateBlockApplyPhysicalStore::renderStates) {
+            return renderStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::textureStageStates) {
+            return textureStageStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::samplerStates) {
+            return samplerStates();
+        } else if constexpr (
+            Store == StateBlockApplyPhysicalStore::transforms) {
+            return transforms();
+#define DXMT9_STATEBLOCK_CONST_STORAGE_KEYED(name)
+#define DXMT9_STATEBLOCK_CONST_STORAGE_FIXED(name, storage, type, slots, role) \
+        } else if constexpr (Store == StateBlockApplyPhysicalStore::name) {  \
+            return std::as_const(storage);
+#define DXMT9_STATEBLOCK_CONST_STORAGE_CONSTANT(name)                       \
+        } else if constexpr (Store == StateBlockApplyPhysicalStore::name) { \
+            return std::as_const(constants.name);
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_CONST_STORAGE_KEYED,
+            DXMT9_STATEBLOCK_CONST_STORAGE_FIXED,
+            DXMT9_STATEBLOCK_CONST_STORAGE_CONSTANT)
+#undef DXMT9_STATEBLOCK_CONST_STORAGE_KEYED
+#undef DXMT9_STATEBLOCK_CONST_STORAGE_FIXED
+#undef DXMT9_STATEBLOCK_CONST_STORAGE_CONSTANT
+        } else {
+            []<bool handled = false>() {
+                static_assert(handled, "StateBlock physical storage omitted");
+            }();
+        }
     }
 
+private:
     template<typename Fn>
     void forEachApplyPhysical(Fn&& fn) noexcept {
 #define DXMT9_STATEBLOCK_VISIT_PHYSICAL_KEYED(name)                          \
@@ -1458,12 +1704,24 @@ public:
 #undef DXMT9_STATEBLOCK_VISIT_PHYSICAL_CONSTANT
     }
 
+public:
     template<typename Fn>
     void forEachApplyPhysical(Fn&& fn) const noexcept {
-        const_cast<StateBlockRecorded*>(this)->forEachApplyPhysical(
-            [&]<StateBlockApplyPhysicalStore Store>(auto&& storage) {
-                fn.template operator()<Store>(std::as_const(storage));
-            });
+#define DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_KEYED(name)                  \
+        fn.template operator()<StateBlockApplyPhysicalStore::name>(        \
+            applyPhysicalStorage<StateBlockApplyPhysicalStore::name>());
+#define DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_FIXED(                       \
+    name, storage, type, slots, role)                                      \
+        DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_KEYED(name)
+#define DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_CONSTANT(name)               \
+        DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_KEYED(name)
+        DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY(
+            DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_KEYED,
+            DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_FIXED,
+            DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_CONSTANT)
+#undef DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_KEYED
+#undef DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_FIXED
+#undef DXMT9_STATEBLOCK_VISIT_CONST_PHYSICAL_CONSTANT
     }
 
     template<typename Fn>
@@ -1489,8 +1747,7 @@ public:
         return present;
     }
 
-    PeStateBlockConstRecorded constants{};
-
+private:
     RenderStateTableView renderStates() noexcept {
         return RenderStateTableView(renderStates_);
     }
@@ -1503,6 +1760,7 @@ public:
     TypedTransformTableView transforms() noexcept {
         return TypedTransformTableView(transforms_);
     }
+public:
     ConstRenderStateTableView renderStates() const noexcept {
         return ConstRenderStateTableView(renderStates_);
     }
@@ -1515,6 +1773,11 @@ public:
     ConstTypedTransformTableView transforms() const noexcept {
         return ConstTypedTransformTableView(transforms_);
     }
+    const PeStateBlockConstRecorded& constantSnapshot() const noexcept {
+        return constants;
+    }
+
+private:
     void clearForBegin() noexcept {
         forEachApplyPhysical(
             []<StateBlockApplyPhysicalStore>(auto&& storage) {
@@ -1562,72 +1825,153 @@ private:
         textureStageStates_{};
     FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStates_{};
     FixedTransformTable transforms_{};
+    PeStateBlockConstRecorded constants{};
 };
 
 #undef DXMT9_STATEBLOCK_APPLY_PHYSICAL_INVENTORY
 
 struct PeHotStateShadow : LiveShadow, PendingDelta {
-    bool hasPendingHotState() const noexcept {
-        return PendingDelta::hasHotState();
-    }
-    void clearPendingHotState() noexcept {
-        PendingDelta::clearHotState();
-    }
-    void clearServerShadowTables() noexcept {
-        LiveShadow::clearServerTables();
-    }
+    class Writer {
+    public:
+        RenderStateTableView renderStateShadowTyped() noexcept {
+            return shadow_.LiveShadow::renderStates();
+        }
+        RenderStateTableView pendingRenderStatesTyped() noexcept {
+            return shadow_.PendingDelta::renderStates();
+        }
+        TssTableView tssShadowTyped() noexcept {
+            return shadow_.LiveShadow::textureStageStates();
+        }
+        TssTableView pendingTssTyped() noexcept {
+            return shadow_.PendingDelta::textureStageStates();
+        }
+        SamplerStateTableView samplerStateShadowTyped() noexcept {
+            return shadow_.LiveShadow::samplerStates();
+        }
+        SamplerStateTableView pendingSamplerStatesTyped() noexcept {
+            return shadow_.PendingDelta::samplerStates();
+        }
+        TypedTransformTableView transformShadowTyped() noexcept {
+            return shadow_.LiveShadow::transforms();
+        }
+        TypedTransformTableView pendingTransformsTyped() noexcept {
+            return shadow_.PendingDelta::transforms();
+        }
+        void clearServerShadowTables() noexcept {
+            shadow_.LiveShadow::clearServerTables();
+        }
 
-    // Compatibility names for existing callers. Each exposes only the typed
-    // category view owned by LiveShadow or PendingDelta; the raw keyed tables
-    // are private to those owners. StateBlockRecorded is intentionally a
-    // separate PeRecorderState member and has no compatibility doorway here.
-    RenderStateTableView renderStateShadowTyped() noexcept {
-        return LiveShadow::renderStates();
-    }
-    RenderStateTableView pendingRenderStatesTyped() noexcept {
-        return PendingDelta::renderStates();
-    }
-    TssTableView tssShadowTyped() noexcept { return LiveShadow::textureStageStates(); }
-    TssTableView pendingTssTyped() noexcept { return PendingDelta::textureStageStates(); }
-    SamplerStateTableView samplerStateShadowTyped() noexcept {
-        return LiveShadow::samplerStates();
-    }
-    SamplerStateTableView pendingSamplerStatesTyped() noexcept {
-        return PendingDelta::samplerStates();
-    }
-    TypedTransformTableView transformShadowTyped() noexcept {
-        return LiveShadow::transforms();
-    }
-    TypedTransformTableView pendingTransformsTyped() noexcept {
-        return PendingDelta::transforms();
-    }
+    private:
+        explicit Writer(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
+        PeHotStateShadow& shadow_;
+        friend struct PeHotStateShadow;
+    };
 
-    // const overloads (cv-qualification-based overloading, not name
-    // collision) for read paths that only see a `const PeHotStateShadow&`.
+    class Snapshot {
+    public:
+        ConstRenderStateTableView renderStateShadowTyped() const noexcept {
+            return shadow_.LiveShadow::renderStates();
+        }
+        ConstRenderStateTableView pendingRenderStatesTyped() const noexcept {
+            return shadow_.PendingDelta::renderStates();
+        }
+        ConstTssTableView tssShadowTyped() const noexcept {
+            return shadow_.LiveShadow::textureStageStates();
+        }
+        ConstTssTableView pendingTssTyped() const noexcept {
+            return shadow_.PendingDelta::textureStageStates();
+        }
+        ConstSamplerStateTableView samplerStateShadowTyped() const noexcept {
+            return shadow_.LiveShadow::samplerStates();
+        }
+        ConstSamplerStateTableView pendingSamplerStatesTyped() const noexcept {
+            return shadow_.PendingDelta::samplerStates();
+        }
+        ConstTypedTransformTableView transformShadowTyped() const noexcept {
+            return shadow_.LiveShadow::transforms();
+        }
+        ConstTypedTransformTableView pendingTransformsTyped() const noexcept {
+            return shadow_.PendingDelta::transforms();
+        }
+
+    private:
+        explicit Snapshot(const PeHotStateShadow& shadow) noexcept
+            : shadow_(shadow) {}
+        const PeHotStateShadow& shadow_;
+        friend struct PeHotStateShadow;
+    };
+
+    class Consumer {
+    public:
+        bool acceptRenderStateBatch(
+            std::span<const D9CCommandChunkWireRenderState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return shadow_.PendingDelta::acceptRenderStateBatch(accepted, plan);
+        }
+        bool acceptTextureStageStateBatch(
+            std::span<const D9CDrawPacketTextureStageState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return shadow_.PendingDelta::acceptTextureStageStateBatch(accepted,
+                                                                       plan);
+        }
+        bool acceptSamplerStateBatch(
+            std::span<const D9CDrawPacketSamplerState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return shadow_.PendingDelta::acceptSamplerStateBatch(accepted,
+                                                                  plan);
+        }
+        bool acceptTransformBatch(
+            std::span<const D9CDrawPacketTransform> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return shadow_.PendingDelta::acceptTransformBatch(accepted, plan);
+        }
+        void clearPendingHotState() noexcept {
+            shadow_.PendingDelta::clearHotState();
+        }
+
+    private:
+        explicit Consumer(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
+        PeHotStateShadow& shadow_;
+        friend struct PeHotStateShadow;
+    };
+
+    Writer writer() noexcept { return Writer(*this); }
+    Snapshot snapshot() const noexcept { return Snapshot(*this); }
+    Consumer consume() noexcept { return Consumer(*this); }
+
     ConstRenderStateTableView renderStateShadowTyped() const noexcept {
-        return LiveShadow::renderStates();
+        return snapshot().renderStateShadowTyped();
     }
     ConstRenderStateTableView pendingRenderStatesTyped() const noexcept {
-        return PendingDelta::renderStates();
+        return snapshot().pendingRenderStatesTyped();
     }
-    ConstTssTableView tssShadowTyped() const noexcept { return LiveShadow::textureStageStates(); }
-    ConstTssTableView pendingTssTyped() const noexcept { return PendingDelta::textureStageStates(); }
+    ConstTssTableView tssShadowTyped() const noexcept {
+        return snapshot().tssShadowTyped();
+    }
+    ConstTssTableView pendingTssTyped() const noexcept {
+        return snapshot().pendingTssTyped();
+    }
     ConstSamplerStateTableView samplerStateShadowTyped() const noexcept {
-        return LiveShadow::samplerStates();
+        return snapshot().samplerStateShadowTyped();
     }
     ConstSamplerStateTableView pendingSamplerStatesTyped() const noexcept {
-        return PendingDelta::samplerStates();
+        return snapshot().pendingSamplerStatesTyped();
     }
     ConstTypedTransformTableView transformShadowTyped() const noexcept {
-        return LiveShadow::transforms();
+        return snapshot().transformShadowTyped();
     }
     ConstTypedTransformTableView pendingTransformsTyped() const noexcept {
-        return PendingDelta::transforms();
+        return snapshot().pendingTransformsTyped();
+    }
+
+    bool hasPendingHotState() const noexcept {
+        return PendingDelta::hasHotState();
     }
 
     bool renderStateEqualsTyped(RenderStateSlot state, std::uint32_t value) const noexcept {
         std::uint32_t shadowValue = 0;
-        return renderStateShadowTyped().get(state, shadowValue) && shadowValue == value;
+        return snapshot().renderStateShadowTyped().get(state, shadowValue) &&
+               shadowValue == value;
     }
 
 private:

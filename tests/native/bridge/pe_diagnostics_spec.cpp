@@ -150,6 +150,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
+  const auto deviceCold =
+      readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
   const auto recorderState =
       readTextFile(root / "src/d3d9/d3d9_pe_recorder_state.hpp");
   const auto stateBlockTransaction = readTextFile(
@@ -215,6 +217,25 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(recorderState,
                 "PeStateBlockTransactionState stateBlockTransaction{};",
                 "recorder state owns the closed StateBlock transaction");
+  checkContains(device,
+                "dxmt9::d3d9::pe::PeRecorderState recorderState_{};",
+                "device stores the hot recorder owner directly");
+  for (const std::string_view alias : {
+           "bool& recorderLockRequired_",
+           "std::recursive_mutex& recorderMutex_",
+           "PeHotStateShadow& peState_", "PeConstShadowBlock& peConsts_",
+           "PeBindingView& bindingScratch_", "PeSparseScratch& sparseScratch_",
+           "CommandChunkBuilder& commandChunk_",
+           "bool& commandChunkNegotiated_"}) {
+    checkNotContains(device, alias,
+                     "device must not retain audited recorder-field aliases");
+  }
+  checkContains(child, "class D3D9StateBlockShadow",
+                "StateBlock wrapper snapshot is a closed class");
+  checkContains(child, "class Writer",
+                "wrapper snapshot exposes a writer capability");
+  checkContains(child, "class Snapshot",
+                "wrapper snapshot exposes an immutable snapshot capability");
   checkContains(stateBlockTransaction,
                 "StateBlockVertexShaderRef stagedVertexShader_{};",
                 "Apply staging remains kind-qualified inside its owner");
@@ -272,8 +293,48 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkBefore(
       appendRecordBody,
       "if (recorderState_.stateBlockTransaction.isPoisoned())",
-      "if (!commandChunkNegotiated_ || bytes == 0u",
+      "if (!recorderState_.commandChunkNegotiated || bytes == 0u",
       "poison stops every writer before negotiation and capacity work");
+  const auto flushBegin = recorder.find(
+      "HRESULT D3D9DeviceImpl::flushPendingCommandChunk(");
+  const auto flushEnd = flushBegin == std::string::npos
+      ? std::string::npos
+      : recorder.find("HRESULT D3D9DeviceImpl::flushPeRecorder(", flushBegin);
+  check(flushBegin != std::string::npos && flushEnd != std::string::npos,
+        "production flush source contract is present");
+  const std::string_view flushBody(
+      recorder.data() + flushBegin, flushEnd - flushBegin);
+  checkBefore(
+      flushBody,
+      "if (flushAction == PeRecorderFlushAction::RejectPoisoned)",
+      "if (!recorderState_.commandChunkNegotiated)",
+      "ordinary flush rejects poison before negotiation, seal, or bridge entry");
+  checkContains(
+      deviceCold,
+      "D3D9DeviceImpl::~D3D9DeviceImpl() {\n    (void)flushPeRecorder(\n        PeRecorderFlushReason::Destructor,\n        PeRecorderFlushDisposition::DiscardForRecovery);",
+      "destructor unconditionally selects recovery discard");
+  constexpr std::string_view resetDispositionCall =
+      "peRecorderResetDisposition(\n            recorderState_.stateBlockTransaction.isPoisoned())";
+  const auto resetBegin = deviceCold.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(");
+  const auto resetEnd = deviceCold.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(", resetBegin);
+  check(resetBegin != std::string::npos && resetEnd != std::string::npos,
+        "Reset source contract is present");
+  checkContains(std::string_view(deviceCold).substr(resetBegin,
+                                                     resetEnd - resetBegin),
+                resetDispositionCall,
+                "Reset selects disposition from poisoned recovery state");
+  const auto resetExBegin = resetEnd;
+  const auto resetExEnd = deviceCold.find(
+      "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetDisplayModeEx(",
+      resetExBegin);
+  check(resetExEnd != std::string::npos,
+        "ResetEx source contract has a bounded body");
+  checkContains(std::string_view(deviceCold).substr(
+                    resetExBegin, resetExEnd - resetExBegin),
+                resetDispositionCall,
+                "ResetEx selects disposition from poisoned recovery state");
   checkContains(
       device,
       "HRESULT AppendQueryIssueForChild(\n        std::uint32_t flags",

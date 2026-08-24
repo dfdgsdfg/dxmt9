@@ -5,9 +5,11 @@
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_recorder_state.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
+#include "d3d9_pe_stateblock_value.hpp"
 
 #include <array>
 #include <atomic>
+#include <concepts>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
@@ -27,6 +29,11 @@ void check(bool condition, std::string_view message) {
   if (!condition) throw Failure(std::string(message));
 }
 
+template<StateBlockApplyPhysicalStore Store>
+constexpr auto fixedKey(std::uint32_t slot) noexcept {
+  return stateBlockFixedSlotKey<Store>(slot);
+}
+
 static_assert(kStateBlockApplyPhysicalInventory.size() == 26u);
 static_assert(stateBlockApplyPhysicalDescriptor<
                   StateBlockApplyPhysicalStore::textures>().role ==
@@ -37,6 +44,40 @@ static_assert(stateBlockApplyPhysicalDescriptor<
 static_assert(stateBlockApplyPhysicalDescriptor<
                   StateBlockApplyPhysicalStore::vertexDeclaration>().role ==
               StateBlockApplyCategoryRole::CandidateOwnedVertexDeclaration);
+
+template<typename T>
+concept ExposesRecordedReference = requires(T& value) { value.recorded(); };
+
+template<typename T>
+concept ExposesMutableRecordedTable = requires(T& value) {
+  { value.renderStates() } -> std::same_as<RenderStateTableView>;
+};
+
+template<typename T>
+concept ExposesMutableFixedStorage = requires(T& value) {
+  { value.writer().textures() } ->
+      std::same_as<StateBlockRecorded::texturesState&>;
+};
+
+template<typename T>
+concept ExposesVertexDeclarationRecorded = requires(T& value) {
+  value.vertexDeclarationRecorded;
+};
+
+static_assert(!ExposesRecordedReference<PeStateBlockTransactionState>,
+              "transaction state must not expose its recorded owner");
+static_assert(!ExposesMutableRecordedTable<StateBlockRecorded>,
+              "StateBlock snapshots must not expose mutable tables");
+static_assert(!ExposesMutableFixedStorage<StateBlockRecorded>,
+              "Writer must expose a bounded capability, not fixed storage");
+static_assert(!ExposesVertexDeclarationRecorded<StateBlockRecorded>,
+              "vertex-declaration recording metadata must stay private");
+static_assert(sizeof(StateBlockRecorded::Writer) == sizeof(void*),
+              "StateBlock writer capability must be one reference");
+static_assert(std::same_as<
+              decltype(std::declval<const StateBlockRecorded&>().snapshot()),
+              const StateBlockRecorded&>,
+              "StateBlock snapshots must remain immutable references");
 
 void testApplyCategoryRegistry() {
   std::array<bool, 26u> seen{};
@@ -64,87 +105,123 @@ void testApplyCategoryRegistry() {
   }
 }
 
+void testEveryFixedWriterRejectsInvalidKindKey() {
+  StateBlockRecorded candidate{};
+  auto writer = candidate.writer();
+#define DXMT9_TEST_INVALID_FIXED(name, type, slots)                           \
+  check(!writer.name().set(                                                   \
+            fixedKey<StateBlockApplyPhysicalStore::name>(                    \
+                static_cast<std::uint32_t>(slots)), type{}),                  \
+        "invalid " #name " key rejects before mutation")
+  DXMT9_TEST_INVALID_FIXED(textures, StateBlockTextureRef, kPeTextureSlots);
+  DXMT9_TEST_INVALID_FIXED(streamSources, StateBlockStreamSourceValue,
+                           D9C_DRAW_PACKET_MAX_STREAMS);
+  DXMT9_TEST_INVALID_FIXED(streamFrequencies, std::uint32_t,
+                           D9C_DRAW_PACKET_MAX_STREAMS);
+  DXMT9_TEST_INVALID_FIXED(vertexShader, StateBlockVertexShaderRef, 1u);
+  DXMT9_TEST_INVALID_FIXED(pixelShader, StateBlockPixelShaderRef, 1u);
+  DXMT9_TEST_INVALID_FIXED(fvf, std::uint32_t, 1u);
+  DXMT9_TEST_INVALID_FIXED(vertexDeclaration,
+                           StateBlockVertexDeclarationRef, 1u);
+  DXMT9_TEST_INVALID_FIXED(indexBuffer, StateBlockIndexBufferRef, 1u);
+  DXMT9_TEST_INVALID_FIXED(renderTargets, StateBlockRenderTargetRef,
+                           D9C_DRAW_PACKET_MAX_RENDER_TARGETS);
+  DXMT9_TEST_INVALID_FIXED(depthStencil, StateBlockDepthStencilRef, 1u);
+  DXMT9_TEST_INVALID_FIXED(viewport, D9CViewport, 1u);
+  DXMT9_TEST_INVALID_FIXED(scissor, D9CRect, 1u);
+  DXMT9_TEST_INVALID_FIXED(material, D9CMaterial, 1u);
+  DXMT9_TEST_INVALID_FIXED(clipPlanes, StateBlockClipPlaneValue, 6u);
+  DXMT9_TEST_INVALID_FIXED(lights, D9CLight, D9C_DRAW_PACKET_MAX_LIGHTS);
+  DXMT9_TEST_INVALID_FIXED(lightEnables, std::uint32_t,
+                           D9C_DRAW_PACKET_MAX_LIGHTS);
+#undef DXMT9_TEST_INVALID_FIXED
+  candidate.snapshot().forEachCategory([&](auto, const auto& table) {
+    check(table.empty(), "invalid fixed key leaves occupancy unchanged");
+  });
+}
+
 void testCandidateAbaAndDomains() {
   StateBlockRecorded candidate{};
+  auto candidateWriter = candidate.writer();
   PeHotStateShadow live{};
 
   // Ordinary writes belong to LiveShadow/PendingDelta.  A recording write
   // to the same key belongs only to the candidate, including A-B-A.
   const auto render = renderStateSlotKey(7u);
-  live.renderStateShadowTyped().set(render, 11u);
-  live.pendingRenderStatesTyped().set(render, 11u);
-  candidate.renderStates().set(render, 1u);
-  candidate.renderStates().set(render, 2u);
-  candidate.renderStates().set(render, 1u);
+  live.writer().renderStateShadowTyped().set(render, 11u);
+  live.writer().pendingRenderStatesTyped().set(render, 11u);
+  candidateWriter.renderStates().set(render, 1u);
+  candidateWriter.renderStates().set(render, 2u);
+  candidateWriter.renderStates().set(render, 1u);
   std::uint32_t value = 0u;
-  check(live.renderStateShadowTyped().get(render, value) && value == 11u,
+  check(live.writer().renderStateShadowTyped().get(render, value) && value == 11u,
         "recording must not mutate live render state");
-  check(live.pendingRenderStatesTyped().get(render, value) && value == 11u,
+  check(live.writer().pendingRenderStatesTyped().get(render, value) && value == 11u,
         "recording must not mutate pending render state");
-  check(candidate.renderStates().get(render, value) && value == 1u,
+  check(candidate.snapshot().renderStates().get(render, value) && value == 1u,
         "candidate render state must be last-write-wins");
 
-  candidate.textureStageStates().set(textureStageIndexKey(2u),
+  candidateWriter.textureStageStates().set(textureStageIndexKey(2u),
                                      textureStageStateTypeKey(3u), 1u);
-  candidate.textureStageStates().set(textureStageIndexKey(2u),
+  candidateWriter.textureStageStates().set(textureStageIndexKey(2u),
                                      textureStageStateTypeKey(3u), 2u);
-  candidate.textureStageStates().set(textureStageIndexKey(2u),
+  candidateWriter.textureStageStates().set(textureStageIndexKey(2u),
                                      textureStageStateTypeKey(3u), 1u);
-  check(candidate.textureStageStates().size() == 1u,
+  check(candidate.snapshot().textureStageStates().size() == 1u,
         "TSS candidate key must remain singular");
 
   SamplerIndex sampler{};
   check(samplerIndexKey(4u, sampler), "sampler key normalization");
   SamplerStateType samplerType{};
   check(samplerStateTypeKey(2u, samplerType), "sampler type normalization");
-  candidate.samplerStates().set(sampler, samplerType, 1u);
-  candidate.samplerStates().set(sampler, samplerType, 2u);
-  candidate.samplerStates().set(sampler, samplerType, 1u);
-  check(candidate.samplerStates().size() == 1u,
+  candidateWriter.samplerStates().set(sampler, samplerType, 1u);
+  candidateWriter.samplerStates().set(sampler, samplerType, 2u);
+  candidateWriter.samplerStates().set(sampler, samplerType, 1u);
+  check(candidate.snapshot().samplerStates().size() == 1u,
         "sampler candidate key must remain singular");
 
   D9CMatrix matrix = identityTransformMatrix();
   matrix.m[0] = 2.0f;
   const auto transform = transformStateKey(kD3dTsView);
-  candidate.transforms().set(transform, matrix);
+  candidateWriter.transforms().set(transform, matrix);
   matrix.m[0] = 3.0f;
-  candidate.transforms().set(transform, matrix);
+  candidateWriter.transforms().set(transform, matrix);
   matrix.m[0] = 2.0f;
-  candidate.transforms().set(transform, matrix);
+  candidateWriter.transforms().set(transform, matrix);
   D9CMatrix capturedMatrix{};
-  check(candidate.transforms().get(transform, capturedMatrix) &&
+  check(candidate.snapshot().transforms().get(transform, capturedMatrix) &&
             capturedMatrix.m[0] == 2.0f,
         "transform candidate must preserve A-B-A");
 
   // Every remaining PE-shadow category has a bounded tracked slot and can be
   // captured without changing the ordinary live domain.
-  candidate.textures().set(0u, StateBlockTextureRef::fromRaw(reinterpret_cast<void*>(0x10u)));
-  candidate.streamSources().set(0u, StateBlockStreamSourceValue{
+  candidateWriter.textures().set(fixedKey<StateBlockApplyPhysicalStore::textures>(0u), StateBlockTextureRef::fromRaw(reinterpret_cast<void*>(0x10u)));
+  candidateWriter.streamSources().set(fixedKey<StateBlockApplyPhysicalStore::streamSources>(0u), StateBlockStreamSourceValue{
       .buffer = {reinterpret_cast<void*>(0x20u)}, .offset = 4u,
       .stride = 16u});
-  candidate.streamFrequencies().set(0u, 2u);
-  candidate.indexBuffer().set(0u, StateBlockIndexBufferRef::fromRaw(reinterpret_cast<void*>(0x30u)));
-  candidate.vertexShader().set(0u, StateBlockVertexShaderRef::fromRaw(reinterpret_cast<void*>(0x40u)));
-  candidate.pixelShader().set(0u, StateBlockPixelShaderRef::fromRaw(reinterpret_cast<void*>(0x50u)));
-  candidate.fvf().set(0u, 0x1122u);
-  candidate.vertexDeclaration().set(0u, StateBlockVertexDeclarationRef::fromRaw(reinterpret_cast<void*>(0x60u)));
-  candidate.renderTargets().set(0u, StateBlockRenderTargetRef::fromRaw(reinterpret_cast<void*>(0x70u)));
-  candidate.depthStencil().set(0u, StateBlockDepthStencilRef::fromRaw(reinterpret_cast<void*>(0x80u)));
-  candidate.viewport().set(0u, D9CViewport{1u, 2u, 640u, 480u, 0.0f, 1.0f});
-  candidate.scissor().set(0u, D9CRect{1, 2, 639, 479});
-  candidate.material().set(0u, D9CMaterial{});
-  candidate.clipPlanes().set(0u, std::array<float, 4>{1, 2, 3, 4});
-  candidate.lights().set(0u, D9CLight{});
-  candidate.lightEnables().set(0u, 1u);
+  candidateWriter.streamFrequencies().set(fixedKey<StateBlockApplyPhysicalStore::streamFrequencies>(0u), 2u);
+  candidateWriter.indexBuffer().set(fixedKey<StateBlockApplyPhysicalStore::indexBuffer>(0u), StateBlockIndexBufferRef::fromRaw(reinterpret_cast<void*>(0x30u)));
+  candidateWriter.vertexShader().set(fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u), StateBlockVertexShaderRef::fromRaw(reinterpret_cast<void*>(0x40u)));
+  candidateWriter.pixelShader().set(fixedKey<StateBlockApplyPhysicalStore::pixelShader>(0u), StateBlockPixelShaderRef::fromRaw(reinterpret_cast<void*>(0x50u)));
+  candidateWriter.fvf().set(fixedKey<StateBlockApplyPhysicalStore::fvf>(0u), 0x1122u);
+  candidateWriter.vertexDeclaration().set(fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u), StateBlockVertexDeclarationRef::fromRaw(reinterpret_cast<void*>(0x60u)));
+  candidateWriter.renderTargets().set(fixedKey<StateBlockApplyPhysicalStore::renderTargets>(0u), StateBlockRenderTargetRef::fromRaw(reinterpret_cast<void*>(0x70u)));
+  candidateWriter.depthStencil().set(fixedKey<StateBlockApplyPhysicalStore::depthStencil>(0u), StateBlockDepthStencilRef::fromRaw(reinterpret_cast<void*>(0x80u)));
+  candidateWriter.viewport().set(fixedKey<StateBlockApplyPhysicalStore::viewport>(0u), D9CViewport{1u, 2u, 640u, 480u, 0.0f, 1.0f});
+  candidateWriter.scissor().set(fixedKey<StateBlockApplyPhysicalStore::scissor>(0u), D9CRect{1, 2, 639, 479});
+  candidateWriter.material().set(fixedKey<StateBlockApplyPhysicalStore::material>(0u), D9CMaterial{});
+  candidateWriter.clipPlanes().set(fixedKey<StateBlockApplyPhysicalStore::clipPlanes>(0u), std::array<float, 4>{1, 2, 3, 4});
+  candidateWriter.lights().set(fixedKey<StateBlockApplyPhysicalStore::lights>(0u), D9CLight{});
+  candidateWriter.lightEnables().set(fixedKey<StateBlockApplyPhysicalStore::lightEnables>(0u), 1u);
   std::array<float, 4> constants{1, 2, 3, 4};
-  candidate.constants.vsConstF.record(3u, 1u, constants.data(),
+  candidateWriter.constants().vsConstF.record(3u, 1u, constants.data(),
                                       sizeof(constants));
-  candidate.constants.psConstF.record(3u, 1u, constants.data(),
+  candidateWriter.constants().psConstF.record(3u, 1u, constants.data(),
                                       sizeof(constants));
 
   std::array<bool, static_cast<std::size_t>(
                        StateBlockApplyPhysicalStore::Count)> physicalSeen{};
-  candidate.forEachApplyPhysical(
+  candidate.snapshot().forEachApplyPhysical(
       [&]<StateBlockApplyPhysicalStore store>(const auto&) {
         const auto ordinal = static_cast<std::size_t>(store);
         check(ordinal < physicalSeen.size() && !physicalSeen[ordinal],
@@ -166,8 +243,8 @@ void testCandidateAbaAndDomains() {
             candidate.scissor().contains(0u) && candidate.material().contains(0u) &&
             candidate.clipPlanes().contains(0u) && candidate.lights().contains(0u) &&
             candidate.lightEnables().contains(0u) &&
-            candidate.constants.vsConstF.contains(3u) &&
-            candidate.constants.psConstF.contains(3u),
+            candidate.constantSnapshot().vsConstF.contains(3u) &&
+            candidate.constantSnapshot().psConstF.contains(3u),
         "all recordable categories must have fixed candidate slots");
   check(candidate.has(StateBlockRecorded::Category::textures) &&
             candidate.has(StateBlockRecorded::Category::streamSources) &&
@@ -177,10 +254,12 @@ void testCandidateAbaAndDomains() {
   // Source tuple and frequency are independent D3D9 state aspects. Applying
   // either tracked set preserves the other aspect.
   StateBlockRecorded sourceOnly{};
-  sourceOnly.streamSources().set(
-      0u, StateBlockStreamSourceValue{{reinterpret_cast<void*>(0x90u)}, 8u, 32u});
+  sourceOnly.writer().streamSources().set(
+      fixedKey<StateBlockApplyPhysicalStore::streamSources>(0u),
+      StateBlockStreamSourceValue{{reinterpret_cast<void*>(0x90u)}, 8u, 32u});
   StateBlockRecorded frequencyOnly{};
-  frequencyOnly.streamFrequencies().set(0u, 9u);
+  frequencyOnly.writer().streamFrequencies().set(
+      fixedKey<StateBlockApplyPhysicalStore::streamFrequencies>(0u), 9u);
   StateBlockStreamSourceValue liveSource{
       reinterpret_cast<void*>(0x91u), 4u, 16u};
   std::uint32_t liveFrequency = 7u;
@@ -249,17 +328,18 @@ void testCandidateAbaAndDomains() {
         "vertex/pixel key filtering");
 
   StateBlockRecorded capture = candidate;
-  capture.renderStates().set(render, 99u);
-  check(candidate.renderStates().get(render, value) && value == 1u,
+  capture.writer().renderStates().set(render, 99u);
+  check(candidate.snapshot().renderStates().get(render, value) && value == 1u,
         "Capture refresh must not mutate the recording candidate");
-  live.renderStateShadowTyped().set(render, 77u);
-  capture.renderStates().set(render, 77u);
-  check(capture.renderStates().get(render, value) && value == 77u &&
-            candidate.renderStates().get(render, value) && value == 1u,
+  live.writer().renderStateShadowTyped().set(render, 77u);
+  capture.writer().renderStates().set(render, 77u);
+  check(capture.snapshot().renderStates().get(render, value) && value == 77u &&
+            candidate.snapshot().renderStates().get(render, value) && value == 1u,
         "Capture must refresh a fixed tracked key from live state only");
-  candidate.clearForBegin();
-  check(candidate.renderStates().empty() && candidate.textures().empty() &&
-            candidate.constants.vsConstF.empty(),
+  candidate.writer().clear();
+  check(candidate.snapshot().renderStates().empty() &&
+            candidate.textures().empty() &&
+            candidate.constantSnapshot().vsConstF.empty(),
         "Begin must establish an empty candidate domain");
 }
 
@@ -271,6 +351,23 @@ struct RefProbe {
     --refs;
   }
 };
+
+struct RetainNoop {
+  void operator()(void*) const noexcept {}
+};
+
+template<typename T>
+concept AcceptsRawTextureStage = requires(T& transaction) {
+  transaction.stageTexture(0u, StateBlockTextureRef{}, RetainNoop{});
+};
+
+static_assert(!AcceptsRawTextureStage<PeStateBlockTransactionState>,
+              "StateBlock staging must reject raw size_t/integer keys");
+static_assert(!std::is_constructible_v<StateBlockTextureSlot, std::uint32_t> &&
+              !std::is_constructible_v<StateBlockStreamSlot, std::uint32_t> &&
+              !std::is_constructible_v<StateBlockRenderTargetSlot,
+                                       std::uint32_t>,
+              "StateBlock boundary keys require bounded factories");
 
 void testGeneratedTransitionTableIsomorphism() {
   static_assert(!std::is_aggregate_v<PeStateBlockTransitionPlan>);
@@ -349,8 +446,8 @@ void testTransactionOwnershipAndLifecycle() {
   static_assert(!std::is_copy_constructible_v<PeStateBlockTransactionState>);
   static_assert(std::is_same_v<
                 decltype(std::declval<PeRecorderState&>()
-                             .stateBlockTransaction.recorded()),
-                StateBlockRecorded&>);
+                             .stateBlockTransaction.recordWriter()),
+                StateBlockRecorded::Writer>);
 
   PeStateBlockTransactionState transaction{};
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
@@ -361,23 +458,26 @@ void testTransactionOwnershipAndLifecycle() {
   candidateRef.addRef();
   candidateRef.addRef();
   candidateRef.addRef();
-  transaction.recorded().textures().set(
-      0u, StateBlockTextureRef::fromRaw(&candidateRef));
-  transaction.recorded().vertexShader().set(
-      0u, StateBlockVertexShaderRef::fromRaw(&candidateRef));
-  transaction.recorded().vertexDeclaration().set(
-      0u, StateBlockVertexDeclarationRef::fromRaw(&candidateRef));
+  transaction.recordWriter().textures().set(
+      fixedKey<StateBlockApplyPhysicalStore::textures>(0u),
+      StateBlockTextureRef::fromRaw(&candidateRef));
+  transaction.recordWriter().vertexShader().set(
+      fixedKey<StateBlockApplyPhysicalStore::vertexShader>(0u),
+      StateBlockVertexShaderRef::fromRaw(&candidateRef));
+  transaction.recordWriter().vertexDeclaration().set(
+      fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u),
+      StateBlockVertexDeclarationRef::fromRaw(&candidateRef));
   transaction.beginAccepted([&](void* raw) noexcept {
     if (raw) static_cast<RefProbe*>(raw)->release();
   });
   check(transaction.isRecording() &&
-            transaction.recorded().textures().empty() &&
-            transaction.recorded().vertexShader().empty() &&
-            transaction.recorded().vertexDeclaration().empty() &&
+            transaction.recordedSnapshot().textures().empty() &&
+            transaction.recordedSnapshot().vertexShader().empty() &&
+            transaction.recordedSnapshot().vertexDeclaration().empty() &&
             candidateRef.refs == 1u,
         "candidate-owned vdecl and staged categories release each retain by multiplicity");
 
-  transaction.recorded().renderStates().set(renderStateSlotKey(7u), 19u);
+  transaction.recordWriter().renderStates().set(renderStateSlotKey(7u), 19u);
   transaction.enterEndPublication();
   check(!transaction.isRecording() && transaction.isInsideEnd(),
         "accepted backend End enters the closed publication scope");
@@ -386,7 +486,7 @@ void testTransactionOwnershipAndLifecycle() {
   });
   check(!transaction.isRecording() && !transaction.isInsideEnd() &&
             transaction.writeAllowed() &&
-            transaction.recorded().renderStates().empty(),
+            transaction.recordedSnapshot().renderStates().empty(),
         "successful End leaves no candidate or inside-End state");
 
   transaction.beginAccepted([&](void* raw) noexcept {
@@ -413,10 +513,25 @@ void testTypedStagingRetentionMultiplicityAndReset() {
     if (raw) static_cast<RefProbe*>(raw)->release();
   };
 
-  transaction.stageTexture(0u, StateBlockTextureRef::fromRaw(&shared), retain);
-  transaction.stageTexture(1u, StateBlockTextureRef::fromRaw(&shared), retain);
+  check(!transaction.stageTexture(
+            stateBlockTextureSlotKey(kPeTextureSlots),
+            StateBlockTextureRef::fromRaw(&shared), retain) &&
+            !transaction.stageStream(
+                stateBlockStreamSlotKey(D9C_DRAW_PACKET_MAX_STREAMS),
+                StateBlockStreamSourceValue{.buffer = {&shared}}, retain) &&
+            !transaction.stageRenderTarget(
+                stateBlockRenderTargetSlotKey(
+                    D9C_DRAW_PACKET_MAX_RENDER_TARGETS),
+                StateBlockRenderTargetRef::fromRaw(&shared), retain) &&
+            !transaction.hasPreparedApply() && shared.refs == 1u,
+        "invalid bounded staging keys fail before retain or occupancy");
+
+  transaction.stageTexture(stateBlockTextureSlotKey(0u),
+                           StateBlockTextureRef::fromRaw(&shared), retain);
+  transaction.stageTexture(stateBlockTextureSlotKey(1u),
+                           StateBlockTextureRef::fromRaw(&shared), retain);
   transaction.stageStream(
-      0u, StateBlockStreamSourceValue{
+      stateBlockStreamSlotKey(0u), StateBlockStreamSourceValue{
               .buffer = {&shared}, .offset = 4u, .stride = 16u},
       retain);
   transaction.stageVertexShader(
@@ -426,7 +541,8 @@ void testTypedStagingRetentionMultiplicityAndReset() {
   transaction.stageIndexBuffer(
       StateBlockIndexBufferRef::fromRaw(&shared), retain);
   transaction.stageRenderTarget(
-      0u, StateBlockRenderTargetRef::fromRaw(&shared), retain);
+      stateBlockRenderTargetSlotKey(0u),
+      StateBlockRenderTargetRef::fromRaw(&shared), retain);
   transaction.stageDepthStencil(
       StateBlockDepthStencilRef::fromRaw(&shared), retain);
   check(transaction.hasPreparedApply() && shared.refs == 9u,
@@ -435,8 +551,10 @@ void testTypedStagingRetentionMultiplicityAndReset() {
   check(!transaction.hasPreparedApply() && shared.refs == 1u,
         "discard releases every staged retain without deduplication");
 
-  transaction.stageTexture(0u, StateBlockTextureRef::fromRaw(&shared), retain);
-  const auto transferred = transaction.takeTexture(0u);
+  transaction.stageTexture(stateBlockTextureSlotKey(0u),
+                           StateBlockTextureRef::fromRaw(&shared), retain);
+  const auto transferred =
+      transaction.takeTexture(stateBlockTextureSlotKey(0u));
   check(transferred.raw() == &shared && !transaction.hasPreparedApply() &&
             shared.refs == 2u,
         "commit take transfers the staged retain without releasing it");
@@ -658,11 +776,192 @@ void testEndFailureAndPoisonWriteBoundary() {
         "accepted End publishes once and keeps later recorder writes legal");
 }
 
+void testRepeatedQualifiedValueAndComMultiplicity() {
+  constexpr std::array events{
+      PeStateBlockValueEvent::CapturePreEffectFailed,
+      PeStateBlockValueEvent::CaptureBackendFailed,
+      PeStateBlockValueEvent::CaptureAccepted,
+      PeStateBlockValueEvent::ApplyPreEffectFailed,
+      PeStateBlockValueEvent::ApplyPrepared,
+      PeStateBlockValueEvent::ApplyBackendFailed,
+      PeStateBlockValueEvent::ApplyAccepted};
+  for (const auto event : events) {
+    const auto plan = planPeStateBlockValue(event);
+    std::size_t matches = 0u;
+    for (const auto& row : kPeStateBlockValueTable) {
+      if (row.event == event) {
+        ++matches;
+        check(plan.valid() && plan.action() == row.action &&
+                  plan.preserveTrackedSet() == row.preserveTrackedSet &&
+                  plan.refreshSnapshot() == row.refreshSnapshot &&
+                  plan.publishLive() == row.publishLive &&
+                  plan.poison() == row.poison,
+              "StateBlock value planner matches every generated row");
+      }
+    }
+    check(matches == 1u, "every StateBlock value event has one row");
+  }
+
+  // Drive the host-buildable production shadow types through three repeated
+  // value rounds.  RenderState and Transform are the frozen tracked set;
+  // Sampler is live but deliberately absent from the StateBlock snapshot.
+  const auto renderKey = renderStateSlotKey(7u);
+  const auto transformKey = transformStateKey(kD3dTsView);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(0u, sampler) && samplerStateTypeKey(1u, samplerType),
+        "typed sampler keys are valid");
+  StateBlockRecorded saved{};
+  saved.writer().renderStates().set(renderKey, 0u);
+  saved.writer().transforms().set(transformKey, identityTransformMatrix());
+  PeHotStateShadow live{};
+  std::uint64_t ordinal = 0u;
+  for (const std::uint32_t capturedValue : {1u, 2u, 0u}) {
+    D9CMatrix capturedMatrix = identityTransformMatrix();
+    capturedMatrix.m[0] = static_cast<float>(capturedValue + 1u);
+    live.writer().renderStateShadowTyped().set(renderKey, capturedValue);
+    live.writer().transformShadowTyped().set(transformKey, capturedMatrix);
+    live.writer().samplerStateShadowTyped().set(
+        sampler, samplerType, capturedValue + 10u);
+
+    StateBlockRecorded candidate = saved;
+    candidate.writer().renderStates().set(renderKey, capturedValue);
+    candidate.writer().transforms().set(transformKey, capturedMatrix);
+    const auto capturePlan = planPeStateBlockValue(
+        PeStateBlockValueEvent::CaptureAccepted);
+    check(capturePlan.valid() && capturePlan.refreshSnapshot() &&
+              !candidate.snapshot().samplerStates().contains(
+                  sampler, samplerType),
+          "successful Capture refreshes only the frozen tracked categories");
+    saved = std::move(candidate);
+    ++ordinal;
+
+    // A failed Capture may build a candidate, but the production publication
+    // edge must leave the prior saved snapshot intact.
+    StateBlockRecorded failedCandidate = saved;
+    failedCandidate.writer().renderStates().set(renderKey, 99u);
+    const auto failedCapture = planPeStateBlockValue(
+        PeStateBlockValueEvent::CapturePreEffectFailed);
+    const auto failedBackendCapture = planPeStateBlockValue(
+        PeStateBlockValueEvent::CaptureBackendFailed);
+    std::uint32_t savedRender = 0u;
+    check(failedCapture.valid() && !failedCapture.refreshSnapshot() &&
+              failedBackendCapture.valid() &&
+              !failedBackendCapture.refreshSnapshot() &&
+              failedBackendCapture.poison() &&
+              saved.snapshot().renderStates().get(renderKey, savedRender) &&
+              savedRender == capturedValue,
+          "pre-effect and backend Capture failures preserve the published snapshot");
+
+    // Mutate all three live categories between Capture and Apply.  Apply must
+    // publish the latest captured R/T values while leaving untracked S alone.
+    D9CMatrix interveningMatrix = capturedMatrix;
+    interveningMatrix.m[0] += 20.0f;
+    live.writer().renderStateShadowTyped().set(renderKey, capturedValue + 20u);
+    live.writer().transformShadowTyped().set(transformKey, interveningMatrix);
+    live.writer().samplerStateShadowTyped().set(
+        sampler, samplerType, capturedValue + 30u);
+    const auto preEffectApply = planPeStateBlockValue(
+        PeStateBlockValueEvent::ApplyPreEffectFailed);
+    const auto backendFailedApply = planPeStateBlockValue(
+        PeStateBlockValueEvent::ApplyBackendFailed);
+    std::uint32_t interveningRender = 0u;
+    D9CMatrix failedApplyMatrix{};
+    check(preEffectApply.valid() && preEffectApply.preserveTrackedSet() &&
+              !preEffectApply.publishLive() &&
+              backendFailedApply.valid() && backendFailedApply.poison() &&
+              !backendFailedApply.publishLive() &&
+              live.snapshot().renderStateShadowTyped().get(
+                  renderKey, interveningRender) &&
+              interveningRender == capturedValue + 20u &&
+              live.snapshot().transformShadowTyped().get(
+                  transformKey, failedApplyMatrix) &&
+              failedApplyMatrix.m[0] == interveningMatrix.m[0],
+          "pre-effect and backend Apply failures preserve live values");
+    const auto applyPlan = planPeStateBlockValue(
+        PeStateBlockValueEvent::ApplyAccepted);
+    saved.snapshot().renderStates().forEach(
+        [&](RenderStateSlot key, std::uint32_t value) {
+          live.writer().renderStateShadowTyped().set(key, value);
+        });
+    saved.snapshot().transforms().forEach(
+        [&](TransformState key, const D9CMatrix& value) {
+          live.writer().transformShadowTyped().set(key, value);
+        });
+    std::uint32_t liveRender = 0u;
+    std::uint32_t liveSampler = 0u;
+    D9CMatrix liveMatrix{};
+    const PeStateBlockQualifiedValue captured{
+        PeStateBlockValueCategory::RenderState, 7u, capturedValue, ordinal};
+    check(applyPlan.valid() && applyPlan.publishLive() &&
+              live.snapshot().renderStateShadowTyped().get(
+                  renderKey, liveRender) && liveRender == capturedValue &&
+              live.snapshot().transformShadowTyped().get(
+                  transformKey, liveMatrix) &&
+              liveMatrix.m[0] == capturedMatrix.m[0] &&
+              live.snapshot().samplerStateShadowTyped().get(
+                  sampler, samplerType, liveSampler) &&
+              liveSampler == capturedValue + 30u &&
+              peStateBlockApplyPublishesLatest(captured, captured, true),
+          "Apply publishes latest captured R/T and isolates untracked sampler");
+  }
+
+  RefProbe shared{};
+  auto retain = [&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->addRef();
+  };
+  auto release = [&](void* raw) noexcept {
+    if (raw) static_cast<RefProbe*>(raw)->release();
+  };
+  PeStateBlockTransactionState transaction{};
+  // Two live slots independently own the same COM identity.
+  retain(&shared);
+  retain(&shared);
+  for (std::uint32_t cycle = 0u; cycle < 3u; ++cycle) {
+    transaction.stageTexture(
+        stateBlockTextureSlotKey(0u),
+        StateBlockTextureRef::fromRaw(&shared), retain);
+    transaction.stageTexture(
+        stateBlockTextureSlotKey(1u),
+        StateBlockTextureRef::fromRaw(&shared), retain);
+    check(shared.refs == 5u,
+          "same COM identity retains once per qualified slot per cycle");
+    transaction.markApplyPrepared();
+    check(transaction.phase() == PeStateBlockPhase::ApplyPrepared,
+          "production transition enters ApplyPrepared after per-slot retain");
+    release(&shared);
+    release(&shared);
+    const auto slot0 = transaction.takeTexture(stateBlockTextureSlotKey(0u));
+    const auto slot1 = transaction.takeTexture(stateBlockTextureSlotKey(1u));
+    check(slot0.raw() == &shared && slot1.raw() == &shared &&
+              shared.refs == 3u && !transaction.hasPreparedApply(),
+          "successful Apply transfers exactly two same-identity slot retains");
+    transaction.finishPreparedApply();
+    check(transaction.phase() == PeStateBlockPhase::Idle,
+          "production transfer transition returns to Idle");
+  }
+  release(&shared);
+  release(&shared);
+  check(shared.refs == 1u,
+        "final live teardown releases exactly one owner per qualified slot");
+
+  PeStateBlockTransactionState failed{};
+  failed.stageTexture(stateBlockTextureSlotKey(0u),
+                      StateBlockTextureRef::fromRaw(&shared), retain);
+  failed.stageTexture(stateBlockTextureSlotKey(1u),
+                      StateBlockTextureRef::fromRaw(&shared), retain);
+  failed.markApplyPrepared();
+  failed.failPreparedApply(release);
+  check(failed.phase() == PeStateBlockPhase::Poisoned && shared.refs == 1u,
+        "failed Apply releases both staged retains and fails stop");
+}
+
 }  // namespace
 
 int main() {
   try {
     testApplyCategoryRegistry();
+    testEveryFixedWriterRejectsInvalidKindKey();
     testCandidateAbaAndDomains();
     testGeneratedTransitionTableIsomorphism();
     testTransactionOwnershipAndLifecycle();
@@ -670,6 +969,7 @@ int main() {
     testStagedFailureAndIntervalWitness();
     testPoisonResetFaultSequence();
     testEndFailureAndPoisonWriteBoundary();
+    testRepeatedQualifiedValueAndComMultiplicity();
     std::cout << "pe state-block category spec: PASS\n";
     return 0;
   } catch (const Failure& failure) {

@@ -22,7 +22,8 @@ ASSUME Mutation \in {"Guarded", "ParentBeforeAlias", "EarlyReset",
 ASSUME MaxOperations \in Nat \ {0}
 
 Phases == {"Unsealed", "Sealed", "Accepted", "CaptureSettled",
-           "Draining", "Drained", "Reset", "WarmAdvanced", "Discarded"}
+           "Draining", "Drained", "Reset", "WarmAdvanced", "Poisoned",
+           "Discarded"}
 CaptureDispositions == {"Pending", "Materialized", "Rejected", "Skipped",
                         "None"}
 
@@ -70,12 +71,23 @@ SealFailure ==
                  pendingRefs, aliases, parentPending, destroyed,
                  commandAccepted, captureDisposition>>
 
-BridgeFailure ==
+BridgePreEffectFailure ==
   /\ phase = "Sealed"
   /\ bridgeFailures < MaxOperations
-  /\ CommitMatches("Sealed", "BridgeFailed", "Sealed", "Retry",
+  /\ CommitMatches("Sealed", "BridgePreEffectFailed", "Sealed", "Retry",
                    TRUE, FALSE, FALSE, FALSE, FALSE)
   /\ phase' = "Sealed"
+  /\ bridgeFailures' = bridgeFailures + 1
+  /\ UNCHANGED <<bytes, sealedBytes, recordCount, handleCount, pins,
+                 pendingRefs, aliases, parentPending, destroyed,
+                 commandAccepted, captureDisposition>>
+
+BridgeEffectUnknown ==
+  /\ phase = "Sealed"
+  /\ bridgeFailures < MaxOperations
+  /\ CommitMatches("Sealed", "BridgeEffectUnknown", "Poisoned", "FailStop",
+                   FALSE, FALSE, FALSE, FALSE, FALSE)
+  /\ phase' = "Poisoned"
   /\ bridgeFailures' = bridgeFailures + 1
   /\ UNCHANGED <<bytes, sealedBytes, recordCount, handleCount, pins,
                  pendingRefs, aliases, parentPending, destroyed,
@@ -229,7 +241,8 @@ Discard ==
   /\ UNCHANGED <<destroyed, bridgeFailures>>
 
 Next ==
-  SealSuccess \/ SealFailure \/ BridgeFailure \/ BridgeSuccess \/
+  SealSuccess \/ SealFailure \/ BridgePreEffectFailure \/
+  BridgeEffectUnknown \/ BridgeSuccess \/
   CaptureMaterialized \/ CaptureRejected \/ CaptureSkipped \/ BeginDrain \/
   DrainAlias \/ DrainParent \/ DrainComplete \/ BuilderReset \/
   WarmEpochAdvance \/ Complete \/ Discard
@@ -282,18 +295,15 @@ ReusableWarmCompletion ==
   []((phase = "WarmAdvanced") ~>
       ((phase = "Unsealed" /\ ~commandAccepted) \/ phase = "Discarded"))
 
-AcceptedEventuallySettles ==
-  [](commandAccepted ~> (phase = "Unsealed" /\ ~commandAccepted) \/
-                         phase = "Discarded")
+SuccessfulInternalSettlement ==
+  []((phase = "CaptureSettled") ~>
+      ((phase = "Unsealed" /\ ~commandAccepted) \/ phase = "Discarded"))
 
 Spec == Init /\ [][Next]_vars /\
-        WF_vars(SealSuccess) /\ WF_vars(SealFailure) /\
-        WF_vars(BridgeSuccess) /\ WF_vars(BridgeFailure) /\
-        WF_vars(CaptureMaterialized) /\ WF_vars(CaptureRejected) /\
-        WF_vars(CaptureSkipped) /\ WF_vars(BeginDrain) /\
+        WF_vars(BeginDrain) /\
         WF_vars(DrainAlias) /\ WF_vars(DrainParent) /\
         WF_vars(DrainComplete) /\ WF_vars(BuilderReset) /\
-        WF_vars(WarmEpochAdvance) /\ WF_vars(Complete) /\ WF_vars(Discard)
+        WF_vars(WarmEpochAdvance) /\ WF_vars(Complete)
 
 Progress == [](phase = "Draining" ~> (phase = "Drained" \/ phase = "Discarded"))
 
