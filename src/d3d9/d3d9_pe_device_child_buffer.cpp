@@ -1,7 +1,9 @@
 /* src/d3d9/d3d9_pe_device_child_buffer.cpp — PE-side child COM wrappers
  * for IDirect3DVertexBuffer9 and IDirect3DIndexBuffer9. */
 
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_child_scopes.hpp"
+#include "d3d9_pe_child_validation.hpp"
 #include "d3d9_pe_validated_object_writer.hpp"
 
 #include "d3d9_pe_buffer_readonly_cache.hpp"
@@ -75,7 +77,7 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
 }
 
 [[nodiscard]] static HRESULT
-flushChildRecorderForBufferLock(D3D9PeRecorderFlush *recorder, D9CBuffer *buffer,
+flushChildRecorderForBufferLock(D3D9PeBufferContext *recorder, D9CBuffer *buffer,
                                 DWORD flags) {
   return dxmt9::d3d9::pe::sealBufferGenerationBeforeLock(
     recorder != nullptr, flags, static_cast<HRESULT>(S_OK),
@@ -86,7 +88,7 @@ static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {
   return buffer && SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc)));
 }
 
-static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
+static bool copyRenderTapeBufferMutation(D3D9PeBufferContext *recorder,
                                          const void *data, std::size_t bytes,
                                          std::vector<std::byte> &copy,
                                          bool *captureTrackingEnabled = nullptr)
@@ -117,7 +119,7 @@ static bool copyRenderTapeBufferMutation(D3D9PeRecorderFlush *recorder,
 }
 
 static void rejectRenderTapeBufferSnapshot(
-    D3D9PeRecorderFlush *recorder,
+    D3D9PeBufferContext *recorder,
     dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint64_t bytes = 0u) noexcept {
@@ -142,7 +144,7 @@ renderTapeBufferMutationDisposition(DWORD flags) noexcept {
 // application unlock has committed.  No allocation or backend inference is
 // admitted; only the bytes returned by this lock may close the seed.
 static bool captureRenderTapeFullBufferSnapshot(
-    D3D9PeRecorderFlush *recorder, D9CBuffer *buffer,
+    D3D9PeBufferContext *recorder, D9CBuffer *buffer,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     const D9CBufferDesc &desc,
     dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition) noexcept {
@@ -246,7 +248,7 @@ static void fillIndexBufferDesc(const D9CBufferDesc &desc,
   out.Size = desc.size;
 }
 
-static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
+static void trackDefaultPoolResource(D3D9PeBufferContext *recorder,
                                      bool &tracked, bool shouldTrack) {
   if (!recorder || !shouldTrack || tracked)
     return;
@@ -254,7 +256,7 @@ static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
   recorder->AddDefaultPoolResourceRefForChild();
 }
 
-static void untrackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
+static void untrackDefaultPoolResource(D3D9PeBufferContext *recorder,
                                        bool &tracked) {
   if (!recorder || !tracked)
     return;
@@ -299,7 +301,7 @@ validateBufferLockArgs(D9CBuffer *buffer, const D9CBufferDesc &cachedDesc,
 }
 
 [[nodiscard]] static HRESULT
-lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
+lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
              const D9CBufferDesc &cachedDesc, bool cachedDescValid,
              const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
              D3D9PeBufferLockState &state, UINT off, UINT size, void **pp,
@@ -381,7 +383,7 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
 }
 
 [[nodiscard]] static HRESULT
-unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
+unlockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
                const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
                D3D9PeBufferLockState &state) noexcept {
   if (!state.locked)
@@ -468,7 +470,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   ULONG refs_ = 1;
   D9CBuffer *b_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeBufferContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   D9CBufferDesc desc_{};
   bool descValid_ = false;
@@ -480,9 +482,9 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
 
 public:
   D3D9VertexBufferImpl(D9CBuffer *b, IDirect3DDevice9 *device,
-                       D3D9PeRecorderFlush *recorder = nullptr,
+                       D3D9PeBufferContext *recorder = nullptr,
                        D3D9PeDiagnosticObserver *diagnostics = nullptr)
-      : b_(b), device_(device), recorder_(recorder),
+      : b_(b), device_(device), context_(recorder),
         diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
@@ -490,13 +492,13 @@ public:
         b_,
         dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9VertexBufferImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     dxmt9c_buffer_release(b_);
     if (device_)
       device_->Release();
@@ -575,11 +577,11 @@ public:
     if (diagnostics_)
       diagnostics_->notifyFirstCallAfterPresent(
           "VertexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    return lockPeBuffer(b_, recorder_, desc_, descValid_, wireObject_,
+    return lockPeBuffer(b_, context_, desc_, descValid_, wireObject_,
                         lockState_, off, size, pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);
+    return unlockPeBuffer(b_, context_, wireObject_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {
@@ -614,7 +616,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
   ULONG refs_ = 1;
   D9CBuffer *b_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeBufferContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   D9CBufferDesc desc_{};
   bool descValid_ = false;
@@ -626,9 +628,9 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
 
 public:
   D3D9IndexBufferImpl(D9CBuffer *b, IDirect3DDevice9 *device,
-                      D3D9PeRecorderFlush *recorder = nullptr,
+                      D3D9PeBufferContext *recorder = nullptr,
                       D3D9PeDiagnosticObserver *diagnostics = nullptr)
-      : b_(b), device_(device), recorder_(recorder),
+      : b_(b), device_(device), context_(recorder),
         diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
@@ -636,13 +638,13 @@ public:
         b_,
         dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              bufferIsDefaultPool(desc_, descValid_));
   }
   ~D3D9IndexBufferImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     dxmt9c_buffer_release(b_);
     if (device_)
       device_->Release();
@@ -721,11 +723,11 @@ public:
     if (diagnostics_)
       diagnostics_->notifyFirstCallAfterPresent(
           "IndexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    return lockPeBuffer(b_, recorder_, desc_, descValid_, wireObject_,
+    return lockPeBuffer(b_, context_, desc_, descValid_, wireObject_,
                         lockState_, off, size, pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    return unlockPeBuffer(b_, recorder_, wireObject_, lockState_);
+    return unlockPeBuffer(b_, context_, wireObject_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DINDEXBUFFER_DESC *pDesc) noexcept override {
@@ -759,7 +761,7 @@ public:
 
 IDirect3DVertexBuffer9 *CreatePeVertexBuffer(D9CBuffer *buffer,
                                              IDirect3DDevice9 *device,
-                                             D3D9PeRecorderFlush *recorder,
+                                             D3D9PeBufferContext *recorder,
                                              D3D9PeDiagnosticObserver *diagnostics) noexcept {
   return peNewNoexcept<D3D9VertexBufferImpl>(buffer, device, recorder,
                                              diagnostics);
@@ -767,7 +769,7 @@ IDirect3DVertexBuffer9 *CreatePeVertexBuffer(D9CBuffer *buffer,
 
 IDirect3DIndexBuffer9 *CreatePeIndexBuffer(D9CBuffer *buffer,
                                            IDirect3DDevice9 *device,
-                                           D3D9PeRecorderFlush *recorder,
+                                           D3D9PeBufferContext *recorder,
                                            D3D9PeDiagnosticObserver *diagnostics) noexcept {
   return peNewNoexcept<D3D9IndexBufferImpl>(buffer, device, recorder,
                                             diagnostics);

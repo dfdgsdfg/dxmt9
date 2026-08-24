@@ -8,10 +8,10 @@
  * and display-mode queries, and the state-block plumbing.
  *
  * All 96 are virtual overrides. Out-lining them here is only safe because
- * d3d9_pe_device.cpp pins an explicit key function (FlushPeRecorderForChild,
- * the first non-pure non-inline virtual in declaration order); without it the
+ * d3d9_pe_device.cpp pins an explicit key function (out-of-line
+ * QueryInterface, the first non-pure non-inline virtual in declaration order); without it the
  * first cold TU to out-line a virtual claims the vtable and the whole COM
- * surface with it. See the comment on FlushPeRecorderForChild in the class
+ * surface with it. See the QueryInterface key-function comment in the class
  * header and agents/rules/codebase_conventions.rules.md.
  *
  * The two validator regions below are reached only from these definitions, so
@@ -93,6 +93,12 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
           this, dxmt9PeResolvedDiagnosticsConfig()))
     , creationWindow_(window)
     , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
+    stateBlockContext_.device = this;
+    bufferContext_.device = this;
+    surfaceTextureContext_.device = this;
+    queryContext_.device = this;
+    presentationContext_.device = this;
+    shaderDeclarationContext_.device = this;
     for (UINT& freq : streamFreq_) {
         freq = 1;
     }
@@ -768,7 +774,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateAdditionalSwapChain(
     cpp.presentationInterval = pPP->PresentationInterval;
     D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
     if (!sc) return D3DERR_INVALIDCALL;
-    *ppSC = CreatePeSwapChain(sc, this, this, diagnosticObserverForChild(),
+    *ppSC = CreatePeSwapChain(sc, this, presentationContext(), diagnosticObserverForChild(),
                               extended_, pPP->Flags);
     if (!*ppSC) {
         dxmt9c_swapchain_release(sc);
@@ -811,7 +817,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetSwapChain(UINT index,
     // and that path already sets the shadow. For lazy-created index-0
     // wrappers fall back to the device's captured implicit flags.
     const DWORD wrapperFlags = (index == 0) ? implicitSwapchainFlagsShadow_ : 0;
-    auto* wrapper = CreatePeSwapChain(sc, this, this,
+    auto* wrapper = CreatePeSwapChain(sc, this, presentationContext(),
                                       diagnosticObserverForChild(), extended_,
                                       wrapperFlags);
     if (!wrapper) {
@@ -1115,7 +1121,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateTexture(UINT w, UINT h, UINT lev
                                                   (uint32_t)pool,
                                                   providerShared);
     if (!t) return D3DERR_INVALIDCALL;
-    *ppTex = CreatePeTexture(t, this, this, diagnosticObserverForChild(),
+    *ppTex = CreatePeTexture(t, this, surfaceTextureContext(), diagnosticObserverForChild(),
                              userPtr, userPitch);
     if (!*ppTex) {
         dxmt9c_texture_release(t);
@@ -1168,7 +1174,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVolumeTexture(UINT w, UINT h, UI
                                                          (uint32_t)pool,
                                                          providerShared);
     if (!t) return D3DERR_INVALIDCALL;
-    *ppTex = CreatePeVolumeTexture(t, this, this,
+    *ppTex = CreatePeVolumeTexture(t, this, surfaceTextureContext(),
                                    diagnosticObserverForChild());
     if (!*ppTex) {
         dxmt9c_texture_release(t);
@@ -1212,7 +1218,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateCubeTexture(UINT size, UINT leve
                                                        (uint32_t)pool,
                                                        providerShared);
     if (!t) return D3DERR_INVALIDCALL;
-    *ppTex = CreatePeCubeTexture(t, this, this,
+    *ppTex = CreatePeCubeTexture(t, this, surfaceTextureContext(),
                                  diagnosticObserverForChild());
     if (!*ppTex) {
         dxmt9c_texture_release(t);
@@ -1252,7 +1258,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVertexBuffer(UINT len, DWORD usa
                                                        fvf, (uint32_t)pool,
                                                        providerShared);
     if (!b) return D3DERR_INVALIDCALL;
-    *ppBuf = CreatePeVertexBuffer(b, this, this,
+    *ppBuf = CreatePeVertexBuffer(b, this, bufferContext(),
                                   diagnosticObserverForChild());
     if (!*ppBuf) {
         dxmt9c_buffer_release(b);
@@ -1291,7 +1297,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateIndexBuffer(UINT len, DWORD usag
                                                       (uint32_t)pool,
                                                       providerShared);
     if (!b) return D3DERR_INVALIDCALL;
-    *ppBuf = CreatePeIndexBuffer(b, this, this,
+    *ppBuf = CreatePeIndexBuffer(b, this, bufferContext(),
                                  diagnosticObserverForChild());
     if (!*ppBuf) {
         dxmt9c_buffer_release(b);
@@ -1359,7 +1365,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateRenderTarget(UINT w, UINT h, D3D
                                                         lockable ? 1u : 0u,
                                                         providerShared);
     if (!s) return D3DERR_INVALIDCALL;
-    *ppS = CreatePeSurface(s, this, nullptr, this,
+    *ppS = CreatePeSurface(s, this, nullptr, surfaceTextureContext(),
                            diagnosticObserverForChild());
     if (!*ppS) {
         dxmt9c_surface_release(s);
@@ -1401,7 +1407,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateDepthStencilSurface(UINT w, UINT
                                                         discard ? 1u : 0u,
                                                         providerShared);
     if (!s) return D3DERR_INVALIDCALL;
-    *ppS = CreatePeSurface(s, this, nullptr, this,
+    *ppS = CreatePeSurface(s, this, nullptr, surfaceTextureContext(),
                            diagnosticObserverForChild());
     if (!*ppS) {
         dxmt9c_surface_release(s);
@@ -1873,7 +1879,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateOffscreenPlainSurface(UINT w, UI
                                                             (uint32_t)pool,
                                                             providerShared);
     if (!s) return D3DERR_INVALIDCALL;
-    *ppS = CreatePeSurface(s, this, nullptr, this,
+    *ppS = CreatePeSurface(s, this, nullptr, surfaceTextureContext(),
                            diagnosticObserverForChild(), true, userPtr,
                            userPitch);
     if (!*ppS) {
@@ -1917,7 +1923,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTarget(DWORD idx,
         return finishPeCall(S_OK);
     }
     D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
-    *ppS = s ? CreatePeSurface(s, this, nullptr, this,
+    *ppS = s ? CreatePeSurface(s, this, nullptr, surfaceTextureContext(),
                                diagnosticObserverForChild(), false)
              : nullptr;
     if (s && !*ppS) {
@@ -1948,7 +1954,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetDepthStencilSurface(IDirect3DSurfac
         return S_OK;
     }
     D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-    *ppS = s ? CreatePeSurface(s, this, nullptr, this,
+    *ppS = s ? CreatePeSurface(s, this, nullptr, surfaceTextureContext(),
                                diagnosticObserverForChild())
              : nullptr;
     if (s && !*ppS) {
@@ -2153,7 +2159,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateStateBlock(D3DSTATEBLOCKTYPE typ
     D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
     if (!sb) return D3DERR_INVALIDCALL;
     *ppSB = CreatePeStateBlock(
-        sb, this, this, diagnosticObserverForChild(),
+        sb, this, stateBlockContext(), diagnosticObserverForChild(),
         stateBlockCaptureDispositionFromType(static_cast<std::uint32_t>(type)));
     if (!*ppSB) return E_OUTOFMEMORY;
     return S_OK;
@@ -2265,7 +2271,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
         // stateBlockTransformRecorded (which may be empty if all
         // recording was MultiplyTransform) instead of falling
         // back to a full transformShadow capture.
-        *ppSB = CreatePeStateBlock(sb, this, this,
+        *ppSB = CreatePeStateBlock(sb, this, stateBlockContext(),
                                    diagnosticObserverForChild(),
                                    StateBlockCaptureDisposition::Explicit);
     }
@@ -2505,7 +2511,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVertexDeclaration(
         *ppVD = nullptr;
         return D3DERR_INVALIDCALL;
     }
-    *ppVD = CreatePeVertexDecl(d, this, this);
+    *ppVD = CreatePeVertexDecl(d, this, shaderDeclarationContext());
     if (!*ppVD) {
         dxmt9c_vdecl_release(d);
         return E_OUTOFMEMORY;
@@ -2549,7 +2555,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVertexShader(const DWORD* pFn,
         *ppVS = nullptr;
         return D3DERR_INVALIDCALL;
     }
-    *ppVS = CreatePeVertexShader(s, this, hashValidatedShaderBytecode(pFn), this);
+    *ppVS = CreatePeVertexShader(s, this, hashValidatedShaderBytecode(pFn), shaderDeclarationContext());
     if (!*ppVS) {
         dxmt9c_shader_release(s);
         return E_OUTOFMEMORY;
@@ -2641,7 +2647,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreatePixelShader(const DWORD* pFn,
         *ppPS = nullptr;
         return D3DERR_INVALIDCALL;
     }
-    *ppPS = CreatePePixelShader(s, this, hashValidatedShaderBytecode(pFn), this);
+    *ppPS = CreatePePixelShader(s, this, hashValidatedShaderBytecode(pFn), shaderDeclarationContext());
     if (!*ppPS) {
         dxmt9c_shader_release(s);
         return E_OUTOFMEMORY;
@@ -2749,7 +2755,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateQuery(D3DQUERYTYPE type,
         dxmt9c_query_release(q);
         return S_OK;
     }
-    *ppQ = CreatePeQuery(q, this, this, diagnosticObserverForChild());
+    *ppQ = CreatePeQuery(q, this, queryContext(), diagnosticObserverForChild());
     if (!*ppQ) {
         dxmt9c_query_release(q);
         return E_OUTOFMEMORY;

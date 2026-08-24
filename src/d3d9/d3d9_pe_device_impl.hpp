@@ -42,7 +42,12 @@
 // be visible for HANDLE / DWORD / SIZE_T / ULONG_PTR / WINBOOL.
 #include <tlhelp32.h>
 #endif
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_child_context.hpp"
+#include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_child_scopes.hpp"
+#include "d3d9_pe_child_validation.hpp"
+#include "d3d9_pe_diagnostic_observer.hpp"
+#include "d3d9_pe_stateblock_shadow.hpp"
 #include "d3d9_pe_com_cache.hpp"
 #include "d3d9_pe_capture_state.hpp"
 #include "d3d9_pe_commit_transition.hpp"
@@ -786,8 +791,14 @@ static constexpr DWORD kReszDepthResolveSentinel = 0x7FA05000u;
  * D3D9DeviceImpl — IDirect3DDevice9Ex
  * ========================================================================= */
 
-class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush {
+class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     friend class D3D9PeDiagnosticObserver;
+    friend struct D3D9PeStateBlockContext;
+    friend struct D3D9PeBufferContext;
+    friend struct D3D9PeSurfaceTextureContext;
+    friend struct D3D9PeQueryContext;
+    friend struct D3D9PePresentationContext;
+    friend struct D3D9PeShaderDeclarationContext;
     // Chunk-flush thresholds. The historical defaults (64 records /
     // 256 KiB, tuned around Phase 5) were promoted to 4x on 2026-08-19
     // after the measured GT2 evidence in
@@ -839,6 +850,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // dxmt9PeRecorderLockRequired(). DXMT9_PE_FORCE_RECORDER_LOCK is the
     // rollback/insurance lane for apps that violate the contract.
     dxmt9::d3d9::pe::PeRecorderState recorderState_{};
+    D3D9PeStateBlockContext stateBlockContext_{};
+    D3D9PeBufferContext bufferContext_{};
+    D3D9PeSurfaceTextureContext surfaceTextureContext_{};
+    D3D9PeQueryContext queryContext_{};
+    D3D9PePresentationContext presentationContext_{};
+    D3D9PeShaderDeclarationContext shaderDeclarationContext_{};
     // R-BACK-43.4 `producer-owned` (PE game thread) — the PE recorder, the
     // chunk builder it owns, and their retainer are written and read only on
     // the thread that constructed this device, EXCEPT under the documented
@@ -3548,34 +3565,31 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     HRESULT drainOversizedPendingStateAsApplyStateRecords();
 
 public:
-    // KEY FUNCTION. Deliberately the one virtual whose body is NOT in this
-    // header, and deliberately the FIRST virtual in declaration order, so the
-    // Itanium ABI's "first non-pure, non-inline virtual" rule resolves to it.
-    // That pins the vtable -- and with it the out-of-line copies of every
-    // inline virtual, i.e. the whole IDirect3DDevice9Ex COM surface Wine calls
-    // through -- into d3d9_pe_device.cpp, the hot TU, where it belongs.
-    // Without this the class has NO key function, the vtable is comdat in
-    // every TU, and the first cold TU to out-line any virtual silently claims
-    // it: step 8 did exactly that by accident and moved DrawPrimitive into the
-    // diagnostics object (744 KB there, 146 KB left in the hot TU).
-    // Defined in d3d9_pe_device.cpp. Do not give it an in-class body.
-    HRESULT FlushPeRecorderForChild() noexcept override;
-    void LockStateBlockOperationForChild() noexcept override {
+    // KEY FUNCTION. QueryInterface is deliberately declaration-only and its
+    // unchanged body is owned by d3d9_pe_device.cpp. It is the first
+    // non-pure, non-inline virtual in declaration order, so the Itanium ABI
+    // anchors this device's vtable -- and the out-of-line copies of its inline
+    // COM surface -- in the hot owning TU. Keep AddRef/Release inline.
+private:
+    HRESULT FlushPeRecorderForChild() noexcept;
+
+public:
+    void LockStateBlockOperationForChild() noexcept {
         if (recorderState_.recorderLockRequired) recorderState_.recorderMutex.lock();
     }
-    void UnlockStateBlockOperationForChild() noexcept override {
+    void UnlockStateBlockOperationForChild() noexcept {
         if (recorderState_.recorderLockRequired) recorderState_.recorderMutex.unlock();
     }
-    bool IsStateBlockRecorderPoisonedForChild() const noexcept override {
+    bool IsStateBlockRecorderPoisonedForChild() const noexcept {
         return recorderState_.stateBlockTransaction.isPoisoned();
     }
-    void DiscardPreparedStateBlockApplyForChild() noexcept override {
+    void DiscardPreparedStateBlockApplyForChild() noexcept {
         discardPreparedStateBlockApply();
     }
-    void PoisonStateBlockRecorderForChild() noexcept override {
+    void PoisonStateBlockRecorderForChild() noexcept {
         poisonStateBlockTransaction();
     }
-    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept override {
+    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept {
         if (!buffer) {
             return S_OK;
         }
@@ -3592,31 +3606,31 @@ public:
     void NotifyRenderTapeObjectDefineForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
-        std::span<const std::byte> immutablePayload = {}) noexcept override;
-    bool IsRenderTapeCaptureActiveForChild() const noexcept override;
-    bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept override;
-    void AbortRenderTapeCaptureForChild() noexcept override;
+        std::span<const std::byte> immutablePayload = {}) noexcept;
+    bool IsRenderTapeCaptureActiveForChild() const noexcept;
+    bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
+    void AbortRenderTapeCaptureForChild() noexcept;
     void RejectRenderTapeCaptureForChild(
         dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::uint32_t subresource,
         const dxmt9::d3d9::RenderTapeCaptureLayoutDiagnostic &diagnostic)
-        noexcept override;
+        noexcept;
     dxmt9::d3d9::RenderTapeFullSnapshotStatus
     RenderTapeFullSnapshotStatusForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::uint32_t subresource, std::uint32_t fullRowBytes,
-        std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept override;
+        std::uint32_t fullRows, std::uint64_t fullBytes) const noexcept;
     void NotifyRenderTapeBlockMutationForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::uint32_t subresource,
         const dxmt9::d3d9::RenderTapeBlockLockLayout &layout,
-        std::span<const std::byte> bytes) noexcept override;
+        std::span<const std::byte> bytes) noexcept;
     void NotifyRenderTapeLinearMutationForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::uint32_t subresource,
         const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
-        std::span<const std::byte> bytes) noexcept override;
+        std::span<const std::byte> bytes) noexcept;
 
     // UpdateTexture is a full-resource SYSTEMMEM -> DEFAULT copy. Keep the
     // normal command record untouched, but use its successful append as the
@@ -3634,10 +3648,10 @@ public:
         const dxmt9::d3d9::pe::PeWireObjectRef &surface,
         const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
         std::uint32_t subresource,
-        const D9CSurfaceDesc &descriptor) noexcept override;
+        const D9CSurfaceDesc &descriptor) noexcept;
     void NotifyRenderTapeStandaloneSurfaceForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &surface,
-        const D9CSurfaceDesc &descriptor) noexcept override;
+        const D9CSurfaceDesc &descriptor) noexcept;
 
     bool retireRenderTapeObject(
         const D9CWireObjectIdentity &identity, bool recordDestroy,
@@ -3649,17 +3663,17 @@ public:
     void drainPendingRenderTapeChunk(bool recordDestroy) noexcept;
 
     void NotifyRenderTapeObjectDestroyForChild(
-        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept override;
+        const dxmt9::d3d9::pe::PeWireObjectRef &object) noexcept;
     void NotifyRenderTapeResourceMutationForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         dxmt9::d3d9::RenderTapeMutationKind kind, std::uint32_t subresource,
         std::uint64_t byteOffset,
         std::span<const std::byte> bytes,
         dxmt9::d3d9::RenderTapeBufferMutationDisposition bufferDisposition)
-        noexcept override;
+        noexcept;
     void NotifyRenderTapeOrderedControlForChild(
         const dxmt9::d3d9::RenderTapeOrderedControlHeader &fixed,
-        std::span<const std::byte> payload) noexcept override;
+        std::span<const std::byte> payload) noexcept;
     void notifyRenderTapeCreatedObject(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,
@@ -3682,30 +3696,30 @@ public:
         D9CShader *shader,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         uint32_t stage) noexcept;
-    bool IsStateBlockRecordingForChild() const noexcept override {
+    bool IsStateBlockRecordingForChild() const noexcept {
         return recorderState_.stateBlockTransaction.isRecording();
     }
-    void InvalidateStateBlockShadowForChild() noexcept override {
+    void InvalidateStateBlockShadowForChild() noexcept {
         recorderState_.peState.maintenance().clearServerShadowTables();
         clearPendingHotState();
     }
-    void AddDefaultPoolResourceRefForChild() noexcept override {
+    void AddDefaultPoolResourceRefForChild() noexcept {
         PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
         ++defaultPoolResourceRefs_;
     }
-    void ReleaseDefaultPoolResourceRefForChild() noexcept override {
+    void ReleaseDefaultPoolResourceRefForChild() noexcept {
         PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
         if (defaultPoolResourceRefs_ != 0) {
             --defaultPoolResourceRefs_;
         }
     }
-    bool IsChunkRecorderEnabledForChild() const noexcept override {
+    bool IsChunkRecorderEnabledForChild() const noexcept {
         return true;
     }
 
     HRESULT AppendQueryIssueForChild(
         std::uint32_t flags,
-        const dxmt9::d3d9::pe::QueryRef& query) noexcept override {
+        const dxmt9::d3d9::pe::QueryRef& query) noexcept {
         return appendRecord(
             D9C_COMMAND_RECORD_QUERY_ISSUE,
             kLegacyQueryIssueSizeHint,
@@ -3738,7 +3752,7 @@ public:
     // only keys already tracked by the stateblock.
     HRESULT CaptureStateBlockShadowForChild(
         D3D9StateBlockShadow& out,
-        StateBlockCaptureDisposition disposition) noexcept override;
+        StateBlockCaptureDisposition disposition) noexcept;
 
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
                    UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
@@ -3747,6 +3761,21 @@ public:
 
     bool commandChunkReady() const noexcept {
         return recorderState_.commandChunkNegotiated;
+    }
+
+    D3D9PeStateBlockContext *stateBlockContext() noexcept {
+        return &stateBlockContext_;
+    }
+    D3D9PeBufferContext *bufferContext() noexcept { return &bufferContext_; }
+    D3D9PeSurfaceTextureContext *surfaceTextureContext() noexcept {
+        return &surfaceTextureContext_;
+    }
+    D3D9PeQueryContext *queryContext() noexcept { return &queryContext_; }
+    D3D9PePresentationContext *presentationContext() noexcept {
+        return &presentationContext_;
+    }
+    D3D9PeShaderDeclarationContext *shaderDeclarationContext() noexcept {
+        return &shaderDeclarationContext_;
     }
 
     D3D9PeDiagnosticObserver* diagnosticObserverForChild() noexcept {
@@ -3780,27 +3809,7 @@ public:
     ULONG STDMETHODCALLTYPE Release() noexcept override {
         ULONG r = --refs_; if (!r) delete this; return r;
     }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)          ||
-            IsEqualGUID(riid, IID_IDirect3DDevice9)) {
-            *ppv = static_cast<IDirect3DDevice9*>(this);
-            dxmt9DeviceDebugLog("device_query_interface this=%p -> out=%p", this, *ppv);
-            AddRef();
-            return S_OK;
-        }
-        if (IsEqualGUID(riid, IID_IDirect3DDevice9Ex)) {
-            if (!extended_) {
-                *ppv = nullptr;
-                return E_NOINTERFACE;
-            }
-            *ppv = static_cast<IDirect3DDevice9Ex*>(this);
-            dxmt9DeviceDebugLog("device_query_interface_ex this=%p -> out=%p", this, *ppv);
-            AddRef();
-            return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override;
 
     /* ── device info ── */
 

@@ -125,7 +125,7 @@
                     },
                     [&](D9CVertexDecl* decl) {
                         IDirect3DVertexDeclaration9* wrapper =
-                            CreatePeVertexDecl(decl, this, this);
+                            CreatePeVertexDecl(decl, this, shaderDeclarationContext());
                         if (wrapper) {
                             // Create must precede any failure cleanup because
                             // the wrapper destructor emits ObjectDestroy.
@@ -163,7 +163,7 @@
     }
 
     HRESULT PrepareStateBlockApplyForChild(
-        const D3D9StateBlockShadow& shadow) noexcept override {
+        const D3D9StateBlockShadow& shadow) noexcept {
         if (recorderState_.stateBlockTransaction.isPoisoned()) return D3DERR_DEVICELOST;
         const auto snapshot = shadow.snapshot();
         discardPreparedStateBlockApply();
@@ -363,7 +363,7 @@
     }
 
     void CommitStateBlockApplyForChild(
-        const D3D9StateBlockShadow& shadow) noexcept override {
+        const D3D9StateBlockShadow& shadow) noexcept {
         if (recorderState_.stateBlockTransaction.isPoisoned()) return;
         const auto snapshot = shadow.snapshot();
         auto copyConst = [](ConstShadow& live,

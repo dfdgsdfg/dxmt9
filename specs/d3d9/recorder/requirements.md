@@ -350,14 +350,15 @@ bounded model must contain an expected-failure mutation for that leak.
 must remain in the hot recorder owner. Render Tape, call-history diagnostics,
 failure reporting, and state-block orchestration are cold owners even when
 hot-reachable. Moving virtual definitions must preserve
-`D3D9DeviceImpl::FlushPeRecorderForChild` as the deliberate key function unless
-an independently measured vtable/code-placement change is part of the task.
-The device remains one `D3D9PeRecorderFlush` base with one object vptr; ordered
-in-class header fragments and existing staged source owners must not introduce
-capability bases, per-child pointers, or reorder virtual declarations. The
-child callback facade has exactly 29 virtual declarations, every declaration
-and override is `noexcept`, and fallible implementations translate failure to
-`HRESULT` or the recorder fail-stop transition.
+the deliberate out-of-line `D3D9DeviceImpl::QueryInterface` key function
+unless an independently measured vtable/code-placement change is part of the task.
+The device remains one COM object with direct `PeRecorderState` ownership;
+ordered in-class header fragments and existing staged source owners must not
+introduce capability bases or reorder COM virtual declarations. Child wrappers
+use one nullable pointer to a device-owned, kind-qualified plain context;
+context operations are `noexcept` and allocation-free at dispatch. Fallible
+implementations translate failure to `HRESULT` or the recorder fail-stop
+transition.
 
 Every generic callable invoked by a `noexcept` recorder boundary must itself be
 constrained as nothrow-invocable for the exact typed arguments. This includes
@@ -365,16 +366,15 @@ StateBlock recording writers, live/pending binding transitions, and enabled or
 disabled child call-scope bodies. A merely conventional non-throwing lambda is
 not sufficient; throwing callables must be rejected during overload resolution.
 
-**R-CORE-REC-5.2.1** The broad `D3D9PeRecorderFlush` child facade is a migration
-surface, not the final DOD boundary. It must be replaced by kind-scoped,
-non-polymorphic child-service contexts for StateBlock, resource mutation,
-query, and presentation responsibilities. A wrapper may replace its existing
-recorder pointer with one typed non-owning context pointer but must not gain a
-second vptr, capability base, allocation, or additional per-child pointer for
-this migration. Service entry points must be `noexcept` free functions or an
-equivalent allocation-free value dispatch and expose only the operations used
-by that wrapper kind. Until that migration lands, the existing single base
-retains its 29-entry order and `noexcept` contract.
+**R-CORE-REC-5.2.1** The broad recorder facade is absent from public child
+headers. Six independent plain context families — StateBlock, Buffer,
+SurfaceTexture, Query, Presentation, and ShaderDeclaration — each contain
+only one non-owning `D3D9DeviceImpl*` and expose only the operations consumed by
+that family. A wrapper has exactly one nullable pointer to its family context;
+it must not gain a second vptr, capability base, allocation, or additional
+per-child pointer. Context entry points are `noexcept`, allocation-free, and
+consume synchronous spans before returning. Object-definition and device-only
+state-shadow invalidation remain private device operations.
 
 The device implementation header must converge on a declaration and ownership
 shell: DOD state aggregates own data, while hot recorder, cold COM, Render

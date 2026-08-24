@@ -23,13 +23,15 @@ does not yet satisfy it.
 | Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
 | Capture registry and settlement | Nullable heap-owned `PeCaptureState` in `src/d3d9/d3d9_pe_capture_state.hpp`, operated by `D3D9DeviceImpl` cold methods in `d3d9_pe_device_tape.cpp` | changes to app HRESULT or capture-off cadence |
 | PE recorder diagnostics | Optional `PeDiagnosticsState` in `src/d3d9/d3d9_pe_diagnostics_state.hpp`, operated by cold helpers in `d3d9_pe_device_diag.cpp` and nullable hot gates | recorder protocol counters, pacing limits, semantic shadows, capture transaction state |
-| State-block wrapper snapshot | `D3D9StateBlockImpl` and `D3D9StateBlockShadow` in `d3d9_pe_device_child_misc.cpp` / `d3d9_pe_device_child.hpp` | expanding the tracked set during Capture |
+| State-block wrapper snapshot | `D3D9StateBlockImpl` in `d3d9_pe_device_child_misc.cpp` and `D3D9StateBlockShadow` in `d3d9_pe_stateblock_shadow.hpp` | expanding the tracked set during Capture |
 | Import, replay, execution | unix importer and `CommandQueue` | reading PE `LiveShadow` or COM pointers |
 
-`D3D9DeviceImpl::FlushPeRecorderForChild` remains out-of-line in
+`D3D9DeviceImpl::QueryInterface` remains declaration-only in
+`src/d3d9/d3d9_pe_device_impl.hpp`, with its unchanged body out-of-line in
 `src/d3d9/d3d9_pe_device.cpp`. It is the first declared non-pure, non-inline
 virtual and deliberately anchors the vtable and inline virtual bodies in the
-owning TU. Cold-interface cleanup must preserve that placement unless codegen
+owning TU. `FlushPeRecorderForChild` is a private nonvirtual helper. Cold-
+interface cleanup must preserve the QueryInterface placement unless codegen
 measurement authorizes a different one.
 
 ## 2. State model
@@ -382,7 +384,7 @@ An enabled callback is synchronous and call-local. Its input includes the
 qualified identity and exact span; it cannot retain the span, reenter the
 recorder/registry, or add a flush. Disabled Render Tape and PE-call tracking do
 not justify a virtual call or RAII scope per COM call. The diagnostic methods
-have therefore been removed from `D3D9PeRecorderFlush`, and the device/child
+have therefore been removed from the recorder boundary, and the device/child
 entry helpers branch on their cached nullable owner or observer before an
 enabled-only `PeCallScope` or `D3D9PeChildCallScope` lifetime begins. Within an
 enabled owner, feature-specific cached gates ensure module-map, thread-sampler,
@@ -410,18 +412,19 @@ public-interface address, raw provider handle, wire ref, and concrete kind.
 Binding setters cache the wire ref and StateBlock ownership traversal uses
 typed policies, so no public `void*` ownership callback or trusted raw-cast wire
 extractor remains.
-`D3D9DeviceImpl` currently remains one concrete COM object with one recorder
-base. Ordered in-class fragments preserve declaration order while existing cold
-source owners retain staged method definitions. The transitional child callback
-facade contains exactly 29 `noexcept` virtuals; `FlushPeRecorderForChild`
-remains the earliest non-inline declaration and its `d3d9_pe_device.cpp`
-definition remains the key-function/vtable owner.
+`D3D9DeviceImpl` remains one concrete COM object with direct `PeRecorderState`
+ownership. Ordered in-class fragments preserve declaration order while existing
+cold source owners retain staged method definitions. Six independent plain
+contexts — StateBlock, Buffer, SurfaceTexture, Query, Presentation, and
+ShaderDeclaration — each contain one device pointer and only family-consumed
+`noexcept` operations; `QueryInterface` remains the out-of-line key function in
+`d3d9_pe_device.cpp`, while `FlushPeRecorderForChild` is nonvirtual.
 
 The target internal boundary does not remove the Windows COM vtable. It splits
-the broad recorder facade by consumer into typed StateBlock, resource-mutation,
-query, and presentation service contexts. Each wrapper replaces its existing
-recorder pointer with one kind-scoped non-owning context pointer and reaches
-`noexcept` free-function operations, so wrapper size and vptr count do not grow.
+recorder operations by consumer into six independent typed contexts. Each
+wrapper replaces its existing recorder pointer with one kind-scoped non-owning
+context pointer and reaches private `.cpp` helpers, so wrapper size and vptr
+count do not grow.
 The device header then becomes a COM declaration/ownership shell over DOD state
 aggregates; hot recorder, cold COM, Render Tape, diagnostics, and SWVP method
 bodies stay out of line in their owning translation units. This migration must
@@ -442,9 +445,9 @@ all reached through its nullable gate. The pending-command retainer reserves
 its entry arena and hash index from the builder handle capacity, so the >64
 handle and default 256-handle retry paths remain warm without capacity growth.
 Child wrappers keep a nullable concrete
-`D3D9PeDiagnosticObserver`; diagnostic entry/return methods are not virtuals on
-`D3D9PeRecorderFlush`, whose remaining methods are recorder protocol,
-state-block semantics, or Render Tape lifecycle operations.
+`D3D9PeDiagnosticObserver`; diagnostic entry/return methods are not part of any
+child service context. Object definition and state-shadow invalidation remain
+private device operations.
 
 Ordinary PE COM wrappers retain non-atomic reference counts under the D3D9
 device/COM ownership contract. `D3D9StateBlockImpl` is the explicit atomic
@@ -567,7 +570,7 @@ flowchart TD
     I1 --> I2 --> I3 --> I4 --> I5 --> I6 --> I7 --> I8
 ```
 
-At each step, preserve the PE/unix ABI, `FlushPeRecorderForChild` key-function
+At each step, preserve the PE/unix ABI, `QueryInterface` key-function
 placement, and capture-off chunk cadence unless that step explicitly owns and
 measures the change. No step may use a later wild run to waive an earlier
 transaction or model/code gate.

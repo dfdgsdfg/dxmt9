@@ -13,7 +13,7 @@ inline constexpr D3D9PePresentCallSlot kD3D9PePresentCallSlotNone =
 
 // Concrete, non-owning observer used only when DXMT9_PE_RECORDER_STATS is on.
 // Child wrappers cache a nullable pointer at construction, so the disabled
-// path performs one null test and never dispatches through D3D9PeRecorderFlush.
+// path performs one null test and never dispatches through a polymorphic facade.
 class D3D9PeDiagnosticObserver {
 public:
   explicit D3D9PeDiagnosticObserver(D3D9DeviceImpl *device = nullptr) noexcept

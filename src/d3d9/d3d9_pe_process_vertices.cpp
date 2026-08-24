@@ -1,6 +1,6 @@
 #include "d3d9_pe_process_vertices.hpp"
 
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_child_validation.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>

@@ -1,7 +1,8 @@
 /* src/d3d9/d3d9_pe_device_child_shader.cpp — PE-side child COM wrappers
  * for IDirect3DVertexShader9 and IDirect3DPixelShader9. */
 
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_child_validation.hpp"
 #include "d3d9_pe_validated_object_writer.hpp"
 
 #include <cstdint>
@@ -25,14 +26,14 @@ class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeShaderDeclarationContext *context_;
   std::uint64_t hash_ = 0;
   dxmt9::d3d9::pe::ShaderRef wireObject_{};
 
 public:
   D3D9VertexShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
-                       std::uint64_t hash, D3D9PeRecorderFlush *recorder)
-      : s_(s), device_(device), recorder_(recorder), hash_(hash) {
+                       std::uint64_t hash, D3D9PeShaderDeclarationContext *recorder)
+      : s_(s), device_(device), context_(recorder), hash_(hash) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -40,8 +41,8 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9VertexShaderImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
       device_->Release();
@@ -100,14 +101,14 @@ class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
   ULONG refs_ = 1;
   D9CShader *s_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeShaderDeclarationContext *context_;
   std::uint64_t hash_ = 0;
   dxmt9::d3d9::pe::ShaderRef wireObject_{};
 
 public:
   D3D9PixelShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
-                      std::uint64_t hash, D3D9PeRecorderFlush *recorder)
-      : s_(s), device_(device), recorder_(recorder), hash_(hash) {
+                      std::uint64_t hash, D3D9PeShaderDeclarationContext *recorder)
+      : s_(s), device_(device), context_(recorder), hash_(hash) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -115,8 +116,8 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9PixelShaderImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
       device_->Release();
@@ -175,14 +176,14 @@ public:
 IDirect3DVertexShader9 *CreatePeVertexShader(D9CShader *shader,
                                              IDirect3DDevice9 *device,
                                              std::uint64_t hash,
-                                             D3D9PeRecorderFlush *recorder) noexcept {
+                                             D3D9PeShaderDeclarationContext *recorder) noexcept {
   return peNewNoexcept<D3D9VertexShaderImpl>(shader, device, hash, recorder);
 }
 
 IDirect3DPixelShader9 *CreatePePixelShader(D9CShader *shader,
                                            IDirect3DDevice9 *device,
                                            std::uint64_t hash,
-                                           D3D9PeRecorderFlush *recorder) noexcept {
+                                           D3D9PeShaderDeclarationContext *recorder) noexcept {
   return peNewNoexcept<D3D9PixelShaderImpl>(shader, device, hash, recorder);
 }
 

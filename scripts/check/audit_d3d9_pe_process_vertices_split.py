@@ -29,7 +29,8 @@ DEVICE_TAPE = ROOT / "src/d3d9/d3d9_pe_device_tape.cpp"
 ENGINE_HPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.hpp"
 ENGINE_CPP = ROOT / "src/d3d9/d3d9_pe_process_vertices.cpp"
 CHILD_HPP = ROOT / "src/d3d9/d3d9_pe_device_child.hpp"
-RECORDER_FACADE = ROOT / "src/d3d9/d3d9_pe_recorder_flush_facade.inc.hpp"
+CHILD_CONTEXT_HPP = ROOT / "src/d3d9/d3d9_pe_child_context.hpp"
+CHILD_SCOPES_HPP = ROOT / "src/d3d9/d3d9_pe_child_scopes.hpp"
 DIAGNOSTIC_OBSERVER_HPP = ROOT / "src/d3d9/d3d9_pe_diagnostic_observer.hpp"
 RECORDER_HPP = ROOT / "src/d3d9/d3d9_pe_recorder.hpp"
 MESON = ROOT / "src/d3d9/meson.build"
@@ -63,7 +64,8 @@ def main() -> int:
     engine_hpp = ENGINE_HPP.read_text()
     engine_cpp = ENGINE_CPP.read_text()
     child_hpp = CHILD_HPP.read_text()
-    recorder_facade = RECORDER_FACADE.read_text()
+    child_contexts = CHILD_CONTEXT_HPP.read_text()
+    child_scopes = CHILD_SCOPES_HPP.read_text()
     diagnostic_observer_hpp = DIAGNOSTIC_OBSERVER_HPP.read_text()
     recorder_hpp = RECORDER_HPP.read_text()
     meson = MESON.read_text()
@@ -148,39 +150,63 @@ def main() -> int:
     require(wrapper, ".streamSources = std::span<", "borrowed stream context")
     require(wrapper, ".textures = std::span<", "borrowed texture context")
 
-    require(
-        device_impl,
-        "class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush",
-        "device inheritance layout",
-    )
-    if device_all.count("public D3D9PeRecorderFlush") != 1:
-        fail("D3D9PeRecorderFlush must have exactly one derived implementation")
+    require(device_impl, "class D3D9DeviceImpl final : public IDirect3DDevice9Ex",
+            "device COM inheritance layout")
+    forbid(device_all + child_contexts, "D3D9PeRecorderFlush",
+           "removed broad recorder facade")
     key_position = device_impl.find(
-        "HRESULT FlushPeRecorderForChild() noexcept override;")
+        "HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override;")
     fragment_position = device_impl.find(
         '#include "d3d9_pe_device_state_core.inc.hpp"')
     if key_position < 0 or fragment_position < 0 or key_position >= fragment_position:
-        fail("FlushPeRecorderForChild must precede every ordered class fragment")
+        fail("QueryInterface key declaration must precede every ordered class fragment")
+    require(device_impl, "HRESULT FlushPeRecorderForChild() noexcept;",
+            "private nonvirtual child flush helper")
+    forbid(device_impl, "virtual HRESULT FlushPeRecorderForChild() noexcept;",
+           "synthetic child-flush vtable anchor")
     for removed_virtual in (
         "NotifyPeFirstCallAfterPresentForChild",
         "PushPeCallScopeForChild",
         "NotifyPeCallScopeReturnForChild",
         "PopPeCallScopeForChild",
     ):
-        forbid(child_hpp + recorder_facade + device_all, removed_virtual,
+        forbid(child_hpp + child_contexts + device_all, removed_virtual,
                "retired diagnostic recorder virtual")
-    require(recorder_facade, "virtual HRESULT FlushPeRecorderForChild() noexcept = 0;",
-            "first recorder protocol virtual")
-    if recorder_facade.count("virtual ") != 29:
-        fail("D3D9PeRecorderFlush must retain exactly 29 virtual declarations")
-    if recorder_facade.count("noexcept") != 29:
-        fail("every D3D9PeRecorderFlush virtual must be noexcept")
-    require(child_hpp, '#include "d3d9_pe_recorder_flush_facade.inc.hpp"',
-            "ordered child callback facade fragment")
-    require(child_hpp,
+    require(child_hpp, '#include "d3d9_pe_child_context.hpp"',
+            "typed child context declarations")
+    for context_name in (
+        "D3D9PeStateBlockContext", "D3D9PeBufferContext",
+        "D3D9PeSurfaceTextureContext", "D3D9PeQueryContext",
+        "D3D9PePresentationContext", "D3D9PeShaderDeclarationContext",
+    ):
+        require(child_contexts, f"struct {context_name}",
+                f"{context_name} declaration")
+    forbid(child_contexts, "virtual ", "non-polymorphic child contexts")
+    forbid(child_contexts, "NotifyRenderTapeObjectDefineForChild",
+           "object definition remains device-private")
+    forbid(child_contexts, "InvalidateStateBlockShadowForChild",
+           "shadow invalidation remains device-private")
+    for wrapper_source in (
+        ROOT / "src/d3d9/d3d9_pe_device_child_buffer.cpp",
+        ROOT / "src/d3d9/d3d9_pe_device_child_surface.cpp",
+        ROOT / "src/d3d9/d3d9_pe_device_child_misc.cpp",
+        ROOT / "src/d3d9/d3d9_pe_device_child_shader.cpp",
+    ):
+        wrapper_text = wrapper_source.read_text()
+        forbid(wrapper_text, "recorder_", "legacy wrapper service field")
+        if wrapper_text.count("*context_;") == 0:
+            fail(f"{wrapper_source.name} has no typed context field")
+    for narrow_source in (
+        ROOT / "src/d3d9/d3d9_pe_device_child_buffer.cpp",
+        ROOT / "src/d3d9/d3d9_pe_device_child_surface.cpp",
+        ROOT / "src/d3d9/d3d9_pe_device_child_shader.cpp",
+    ):
+        forbid(narrow_source.read_text(), '#include "d3d9_pe_device_child.hpp"',
+               "concrete child TU includes umbrella")
+    require(child_scopes,
             "D3D9PeChildCallScope(D3D9PeDiagnosticObserver &observer,",
             "enabled-only concrete child observer scope")
-    require(child_hpp, "if (!observer) {",
+    require(child_scopes, "if (!observer) return std::forward<Body>(body)",
             "branch before child observer scope construction")
     require(diagnostic_observer_hpp, "class D3D9PeDiagnosticObserver {",
             "concrete diagnostic observer")
@@ -191,7 +217,7 @@ def main() -> int:
     # d3d9_pe_device.cpp. Only the register-sized slot handle may cross this
     # header, and the device's own entry note must stay void -- returning the
     # sample by value put it back into 118 hot-path call-site contracts.
-    forbid(child_hpp + recorder_facade, "D3D9PePresentCallToken",
+    forbid(child_hpp + child_contexts + child_scopes, "D3D9PePresentCallToken",
            "diagnostic sample in child header")
     require(
         device_impl,
@@ -201,8 +227,11 @@ def main() -> int:
     require(device_impl, "std::unique_ptr<PeDiagnosticsState> diagnostics_{};",
             "nullable cold diagnostics owner")
     require(device,
+            "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::QueryInterface(",
+            "QueryInterface key-function definition")
+    require(device,
             "HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept",
-            "device key-function definition")
+            "private child flush helper definition")
 
     for dead in (
         "shadowedTextureEquals",

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_validated_object.hpp"
 
 // This header is intentionally included only by validator implementation TUs.
 // The public child header forward-declares the writer solely as a friend; no

@@ -7,10 +7,33 @@
 #include <new>
 
 /* =========================================================================
- * Key function -- see the declaration comment in d3d9_pe_device_impl.hpp.
- * Its only job here is to be the first non-pure, non-inline virtual in
- * declaration order, which anchors the vtable in this translation unit.
+ * Key function -- QueryInterface is declaration-only in the class header so
+ * this hot TU owns the device vtable. Keep its COM behavior unchanged.
  * ========================================================================= */
+
+HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::QueryInterface(
+    REFIID riid, void** ppv) noexcept {
+    if (!ppv) return E_POINTER;
+    if (IsEqualGUID(riid, IID_IUnknown) ||
+        IsEqualGUID(riid, IID_IDirect3DDevice9)) {
+        *ppv = static_cast<IDirect3DDevice9*>(this);
+        dxmt9DeviceDebugLog("device_query_interface this=%p -> out=%p", this, *ppv);
+        AddRef();
+        return S_OK;
+    }
+    if (IsEqualGUID(riid, IID_IDirect3DDevice9Ex)) {
+        if (!extended_) {
+            *ppv = nullptr;
+            return E_NOINTERFACE;
+        }
+        *ppv = static_cast<IDirect3DDevice9Ex*>(this);
+        dxmt9DeviceDebugLog("device_query_interface_ex this=%p -> out=%p", this, *ppv);
+        AddRef();
+        return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
 
 HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept {
     return flushPeRecorder(PeRecorderFlushReason::Child);

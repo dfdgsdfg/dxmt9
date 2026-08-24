@@ -192,8 +192,12 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_child.hpp");
   const auto validatedObject = readTextFile(
       root / "src/d3d9/d3d9_pe_validated_object.hpp");
-  const auto recorderFacade = readTextFile(
-      root / "src/d3d9/d3d9_pe_recorder_flush_facade.inc.hpp");
+  const auto contexts = readTextFile(
+      root / "src/d3d9/d3d9_pe_child_context.hpp");
+  const auto scopes = readTextFile(
+      root / "src/d3d9/d3d9_pe_child_scopes.hpp");
+  const auto stateBlockShadow = readTextFile(
+      root / "src/d3d9/d3d9_pe_stateblock_shadow.hpp");
   auto device = readTextFile(root / "src/d3d9/d3d9_pe_device_impl.hpp");
   for (const std::string_view fragment : {
            "d3d9_pe_device_state_core.inc.hpp",
@@ -300,11 +304,11 @@ void testSourceContracts(const std::filesystem::path &root) {
     checkNotContains(device, alias,
                      "device must not retain audited recorder-field aliases");
   }
-  checkContains(child, "class D3D9StateBlockShadow",
+  checkContains(stateBlockShadow, "class D3D9StateBlockShadow",
                 "StateBlock wrapper snapshot is a closed class");
-  checkContains(child, "class Writer",
+  checkContains(stateBlockShadow, "class Writer",
                 "wrapper snapshot exposes a writer capability");
-  checkContains(child, "class Snapshot",
+  checkContains(stateBlockShadow, "class Snapshot",
                 "wrapper snapshot exposes an immutable snapshot capability");
   checkContains(stateBlockTransaction,
                 "StateBlockVertexShaderRef stagedVertexShader_{};",
@@ -333,13 +337,13 @@ void testSourceContracts(const std::filesystem::path &root) {
   }
   check(validatedWriterIncludes == 4u,
         "only the four concrete validator TUs can mint validation evidence");
-  checkNotContains(child, "operator()(void*",
+  checkNotContains(stateBlockShadow, "operator()(void*",
                    "StateBlock ownership policies reject untyped pointers");
-  checkNotContains(child, "reinterpret_cast<IUnknown",
+  checkNotContains(stateBlockShadow, "reinterpret_cast<IUnknown",
                    "StateBlock ownership preserves the exact interface address");
-  checkContains(child, "if (auto* object = value.raw()) object->AddRef();",
+  checkContains(stateBlockShadow, "if (auto* object = value.raw()) object->AddRef();",
                 "typed retain policy calls the original interface pointer");
-  checkContains(child, "if (auto* object = value.raw()) object->Release();",
+  checkContains(stateBlockShadow, "if (auto* object = value.raw()) object->Release();",
                 "typed release policy calls the original interface pointer");
   check(!std::filesystem::exists(
             root / "src/d3d9/d3d9_pe_trusted_handles.hpp"),
@@ -491,25 +495,40 @@ void testSourceContracts(const std::filesystem::path &root) {
     checkNotContains(child, removed,
                      "diagnostic virtual is absent from recorder protocol");
   }
-  checkContains(recorderFacade,
-                "virtual HRESULT FlushPeRecorderForChild() noexcept = 0;",
-                "recorder protocol flush virtual remains first");
-  check(countOccurrences(recorderFacade, "virtual ") == 29u,
-        "recorder protocol retains exactly 29 virtual declarations");
-  check(countOccurrences(recorderFacade, "noexcept") == 29u,
-        "every recorder protocol virtual is noexcept");
-  checkContains(child,
-                "#include \"d3d9_pe_recorder_flush_facade.inc.hpp\"",
-                "child header includes the ordered callback facade fragment");
+  checkNotContains(contexts, "D3D9PeChildContextBase",
+                   "broad child context base is absent");
+  for (const std::string_view family : {
+           "struct D3D9PeStateBlockContext",
+           "struct D3D9PeBufferContext",
+           "struct D3D9PeSurfaceTextureContext",
+           "struct D3D9PeQueryContext",
+           "struct D3D9PePresentationContext",
+           "struct D3D9PeShaderDeclarationContext",
+       }) {
+    checkContains(contexts, family, "all typed child contexts are declared");
+  }
+  checkNotContains(contexts, "virtual ",
+                   "typed child contexts are non-polymorphic");
+  checkNotContains(contexts, "NotifyRenderTapeObjectDefineForChild",
+                   "object definition remains device-private");
+  checkNotContains(contexts, "InvalidateStateBlockShadowForChild",
+                   "state shadow invalidation remains device-private");
+  checkContains(contexts, "D3D9DeviceImpl *device = nullptr;",
+                "contexts carry one nullable device pointer");
+  checkContains(child, "#include \"d3d9_pe_child_context.hpp\"",
+                "child header includes typed context declarations");
   checkContains(
-      child,
+      scopes,
       "requires std::is_nothrow_invocable_v<Body&&, D3D9PeChildCallScope&>",
       "child call-scope bodies are constrained at the noexcept boundary");
   checkNotContains(observer, "virtual ",
                    "the child diagnostic observer is concrete and nonvirtual");
   checkContains(deviceOwner,
+                "HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::QueryInterface(",
+                "QueryInterface key function remains in the hot owning TU");
+  checkContains(deviceOwner,
                 "HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept",
-                "device key function remains in the hot owning TU");
+                "private child flush helper remains out of line");
 
   checkContains(misc, "std::atomic<ULONG> refs_{1};",
                 "StateBlock retains its atomic COM lifetime exception");

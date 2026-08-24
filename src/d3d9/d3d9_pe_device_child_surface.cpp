@@ -2,7 +2,9 @@
  * for IDirect3DSurface9, IDirect3DTexture9, IDirect3DCubeTexture9,
  * IDirect3DVolumeTexture9 (and the inner IDirect3DVolume9 helper). */
 
-#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_child_scopes.hpp"
+#include "d3d9_pe_child_validation.hpp"
 #include "d3d9_pe_validated_object_writer.hpp"
 
 #include "d3d9_pe_level_surface_cache.hpp"
@@ -149,7 +151,7 @@ static D9CRect toR(const D3DBOX &b) {
   return c;
 }
 
-[[nodiscard]] static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
+[[nodiscard]] static HRESULT flushChildRecorder(D3D9PeSurfaceTextureContext *recorder) {
   return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
 }
 
@@ -158,7 +160,7 @@ static D9CRect toR(const D3DBOX &b) {
 // current PE command chunk has been materialized. Capture-off keeps the
 // caller-owned-memory path free of recorder work.
 [[nodiscard]] static HRESULT flushUserMemoryMutationOrdering(
-    D3D9PeRecorderFlush *recorder, bool linearLock, DWORD lockFlags) {
+    D3D9PeSurfaceTextureContext *recorder, bool linearLock, DWORD lockFlags) {
   if (!recorder || !linearLock || (lockFlags & D3DLOCK_READONLY) != 0u ||
       !dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
           recorder->IsRenderTapeCaptureTrackingEnabledForChild())) {
@@ -266,7 +268,7 @@ renderTapeBlockLayoutRejection(
 }
 
 static bool prepareRenderTapeBlockLock(
-    D3D9PeRecorderFlush *recorder,
+    D3D9PeSurfaceTextureContext *recorder,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint32_t subresource, const D9CSurfaceDesc &desc, LONG pitch,
     const RECT *rect, dxmt9::d3d9::RenderTapeBlockLockLayout &out) noexcept {
@@ -291,7 +293,7 @@ static bool prepareRenderTapeBlockLock(
 }
 
 static bool prepareRenderTapeLinearLock(
-    D3D9PeRecorderFlush *recorder,
+    D3D9PeSurfaceTextureContext *recorder,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint32_t subresource, const D9CSurfaceDesc &desc, LONG pitch,
     const RECT *rect, dxmt9::d3d9::RenderTapeLinearLockLayout &out) noexcept {
@@ -323,7 +325,7 @@ static bool prepareRenderTapeLinearLock(
 }
 
 static void rejectRenderTapeFullSnapshot(
-    D3D9PeRecorderFlush *recorder,
+    D3D9PeSurfaceTextureContext *recorder,
     dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint32_t subresource, const D9CSurfaceDesc &desc, LONG pitch,
@@ -362,7 +364,7 @@ static void logRenderTapeSurfaceSnapshot(
 // after resolving its live container texture and proving that exact owner's
 // generation-qualified mutation identity; it must never guess the owner.
 static bool captureRenderTapeFullTextureSnapshot(
-    D3D9PeRecorderFlush *recorder, D9CTexture *texture,
+    D3D9PeSurfaceTextureContext *recorder, D9CTexture *texture,
     const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
     const D9CSurfaceDesc &desc) noexcept {
   if (!recorder || !texture)
@@ -522,7 +524,7 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
 
 [[nodiscard]] static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
                               D3DLOCKED_BOX *locked, const D3DBOX *box,
-                              DWORD flags, D3D9PeRecorderFlush *recorder) {
+                              DWORD flags, D3D9PeSurfaceTextureContext *recorder) {
   if (!locked)
     return D3DERR_INVALIDCALL;
   // Reject misaligned boxes on block-compressed volumes BEFORE the
@@ -578,7 +580,7 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
 }
 
 [[nodiscard]] static HRESULT unlockTextureBox(D9CTexture *texture, UINT level,
-                                D3D9PeRecorderFlush *recorder) {
+                                D3D9PeSurfaceTextureContext *recorder) {
   const HRESULT flushHr = flushChildRecorder(recorder);
   if (FAILED(flushHr))
     return flushHr;
@@ -616,7 +618,7 @@ static bool texturePriorityWriteable(D9CTexture *texture) {
          desc.pool == D3DPOOL_MANAGED;
 }
 
-static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
+static void trackDefaultPoolResource(D3D9PeSurfaceTextureContext *recorder,
                                      bool &tracked, bool shouldTrack) {
   if (!recorder || !shouldTrack || tracked)
     return;
@@ -624,7 +626,7 @@ static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
   recorder->AddDefaultPoolResourceRefForChild();
 }
 
-static void untrackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
+static void untrackDefaultPoolResource(D3D9PeSurfaceTextureContext *recorder,
                                        bool &tracked) {
   if (!recorder || !tracked)
     return;
@@ -750,7 +752,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   D9CSurface *s_;
   IDirect3DDevice9 *device_;
   IUnknown *container_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeSurfaceTextureContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   D9CSurfaceDesc desc_{};
   bool descValid_ = false;
@@ -802,7 +804,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
 
 public:
   D3D9SurfaceImpl(D9CSurface *s, IDirect3DDevice9 *device, IUnknown *container,
-                  D3D9PeRecorderFlush *recorder = nullptr,
+                  D3D9PeSurfaceTextureContext *recorder = nullptr,
                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   bool trackDefaultPool = true,
                   void *userMemory = nullptr,
@@ -810,7 +812,7 @@ public:
                   const dxmt9::d3d9::pe::TextureRef *parentTexture = nullptr,
                   std::uint32_t parentSubresource = 0u,
                   const PeBorrowedSurfaceHandle *borrowed = nullptr)
-      : s_(s), device_(device), container_(container), recorder_(recorder),
+      : s_(s), device_(device), container_(container), context_(recorder),
         diagnostics_(diagnostics), textureAlias_(parentTexture != nullptr),
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch),
         ownsHandle_(borrowed == nullptr) {
@@ -846,10 +848,10 @@ public:
       mutationObject_ = wireObject_;
     }
     mutationSubresource_ = captureTextureAlias ? parentSubresource : 0u;
-    if (recorder_ && captureTextureAlias) {
-      recorder_->NotifyRenderTapeSurfaceAliasForChild(
+    if (context_ && captureTextureAlias) {
+      context_->NotifyRenderTapeSurfaceAliasForChild(
           wireObject_, *parentTexture, parentSubresource, desc_);
-    } else if (recorder_ && descValid_ &&
+    } else if (context_ && descValid_ &&
                registrationRoute ==
                    dxmt9::d3d9::RenderTapeSurfaceRegistrationRoute::Standalone) {
       // Every standalone PE surface wrapper is a possible command-chunk
@@ -858,7 +860,7 @@ public:
       // identity before the wrapper can be admitted to a chunk. Explicit
       // Create* callers use this same constructor hook, so they do not need a
       // second wrapper-registration notification after construction.
-      recorder_->NotifyRenderTapeStandaloneSurfaceForChild(wireObject_, desc_);
+      context_->NotifyRenderTapeStandaloneSurfaceForChild(wireObject_, desc_);
     }
     if (container_)
       container_->AddRef();
@@ -871,7 +873,7 @@ public:
         base->Release();
       }
     }
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              trackDefaultPool &&
                                  surfaceIsDefaultPool(desc_, descValid_));
   }
@@ -879,9 +881,9 @@ public:
   bool peLocked() const { return locked_; }
 
   ~D3D9SurfaceImpl() {
-    if (recorder_ && ownsHandle_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_ && ownsHandle_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     if (dc_)
       DeleteDC(dc_);
     if (ownsHandle_) {
@@ -1068,9 +1070,9 @@ public:
     // user-memory path, see test_user_memory).
     if (userMemory_) {
       if (dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
-              recorder_ &&
-                  recorder_->IsRenderTapeCaptureTrackingEnabledForChild())) {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
+              context_ &&
+                  context_->IsRenderTapeCaptureTrackingEnabledForChild())) {
+        const HRESULT flushHr = flushChildRecorder(context_);
         if (FAILED(flushHr))
           return flushHr;
       }
@@ -1080,24 +1082,24 @@ public:
       lockFlags_ = flags;
       lockBits_ = userMemory_;
       linearLock_ = prepareRenderTapeLinearLock(
-          recorder_, mutationObject_, mutationSubresource_, desc_,
+          context_, mutationObject_, mutationSubresource_, desc_,
           userMemoryPitch_, pRect, linearLockLayout_);
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Subresource;
-      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
+      if (context_ && context_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           !linearLock_ && formatIsBlockCompressed(desc_.format)) {
-        recorder_->RejectRenderTapeCaptureForChild(
+        context_->RejectRenderTapeCaptureForChild(
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::UnsupportedLockFormat,
             mutationObject_, mutationSubresource_,
             renderTapeLayoutDiagnostic(desc_, userMemoryPitch_));
       }
-      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u) {
         const dxmt9::d3d9::RenderTapeCpuReadControl payload{
             .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
                 std::min<std::uint64_t>(
                     linearLock_ ? linearLockLayout_.tightBytes : 0u,
                     0xffffffffu))};
-        recorder_->NotifyRenderTapeOrderedControlForChild(
+        context_->NotifyRenderTapeOrderedControlForChild(
             dxmt9::d3d9::RenderTapeOrderedControlHeader{
                 .identity = mutationObject_.identity,
                 .kind = static_cast<std::uint32_t>(
@@ -1113,7 +1115,7 @@ public:
           userMemoryPitch_, userMemory_);
       return S_OK;
     }
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     dxmt9DeviceDebugLog("surface_lock_rect surface=%p flags=0x%x rect=%s", this,
@@ -1131,14 +1133,14 @@ public:
       lockFlags_ = flags;
       lockBits_ = lr.bits;
       blockLock_ = prepareRenderTapeBlockLock(
-          recorder_, mutationObject_, mutationSubresource_, desc_, lr.pitch,
+          context_, mutationObject_, mutationSubresource_, desc_, lr.pitch,
           pRect, blockLockLayout_);
       linearLock_ = !blockLock_ && prepareRenderTapeLinearLock(
-          recorder_, mutationObject_, mutationSubresource_, desc_, lr.pitch,
+          context_, mutationObject_, mutationSubresource_, desc_, lr.pitch,
           pRect, linearLockLayout_);
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
-      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u) {
         const dxmt9::d3d9::RenderTapeCpuReadControl payload{
             .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
                 std::min<std::uint64_t>(
@@ -1146,7 +1148,7 @@ public:
                                : linearLock_ ? linearLockLayout_.tightBytes
                                              : 0u,
                                         0xffffffffu))};
-        recorder_->NotifyRenderTapeOrderedControlForChild(
+        context_->NotifyRenderTapeOrderedControlForChild(
             dxmt9::d3d9::RenderTapeOrderedControlHeader{
                 .identity = mutationObject_.identity,
                 .kind = static_cast<std::uint32_t>(
@@ -1171,21 +1173,21 @@ public:
     if (userMemory_) {
       if (!locked_)
         return ownerIsTexture2D_ ? S_OK : D3DERR_INVALIDCALL;
-      if (recorder_ && linearLock_ &&
+      if (context_ && linearLock_ &&
           (lockFlags_ & D3DLOCK_READONLY) == 0u) {
         std::vector<std::byte> mutationCopy;
         if (dxmt9::d3d9::copyRenderTapeLinearRows(
                 lockBits_, linearLockLayout_, mutationCopy,
                 linearBitsOrigin_)) {
           const HRESULT flushHr = flushUserMemoryMutationOrdering(
-              recorder_, linearLock_, lockFlags_);
+              context_, linearLock_, lockFlags_);
           if (FAILED(flushHr))
             return flushHr;
-          recorder_->NotifyRenderTapeLinearMutationForChild(
+          context_->NotifyRenderTapeLinearMutationForChild(
               mutationObject_, mutationSubresource_, linearLockLayout_,
               mutationCopy);
         } else {
-          recorder_->RejectRenderTapeCaptureForChild(
+          context_->RejectRenderTapeCaptureForChild(
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
               mutationObject_, mutationSubresource_,
               renderTapeLayoutDiagnostic(desc_, userMemoryPitch_,
@@ -1224,7 +1226,7 @@ public:
                       linearBitsOrigin_)
                 : true;
       if (!mutationReady && (blockLock_ || linearLock_)) {
-        recorder_->RejectRenderTapeCaptureForChild(
+        context_->RejectRenderTapeCaptureForChild(
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
             mutationObject_, mutationSubresource_,
             renderTapeLayoutDiagnostic(
@@ -1244,8 +1246,8 @@ public:
     const bool snapshotCandidate =
         partialMutation && mutationReady && !mutationCopy.empty();
     const bool captureTracking =
-        snapshotCandidate && recorder_ &&
-        recorder_->IsRenderTapeCaptureTrackingEnabledForChild();
+        snapshotCandidate && context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild();
     const auto surfaceRoute = captureTracking
         ? dxmt9::d3d9::renderTapeClassifySurfaceSnapshotRoute(
               true, ownerIsTexture2D_,
@@ -1257,7 +1259,7 @@ public:
       snapshotStatus =
           dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity;
       rejectRenderTapeFullSnapshot(
-          recorder_,
+          context_,
           dxmt9::d3d9::RenderTapeCaptureRejectionReason::
               FullSnapshotIdentityMismatch,
           mutationObject_, mutationSubresource_, desc_,
@@ -1279,7 +1281,7 @@ public:
         snapshotStatus =
             dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity;
         rejectRenderTapeFullSnapshot(
-            recorder_,
+            context_,
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                 FullSnapshotIdentityMismatch,
             mutationObject_, mutationSubresource_, desc_,
@@ -1291,7 +1293,7 @@ public:
         snapshotStatus =
             dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent;
         rejectRenderTapeFullSnapshot(
-            recorder_,
+            context_,
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                 FullSnapshotExtentMismatch,
             mutationObject_, mutationSubresource_, snapshotDesc,
@@ -1309,7 +1311,7 @@ public:
                               static_cast<std::uint64_t>(blockLockLayout_.fullRows)
                        : linearLockLayout_.fullRowBytes *
                               static_cast<std::uint64_t>(linearLockLayout_.fullRows);
-        snapshotStatus = recorder_->RenderTapeFullSnapshotStatusForChild(
+        snapshotStatus = context_->RenderTapeFullSnapshotStatusForChild(
             mutationObject_, mutationSubresource_, fullRowBytes, fullRows,
             fullBytes);
         if (snapshotStatus ==
@@ -1317,7 +1319,7 @@ public:
             snapshotStatus ==
                 dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
           rejectRenderTapeFullSnapshot(
-              recorder_,
+              context_,
               snapshotStatus ==
                       dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
                   ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
@@ -1337,7 +1339,7 @@ public:
       logRenderTapeSurfaceSnapshot("preflight", mutationObject_,
                                    mutationSubresource_, snapshotStatus);
     }
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     HRESULT hr = hr32(dxmt9c_surface_unlock_rect(s_));
@@ -1354,7 +1356,7 @@ public:
           dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
         const bool captured = snapshotOwner &&
             captureRenderTapeFullTextureSnapshot(
-                recorder_, snapshotOwner, mutationObject_, mutationSubresource_,
+                context_, snapshotOwner, mutationObject_, mutationSubresource_,
                 snapshotDesc);
         logRenderTapeSurfaceSnapshot(
             captured ? "snapshot_accepted" : "snapshot_rejected",
@@ -1367,11 +1369,11 @@ public:
                  snapshotStatus !=
                      dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
         if (blockLock_) {
-          recorder_->NotifyRenderTapeBlockMutationForChild(
+          context_->NotifyRenderTapeBlockMutationForChild(
               mutationObject_, mutationSubresource_, blockLockLayout_,
               mutationCopy);
         } else if (linearLock_) {
-          recorder_->NotifyRenderTapeLinearMutationForChild(
+          context_->NotifyRenderTapeLinearMutationForChild(
               mutationObject_, mutationSubresource_, linearLockLayout_,
               mutationCopy);
         }
@@ -1504,7 +1506,7 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   ULONG refs_ = 1;
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeSurfaceTextureContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
@@ -1532,11 +1534,11 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
 
 public:
   D3D9TextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                  D3D9PeRecorderFlush *recorder = nullptr,
+                  D3D9PeSurfaceTextureContext *recorder = nullptr,
                   D3D9PeDiagnosticObserver *diagnostics = nullptr,
                   void *userMemory = nullptr,
                   int32_t userMemoryPitch = 0)
-      : t_(t), device_(device), recorder_(recorder),
+      : t_(t), device_(device), context_(recorder),
         diagnostics_(diagnostics),
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
@@ -1544,13 +1546,13 @@ public:
     dxmt9::d3d9::pe::cacheWireObjectRef(
         t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
   ~D3D9TextureImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     // Every borrower AddRef'd this container, so no surface wrapper can still
     // be alive here; the level handles may be released before the texture.
     releaseCachedLevelSurfaces(levelSurfaces_);
@@ -1661,7 +1663,7 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
     static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
@@ -1714,7 +1716,7 @@ public:
                                                entry->descValid};
         *ppS = peNewNoexcept<D3D9SurfaceImpl>(entry->handle, device_,
                             static_cast<IDirect3DBaseTexture9 *>(this),
-                            recorder_, diagnostics_, true, nullptr, 0,
+                            context_, diagnostics_, true, nullptr, 0,
                             &wireObject_, level, &borrowed);
         if (!*ppS)
           return finishPeCall(E_OUTOFMEMORY);
@@ -1737,7 +1739,7 @@ public:
       return finishPeCall(D3DERR_INVALIDCALL);
     }
     *ppS = peNewNoexcept<D3D9SurfaceImpl>(
-        s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
+        s, device_, static_cast<IDirect3DBaseTexture9 *>(this), context_,
         diagnostics_, true, nullptr, 0, &wireObject_, level);
     if (!*ppS) {
       dxmt9c_surface_release(s);
@@ -1788,9 +1790,9 @@ public:
     // only valid lock target.
     if (userMemory_ && level == 0) {
       if (dxmt9::d3d9::renderTapeUserMemoryLockRequiresFlush(
-              recorder_ &&
-                  recorder_->IsRenderTapeCaptureTrackingEnabledForChild())) {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
+              context_ &&
+                  context_->IsRenderTapeCaptureTrackingEnabledForChild())) {
+        const HRESULT flushHr = flushChildRecorder(context_);
         if (FAILED(flushHr))
           return flushHr;
       }
@@ -1801,24 +1803,24 @@ public:
       D9CSurfaceDesc userDesc{};
       (void)textureLevelDesc(t_, level, &userDesc);
       linearLock_ = prepareRenderTapeLinearLock(
-          recorder_, wireObject_, level, userDesc, userMemoryPitch_, pRect,
+          context_, wireObject_, level, userDesc, userMemoryPitch_, pRect,
           linearLockLayout_);
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Subresource;
-      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild() &&
+      if (context_ && context_->IsRenderTapeCaptureTrackingEnabledForChild() &&
           !linearLock_ && formatIsBlockCompressed(userDesc.format)) {
-        recorder_->RejectRenderTapeCaptureForChild(
+        context_->RejectRenderTapeCaptureForChild(
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::UnsupportedLockFormat,
             wireObject_, level,
             renderTapeLayoutDiagnostic(userDesc, userMemoryPitch_));
       }
-      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u) {
         const dxmt9::d3d9::RenderTapeCpuReadControl payload{
             .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
                 std::min<std::uint64_t>(
                     linearLock_ ? linearLockLayout_.tightBytes : 0u,
                     0xffffffffu))};
-        recorder_->NotifyRenderTapeOrderedControlForChild(
+        context_->NotifyRenderTapeOrderedControlForChild(
             dxmt9::d3d9::RenderTapeOrderedControlHeader{
                 .identity = wireObject_.identity,
                 .kind = static_cast<std::uint32_t>(
@@ -1834,7 +1836,7 @@ public:
           userMemoryPitch_, userMemory_);
       return S_OK;
     }
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     dxmt9DeviceDebugLog(
@@ -1854,14 +1856,14 @@ public:
       D9CSurfaceDesc lockDesc{};
       (void)textureLevelDesc(t_, level, &lockDesc);
       blockLock_ = prepareRenderTapeBlockLock(
-          recorder_, wireObject_, level, lockDesc, lr.pitch, pRect,
+          context_, wireObject_, level, lockDesc, lr.pitch, pRect,
           blockLockLayout_);
       linearLock_ = !blockLock_ && prepareRenderTapeLinearLock(
-          recorder_, wireObject_, level, lockDesc, lr.pitch, pRect,
+          context_, wireObject_, level, lockDesc, lr.pitch, pRect,
           linearLockLayout_);
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
-      if (recorder_ && (flags & D3DLOCK_READONLY) != 0u) {
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u) {
         const dxmt9::d3d9::RenderTapeCpuReadControl payload{
             .copyCount = 1u, .bytesRead = static_cast<std::uint32_t>(
                 std::min<std::uint64_t>(
@@ -1869,7 +1871,7 @@ public:
                                : linearLock_ ? linearLockLayout_.tightBytes
                                              : 0u,
                                         0xffffffffu))};
-        recorder_->NotifyRenderTapeOrderedControlForChild(
+        context_->NotifyRenderTapeOrderedControlForChild(
             dxmt9::d3d9::RenderTapeOrderedControlHeader{
                 .identity = wireObject_.identity,
                 .kind = static_cast<std::uint32_t>(
@@ -1894,7 +1896,7 @@ public:
       return D3DERR_INVALIDCALL;
     // T4: user-memory aliasing has no staging copy to flush.
     if (userMemory_ && level == 0) {
-      if (recorder_ && linearLock_ &&
+      if (context_ && linearLock_ &&
           (lockFlags_ & D3DLOCK_READONLY) == 0u) {
         std::vector<std::byte> mutationCopy;
         const bool mutationReady = dxmt9::d3d9::copyRenderTapeLinearRows(
@@ -1902,7 +1904,7 @@ public:
         if (!mutationReady) {
           D9CSurfaceDesc userDesc{};
           (void)textureLevelDesc(t_, level, &userDesc);
-          recorder_->RejectRenderTapeCaptureForChild(
+          context_->RejectRenderTapeCaptureForChild(
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
               wireObject_, level,
               renderTapeLayoutDiagnostic(userDesc, userMemoryPitch_,
@@ -1922,7 +1924,7 @@ public:
                     userDesc, userMemoryPitch_, fullLayout);
             if (layoutStatus ==
                 dxmt9::d3d9::RenderTapeLinearLayoutStatus::Accepted) {
-              snapshotStatus = recorder_->RenderTapeFullSnapshotStatusForChild(
+              snapshotStatus = context_->RenderTapeFullSnapshotStatusForChild(
                   wireObject_, level, fullLayout.fullRowBytes,
                   fullLayout.fullRows, fullLayout.tightBytes);
             }
@@ -1935,7 +1937,7 @@ public:
               snapshotStatus ==
                   dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
             rejectRenderTapeFullSnapshot(
-                recorder_,
+                context_,
                 snapshotStatus ==
                         dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
                     ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
@@ -1961,7 +1963,7 @@ public:
             if (validation !=
                 dxmt9::d3d9::RenderTapeFullSnapshotStatus::Accepted) {
               rejectRenderTapeFullSnapshot(
-                  recorder_,
+                  context_,
                   dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                       FullSnapshotCopyFailed,
                   wireObject_, level, userDesc, userMemoryPitch_,
@@ -1971,10 +1973,10 @@ public:
               // existing mutation reducer publishes these exact rows as a
               // complete seed rather than overlaying the partial write.
               const HRESULT flushHr = flushUserMemoryMutationOrdering(
-                  recorder_, linearLock_, lockFlags_);
+                  context_, linearLock_, lockFlags_);
               if (FAILED(flushHr))
                 return flushHr;
-              recorder_->NotifyRenderTapeLinearMutationForChild(
+              context_->NotifyRenderTapeLinearMutationForChild(
                   wireObject_, level, fullLayout, fullCopy);
             }
           } else if (snapshotRoute ==
@@ -1982,14 +1984,14 @@ public:
             // A complete seed already exists, so preserve the ordinary
             // partial mutation event and its descriptor-relative overlay.
             const HRESULT flushHr = flushUserMemoryMutationOrdering(
-                recorder_, linearLock_, lockFlags_);
+                context_, linearLock_, lockFlags_);
             if (FAILED(flushHr))
               return flushHr;
-            recorder_->NotifyRenderTapeLinearMutationForChild(
+            context_->NotifyRenderTapeLinearMutationForChild(
                 wireObject_, level, linearLockLayout_, mutationCopy);
           } else {
             rejectRenderTapeFullSnapshot(
-                recorder_,
+                context_,
                 dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                     FullSnapshotCopyFailed,
                 wireObject_, level, userDesc, userMemoryPitch_,
@@ -1997,10 +1999,10 @@ public:
           }
         } else {
           const HRESULT flushHr = flushUserMemoryMutationOrdering(
-              recorder_, linearLock_, lockFlags_);
+              context_, linearLock_, lockFlags_);
           if (FAILED(flushHr))
             return flushHr;
-          recorder_->NotifyRenderTapeLinearMutationForChild(
+          context_->NotifyRenderTapeLinearMutationForChild(
               wireObject_, level, linearLockLayout_, mutationCopy);
         }
       }
@@ -2012,7 +2014,7 @@ public:
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
       return S_OK;
     }
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     dxmt9DeviceDebugLog("texture_unlock_rect texture=%p level=%u", this,
@@ -2031,7 +2033,7 @@ public:
       if (!mutationReady && (blockLock_ || linearLock_)) {
         D9CSurfaceDesc lockDesc{};
         (void)textureLevelDesc(t_, level, &lockDesc);
-        recorder_->RejectRenderTapeCaptureForChild(
+        context_->RejectRenderTapeCaptureForChild(
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
             wireObject_, level,
             renderTapeLayoutDiagnostic(
@@ -2048,13 +2050,13 @@ public:
     const bool partialLock =
         (blockLock_ && !blockLockLayout_.fullSubresource) ||
         (linearLock_ && !linearLockLayout_.fullSubresource);
-    if (mutationReady && !mutationCopy.empty() && partialLock && recorder_ &&
-        recorder_->IsRenderTapeCaptureTrackingEnabledForChild()) {
+    if (mutationReady && !mutationCopy.empty() && partialLock && context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild()) {
       if (FAILED(textureLevelDesc(t_, level, &snapshotDesc))) {
         snapshotStatus =
             dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent;
         rejectRenderTapeFullSnapshot(
-            recorder_,
+            context_,
             dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                 FullSnapshotExtentMismatch,
             wireObject_, level, snapshotDesc,
@@ -2072,14 +2074,14 @@ public:
                   blockLockLayout_.fullRows
             : static_cast<std::uint64_t>(linearLockLayout_.fullRowBytes) *
                   linearLockLayout_.fullRows;
-        snapshotStatus = recorder_->RenderTapeFullSnapshotStatusForChild(
+        snapshotStatus = context_->RenderTapeFullSnapshotStatusForChild(
             wireObject_, level, fullRowBytes, fullRows, fullBytes);
         if (snapshotStatus ==
                 dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity ||
             snapshotStatus ==
                 dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
           rejectRenderTapeFullSnapshot(
-              recorder_,
+              context_,
               snapshotStatus ==
                       dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidIdentity
                   ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::
@@ -2102,13 +2104,13 @@ public:
           dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
         if (FAILED(textureLevelDesc(t_, level, &snapshotDesc))) {
           rejectRenderTapeFullSnapshot(
-              recorder_,
+              context_,
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::
                   FullSnapshotExtentMismatch,
               wireObject_, level, snapshotDesc, 0, mutationCopy.size());
         } else {
           (void)captureRenderTapeFullTextureSnapshot(
-              recorder_, t_, wireObject_, level, snapshotDesc);
+              context_, t_, wireObject_, level, snapshotDesc);
         }
       } else if (mutationReady && !mutationCopy.empty() &&
                  snapshotStatus !=
@@ -2116,10 +2118,10 @@ public:
                  snapshotStatus !=
                      dxmt9::d3d9::RenderTapeFullSnapshotStatus::InvalidExtent) {
         if (blockLock_) {
-          recorder_->NotifyRenderTapeBlockMutationForChild(
+          context_->NotifyRenderTapeBlockMutationForChild(
               wireObject_, level, blockLockLayout_, mutationCopy);
         } else if (linearLock_) {
-          recorder_->NotifyRenderTapeLinearMutationForChild(
+          context_->NotifyRenderTapeLinearMutationForChild(
               wireObject_, level, linearLockLayout_, mutationCopy);
         }
       }
@@ -2173,7 +2175,7 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   ULONG refs_ = 1;
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeSurfaceTextureContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
@@ -2188,22 +2190,22 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
 
 public:
   D3D9CubeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                      D3D9PeRecorderFlush *recorder = nullptr,
+                      D3D9PeSurfaceTextureContext *recorder = nullptr,
                       D3D9PeDiagnosticObserver *diagnostics = nullptr)
-      : t_(t), device_(device), recorder_(recorder),
+      : t_(t), device_(device), context_(recorder),
         diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
         t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
   ~D3D9CubeTextureImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     // Every borrower AddRef'd this container, so no surface wrapper can still
     // be alive here; the level handles may be released before the texture.
     releaseCachedLevelSurfaces(levelSurfaces_);
@@ -2319,7 +2321,7 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
     static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
@@ -2382,7 +2384,7 @@ public:
                                                entry->descValid};
         *ppS = peNewNoexcept<D3D9SurfaceImpl>(entry->handle, device_,
                             static_cast<IDirect3DBaseTexture9 *>(this),
-                            recorder_, diagnostics_, true, nullptr, 0,
+                            context_, diagnostics_, true, nullptr, 0,
                             &wireObject_, idx, &borrowed);
         if (!*ppS)
           return finishPeCall(E_OUTOFMEMORY);
@@ -2407,7 +2409,7 @@ public:
       return finishPeCall(D3DERR_INVALIDCALL);
     }
     *ppS = peNewNoexcept<D3D9SurfaceImpl>(
-        s, device_, static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
+        s, device_, static_cast<IDirect3DBaseTexture9 *>(this), context_,
         diagnostics_, true, nullptr, 0, &wireObject_, idx);
     if (!*ppS) {
       dxmt9c_surface_release(s);
@@ -2427,7 +2429,7 @@ public:
           "CubeTexture::LockRect", DXMT9_PE_CALLSITE_PC());
     if (!pLR)
       return D3DERR_INVALIDCALL;
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     UINT idx = 0;
@@ -2442,19 +2444,19 @@ public:
     if (SUCCEEDED(hr)) {
       pLR->Pitch = lr.pitch;
       pLR->pBits = lr.bits;
-      if (recorder_ && recorder_->IsRenderTapeCaptureTrackingEnabledForChild()) {
+      if (context_ && context_->IsRenderTapeCaptureTrackingEnabledForChild()) {
         D9CSurfaceDesc desc{};
         if (FAILED(textureLevelDesc(t_, level, &desc))) {
-          recorder_->RejectRenderTapeCaptureForChild(
+          context_->RejectRenderTapeCaptureForChild(
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::DescriptorMismatch,
               wireObject_, idx, renderTapeLayoutDiagnostic(desc, lr.pitch));
         } else {
           dxmt9::d3d9::RenderTapeBlockLockLayout blockLayout{};
           dxmt9::d3d9::RenderTapeLinearLockLayout linearLayout{};
           const bool block = prepareRenderTapeBlockLock(
-              recorder_, wireObject_, idx, desc, lr.pitch, pRect, blockLayout);
+              context_, wireObject_, idx, desc, lr.pitch, pRect, blockLayout);
           const bool linear = !block && prepareRenderTapeLinearLock(
-              recorder_, wireObject_, idx, desc, lr.pitch, pRect, linearLayout);
+              context_, wireObject_, idx, desc, lr.pitch, pRect, linearLayout);
           if (block || linear) {
             try {
               if (captureLocks_.size() <= idx)
@@ -2468,7 +2470,7 @@ public:
                   .active = true,
               };
             } catch (...) {
-              recorder_->RejectRenderTapeCaptureForChild(
+              context_->RejectRenderTapeCaptureForChild(
                   dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
                   wireObject_, idx,
                   renderTapeLayoutDiagnostic(
@@ -2484,7 +2486,7 @@ public:
   }
   HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face,
                                        UINT level) noexcept override {
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
     UINT idx = 0;
@@ -2504,7 +2506,7 @@ public:
         if (!mutationReady) {
           D9CSurfaceDesc desc{};
           (void)textureLevelDesc(t_, level, &desc);
-          recorder_->RejectRenderTapeCaptureForChild(
+          context_->RejectRenderTapeCaptureForChild(
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
               wireObject_, idx,
               renderTapeLayoutDiagnostic(
@@ -2528,7 +2530,7 @@ public:
                                   : capture.linearLayout.tightBytes,
                     0xffffffffu)),
         };
-        recorder_->NotifyRenderTapeOrderedControlForChild(
+        context_->NotifyRenderTapeOrderedControlForChild(
             dxmt9::d3d9::RenderTapeOrderedControlHeader{
                 .identity = wireObject_.identity,
                 .kind = static_cast<std::uint32_t>(
@@ -2540,10 +2542,10 @@ public:
             std::as_bytes(std::span(&payload, 1u)));
       } else if (mutationReady) {
         if (capture.block) {
-          recorder_->NotifyRenderTapeBlockMutationForChild(
+          context_->NotifyRenderTapeBlockMutationForChild(
               wireObject_, idx, capture.blockLayout, mutationCopy);
         } else {
-          recorder_->NotifyRenderTapeLinearMutationForChild(
+          context_->NotifyRenderTapeLinearMutationForChild(
               wireObject_, idx, capture.linearLayout, mutationCopy);
         }
       }
@@ -2565,7 +2567,7 @@ class D3D9VolumeImpl final : public IDirect3DVolume9 {
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
   IUnknown *container_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeSurfaceTextureContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   UINT level_;
   bool defaultPoolTracked_ = false;
@@ -2573,9 +2575,9 @@ class D3D9VolumeImpl final : public IDirect3DVolume9 {
 
 public:
   D3D9VolumeImpl(D9CTexture *t, IDirect3DDevice9 *device, IUnknown *container,
-                 D3D9PeRecorderFlush *recorder,
+                 D3D9PeSurfaceTextureContext *recorder,
                  D3D9PeDiagnosticObserver *diagnostics, UINT level)
-      : t_(t), device_(device), container_(container), recorder_(recorder),
+      : t_(t), device_(device), container_(container), context_(recorder),
         diagnostics_(diagnostics), level_(level) {
     if (t_)
       dxmt9c_texture_addref(t_);
@@ -2583,11 +2585,11 @@ public:
       device_->AddRef();
     if (container_)
       container_->AddRef();
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
   ~D3D9VolumeImpl() {
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     if (t_)
       dxmt9c_texture_release(t_);
     if (container_)
@@ -2678,14 +2680,14 @@ public:
     if (diagnostics_)
       diagnostics_->notifyFirstCallAfterPresent(
           "Volume::LockBox", DXMT9_PE_CALLSITE_PC());
-    const HRESULT hr = lockTextureBox(t_, level_, locked, box, flags, recorder_);
-    if (SUCCEEDED(hr) && recorder_ &&
-        recorder_->IsRenderTapeCaptureTrackingEnabledForChild())
-      recorder_->AbortRenderTapeCaptureForChild();
+    const HRESULT hr = lockTextureBox(t_, level_, locked, box, flags, context_);
+    if (SUCCEEDED(hr) && context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild())
+      context_->AbortRenderTapeCaptureForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
-    return unlockTextureBox(t_, level_, recorder_);
+    return unlockTextureBox(t_, level_, context_);
   }
 };
 
@@ -2696,7 +2698,7 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   ULONG refs_ = 1;
   D9CTexture *t_;
   IDirect3DDevice9 *device_;
-  D3D9PeRecorderFlush *recorder_;
+  D3D9PeSurfaceTextureContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
@@ -2707,22 +2709,22 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
 
 public:
   D3D9VolumeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                        D3D9PeRecorderFlush *recorder = nullptr,
+                        D3D9PeSurfaceTextureContext *recorder = nullptr,
                         D3D9PeDiagnosticObserver *diagnostics = nullptr)
-      : t_(t), device_(device), recorder_(recorder),
+      : t_(t), device_(device), context_(recorder),
         diagnostics_(diagnostics) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
         t_,
         dxmt9c_texture_get_wire_identity, wireObject_);
-    trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+    trackDefaultPoolResource(context_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
   ~D3D9VolumeTextureImpl() {
-    if (recorder_)
-      recorder_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
-    untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    if (context_)
+      context_->NotifyRenderTapeObjectDestroyForChild(wireObject_);
+    untrackDefaultPoolResource(context_, defaultPoolTracked_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
@@ -2826,7 +2828,7 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
-    const HRESULT flushHr = flushChildRecorder(recorder_);
+    const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
     static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
@@ -2871,7 +2873,7 @@ public:
     if (level >= dxmt9c_texture_get_level_count(t_))
       return finishPeCall(D3DERR_INVALIDCALL);
     *ppVolume = peNewNoexcept<D3D9VolumeImpl>(t_, device_,
-                       static_cast<IDirect3DBaseTexture9 *>(this), recorder_,
+                       static_cast<IDirect3DBaseTexture9 *>(this), context_,
                        diagnostics_, level);
     if (!*ppVolume)
       return finishPeCall(E_OUTOFMEMORY);
@@ -2905,16 +2907,16 @@ public:
           return D3DERR_INVALIDCALL;
       }
     }
-    const HRESULT hr = lockTextureBox(t_, level, locked, box, flags, recorder_);
-    if (SUCCEEDED(hr) && recorder_ &&
-        recorder_->IsRenderTapeCaptureTrackingEnabledForChild())
-      recorder_->AbortRenderTapeCaptureForChild();
+    const HRESULT hr = lockTextureBox(t_, level, locked, box, flags, context_);
+    if (SUCCEEDED(hr) && context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild())
+      context_->AbortRenderTapeCaptureForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
     if (level >= dxmt9c_texture_get_level_count(t_))
       return D3DERR_INVALIDCALL;
-    return unlockTextureBox(t_, level, recorder_);
+    return unlockTextureBox(t_, level, context_);
   }
   HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX *) noexcept override {
     // stub: Wine returns S_OK; dxmt9 uploads dirty regions via the chunk recorder,
@@ -2930,7 +2932,7 @@ public:
 IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,
                                    IUnknown *container,
-                                   D3D9PeRecorderFlush *recorder,
+                                   D3D9PeSurfaceTextureContext *recorder,
                                    D3D9PeDiagnosticObserver *diagnostics,
                                    bool trackDefaultPool,
                                    void *userMemory,
@@ -2942,7 +2944,7 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
 
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
-                                   D3D9PeRecorderFlush *recorder,
+                                   D3D9PeSurfaceTextureContext *recorder,
                                    D3D9PeDiagnosticObserver *diagnostics,
                                    void *userMemory,
                                    int32_t userMemoryPitch) noexcept {
@@ -2952,7 +2954,7 @@ IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
 
 IDirect3DVolumeTexture9 *CreatePeVolumeTexture(D9CTexture *texture,
                                                IDirect3DDevice9 *device,
-                                               D3D9PeRecorderFlush *recorder,
+                                               D3D9PeSurfaceTextureContext *recorder,
                                                D3D9PeDiagnosticObserver *diagnostics) noexcept {
   return peNewNoexcept<D3D9VolumeTextureImpl>(
       texture, device, recorder, diagnostics);
@@ -2960,7 +2962,7 @@ IDirect3DVolumeTexture9 *CreatePeVolumeTexture(D9CTexture *texture,
 
 IDirect3DCubeTexture9 *CreatePeCubeTexture(D9CTexture *texture,
                                            IDirect3DDevice9 *device,
-                                           D3D9PeRecorderFlush *recorder,
+                                           D3D9PeSurfaceTextureContext *recorder,
                                            D3D9PeDiagnosticObserver *diagnostics) noexcept {
   return peNewNoexcept<D3D9CubeTextureImpl>(
       texture, device, recorder, diagnostics);
