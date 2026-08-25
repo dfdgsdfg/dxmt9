@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
 // Vendored from Wine's dlls/winemac.drv (LGPL-2.1+). Signatures only —
-// no implementation. The functions are implemented in winemac.so and
-// reached at runtime via dlsym after the Wine build re-exports them
-// with __attribute__((visibility("default"))). See
+// no implementation. The functions are implemented in winemac.so. The
+// current legacy runtime path resolves only the aggregate macdrv_functions
+// table on an exact manifest-qualified Wine build; the individual declarations
+// below document the retired visibility-patch ABI. See
 // specs/winemetal/{requirements,spec}.md for the contract.
 //
-// This is a REFERENCE EXAMPLE shipped alongside the spec. The live
-// header at include/winemetal/winemacdrv.h is maintained per Wine
-// version per specs/winemetal/requirements.md §3.
+// This is a REFERENCE EXAMPLE shipped alongside the spec. It is not a live
+// runtime header or authorization to restore generic per-symbol discovery.
 
 #pragma once
 
@@ -43,9 +43,8 @@ struct macdrv_win_data {
 };
 
 // ─── Aggregate function table (Wine: present when macdrv exposes
-//     macdrv_functions; older Wine versions exposed each symbol
-//     individually). dxmt9's probe tries the aggregate first, then
-//     falls back to per-symbol dlsym. ────────────────────────────────────
+//     macdrv_functions). This is the only legacy ABI selected by the current
+//     dxmt9 runtime, and only for an exact manifest-qualified Wine build. ────
 struct macdrv_functions {
   void (*macdrv_init_display_devices)(bool);
 
@@ -63,10 +62,9 @@ struct macdrv_functions {
   void                (*macdrv_view_release_metal_view)(macdrv_metal_view view);
 };
 
-// ─── Per-symbol declarations (resolved via dlsym(RTLD_DEFAULT, "<name>")
-//     when the aggregate is absent). These match Wine's signatures
-//     verbatim; the dxmt9 patch only adds visibility("default")
-//     attributes to keep them in the dynamic symbol table. ──────────────
+// ─── Retired per-symbol ABI reference. Older experiments made these Wine
+//     functions visible to dlsym(RTLD_DEFAULT, "<name>"). Current dxmt9 does
+//     not resolve them and does not use them as a generic fallback. ─────────
 struct macdrv_win_data *get_win_data(HWND hwnd);
 void                    release_win_data(struct macdrv_win_data *data);
 
