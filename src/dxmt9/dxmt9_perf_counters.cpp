@@ -5418,12 +5418,17 @@ void countD3D9BufferUploadFull(std::uint64_t nanoseconds,
   }
 }
 
-void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes) {
+void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes,
+                                 bool discard) {
   auto& c = counters();
   add(c.d3d9BufferUploadRangeCalls);
   add(c.d3d9BufferUploadRangeNs, nanoseconds);
   updateMax(c.d3d9BufferUploadRangeMaxNs, nanoseconds);
   add(c.d3d9BufferUploadRangeBytes, bytes);
+  if (discard) {
+    add(c.d3d9BufferUploadRangeDiscardCalls);
+    add(c.d3d9BufferUploadRangeDiscardBytes, bytes);
+  }
 }
 
 void countD3D9BufferUnmap(std::uint64_t nanoseconds) {

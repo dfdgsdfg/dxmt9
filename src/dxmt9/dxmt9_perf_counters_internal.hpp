@@ -1542,6 +1542,11 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9BufferUploadRangeNs{0};
   std::atomic<std::uint64_t> d3d9BufferUploadRangeMaxNs{0};
   std::atomic<std::uint64_t> d3d9BufferUploadRangeBytes{0};
+  // R-237.5: DISCARD-range subset of the range family above, gated behind
+  // DXMT9_DISCARD_RANGE_UPLOAD; calls/bytes only (no ms — the parent
+  // d3d9_buffer_upload_range_ms/_max_ms already time every range upload).
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeDiscardCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeDiscardBytes{0};
   std::atomic<std::uint64_t> d3d9BufferUnmapCalls{0};
   std::atomic<std::uint64_t> d3d9BufferUnmapNs{0};
   std::atomic<std::uint64_t> d3d9BufferUnmapMaxNs{0};

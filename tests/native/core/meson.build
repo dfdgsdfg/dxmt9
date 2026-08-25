@@ -22,6 +22,27 @@ core_device_com_spec = executable(
 test('dxmt9-core-device-com-spec', core_device_com_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# R-237.5 (present-pacing-bridge-crossing-decomposition.237): Buffer::unlock
+# DISCARD-range routing behind DXMT9_DISCARD_RANGE_UPLOAD. The resolver in
+# src/d3d9/core_buffer.cpp caches on first use, so the off/on states are two
+# separate test() runs of the same executable (dxmt9-replay-byte-identity-
+# {off,on}-spec precedent in tests/native/backend/meson.build).
+discard_range_upload_spec = executable(
+  'dxmt9-discard-range-upload-spec',
+  'discard_range_upload_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-discard-range-upload-off-spec', discard_range_upload_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+test('dxmt9-discard-range-upload-on-spec', discard_range_upload_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1',
+       'DXMT9_DISCARD_RANGE_UPLOAD=1',
+     ])
+
 # Device-free pin on the shared D3D9 private-data store
 # (dxmt9::util::ComPrivateData) used by every IDirect3DResource9 /
 # IDirect3DVolume9 PE wrapper. Covers R-CORE-4.10: byte-blob

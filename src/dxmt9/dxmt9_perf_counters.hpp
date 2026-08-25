@@ -1370,10 +1370,15 @@ void countD3D9BufferUnlock(std::uint64_t nanoseconds,
 // other upload takes the full path); unmap always runs. pool is the static_cast<u32>
 // of dxmt9::core::Pool at call time; only Default/Managed get a byte-and-call split,
 // matching the range path being Default-only by construction.
+// R-237.5: behind DXMT9_DISCARD_RANGE_UPLOAD, a Default+Dynamic+DISCARD unlock
+// also takes the range path; `discard` distinguishes that admitted case so an
+// A/B can gate on the mechanism firing (d3d9_buffer_upload_range_discard_calls
+// / _bytes) without splitting the shared range timing.
 void countD3D9BufferUploadFull(std::uint64_t nanoseconds,
                                 std::uint64_t bytes,
                                 std::uint32_t pool);
-void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes);
+void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes,
+                                 bool discard);
 void countD3D9BufferUnmap(std::uint64_t nanoseconds);
 // dxmt9c_surface_lock_rect attribution (state-churn-encode-append-decomposition.24/.26:
 // 1.33 ms/call, 0.58 ms/present on GT2, confirmed NOT a drain-fence wait).

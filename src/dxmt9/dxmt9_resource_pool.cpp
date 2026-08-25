@@ -1508,10 +1508,18 @@ bool Pool::uploadBufferDataRange(WMT::Device device,
   // in place under the buffer arena's unique lock).
   bool accepted = false;
   const bool found = bufferArena_.update(handleValue, [&](BufferRecord& record) {
-    // This entry point is intentionally narrow. A range upload is valid only
-    // for the D3D9 DEFAULT+DYNAMIC ring whose NOOVERWRITE contract keeps the
-    // application-provided range disjoint from in-flight reads. DISCARD,
-    // MANAGED, and plain locks retain the full-shadow path above.
+    // This entry point is intentionally narrow. A range upload is valid for
+    // the D3D9 DEFAULT+DYNAMIC ring under two admitted contracts: the
+    // NOOVERWRITE contract, whose disjoint-range promise keeps the
+    // application-provided range disjoint from in-flight reads, and — behind
+    // DXMT9_DISCARD_RANGE_UPLOAD (R-237.5, present-pacing-bridge-crossing-
+    // decomposition.237) — a DISCARD lock, which is safe here because the
+    // backing was already rotated at lock time (finalizeBufferMap,
+    // R-BACK-5.8), so a range write on the fresh backing is a strict subset
+    // of what the full-shadow path would write. This predicate does not
+    // itself inspect lock flags; the caller (Buffer::unlock) is what decides
+    // whether the range call is admitted. MANAGED and plain locks retain the
+    // full-shadow path above.
     if (record.desc.pool != core::Pool::Default ||
         (record.desc.usage & core::UsageDynamic) == 0u ||
         record.desc.size > std::numeric_limits<std::size_t>::max() ||

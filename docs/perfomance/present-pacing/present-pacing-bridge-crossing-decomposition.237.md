@@ -223,3 +223,77 @@ the full-upload population into two different problems:
 - Each candidate needs: mirror-invariant argument (or zero-fill contract
   decision), a native spec pinning the upload-range choice, and a GT2
   ABBA with visual gates before promotion.
+
+## Lane spec: `DXMT9_DISCARD_RANGE_UPLOAD` (V1, experimental candidate)
+
+R-237.5: Behind env `DXMT9_DISCARD_RANGE_UPLOAD` (default off, unset/`0`
+selects the byte-identical full-upload path), `Buffer::unlock` routes a
+writable unlock whose lock was Default-pool + Dynamic + `DISCARD` (and
+whose recorded `lockedOffset_`/`lockedSize_` are in bounds) through
+`uploadBufferDataRange(handle_, storage_, lockedOffset_, lockedSize_)`
+instead of the full `uploadBufferData(handle_, storage_)`. `NOOVERWRITE`,
+Managed, plain, and readonly paths are unchanged. V1 deliberately keeps
+the lock-side DISCARD zero-fill and the wow64 shadow pre-copy unchanged
+(V2 candidates, separate correctness arguments).
+
+Correctness argument (why no ordering/formal layer):
+- No command, submission, or interleaving order changes; the same single
+  upload happens at the same point with a smaller span. Per
+  `agents/rules/rendering_correctness.rules.md` this is a value transform;
+  the formal layer is recorded as not applicable for V1.
+- In-flight safety: for Default dynamic rename buffers the backing was
+  rotated at lock time (`finalizeBufferMap`, R-BACK-5.8), so the in-place
+  range write lands on the freshly selected backing exactly as the current
+  full write does; the range write touches a strict subset of the bytes
+  the full path writes today. No new hazard class is introduced.
+- Content semantics: bytes outside the locked span on the new backing
+  change from uploaded zeros to the rotated backing's prior content. D3D9
+  defines post-DISCARD content as undefined; contract-abiding apps read
+  only bytes written since the DISCARD. Out-of-contract readers are the
+  risk the visual gate family covers.
+- Mirror note: core `storage_` (zero-filled) and the pool capture shadow
+  (range-patched) diverge outside the locked span while the env is set;
+  both hold undefined-region bytes. Render Tape capture accuracy for those
+  bytes is a diagnostic-lane caveat, recorded here, not a production
+  contract change.
+
+Mechanism proof counters: `d3d9_buffer_upload_range_discard_calls` /
+`_bytes` split inside the existing range family, so an A/B can gate on
+the mechanism being exercised and on `d3d9_buffer_upload_full_bytes`
+dropping by the DISCARD share.
+
+Evidence plan before any default flip: native spec pinning route selection
+(env off = full; env on = range with exact offset/size; NOOVERWRITE /
+Managed / plain unaffected), D3D9 conformance suite clean, GT1 visual
+anchor sanity, GT2 matched A/B with mechanism + FPS + upload-byte gates.
+
+### V1 A/B result — mechanism proven, FPS null, default-off kept
+
+Runs: `app-d3d9-3dmark05-discard-range-{off,on}-gt2-r1` (same build, both
+`status pass`, both `1,814` presents, `gpu_command_buffer_errors=0` both)
+and `app-d3d9-3dmark05-discard-range-on-gt1-visual-r1` (GT1, pass, `7,116`
+discard-range calls, normal frame verified against the visual anchor
+expectations, zero GPU errors).
+
+- Mechanism: exact. `d3d9_buffer_upload_range_discard_calls=8,440` with
+  `full_default_calls` `8,382 -> 0`; total uploaded bytes
+  `17.14GB -> 14.48GB` (`-2.66GB`, `-15.5%`), matching the DISCARD
+  locked-span share (`3.92GB` locked vs `6.59GB` previously uploaded).
+- CPU: null. Full-upload span `-459.8ms/run` but the range span rose
+  `+360.9ms/run`; net upload CPU `-98.9ms/run` (`-0.055ms/present`),
+  unlock core `-3.1%`. Scene fps harmonic `27.775 -> 27.679` (`-0.35%`),
+  median `32.719 -> 32.810` (`+0.28%`) — inside noise.
+- Attribution correction the ON run makes possible: with Default DISCARD
+  isolated away, the remaining full-upload wall is **Managed alone** —
+  `1,225` calls, `8.94GB`, `2,157ms/run` = `1.19ms/present` at
+  `1.76ms/call` (`~4.1GB/s` across the rotation plus two `7.3MB` copies).
+  Default DISCARD full uploads cost only `~460ms/run` (`~0.25ms/present`,
+  `~14GB/s` marginal — memcpy-cheap); the earlier byte-volume framing
+  overstated them as a wall owner.
+
+Disposition: keep `DXMT9_DISCARD_RANGE_UPLOAD` as an opt-in default-off
+candidate (inline-const-delta precedent — proven mechanism, no measured
+win). Conformance and the full visual-anchor family remain required only
+if a default flip is ever proposed. **The lane's real continuation is the
+Managed dirty-range / deferred-upload-at-use design, now sized at
+`1.19ms/present` (`~+3.3%` GT2 mathematical ceiling).**

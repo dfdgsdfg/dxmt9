@@ -1,6 +1,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
+#include "util/config/config.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +13,21 @@ namespace dxmt9::core {
 // Split from core_resources.cpp: Buffer class members and the corresponding
 // Device factory/registration entry points. See core_resources.cpp for the
 // shared anonymous-namespace helpers and Device cross-cutting state.
+
+namespace {
+
+// R-237.5 (present-pacing-bridge-crossing-decomposition.237): experimental
+// candidate that routes a Default+Dynamic+DISCARD unlock through the range
+// upload instead of the full upload. Default off (unset/"0"/empty), which is
+// byte-identical current behavior; read once and cached, matching the
+// dynamicBufferRenameEnabled()-style resolvers elsewhere in this codebase.
+bool discardRangeUploadEnabled() noexcept {
+  static const bool enabled =
+      dxmt9::util::getenvFlag("DXMT9_DISCARD_RANGE_UPLOAD");
+  return enabled;
+}
+
+} // namespace
 
 Buffer::Buffer(std::shared_ptr<Device> owner, BufferHandle handle,
                BufferDesc desc)
@@ -64,7 +80,19 @@ void Buffer::unlock(bool upload) {
         (lockedFlags_ & UsageDiscard) == 0 &&
         lockedOffset_ <= storage_.size() &&
         lockedSize_ <= storage_.size() - lockedOffset_;
-    if (exactNoOverwrite) {
+    // R-237.5: env-gated second admitted range-upload contract. Unlike
+    // exactNoOverwrite, this fires on a DISCARD lock; safe because the
+    // Default+Dynamic backing was already rotated at lock time
+    // (finalizeBufferMap, R-BACK-5.8), so the range write lands on the
+    // freshly selected backing exactly as the full write does today.
+    const bool discardRange =
+        discardRangeUploadEnabled() &&
+        locked_ && desc_.pool == Pool::Default &&
+        (desc_.usage & UsageDynamic) != 0 &&
+        (lockedFlags_ & UsageDiscard) != 0 &&
+        lockedOffset_ <= storage_.size() &&
+        lockedSize_ <= storage_.size() - lockedOffset_;
+    if (exactNoOverwrite || discardRange) {
       const auto rangeStart = std::chrono::steady_clock::now();
       backend_->uploadBufferDataRange(
           handle_, storage_, lockedOffset_, lockedSize_);
@@ -72,7 +100,7 @@ void Buffer::unlock(bool upload) {
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - rangeStart).count());
       dxmt9::perf::countD3D9BufferUploadRange(
-          rangeNs, static_cast<std::uint64_t>(lockedSize_));
+          rangeNs, static_cast<std::uint64_t>(lockedSize_), discardRange);
     } else {
       const auto fullStart = std::chrono::steady_clock::now();
       backend_->uploadBufferData(handle_, storage_);

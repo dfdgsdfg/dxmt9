@@ -1539,6 +1539,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_buffer_upload_range_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferUploadRangeNs, nullptr, nullptr, 0.0},
     {"d3d9_buffer_upload_range_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferUploadRangeMaxNs, nullptr, nullptr, 0.0},
     {"d3d9_buffer_upload_range_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferUploadRangeBytes, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_upload_range_discard_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferUploadRangeDiscardCalls, nullptr, nullptr, 0.0},
+    {"d3d9_buffer_upload_range_discard_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferUploadRangeDiscardBytes, nullptr, nullptr, 0.0},
     {"d3d9_buffer_unmap_calls", CounterEntry::Kind::UnsignedCount, &Counters::d3d9BufferUnmapCalls, nullptr, nullptr, 0.0},
     {"d3d9_buffer_unmap_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferUnmapNs, nullptr, nullptr, 0.0},
     {"d3d9_buffer_unmap_max_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9BufferUnmapMaxNs, nullptr, nullptr, 0.0},
