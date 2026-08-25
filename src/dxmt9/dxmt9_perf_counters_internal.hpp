@@ -1517,6 +1517,17 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9BufferLockScratchPool{0};
   std::atomic<std::uint64_t> d3d9BufferLockDynamic{0};
   std::atomic<std::uint64_t> d3d9BufferLockWriteOnly{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockCpuNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockCpuMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockWritebackNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockWritebackMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockWritebackBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockCoreNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockCoreMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockUploadCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockReadonlyCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockShadowCalls{0};
   // dxmt9c_surface_lock_rect / dxmt9c_texture_lock_rect attribution
   // (state-churn-encode-append-decomposition.24/.26). *_core_ns times the
   // obj->lockRect(...) call into core; *_shadow_ns times the wow64 pointer-
@@ -2272,6 +2283,7 @@ struct Counters {
   PercentileRing d3d9BufferLockRing;
   PercentileRing d3d9BufferLockShadowAllocRing;
   PercentileRing d3d9BufferLockShadowCopyRing;
+  PercentileRing d3d9BufferUnlockCpuRing;
   PercentileRing commandBufferCreateCpuRing;
   PercentileRing commandBufferCommitCpuRing;
   PercentileRing submitPresentCpuRing;

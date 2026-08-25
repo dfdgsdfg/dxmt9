@@ -1349,6 +1349,20 @@ void countD3D9BufferLock(std::uint64_t nanoseconds,
                          std::uint32_t pool,
                          bool fullResource,
                          bool shadowCopy);
+// dxmt9c_buffer_unlock attribution (present-pacing-bridge-crossing-decomposition.237:
+// unmeasured 82.1us/call PE round-trip, 3x lock's, with two candidate owners —
+// the wow64 shadow->native writeback memcpy and the core b->obj->unlock() call
+// — that could not be separated from PE-side timing alone).
+// nanoseconds times the whole call; writebackNanoseconds/writebackBytes time
+// the shadow writeback memcpy (0/0 when no shadow writeback ran); coreNanoseconds
+// times b->obj->unlock(); uploaded is !lastLockReadOnly at call time; shadowActive
+// is b->wow64Lock.active on entry.
+void countD3D9BufferUnlock(std::uint64_t nanoseconds,
+                           std::uint64_t writebackNanoseconds,
+                           std::uint64_t coreNanoseconds,
+                           std::uint64_t writebackBytes,
+                           bool uploaded,
+                           bool shadowActive);
 // dxmt9c_surface_lock_rect attribution (state-churn-encode-append-decomposition.24/.26:
 // 1.33 ms/call, 0.58 ms/present on GT2, confirmed NOT a drain-fence wait).
 // coreNanoseconds times the s->obj->lockRect(...) call into core Surface/Texture

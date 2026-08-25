@@ -5372,6 +5372,30 @@ void countD3D9BufferLock(std::uint64_t nanoseconds,
   if ((usage & kUsageWriteOnly) != 0) add(c.d3d9BufferLockWriteOnly);
 }
 
+void countD3D9BufferUnlock(std::uint64_t nanoseconds,
+                           std::uint64_t writebackNanoseconds,
+                           std::uint64_t coreNanoseconds,
+                           std::uint64_t writebackBytes,
+                           bool uploaded,
+                           bool shadowActive) {
+  auto& c = counters();
+  add(c.d3d9BufferUnlockCalls);
+  add(c.d3d9BufferUnlockCpuNs, nanoseconds);
+  updateMax(c.d3d9BufferUnlockCpuMaxNs, nanoseconds);
+  recordRing(c.d3d9BufferUnlockCpuRing, nanoseconds);
+  add(c.d3d9BufferUnlockWritebackNs, writebackNanoseconds);
+  updateMax(c.d3d9BufferUnlockWritebackMaxNs, writebackNanoseconds);
+  add(c.d3d9BufferUnlockWritebackBytes, writebackBytes);
+  add(c.d3d9BufferUnlockCoreNs, coreNanoseconds);
+  updateMax(c.d3d9BufferUnlockCoreMaxNs, coreNanoseconds);
+  if (uploaded) {
+    add(c.d3d9BufferUnlockUploadCalls);
+  } else {
+    add(c.d3d9BufferUnlockReadonlyCalls);
+  }
+  if (shadowActive) add(c.d3d9BufferUnlockShadowCalls);
+}
+
 void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
                               std::uint64_t shadowNanoseconds,
                               std::uint64_t bytes,

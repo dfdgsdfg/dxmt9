@@ -1259,11 +1259,21 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   if (!b || !b->obj) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  const auto start = std::chrono::steady_clock::now();
   const uint64_t handle = bufferHandleValue(b);
   const bool traceBuffer = shouldTraceBufferHandle(b);
+  const bool shadowActive = b->wow64Lock.active;
+  const bool wasReadOnly = b->lastLockReadOnly;
+  std::uint64_t writebackNs = 0;
+  std::uint64_t writebackBytes = 0;
   if (b->wow64Lock.active) {
     if (!b->lastLockReadOnly) {
+      const auto writebackStart = std::chrono::steady_clock::now();
       std::memcpy(b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr, b->wow64Lock.rowBytes);
+      writebackNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - writebackStart).count());
+      writebackBytes = b->wow64Lock.rowBytes;
       dxmt9DebugLog("buffer_unlock shadow writeback buffer=%p native=%p shadow=%p size=%u",
                     static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
                     b->wow64Lock.rowBytes);
@@ -1278,7 +1288,11 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
     b->wow64Lock.rows = 0;
     b->wow64Lock.active = false;
   }
+  const auto coreStart = std::chrono::steady_clock::now();
   b->obj->unlock(!b->lastLockReadOnly);
+  const auto coreNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - coreStart).count());
   if (traceBuffer) {
     bufferTraceLog("buffer_trace unlock buffer=%p handle=0x%llx offset=%u actual_size=%u flags=0x%x readonly=%u upload=%u",
                    static_cast<void*>(b), static_cast<unsigned long long>(handle),
@@ -1290,6 +1304,16 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   b->lastLockSize = 0;
   b->lastLockFlags = 0;
   b->lastLockSucceeded = false;
+  const auto elapsedNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count());
+  dxmt9::perf::countD3D9BufferUnlock(
+      elapsedNs,
+      writebackNs,
+      coreNs,
+      writebackBytes,
+      !wasReadOnly,
+      shadowActive);
   return dxmt9::core::D3D_OK;
 }
 
