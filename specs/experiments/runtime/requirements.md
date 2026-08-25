@@ -24,7 +24,7 @@ Scope keywords used below: **wine root**, **prefix**, **install**,
 
 **R-RT-1.1** This spec applies to *wild* experiments only — runs that load a
 real D3D9 binary into Wine and exercise dxmt9's PE-side `d3d9.dll` /
-`winemetal.dll`. Native macOS experiments (those covered by
+`winemetal_dxmt9.dll`. Native macOS experiments (those covered by
 `specs/experiments/spec.md` §2 — `DYLD_INSERT_LIBRARIES`) are out of scope
 and continue to use no Wine, no prefix, no external install.
 

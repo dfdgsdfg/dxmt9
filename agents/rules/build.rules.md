@@ -22,9 +22,9 @@ staged directory — a stale `build-win32-x86-builtin` mismatched against
 `build/` has produced false bridge regressions before (see
 `test_wild.rules.md` checklist item 3).
 
-## Rule: never build `winemetal.so` with a bare `ninja` target
+## Rule: never build `winemetal_dxmt9.so` with a bare `ninja` target
 
-`ninja src/winemetal/unix/winemetal.so` skips the
+`ninja src/winemetal/unix/winemetal_dxmt9.so` skips the
 `winemetal_unix_install_name_fixup` stamp, leaving bare `winemac.so` /
 `ntdll.so` deps that silently break Wine's unixlib lookup
 (`abi-hash unix-call failed status=0xc0000003`). Always use
@@ -58,13 +58,13 @@ the artifact instead of requiring suspicion:
 **Build-config parity is a precondition for any A/B, not an assumption.**
 `run_3dmark05_perf_probe.sh --build-root` checks only that the five directories
 *exist*. Diff `meson-info/intro-buildoptions.json` between the trees until every
-option matches, and prefer a file the change cannot touch (`winemetal.so` for a
+option matches, and prefer a file the change cannot touch (`winemetal_dxmt9.so` for a
 D3D9-only change) as a byte-identity check. Run a same-build A/A pair first — it
 validates the harness, though note it is structurally blind to a worktree
 *configuration* asymmetry, which only the parity check catches.
 
 **The Wine root is shared mutable state, so staging is a side effect on every
-later run.** `stage_builtin_pe_dlls` copies `d3d9.dll` / `winemetal.dll` from
+later run.** `stage_builtin_pe_dlls` copies `d3d9.dll` / `winemetal_dxmt9.dll` from
 `--exe`'s directory into `$WINE_ROOT/lib/wine/x86_64-windows/`, and they stay
 there. A conformance bisect that builds old commits in throwaway worktrees
 therefore leaves the *last point measured* staged in the Wine root — verified
@@ -76,7 +76,7 @@ them. The `.staged-build.json` sidecar is what makes this checkable: compare
 its hash against the tree you meant to test.
 
 **Builtin-lane PE DLLs are loaded from the Wine root, not from where you put
-them.** `wine_builtin_dll=true` postprocesses `d3d9.dll` / `winemetal.dll` with
+them.** `wine_builtin_dll=true` postprocesses `d3d9.dll` / `winemetal_dxmt9.dll` with
 Wine's `"Wine builtin DLL"` signature, so Wine resolves them from
 `$WINE_ROOT/lib/wine/<arch>-windows/` regardless of the path `LoadLibrary` was
 given. A copy beside the executable or in the prefix's `system32` is inert.

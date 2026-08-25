@@ -121,7 +121,7 @@ void emitRenderTrace(const char* fmt, ...) {
 }  // namespace
 
 // hashBytes / hashString moved to src/util/util_hash.cpp so the ELF
-// winemetal.so unix module can link them without pulling d3d9 in.
+// winemetal_dxmt9.so unix module can link them without pulling d3d9 in.
 
 Device::Device(AdapterInfo adapter, BackendLimits limits,
                PresentParameters params, u32 behaviorFlags,

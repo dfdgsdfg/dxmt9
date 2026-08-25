@@ -229,7 +229,7 @@ test('dxmt9-bridge-entry-classification-audit', python3,
 test('dxmt9-thread-ownership-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_thread_ownership_declarations.py')],
      is_parallel: false)
-# winemetal.so install_name fixup audit — see
+# winemetal_dxmt9.so install_name fixup audit — see
 # scripts/check/audit_winemetal_install_names.py for the rationale. Catches
 # a partial-build regression where the post-link `winemetal_unix_install_name_fixup`
 # custom_target did not run and the .so kept bare `winemac.so`/`ntdll.so`
@@ -248,6 +248,11 @@ test('dxmt9-wine-resolve', python3,
      is_parallel: false)
 test('dxmt9-run-d3d9-conformance', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_d3d9_conformance.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-winemetal-module-identity', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_winemetal_module_identity.py')],
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)

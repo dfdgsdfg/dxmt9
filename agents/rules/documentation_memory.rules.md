@@ -23,7 +23,7 @@ Rules capture the **non-obvious** - things code alone does not convey. Focus on:
 | **Trade-off** | "App-local provider fallback is diagnostic opt-in: safer isolation, less automatic recovery from missing files." |
 | **Assumption** | "Wine-oracle D3D9 tests are behavior oracles, not a requirement to mirror Wine's implementation structure." |
 | **Limitation** | "TLA+ covers queue invariants, but Metal encoder side effects still need implementation assertions or observers." |
-| **Risk / Hazard** | "Missing `bridge_abi_hash` or version checks can pair incompatible `d3d9.dll`, `winemetal.dll`, and provider artifacts." |
+| **Risk / Hazard** | "Missing `bridge_abi_hash` or version checks can pair incompatible `d3d9.dll`, `winemetal_dxmt9.dll`, and provider artifacts." |
 | **Exception to a Rule** | "Runtime readback belongs in tests only for GPU-visible behavior that source/descriptor inspection cannot prove." |
 
 ## What NOT to Record

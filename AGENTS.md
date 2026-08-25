@@ -33,12 +33,12 @@ split is the central design constraint and is enforced by code review:
 | Binary | Kind | Built from | Role |
 |---|---|---|---|
 | `d3d9.dll` | PE DLL | `src/d3d9/` + `src/win32/` | User-facing D3D9 COM surface. Records D3D9 semantics into POD packets; never calls Metal. |
-| `winemetal.dll` | PE DLL | `src/winemetal/` | PE bridge. Dispatches `dxmt9c_*` ops and shader/provider calls across `wine_unix_call` into `winemetal.so`. |
-| `winemetal.so` | Wine unixlib (Mach-O) | `src/winemetal/unix/` + `src/dxmt9/` | Unix-side provider. Replays packets and owns all Metal / Objective-C++ runtime code. |
+| `winemetal_dxmt9.dll` | PE DLL | `src/winemetal/` | PE bridge. Dispatches `dxmt9c_*` ops and shader/provider calls across `wine_unix_call` into `winemetal_dxmt9.so`. |
+| `winemetal_dxmt9.so` | Wine unixlib (Mach-O) | `src/winemetal/unix/` + `src/dxmt9/` | Unix-side provider. Replays packets and owns all Metal / Objective-C++ runtime code. |
 
 **Data flow (per draw/state):** the PE side (`src/d3d9/d3d9_pe_*.cpp`,
 `d3d9_pe_recorder.hpp`) records D3D9 calls into bounded, pointer-free,
-schema-stable chunk records → bridged via `winemetal.dll` →
+schema-stable chunk records → bridged via `winemetal_dxmt9.dll` →
 `src/d3d9/device_c_chunk_replay.cpp` / `device_c_record_replay.cpp` replays them
 on the unix side → `src/dxmt9/` encodes into Metal command buffers.
 
@@ -79,9 +79,9 @@ dirs (the runner scripts and `test_wild.rules.md` expect these exact names):
 | Dir | Cross/native file | Produces |
 |---|---|---|
 | `build/` | native host | Native unit/spec tests — no Wine, fastest inner loop. |
-| `build-x86_64-builtin/` | `cross/x86_64-macos.ini` | `winemetal.so` unix provider for Rosetta Wine64. |
-| `build-win32-x64-builtin/` | `cross/x86_64-windows.ini` | 64-bit PE `d3d9.dll` + `winemetal.dll`. |
-| `build-win32-x86-builtin/` | `cross/i686-windows.ini` | 32-bit WoW64 PE `d3d9.dll` + `winemetal.dll`. |
+| `build-x86_64-builtin/` | `cross/x86_64-macos.ini` | `winemetal_dxmt9.so` unix provider for Rosetta Wine64. |
+| `build-win32-x64-builtin/` | `cross/x86_64-windows.ini` | 64-bit PE `d3d9.dll` + `winemetal_dxmt9.dll`. |
+| `build-win32-x86-builtin/` | `cross/i686-windows.ini` | 32-bit WoW64 PE `d3d9.dll` + `winemetal_dxmt9.dll`. |
 
 ```sh
 # Native unit/spec tests (the common inner loop):

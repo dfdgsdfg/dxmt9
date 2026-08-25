@@ -66,7 +66,7 @@ DEFAULT_PREFIX = REPO_ROOT / "tmp/conformance-prefix"
 DEFAULT_OUTPUT = REPO_ROOT / "tmp/d3d9-conformance-results.json"
 DEFAULT_ARCHIVE_ROOT = REPO_ROOT / "experiments/output"
 DEFAULT_MANIFEST = REPO_ROOT / "tests/conformance/d3d9/MANIFEST.toml"
-DEFAULT_WINEMETAL_SO = REPO_ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal.so"
+DEFAULT_WINEMETAL_SO = REPO_ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so"
 TEST_SOURCE = REPO_ROOT / "tests/conformance/d3d9/d3d9_conformance.c"
 
 # Executables that follow the same `RUN [N:name] ... PASS/FAIL/SKIP [name]`
@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
                         "(default: same directory as --exe).")
     p.add_argument("--pe-dll-dir", type=Path, default=None,
                    help="Builtin PE build root containing src/win32/d3d9.dll "
-                        "and src/winemetal/winemetal.dll (default: infer from --exe).")
+                        "and src/winemetal/winemetal_dxmt9.dll (default: infer from --exe).")
     p.add_argument("--pe-arch", choices=("auto", "x64", "x86"), default="auto",
                    help="Builtin PE staging lane (default: infer from d3d9.dll).")
     p.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST,
@@ -116,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--winemetal-so", type=Path,
                    default=Path(os.environ.get("DXMT9_CONFORMANCE_WINEMETAL_SO",
                                                str(DEFAULT_WINEMETAL_SO))),
-                   help="winemetal.so to stage next to the conformance exe "
+                   help="winemetal_dxmt9.so to stage next to the conformance exe "
                         f"(default: {DEFAULT_WINEMETAL_SO.relative_to(REPO_ROOT)}, "
                         "or DXMT9_CONFORMANCE_WINEMETAL_SO).")
     p.add_argument("--skip-aux", action="store_true",
@@ -277,11 +277,11 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
 
 
 def stage_app_local_unixlib(args: argparse.Namespace) -> None:
-    """Stage winemetal.so beside app-local winemetal.dll when available."""
+    """Stage winemetal_dxmt9.so beside app-local winemetal_dxmt9.dll when available."""
     src = args.winemetal_so
     if not src.exists():
         return
-    dst = args.exe.parent / "winemetal.so"
+    dst = args.exe.parent / "winemetal_dxmt9.so"
     if src.resolve() != dst.resolve():
         shutil.copy2(src, dst)
     args.staged_winemetal_so = dst
@@ -301,7 +301,7 @@ def stage_app_local_unixlib(args: argparse.Namespace) -> None:
 # while every path anyone thought to md5-check matched the build output. A suite
 # that cannot observe a code change cannot pass informatively, so this staging
 # is a correctness precondition, not a convenience.
-BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal.dll")
+BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal_dxmt9.dll")
 
 
 def detect_pe_arch(path: Path) -> str:
@@ -339,7 +339,7 @@ def canonical_pe_dlls(args: argparse.Namespace) -> tuple[Path, Path, str]:
         candidates = []
         for parent in exe.parents:
             if ((parent / "src/win32/d3d9.dll").is_file() and
-                    (parent / "src/winemetal/winemetal.dll").is_file()):
+                    (parent / "src/winemetal/winemetal_dxmt9.dll").is_file()):
                 candidates.append(parent)
         if len(candidates) != 1:
             detail = "no canonical PE build root found" if not candidates \
@@ -351,7 +351,7 @@ def canonical_pe_dlls(args: argparse.Namespace) -> tuple[Path, Path, str]:
         build_root = build_root.resolve()
 
     d3d9 = build_root / "src/win32/d3d9.dll"
-    winemetal = build_root / "src/winemetal/winemetal.dll"
+    winemetal = build_root / "src/winemetal/winemetal_dxmt9.dll"
     for dll in (d3d9, winemetal):
         if not dll.is_file():
             sys.exit(f"canonical builtin PE DLL missing: {dll}")
@@ -373,11 +373,11 @@ def canonical_pe_dlls(args: argparse.Namespace) -> tuple[Path, Path, str]:
 def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     """Copy the built PE DLLs AND the unix provider into the Wine root.
 
-    The unix side has the same trap as the PE side: Wine resolves winemetal.so
+    The unix side has the same trap as the PE side: Wine resolves winemetal_dxmt9.so
     from $WINE_ROOT/lib/wine/x86_64-unix/, so the copy this runner used to place
     next to the exe (and DXMT9_WINEMETAL_SO) is inert in the builtin lane. Until
     2026-08-02 nothing here wrote that file either, so conformance ran against
-    whichever winemetal.so a 3DMark wild run last staged -- the PE half of this
+    whichever winemetal_dxmt9.so a 3DMark wild run last staged -- the PE half of this
     bug was fixed first and left the unix half live.  The unix provider remains
     x86_64-unix for both PE lanes under Sikarugir WoW64.
     """
@@ -387,7 +387,7 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
         "i386-windows" if pe_arch == "x86" else "x86_64-windows")
     if not wine_dll_dir.is_dir():
         sys.exit(f"wine dll dir not found: {wine_dll_dir}")
-    sources = {"d3d9.dll": d3d9_src, "winemetal.dll": winemetal_src}
+    sources = {"d3d9.dll": d3d9_src, "winemetal_dxmt9.dll": winemetal_src}
     for name in BUILTIN_PE_DLLS:
         src = sources[name]
         dst = wine_dll_dir / name
@@ -406,22 +406,22 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
         sys.exit(f"wine unix dir not found: {unix_dir}")
     so_src = args.winemetal_so
     if not so_src.is_file():
-        sys.exit(f"cannot stage winemetal.so: missing {so_src}")
+        sys.exit(f"cannot stage winemetal_dxmt9.so: missing {so_src}")
     # Same-directory temp + atomic rename, never an in-place overwrite. An
     # in-place cp over a Mach-O file inside the live Wine tree has reproduced
     # `SIGKILL (Code Signature Invalid)` even when codesign --verify passed
     # (see run_with_wine_metal_capture_layer.sh and metal_debugging.rules.md),
-    # and any process with the old winemetal.so still mapped can be killed when
+    # and any process with the old winemetal_dxmt9.so still mapped can be killed when
     # its pages are invalidated. The PE DLLs above are not Mach-O and are not
     # exposed to this.
-    so_dst = unix_dir / "winemetal.so"
+    so_dst = unix_dir / "winemetal_dxmt9.so"
     with tempfile.NamedTemporaryFile(dir=unix_dir, delete=False) as tmp:
         tmp_path = pathlib.Path(tmp.name)
     shutil.copy2(so_src, tmp_path)
     os.replace(tmp_path, so_dst)
     so_data = so_dst.read_bytes()
     if so_data != so_src.read_bytes():
-        sys.exit(f"staging winemetal.so into the wine root did not take effect: {so_dst}")
+        sys.exit(f"staging winemetal_dxmt9.so into the wine root did not take effect: {so_dst}")
     staged[str(so_dst)] = {
         "source": str(so_src),
         "sha256": hashlib.sha256(so_data).hexdigest()[:16],
@@ -440,7 +440,7 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
     # conformance exe loads no dxmt9 and emits no verdicts -> false all-skip.
     env["WINEPREFIX"] = str(args.prefix.resolve())
     env["WINEDLLOVERRIDES"] = os.environ.get(
-        "DXMT9_CONFORMANCE_DLLOVERRIDES", "d3d9,winemetal=n,b")
+        "DXMT9_CONFORMANCE_DLLOVERRIDES", "d3d9,winemetal_dxmt9=n,b")
     if getattr(args, "staged_winemetal_so", None):
         env.setdefault("DXMT9_WINEMETAL_SO",
                        str(args.staged_winemetal_so.resolve()))

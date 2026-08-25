@@ -13,7 +13,7 @@ typedef uint64_t dxmt9_u64;
 /* WinemetalShaderCompileRequest — passed to compile_shader for ahead-of-time
  * MSL generation.  An optional Wine build with the Apple shader converter can
  * provide a faster compile_shader implementation; the default falls back to
- * the built-in D3DBC-to-MSL translator in winemetal.so. */
+ * the built-in D3DBC-to-MSL translator in winemetal_dxmt9.so. */
 
 typedef enum WinemetalShaderKind {
   WinemetalShaderKind_D3DBytecodeVertex = 0,

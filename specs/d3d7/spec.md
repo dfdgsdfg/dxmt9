@@ -298,13 +298,13 @@ src/d3d7/
 
 ```
 ddraw.dll  (PE, user-facing, new)
-  └── imports winemetal.dll
-        └── dispatches to winemetal.so (Wine unix module, Metal backend)
+  └── imports winemetal_dxmt9.dll
+        └── dispatches to winemetal_dxmt9.so (Wine unix module, Metal backend)
 ```
 
 `ddraw.dll` does not need to use the provider C ABI directly. It talks to the
 Metal backend through the in-process `IDirect3D9` / `IDirect3DDevice9` COM
-interfaces already exposed by the D3D9 layer, while `winemetal.dll` remains the
+interfaces already exposed by the D3D9 layer, while `winemetal_dxmt9.dll` remains the
 only PE bridge to the unix-side Metal module.
 
 ---

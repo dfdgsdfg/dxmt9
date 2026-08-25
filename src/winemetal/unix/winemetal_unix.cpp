@@ -6,7 +6,7 @@
 
 // Reserved ABI-hash handler — slot 4 of the unified dispatch table. Returns
 // the codegen-time dxmt9::bridge::kBridgeAbiHash so the PE-side DllMain in
-// src/winemetal/main.c can detect a winemetal.dll/winemetal.so version
+// src/winemetal/main.c can detect a winemetal_dxmt9.dll/winemetal_dxmt9.so version
 // skew before any bridge call is dispatched.
 extern "C" NTSTATUS dxmt9_winemetal_abi_hash_unix_call(void*);
 
@@ -19,7 +19,7 @@ extern "C" NTSTATUS dxmt9_winemetal_abi_hash_unix_call(void*);
 #include "dxmt9_wine_unix_entries.generated.h"
 #undef DXMT9_BRIDGE_UNIX_ENTRY
 
-// Unified __wine_unix_call dispatch table for winemetal.so.
+// Unified __wine_unix_call dispatch table for winemetal_dxmt9.so.
 //
 // Slots 0..DXMT9_WINEMETAL_CALL_SHADER_COUNT-1 are owned by the shader
 // service handlers (compile / source-size / source-copy / destroy).
@@ -36,7 +36,7 @@ extern "C" NTSTATUS dxmt9_winemetal_abi_hash_unix_call(void*);
 //   2. Generated client (dxmt9_device_c_bridge_exports.generated.cpp,
 //      lives in dxmt9_d3d9_forwarder.a inside d3d9.dll) packs Args_*
 //      and calls dxmt9_winemetal_unix_call(BridgeOpcode::xxx, &args).
-//   3. winemetal.dll's thunk forwards via __wine_unix_call to ntdll.
+//   3. winemetal_dxmt9.dll's thunk forwards via __wine_unix_call to ntdll.
 //   4. ntdll routes to slot BridgeOpcode::xxx in this table.
 //   5. Generated server thunk (dxmt9_wine_unix_dispatch.generated.cpp)
 //      decodes Args_* and calls the native dxmt9c_* implementation

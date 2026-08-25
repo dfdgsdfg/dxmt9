@@ -610,7 +610,7 @@ origin images for dyld-known images — PE modules are not dyld images, so
 their samples surface as unmapped high addresses (measured 2026-08-19: with a
 probe-verified `DXMT9_PE_MODULE_MAP=1` module map, 92.7% of game-thread
 samples were `unknown_64bit` and zero fell below 4 GiB). The dyld-loaded unix
-side (`winemetal.so`) still symbolizes normally. Use the in-process PE
+side (`winemetal_dxmt9.so`) still symbolizes normally. Use the in-process PE
 sampler instead: run with `DXMT9_PE_MODULE_MAP=1 DXMT9_PE_THREAD_SAMPLER=1
 DXMT_LOG_LEVEL=info` (rate knob `DXMT9_PE_THREAD_SAMPLER_HZ`, default `250`;
 see `agents/rules/environment_variables_bridge.rules.md`), which reads
@@ -653,7 +653,7 @@ representative runtime FPS; for lower-overhead timing samples, pass sidecar
 `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN/MAX` and lets the join gate prove the
 range covered xctrace's RenderPass seq window. If a range run logs
 `dxmt9-perf-encoder` or `dxmt9-perf-indexed-probe-draw` rows before `MIN`,
-check for a stale installed `winemetal.so` before interpreting runtime FPS:
+check for a stale installed `winemetal_dxmt9.so` before interpreting runtime FPS:
 the active Wine unix provider must be rebuilt and restaged for new perf env
 filters to exist.
 

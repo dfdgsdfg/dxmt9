@@ -94,7 +94,7 @@ class BuiltinStagingArchitectureTests(unittest.TestCase):
             canonical_win32.mkdir(parents=True)
             canonical_winemetal.mkdir(parents=True)
             canonical_d3d9 = canonical_win32 / "d3d9.dll"
-            canonical_runtime = canonical_winemetal / "winemetal.dll"
+            canonical_runtime = canonical_winemetal / "winemetal_dxmt9.dll"
             canonical_d3d9.write_bytes(self._pe(0x8664) + b"canonical-d3d9")
             canonical_runtime.write_bytes(self._pe(0x8664) + b"canonical-runtime")
             for dll in (canonical_d3d9, canonical_runtime):
@@ -106,13 +106,13 @@ class BuiltinStagingArchitectureTests(unittest.TestCase):
             test_dir = build / "tests/conformance/d3d9"
             test_dir.mkdir(parents=True)
             (test_dir / "d3d9.dll").write_bytes(b"stale-test-copy")
-            (test_dir / "winemetal.dll").write_bytes(b"stale-test-copy")
+            (test_dir / "winemetal_dxmt9.dll").write_bytes(b"stale-test-copy")
             wine = root / "wine/bin/wine"
             (root / "wine/lib/wine/x86_64-windows").mkdir(parents=True)
             (root / "wine/lib/wine/x86_64-unix").mkdir(parents=True)
             wine.parent.mkdir(parents=True, exist_ok=True)
             wine.write_bytes(b"wine")
-            provider = root / "provider/winemetal.so"
+            provider = root / "provider/winemetal_dxmt9.so"
             provider.parent.mkdir()
             provider.write_bytes(b"provider")
             args = SimpleNamespace(
@@ -125,7 +125,7 @@ class BuiltinStagingArchitectureTests(unittest.TestCase):
 
             runner.stage_builtin_pe_dlls(args)
             staged_d3d9 = root / "wine/lib/wine/x86_64-windows/d3d9.dll"
-            staged_runtime = root / "wine/lib/wine/x86_64-windows/winemetal.dll"
+            staged_runtime = root / "wine/lib/wine/x86_64-windows/winemetal_dxmt9.dll"
             self.assertEqual(staged_d3d9.read_bytes(), canonical_d3d9.read_bytes())
             self.assertEqual(staged_runtime.read_bytes(), canonical_runtime.read_bytes())
             self.assertEqual(args.staged_pe_arch, "x64")
@@ -139,7 +139,7 @@ class BuiltinStagingArchitectureTests(unittest.TestCase):
             runtime_dir = root / "src/winemetal"
             d3d9_dir.mkdir(parents=True)
             runtime_dir.mkdir(parents=True)
-            for dll in (d3d9_dir / "d3d9.dll", runtime_dir / "winemetal.dll"):
+            for dll in (d3d9_dir / "d3d9.dll", runtime_dir / "winemetal_dxmt9.dll"):
                 dll.write_bytes(self._pe(0x8664))
                 Path(str(dll) + ".postproc").write_text("old\n")
                 os.utime(Path(str(dll) + ".postproc"),

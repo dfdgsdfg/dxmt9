@@ -157,7 +157,7 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   verifies the range was correct. Exact scoped encoder-breakdown settings are
   rejected for this wrapper. If a range run logs encoder or indexed-probe rows
   before `MIN`, suspect a stale installed unix provider first: the standard
-  staging path now builds `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
+  staging path now builds `build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so`
   before copying it, but manual installs must do the same or new env filters
   will not exist in the active Wine provider. The sidecar also has a
   `--min-free-mb N` / `DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB` launch guard

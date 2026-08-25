@@ -23,7 +23,7 @@ option(
   'wine_builtin_dll',
   type: 'boolean',
   value: true,
-  description: 'Postprocess the PE d3d9.dll and winemetal.dll bridge pair as Wine builtin modules.',
+  description: 'Postprocess the PE d3d9.dll and winemetal_dxmt9.dll bridge pair as Wine builtin modules.',
 )
 
 option(

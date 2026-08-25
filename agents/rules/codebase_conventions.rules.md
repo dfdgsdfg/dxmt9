@@ -103,7 +103,7 @@ loop while moving code, not as a final check.
   directly. It records D3D9 semantics and uses the `winemetal` bridge.
 - Cross-boundary records must be POD, versioned or schema-stable,
   bounds-checkable, and pointer-free.
-- `winemetal.dll` is a PE bridge. `winemetal.so` is the Wine unixlib provider.
+- `winemetal_dxmt9.dll` is a PE bridge. `winemetal_dxmt9.so` is the Wine unixlib provider.
   Do not collapse this boundary for app-local convenience unless the deployment
   specs are changed first.
 - Generated bridge files are produced by scripts from `include/dxmt9/device_c.h`

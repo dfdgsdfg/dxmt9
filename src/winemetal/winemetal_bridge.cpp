@@ -1,10 +1,10 @@
 /* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for the single
- * winemetal.so unixlib path.
+ * winemetal_dxmt9.so unixlib path.
  *
- * winemetal.so is the single unixlib root. It hosts the WMT wrapper surface,
+ * winemetal_dxmt9.so is the single unixlib root. It hosts the WMT wrapper surface,
  * shader-service handlers, and generated device_c provider/runtime thunks.
  * This PE bridge resolves Wine's unix-call dispatcher and forwards all
- * winemetal.dll exports into the paired builtin unixlib table.
+ * winemetal_dxmt9.dll exports into the paired builtin unixlib table.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -156,7 +156,7 @@ struct BridgePerfCounters {
 
 BridgeState& winemetalUnixBridgeState() {
   static BridgeState state{};
-  state.module_name = L"winemetal.so";
+  state.module_name = L"winemetal_dxmt9.so";
 #if defined(DXMT9_WINE_BUILTIN_DLL)
   state.locator_mode = BridgeLocatorMode::Builtin;
 #else
@@ -873,20 +873,20 @@ NTSTATUS loadAppLocalUnixlib(BridgeState& state) {
   }
 
   const std::wstring module_path =
-      moduleSiblingPath(bridgeModuleHandle(), L"winemetal.so");
+      moduleSiblingPath(bridgeModuleHandle(), L"winemetal_dxmt9.so");
   last_status = loadUnixlibExplicitPath(state, module_path, "module-dir");
   if (last_status == DXMT9_STATUS_SUCCESS) {
     return last_status;
   }
 
-  const std::wstring exe_path = moduleSiblingPath(nullptr, L"winemetal.so");
+  const std::wstring exe_path = moduleSiblingPath(nullptr, L"winemetal_dxmt9.so");
   last_status = loadUnixlibExplicitPath(state, exe_path, "exe-dir");
   if (last_status == DXMT9_STATUS_SUCCESS) {
     return last_status;
   }
 
   if (runtimeProviderFallbackAllowed()) {
-    const std::wstring name = L"winemetal.so";
+    const std::wstring name = L"winemetal_dxmt9.so";
     const UNICODE_STRING unixlib_name = makeUnicodeString(name);
     last_status = loadUnixlibByName(state, unixlib_name, "runtime-by-name");
     if (last_status == DXMT9_STATUS_SUCCESS) {

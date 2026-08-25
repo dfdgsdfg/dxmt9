@@ -35,7 +35,7 @@ u64 fnv1a64(std::string_view text) {
 
 // Public dxmt9::core hashBytes/hashString — declared in include/dxmt9/core.hpp
 // but lifted from src/d3d9/core.cpp into the util library so that any layer
-// (incl. the ELF winemetal.so unix module's shader-service core) can call
+// (incl. the ELF winemetal_dxmt9.so unix module's shader-service core) can call
 // them without dragging the d3d9 frontend in. The constant differs from
 // dxmt9::util::fnv1a64's offset basis (1469... vs 1469... + truncated digit)
 // — preserved verbatim from d3d9/core.cpp to keep cached-hash compatibility.

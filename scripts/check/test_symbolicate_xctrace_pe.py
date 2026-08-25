@@ -110,7 +110,7 @@ def module_map_log(probe_addr: str, contained: str) -> str:
     return textwrap.dedent(
         f"""\
         [dxmt9-pe-module-map] Info: module=d3d9.dll base=0x10000000 size=0x100000
-        [dxmt9-pe-module-map] Info: module=winemetal.dll base=0x10200000 size=0x10000
+        [dxmt9-pe-module-map] Info: module=winemetal_dxmt9.dll base=0x10200000 size=0x10000
         [dxmt9-pe-module-map] Info: probe=dxmt9PeModuleMapProbeMarker addr={probe_addr} contained={contained}
         """
     )

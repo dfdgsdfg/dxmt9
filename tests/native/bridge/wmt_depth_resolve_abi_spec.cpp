@@ -6,7 +6,7 @@
 // WMTColorAttachmentInfo.resolve_texture + WMTStoreActionMultisampleResolve.
 //
 // The fields are shared in a single header (src/winemetal/winemetal.h) that
-// both the PE-side winemetal.dll and the unix-side winemetal.so compile, and
+// both the PE-side winemetal_dxmt9.dll and the unix-side winemetal_dxmt9.so compile, and
 // the bridge abi-hash (dxmt9::bridge::kBridgeAbiHash) is codegen from that
 // header — so the PE and unix struct views cannot diverge. This spec asserts
 // the value-level contract (enum codes, zero-init = "no resolve", field

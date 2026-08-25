@@ -64,7 +64,7 @@ bool testNormalizeSortsAndDropsUnusable() {
 bool testClassifyPc() {
   PeSamplerModuleRange ranges[3]{};
   ranges[0] = {0x10000000, 0x100000, 7};   // d3d9.dll
-  ranges[1] = {0x10200000, 0x10000, 8};    // winemetal.dll
+  ranges[1] = {0x10200000, 0x10000, 8};    // winemetal_dxmt9.dll
   ranges[2] = {0x00400000, 0x50000, 9};    // game.exe
   const std::size_t kept = normalizePeSamplerModuleRanges(ranges, 3);
   bool ok = check(kept == 3, "classify fixture keeps every range");

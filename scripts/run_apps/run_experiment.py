@@ -556,10 +556,10 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
 # failures visible in the artifact instead of requiring someone to suspect them.
 STAGED_ARTIFACTS = (
     "lib/wine/x86_64-windows/d3d9.dll",
-    "lib/wine/x86_64-windows/winemetal.dll",
-    "lib/wine/x86_64-unix/winemetal.so",
+    "lib/wine/x86_64-windows/winemetal_dxmt9.dll",
+    "lib/wine/x86_64-unix/winemetal_dxmt9.so",
     "lib/wine/i386-windows/d3d9.dll",
-    "lib/wine/i386-windows/winemetal.dll",
+    "lib/wine/i386-windows/winemetal_dxmt9.dll",
 )
 
 
@@ -1350,10 +1350,10 @@ def main() -> int:
         help="Override timeout seconds; <= 0 disables unless the catalogue entry requires a positive timeout",
     )
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
-    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
+    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal_dxmt9.dll")
     run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
-    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal.dll")
-    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
+    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal_dxmt9.dll")
+    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal_dxmt9.so")
     run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
     run_parser.add_argument(
         "--stage-mingw-runtime",

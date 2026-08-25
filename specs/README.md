@@ -10,10 +10,11 @@ build it. Use [index](index.md) as the topic map and entry point.
 
 These specs use separate compatibility and design scopes:
 
-- **DXMT-compatible architecture**: the implementation and deployment shape
-  follows upstream DXMT's split (`d3d9.dll` -> `winemetal.dll` ->
-  `winemetal.so`), bridge ABI style, and chunked command-submission model. This
-  does not mean copying Wine's `dlls/d3d9` or wined3d internal architecture.
+- **DXMT-compatible architecture**: the implementation follows upstream DXMT's
+  three-binary split while using dxmt9-private module identities
+  (`d3d9.dll` -> `winemetal_dxmt9.dll` -> `winemetal_dxmt9.so`), bridge ABI
+  style, and chunked command-submission model. This does not mean copying
+  Wine's `dlls/d3d9` or wined3d internal architecture.
 - **Wine runtime-compatible**: binaries load and run correctly inside Wine,
   including builtin PE DLL handling, normal/native DLL search, unixlib provider
   discovery, and target Wine runtime dependencies.

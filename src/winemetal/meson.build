@@ -2,9 +2,9 @@ dxmt9_winemetal_internal_inc = include_directories('.', '..', '../dxmt9')
 fs = import('fs')
 
 if host_machine.system() == 'windows'
-  # PE-side winemetal.dll — DllMain bootstrap + __wine_unix_call thunk shims
+  # PE-side winemetal_dxmt9.dll — DllMain bootstrap + __wine_unix_call thunk shims
   # for the bridge ops generated from device_c.h. The actual Metal calls
-  # land in the darwin-built winemetal.so (Mach-O, separate target).
+  # land in the darwin-built winemetal_dxmt9.so (Mach-O, separate target).
   cc = meson.get_compiler('c')
   cpp = meson.get_compiler('cpp')
   wine_builtin_dll = get_option('wine_builtin_dll')
@@ -113,7 +113,7 @@ if host_machine.system() == 'windows'
   endif
 
   winemetal_dll = shared_library(
-    'winemetal',
+    'winemetal_dxmt9',
     files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp',
           'winemetal_abi_check.cpp') + [
       bridge_codegen[0],  # dxmt9_bridge_ops.generated.h — order-only dep so
@@ -152,7 +152,7 @@ if host_machine.system() == 'windows'
     custom_target(
       'winemetal_builtin_postprocess',
       input: winemetal_dll,
-      output: 'winemetal.dll.postproc',
+      output: 'winemetal_dxmt9.dll.postproc',
       command: [
         'sh', '-c', '"$1" --builtin "$2" && touch "$3"',
         'sh', winebuild, '@INPUT@', '@OUTPUT@',

@@ -171,7 +171,7 @@ exp_run_wine_binary() {
 
   local binary=${1:-"$DXMT_EXPERIMENT_BINARY"}
   shift || true
-  local dll_overrides=${DXMT_EXPERIMENT_WINE_DLLOVERRIDES:-d3d9,winemetal=n,b}
+  local dll_overrides=${DXMT_EXPERIMENT_WINE_DLLOVERRIDES:-d3d9,winemetal_dxmt9=n,b}
   local workdir=${DXMT_EXPERIMENT_WORKDIR:-$exp_repo_root}
   local log_dir
   log_dir=$(dirname -- "$DXMT_EXPERIMENT_LOG")
@@ -182,8 +182,8 @@ exp_run_wine_binary() {
     dyld_library_path="$wine_unix_dir${dyld_library_path:+:$dyld_library_path}"
   fi
   local winemetal_so=${DXMT9_WINEMETAL_SO:-}
-  if [[ -z "$winemetal_so" && -f "${DXMT_EXPERIMENT_UNIX_BUILD_DIR:-}/winemetal/unix/winemetal.so" ]]; then
-    winemetal_so="$DXMT_EXPERIMENT_UNIX_BUILD_DIR/winemetal/unix/winemetal.so"
+  if [[ -z "$winemetal_so" && -f "${DXMT_EXPERIMENT_UNIX_BUILD_DIR:-}/winemetal/unix/winemetal_dxmt9.so" ]]; then
+    winemetal_so="$DXMT_EXPERIMENT_UNIX_BUILD_DIR/winemetal/unix/winemetal_dxmt9.so"
   fi
   exp_resolve_profile_defaults
 

@@ -1,4 +1,4 @@
-LIBRARY winemetal.dll
+LIBRARY winemetal_dxmt9.dll
 EXPORTS
   dxmt9_winemetal_unix_call
   dxmt9_winemetal_compile_shader

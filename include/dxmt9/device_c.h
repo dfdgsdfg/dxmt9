@@ -1,5 +1,5 @@
-/* dxmt9/device_c.h -- C ABI bridge between the PE winemetal.dll bridge and
- * the unix-side winemetal.so module. All types use stdint / plain C so this
+/* dxmt9/device_c.h -- C ABI bridge between the PE winemetal_dxmt9.dll bridge and
+ * the unix-side winemetal_dxmt9.so module. All types use stdint / plain C so this
  * header is safe to include from both Apple clang (Mach-O) and llvm-mingw
  * (PE) compilations.
  *

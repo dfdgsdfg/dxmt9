@@ -6,7 +6,7 @@ Two input modes, mutually exclusive:
 `--time-profile` (Tier 1) joins an xctrace `time-profile` export against a
 `DXMT9_PE_MODULE_MAP=1` log. xctrace samples of the Wine game thread are
 largely opaque because the 32-bit PE code (game exe, our PE `d3d9.dll`,
-`winemetal.dll`, and Wine's own PE-side DLLs) has no dyld image xctrace can
+`winemetal_dxmt9.dll`, and Wine's own PE-side DLLs) has no dyld image xctrace can
 attribute to; the module map (`[dxmt9-pe-module-map] module=... base=...
 size=...`, logged once at device creation) lets the top frame of each sample be
 classified by address range.

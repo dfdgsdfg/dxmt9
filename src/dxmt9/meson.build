@@ -2,10 +2,10 @@ dxmt9_shader_service_core_srcs = files('dxmt9_shader_service.cpp')
 dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 
 # Shader-source-generation pipeline — used by both the GPU runtime (encoders
-# + pipeline cache) AND the ELF winemetal.so unix module (for the shader
+# + pipeline cache) AND the ELF winemetal_dxmt9.so unix module (for the shader
 # __wine_unix_call handlers). Listed once here, compiled into runtime_lib
 # below; the unix module compiles the same .cpp files into its own TU so
-# winemetal.so resolves shader_service::compile without dragging the GPU
+# winemetal_dxmt9.so resolves shader_service::compile without dragging the GPU
 # runtime in.
 dxmt9_shader_pipeline_srcs = files(
   'dxmt9_draw_shader.cpp',

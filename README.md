@@ -13,8 +13,8 @@ the game, in the style of DXVK.
 ```
 game.exe
   └─ d3d9.dll         (PE)          D3D9 COM surface; records state and draws
-       └─ winemetal.dll (PE)        bridge: dispatches into the unix side
-            └─ winemetal.so (unix)  Wine unixlib provider: encodes Metal
+       └─ winemetal_dxmt9.dll (PE)        bridge: dispatches into the unix side
+            └─ winemetal_dxmt9.so (unix)  Wine unixlib provider: encodes Metal
                  └─ Metal / CAMetalLayer
 ```
 
@@ -84,8 +84,8 @@ For a 64-bit game:
 
 ```sh
 GAME_DIR="/path/to/game"
-cp pe/x64/d3d9.dll pe/x64/winemetal.dll pe/x64/libc++.dll pe/x64/libunwind.dll "$GAME_DIR/"
-cp unix/x86_64-unix/winemetal.so "$GAME_DIR/"
+cp pe/x64/d3d9.dll pe/x64/winemetal_dxmt9.dll pe/x64/libc++.dll pe/x64/libunwind.dll "$GAME_DIR/"
+cp unix/x86_64-unix/winemetal_dxmt9.so "$GAME_DIR/"
 ```
 
 For a 32-bit game, use `pe/x86/` instead (the unix provider is the same).
@@ -130,7 +130,7 @@ bash scripts/check/verify_tla.sh
 | Core (D3D9 COM surface, device state, draw calls) | Complete |
 | Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
 | Formal verification (TLC, 20 specs) | Complete |
-| Bridge ABI + PE forwarding (`d3d9.dll` / `winemetal.dll` / `winemetal.so`) | Complete |
+| Bridge ABI + PE forwarding (`d3d9.dll` / `winemetal_dxmt9.dll` / `winemetal_dxmt9.so`) | Complete |
 | WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`) | Complete |
 
 Correctness and performance work is ongoing and documented as it lands;

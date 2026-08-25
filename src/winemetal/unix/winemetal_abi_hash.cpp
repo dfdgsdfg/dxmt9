@@ -1,7 +1,7 @@
 // Unix-side handler for the reserved DXMT9_WINEMETAL_CALL_ABI_HASH slot.
 //
-// Returns the codegen-time kBridgeAbiHash baked into winemetal.so so the
-// PE-side winemetal.dll can compare it against its own kBridgeAbiHash at
+// Returns the codegen-time kBridgeAbiHash baked into winemetal_dxmt9.so so the
+// PE-side winemetal_dxmt9.dll can compare it against its own kBridgeAbiHash at
 // DllMain and refuse to load on mismatch (see src/winemetal/main.c).
 //
 // Lives in its own TU rather than alongside the dxmt9c_* dispatch thunks

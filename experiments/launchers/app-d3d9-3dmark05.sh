@@ -185,7 +185,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   exe_dir="$prefix/drive_c/Program Files (x86)/Futuremark/3DMark05"
   exe="$exe_dir/3DMark05.exe"
   log_path=${DXMT_3DMARK05_LOG:-/tmp/3dmark05-direct.log}
-  winemetal_so=${DXMT9_WINEMETAL_SO:-"$exp_repo_root/build-x86_64-builtin/src/winemetal/unix/winemetal.so"}
+  winemetal_so=${DXMT9_WINEMETAL_SO:-"$exp_repo_root/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so"}
 
   cleanup_app_d3d9_3dmark05_direct() {
     local status=${1:-$?}
@@ -255,7 +255,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
 
   cd "$DXMT_EXPERIMENT_WORKDIR"
   WINEPREFIX="$prefix" \
-  WINEDLLOVERRIDES="${DXMT_3DMARK05_DLLOVERRIDES:-d3d9,winemetal=n,b;d3dx9_25,d3dx9_26,d3dx9_27,d3dx9_28,d3dcompiler_43,d3dcompiler_47=n,b}" \
+  WINEDLLOVERRIDES="${DXMT_3DMARK05_DLLOVERRIDES:-d3d9,winemetal_dxmt9=n,b;d3dx9_25,d3dx9_26,d3dx9_27,d3dx9_28,d3dcompiler_43,d3dcompiler_47=n,b}" \
   WINEDEBUG="${WINEDEBUG:-$EXP_DEFAULT_WINEDEBUG}" \
   DYLD_LIBRARY_PATH="$wine_root/lib/wine/x86_64-unix${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
   DXMT_VALIDATE="${DXMT_VALIDATE:-$EXP_DEFAULT_DXMT_VALIDATE}" \

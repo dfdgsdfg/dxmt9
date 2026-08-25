@@ -144,7 +144,7 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
     }
     initGammaRampIdentity();
     // DXMT9_PE_MODULE_MAP: dump the loaded-module map after all modules
-    // (game exe, our PE d3d9.dll/winemetal.dll, Wine DLLs) are loaded.
+    // (game exe, our PE d3d9.dll/winemetal_dxmt9.dll, Wine DLLs) are loaded.
     // Device creation happens well after process/module init, so this is
     // a safe, one-time-per-device site for the Tier 1 PE symbolication
     // diagnostic.
