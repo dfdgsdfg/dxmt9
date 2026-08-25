@@ -2776,10 +2776,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::DeletePatch(UINT) noexcept {
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateQuery(D3DQUERYTYPE type,
                                                    IDirect3DQuery9** ppQ) noexcept {
     notePeDeviceCallAfterPresent("CreateQuery");
-    if (ppQ) *ppQ = nullptr;
     // Query-type support gate. Unsupported / out-of-range types return
-    // D3DERR_NOTAVAILABLE — including the support-probe form
-    // CreateQuery(type, NULL), which must NOT mutate *ppQ (it is NULL).
+    // D3DERR_NOTAVAILABLE and must leave *ppQ untouched (the oracle probes
+    // with a 0xdeadbeef sentinel); the support-probe form
+    // CreateQuery(type, NULL) likewise must not mutate *ppQ. No early
+    // nulling here — the success path assigns, failure paths leave the
+    // caller's pointer as-is.
     // peQueryDataSizeForType reports a non-zero size for exactly the
     // supported set {EVENT, OCCLUSION, TIMESTAMP, TIMESTAMPDISJOINT,
     // TIMESTAMPFREQ}; everything else (e.g. 0xdeadbeef) reports 0.
