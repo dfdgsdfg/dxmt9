@@ -78,6 +78,18 @@ counterexample_models=(
   # a record `gcArena` already released. This is what licenses T2b (capture off
   # `CommandQueue::mutex_`); design doc §8 T2b.
   "ProducerMarkReclaim|.capture.counterexample|Invariant NoCaptureAfterFree is violated"
+  # Managed mutation offload, premise 1: mutation tasks on a SECOND queue,
+  # ordered among themselves but not against chunk replay. A later chunk is
+  # then replayed and encoded while the backing it captured still holds
+  # pre-mutation bytes. See specs/backend/buffer-mutation-offload/spec.md §4
+  # ("no second queue") and R-BACK-44.3.
+  "BufferMutationOffload|.counterexample|Invariant EncodeReadsAppliedBytes is violated"
+  # Same model, premise 2: the LOGICAL rename-ring rotation deferred to the
+  # worker instead of running between reserve and commit. A chunk committed
+  # after the unlock returned captures the pre-rotation backing/revision, so
+  # its draws render pre-unlock content self-consistently — invisible to the
+  # visibility invariant above. R-BACK-44.2 step 2.
+  "BufferMutationOffload|.rotation.counterexample|Invariant SnapshotRevisionIsCurrent is violated"
   # Consuming a projection during Prepare loses it when append subsequently
   # fails; production consumes only the accepted represented set.
   "PeRecorderTransition|.counterexample|Invariant NoLostPending is violated"

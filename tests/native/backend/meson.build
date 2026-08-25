@@ -748,6 +748,22 @@ producer_mark_reclaim_spec = executable(
 test('dxmt9-producer-mark-reclaim-spec', producer_mark_reclaim_spec,
      env: dxmt9_native_test_env)
 
+# Managed buffer mutation offload shared predicates + TLC trace conformance.
+# Binds `specs/verification/tla/BufferMutationOffload.tla` to the C++
+# predicates in `src/dxmt9/dxmt9_mutation_offload_predicates.hpp` that the
+# R-BACK-44.x offload mode will call from `Buffer::unlock` and the
+# `ReplayOffloadQueue` drain loop. Header-only: no Metal, no queue.
+buffer_mutation_offload_spec = executable(
+  'dxmt9-buffer-mutation-offload-spec',
+  'buffer_mutation_offload_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-buffer-mutation-offload-spec', buffer_mutation_offload_spec,
+     env: dxmt9_native_test_env)
+
 # Layer 3 of the semantic-isomorphism plan (design brief §5): the deterministic
 # interleaving harness that discharges the C++ memory-order obligation the
 # model cannot see. Real threads driving the REAL `CommandQueue` (arena-lease
