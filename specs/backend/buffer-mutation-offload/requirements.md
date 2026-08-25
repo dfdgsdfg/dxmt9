@@ -23,38 +23,57 @@ gate, which the #237 measurement meets).
 The managed mutation offload is an opt-in provider mode selected by
 `DXMT9_MANAGED_MUTATION_OFFLOAD` (default off; unset, empty, and `0` select
 the current synchronous upload path byte-identically). It applies only to
-writable unlocks of Managed-pool buffers whose pool record carries a
-versioned backing (`hasVersionedBacking()`); every other unlock class
-(Default dynamic, readonly, non-versioned) keeps its existing path. The
-mode also requires the commit-replay offload worker
-(`DXMT9_OFFLOAD_COMMIT_REPLAY`) to be active; with inline replay the mode
-must resolve to off.
+**plain** writable unlocks of Managed-pool buffers whose pool record
+carries a versioned backing (`hasVersionedBacking()`): locks that carried
+`D3DLOCK_DISCARD` or `D3DLOCK_NOOVERWRITE` are excluded and keep the
+synchronous path, because the PE hazard seal skips `NOOVERWRITE`
+(`bufferLockRequiresHazardFlush`) and `DISCARD` zero-fills the whole core
+`storage_` beyond the locked span — both break the staged-dirty-span
+premise (2026-08-25 design review, findings 1 and 3). The excluded classes
+match the measured population: the #237 Managed upload wall is `1,223`
+plain locks. Every other unlock class (Default dynamic, readonly,
+non-versioned) keeps its existing path. The mode also requires the
+commit-replay offload worker (`DXMT9_OFFLOAD_COMMIT_REPLAY`) to be active;
+with inline replay the mode must resolve to off.
 
 ## R-BACK-44.2 (Synchronous unlock half)
 
-In offload mode, the synchronous half of a Managed writable unlock must,
-before returning to the application, in this order:
+In offload mode, the synchronous half of a Managed writable unlock is a
+transaction with this order (2026-08-25 review finding 4):
 
-1. establish staging capacity and copy the exact dirty span
+1. **reserve** queue admission — a FIFO ordinal and the staged-byte budget
+   (which counts against the existing `DXMT9_OFFLOAD_QUEUE_CHUNKS` /
+   `DXMT9_OFFLOAD_QUEUE_BYTES` bounds, review finding 9) — with no
+   externally visible side effect; then copy the exact dirty span
    (`lockedOffset_`, `lockedSize_` bytes of the core CPU `storage_`, after
-   the wow64 shadow writeback) into task-owned storage — a staging or
-   reservation failure is a pre-effect rejection that leaves every record,
-   ring, and revision unchanged;
+   the wow64 shadow writeback) into task-owned storage and take a concrete
+   backing/record lease (R-BACK-44.2a);
 2. perform the logical backing rotation synchronously: backing selection
    under the existing R-BACK-5.8 / R-BACK-5.11 rules (idle-reuse check
    against `completedSeqId`, fresh allocation fallback, never blocking on
    GPU completion), `renameActiveIndex` / `record.buffer` /
    `record.contents` / `contentRevision` update under the buffer arena's
    unique lock;
-3. enqueue the mutation task (canonical buffer identity, target backing
-   generation, staged bytes, source ordinal) at its producer-order
-   position in the replay FIFO and publish it against the buffer's
-   resource-scoped drain target.
+3. **commit** the reserved task (canonical buffer identity, leased target
+   backing, staged bytes, source ordinal) at its reserved FIFO position
+   and publish it against the buffer's resource-scoped drain target. The
+   commit step must not be fallible: every fallible operation happens
+   before step 2.
 
-The unlock returns success only after all three steps complete
-(`.38`'s "Unlock success may be returned only after immutable payload
-capacity, resource retention, and any failure-visible reservation are
-established").
+Failure of step 1 is a retryable pre-effect rejection: no rotation, no
+revision bump, and — because lock-state clearing across every layer (PE
+`lastLock*`, wow64 shadow lock state, core `locked_` metadata) is deferred
+until after step 3 — the unlock remains retryable with all layers
+consistent (review finding 8). A concurrent queue stop/poison observed at
+step 1 rejects the unlock with the existing fail-stop disposition.
+
+**R-BACK-44.2a (Task lease.)** The committed task owns, until application
+or terminal discard: a retention on the core buffer, the concrete rename
+ring entry it targets (backing handle, contents pointer, generation and
+`contentRevision` at rotation), and a replay-residency lease equivalent to
+the chunk capture's `backingResidency`. The worker applies to the leased
+entry — never to the record's then-current active backing — and destroy or
+GC of the record must respect the lease (review finding 5).
 
 ## R-BACK-44.3 (Ordered application)
 
@@ -80,28 +99,55 @@ discharged by R-BACK-44.3's ordering, not by any wait. Chunks enqueued
 before the mutation captured the pre-rotation backing whose bytes the
 mutation never touches (rotation preserves prior ring backings).
 
+**R-BACK-44.4a (Encode-side reader precondition.)** R-BACK-44.3's FIFO
+order covers replay; encode of an earlier chunk may run after a later
+mutation is applied. Therefore, before offload mode can be enabled, every
+encode-side byte consumer of a versioned buffer record must source bytes
+from the captured snapshot (or be keyed by the captured backing and
+`contentRevision`), never from the live `record.shadow` / `record.contents`
+(review finding 2). The known violator is the encode index staging path:
+`StreamIbStagingCache::findOrStage` is called for index buffers without
+the `!indexSnapshot` guard the vertex-stream path has
+(`dxmt9_draw_encoder_draw.mm`), and diagnostic index readers read
+`indexRecord->shadow` directly. This is a **pre-existing latent race** in
+the synchronous path as well — the R-BACK-2.51(d) unlock drain waits on
+`lastReplayedSeq`, which does not cover encode-time reads — and must be
+fixed as an independent correctness change before this mode, not as part
+of it.
+
 ## R-BACK-44.5 (Direct-call reader fence)
 
 A direct (non-chunk) unix call that reads live buffer record bytes —
 shared-buffer export/alias, any future readback consumer — must wait for
 pending mutation tasks on that buffer through the existing resource-scoped
 replay ledger (R-BACK-2.51(d)(i)), whose `lastQueuedSeq` publication is
-extended to mutation tasks by R-BACK-44.2(3). In offload mode the Managed
-writable unlock itself no longer performs the R-BACK-2.51(d) pre-mutation
-drain: the FIFO ordering of R-BACK-44.3 replaces the wait. Read locks of
-Managed buffers remain served from the core CPU `storage_` and are
-unaffected.
+extended to mutation tasks by R-BACK-44.2(3). Read locks of Managed
+buffers remain served from the core CPU `storage_` and are unaffected.
+
+In offload mode the Managed plain writable unlock itself no longer
+performs the R-BACK-2.51(d) pre-mutation drain. This is not a local
+exception: adopting this mode **amends R-BACK-2.51(d) with a fourth
+admission form** — "(iv) a Managed plain writable unlock in offload mode
+may substitute ordered FIFO-mutation admission (R-BACK-44.2's
+reserve/rotate/commit transaction) for the pre-mutation wait" — and the
+amendment must land in `specs/backend/requirements.md` R-BACK-2.51 itself
+in the same change that implements the mode (review finding 6).
 
 ## R-BACK-44.6 (Synchronicity reclassification evidence)
 
-Offload mode changes `dxmt9c_buffer_unlock`'s bridge-entry synchronicity
-class for the Managed writable case (today `visibility-wait`). The change
-must follow R-BACK-43.2's reclassification procedure with the full
-R-BACK-43.6 evidence stack: a bounded model covering the new
-producer/worker interleavings including at least one counterexample
-configuration that demonstrates the guarded failure when the ordering
-premise is removed, shared pure predicates binding the model to the
-production code, and a native spec exercising the predicate boundaries.
+`dxmt9c_buffer_unlock` retains its entry-wide `visibility-wait`
+classification in the R-BACK-43.1 table — the closed one-class-per-entry
+format is not extended, and the entry still returns the staging /
+rotation / admission acknowledgement so it can never become `record-only`
+(review finding 7). The offload mode is documented as a mode-conditional
+non-waiting `state-mutation-ack` subpath under that ceiling, in the
+producer-concurrency spec's §4 ordering protocols. The behavioral change
+must still follow R-BACK-43.2's procedure with the full R-BACK-43.6
+evidence stack: a bounded model covering the new producer/worker
+interleavings including at least one counterexample configuration that
+demonstrates the guarded failure when the ordering premise is removed,
+shared pure predicates binding the model to the production code, and a
+native spec exercising the predicate boundaries.
 
 ## R-BACK-44.7 (Failure and teardown)
 

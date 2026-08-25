@@ -44,12 +44,17 @@ Three existing invariants carry the proof:
    every draw recorded before the lock captures the pre-rotation backing
    before the unlock can rotate. Rotation preserves prior ring backings;
    the mutation writes only the newly selected backing.
-3. **Post-mutation consumers are ordered, not synchronized.** Replay and
-   encode consume chunks strictly after the offload worker processes them;
-   placing the mutation task at its producer-order FIFO position means
-   every later chunk's replay — and therefore every later encode-side
-   byte read (`record.shadow`, staging caches, snapshot contents) — runs
-   after the bytes are applied.
+3. **Post-mutation consumers are ordered, not synchronized — for replay.**
+   Placing the mutation task at its producer-order FIFO position means
+   every later chunk's replay runs after the bytes are applied. Encode is
+   NOT covered by this order: encode of an *earlier* chunk may run after a
+   *later* mutation applies, so R-BACK-44.4a requires every encode-side
+   byte consumer of a versioned record to be snapshot-sourced (or keyed by
+   captured backing + `contentRevision`) as a prerequisite. The encode
+   index staging path violates this today (missing `!indexSnapshot` guard;
+   a pre-existing latent race against the synchronous unlock as well,
+   since the R-BACK-2.51(d) drain waits on `lastReplayedSeq` only) and is
+   fixed as an independent correctness change before this mode.
 
 The one consumer class outside that order is direct unix calls that read
 live record bytes (shared-buffer export today; any future readback). They
@@ -70,7 +75,7 @@ State ownership under the R-BACK-43.5 taxonomy:
 
 | State | Class | Note |
 |---|---|---|
-| Staged dirty bytes | `worker-owned` after enqueue (`owner-published` at handoff) | Immutable once staged; freed by the worker after application. |
+| Staged dirty bytes + backing lease | `worker-owned` after commit (`owner-published` at handoff) | Immutable once staged; charged against the offload queue byte bounds; the task leases the concrete ring entry (handle, pointer, generation, replay residency) and the worker applies to the leased entry, never to the then-current active backing. Freed/released by the worker after application or terminal discard. |
 | `BufferRecord.buffer` / `renameActiveIndex` / `contentRevision` | `arena-protected` (unchanged) | Rotated synchronously at unlock; captured synchronously at commit. |
 | `BufferRecord.shadow` / rotated backing `contents` bytes | `arena-protected`, with the new rule that in offload mode only the worker (in FIFO order) or a fenced direct call may read them for post-mutation ordinals | The reclassification R-BACK-44.6 must pin. |
 | `ReplayDrainTarget.lastQueuedSeq` | `queue-shared` (unchanged) | Publication extended to mutation tasks. |
@@ -99,10 +104,23 @@ The queue element becomes a two-alternative task (chunk | buffer
 mutation); the worker loop dispatches per alternative. No second queue —
 one queue is what makes the ordering argument one sentence.
 
+Admission is a reserve/commit transaction (R-BACK-44.2): today's
+`pushWithDisposition` assigns `replaySeq` only at adoption under the queue
+mutex and may wait, reject, or stop — rotating first and enqueuing after
+would let a concurrent producer's chunk overtake the mutation, or leave a
+visible rotation with no task on a rejected push. The queue therefore
+gains a reservation API: reserve fixes the FIFO ordinal and charges the
+byte budget with no visible effect; commit is infallible; release covers
+every reject/stop path. Rotation runs strictly between reserve and
+commit.
+
 ## 5. Failure behavior
 
-- Staging or reservation failure at unlock: pre-effect rejection
-  (R-BACK-44.2); no rotation, no revision bump, no enqueue.
+- Staging or reservation failure at unlock: retryable pre-effect
+  rejection (R-BACK-44.2); no rotation, no revision bump, no enqueue, and
+  no lock-state clearing on any layer (PE `lastLock*`, wow64 shadow lock,
+  core lock metadata are cleared only after the commit step), so a retry
+  re-enters a consistent transaction.
 - Worker application failure: fail-stop under the existing offload poison
   discipline; the producer observes it on its next fenced call, matching
   chunk-replay failure semantics.
@@ -129,6 +147,9 @@ one queue is what makes the ordering argument one sentence.
   `.38` composition algebra; V1 is transport-only, one task per unlock.
 - Default-pool dynamic buffers (rename-DISCARD/NOOVERWRITE already cheap
   and fence-bypassed), non-versioned buffers, textures/surfaces.
+- Managed locks carrying `DISCARD` or `NOOVERWRITE` flags (excluded by
+  R-BACK-44.1 after the 2026-08-25 review: the hazard seal skips
+  `NOOVERWRITE` and `DISCARD` zero-fills beyond the staged span).
 - Reducing rotation frequency or backing count for Managed buffers.
 - Any change to read locks, `storage_` ownership, or PE-side hazard
   flushes.
