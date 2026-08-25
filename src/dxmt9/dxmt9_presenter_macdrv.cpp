@@ -1,11 +1,72 @@
 #include "dxmt9_presenter_macdrv.hpp"
 
 #include "dxmt9_queue.hpp"
+#include "dxmt9/wsi_surface_protocol.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 namespace dxmt9::presentimpl {
+
+namespace {
+
+class LegacyHostViewClaimRegistry {
+ public:
+  bool retain(obj_handle_t view) noexcept {
+    if (!view) {
+      return false;
+    }
+    try {
+      std::lock_guard lock(mutex_);
+      ++claims_[view];
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  bool release(obj_handle_t view) noexcept {
+    if (!view) {
+      return false;
+    }
+    try {
+      std::lock_guard lock(mutex_);
+      const auto it = claims_.find(view);
+      if (it == claims_.end()) {
+        // Unknown ownership is never permission to destroy a Wine host view.
+        return false;
+      }
+      const auto transition =
+          wsi::releaseLegacyHostViewClaim(it->second);
+      if (!transition.valid) {
+        return false;
+      }
+      if (transition.remainingClaims == 0u) {
+        claims_.erase(it);
+      } else {
+        it->second = transition.remainingClaims;
+      }
+      return transition.releaseHostView;
+    } catch (...) {
+      // A cold teardown synchronization failure leaks the claim rather than
+      // risking a release through an aliased/stale Wine pointer.
+      return false;
+    }
+  }
+
+ private:
+  std::mutex mutex_;
+  std::unordered_map<obj_handle_t, std::size_t> claims_;
+};
+
+LegacyHostViewClaimRegistry& legacyHostViewClaims() {
+  static LegacyHostViewClaimRegistry registry;
+  return registry;
+}
+
+}  // namespace
 
 void traceEvent(const char* event, u64 seqId, u64 hwnd) {
   using namespace dxmt9::core::metalqueue;
@@ -61,6 +122,20 @@ LayerAcquisition acquireLegacyLayerForHwnd(u64 hwnd, u64 seqId) {
       result.layerHandle = layer.handle;
       result.metalViewHandle = metalView.handle;
       result.ownsLayer = true;
+      if (!legacyHostViewClaims().retain(result.metalViewHandle)) {
+        // Do not release an unregistered handle here: Wine may have returned
+        // the existing view without a retain, so destroying it would poison
+        // the still-current Presenter.  Balance only the resources that this
+        // acquisition independently retained/created and fail closed.
+        result.metalViewHandle = 0;
+        NSObject_release(result.layerHandle);
+        result.layerHandle = 0;
+        result.ownsLayer = false;
+        WMT::MacdrvMetalDevice{result.macdrvDeviceHandle}.release();
+        result.macdrvDeviceHandle = 0;
+        traceEvent("metal-view.claim-failed", seqId, hwnd);
+        return {};
+      }
       return result;
     }
     traceEvent("metal-view.nil", seqId, hwnd);
@@ -75,7 +150,9 @@ LayerAcquisition acquireLegacyLayerForHwnd(u64 hwnd, u64 seqId) {
 
 void releaseLayerAcquisition(LayerAcquisition& acquisition) {
   if (acquisition.metalViewHandle) {
-    WMT::MacdrvMetalView{acquisition.metalViewHandle}.release();
+    if (legacyHostViewClaims().release(acquisition.metalViewHandle)) {
+      WMT::MacdrvMetalView{acquisition.metalViewHandle}.release();
+    }
     acquisition.metalViewHandle = 0;
   }
   if (acquisition.layerHandle && acquisition.ownsLayer) {

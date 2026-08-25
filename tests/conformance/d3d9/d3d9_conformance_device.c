@@ -4427,15 +4427,13 @@ done_d3d9:
  * new policy beyond the QI/CreateDeviceEx wrapper already covered by
  * other Ex device-creation cases.
  *
- * Pins the device-creation policy for hDeviceWindow=GetDesktopWindow():
- * CreateDevice with both hFocusWindow and pp.hDeviceWindow set to the
- * desktop window must accept the request and return S_OK, and a
- * follow-up Clear + Present on the resulting device must succeed
- * (Wine asserts SUCCEEDED on both). This guards against an implicit
- * desktop-window redirect / rejection at device creation or present
- * time. The Wine oracle additionally tests NULL HWND, but that surface
- * is covered separately by the existing window-policy cases — keeping
- * the scope here to the desktop-window pin keeps the scaffold small.
+ * Pins dxmt9's explicit capability policy for
+ * hDeviceWindow=GetDesktopWindow(). Wine accepts this unconditionally, but a
+ * Wine desktop HWND is not guaranteed to expose a host client view on macOS.
+ * dxmt9 accepts the request when the WSI protocol resolves a real layer and
+ * otherwise fails closed with D3DERR_NOTAVAILABLE; it must never construct a
+ * device whose Present silently becomes a no-window no-op. The unconditional
+ * Wine success behavior remains a documented headless-target gap.
  */
 void test_device_desktop_window_present_policy(const struct d3d9_api *api)
 {
@@ -4469,6 +4467,8 @@ void test_device_desktop_window_present_policy(const struct d3d9_api *api)
 
     hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
             desktop, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
+    if (hr == D3DERR_NOTAVAILABLE)
+        goto done_d3d9;
     CHECK_HR(hr, D3D_OK);
     if (FAILED(hr) || !device)
         goto done_d3d9;

@@ -189,8 +189,8 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             core.index("void SwapChain::restoreWindowPresenter")
         ]
         self.assertLess(
-            install.index("registerPresenter(candidate.get())"),
             install.index("beginWsiQuiescence()"),
+            install.index("registerPresenter(candidate.get())"),
         )
         self.assertLess(
             install.index("beginWsiQuiescence()"),
@@ -210,6 +210,53 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             unregister.index("presenter_.reset()"),
         )
         self.assertIn("upperDevice_.lock()", core)
+        self.assertIn("std::lock_guard wsiLock(wsiMutex_)", install)
+
+        snapshots = (
+            REPO_ROOT / "include" / "dxmt9" / "core_snapshots.hpp"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("Presenter* presenter()", snapshots)
+        self.assertIn("PresentId snapshotPresentId()", snapshots)
+        self.assertIn("bool reservePresentMirror(", snapshots)
+        self.assertIn("void cancelPresentMirror(", snapshots)
+
+        snapshot_id = core[
+            core.index("PresentId SwapChain::snapshotPresentId") :
+            core.index("bool SwapChain::reservePresentMirror")
+        ]
+        reserve_mirror = core[
+            core.index("bool SwapChain::reservePresentMirror") :
+            core.index("void SwapChain::cancelPresentMirror")
+        ]
+        cancel_mirror = core[
+            core.index("void SwapChain::cancelPresentMirror") :
+            core.index("std::unique_ptr<dxmt9::Presenter>")
+        ]
+        self.assertIn("std::lock_guard wsiLock(wsiMutex_)", snapshot_id)
+        self.assertIn("std::lock_guard wsiLock(wsiMutex_)", reserve_mirror)
+        self.assertIn("std::lock_guard wsiLock(wsiMutex_)", cancel_mirror)
+
+        legacy = (
+            REPO_ROOT / "src" / "dxmt9" / "dxmt9_presenter_macdrv.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("LegacyHostViewClaimRegistry", legacy)
+        self.assertIn("releaseLegacyHostViewClaim", legacy)
+        self.assertLess(
+            legacy.index("legacyHostViewClaims().release"),
+            legacy.index("WMT::MacdrvMetalView{acquisition.metalViewHandle}.release"),
+        )
+
+        provider = (
+            REPO_ROOT / "src" / "winemetal" / "unix" / "winemetal_private_api.mm"
+        ).read_text(encoding="utf-8")
+        create = provider[
+            provider.index('extern "C" obj_handle_t CreateMetalViewFromHWND') :
+            provider.index('extern "C" obj_handle_t CreateMetalViewFromCocoaView')
+        ]
+        self.assertLess(
+            create.index("if (!win_data->client_cocoa_view)"),
+            create.index("pfn_create_metal_view(win_data->client_cocoa_view"),
+        )
 
         boundary = (
             REPO_ROOT

@@ -226,19 +226,40 @@ HRESULT dxmt9PeTeardownDeviceAndReleaseWsiBinding(
 
 void dxmt9PeFinalizeAndReleaseWsiBinding(
     D9CSwapChain* swapChain, D3D9PeWsiBinding& binding) noexcept {
-  while (FAILED(dxmt9PeTeardownAndReleaseWsiBinding(
-      swapChain, binding))) {
+  HRESULT hr = D3D_OK;
+  std::uint32_t attempts = 0u;
+  do {
+    hr = dxmt9PeTeardownAndReleaseWsiBinding(swapChain, binding);
+    ++attempts;
+    if (SUCCEEDED(hr)) {
+      return;
+    }
     // Terminal ownership cannot be discarded. The unix finalizer is blocking
-    // and non-failable in production; this retry also contains an injected or
-    // transient bridge failure without releasing the sole 6791+HDC capability.
+    // in production. Bound transient bridge retries, then leak the retained
+    // Wine capability rather than hang the process or release it before unix
+    // quiescence was proved.
     SwitchToThread();
-  }
+  } while (dxmt9::wsi::mayRetryFinalWsiTeardown(attempts));
+  logWsiFailure(
+      "unix-finalize-abandoned",
+      reinterpret_cast<HWND>(static_cast<std::uintptr_t>(binding.hwnd)),
+      static_cast<int>(hr));
 }
 
 void dxmt9PeFinalizeDeviceAndReleaseWsiBinding(
     D9CDevice* device, D3D9PeWsiBinding& binding) noexcept {
-  while (FAILED(dxmt9PeTeardownDeviceAndReleaseWsiBinding(
-      device, binding))) {
+  HRESULT hr = D3D_OK;
+  std::uint32_t attempts = 0u;
+  do {
+    hr = dxmt9PeTeardownDeviceAndReleaseWsiBinding(device, binding);
+    ++attempts;
+    if (SUCCEEDED(hr)) {
+      return;
+    }
     SwitchToThread();
-  }
+  } while (dxmt9::wsi::mayRetryFinalWsiTeardown(attempts));
+  logWsiFailure(
+      "unix-device-finalize-abandoned",
+      reinterpret_cast<HWND>(static_cast<std::uintptr_t>(binding.hwnd)),
+      static_cast<int>(hr));
 }

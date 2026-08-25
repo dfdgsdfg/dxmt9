@@ -32,8 +32,25 @@ client surface and borrowed `CAMetalLayer` through the protocol defined by
 `R-WMB-12.1`-`R-WMB-12.6`. If no supported protocol can resolve a presentation
 layer for the `HWND`, device or swap-chain creation must fail cleanly with
 `D3DERR_NOTAVAILABLE`. It must not create a device whose `Present` silently
-becomes a no-window no-op. A future explicitly offscreen creation mode may
-define different behavior under a separate requirement.
+becomes a no-window no-op. `GetDesktopWindow()` is not a capability exception:
+when Wine exposes a host client view it follows the normal presenting path;
+when it does not, current production creation fails closed. Wine-compatible
+desktop/NULL-window success requires a separately specified owned headless
+present target and is not provided by the core's null-Presenter test seam.
+
+**R-CORE-WSI-1.2** A legacy macdrv rebind may return the same non-retained
+`WineMetalView` pointer that backs the current Presenter. Unix code must treat
+that pointer as one physical host view with logical claims, arm the WSI gate
+before acquiring the candidate claim, and call
+`macdrv_view_release_metal_view()` only for the final claim. A null
+`client_cocoa_view` is an unsupported binding, not a callable macdrv target.
+Replacement, restore, typed-output installation, and teardown for one swap
+chain are serialized with every direct Presenter use. The swap chain must not
+publish a raw owning `Presenter*`; callers may snapshot only the generation-
+qualified queue binding or perform a bounded Presenter operation while holding
+the same lifecycle lock. A terminal PE finalizer may make only a bounded
+number of bridge retries; if unix quiescence cannot be proved it leaks the
+retained Wine release capability instead of hanging or releasing it early.
 
 ---
 

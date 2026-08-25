@@ -60,6 +60,35 @@ enum class QuiescenceDisposition : std::uint8_t {
   QueueStopped,
 };
 
+struct LegacyHostViewClaimRelease {
+  std::size_t remainingClaims = 0u;
+  bool releaseHostView = false;
+  bool valid = false;
+};
+
+// Wine's legacy macdrv helper returns the already-installed WineMetalView
+// without retaining it when the same client Cocoa view is rebound.  Treat the
+// returned pointer as one physical host view with dxmt9-local logical claims;
+// only the final claim may call macdrv_view_release_metal_view().
+constexpr LegacyHostViewClaimRelease releaseLegacyHostViewClaim(
+    std::size_t currentClaims) noexcept {
+  if (currentClaims == 0u) {
+    return {};
+  }
+  return {
+      .remainingClaims = currentClaims - 1u,
+      .releaseHostView = currentClaims == 1u,
+      .valid = true,
+  };
+}
+
+inline constexpr std::uint32_t kFinalWsiTeardownAttemptLimit = 8u;
+
+constexpr bool mayRetryFinalWsiTeardown(
+    std::uint32_t completedAttempts) noexcept {
+  return completedAttempts < kFinalWsiTeardownAttemptLimit;
+}
+
 constexpr bool quiescenceComplete(QuiescenceDisposition value) noexcept {
   return value == QuiescenceDisposition::Complete;
 }

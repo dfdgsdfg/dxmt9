@@ -156,7 +156,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_default_diffuse` | 27607 | ✅ | `dxmt9_ffp_decl_missing_defaults_readback` |
 | `test_depth_stencil_init` | 22556 | ✅ | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | ✅ | `dxmt9_depth_bias_occlusion_readback` |
-| `test_desktop_window` | 25880 | ✅ | `test_device_desktop_window_present_policy` |
+| `test_desktop_window` | 25880 | ⚠️ | `test_device_desktop_window_present_policy` accepts either a real host-view-backed `CreateDevice` + `Clear` + `Present` success or dxmt9's clean `D3DERR_NOTAVAILABLE` fail-closed result when the desktop HWND has no host client view; Wine's headless/offscreen success remains an explicit parity gap. |
 | `test_draw_mapped_buffer` | 26213 | ✅ | `test_draw_mapped_buffer_policy` |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | `test_draw_indexed_primitive_up_independence_policy` |
 | `test_dsy` | 23840 | ✅ | `dxmt9_dsy_vpos_readback` |
@@ -349,7 +349,7 @@ Source: [`dlls/d3d9/tests/d3d9ex.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 |------------|----------:|:------:|---------------------------------|
 | `test_backbuffer_resize` | 3848 | ✅ | `test_backbuffer_resize_present_parameter_policy` |
 | `test_create_depth_stencil_surface_ex` | 640 | ✅ | `test_create_depth_stencil_surface_ex` |
-| `test_desktop_window` | 4976 | ✅ | `test_device_desktop_window_present_policy` |
+| `test_desktop_window` | 4976 | ⚠️ | `test_device_desktop_window_present_policy` accepts either a real host-view-backed `CreateDeviceEx` + `Clear` + `Present` success or dxmt9's clean `D3DERR_NOTAVAILABLE` fail-closed result when the desktop HWND has no host client view; Wine's headless/offscreen success remains an explicit parity gap. |
 | `test_device_caps` | 4052 | ✅ | `test_device_caps_roundtrip_policy` |
 | `test_format_unknown` | 3977 | ✅ | `test_creation_failure_out_pointers` |
 | `test_frame_latency` | 4184 | ✅ | `test_ex_frame_latency_state` |

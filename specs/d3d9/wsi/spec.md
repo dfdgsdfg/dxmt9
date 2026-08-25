@@ -82,13 +82,28 @@ Failure to acquire or adopt the layer fails a windowed presenting swap chain
 with `D3DERR_NOTAVAILABLE`. It must not return a device that silently presents
 to no window.
 
+The desktop HWND follows the same capability rule. If Wine resolves a real
+client view/layer, creation and Present use the ordinary windowed path. If the
+desktop HWND (or a NULL effective HWND) has no host view, current production
+returns `D3DERR_NOTAVAILABLE`; the core-only null-Presenter path is not a
+headless D3D9 implementation. The upstream Wine success behavior remains an
+explicit compatibility gap until an owned offscreen target is specified.
+
 ### 2.2 Reset and Rebind
 
-Reset acquires and validates the replacement surface first. The unix provider
-then stops old drawable acquisition, drains or fences old layer users, and
-atomically adopts the replacement. PE releases the old Wine surface only after
-successful adoption. A failed candidate is released and the old valid binding
-is preserved when D3D9 reset semantics allow rollback.
+Reset acquires and validates the replacement Wine surface token first. The unix
+provider serializes the swap-chain WSI lifecycle, arms the admission gate, and
+drains or fences old layer users before it asks legacy macdrv for a candidate
+host-view claim. Wine may return the current `WineMetalView` without retaining
+it; dxmt9 therefore reference-counts logical claims by the physical pointer and
+releases the macdrv view only when the final Presenter claim retires. Candidate
+failure drops its claim, reopens the gate, and preserves the old registered
+Presenter. PE releases the old Wine surface only after successful adoption.
+The same swap-chain lock protects the `PresentId` snapshot and the complete
+duration of cold Presenter mirror operations; there is no public raw-Presenter
+accessor. A snapshot may become stale after the lock is released, but registry
+generation validation makes that stale value resolve to no Presenter rather
+than extending an unowned pointer lifetime.
 
 ### 2.3 Destruction
 
@@ -100,7 +115,10 @@ On swap-chain or device destruction:
 3. Fence a live queue, or join stopped queue workers, then invalidate the
    presenter registry before destroying the unix presenter binding.
 4. Issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
-   token, then clear the PE token even if Wine reports a release failure.
+   token, then clear the PE token even if Wine reports a release failure. A
+   persistent unix teardown/bridge failure is retried only to the bounded
+   finalizer limit; the PE capability is then intentionally leaked because
+   neither early release nor an unbounded destruction hang is safe.
 
 Wine owns the client surface and `CAMetalLayer`. dxmt9 borrows the layer and
 must never independently release it.

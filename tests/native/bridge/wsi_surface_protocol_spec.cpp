@@ -100,6 +100,27 @@ void testCandidateFailureAndQuiescenceDisposition() {
         "only a valid registered candidate plus actual quiescence may commit");
 }
 
+void testLegacyHostViewClaimsAndFinalizerBound() {
+  auto release = dxmt9::wsi::releaseLegacyHostViewClaim(2u);
+  check(release.valid && release.remainingClaims == 1u &&
+            !release.releaseHostView,
+        "releasing the old Presenter keeps an aliased Wine host view live");
+  release = dxmt9::wsi::releaseLegacyHostViewClaim(1u);
+  check(release.valid && release.remainingClaims == 0u &&
+            release.releaseHostView,
+        "only the final Presenter claim releases the Wine host view");
+  release = dxmt9::wsi::releaseLegacyHostViewClaim(0u);
+  check(!release.valid && !release.releaseHostView,
+        "an unknown host-view claim never authorizes a raw release");
+
+  check(dxmt9::wsi::mayRetryFinalWsiTeardown(1u) &&
+            dxmt9::wsi::mayRetryFinalWsiTeardown(
+                dxmt9::wsi::kFinalWsiTeardownAttemptLimit - 1u) &&
+            !dxmt9::wsi::mayRetryFinalWsiTeardown(
+                dxmt9::wsi::kFinalWsiTeardownAttemptLimit),
+        "terminal bridge retries have a finite production bound");
+}
+
 void testAdoptionRollbackPredicate() {
   SurfaceBindingState current = escapeBinding();
   current.unixAdopted = true;
@@ -202,6 +223,7 @@ int main() {
     testWireLayoutAndEscapeValidation();
     testUnsupportedQueryAndLegacySelection();
     testCandidateFailureAndQuiescenceDisposition();
+    testLegacyHostViewClaimsAndFinalizerBound();
     testAdoptionRollbackPredicate();
     testTypedOutputRestoreKeepsExtEscapeLayer();
     testReleaseIsExactlyOnceAfterQuiescence();

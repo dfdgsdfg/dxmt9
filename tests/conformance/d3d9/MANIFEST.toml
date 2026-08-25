@@ -5698,7 +5698,7 @@ arches = ["x64", "x86"]
 area = "device-creation"
 owner = "core/device"
 requirements = ["R-TEST-12.3"]
-acceptance = ["CreateDevice with hFocusWindow=GetDesktopWindow() and pp.hDeviceWindow=GetDesktopWindow() (Windowed=TRUE, SwapEffect=DISCARD) returns S_OK; a follow-up Clear(D3DCLEAR_TARGET) and Present(NULL,NULL,NULL,NULL) on the resulting device both return S_OK — i.e. the desktop window is accepted at device creation and not silently rejected at present time. The Ex variant in d3d9ex.c:test_desktop_window pins the identical contract via CreateDeviceEx, with no policy delta beyond the Ex factory wrapper."]
+acceptance = ["CreateDevice with hFocusWindow=GetDesktopWindow() and pp.hDeviceWindow=GetDesktopWindow() (Windowed=TRUE, SwapEffect=DISCARD) either resolves a real Wine host layer and returns S_OK, after which Clear and Present both return S_OK, or fails creation cleanly with D3DERR_NOTAVAILABLE when no host client view exists. The latter is an explicit dxmt9 WSI capability divergence from Wine until an owned headless present target is implemented; silent no-window Present success is forbidden."]
 status = "partial"
 
 [[case.evidence]]

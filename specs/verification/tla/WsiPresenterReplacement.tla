@@ -5,11 +5,13 @@ CONSTANTS MaxUsers, MaxPresents
 
 VARIABLES phase, gate, users, arena, pendingOldUses,
           oldRegistered, candidateRegistered, oldReleased,
+          oldViewClaim, candidateViewClaim, sharedViewClaimCount,
           attemptedPresents, acceptedPresents, completedPresents,
           waitingPresents, pendingPresents
 
 vars == <<phase, gate, users, arena, pendingOldUses,
           oldRegistered, candidateRegistered, oldReleased,
+          oldViewClaim, candidateViewClaim, sharedViewClaimCount,
           attemptedPresents, acceptedPresents, completedPresents,
           waitingPresents, pendingPresents>>
 
@@ -22,29 +24,14 @@ Init ==
   /\ oldRegistered = TRUE
   /\ candidateRegistered = FALSE
   /\ oldReleased = FALSE
+  /\ oldViewClaim = TRUE
+  /\ candidateViewClaim = FALSE
+  /\ sharedViewClaimCount = 1
   /\ attemptedPresents = 0
   /\ acceptedPresents = 0
   /\ completedPresents = 0
   /\ waitingPresents = 0
   /\ pendingPresents = 0
-
-StartCandidate ==
-  /\ phase = "Idle"
-  /\ phase' = "Candidate"
-  /\ candidateRegistered' = TRUE
-  /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  oldRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
-
-CandidateFailure ==
-  /\ phase = "Candidate"
-  /\ phase' = "Failed"
-  /\ candidateRegistered' = FALSE
-  /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  oldRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
 
 PresentAttempt ==
   /\ attemptedPresents < MaxPresents
@@ -52,6 +39,7 @@ PresentAttempt ==
   /\ waitingPresents' = waitingPresents + 1
   /\ UNCHANGED <<phase, gate, users, arena, pendingOldUses,
                   oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
                   acceptedPresents, completedPresents, pendingPresents>>
 
 PresentEnter ==
@@ -63,6 +51,7 @@ PresentEnter ==
   /\ acceptedPresents' = acceptedPresents + 1
   /\ UNCHANGED <<phase, gate, arena, pendingOldUses,
                   oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
                   attemptedPresents, completedPresents, pendingPresents>>
 
 PresentPublish ==
@@ -74,8 +63,10 @@ PresentPublish ==
                         THEN pendingOldUses + 1
                         ELSE pendingOldUses
   /\ UNCHANGED <<phase, gate, arena, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents>>
 
 ArenaBegin ==
   /\ ~gate
@@ -84,6 +75,7 @@ ArenaBegin ==
   /\ arena' = TRUE
   /\ UNCHANGED <<phase, gate, users, pendingOldUses,
                   oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
                   attemptedPresents, acceptedPresents, completedPresents,
                   waitingPresents, pendingPresents>>
 
@@ -93,20 +85,22 @@ ArenaPublish ==
   /\ arena' = FALSE
   /\ pendingOldUses' = pendingOldUses + 1
   /\ UNCHANGED <<phase, gate, users, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
 BeginQuiescence ==
-  /\ phase = "Candidate"
+  /\ phase = "Idle"
   /\ ~gate
   /\ ~arena
   /\ gate' = TRUE
   /\ phase' = "Quiescing"
   /\ UNCHANGED <<users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
 GpuComplete ==
   /\ pendingPresents > 0
@@ -116,16 +110,18 @@ GpuComplete ==
                         THEN pendingOldUses - 1
                         ELSE pendingOldUses
   /\ UNCHANGED <<phase, gate, users, arena, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, waitingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, waitingPresents>>
 
 GpuCompleteArena ==
   /\ pendingOldUses > pendingPresents
   /\ pendingOldUses' = pendingOldUses - 1
   /\ UNCHANGED <<phase, gate, users, arena, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
 FenceComplete ==
   /\ phase = "Quiescing"
@@ -134,36 +130,85 @@ FenceComplete ==
   /\ pendingOldUses = 0
   /\ phase' = "Quiescent"
   /\ UNCHANGED <<gate, users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
+
+StartCandidate ==
+  /\ phase = "Quiescent"
+  /\ phase' = "Candidate"
+  /\ candidateViewClaim' = TRUE
+  /\ sharedViewClaimCount' = sharedViewClaimCount + 1
+  /\ UNCHANGED <<gate, users, arena, pendingOldUses,
+                  oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, attemptedPresents, acceptedPresents,
+                  completedPresents, waitingPresents, pendingPresents>>
+
+CandidateFailure ==
+  /\ phase = "Candidate"
+  /\ phase' = "Failed"
+  /\ gate' = FALSE
+  /\ candidateViewClaim' = FALSE
+  /\ sharedViewClaimCount' = sharedViewClaimCount - 1
+  /\ UNCHANGED <<users, arena, pendingOldUses,
+                  oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, attemptedPresents, acceptedPresents,
+                  completedPresents, waitingPresents, pendingPresents>>
+
+RegisterCandidate ==
+  /\ phase = "Candidate"
+  /\ candidateViewClaim
+  /\ phase' = "Registered"
+  /\ candidateRegistered' = TRUE
+  /\ UNCHANGED <<gate, users, arena, pendingOldUses,
+                  oldRegistered, oldReleased, oldViewClaim,
+                  candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents,
+                  completedPresents, waitingPresents, pendingPresents>>
 
 CommitReplacement ==
-  /\ phase = "Quiescent"
+  /\ phase = "Registered"
   /\ candidateRegistered
   /\ oldRegistered' = FALSE
+  /\ oldViewClaim' = FALSE
+  /\ sharedViewClaimCount' = sharedViewClaimCount - 1
+  /\ oldReleased' = TRUE
   /\ phase' = "Swapped"
   /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  candidateRegistered, oldReleased, attemptedPresents,
-                  acceptedPresents, completedPresents, waitingPresents,
-                  pendingPresents>>
+                  candidateRegistered, candidateViewClaim,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
-ReleaseOld ==
+ReleaseGate ==
   /\ phase = "Swapped"
   /\ gate
   /\ phase' = "Released"
   /\ gate' = FALSE
-  /\ oldReleased' = TRUE
   /\ UNCHANGED <<users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered, attemptedPresents, acceptedPresents,
-                  completedPresents, waitingPresents, pendingPresents>>
+                  candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
+
+RetryAfterCandidateFailure ==
+  /\ phase = "Failed"
+  /\ oldRegistered
+  /\ oldViewClaim
+  /\ ~candidateRegistered
+  /\ ~candidateViewClaim
+  /\ ~gate
+  /\ phase' = "Idle"
+  /\ UNCHANGED <<gate, users, arena, pendingOldUses,
+                  oldRegistered, candidateRegistered, oldReleased,
+                  oldViewClaim, candidateViewClaim, sharedViewClaimCount,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
 Stutter ==
   UNCHANGED vars
 
 Next ==
-  \/ StartCandidate
-  \/ CandidateFailure
   \/ PresentAttempt
   \/ PresentEnter
   \/ PresentPublish
@@ -173,13 +218,17 @@ Next ==
   \/ GpuComplete
   \/ GpuCompleteArena
   \/ FenceComplete
+  \/ StartCandidate
+  \/ CandidateFailure
+  \/ RetryAfterCandidateFailure
+  \/ RegisterCandidate
   \/ CommitReplacement
-  \/ ReleaseOld
+  \/ ReleaseGate
   \/ Stutter
 
 TypeOK ==
-  /\ phase \in {"Idle", "Candidate", "Failed", "Quiescing",
-                 "Quiescent", "Swapped", "Released"}
+  /\ phase \in {"Idle", "Quiescing", "Quiescent", "Candidate",
+                 "Registered", "Failed", "Swapped", "Released"}
   /\ gate \in BOOLEAN
   /\ users \in 0..MaxUsers
   /\ arena \in BOOLEAN
@@ -187,6 +236,9 @@ TypeOK ==
   /\ oldRegistered \in BOOLEAN
   /\ candidateRegistered \in BOOLEAN
   /\ oldReleased \in BOOLEAN
+  /\ oldViewClaim \in BOOLEAN
+  /\ candidateViewClaim \in BOOLEAN
+  /\ sharedViewClaimCount \in 0..2
   /\ attemptedPresents \in 0..MaxPresents
   /\ acceptedPresents \in 0..MaxPresents
   /\ completedPresents \in 0..MaxPresents
@@ -201,18 +253,30 @@ PresentOrdinalConservation ==
   /\ acceptedPresents <= attemptedPresents
 
 CandidateFailurePreservesOld ==
-  phase = "Failed" => oldRegistered /\ ~oldReleased
+  phase = "Failed" =>
+    oldRegistered /\ ~oldReleased /\ oldViewClaim /\
+    ~candidateViewClaim /\ ~gate
 
 ReleaseRequiresActualQuiescence ==
   oldReleased =>
-    ~oldRegistered /\ pendingOldUses = 0
+    ~oldRegistered /\ pendingOldUses = 0 /\ candidateViewClaim
+
+HostViewClaimSafety ==
+  /\ (oldRegistered => oldViewClaim)
+  /\ (candidateRegistered => candidateViewClaim)
+  /\ oldViewClaim \/ candidateViewClaim
+  /\ sharedViewClaimCount =
+       (IF oldViewClaim THEN 1 ELSE 0) +
+       (IF candidateViewClaim THEN 1 ELSE 0)
+  /\ sharedViewClaimCount > 0
 
 CommittedReplacementWasQuiescent ==
-  phase \in {"Quiescent", "Swapped"} =>
+  phase \in {"Quiescent", "Candidate", "Registered", "Swapped"} =>
     users = 0 /\ ~arena /\ pendingOldUses = 0
 
 GateHeldThroughRegistrySwap ==
-  phase \in {"Quiescing", "Quiescent", "Swapped"} => gate
+  phase \in {"Quiescing", "Quiescent", "Candidate", "Registered", "Swapped"}
+    => gate
 
 Spec ==
   /\ Init
@@ -224,8 +288,10 @@ Spec ==
   /\ WF_vars(GpuCompleteArena)
   /\ WF_vars(BeginQuiescence)
   /\ WF_vars(FenceComplete)
+  /\ WF_vars(StartCandidate)
+  /\ WF_vars(RegisterCandidate)
   /\ WF_vars(CommitReplacement)
-  /\ WF_vars(ReleaseOld)
+  /\ WF_vars(ReleaseGate)
 
 AttemptedPresentsEventuallyComplete ==
   attemptedPresents = MaxPresents ~> completedPresents = MaxPresents

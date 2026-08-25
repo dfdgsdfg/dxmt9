@@ -309,6 +309,28 @@ std::shared_ptr<dxmt9::Device> SwapChain::lockUpperDevice() const noexcept {
   return {};
 }
 
+PresentId SwapChain::snapshotPresentId() const noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
+  return presentId_;
+}
+
+bool SwapChain::reservePresentMirror(
+    const dxmt9::PresentOutputTarget& target,
+    std::shared_ptr<dxmt9::PresentMirrorTicket> ticket) noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
+  return presenter_ && presenter_->reservePresentMirror(target, std::move(ticket));
+}
+
+void SwapChain::cancelPresentMirror(
+    const std::shared_ptr<dxmt9::PresentMirrorTicket>& ticket) noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
+  if (presenter_) {
+    presenter_->cancelPresentMirror(ticket);
+  } else if (ticket) {
+    ticket->cancel();
+  }
+}
+
 std::unique_ptr<dxmt9::Presenter> SwapChain::makeWindowPresenter(
     u32 protocol, u64 hwnd, u64 layerToken,
     HResult& failure) const noexcept {
@@ -358,6 +380,7 @@ std::unique_ptr<dxmt9::Presenter> SwapChain::makeWindowPresenter(
 
 bool SwapChain::installPresentOutput(
     std::shared_ptr<dxmt9::PresentOutput> output) noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
   if (!output) {
     return false;
   }
@@ -365,6 +388,11 @@ bool SwapChain::installPresentOutput(
   if (!upper || !upper->wmtDevice()) {
     return false;
   }
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::quiescenceComplete(quiescence)) {
+    return false;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
   std::unique_ptr<dxmt9::Presenter> candidate;
   try {
     candidate = std::make_unique<dxmt9::Presenter>(
@@ -381,13 +409,11 @@ bool SwapChain::installPresentOutput(
   if (!candidateId) {
     return false;
   }
-  const auto quiescence = upper->beginWsiQuiescence();
   if (!dxmt9::wsi::presenterReplacementMayCommit(
           true, true, quiescence)) {
     upper->queue().unregisterPresenter(candidateId);
     return false;
   }
-  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
@@ -395,10 +421,16 @@ bool SwapChain::installPresentOutput(
 }
 
 void SwapChain::restoreWindowPresenter() noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
   const auto upper = lockUpperDevice();
   if (!upper) {
     return;
   }
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::quiescenceComplete(quiescence)) {
+    return;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
   HResult failure = D3DERR_NOTAVAILABLE;
   auto candidate = makeWindowPresenter(
       wsiProtocol_, wsiHwnd_, wsiLayerToken_, failure);
@@ -409,13 +441,11 @@ void SwapChain::restoreWindowPresenter() noexcept {
   if (!candidateId) {
     return;
   }
-  const auto quiescence = upper->beginWsiQuiescence();
   if (!dxmt9::wsi::presenterReplacementMayCommit(
           true, true, quiescence)) {
     upper->queue().unregisterPresenter(candidateId);
     return;
   }
-  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
@@ -423,6 +453,7 @@ void SwapChain::restoreWindowPresenter() noexcept {
 
 HResult SwapChain::adoptWsiSurface(
     u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken) noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
   if (hwnd == 0u ||
       (protocol == static_cast<u32>(dxmt9::wsi::SurfaceProtocol::ExtEscapeV1) &&
        (surfaceToken == 0u || layerToken == 0u)) ||
@@ -436,6 +467,11 @@ HResult SwapChain::adoptWsiSurface(
   if (!upper) {
     return D3DERR_NOTAVAILABLE;
   }
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::quiescenceComplete(quiescence)) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
   HResult failure = D3DERR_NOTAVAILABLE;
   auto candidate = makeWindowPresenter(protocol, hwnd, layerToken, failure);
   if (!candidate || !candidate->valid()) {
@@ -446,16 +482,15 @@ HResult SwapChain::adoptWsiSurface(
     return E_OUTOFMEMORY;
   }
 
-  // Candidate-first replacement: construction and registry allocation cannot
-  // disturb the current presenter. Only after both succeed do we drain every
-  // layer user, retire the old binding, and publish the replacement.
-  const auto quiescence = upper->beginWsiQuiescence();
+  // The gate is armed before any legacy macdrv host-view call. Wine may return
+  // the already-installed Metal view for a same-client-view rebind; the
+  // LayerAcquisition claim registry keeps that one physical view alive while
+  // registry ownership moves from the old Presenter to the candidate.
   if (!dxmt9::wsi::presenterReplacementMayCommit(
           true, true, quiescence)) {
     upper->queue().unregisterPresenter(candidateId);
     return D3DERR_NOTAVAILABLE;
   }
-  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
@@ -466,6 +501,7 @@ HResult SwapChain::adoptWsiSurface(
 }
 
 HResult SwapChain::teardownWsiSurface() noexcept {
+  std::lock_guard wsiLock(wsiMutex_);
   if (!presenter_) {
     wsiProtocol_ = 0u;
     wsiHwnd_ = 0u;

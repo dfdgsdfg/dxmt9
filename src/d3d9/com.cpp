@@ -91,7 +91,7 @@ class Direct3DSwapChain9Impl final : public IDirect3DSwapChain9, public RefCount
     if (auto backBuffer = swapChain_->backBuffer()) {
       desc.sourceSurface = backBuffer->handle();
     }
-    desc.presentId = swapChain_->presentId();
+    desc.presentId = swapChain_->snapshotPresentId();
     return swapChain_->present(device_->backend(), desc);
   }
 

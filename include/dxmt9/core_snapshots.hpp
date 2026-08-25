@@ -12,6 +12,7 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +23,8 @@
 
 namespace dxmt9 {
 class PresentOutput;
+struct PresentOutputTarget;
+class PresentMirrorTicket;
 }
 
 namespace dxmt9::core {
@@ -2163,19 +2166,21 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   void resize(const PresentParameters& params);
   HResult present(std::shared_ptr<dxmt9::Device> device, const SwapDesc& desc);
 
-  // Per-window Presenter (WMT::MetalLayer-centric upper object). Owned by
-  // this swap chain; nullptr on test paths where the upper dxmt9::Device
-  // has no WMT::Device. Production submit/present paths thread the
-  // queue-local presentId() instead — the raw Presenter pointer is kept
-  // here only for the d3d9-internal accessors that pre-date the
-  // registry (none of them cross the PE/unix wire).
-  dxmt9::Presenter* presenter() const noexcept { return presenter_.get(); }
-
   // Queue-local opaque binding registered by WSI adoption. Zero when
   // no Presenter could be constructed (test path / hwnd=0). Travels on
   // core::SwapDesc; the unix-side CommandQueue resolves it back to a
-  // Presenter* (and any pending drawable token).
-  PresentId presentId() const noexcept { return presentId_; }
+  // Presenter* (and any pending drawable token). The value snapshot is safe
+  // to use after this call: replacement invalidates its registry generation,
+  // so a late consumer resolves it to nullptr rather than a freed Presenter.
+  PresentId snapshotPresentId() const noexcept;
+
+  // Cold Render Tape mirror operations are serialized with Presenter
+  // replacement. Never expose the owning raw Presenter pointer to callers.
+  bool reservePresentMirror(
+      const dxmt9::PresentOutputTarget& target,
+      std::shared_ptr<dxmt9::PresentMirrorTicket> ticket) noexcept;
+  void cancelPresentMirror(
+      const std::shared_ptr<dxmt9::PresentMirrorTicket>& ticket) noexcept;
 
   // Installs a typed cold-path output target for provider identity replay.
   // Existing queue binding and Presenter encode semantics remain in use.
@@ -2207,6 +2212,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   u32 wsiProtocol_ = 0u;
   u64 wsiHwnd_ = 0u;
   u64 wsiLayerToken_ = 0u;
+  mutable std::mutex wsiMutex_;
 };
 
 namespace detail {

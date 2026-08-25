@@ -556,6 +556,14 @@ extern "C" obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t devi
     return NULL_OBJECT_HANDLE;
   }
 
+  if (!win_data->client_cocoa_view) {
+    pfn_release_win_data(win_data);
+    if (layer) {
+      *layer = NULL_OBJECT_HANDLE;
+    }
+    return NULL_OBJECT_HANDLE;
+  }
+
   macdrv_metal_view metal_view =
       pfn_create_metal_view(win_data->client_cocoa_view, (macdrv_metal_device)device);
   obj_handle_t view_handle = (obj_handle_t)metal_view;

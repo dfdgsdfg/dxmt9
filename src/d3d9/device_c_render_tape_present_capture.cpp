@@ -22,9 +22,7 @@ void cancelPresentCapture(D9CDevice* device) noexcept {
   auto& lease = *device->renderTapePresentCapture;
   try {
     if (auto swap = device->dev().swapChain(0u)) {
-      if (auto* presenter = swap->presenter()) {
-        presenter->cancelPresentMirror(lease.ticket);
-      }
+      swap->cancelPresentMirror(lease.ticket);
     }
   } catch (...) {
     // Cancellation is best-effort at the Presenter boundary, but the lease
@@ -142,7 +140,7 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
     }
     auto swap = device->dev().swapChain(0u);
     auto upper = device->dev().upperDevice();
-    if (!swap || !upper || !upper->pool() || !swap->presenter()) {
+    if (!swap || !upper || !upper->pool()) {
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     upper->flush();
@@ -167,7 +165,7 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
         .width = mirrorDesc.width,
         .height = mirrorDesc.height,
     };
-    if (!swap->presenter()->reservePresentMirror(target, ticket)) {
+    if (!swap->reservePresentMirror(target, ticket)) {
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     try {
@@ -182,7 +180,7 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
               .d3dFormat = dxmt9::d3d9::devicec::fmtToD3D(mirrorDesc.format),
           });
     } catch (...) {
-      swap->presenter()->cancelPresentMirror(ticket);
+      swap->cancelPresentMirror(ticket);
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     return dxmt9::core::D3D_OK;
