@@ -1,0 +1,134 @@
+---
+type: spec
+title: Managed Buffer Mutation Offload — Design
+description: Ownership, ordering protocol, failure behavior, and verification mapping for R-BACK-44.x.
+tags: [backend, buffers, producer-concurrency, offload]
+---
+
+# Managed Buffer Mutation Offload — Design
+
+Design for R-BACK-44.1..44.8 (`requirements.md`). Status: designed, not
+implemented — see `gap.md`.
+
+## 1. Problem shape
+
+Today a Managed-pool writable unlock runs entirely on the producer thread
+inside the `dxmt9c_buffer_unlock` bridge crossing: drain the replay ledger
+(R-BACK-2.51(d)), rotate the rename ring, and copy the full buffer twice
+(`Pool::uploadBufferData` → `record.shadow` + `record.contents`). Measured
+on GT2 (#237): `1,223` calls, `8.93GB` uploaded from partial locks,
+`2,157ms/run` = `1.19ms/present` at `1.76ms/call` — the largest single
+owner of the producer thread's bridge residence, on the thread that is the
+workload's only saturated stage while the offload worker idles ~43%.
+
+The split this design makes: everything a later synchronous observer can
+see (backing identity, content revision, ledger publication) stays
+synchronous; everything that is only byte motion (copy-forward + dirty
+patch + shadow update) moves to the offload worker at the mutation's exact
+FIFO position.
+
+## 2. Why the content each draw sees is unchanged
+
+Three existing invariants carry the proof:
+
+1. **Capture is a value snapshot.** `Pool::captureChunkBufferBinding`
+   freezes the active backing's Metal handle, contents address, byte size,
+   and `contentRevision` at commit time; the draw encoder reads only the
+   captured snapshot for versioned records (`dxmt9_draw_encoder_draw.mm`,
+   stream/index snapshot resolution), never re-deriving from the live
+   record. A later rotation cannot retarget an already-captured draw.
+2. **Pre-mutation draws are sealed before the mutation.** The PE-side
+   buffer hazard flush (`bufferLockRequiresHazardFlush`,
+   `FlushPeRecorderForBufferHazardForChild`) commits any pending chunk
+   that references the buffer before a Managed writable lock proceeds, so
+   every draw recorded before the lock captures the pre-rotation backing
+   before the unlock can rotate. Rotation preserves prior ring backings;
+   the mutation writes only the newly selected backing.
+3. **Post-mutation consumers are ordered, not synchronized.** Replay and
+   encode consume chunks strictly after the offload worker processes them;
+   placing the mutation task at its producer-order FIFO position means
+   every later chunk's replay — and therefore every later encode-side
+   byte read (`record.shadow`, staging caches, snapshot contents) — runs
+   after the bytes are applied.
+
+The one consumer class outside that order is direct unix calls that read
+live record bytes (shared-buffer export today; any future readback). They
+already fence through the resource-scoped replay ledger; publishing
+mutation tasks to the same per-buffer `ReplayDrainTarget` extends the
+existing wait to cover them (R-BACK-44.5).
+
+## 3. Actors and ownership
+
+| Actor | Role in this design |
+|---|---|
+| Producer thread (app, in `dxmt9c_buffer_unlock`) | Stage dirty span, logical rotation under buffer arena unique lock, FIFO enqueue + ledger publish. No byte materialization, no drain wait for the Managed offload case. |
+| Offload worker (`ReplayOffloadQueue` drain loop) | Applies mutation tasks in FIFO order between chunk replays: copy-forward from pool shadow, dirty patch, shadow update. Fail-stop on application failure. |
+| Encode worker | Unchanged. Reads captured snapshots and live shadow bytes only for chunks the worker has already replayed. |
+| Direct-call readers (export/alias, future readback) | Wait on the buffer's `ReplayDrainTarget` covering both chunks and mutation tasks. |
+
+State ownership under the R-BACK-43.5 taxonomy:
+
+| State | Class | Note |
+|---|---|---|
+| Staged dirty bytes | `worker-owned` after enqueue (`owner-published` at handoff) | Immutable once staged; freed by the worker after application. |
+| `BufferRecord.buffer` / `renameActiveIndex` / `contentRevision` | `arena-protected` (unchanged) | Rotated synchronously at unlock; captured synchronously at commit. |
+| `BufferRecord.shadow` / rotated backing `contents` bytes | `arena-protected`, with the new rule that in offload mode only the worker (in FIFO order) or a fenced direct call may read them for post-mutation ordinals | The reclassification R-BACK-44.6 must pin. |
+| `ReplayDrainTarget.lastQueuedSeq` | `queue-shared` (unchanged) | Publication extended to mutation tasks. |
+
+## 4. Ordering protocol
+
+```mermaid
+sequenceDiagram
+    participant P as Producer (app thread)
+    participant W as Offload worker
+    participant E as Encode worker
+    P->>P: draws -> pending PE chunk
+    P->>W: hazard flush commits chunk A (captures pre-rotation backing)
+    P->>P: Lock(managed, writable) ... app writes
+    P->>P: Unlock: stage dirty span, logical rotate, bump revision
+    P->>W: enqueue MutationTask(buffer, gen, bytes) after A
+    P->>P: draws -> chunk B ... commit B (captures post-rotation backing)
+    W->>W: replay A (reads pre-rotation backing/shadow)
+    W->>W: apply MutationTask (copy-forward + patch + shadow update)
+    W->>W: replay B
+    E->>E: encode A then B (bytes materialized before each)
+```
+
+FIFO transport: `ReplayOffloadQueue` today carries only `RawCommandChunk`.
+The queue element becomes a two-alternative task (chunk | buffer
+mutation); the worker loop dispatches per alternative. No second queue —
+one queue is what makes the ordering argument one sentence.
+
+## 5. Failure behavior
+
+- Staging or reservation failure at unlock: pre-effect rejection
+  (R-BACK-44.2); no rotation, no revision bump, no enqueue.
+- Worker application failure: fail-stop under the existing offload poison
+  discipline; the producer observes it on its next fenced call, matching
+  chunk-replay failure semantics.
+- Reset/destroy/device-lost: pending mutations for a resource are applied
+  or discarded in FIFO order before backing release (R-BACK-44.7);
+  destroy already rides the completion watermark
+  (`NoBackingFreedInFlight`), which the model extension must preserve.
+
+## 6. Verification mapping
+
+| Contract | Evidence (planned) |
+|---|---|
+| Ordering + visibility (R-BACK-44.3/44.4) | New `BufferMutationOffload.tla` (production cfg) modeling producer rotate/enqueue, worker apply, commit capture, encode read; invariant: an encode-side byte read at ordinal `k` observes every mutation with ordinal `< k` applied, and every captured snapshot's revision equals the record revision at its commit. |
+| Counterexample obligation (R-BACK-44.6 via R-BACK-43.6) | `.counterexample.cfg` removing the FIFO-position premise (worker may apply the mutation after a later chunk's replay) must violate the visibility invariant; a second cfg deferring the logical rotation to the worker must violate the snapshot-revision invariant. |
+| Reuse-safety of synchronous rotation | Existing `BufferBackingVersioning.tla` (R-BACK-5.11) — selection logic unchanged; the extension must not weaken `NoUploadOverwriteInFlight` / `NoBackingFreedInFlight`. |
+| Model-to-code binding | Shared pure predicates header (mutation admission, FIFO-position, direct-reader fence predicates), consumed by both the production code and a native spec, following `dxmt9_mark_reclaim_predicates.hpp` / `dxmt9-producer-mark-reclaim-spec`. |
+| Bridge classification | `specs/backend/producer-concurrency/spec.md` classification block row for `dxmt9c_buffer_unlock` updated with the mode-conditional class; `audit_bridge_entry_classification.py` stays green. |
+| Runtime mechanism proof | New counters: mutation tasks enqueued/applied, staged bytes, apply CPU on worker, producer unlock CPU delta; existing `d3d9_buffer_unlock_*` family shows the synchronous half shrinking. |
+| Wild gates | R-BACK-44.8: conformance, GT1/GT3/SFIV visual anchors, GT2 matched A/B (producer wall, FPS, zero GPU errors, locality). |
+
+## 7. Explicitly out of scope (V1)
+
+- Mutation coalescing, dead-mutation elision, DISCARD-chain kills — the
+  `.38` composition algebra; V1 is transport-only, one task per unlock.
+- Default-pool dynamic buffers (rename-DISCARD/NOOVERWRITE already cheap
+  and fence-bypassed), non-versioned buffers, textures/surfaces.
+- Reducing rotation frequency or backing count for Managed buffers.
+- Any change to read locks, `storage_` ownership, or PE-side hazard
+  flushes.

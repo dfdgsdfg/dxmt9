@@ -296,4 +296,9 @@ candidate (inline-const-delta precedent — proven mechanism, no measured
 win). Conformance and the full visual-anchor family remain required only
 if a default flip is ever proposed. **The lane's real continuation is the
 Managed dirty-range / deferred-upload-at-use design, now sized at
-`1.19ms/present` (`~+3.3%` GT2 mathematical ceiling).**
+`1.19ms/present` (`~+3.3%` GT2 mathematical ceiling).** That design is
+specified as `specs/backend/buffer-mutation-offload/` (R-BACK-44.1..44.8,
+`DXMT9_MANAGED_MUTATION_OFFLOAD`): logical rotation stays synchronous so
+commit-time capture is unchanged, byte materialization moves to the replay
+FIFO at its producer-order position, and the R-BACK-2.51(d) unlock drain
+is replaced by ordering for the Managed case.
