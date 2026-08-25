@@ -166,6 +166,44 @@ a `~+3.5%` class candidate before adding the lock-side DISCARD zero-fill
 saving, i.e. larger than the admission-slab ceiling (`~+2.7%`) at far lower
 contract risk.
 
+## Reconciliation with `.38` and backend semantics
+
+`state-churn-encode-append-decomposition.38` (committed in parallel the same
+day, from the current-cap run) reaches the same ledger shape — unlock
+`1.622ms/Present`, bare crossing `~0.3us`, "the plausible remaining value is
+inside buffer mutation execution" — and requires a composition observer with
+a time split before any mutation-stream design. The R-237.4 split above
+delivers `.38`'s time-split requirement and sharpens its verdict: the
+first-order term is not composable adjacent mutations but **full-upload
+write amplification**, a per-call upload-span question that needs no
+mutation reordering or composition algebra.
+
+Backend semantics (`Pool::uploadBufferData{,Range}` and
+`finalizeBufferMap`, `src/dxmt9/dxmt9_resource_pool.cpp:1451-1560`) split
+the full-upload population into two different problems:
+
+- **Managed (`8.92GB`, `1,223` calls, avg `7.3MB`)**: writable unlock
+  rotates the rename ring; this run's selection ledger is `in_place 164 /
+  reuse 919 / fresh 140`, i.e. `86.6%` land on a different backing that
+  genuinely needs full contents under the current rename design — the full
+  copy is load-bearing there. But the byte ledger proves partial-lock
+  amplification: total locked bytes across ALL `38,767` locks are `5.66GB`,
+  of which the range path accounts for `1.65GB`, so managed locks locked at
+  most `~4GB` yet uploaded `8.92GB` twice (shadow + contents). The managed
+  fix class is dirty-range tracking / deferred upload-at-use (real D3D9
+  managed-pool semantics), not a range-limited immediate upload — a larger
+  design.
+- **Default DISCARD (`6.64GB`, `8,446` calls)**: the backing rotation
+  already happened at lock time (`finalizeBufferMap`, R-BACK-5.8), so the
+  unlock full copy uploads the zero-filled remainder of a freshly rotated
+  backing. Contract-wise the unwritten region is undefined after DISCARD;
+  range-limiting the upload (and skipping the lock-side zero-fill +
+  wow64 shadow pre-copy) is the clean candidate, with the caveat that
+  undefined bytes change from zeros to stale garbage for out-of-contract
+  readers — the visual gate family applies. The capture read-set
+  (`record.shadow`) mirror invariant must be restated for a range-limited
+  writer before implementation.
+
 ## Follow-ups
 
 - Candidate mechanisms, now sized (bounded contracts, not yet licensed):
