@@ -250,6 +250,7 @@ def _append_manifest_entry(target_id: str, engine: dict[str, str]) -> bool:
         f'path           = "$REPO_ROOT/experiments/wine/{target_id}"\n'
         f"requires_patch = true\n"
         f'patch_status   = "applied"\n'
+        f'metal_surface_protocol = "legacy-macdrv-symbols"\n'
         f'notes          = "Installed via install_wine.py from {engine["asset"]}."\n'
     )
     MANIFEST_PATH.write_text(text.rstrip() + "\n" + entry)

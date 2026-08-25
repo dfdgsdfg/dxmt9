@@ -75,16 +75,15 @@ PE_RECORDER_COUNTER_PATTERN = re.compile(
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 # R-WMB-6.2 / test_wild.rules.md: surface which WSI layer acquisition path the
-# presenter (`dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) selected.
+# PE WSI control path selected after a successful unix adoption.
 # The presenter emits one line per process via the dxmt9-wsi logger tag, e.g.:
-#   [dxmt9-wsi] info: layer_acquisition=macdrv_functions hwnd=0x12345
+#   [dxmt9-wsi] info: layer_acquisition=extescape-v1 hwnd=0x12345
 WSI_LAYER_ACQUISITION_PATTERN = re.compile(
-    r"^\[dxmt9-wsi\]\s+\w+:\s+layer_acquisition=([A-Za-z0-9_]+)"
+    r"^\[dxmt9-wsi\]\s+\w+:\s+layer_acquisition=([A-Za-z0-9_-]+)"
 )
 VALID_WSI_LAYER_ACQUISITION_PATHS = (
-    "macdrv_functions",
-    "legacy_macdrv_get_cocoa_view",
-    "fallback_nil",
+    "extescape-v1",
+    "legacy-macdrv-symbols",
     "unavailable",
 )
 # The launcher records the experiment profile it resolved
@@ -694,12 +693,11 @@ def extract_wsi_layer_acquisition(log_path: Path) -> str:
     """Return the WSI layer acquisition path the presenter selected.
 
     Parses the one-time `[dxmt9-wsi] info: layer_acquisition=<path> hwnd=...`
-    line emitted by `dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd` (R-WMB-6.2
-    / `agents/rules/test_wild.rules.md`). Returns one of
-    `VALID_WSI_LAYER_ACQUISITION_PATHS`. If the log is absent, never emitted
-    (e.g. process exited before presenting), or contains an unrecognised value,
-    returns ``"unavailable"`` so callers can distinguish "never reached the
-    presenter" from a recorded selection.
+    line emitted by the PE WSI control path after unix adoption (R-WMB-15.2 /
+    `agents/rules/test_wild.rules.md`). Returns one of
+    `VALID_WSI_LAYER_ACQUISITION_PATHS`, or the verbatim token for a future
+    path unknown to this parser. If the log is absent or never emitted (e.g.
+    the process exited before adoption), returns ``"unavailable"``.
     """
     if not log_path.exists():
         return "unavailable"
@@ -1061,6 +1059,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 ),
             }
         )
+        if manifest_entry is not None:
+            env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"] = (
+                manifest_entry.metal_surface_protocol
+            )
         if app.wine_dll_overrides:
             env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
         if app.cx_bottle:
@@ -1153,6 +1155,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "source": manifest_entry.source,
                 "variant": manifest_entry.variant,
                 "path": str(manifest_entry.path),
+                "metal_surface_protocol": manifest_entry.metal_surface_protocol,
             }
             result["prefix_bootstrap"] = prefix_bootstrap_payload
         dxmt9_perf_counters = extract_dxmt9_perf_counters(log_path)
@@ -1178,11 +1181,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         perf_probe_timings = extract_perf_probe_timings(log_path)
         if perf_probe_timings:
             result["perf_probe_timings"] = perf_probe_timings
-        # R-WMB-6.2 / test_wild.rules.md: record which WSI layer acquisition
-        # path the presenter selected so wild-experiment triage can tell at a
-        # glance whether the run hit `macdrv_functions`, the legacy fallback,
-        # or never reached the presenter at all.
+        # R-WMB-15.2: preserve the manifest declaration and the observed WSI
+        # selection independently; an ExtEscape claim never bypasses probing.
         result["wsi"] = {
+            "declared_protocol": (
+                manifest_entry.metal_surface_protocol
+                if manifest_entry is not None
+                else "unknown"
+            ),
             "layer_acquisition": extract_wsi_layer_acquisition(log_path),
         }
 

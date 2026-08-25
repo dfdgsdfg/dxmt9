@@ -1,0 +1,8 @@
+manifest_version = 1
+
+[[wine]]
+id = "bad-protocol"
+source = "manual"
+variant = "vanilla"
+path = "/tmp/bad-protocol"
+metal_surface_protocol = "generic-dlsym"

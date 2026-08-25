@@ -282,10 +282,13 @@ class Presenter {
     bool encoded = false;                // render encoder was opened + committed
   };
 
-  // Acquire the hwnd's CAMetalLayer up-front; on failure valid() is false.
+  // Adopt the protocol-qualified hwnd binding up-front; on failure valid()
+  // is false. ExtEscape layers are borrowed and pinned by PE's Wine surface
+  // token; the exact legacy path owns its macdrv handles locally.
   // archive + archivePath are borrowed pointers (owned by DeviceImpl) used
   // for pipeline persistence — pass nullptr to skip.
-  Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
+  Presenter(WMT::Device device, uint64_t hwnd, uint32_t protocol,
+            uint64_t layerToken,
             WMT::Reference<WMT::BinaryArchive>* archive,
             const std::string* archivePath);
   Presenter(WMT::Device device, std::shared_ptr<PresentOutput> output,

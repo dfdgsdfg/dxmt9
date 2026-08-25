@@ -936,11 +936,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
+    D3D9PeWsiBinding implicitWsiBinding_{};
     // Wine reset_lockable_backbuffer_policy: the implicit swap-chain's
     // PresentParameters.Flags is captured at CreateDevice and re-captured at
     // Reset because the C ABI does not yet round-trip the field.
     DWORD implicitSwapchainFlagsShadow_ = 0;
-
     /* Palette shadow for Wine conformance round-trip and active P8/A8P8
      * texture expansion. Set/Get remain PE-owned state; when a current
      * palette is selected, bound palettized textures push expanded
@@ -2768,7 +2768,7 @@ public:
                    UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
                    HWND window, bool extended,
                    DWORD implicitSwapchainFlags);
-
+    void takeImplicitWsiBinding(D3D9PeWsiBinding& binding) noexcept;
     bool commandChunkReady() const noexcept;
 
     D3D9PeStateBlockContext *stateBlockContext() noexcept;

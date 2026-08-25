@@ -28,6 +28,7 @@ class WineEntry:
     source: str
     variant: str
     path: Path
+    metal_surface_protocol: str
     version: str | None = None
     notes: str | None = None
 
@@ -41,7 +42,10 @@ class WineEntry:
         )
 
 
-_REQUIRED_FIELDS = ("id", "source", "variant", "path")
+_REQUIRED_FIELDS = ("id", "source", "variant", "path", "metal_surface_protocol")
+_METAL_SURFACE_PROTOCOLS = frozenset(
+    ("extescape-v1", "legacy-macdrv-symbols", "unsupported", "unknown")
+)
 
 
 def _expand_path(raw: str) -> Path:
@@ -75,12 +79,18 @@ def load_manifest(path: Path) -> list[WineEntry]:
                 f"wine[{idx}]: duplicate id '{wid}' (also at index {seen[wid]})"
             )
         seen[wid] = idx
+        protocol = raw["metal_surface_protocol"]
+        if protocol not in _METAL_SURFACE_PROTOCOLS:
+            raise ManifestError(
+                f"wine[{idx}]: invalid metal_surface_protocol {protocol!r}"
+            )
         entries.append(
             WineEntry(
                 id=wid,
                 source=raw["source"],
                 variant=raw["variant"],
                 path=_expand_path(raw["path"]),
+                metal_surface_protocol=protocol,
                 version=raw.get("version"),
                 notes=raw.get("notes"),
             )

@@ -5,9 +5,11 @@ id = "dup"
 source = "manual"
 variant = "vanilla"
 path = "/tmp/a"
+metal_surface_protocol = "unsupported"
 
 [[wine]]
 id = "dup"
 source = "manual"
 variant = "dxmt"
 path = "/tmp/b"
+metal_surface_protocol = "unsupported"

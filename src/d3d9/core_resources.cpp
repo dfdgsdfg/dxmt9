@@ -5,6 +5,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/wsi_surface_protocol.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -256,9 +257,7 @@ SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle,
                      std::shared_ptr<Surface> depthStencil)
     : owner_(std::move(owner)), handle_(handle), params_(params),
       backBuffer_(std::move(backBuffer)),
-      depthStencilSurface_(std::move(depthStencil)) {
-  ensurePresenter();
-}
+      depthStencilSurface_(std::move(depthStencil)) {}
 
 SwapChain::~SwapChain() {
   // Release the queue-local Presenter binding before the Presenter
@@ -266,7 +265,7 @@ SwapChain::~SwapChain() {
   // invalidates any in-flight PresentId so a late submitPresent / encode
   // sees a nullptr and skips the present instead of dereferencing
   // freed memory.
-  unregisterPresenter();
+  (void)teardownWsiSurface();
 }
 
 void SwapChain::unregisterPresenter() {
@@ -281,31 +280,39 @@ void SwapChain::unregisterPresenter() {
   presenter_.reset();
 }
 
-void SwapChain::ensurePresenter() {
+std::unique_ptr<dxmt9::Presenter> SwapChain::makeWindowPresenter(
+    u32 protocol, u64 hwnd, u64 layerToken) const {
   auto owner = owner_.lock();
   if (!owner) {
-    return;
+    return {};
   }
   const auto &upper = owner->upperDevice();
   if (!upper) {
-    return;
+    return {};
   }
   auto wmtDevice = upper->wmtDevice();
   if (!wmtDevice) {
-    return;
+    return {};
   }
-  const u64 hwnd = params_.deviceWindow.value;
   if (!hwnd) {
-    return;
+    return {};
   }
-  presenter_ = std::make_unique<dxmt9::Presenter>(wmtDevice, hwnd, 0ull,
-                                                  upper->shaderArchive(),
-                                                  upper->shaderArchivePath());
-  if (!presenter_->valid()) {
-    presenter_.reset();
-    return;
+  const auto surfaceProtocol = static_cast<dxmt9::wsi::SurfaceProtocol>(protocol);
+  if (!dxmt9::wsi::validPresenterRestoreBinding(
+          surfaceProtocol, hwnd, layerToken)) {
+    return {};
   }
-  presentId_ = upper->queue().registerPresenter(presenter_.get());
+  if (surfaceProtocol == dxmt9::wsi::SurfaceProtocol::ExtEscapeV1) {
+    return std::make_unique<dxmt9::Presenter>(
+        wmtDevice, hwnd, protocol, layerToken, upper->shaderArchive(),
+        upper->shaderArchivePath());
+  }
+  if (surfaceProtocol == dxmt9::wsi::SurfaceProtocol::LegacyMacdrvSymbols) {
+    return std::make_unique<dxmt9::Presenter>(
+        wmtDevice, hwnd, protocol, 0ull, upper->shaderArchive(),
+        upper->shaderArchivePath());
+  }
+  return {};
 }
 
 bool SwapChain::installPresentOutput(
@@ -331,8 +338,81 @@ bool SwapChain::installPresentOutput(
 }
 
 void SwapChain::restoreWindowPresenter() {
+  auto owner = owner_.lock();
+  if (!owner || !owner->upperDevice()) {
+    return;
+  }
+  const auto& upper = owner->upperDevice();
+  auto candidate = makeWindowPresenter(wsiProtocol_, wsiHwnd_, wsiLayerToken_);
+  if (!candidate || !candidate->valid()) {
+    return;
+  }
+  const PresentId candidateId = upper->queue().registerPresenter(candidate.get());
+  if (!candidateId) {
+    return;
+  }
   unregisterPresenter();
-  ensurePresenter();
+  presenter_ = std::move(candidate);
+  presentId_ = candidateId;
+}
+
+HResult SwapChain::adoptWsiSurface(
+    u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken) {
+  if (hwnd == 0u ||
+      (protocol == static_cast<u32>(dxmt9::wsi::SurfaceProtocol::ExtEscapeV1) &&
+       (surfaceToken == 0u || layerToken == 0u)) ||
+      (protocol == static_cast<u32>(
+                       dxmt9::wsi::SurfaceProtocol::LegacyMacdrvSymbols) &&
+       (surfaceToken != 0u || layerToken != 0u))) {
+    return D3DERR_NOTAVAILABLE;
+  }
+
+  auto owner = owner_.lock();
+  if (!owner || !owner->upperDevice()) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  const auto& upper = owner->upperDevice();
+  auto candidate = makeWindowPresenter(protocol, hwnd, layerToken);
+  if (!candidate || !candidate->valid()) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  const PresentId candidateId = upper->queue().registerPresenter(candidate.get());
+  if (!candidateId) {
+    return D3DERR_NOTAVAILABLE;
+  }
+
+  // Candidate-first replacement: construction and registry allocation cannot
+  // disturb the current presenter. Only after both succeed do we drain every
+  // layer user, retire the old binding, and publish the replacement.
+  upper->flush();
+  unregisterPresenter();
+  presenter_ = std::move(candidate);
+  presentId_ = candidateId;
+  wsiProtocol_ = protocol;
+  wsiHwnd_ = hwnd;
+  wsiLayerToken_ = layerToken;
+  return D3D_OK;
+}
+
+HResult SwapChain::teardownWsiSurface() {
+  if (!presenter_) {
+    wsiProtocol_ = 0u;
+    wsiHwnd_ = 0u;
+    wsiLayerToken_ = 0u;
+    return D3D_OK;
+  }
+  if (auto owner = owner_.lock()) {
+    if (const auto& upper = owner->upperDevice()) {
+      // flushAndWait is the unix quiescence acknowledgement consumed by PE;
+      // after this returns no command buffer can still reference the layer.
+      upper->flush();
+    }
+  }
+  unregisterPresenter();
+  wsiProtocol_ = 0u;
+  wsiHwnd_ = 0u;
+  wsiLayerToken_ = 0u;
+  return D3D_OK;
 }
 
 bool SwapChain::displaySyncEnabled() const noexcept {

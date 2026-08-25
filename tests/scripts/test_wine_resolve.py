@@ -40,6 +40,14 @@ class LoadManifestTests(unittest.TestCase):
         dxmt = next(e for e in entries if e.id == "fake-dxmt")
         self.assertIsNone(vanilla.notes)
         self.assertEqual(dxmt.notes, "second entry, exercises optional fields")
+        self.assertEqual(vanilla.metal_surface_protocol, "unsupported")
+        self.assertEqual(dxmt.metal_surface_protocol, "legacy-macdrv-symbols")
+
+    def test_invalid_surface_protocol_raises(self):
+        fixture = FIXTURE_DIR / "wine_manifest_invalid_protocol.toml"
+        with self.assertRaises(resolve.ManifestError) as cm:
+            resolve.load_manifest(fixture)
+        self.assertIn("metal_surface_protocol", str(cm.exception))
 
     def test_duplicate_id_raises(self):
         with self.assertRaises(resolve.ManifestError) as cm:

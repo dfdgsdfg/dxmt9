@@ -70,6 +70,24 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
   return out;
 }
 
+extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(
+    D9CSwapChain* s, const D9CWsiSurfaceBinding* binding) {
+  if (!s || !s->iface || !binding ||
+      binding->structSize != sizeof(D9CWsiSurfaceBinding)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  return s->iface->coreSwapChain().adoptWsiSurface(
+      binding->protocol, binding->hwnd,
+      binding->surfaceToken, binding->layerToken);
+}
+
+extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* s) {
+  if (!s || !s->iface) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  return s->iface->coreSwapChain().teardownWsiSurface();
+}
+
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {
   const auto queryType = queryTypeFromD3D(type);
   if (!queryType) {

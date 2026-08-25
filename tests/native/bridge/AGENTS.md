@@ -13,6 +13,7 @@ runtime using pointer-free POD construction and deterministic dispatch.
 | `pe_chunk_record_value_spec.cpp` | Direct canonical producers, PE state staging, retention, and seal/preflight (`R-BACK-2.52`, `R-BACK-2.55`) |
 | `pe_full_snapshot_equivalence_spec.cpp` | Delta/full-snapshot semantic equivalence using typed canonical barrier payloads (`R-BACK-2.55`) |
 | `bridge_ops_spec.cpp` | Generated bridge opcode table parity + DOD chunk op placement (`R-BACK-2.10`, `R-VERIF-7.3`) |
+| `wsi_surface_protocol_spec.cpp` | ExtEscape wire layout, fail-closed selection, adoption rollback, exactly-once release, and exact legacy qualification (`R-WMB-12`–`R-WMB-17`) |
 | `bridge_marshalling_value_spec.cpp` | Native/WoW64 argument blocks and canonical blob marshalling (`R-VERIF-7.3`) |
 | `wmt_setbytes_dispatch_spec.cpp` | `setVertexBytes` / `setFragmentBytes` discriminator via fake unix-call thunk (`R-BACK-12.3`) |
 

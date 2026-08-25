@@ -25,6 +25,7 @@ version        = "wine-9.0 / SikarugirCX 24.0.7 r6"
 path           = "$REPO_ROOT/experiments/wine/sikarugir-cx-24.0.7"
 requires_patch = true
 patch_status   = "applied"
+metal_surface_protocol = "legacy-macdrv-symbols"
 notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible. Verified SFIV end-to-end 2026-05-11. Default wine_id for wild experiments on this machine."
 
 # ─── Documented-as-broken: stripped Heroic / Gcenx builds. ────────────────
@@ -39,6 +40,7 @@ version        = "11.7"
 path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 requires_patch = true
 patch_status   = "unpatched"
+metal_surface_protocol = "unsupported"
 notes          = "winemac.so stripped (only __wine_unix_call_funcs visible); dxmt9 cannot attach a Metal layer. See specs/winemetal/requirements.md R-WMB-6.4."
 
 [[wine]]
@@ -49,6 +51,7 @@ version        = "11.7"
 path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
 requires_patch = true
 patch_status   = "unpatched"
+metal_surface_protocol = "unsupported"
 notes          = "winemac.so md5-identical to vanilla Wine-11.7 (67afe1eb6fab5b958f47a6d58f4306b8). The '-DXMT' suffix bundles pre-built dxmt D3D11 DLLs only — does not patch winemac.so."
 
 # ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
@@ -63,4 +66,5 @@ version        = "wine-11.0-8709 / CrossOver 26"
 path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 requires_patch = true
 patch_status   = "unsupported"
+metal_surface_protocol = "unsupported"
 notes          = "Four blockers (audited 2026-05-11): (a) bin/wine Perl wrapper needs a default CrossOver bottle — bypassable via wineloader or cxbottle CLI. (b) wow64 lacks MemoryWineLoadUnixLibByName (class 1002 → STATUS_INVALID_INFO_CLASS); bottle context does NOT bypass this. Class 1000 is supported. (c) ntdll.so hardcodes /opt/cxoffice/lib/wine for unixlib lookup; WINEDLLDIR0+WINEDLLPATH don't redirect it. (d) CrossOver.app's lib/wine/ is SIP/codesign-protected — winemetal.so cannot be staged there. Use Sikarugir-Engines instead."

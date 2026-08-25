@@ -91,6 +91,8 @@
 #undef dxmt9c_device_get_swap_chain
 #undef dxmt9c_device_get_swap_chain_count
 #undef dxmt9c_device_create_additional_swap_chain
+#undef dxmt9c_swapchain_adopt_wsi_surface
+#undef dxmt9c_swapchain_teardown_wsi_surface
 #undef dxmt9c_device_create_texture
 #undef dxmt9c_device_create_cube_texture
 #undef dxmt9c_device_create_volume_texture

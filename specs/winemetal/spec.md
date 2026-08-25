@@ -121,7 +121,7 @@ patch.
 
 | Evidence | Contract |
 |---|---|
-| Native fake-escape protocol tests | response validation, rollback, balanced release |
+| `dxmt9-wsi-surface-protocol-spec` | payload width, response validation, fail-closed selection, rollback, balanced release, exact legacy selection |
 | PE x64 and WoW64 WSI smoke | Wine escape availability and bridge scalar widths |
 | Reset/additional-swap-chain integration | ordering and per-`HWND` ownership |
 | Negative stock-Wine run | clean unsupported failure, no black-window success |
@@ -131,3 +131,8 @@ patch.
 Runtime evidence must record the Wine root hash, escape protocol, dxmt9 bridge
 ABI hash, and loaded paths for `d3d9.dll`, `winemetal_dxmt9.dll`, and
 `winemetal_dxmt9.so`.
+
+The implementation surfaces are `d3d9_pe_wsi.cpp` for HDC/escape ownership,
+`dxmt9c_swapchain_{adopt,teardown}_wsi_surface` for the cold POD bridge, and
+`SwapChain::{adopt,teardown}WsiSurface` for candidate-first replacement and
+unix quiescence acknowledgement.

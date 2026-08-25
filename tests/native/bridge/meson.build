@@ -110,6 +110,15 @@ test('dxmt9-pe-diagnostics-spec',
      pe_diagnostics_spec,
      args: [meson.project_source_root()])
 
+wsi_surface_protocol_spec = executable(
+  'dxmt9-wsi-surface-protocol-spec',
+  'wsi_surface_protocol_spec.cpp',
+  include_directories: dxmt9_inc,
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-wsi-surface-protocol-spec', wsi_surface_protocol_spec)
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',

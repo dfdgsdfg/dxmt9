@@ -29,6 +29,17 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* a
   return dxmt9p_device_create_additional_swap_chain(arg0, arg1);
 }
 
+extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(
+    D9CSwapChain* arg0, const D9CWsiSurfaceBinding* arg1) {
+  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_swapchain_adopt_wsi_surface");
+  return dxmt9p_swapchain_adopt_wsi_surface(arg0, arg1);
+}
+
+extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* arg0) {
+  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_swapchain_teardown_wsi_surface");
+  return dxmt9p_swapchain_teardown_wsi_surface(arg0);
+}
+
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* arg0, uint32_t type) {
   DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_create_query");
   return dxmt9p_device_create_query(arg0, type);

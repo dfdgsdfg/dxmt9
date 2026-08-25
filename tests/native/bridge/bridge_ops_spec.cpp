@@ -45,9 +45,9 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  // 163 after Render Tape added the source-before-Present finish
-  // operation beside its output oracle and typed color/depth snapshots.
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 163u,
+  // 165 after the dedicated cold WSI adopt and teardown operations were
+  // added without changing the hot CommandChunk schema.
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 165u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
@@ -92,6 +92,12 @@ void testCommandChunkBridgeOpsAreGenerated() {
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_query_get_wire_identity),
         "query identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_swapchain_adopt_wsi_surface),
+        "cold WSI adoption opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_swapchain_teardown_wsi_surface),
+        "cold WSI teardown opcode is generated");
 }
 
 void testDodChunkBridgeOpsStaySingleCallShape() {

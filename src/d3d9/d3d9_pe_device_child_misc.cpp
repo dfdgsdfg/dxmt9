@@ -8,6 +8,7 @@
 #include "d3d9_pe_stateblock_fault.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 #include "d3d9_pe_stateblock_value.hpp"
+#include "d3d9_pe_wsi.hpp"
 
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
@@ -541,14 +542,17 @@ class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
   // on the wrapper and OR them into the value reported by
   // GetPresentParameters.
   DWORD flagsShadow_ = 0;
+  D3D9PeWsiBinding wsiBinding_{};
 
 public:
   D3D9SwapChainImpl(D9CSwapChain *sc, IDirect3DDevice9 *device,
                     D3D9PePresentationContext *recorder = nullptr,
                     D3D9PeDiagnosticObserver *diagnostics = nullptr,
-                    bool extended = false)
+                    bool extended = false,
+                    D3D9PeWsiBinding wsiBinding = {})
       : sc_(sc), device_(device), context_(recorder),
-        diagnostics_(diagnostics), extended_(extended) {
+        diagnostics_(diagnostics), extended_(extended),
+        wsiBinding_(wsiBinding) {
     if (device_)
       device_->AddRef();
   }
@@ -560,6 +564,7 @@ public:
         entry.second->Release();
     }
     cachedBackBuffers_.clear();
+    (void)dxmt9PeTeardownAndReleaseWsiBinding(sc_, wsiBinding_);
     dxmt9c_swapchain_release(sc_);
     if (device_)
       device_->Release();
@@ -920,11 +925,14 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
                                          D3D9PePresentationContext *recorder,
                                          D3D9PeDiagnosticObserver *diagnostics,
                                          bool extended,
-                                         DWORD presentFlagsShadow) noexcept {
+                                         DWORD presentFlagsShadow,
+                                         D3D9PeWsiBinding wsiBinding) noexcept {
   auto *impl = peNewNoexcept<D3D9SwapChainImpl>(
-      swapChain, device, recorder, diagnostics, extended);
-  if (!impl)
+      swapChain, device, recorder, diagnostics, extended, wsiBinding);
+  if (!impl) {
+    (void)dxmt9PeTeardownAndReleaseWsiBinding(swapChain, wsiBinding);
     return nullptr;
+  }
   impl->setFlagsShadow(presentFlagsShadow);
   return impl;
 }

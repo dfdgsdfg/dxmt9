@@ -2151,7 +2151,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   // registry (none of them cross the PE/unix wire).
   dxmt9::Presenter* presenter() const noexcept { return presenter_.get(); }
 
-  // Queue-local opaque binding registered by ensurePresenter. Zero when
+  // Queue-local opaque binding registered by WSI adoption. Zero when
   // no Presenter could be constructed (test path / hwnd=0). Travels on
   // core::SwapDesc; the unix-side CommandQueue resolves it back to a
   // Presenter* (and any pending drawable token).
@@ -2161,9 +2161,13 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   // Existing queue binding and Presenter encode semantics remain in use.
   bool installPresentOutput(std::shared_ptr<dxmt9::PresentOutput> output);
   void restoreWindowPresenter();
+  HResult adoptWsiSurface(
+      u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken);
+  HResult teardownWsiSurface();
 
  private:
-  void ensurePresenter();
+  std::unique_ptr<dxmt9::Presenter> makeWindowPresenter(
+      u32 protocol, u64 hwnd, u64 layerToken) const;
   void unregisterPresenter();
 
   std::weak_ptr<Device> owner_;
@@ -2173,6 +2177,9 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   std::shared_ptr<Surface> depthStencilSurface_;
   std::unique_ptr<dxmt9::Presenter> presenter_{};
   PresentId presentId_{};
+  u32 wsiProtocol_ = 0u;
+  u64 wsiHwnd_ = 0u;
+  u64 wsiLayerToken_ = 0u;
 };
 
 namespace detail {

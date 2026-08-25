@@ -7,9 +7,9 @@ tags: [specs, gap, winemetal, wsi]
 
 # winemetal Gap
 
-The existing provider has a legacy `macdrv_functions` path qualified only for
-exact audited runtimes, but the `ExtEscape` client and its lifetime protocol are
-not implemented. At the 2026-08-25 audit,
+dxmt9 now implements the PE `ExtEscape` client, cold adoption bridge, ordered
+surface lifetime, and exact-qualified legacy aggregate-table fallback. At the
+2026-08-25 implementation baseline,
 [Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
 remains open/conflicted at `07bb09bd2d3974ec035ec0e49fa5bc7e85a3ab41`, while
 [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166) is open at
@@ -25,16 +25,16 @@ compatibility class, not a generally supported runtime.
 
 | Area | Status | Gap |
 |---|---|---|
-| Shared escape compatibility declaration | ❌ | Add one declaration-only header for escape values 6790/6791 and the two-`uint64_t` payload, with Wine revision and LGPL attribution |
-| PE `QUERYESCSUPPORT` / get-surface path | ❌ | Acquire HDC for `HWND`, probe support, validate positive get result and nonzero tokens, and fail cleanly when unavailable |
-| Cold PE/unix layer adoption call | ❌ | Add the pointer-width-independent POD bootstrap/rebind operation without changing hot `CommandChunk` schemas |
-| Ordered exactly-once surface release | ❌ | Quiesce unix presenter use before PE issues `MACDRV_ESCAPE_RELEASE_SURFACE`; cover rollback and double-release prevention |
-| Reset and additional-swap-chain rebind | ❌ | Implement candidate-first atomic adoption and old-surface release ordering |
-| Qualified `macdrv_functions` fallback | ⚠️ partial | The existing path has smoke evidence on a pinned Wine fixture; restrict it to exact `legacy-macdrv-symbols:<runtime-id>` manifest entries and remove generic Wine 11.x assumptions |
-| Runtime protocol manifest | ❌ | Add exact `metal_surface_protocol`, observed acquisition path, independent `unixlib_loader_capabilities`, and result preservation |
-| Native protocol tests | ❌ | Cover unsupported query, malformed/zero response, adoption rollback, and balanced release without Wine/Metal |
+| Shared escape compatibility declaration | ✅ | `winemac_surface_escape.h` pins 6790/6791 and the two-`uint64_t` payload to the cited Wine revision with LGPL attribution |
+| PE `QUERYESCSUPPORT` / get-surface path | ✅ | PE owns `GetDC`/probe/get/`ReleaseDC`, validates both tokens, defensively releases malformed partial results, and fails closed |
+| Cold PE/unix layer adoption call | ✅ | Dedicated fixed-width `D9CWsiSurfaceBinding` adopt/teardown operations leave `CommandChunk` unchanged |
+| Ordered exactly-once surface release | ✅ implementation | Presenter teardown joins acquisition threads and flushes GPU work before PE consumes and clears the one release obligation; Wine integration evidence remains below |
+| Reset and additional-swap-chain rebind | ✅ implementation | Candidate-first adoption preserves the old binding on failure and releases the replaced token only after unix acknowledgement |
+| Qualified `macdrv_functions` fallback | ✅ implementation | Only `legacy-macdrv-symbols:<runtime-id>` whose suffix matches the resolved manifest entry selects the aggregate-table path; generic direct-symbol and Cocoa-view fallbacks were removed |
+| Runtime protocol manifest | ✅ | Resolver requires a validated `metal_surface_protocol`; harness exports the declaration and preserves declared plus observed values in `result.json` |
+| Native protocol tests | ✅ | `dxmt9-wsi-surface-protocol-spec` covers widths, unsupported query, malformed/zero response, rollback, exactly-once release, and legacy selection |
 | x64 and WoW64 Wine integration | ❌ | Requires a Wine build carrying the accepted escape implementation and evidence for create/present/reset/destroy |
 | Post-change `macdrv_functions` regression | ❌ rerun required | Existing builtin x64/WoW64 legacy smoke evidence predates both ExtEscape dispatch and the `winemetal_dxmt9.*` rename; both lanes must pass R-WMB-17.4 on an exact audited fixture before rollout |
-| Unsupported Gcenx/Heroic behavior | ❌ | Prove `D3DERR_NOTAVAILABLE` with one diagnostic instead of success plus a black/no-op window |
+| Unsupported Gcenx/Heroic behavior | ⚠️ implementation complete, evidence open | Source and native predicates fail with `D3DERR_NOTAVAILABLE` plus `layer_acquisition=unavailable`; a negative stock-Wine run is still required |
 | Loader-pass / WSI-fail composition | ❌ | On stock current Wine, require a successful provider ABI handshake followed by `layer_acquisition=unavailable` and clean WSI creation failure |
 | Upstream DXMT coexistence | ❌ | Pair ExtEscape WSI with the `winemetal_dxmt9.*` deployment rename and prove independent D3D9/D3D11 initialization |

@@ -345,6 +345,8 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_get_swap_chain:
   case BridgeOpcode::dxmt9c_device_get_swap_chain_count:
   case BridgeOpcode::dxmt9c_device_create_additional_swap_chain:
+  case BridgeOpcode::dxmt9c_swapchain_adopt_wsi_surface:
+  case BridgeOpcode::dxmt9c_swapchain_teardown_wsi_surface:
   case BridgeOpcode::dxmt9c_swapchain_addref:
   case BridgeOpcode::dxmt9c_swapchain_release:
   case BridgeOpcode::dxmt9c_swapchain_get_back_buffer:
