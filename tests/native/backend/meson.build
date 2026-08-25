@@ -768,9 +768,10 @@ test('dxmt9-buffer-mutation-offload-spec', buffer_mutation_offload_spec,
 # reserve/commit/release transaction, the worker's one-FIFO dispatch across
 # chunks and mutations, and the end-to-end unlock transaction over real
 # core::Buffer / D9CBuffer / Pool objects. Registered twice because
-# `DXMT9_MANAGED_MUTATION_OFFLOAD` is read once per process: the default
-# registration covers the rollback lane (mode off must resolve to the
-# synchronous path), the `-mode-on` one covers the mode itself.
+# `DXMT9_MANAGED_MUTATION_OFFLOAD` is read once per process. The engine
+# default is ON (2026-08-25 promotion), so the rollback registration pins
+# the explicit `0` lane (must resolve to the synchronous path) and the
+# `-mode-on` one covers the mode itself.
 managed_mutation_offload_transaction_spec = executable(
   'dxmt9-managed-mutation-offload-transaction-spec',
   'managed_mutation_offload_transaction_spec.cpp',
@@ -781,7 +782,7 @@ managed_mutation_offload_transaction_spec = executable(
 
 test('dxmt9-managed-mutation-offload-transaction-spec',
      managed_mutation_offload_transaction_spec,
-     env: dxmt9_native_test_env)
+     env: dxmt9_native_test_env_vars + ['DXMT9_MANAGED_MUTATION_OFFLOAD=0'])
 
 test('dxmt9-managed-mutation-offload-transaction-spec-mode-on',
      managed_mutation_offload_transaction_spec,

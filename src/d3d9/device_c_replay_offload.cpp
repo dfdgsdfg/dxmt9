@@ -869,10 +869,18 @@ bool drainDeferredReplayForBufferLock(D9CBuffer* b,
 }
 
 bool managedMutationOffloadEnabled() noexcept {
+  // Engine default ON since 2026-08-25: the R-BACK-44.8 gates passed (GT2
+  // matched A/B +4.6% harmonic with exact mechanism conservation and zero
+  // GPU errors, GT1/GT3/SFIV visual anchors, conserved CB/pass locality,
+  // D3D9 conformance with the mode on). Explicit "0" selects the
+  // byte-identical synchronous-upload rollback lane; admission still
+  // requires the commit-replay offload worker to be active.
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_MANAGED_MUTATION_OFFLOAD");
-    return value && value[0] != '\0' &&
-           !(value[0] == '0' && value[1] == '\0');
+    if (!value || value[0] == '\0') {
+      return true;
+    }
+    return !(value[0] == '0' && value[1] == '\0');
   }();
   return enabled;
 }

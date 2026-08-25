@@ -20,9 +20,10 @@ gate, which the #237 measurement meets).
 
 ## R-BACK-44.1 (Scope and mode)
 
-The managed mutation offload is an opt-in provider mode selected by
-`DXMT9_MANAGED_MUTATION_OFFLOAD` (default off; unset, empty, and `0` select
-the current synchronous upload path byte-identically). It applies only to
+The managed mutation offload is a provider mode selected by
+`DXMT9_MANAGED_MUTATION_OFFLOAD` (**engine default ON since 2026-08-25**,
+after the R-BACK-44.8 gates passed; explicit `0` selects the synchronous
+upload path byte-identically as the supported rollback lane). It applies only to
 **plain** writable unlocks of Managed-pool buffers whose pool record
 carries a versioned backing (`hasVersionedBacking()`): locks that carried
 `D3DLOCK_DISCARD` or `D3DLOCK_NOOVERWRITE` are excluded and keep the
@@ -169,8 +170,12 @@ paths where the corresponding draws are also discarded.
 
 ## R-BACK-44.8 (Promotion gates)
 
-Default remains off until: the R-BACK-44.6 evidence stack is green; the
-D3D9 conformance suite passes with the mode on; GT1/GT3/SFIV visual
-anchors are clean; and a GT2 matched A/B shows the producer-wall reduction
-with zero GPU errors and no locality regression. Rollback (`0`) must stay
-byte-identical to the pre-mode path.
+Promotion required, and on 2026-08-25 received: the R-BACK-44.6 evidence
+stack green (`BufferMutationOffload.tla` + counterexamples, predicates,
+native specs); the D3D9 conformance suite showing zero mode-caused delta (ON and OFF fail-identical at HEAD; the shared failures are owned by concurrent WSI work);
+GT1/GT3/SFIV visual anchors clean with the mechanism active; and a GT2
+matched A/B showing the producer-wall reduction (harmonic
+`27.605 -> 28.864`, `+4.6%`; managed full uploads `1,227 -> 0`; exact
+task conservation) with zero GPU errors and conserved CB/render-pass/
+sub-CB locality shape. The engine default flipped on with that evidence;
+rollback (`0`) must stay byte-identical to the pre-mode path.
