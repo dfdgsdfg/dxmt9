@@ -2318,6 +2318,18 @@ public:
         void clearPendingHotState() noexcept {
             shadow_.PendingDelta::clearHotState();
         }
+        void acceptAllRenderStates() noexcept {
+            shadow_.PendingDelta::renderStates_.clear();
+        }
+        void acceptAllTextureStageStates() noexcept {
+            shadow_.PendingDelta::textureStageStates_.clear();
+        }
+        void acceptAllSamplerStates() noexcept {
+            shadow_.PendingDelta::samplerStates_.clear();
+        }
+        void acceptAllTransforms() noexcept {
+            shadow_.PendingDelta::transforms_.clear();
+        }
         void acceptTexture(std::uint32_t slot) noexcept {
             if (slot < D9C_DRAW_PACKET_MAX_TEXTURES)
                 shadow_.PendingDelta::pendingTextureMask_ &= ~(1u << slot);

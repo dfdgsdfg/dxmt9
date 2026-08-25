@@ -921,9 +921,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
 
-    // Reused sparse-producer storage. The SparseStateInput spans point into
-    // recorderState_.peSparseScratch, so both must outlive the append that consumes them --
-    // they are members for that reason as well as to avoid per-draw zeroing.
+    // Section-sized sparse compatibility storage lives in recorderState_ and
+    // is reserved for oversized, Render Tape, and SWVP override projections.
+    // Ordinary draws/APPLY_STATE use a compact call-local plan.
     bool dsSurfaceExplicit_ = false;
     // The complete Render Tape lifecycle is cold. The nullable owner leaves
     // only one pointer in the normal renderer and constructs no capture
@@ -1164,16 +1164,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // the append emitter and not before.
     dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const;
 
-    // Bytes the drained constant ranges contribute, so the capacity precheck
-    // sees a value on the same scale as the legacy record's
-    // d9c_command_record_draw_*_total_size(), which included the folded const
-    // payload. Without this, enabling DXMT9_PE_INLINE_CONST_DELTA would move
-    // chunk boundaries.
-    std::size_t sparseConstPayloadBytes() const;
-
-    // The recorder's sole state producer. Fills the reused
-    // recorderState_.peSparseState / recorderState_.peSparseHeader from the shadows and the binding view --
-    // no fat packet in between. The decimated draw_packet scope lives here for
+    // Compatibility producer for Render Tape, oversized batches, and SWVP
+    // override packets. Ordinary APPLY_STATE and non-UP draws use the compact
+    // two-pass SparseStatePlan path below and never write section-sized scratch.
+    // The decimated draw_packet scope lives here for
     // the same reason it does on the fat-packet forwarder: it has to cover the
     // COM-to-wire binding translation, not just the section fill.
     // The shadow is const through this producer boundary. Preparation is
@@ -1197,6 +1191,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         bool forceFullSnapshot = false,
         bool inlineConstDelta = false);
 
+    bool buildSparseStatePlanForRecord(
+        const dxmt9::d3d9::pe::PeDrawParams& params,
+        const dxmt9::d3d9::pe::PeDrawPayloads& payloads,
+        dxmt9::d3d9::pe::SparseStatePlan& plan,
+        bool forceFullSnapshot = false,
+        bool inlineConstDelta = false);
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount);
 
     static bool checkedByteCount(UINT count, UINT stride, std::uint32_t& bytes);

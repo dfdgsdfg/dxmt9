@@ -17,9 +17,9 @@ does not yet satisfy it.
 |---|---|---|
 | COM validation, app-visible state, getters | `D3D9DeviceImpl` in `src/d3d9/d3d9_pe_device_impl.hpp` and its cold COM TUs | Metal objects, unix queue state |
 | State-domain value types and typed keys | `src/d3d9/d3d9_pe_state_shadow.hpp`, `d3d9_pe_const_shadow.hpp` | COM lifetime, capture journaling |
-| Sparse normalization | `buildSparseState` / `addChunkContextSections` in `src/d3d9/d3d9_pe_producer.cpp` | consuming pending state before append acceptance |
+| Sparse normalization | `buildSparseStatePlan` / `finalizeSparseStatePlanChunkContext` in `src/d3d9/d3d9_pe_producer.cpp`; compatibility `buildSparseState` only for oversized, Render Tape, and SWVP override projections | wire-row staging, handle retention, or pending consumption during pass 1 |
 | Record/chunk transaction | `CommandChunkBuilder` in `src/d3d9/d3d9_pe_chunk_builder.*` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk` | D3D9 getter authority, Metal execution |
-| PE local pinning | `D3D9PePendingCommandRetainer` in `src/d3d9/d3d9_pe_retainer.*` | wire identity semantics |
+| PE local pinning | `D3D9PePendingCommandRetainer` in `src/d3d9/d3d9_pe_retainer.*`; `CommandChunkBuilder` owns physical retain/rollback | Render Tape logical settlement |
 | Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
 | Capture registry and settlement | Nullable heap-owned `PeCaptureState` in `src/d3d9/d3d9_pe_capture_state.hpp`, operated by `D3D9DeviceImpl` cold methods in `d3d9_pe_device_tape.cpp` | changes to app HRESULT or capture-off cadence |
 | PE recorder diagnostics | Optional `PeDiagnosticsState` in `src/d3d9/d3d9_pe_diagnostics_state.hpp`, operated by cold helpers in `d3d9_pe_device_diag.cpp` and nullable hot gates | recorder protocol counters, pacing limits, semantic shadows, capture transaction state |
@@ -108,6 +108,17 @@ Preparing a record computes a non-owning candidate projection:
 ```text
 Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
 ```
+
+Ordinary draws and APPLY_STATE use a two-pass `SparseStatePlan`. Pass 1 owns
+only bounded masks, category counts, constant ranges, UP spans, draw semantics,
+and borrowed source witnesses held under the recorder lock. It owns no
+`PeSparseScratch`, `SparseStateInput`, or section-sized wire array, performs no
+handle retain, and does not mutate `PendingDelta`. CapacityPre may flush after
+pass 1. The emitter then finalizes destination-chunk stream/index selection and
+pass 2 visits each selected source row once, writing it directly into the
+builder's final typed payload range. The active-record checkpoint owns handle
+retention and rollback. Acceptance rebinds the exact source witnesses and
+selection before consuming pending categories or dirty constant ranges.
 
 Only accepted settlement through the consume capability may perform:
 
@@ -252,7 +263,8 @@ checkpoint even though it is owned outside the builder.
 | `commitRecord` succeeds | record becomes durable in current builder | pins owned by builder | remove exactly represented entries | success or continue to capacity settlement |
 | post-append capacity commit is effect-unknown | sealed accepted record remains owned for Reset/teardown cleanup, not ordinary retry | pins retained | entries remain represented by the accepted record, not reintroduced as a duplicate | failure and recorder poison |
 
-`buildSparseState` and every typed `prepare*Batch` are non-consuming.
+`buildSparseStatePlan`, compatibility `buildSparseState`, and every typed
+`prepare*Batch` are non-consuming. `acceptSparseStatePlan`, compatibility
 `acceptPreparedSparseState`, `acceptInlineConstantDelta`, standalone constant
 flush, and the four oversized adapters all consume through an Accepted
 `AppendPlan`; Failed and Discarded plans retain pending state and the prepared
@@ -330,6 +342,21 @@ a failed commit preserves both. Texture-derived aliases remain generation
 qualified until parent settlement. A pending alias may force one flush and one
 lookup restart before replacement; exhaustion rejects capture without changing
 capture-off behavior.
+
+The physical and logical halves are coupled by
+`CommittedPendingChunkLease`, a non-copyable, callback-scoped capability issued
+only by `CommandChunkBuilder`. The builder proves the complete
+`(kind,generation,objectId)` wire identity and the expected local wrapper
+pointer against a handle below the active-record checkpoint. An active-only
+handle, or a warm retainer pin with no current committed handle, cannot issue a
+lease; rollback therefore cannot leave a stale logical witness. The capability
+does not own a retain or release: the builder retains and rolls back physical
+pins, while the nullable Render Tape registry consumes the witness to transfer
+`pendingChunkRefs`. Drain enumerates typed committed witnesses, visits duplicate
+handles when present, and relies on the boolean-shaped logical ref as the
+exactly-once guard. Alias witnesses are drained before parent witnesses,
+independent of wire handle order. Capture-off adds no sidecar/vector or
+per-command bookkeeping.
 
 ## 4. Identity and callback contracts
 
@@ -456,14 +483,15 @@ backend chunk retains remain private and do not alter public COM refcount
 observations. The prepare/accept boundary is non-reentrant: preparation reads
 into reusable scratch, and only acceptance settles pending state, so a failed
 append cannot erase a later mutation.
-Prepared binding rows are materialized one row at a time into a builder-reserved
-final section range. The builder exposes no mutable payload span: generators
-receive one qualified wire value, resolve handles through the existing typed
-retention path, and the builder addresses the destination by record-relative
-offset after each callback. A failure rolls payload, handle, and retainer state
-back to the same record checkpoint. This removes the former section-sized
-`Wire[Capacity]` staging copy without weakening the prepared-value retry
-witness owned by `PendingDelta` and reusable producer scratch.
+Prepared plan rows are materialized one row at a time into a builder-reserved
+final section range. The builder exposes no mutable payload span: a typed
+visitor receives a call-local sink, binding rows resolve handles through the
+existing retention path, and each value is copied by record-relative offset.
+A failure rolls payload, handle, and retainer state back to the same record
+checkpoint. Ordinary production therefore has no section-sized wire staging
+copy. `PeSparseScratch` and `SparseStateInput` remain value-owned compatibility
+storage only for oversized batches, Render Tape full snapshots, and SWVP
+override packets whose borrowed bindings are restored before append.
 
 ## 6. Shared predicates and counterexamples
 

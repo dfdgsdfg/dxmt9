@@ -2,12 +2,11 @@
 
 // The PE draw-packet / sparse-state producer.
 //
-// buildSparseState is the PE recorder's sole state producer: it reads the
-// hot-state shadow, the constant shadow, the binding view and the draw payloads,
-// and fills a SparseStateInput plus the record's draw header. addChunkContextSections
-// then adds the sections that depend on what the DESTINATION chunk already
-// retains, which is why it is separate -- that input is not available until
-// after the capacity precheck has sealed the previous chunk.
+// buildSparseStatePlan is the ordinary PE recorder producer. It selects a
+// compact, non-consuming plan before CapacityPre; destination-chunk selection
+// is finalized afterwards and pass 2 writes directly into final builder
+// payload. buildSparseState/addChunkContextSections remain the value-owned
+// compatibility projection for oversized, Render Tape, and SWVP overrides.
 //
 // buildSparseState is a pure read of its inputs, including constant dirty
 // ranges when asked to fold them inline. It does NOT clear pending state;
@@ -69,6 +68,43 @@ bool buildSparseState(const PeHotStateShadow& shadow,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeader& header,
                         SparseStateInput& out) noexcept;
+
+// Pass 1 for ordinary APPLY_STATE and draw production. Selects canonical
+// rows/ranges without constructing wire rows, retaining handles, consuming
+// PendingDelta, or touching the builder.
+bool buildSparseStatePlan(const PeHotStateShadow& shadow,
+                          PeConstShadowBlock& constants,
+                          const PeBindingView& bindings,
+                          const PeDrawPayloads& payloads,
+                          const PeDrawParams& params,
+                          bool forceFullSnapshot,
+                          bool inlineConstDelta,
+                          SparseStatePlan& plan) noexcept;
+
+// Finalizes only the destination-chunk-dependent stream/index selection. This
+// belongs inside the append emitter because CapacityPre may flush first.
+bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
+                                         SparseStatePlan& plan) noexcept;
+
+// Pass 2: materializes every selected row directly into the builder's final
+// payload and retains binding handles through the active-record checkpoint.
+bool appendSparseStatePlan(CommandChunkBuilder& builder,
+                           std::uint32_t type,
+                           const SparseStatePlan& plan) noexcept;
+bool appendApplyStatePlan(CommandChunkBuilder& builder,
+                          std::uint32_t flags,
+                          const SparseStatePlan& plan) noexcept;
+
+// Accepts exactly the source witness selected and emitted by a durable plan.
+bool acceptSparseStatePlan(PeHotStateShadow& shadow,
+                           PeConstShadowBlock& constants,
+                           const SparseStatePlan& state,
+                           const AppendPlan& plan,
+                           PeScalarSemanticTokenLedger* tokens = nullptr,
+                           std::uint64_t recordOrdinal = 0u) noexcept;
+
+std::size_t sparseStatePlanConstantPayloadBytes(
+    const SparseStatePlan& plan) noexcept;
 
 // Settles only the constant ranges prepared by buildSparseState after the
 // builder has accepted their record. A failed append must skip this call.

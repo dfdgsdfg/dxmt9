@@ -173,6 +173,34 @@ struct PeLocalObjectIdentity {
                          const PeLocalObjectIdentity&) = default;
 };
 
+// A logical Render Tape pending-chunk lease may only be issued by a builder
+// after it has proved that the exact wrapper identity is present in the
+// committed portion of the current chunk.  The constructor is private so a
+// registry cannot manufacture a lease from a wire identity alone; the token
+// is only a witness and owns no retain/release operation.
+class CommittedPendingChunkLease final {
+ public:
+  CommittedPendingChunkLease(const CommittedPendingChunkLease&) = delete;
+  CommittedPendingChunkLease& operator=(
+      const CommittedPendingChunkLease&) = delete;
+  CommittedPendingChunkLease(CommittedPendingChunkLease&&) = delete;
+  CommittedPendingChunkLease& operator=(CommittedPendingChunkLease&&) = delete;
+
+  const PeWireObjectRef& object() const noexcept { return object_; }
+  PeLocalObjectIdentity localIdentity() const noexcept {
+    return PeLocalObjectIdentity{.kind = object_.identity.kind,
+                                 .object = object_.object};
+  }
+
+ private:
+  friend class CommandChunkBuilder;
+
+  explicit CommittedPendingChunkLease(PeWireObjectRef object) noexcept
+      : object_(object) {}
+
+  PeWireObjectRef object_{};
+};
+
 template <std::uint32_t Kind>
 constexpr PeLocalObjectIdentity localIdentity(
     const PeLocalObjectRef<Kind>& object) noexcept {
@@ -369,6 +397,60 @@ class CommandChunkBuilder {
     return true;
   }
 
+  // Visits a typed source once and writes exactly `count` rows into the final
+  // record payload. The visitor receives a call-local sink; it never receives
+  // a mutable payload span or pointer that could be invalidated by handle
+  // retention. Rejection rolls the complete active-record checkpoint back.
+  template <typename T, typename Visit>
+    requires isWireSafeSectionPayload<T>
+  bool appendVisitedSectionPayload(
+      std::uint16_t kind, std::size_t count, Visit&& visit,
+      std::uint32_t* recordRelativeOffset = nullptr) noexcept {
+    const auto* rule = sectionRule(kind);
+    const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+    if (!rule || !activeRule ||
+        (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+        kind != ApprovedWireSectionPayload<std::remove_cv_t<T>>::kind ||
+        count == 0u || count > rule->maxCount ||
+        sizeof(T) != rule->elementSize ||
+        count > std::numeric_limits<std::uint32_t>::max() ||
+        count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+      return failActiveRecord();
+    }
+
+    std::uint32_t offset = 0u;
+    if (!reservePayload(count * sizeof(T), rule->payloadAlignment, &offset)) {
+      return false;
+    }
+    std::size_t emitted = 0u;
+    const auto emit = [&](const T& value) noexcept {
+      if (emitted >= count) {
+        return false;
+      }
+      const std::size_t relative =
+          static_cast<std::size_t>(offset) + emitted * sizeof(T);
+      const std::size_t absolute = active_.payloadStart + relative;
+      if (!active_.active || sealed_ || absolute < active_.payloadStart ||
+          absolute > payload_.size() ||
+          sizeof(T) > payload_.size() - absolute) {
+        return false;
+      }
+      std::memcpy(payload_.data() + absolute, &value, sizeof(T));
+      ++emitted;
+      return true;
+    };
+    static_assert(std::is_nothrow_invocable_r_v<
+                      bool, Visit&, const decltype(emit)&>,
+                  "visited section producers must be noexcept");
+    if (!visit(emit) || emitted != count) {
+      return failActiveRecord();
+    }
+    if (recordRelativeOffset) {
+      *recordRelativeOffset = offset;
+    }
+    return true;
+  }
+
   bool appendConstantSectionPayload(
       std::uint16_t kind, std::uint32_t startRegister,
       std::uint32_t registerCount, std::span<const std::byte> registerBytes,
@@ -417,15 +499,83 @@ class CommandChunkBuilder {
   }
   bool referencesObject(PeLocalObjectIdentity identity) const noexcept;
 
+  // Issues a non-owning capability only for a handle whose wire identity and
+  // local wrapper pointer both match `expected`, and whose handle is below the
+  // active record checkpoint. Thus an active-only handle cannot create a
+  // logical pending lease; an active+committed identity can still do so from
+  // its committed occurrence. The callback is invoked at most once.
+  template <typename Visit>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Visit&, const CommittedPendingChunkLease&>
+  bool visitCommittedPendingChunkLease(const PeWireObjectRef& expected,
+                                       Visit&& visit) const noexcept {
+    if (!expected.object ||
+        expected.identity.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+        expected.identity.generation == 0u ||
+        expected.identity.objectId == 0u) {
+      return false;
+    }
+    const std::size_t committedCount =
+        active_.active ? active_.handleCheckpoint : handles_.size();
+    if (committedCount > handles_.size() ||
+        committedCount > handleObjects_.size()) {
+      return false;
+    }
+    for (std::size_t i = 0u; i < committedCount; ++i) {
+      const auto& wire = handles_[i];
+      const auto& local = handleObjects_[i];
+      if (wire.kind != expected.identity.kind ||
+          wire.generation != expected.identity.generation ||
+          wire.objectId != expected.identity.objectId ||
+          local.kind != expected.identity.kind ||
+          local.object != expected.object) {
+        continue;
+      }
+      const CommittedPendingChunkLease lease(expected);
+      // A matched capability whose consumer rejects settlement is not a
+      // successful lease transfer; propagate that result so the caller can
+      // take its ordinary unregister/fail path.
+      return visit(lease);
+    }
+    return false;
+  }
+
+  // Enumerates the same typed witnesses for drain/reset consumers. Duplicate
+  // wire handles are intentionally visited: the logical lifetime state owns
+  // the exactly-once guard, while the builder remains the physical pin owner.
+  template <typename Visit>
+    requires std::is_nothrow_invocable_v<
+        Visit&, const CommittedPendingChunkLease&>
+  void visitCommittedPendingChunkLeases(Visit&& visit) const noexcept {
+    const std::size_t committedCount =
+        active_.active ? active_.handleCheckpoint : handles_.size();
+    if (committedCount > handles_.size() ||
+        committedCount > handleObjects_.size()) {
+      return;
+    }
+    for (std::size_t i = 0u; i < committedCount; ++i) {
+      const auto& wire = handles_[i];
+      const auto& local = handleObjects_[i];
+      if (!local.object || wire.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+          wire.generation == 0u || wire.objectId == 0u ||
+          wire.kind != local.kind) {
+        continue;
+      }
+      visit(CommittedPendingChunkLease(PeWireObjectRef{
+          .identity = D9CWireObjectIdentity{
+              .kind = wire.kind,
+              .generation = wire.generation,
+              .objectId = wire.objectId},
+          .object = local.object}));
+    }
+  }
+
   const std::vector<D9CCommandChunkWireRecordHeader>& recordsForTest()
       const noexcept {
     return records_;
   }
   const std::vector<D9CCommandChunkWireHandleEntry>& handlesForTest()
       const noexcept {
-    return handles_;
-  }
-  const std::vector<D9CCommandChunkWireHandleEntry>& handles() const noexcept {
     return handles_;
   }
   const std::vector<std::byte>& payloadForTest() const noexcept {

@@ -32,6 +32,10 @@ struct PeRecorderState {
   PeHotStateShadow peState{};
   PeConstShadowBlock peConsts{};
   ::PeStateBlockTransactionState stateBlockTransaction{};
+  // Binding refs are the borrowed source witness for a call-local compact
+  // plan. The section-sized owners below are never written by ordinary
+  // APPLY_STATE/draw production; they remain for oversized batches, Render
+  // Tape checkpointing, and SWVP override projections.
   mutable PeBindingView peBindingView{};
   mutable PeSparseScratch peSparseScratch{};
   mutable SparseStateInput peSparseState{};

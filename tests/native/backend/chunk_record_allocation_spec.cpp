@@ -1,4 +1,5 @@
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_producer.hpp"
 #include "device_c_chunk_registry.hpp"
 #include "device_c_chunk_replay.hpp"
 #include "device_c_replay_offload.hpp"
@@ -356,12 +357,48 @@ void testSparseDrawWireSizeReduction() {
         "sparse canonical state adds bytes only when a section is present");
 }
 
+void testWarmSparseStatePlanAllocations() {
+  PeHotStateShadow shadow{};
+  shadow.transition().setRenderState(renderStateSlotKey(7u), 11u);
+  PeConstShadowBlock constants{};
+  dxmt9::d3d9::pe::PeBindingView bindings{};
+  const dxmt9::d3d9::pe::PeDrawParams params{
+      .recordType = D9C_COMMAND_RECORD_APPLY_STATE,
+  };
+  CommandChunkBuilder builder;
+
+  const auto appendOne = [&]() {
+    dxmt9::d3d9::pe::SparseStatePlan plan{};
+    if (!dxmt9::d3d9::pe::buildSparseStatePlan(
+            shadow, constants, bindings, {}, params, false, false, plan) ||
+        !dxmt9::d3d9::pe::appendApplyStatePlan(
+            builder, plan.drawFlags, plan)) {
+      return false;
+    }
+    builder.reset();
+    return true;
+  };
+  check(appendOne(), "compact sparse plan warm-up succeeds");
+
+  gAllocationCount.store(0u, std::memory_order_relaxed);
+  gCountAllocations.store(true, std::memory_order_release);
+  bool repeated = true;
+  for (std::uint32_t i = 0u; i < 256u; ++i) repeated &= appendOne();
+  gCountAllocations.store(false, std::memory_order_release);
+
+  check(repeated, "compact sparse plan repeatedly materializes");
+  check(gAllocationCount.load(std::memory_order_relaxed) == 0u,
+        "warm compact plan prepare/final-payload path performs zero system "
+        "allocations");
+}
+
 }  // namespace
 
 int main() {
   try {
     testWarmRecordImportReplayAllocations();
     testSparseDrawWireSizeReduction();
+    testWarmSparseStatePlanAllocations();
   } catch (const TestFailure& error) {
     gCountAllocations.store(false, std::memory_order_relaxed);
     std::cerr << "chunk_record_allocation_spec failed: " << error.what()

@@ -277,6 +277,35 @@ LaneResult runDirectLane(const Fixture& fixture) {
   return finishLane(builder, ok);
 }
 
+// New two-pass production lane. Pass 1 owns only compact selection metadata;
+// pass 2 visits the source witnesses and writes final builder payload rows.
+LaneResult runPlanLane(const Fixture& fixture) {
+  pe::CommandChunkBuilder builder;
+  PeConstShadowBlock constants = fixture.constants;
+  pe::PeDrawParams params = fixture.params;
+  if (params.recordType == 0u) {
+    params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  }
+  pe::SparseStatePlan plan{};
+  if (!pe::buildSparseStatePlan(
+          fixture.shadow, constants, fixture.bindings, fixture.payloads,
+          params, fixture.forceFullSnapshot, fixture.inlineConstDelta,
+          plan)) {
+    return LaneResult{};
+  }
+  const bool destinationDependent =
+      params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  if (destinationDependent &&
+      !pe::finalizeSparseStatePlanChunkContext(fixture.chunk, plan)) {
+    return LaneResult{};
+  }
+  const bool ok = params.recordType == D9C_COMMAND_RECORD_APPLY_STATE
+      ? pe::appendApplyStatePlan(builder, plan.drawFlags, plan)
+      : pe::appendSparseStatePlan(builder, params.recordType, plan);
+  return finishLane(builder, ok);
+}
+
 // --- goldens ---------------------------------------------------------------
 //
 // The legacy lane is going away with the shim (Task 10 stage C). Its value is a
@@ -440,6 +469,40 @@ void requirePinnedOutput(const Fixture& f) {
   const LaneResult direct = up ? runDirectUpLane(f)
                                : (draw ? runDirectDrawLane(f)
                                        : runDirectLane(f));
+  const LaneResult planned = runPlanLane(f);
+  const auto directShape = goldenOf(direct);
+  const auto planShape = goldenOf(planned);
+  std::size_t firstDifference = 0u;
+  while (firstDifference < direct.bytes.size() &&
+         firstDifference < planned.bytes.size() &&
+         direct.bytes[firstDifference] == planned.bytes[firstDifference]) {
+    ++firstDifference;
+  }
+  check(directShape.ok == planShape.ok &&
+            directShape.bytes == planShape.bytes &&
+            directShape.records == planShape.records &&
+            directShape.handles == planShape.handles &&
+            directShape.payload == planShape.payload &&
+            directShape.retained == planShape.retained &&
+            directShape.hash == planShape.hash,
+        f.name + ": compact plan output differs from compatibility producer " +
+            "direct(bytes=" + std::to_string(directShape.bytes) +
+            ", payload=" + std::to_string(directShape.payload) +
+            ", handles=" + std::to_string(directShape.handles) +
+            ", hash=" + std::to_string(directShape.hash) + ") plan(bytes=" +
+            std::to_string(planShape.bytes) + ", payload=" +
+            std::to_string(planShape.payload) + ", handles=" +
+            std::to_string(planShape.handles) + ", hash=" +
+            std::to_string(planShape.hash) + ", firstDifference=" +
+            std::to_string(firstDifference) + ", directByte=" +
+            (firstDifference < direct.bytes.size()
+                 ? std::to_string(std::to_integer<unsigned>(
+                       direct.bytes[firstDifference]))
+                 : std::string("end")) + ", planByte=" +
+            (firstDifference < planned.bytes.size()
+                 ? std::to_string(std::to_integer<unsigned>(
+                       planned.bytes[firstDifference]))
+                 : std::string("end")) + ")");
   requireMatchesGolden(f.name, direct);
 }
 
@@ -1009,6 +1072,61 @@ void sparseSettlementNormalAndOversizedAreExact() {
         "oversized settlement uses the same exact represented-set acceptance");
 }
 
+void sparsePlanFailureRetryAndSourceWitness() {
+  Fixture f = baseDraw("plan settlement-only fixture",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  PeHotStateShadow shadow{};
+  shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u), 70u);
+  shadow.writer().pendingTextureMask() = 1u << 2u;
+  PeConstShadowBlock constants{};
+  pe::SparseStatePlan plan{};
+  check(pe::buildSparseStatePlan(shadow, constants, f.bindings, {}, f.params,
+                                 false, false, plan),
+        "compact plan preparation succeeds");
+  check(plan.sourceShadow == &shadow && plan.sourceConstants == &constants &&
+            plan.sourceBindings == &f.bindings &&
+            sizeof(pe::SparseStatePlan) < 512u,
+        "compact plan carries bounded borrowed source witnesses only");
+
+  pe::CommandChunkBuilder builder;
+  check(!pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+        "draw plan cannot materialize before destination chunk finalization");
+  check(shadow.pendingRenderStatesTyped().size() == 1u &&
+            shadow.pendingTextureMask() == (1u << 2u),
+        "pre-materialization rejection preserves PendingDelta");
+  check(pe::finalizeSparseStatePlanChunkContext(f.chunk, plan),
+        "chunk-context finalization succeeds after CapacityPre");
+
+  check(builder.beginRecord(D9C_COMMAND_RECORD_CLEAR),
+        "active-record injection occupies the builder");
+  check(!pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+        "builder failure rejects direct final-payload materialization");
+  const auto failed = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = false,
+  });
+  check(!pe::acceptSparseStatePlan(shadow, constants, plan, failed) &&
+            shadow.pendingRenderStatesTyped().size() == 1u &&
+            shadow.pendingTextureMask() == (1u << 2u),
+        "failed plan append preserves exact retry witnesses");
+
+  builder.rollbackRecord();
+  check(pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+        "same compact plan retries successfully");
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  PeHotStateShadow wrongSource = shadow;
+  check(!pe::acceptSparseStatePlan(wrongSource, constants, plan, accepted) &&
+            shadow.pendingRenderStatesTyped().size() == 1u,
+        "accept rejects a source binding different from the emitted witness");
+  check(pe::acceptSparseStatePlan(shadow, constants, plan, accepted) &&
+            shadow.pendingRenderStatesTyped().empty() &&
+            shadow.pendingTextureMask() == 0u,
+        "durable plan consumes exactly its emitted PendingDelta");
+}
+
 // --- fixed-seed randomized corpus -----------------------------------------
 
 // --- UP draw records -------------------------------------------------------
@@ -1273,6 +1391,7 @@ int main() {
     inlineConstDeltaSingleRange();
     inlineConstAppendFailurePreservesDirtyRange();
     sparseSettlementNormalAndOversizedAreExact();
+    sparsePlanFailureRetryAndSourceWitness();
     upDrawCarriesVertexPayload();
     upDrawWithDirtyState();
     upIndexedDrawCarriesBothPayloads();

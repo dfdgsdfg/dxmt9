@@ -118,6 +118,7 @@ using dxmt9::d3d9::ImportedChunkView;
 using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::CommandChunkBuilderCapacities;
+using dxmt9::d3d9::pe::CommittedPendingChunkLease;
 using dxmt9::d3d9::pe::PeWireObjectRef;
 using dxmt9::d3d9::pe::SparseBindingInput;
 using dxmt9::d3d9::pe::SparseStateInput;
@@ -1269,6 +1270,108 @@ void testKindQualifiedHazardAndPendingDestroyQueries() {
         "pending-destroy query rejects a wrong-kind same-address wrapper");
 }
 
+// A Render Tape pending lease is a capability issued by the builder, not a
+// query over the warm retainer. It must require the complete wire identity
+// and the local wrapper pointer, and it must ignore the active-record suffix
+// until that record commits. Duplicate committed handles are visited for
+// drain, where the logical pending-ref counter supplies the exactly-once
+// settlement guard.
+void testCommittedPendingChunkLeaseQualification() {
+  D9CTexture committed;
+  D9CTexture active;
+  D9CTexture warm;
+  const auto committedRef =
+      wireRef(&committed, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF201u);
+  const auto activeRef =
+      wireRef(&active, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF202u);
+  const auto warmRef =
+      wireRef(&warm, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF203u);
+  CommandChunkBuilder builder;
+  std::uint32_t index = 0u;
+  const auto appendTextureRecord = [&](const PeWireObjectRef& ref) {
+    return builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+           builder.appendHandle(ref, D9C_CHUNK_HANDLE_KIND_TEXTURE, index) &&
+           builder.appendPayloadValue(D9CCommandChunkWireUpdateTexture{
+               .srcHandleIndex = index, .dstHandleIndex = index}) &&
+           builder.commitRecord();
+  };
+
+  check(appendTextureRecord(committedRef),
+        "committed lease fixture records its first handle");
+  bool visited = false;
+  check(builder.visitCommittedPendingChunkLease(
+            committedRef,
+            [&](const CommittedPendingChunkLease& lease) noexcept {
+              visited = lease.object().object == &committed &&
+                        lease.object().identity.generation ==
+                            committedRef.identity.generation &&
+                        lease.object().identity.objectId ==
+                            committedRef.identity.objectId;
+              return visited;
+            }) &&
+            visited,
+        "committed handle issues a fully-qualified logical lease");
+  check(!builder.visitCommittedPendingChunkLease(
+              committedRef,
+              [](const CommittedPendingChunkLease&) noexcept { return false; }),
+        "a matching consumer rejection is propagated as lease failure");
+
+  const auto wrongGeneration =
+      wireRef(&committed, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF204u);
+  const auto wrongWrapper =
+      wireRef(&active, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xF201u);
+  check(!builder.visitCommittedPendingChunkLease(
+              wrongGeneration,
+              [](const CommittedPendingChunkLease&) noexcept { return true; }) &&
+            !builder.visitCommittedPendingChunkLease(
+                wrongWrapper,
+                [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "wire generation/object id and local wrapper are both qualified");
+
+  check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            builder.appendHandle(activeRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                 index) &&
+            builder.appendHandle(committedRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                 index),
+        "active-only and active-plus-committed lease fixtures append handles");
+  check(!builder.visitCommittedPendingChunkLease(
+              activeRef,
+              [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "active-only handle cannot issue a pending lease");
+  check(builder.visitCommittedPendingChunkLease(
+            committedRef,
+            [&committed](const CommittedPendingChunkLease& lease) noexcept {
+              return lease.object().object == &committed;
+            }),
+        "active-plus-committed identity still issues from committed prefix");
+  builder.rollbackRecord();
+  check(!builder.visitCommittedPendingChunkLease(
+              activeRef,
+              [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "rollback removes the active-only lease witness");
+
+  check(appendTextureRecord(committedRef),
+        "duplicate committed handle fixture records a later occurrence");
+  std::size_t visits = 0u;
+  builder.visitCommittedPendingChunkLeases(
+      [&](const CommittedPendingChunkLease& lease) noexcept {
+        if (lease.object().identity.objectId == committedRef.identity.objectId)
+          ++visits;
+      });
+  check(visits == 2u,
+        "drain visitor exposes duplicate committed occurrences for exact-once guard");
+
+  check(appendTextureRecord(warmRef),
+        "warm-pin fixture commits a handle before the chunk boundary");
+  builder.reset();
+  check(builder.handleCount() == 0u && builder.retainedObjectCount() == 2u &&
+            !builder.visitCommittedPendingChunkLease(
+                warmRef,
+                [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "warm physical pin without a committed handle cannot issue a lease");
+  builder.resetAndReleaseRetained();
+}
+
 void testOversizedPendingBatchAppendFailure() {
   PeHotStateShadow shadow{};
   auto pending = shadow.writer().pendingRenderStatesTyped();
@@ -1462,6 +1565,7 @@ int main() {
     testRecordLocalDedupAccelerator();
     testKindQualifiedLocalIdentity();
     testKindQualifiedHazardAndPendingDestroyQueries();
+    testCommittedPendingChunkLeaseQualification();
     testOversizedPendingBatchAppendFailure();
     testTypedTailAndSectionAdmission();
   } catch (const TestFailure& error) {

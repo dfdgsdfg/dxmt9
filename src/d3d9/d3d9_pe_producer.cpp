@@ -6,10 +6,526 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
+#include <bit>
 #include <cstring>
+#include <span>
 
 namespace dxmt9::d3d9::pe {
+
+namespace {
+
+constexpr std::uint32_t lowMask(std::uint32_t count) noexcept {
+  return count >= 32u ? 0xffffffffu : (1u << count) - 1u;
+}
+
+bool prepareConstantRanges(PeConstShadowBlock& constants,
+                           bool inlineConstDelta,
+                           SparseStatePlan& plan) noexcept {
+  if (!inlineConstDelta) {
+    return true;
+  }
+  struct ConstRange {
+    ConstShadow* shadow;
+    SparseConstantRangeInput* out;
+    std::size_t elementSize;
+  };
+  const ConstRange ranges[D9C_DRAW_PACKET_CONST_DELTA_COUNT] = {
+      {&constants.vsConstF, &plan.vsFloatConstants, 16u},
+      {&constants.vsConstI, &plan.vsIntConstants, 16u},
+      {&constants.vsConstB, &plan.vsBoolConstants, 4u},
+      {&constants.psConstF, &plan.psFloatConstants, 16u},
+      {&constants.psConstI, &plan.psIntConstants, 16u},
+      {&constants.psConstB, &plan.psBoolConstants, 4u},
+  };
+  for (std::uint32_t kind = 0u; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT;
+       ++kind) {
+    auto& source = *ranges[kind].shadow;
+    if (!source.dirty()) {
+      continue;
+    }
+    const std::uint32_t start = source.dirtyStart;
+    const std::uint32_t count = source.dirtyEnd - source.dirtyStart;
+    if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
+      return false;
+    }
+    const auto offset = static_cast<std::size_t>(start) *
+                        ranges[kind].elementSize;
+    const auto bytes = static_cast<std::size_t>(count) *
+                       ranges[kind].elementSize;
+    if (source.values.size() < offset + bytes) {
+      return false;
+    }
+    *ranges[kind].out = SparseConstantRangeInput{
+        .startRegister = start,
+        .registerCount = count,
+        .registerBytes = std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(source.values.data()) + offset,
+            bytes),
+    };
+  }
+  return true;
+}
+
+bool constantRangeStillDirty(const ConstShadow& shadow,
+                             const SparseConstantRangeInput& range) noexcept {
+  if (!range.present()) {
+    return true;
+  }
+  return shadow.dirty() && shadow.dirtyStart == range.startRegister &&
+         shadow.dirtyEnd - shadow.dirtyStart == range.registerCount;
+}
+
+}  // namespace
+
+bool buildSparseStatePlan(const PeHotStateShadow& shadow,
+                          PeConstShadowBlock& constants,
+                          const PeBindingView& bindings,
+                          const PeDrawPayloads& payloads,
+                          const PeDrawParams& params,
+                          bool forceFullSnapshot,
+                          bool inlineConstDelta,
+                          SparseStatePlan& plan) noexcept {
+  if (params.recordType == 0u) {
+    return false;
+  }
+  plan = SparseStatePlan{};
+  plan.sourceShadow = &shadow;
+  plan.sourceConstants = &constants;
+  plan.sourceBindings = &bindings;
+  plan.draw = params;
+  plan.fullSnapshot =
+      forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
+  plan.payloads = payloads;
+
+  const auto renderStates = plan.fullSnapshot
+      ? shadow.renderStateShadowTyped()
+      : shadow.pendingRenderStatesTyped();
+  const auto textureStageStates = plan.fullSnapshot
+      ? shadow.tssShadowTyped()
+      : shadow.pendingTssTyped();
+  const auto samplerStates = plan.fullSnapshot
+      ? shadow.samplerStateShadowTyped()
+      : shadow.pendingSamplerStatesTyped();
+  const auto transforms = plan.fullSnapshot
+      ? shadow.transformShadowTyped()
+      : shadow.pendingTransformsTyped();
+  if (renderStates.size() > detail::sectionMaxCount(
+          D9C_COMMAND_CHUNK_SECTION_RENDER_STATE) ||
+      textureStageStates.size() > detail::sectionMaxCount(
+          D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE) ||
+      samplerStates.size() > detail::sectionMaxCount(
+          D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE) ||
+      transforms.size() > detail::sectionMaxCount(
+          D9C_COMMAND_CHUNK_SECTION_TRANSFORM)) {
+    return false;
+  }
+  plan.renderStateCount = renderStates.size();
+  plan.textureStageStateCount = textureStageStates.size();
+  plan.samplerStateCount = samplerStates.size();
+  plan.transformCount = transforms.size();
+
+  plan.textureMask = plan.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_TEXTURES)
+      : shadow.pendingTextureMask();
+  plan.selectedStreamMask = plan.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_STREAMS)
+      : shadow.pendingStreamMask();
+  plan.streamMask = plan.selectedStreamMask;
+  if (plan.fullSnapshot || shadow.pendingVs()) {
+    plan.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX;
+  }
+  if (plan.fullSnapshot || shadow.pendingPs()) {
+    plan.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL;
+  }
+  plan.vertexInput = plan.fullSnapshot || shadow.pendingVdecl() ||
+                     shadow.pendingFvf();
+  if (plan.vertexInput) {
+    plan.vertexInputKind =
+        plan.fullSnapshot || shadow.pendingVdecl()
+            ? D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION
+            : D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF;
+  }
+  plan.selectedIndexBuffer =
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
+      shadow.pendingIb();
+  plan.indexBuffer = plan.selectedIndexBuffer;
+
+  if (plan.fullSnapshot) {
+    for (std::uint32_t slot = 0u;
+         slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+      if (bindings.rtExplicitMask[slot] ||
+          bindings.renderTargets[slot].object != nullptr) {
+        plan.renderTargetMask |= 1u << slot;
+      }
+    }
+  } else {
+    plan.renderTargetMask = shadow.pendingRtMask();
+  }
+  plan.depthStencil = plan.fullSnapshot || shadow.pendingDs();
+  plan.viewport = plan.fullSnapshot || shadow.pendingViewport();
+  plan.scissor = plan.fullSnapshot || shadow.pendingScissor();
+  plan.material = plan.fullSnapshot || shadow.pendingMaterial();
+  plan.clipPlaneMask = plan.fullSnapshot
+      ? lowMask(6u)
+      : shadow.pendingClipPlaneMask();
+  plan.lightMask = plan.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
+      : shadow.pendingLightSlotMask();
+  plan.lightEnableMask = plan.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
+      : shadow.pendingLightEnableValidMask();
+
+  if (!prepareConstantRanges(constants, inlineConstDelta, plan)) {
+    return false;
+  }
+
+  constexpr auto allTextures = lowMask(D9C_DRAW_PACKET_MAX_TEXTURES);
+  constexpr auto allStreams = lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
+  if (plan.fullSnapshot ||
+      (shadow.pendingTextureMask() == allTextures &&
+       shadow.pendingStreamMask() == allStreams)) {
+    plan.drawFlags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
+  }
+
+  const auto usable = [](const PeWireObjectRef& ref,
+                         std::uint32_t kind) noexcept {
+    return ref.object == nullptr || ref.valid(kind);
+  };
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    if ((plan.textureMask & (1u << slot)) != 0u &&
+        !usable(bindings.textures[slot], D9C_CHUNK_HANDLE_KIND_TEXTURE)) {
+      return false;
+    }
+  }
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    if ((plan.streamMask & (1u << slot)) != 0u &&
+        !usable(bindings.streams[slot].buffer,
+                D9C_CHUNK_HANDLE_KIND_BUFFER)) {
+      return false;
+    }
+  }
+  if (((plan.shaderMask & 1u) != 0u &&
+       !usable(bindings.vs, D9C_CHUNK_HANDLE_KIND_SHADER)) ||
+      ((plan.shaderMask & 2u) != 0u &&
+       !usable(bindings.ps, D9C_CHUNK_HANDLE_KIND_SHADER)) ||
+      (plan.vertexInput &&
+       plan.vertexInputKind ==
+           D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION &&
+       !usable(bindings.vdecl, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)) ||
+      (plan.indexBuffer &&
+       !usable(bindings.indexBuffer, D9C_CHUNK_HANDLE_KIND_BUFFER)) ||
+      (plan.depthStencil &&
+       !usable(bindings.depthStencil, D9C_CHUNK_HANDLE_KIND_SURFACE))) {
+    return false;
+  }
+  for (std::uint32_t slot = 0u;
+       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if ((plan.renderTargetMask & (1u << slot)) != 0u &&
+        !usable(bindings.renderTargets[slot],
+                D9C_CHUNK_HANDLE_KIND_SURFACE)) {
+      return false;
+    }
+  }
+
+  const bool destinationDependent =
+      params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  plan.chunkContextFinalized = !destinationDependent;
+  plan.prepared = true;
+  return true;
+}
+
+bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
+                                         SparseStatePlan& plan) noexcept {
+  if (!plan.prepared || !plan.sourceShadow || !plan.sourceBindings ||
+      plan.draw.recordType == 0u) {
+    return false;
+  }
+  const auto& bindings = *plan.sourceBindings;
+  if (!plan.fullSnapshot) {
+    for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+      const bool bound = bindings.streams[slot].buffer.object != nullptr;
+      const bool retained = (chunk.retainedStreamMask & (1u << slot)) != 0u;
+      if (bound && !retained) {
+        plan.streamMask |= 1u << slot;
+      }
+    }
+  }
+  if (plan.draw.recordType ==
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+    const std::uint64_t wire =
+        d9cWireHandleValue(toWireHandle(bindings.indexBuffer.object));
+    const bool bound = bindings.indexBuffer.object != nullptr;
+    plan.indexBuffer = plan.selectedIndexBuffer ||
+        !chunk.indexBufferKnown || chunk.submittedIndexBufferWire != wire ||
+        (!chunk.indexBufferRetained && bound);
+  } else {
+    plan.indexBuffer = false;
+  }
+  plan.chunkContextFinalized = true;
+  return true;
+}
+
+std::size_t sparseStatePlanConstantPayloadBytes(
+    const SparseStatePlan& plan) noexcept {
+  return plan.vsFloatConstants.registerBytes.size() +
+         plan.vsIntConstants.registerBytes.size() +
+         plan.vsBoolConstants.registerBytes.size() +
+         plan.psFloatConstants.registerBytes.size() +
+         plan.psIntConstants.registerBytes.size() +
+         plan.psBoolConstants.registerBytes.size();
+}
+
+bool acceptSparseStatePlan(PeHotStateShadow& shadow,
+                           PeConstShadowBlock& constants,
+                           const SparseStatePlan& state,
+                           const AppendPlan& plan,
+                           PeScalarSemanticTokenLedger* tokens,
+                           std::uint64_t recordOrdinal) noexcept {
+  if (!plan.valid() || !plan.consumeRepresentedPending() ||
+      !plan.recordDurable() || !state.prepared ||
+      !state.chunkContextFinalized || state.sourceShadow != &shadow ||
+      state.sourceConstants != &constants || !state.sourceBindings) {
+    return false;
+  }
+
+  const auto& bindings = *state.sourceBindings;
+  const auto renderStates = state.fullSnapshot
+      ? shadow.renderStateShadowTyped()
+      : shadow.pendingRenderStatesTyped();
+  const auto textureStageStates = state.fullSnapshot
+      ? shadow.tssShadowTyped()
+      : shadow.pendingTssTyped();
+  const auto samplerStates = state.fullSnapshot
+      ? shadow.samplerStateShadowTyped()
+      : shadow.pendingSamplerStatesTyped();
+  const auto transforms = state.fullSnapshot
+      ? shadow.transformShadowTyped()
+      : shadow.pendingTransformsTyped();
+  if (renderStates.size() != state.renderStateCount ||
+      textureStageStates.size() != state.textureStageStateCount ||
+      samplerStates.size() != state.samplerStateCount ||
+      transforms.size() != state.transformCount) {
+    return false;
+  }
+
+  const std::uint32_t expectedTextureMask = state.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_TEXTURES)
+      : shadow.pendingTextureMask();
+  const std::uint32_t expectedSelectedStreamMask = state.fullSnapshot
+      ? lowMask(D9C_DRAW_PACKET_MAX_STREAMS)
+      : shadow.pendingStreamMask();
+  std::uint8_t expectedShaderMask = 0u;
+  if (state.fullSnapshot || shadow.pendingVs()) expectedShaderMask |= 1u;
+  if (state.fullSnapshot || shadow.pendingPs()) expectedShaderMask |= 2u;
+  const bool expectedVertexInput =
+      state.fullSnapshot || shadow.pendingVdecl() || shadow.pendingFvf();
+  const std::uint8_t expectedVertexInputKind =
+      state.fullSnapshot || shadow.pendingVdecl()
+          ? D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION
+          : D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF;
+  const bool expectedSelectedIndex =
+      state.draw.recordType ==
+          D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
+      shadow.pendingIb();
+  std::uint32_t expectedRenderTargetMask = shadow.pendingRtMask();
+  if (state.fullSnapshot) {
+    expectedRenderTargetMask = 0u;
+    for (std::uint32_t slot = 0u;
+         slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+      if (bindings.rtExplicitMask[slot] ||
+          bindings.renderTargets[slot].object != nullptr) {
+        expectedRenderTargetMask |= 1u << slot;
+      }
+    }
+  }
+  const std::uint32_t validStreamMask =
+      lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
+  if (state.textureMask != expectedTextureMask ||
+      state.selectedStreamMask != expectedSelectedStreamMask ||
+      (state.streamMask & state.selectedStreamMask) !=
+          state.selectedStreamMask ||
+      (state.streamMask & ~validStreamMask) != 0u ||
+      state.shaderMask != expectedShaderMask ||
+      state.vertexInput != expectedVertexInput ||
+      (state.vertexInput &&
+       state.vertexInputKind != expectedVertexInputKind) ||
+      state.selectedIndexBuffer != expectedSelectedIndex ||
+      state.renderTargetMask != expectedRenderTargetMask ||
+      state.depthStencil != (state.fullSnapshot || shadow.pendingDs()) ||
+      state.viewport != (state.fullSnapshot || shadow.pendingViewport()) ||
+      state.scissor != (state.fullSnapshot || shadow.pendingScissor()) ||
+      state.material != (state.fullSnapshot || shadow.pendingMaterial()) ||
+      state.clipPlaneMask !=
+          (state.fullSnapshot ? lowMask(6u)
+                              : shadow.pendingClipPlaneMask()) ||
+      state.lightMask !=
+          (state.fullSnapshot ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
+                              : shadow.pendingLightSlotMask()) ||
+      state.lightEnableMask !=
+          (state.fullSnapshot ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
+                              : shadow.pendingLightEnableValidMask())) {
+    return false;
+  }
+  const std::uint32_t addedStreams =
+      state.streamMask & ~state.selectedStreamMask;
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    if ((addedStreams & (1u << slot)) != 0u &&
+        bindings.streams[slot].buffer.object == nullptr) {
+      return false;
+    }
+  }
+  if (state.indexBuffer &&
+      state.draw.recordType !=
+          D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+    return false;
+  }
+
+  const SparseConstantRangeInput* acceptedConstants[] = {
+      &state.vsFloatConstants, &state.vsIntConstants,
+      &state.vsBoolConstants,  &state.psFloatConstants,
+      &state.psIntConstants,   &state.psBoolConstants,
+  };
+  ConstShadow* constantShadows[] = {
+      &constants.vsConstF, &constants.vsConstI, &constants.vsConstB,
+      &constants.psConstF, &constants.psConstI, &constants.psConstB,
+  };
+  for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
+    if (!constantRangeStillDirty(*constantShadows[i],
+                                 *acceptedConstants[i])) {
+      return false;
+    }
+  }
+
+  const auto validateToken = [&](ScalarSemanticCategory category,
+                                 std::uint32_t key, std::uint32_t index,
+                                 std::uint32_t value) noexcept {
+    if (!tokens) return true;
+    ScalarSemanticProjectionTuple tuple{};
+    return tokens->project(category, key, index, value, recordOrdinal,
+                           tuple) && tokens->canConsumeProjected(tuple);
+  };
+  bool scalarValid = true;
+  shadow.pendingRenderStatesTyped().forEach(
+      [&](RenderStateSlot key, std::uint32_t value) {
+        std::uint32_t live = 0u;
+        scalarValid = scalarValid &&
+            (!state.fullSnapshot ||
+             (shadow.renderStateShadowTyped().get(key, live) &&
+              live == value)) &&
+            validateToken(ScalarSemanticCategory::RenderState,
+                          rawSlot(key), 0u, value);
+      });
+  shadow.pendingTssTyped().forEach(
+      [&](TextureStageIndex stage, TextureStageStateType type,
+          std::uint32_t value) {
+        std::uint32_t live = 0u;
+        scalarValid = scalarValid &&
+            (!state.fullSnapshot ||
+             (shadow.tssShadowTyped().get(stage, type, live) &&
+              live == value)) &&
+            validateToken(ScalarSemanticCategory::TextureStageState,
+                          rawSlot(stage), rawSlot(type), value);
+      });
+  shadow.pendingSamplerStatesTyped().forEach(
+      [&](SamplerIndex sampler, SamplerStateType type,
+          std::uint32_t value) {
+        std::uint32_t live = 0u;
+        scalarValid = scalarValid &&
+            (!state.fullSnapshot ||
+             (shadow.samplerStateShadowTyped().get(sampler, type, live) &&
+              live == value)) &&
+            validateToken(ScalarSemanticCategory::SamplerState,
+                          rawSlot(sampler), rawSlot(type), value);
+      });
+  if (!scalarValid) {
+    return false;
+  }
+
+  for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
+    if (acceptedConstants[i]->present()) {
+      constantShadows[i]->clear();
+    }
+  }
+
+  if (tokens) {
+    const auto consumeToken = [&](ScalarSemanticCategory category,
+                                  std::uint32_t key, std::uint32_t index,
+                                  std::uint32_t value) noexcept {
+      ScalarSemanticProjectionTuple tuple{};
+      return tokens->project(category, key, index, value, recordOrdinal,
+                             tuple) && tokens->consumeProjected(tuple);
+    };
+    bool consumed = true;
+    shadow.pendingRenderStatesTyped().forEach(
+        [&](RenderStateSlot key, std::uint32_t value) {
+          consumed = consumed && consumeToken(
+              ScalarSemanticCategory::RenderState, rawSlot(key), 0u, value);
+        });
+    shadow.pendingTssTyped().forEach(
+        [&](TextureStageIndex stage, TextureStageStateType type,
+            std::uint32_t value) {
+          consumed = consumed && consumeToken(
+              ScalarSemanticCategory::TextureStageState, rawSlot(stage),
+              rawSlot(type), value);
+        });
+    shadow.pendingSamplerStatesTyped().forEach(
+        [&](SamplerIndex sampler, SamplerStateType type,
+            std::uint32_t value) {
+          consumed = consumed && consumeToken(
+              ScalarSemanticCategory::SamplerState, rawSlot(sampler),
+              rawSlot(type), value);
+        });
+    if (!consumed) {
+      return false;
+    }
+  }
+
+  auto consumer = shadow.consume();
+  consumer.acceptAllRenderStates();
+  consumer.acceptAllTextureStageStates();
+  consumer.acceptAllSamplerStates();
+  consumer.acceptAllTransforms();
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    if ((state.textureMask & (1u << slot)) != 0u) consumer.acceptTexture(slot);
+  }
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    if ((state.streamMask & (1u << slot)) != 0u) consumer.acceptStream(slot);
+  }
+  if ((state.shaderMask & 1u) != 0u) consumer.acceptVertexShader();
+  if ((state.shaderMask & 2u) != 0u) consumer.acceptPixelShader();
+  if (state.vertexInput) {
+    if (state.vertexInputKind ==
+        D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
+      consumer.acceptVertexDeclaration();
+    } else {
+      consumer.acceptFvf();
+    }
+  }
+  if (state.indexBuffer) consumer.acceptIndexBuffer();
+  for (std::uint32_t slot = 0u;
+       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if ((state.renderTargetMask & (1u << slot)) != 0u) {
+      consumer.acceptRenderTarget(slot);
+    }
+  }
+  if (state.depthStencil) consumer.acceptDepthStencil();
+  if (state.viewport) consumer.acceptViewport();
+  if (state.scissor) consumer.acceptScissor();
+  if (state.material) consumer.acceptMaterial();
+  for (std::uint32_t slot = 0u; slot < 6u; ++slot) {
+    if ((state.clipPlaneMask & (1u << slot)) != 0u) {
+      consumer.acceptClipPlane(slot);
+    }
+  }
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
+    if ((state.lightMask & (1u << slot)) != 0u) consumer.acceptLight(slot);
+    if ((state.lightEnableMask & (1u << slot)) != 0u) {
+      consumer.acceptLightEnable(slot);
+    }
+  }
+  return true;
+}
 
 // Fills SparseStateInput straight from the shadows and the binding view.
 //

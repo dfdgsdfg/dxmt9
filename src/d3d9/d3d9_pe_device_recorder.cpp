@@ -605,7 +605,9 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
         : 0;
     dxmt9::d3d9::pe::PeDrawParams applyParams{};
     applyParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
-    if (buildSparseStateForRecord(applyParams)) {
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (buildSparseStatePlanForRecord(
+            applyParams, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
         recordPeApplyStateBuildCpu(buildEntryNs);
         // sizeHint stays kLegacyApplyStateSizeHint: it is what the
         // capacity precheck saw before, so seal cadence is unchanged.
@@ -615,8 +617,8 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
             [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendApplyState(
-                    builder, recorderState_.peSparseHeader.flags, recorderState_.peSparseState);
+                const bool ok = dxmt9::d3d9::pe::appendApplyStatePlan(
+                    builder, sparsePlan.drawFlags, sparsePlan);
                 const auto settlement =
                     dxmt9::d3d9::pe::settleRecorderAppend({
                         .phase =
@@ -624,9 +626,9 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
                         .appendSucceeded = ok,
                     });
                 const bool settled =
-                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                    dxmt9::d3d9::pe::acceptSparseStatePlan(
                         recorderState_.peState, recorderState_.peConsts,
-                        recorderState_.peSparseState, settlement,
+                        sparsePlan, settlement,
                         scalarSemanticObserver(),
                         builder.activeRecordOrdinal());
                 phase.recordEncode(t0);
@@ -774,7 +776,9 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
     }
     dxmt9::d3d9::pe::PeDrawParams tailParams{};
     tailParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
-    if (!buildSparseStateForRecord(tailParams)) {
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (!buildSparseStatePlanForRecord(
+            tailParams, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
         // Truly should never happen -- the four cappable collections are now
         // empty. Defensive: log + return failure rather than silently leaving
         // pending state dirty (which would let the upcoming barrier observe
@@ -791,8 +795,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendApplyState(
-                builder, recorderState_.peSparseHeader.flags, recorderState_.peSparseState);
+            const bool ok = dxmt9::d3d9::pe::appendApplyStatePlan(
+                builder, sparsePlan.drawFlags, sparsePlan);
             const auto settlement =
                 dxmt9::d3d9::pe::settleRecorderAppend({
                     .phase =
@@ -800,9 +804,9 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
                     .appendSucceeded = ok,
                 });
             const bool settled =
-                dxmt9::d3d9::pe::acceptPreparedSparseState(
+                dxmt9::d3d9::pe::acceptSparseStatePlan(
                     recorderState_.peState, recorderState_.peConsts,
-                    recorderState_.peSparseState, settlement,
+                    sparsePlan, settlement,
                     scalarSemanticObserver(),
                     builder.activeRecordOrdinal());
             phase.recordEncode(t0);

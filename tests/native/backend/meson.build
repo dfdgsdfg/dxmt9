@@ -789,6 +789,7 @@ chunk_record_allocation_spec = executable(
     '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
   ],
   include_directories: [
     dxmt9_inc,

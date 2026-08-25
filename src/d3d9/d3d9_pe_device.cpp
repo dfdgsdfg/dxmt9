@@ -1430,19 +1430,6 @@ dxmt9::d3d9::pe::PeChunkContext D3D9DeviceImpl::currentChunkContext() const {
     return chunk;
 }
 
-std::size_t D3D9DeviceImpl::sparseConstPayloadBytes() const {
-    const dxmt9::d3d9::pe::SparseConstantRangeInput* ranges[] = {
-        &recorderState_.peSparseState.vsFloatConstants, &recorderState_.peSparseState.vsIntConstants,
-        &recorderState_.peSparseState.vsBoolConstants,  &recorderState_.peSparseState.psFloatConstants,
-        &recorderState_.peSparseState.psIntConstants,   &recorderState_.peSparseState.psBoolConstants,
-    };
-    std::size_t total = 0;
-    for (const auto* range : ranges) {
-        total += range->registerBytes.size();
-    }
-    return total;
-}
-
 bool D3D9DeviceImpl::buildSparseStateForRecord(
     const dxmt9::d3d9::pe::PeDrawParams& params,
     bool forceFullSnapshot,
@@ -1481,6 +1468,42 @@ bool D3D9DeviceImpl::buildSparseStateForRecord(
         recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparsePayloads, params,
         forceFullSnapshot, inlineConstDelta, recorderState_.peSparseScratch,
         recorderState_.peSparseHeader, recorderState_.peSparseState);
+}
+
+bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
+    const dxmt9::d3d9::pe::PeDrawParams& params,
+    const dxmt9::d3d9::pe::PeDrawPayloads& payloads,
+    dxmt9::d3d9::pe::SparseStatePlan& plan,
+    bool forceFullSnapshot,
+    bool inlineConstDelta) {
+    if (params.recordType == 0u) {
+        return false;
+    }
+    DxmtPeDecimatedScopeGuard decimatedScope;
+    const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+    if (decimationN != 0 &&
+        PeDecimatedScopeTimer::shouldSample(
+            diagnostics_->peDrawPacketDecimatedStats_, decimationN)) {
+        decimatedScope.stats = &diagnostics_->peDrawPacketDecimatedStats_;
+        {
+            const auto n0 = std::chrono::steady_clock::now();
+            const auto n1 = std::chrono::steady_clock::now();
+            PeDecimatedScopeTimer::recordSample(
+                peDecimatedNullScopeStats(),
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+        }
+        decimatedScope.t0 = std::chrono::steady_clock::now();
+    }
+    const bool needAllSlots =
+        forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
+    const bool isDraw =
+        params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
+    populateBindingView(recorderState_.peBindingView, needAllSlots, isDraw);
+    return dxmt9::d3d9::pe::buildSparseStatePlan(
+        recorderState_.peState, recorderState_.peConsts,
+        recorderState_.peBindingView, payloads, params, forceFullSnapshot,
+        inlineConstDelta, plan);
 }
 
 UINT D3D9DeviceImpl::primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {
@@ -1710,28 +1733,28 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
     // Under inlineConstDelta the const shadows are still dirty here. The
     // producer prepares their constant-range sections; the emitter settles
     // them only after appendSparseRecord accepts the record.
-    if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
-                                   inlineConstDelta)) {
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (!buildSparseStatePlanForRecord(
+            params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
+            /*forceFullSnapshot=*/false, inlineConstDelta)) {
         return D3DERR_INVALIDCALL;
     }
     return appendRecord(
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-        kLegacyDrawPrimitiveSizeHint + sparseConstPayloadBytes(),
+        kLegacyDrawPrimitiveSizeHint +
+            dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(sparsePlan),
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
             // Inside the emitter on purpose: CapacityPre may have sealed the
             // old chunk, and the retention answers are about the chunk this
             // record actually lands in.
-            if (!dxmt9::d3d9::pe::addChunkContextSections(
-                currentChunkContext(), recorderState_.peState, recorderState_.peBindingView, params,
-                recorderState_.peSparseScratch,
-                    recorderState_.peSparseState)) {
+            if (!dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
+                    currentChunkContext(), sparsePlan)) {
                 return D3DERR_INVALIDCALL;
             }
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, recorderState_.peSparseHeader,
-                recorderState_.peSparseState);
+            const bool ok = dxmt9::d3d9::pe::appendSparseStatePlan(
+                builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, sparsePlan);
             const auto settlement =
                 dxmt9::d3d9::pe::settleRecorderAppend({
                     .phase =
@@ -1739,9 +1762,9 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
                     .appendSucceeded = ok,
                 });
             const bool settled =
-                dxmt9::d3d9::pe::acceptPreparedSparseState(
+                dxmt9::d3d9::pe::acceptSparseStatePlan(
                     recorderState_.peState, recorderState_.peConsts,
-                    recorderState_.peSparseState, settlement,
+                    sparsePlan, settlement,
                     scalarSemanticObserver(),
                     builder.activeRecordOrdinal());
             phase.recordEncode(t0);
@@ -1783,8 +1806,10 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
     params.numVertices = numVertices;
     params.startIndex = startIndex;
     params.primitiveCount = count;
-    if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
-                                   inlineConstDelta)) {
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (!buildSparseStatePlanForRecord(
+            params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
+            /*forceFullSnapshot=*/false, inlineConstDelta)) {
         return D3DERR_INVALIDCALL;
     }
     const std::uint64_t ibWireValue =
@@ -1796,20 +1821,18 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
     const HRESULT hr = appendRecord(
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
         kLegacyDrawIndexedPrimitiveSizeHint +
-            sparseConstPayloadBytes(),
+            dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(sparsePlan),
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
-            if (!dxmt9::d3d9::pe::addChunkContextSections(
-                currentChunkContext(), recorderState_.peState, recorderState_.peBindingView, params,
-                recorderState_.peSparseScratch,
-                    recorderState_.peSparseState)) {
+            if (!dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
+                    currentChunkContext(), sparsePlan)) {
                 return D3DERR_INVALIDCALL;
             }
-            indexSectionEmitted = !recorderState_.peSparseState.indexBuffers.empty();
+            indexSectionEmitted = sparsePlan.indexBuffer;
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
+            const bool ok = dxmt9::d3d9::pe::appendSparseStatePlan(
                 builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-                recorderState_.peSparseHeader, recorderState_.peSparseState);
+                sparsePlan);
             const auto settlement =
                 dxmt9::d3d9::pe::settleRecorderAppend({
                     .phase =
@@ -1817,9 +1840,9 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
                     .appendSucceeded = ok,
                 });
             const bool settled =
-                dxmt9::d3d9::pe::acceptPreparedSparseState(
+                dxmt9::d3d9::pe::acceptSparseStatePlan(
                     recorderState_.peState, recorderState_.peConsts,
-                    recorderState_.peSparseState, settlement,
+                    sparsePlan, settlement,
                     scalarSemanticObserver(),
                     builder.activeRecordOrdinal());
             phase.recordEncode(t0);
@@ -1922,13 +1945,22 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
     params.primitiveType = static_cast<std::uint32_t>(type);
     params.primitiveCount = count;
     params.stride = stride;
-    // Borrowed for this call only; cleared below so no later build can read
-    // a dangling span. Nothing else assigns recorderState_.peSparsePayloads, so empty is
-    // the invariant every non-UP record relies on.
-    recorderState_.peSparsePayloads.upVertex = std::span<const std::byte>(
-        static_cast<const std::byte*>(data), vertexBytes);
-    const bool built =
-        buildSparseStateForRecord(params, forceFullSnapshot);
+    const dxmt9::d3d9::pe::PeDrawPayloads payloads{
+        .upVertex = std::span<const std::byte>(
+            static_cast<const std::byte*>(data), vertexBytes),
+    };
+    const bool compatibilityOverride =
+        overrideFvf || overrideVertexShaderNull;
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (compatibilityOverride) {
+        // The SWVP override window is restored before append, so its borrowed
+        // binding values need the value-owned compatibility projection.
+        recorderState_.peSparsePayloads = payloads;
+    }
+    const bool built = compatibilityOverride
+        ? buildSparseStateForRecord(params, forceFullSnapshot)
+        : buildSparseStatePlanForRecord(
+              params, payloads, sparsePlan, forceFullSnapshot);
     if (overrideFvf) {
         fvf_ = savedFvf;
         vdecl_ = savedVdecl;
@@ -1943,7 +1975,10 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
         recorderState_.peState.maintenance().pendingVs() = savedPendingVs;
     }
     if (!built) {
-        recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
+        if (compatibilityOverride) {
+            recorderState_.peSparsePayloads =
+                dxmt9::d3d9::pe::PeDrawPayloads{};
+        }
         return D3DERR_INVALIDCALL;
     }
 
@@ -1958,10 +1993,15 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-                recorderState_.peSparseHeader, recorderState_.peSparseState);
-            if (!overrideFvf && !overrideVertexShaderNull) {
+            const bool ok = compatibilityOverride
+                ? dxmt9::d3d9::pe::appendSparseRecord(
+                      builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                      recorderState_.peSparseHeader,
+                      recorderState_.peSparseState)
+                : dxmt9::d3d9::pe::appendSparseStatePlan(
+                      builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                      sparsePlan);
+            if (!compatibilityOverride) {
                 const auto settlement =
                     dxmt9::d3d9::pe::settleRecorderAppend({
                         .phase =
@@ -1969,9 +2009,9 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
                         .appendSucceeded = ok,
                     });
                 const bool settled =
-                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                    dxmt9::d3d9::pe::acceptSparseStatePlan(
                         recorderState_.peState, recorderState_.peConsts,
-                        recorderState_.peSparseState, settlement,
+                        sparsePlan, settlement,
                         scalarSemanticObserver(),
                         builder.activeRecordOrdinal());
                 if (ok && !settled) {
@@ -1983,7 +2023,10 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
-    recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
+    if (compatibilityOverride) {
+        recorderState_.peSparsePayloads =
+            dxmt9::d3d9::pe::PeDrawPayloads{};
+    }
     if (SUCCEEDED(hr)) {
         recordDrawPrimitiveUPCopy(vertexBytes);
     }
@@ -2078,15 +2121,22 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
     params.primitiveCount = count;
     params.stride = stride;
     params.indexFormat = static_cast<std::uint32_t>(indexFormat);
-    // Borrowed for this call only; cleared below. Index bytes precede vertex
-    // bytes in the record, and appendSparseRecord lays them out in that
-    // order from these two spans.
-    recorderState_.peSparsePayloads.upIndex = std::span<const std::byte>(
-        static_cast<const std::byte*>(indexData), indexBytes);
-    recorderState_.peSparsePayloads.upVertex = std::span<const std::byte>(
-        static_cast<const std::byte*>(vertexData), vertexBytes);
-    const bool built =
-        buildSparseStateForRecord(params, forceFullSnapshot);
+    const dxmt9::d3d9::pe::PeDrawPayloads payloads{
+        .upIndex = std::span<const std::byte>(
+            static_cast<const std::byte*>(indexData), indexBytes),
+        .upVertex = std::span<const std::byte>(
+            static_cast<const std::byte*>(vertexData), vertexBytes),
+    };
+    const bool compatibilityOverride =
+        overrideFvf || overrideVertexShaderNull;
+    dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
+    if (compatibilityOverride) {
+        recorderState_.peSparsePayloads = payloads;
+    }
+    const bool built = compatibilityOverride
+        ? buildSparseStateForRecord(params, forceFullSnapshot)
+        : buildSparseStatePlanForRecord(
+              params, payloads, sparsePlan, forceFullSnapshot);
     if (overrideFvf) {
         fvf_ = savedFvf;
         vdecl_ = savedVdecl;
@@ -2101,7 +2151,10 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
         recorderState_.peState.maintenance().pendingVs() = savedPendingVs;
     }
     if (!built) {
-        recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
+        if (compatibilityOverride) {
+            recorderState_.peSparsePayloads =
+                dxmt9::d3d9::pe::PeDrawPayloads{};
+        }
         return D3DERR_INVALIDCALL;
     }
 
@@ -2116,10 +2169,17 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
-                builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-                recorderState_.peSparseHeader, recorderState_.peSparseState);
-            if (!overrideFvf && !overrideVertexShaderNull) {
+            const bool ok = compatibilityOverride
+                ? dxmt9::d3d9::pe::appendSparseRecord(
+                      builder,
+                      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                      recorderState_.peSparseHeader,
+                      recorderState_.peSparseState)
+                : dxmt9::d3d9::pe::appendSparseStatePlan(
+                      builder,
+                      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                      sparsePlan);
+            if (!compatibilityOverride) {
                 const auto settlement =
                     dxmt9::d3d9::pe::settleRecorderAppend({
                         .phase =
@@ -2127,9 +2187,9 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
                         .appendSucceeded = ok,
                     });
                 const bool settled =
-                    dxmt9::d3d9::pe::acceptPreparedSparseState(
+                    dxmt9::d3d9::pe::acceptSparseStatePlan(
                         recorderState_.peState, recorderState_.peConsts,
-                        recorderState_.peSparseState, settlement,
+                        sparsePlan, settlement,
                         scalarSemanticObserver(),
                         builder.activeRecordOrdinal());
                 if (ok && !settled) {
@@ -2141,7 +2201,10 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
-    recorderState_.peSparsePayloads = dxmt9::d3d9::pe::PeDrawPayloads{};
+    if (compatibilityOverride) {
+        recorderState_.peSparsePayloads =
+            dxmt9::d3d9::pe::PeDrawPayloads{};
+    }
     if (SUCCEEDED(hr)) {
         recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
     }

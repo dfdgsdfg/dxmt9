@@ -3,13 +3,13 @@
 // POD inputs for the PE sparse-state producer.
 //
 // The producer is pure over (a) bindings, (b) the constant shadow, and
-// (c) draw payloads. Destination-chunk state (d) is NOT a producer input:
-// production applies it inside the draw call sites' writer lambdas, after the
-// producer runs, and never on the barrier path. Compare the four callers of
+// (c) draw payloads. Destination-chunk state (d) is NOT a pass-1 input:
+// production applies it inside draw emitters after CapacityPre, and never on
+// the barrier path. Compare the callers of
 // d3d9_pe_device.cpp's populatePendingChunkDrawStreamDependencies against
 // chunkBarrierFlush, which builds an APPLY_STATE packet with no chunk-context
-// step at all. Chunk context is therefore an input to
-// addChunkContextSections instead. See
+// step at all. Compact plans use finalizeSparseStatePlanChunkContext; the
+// compatibility projection uses addChunkContextSections. See
 // docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §3.
 //
 // References here name symbols rather than line numbers on purpose: this
@@ -114,7 +114,60 @@ struct PeDrawParams {
   std::uint32_t indexFormat = 0u;
 };
 
-// Device-owned, reused output storage. The SparseStateInput spans the
+// Compact pass-1 result for the normal recorder path.  It deliberately owns
+// no section-sized wire storage: masks/counts select rows from the borrowed
+// source views, constant and UP ranges borrow their call-local bytes, and pass
+// 2 writes those rows directly into CommandChunkBuilder's final payload while
+// the recorder lock keeps the witnesses stable.
+//
+// PeSparseScratch remains below as an isolated compatibility/oversized-batch
+// owner.  It must not be embedded here or moved to a draw-call stack frame.
+struct SparseStatePlan {
+  const PeHotStateShadow* sourceShadow = nullptr;
+  PeConstShadowBlock* sourceConstants = nullptr;
+  const PeBindingView* sourceBindings = nullptr;
+
+  PeDrawParams draw{};
+  bool prepared = false;
+  bool fullSnapshot = false;
+  bool chunkContextFinalized = false;
+  std::uint32_t drawFlags = 0u;
+
+  std::uint32_t renderStateCount = 0u;
+  std::uint32_t textureStageStateCount = 0u;
+  std::uint32_t samplerStateCount = 0u;
+  std::uint32_t transformCount = 0u;
+
+  std::uint32_t textureMask = 0u;
+  std::uint32_t selectedStreamMask = 0u;
+  std::uint32_t streamMask = 0u;
+  std::uint32_t renderTargetMask = 0u;
+  std::uint32_t clipPlaneMask = 0u;
+  std::uint32_t lightMask = 0u;
+  std::uint32_t lightEnableMask = 0u;
+  std::uint8_t shaderMask = 0u;
+  bool vertexInput = false;
+  std::uint8_t vertexInputKind = 0u;
+  bool selectedIndexBuffer = false;
+  bool indexBuffer = false;
+  bool depthStencil = false;
+  bool viewport = false;
+  bool scissor = false;
+  bool material = false;
+
+  SparseConstantRangeInput vsFloatConstants{};
+  SparseConstantRangeInput vsIntConstants{};
+  SparseConstantRangeInput vsBoolConstants{};
+  SparseConstantRangeInput psFloatConstants{};
+  SparseConstantRangeInput psIntConstants{};
+  SparseConstantRangeInput psBoolConstants{};
+  PeDrawPayloads payloads{};
+};
+
+// Device-owned, reused compatibility/oversized storage. SparseStateInput spans
+// point into this owner for Render Tape full snapshots, SWVP override packets,
+// and oversized APPLY_STATE batches. The normal plan path never writes it.
+// The SparseStateInput spans the
 // producer fills point into these arrays, so the scratch must outlive the
 // append that consumes them. The producer returns false rather than
 // truncating.

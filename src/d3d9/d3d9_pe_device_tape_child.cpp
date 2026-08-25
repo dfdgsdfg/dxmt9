@@ -436,19 +436,18 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
         return;
     // Handles are intentionally walked after the command has been
     // materialized. Duplicate handles across records are harmless because
-    // the bounded lifetime ref reaches zero on the first visit.
-    for (const auto &handle : recorderState_.commandChunk.handles()) {
-        const D9CWireObjectIdentity identity{
-            .kind = handle.kind,
-            .generation = handle.generation,
-            .objectId = handle.objectId,
-        };
-        auto *entry = findRenderTapeObject(
-            dxmt9::d3d9::pe::PeWireObjectRef{.identity = identity});
-        if (!entry || entry->lifetime.pendingChunkRefs == 0u)
-            continue;
+    // the bounded lifetime ref reaches zero on the first visit. Run aliases
+    // first so the parent order does not depend on wire handle ordering.
+    const auto drainPass = [&](bool aliasPass) noexcept {
+      recorderState_.commandChunk.visitCommittedPendingChunkLeases(
+          [&](const dxmt9::d3d9::pe::CommittedPendingChunkLease &lease) noexcept {
+        const D9CWireObjectIdentity identity = lease.object().identity;
+        auto *entry = findRenderTapeObject(lease.object());
+        if (!entry || entry->lifetime.pendingChunkRefs == 0u ||
+            entry->lifetime.textureAlias != aliasPass)
+            return;
         if (!entry->lifetime.releasePendingChunk())
-            continue;
+            return;
         const bool isTexture = identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE;
         const bool isAlias = entry->lifetime.textureAlias;
         if (isTexture)
@@ -473,7 +472,7 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
             if (!retired) {
                 markRenderTapeInvalidOnce("commit_alias_destroy");
             }
-            continue;
+            return;
         }
         // Preserve the established alias-before-parent event order. The
         // parent entry remains in the registry until the alias scan has
@@ -509,7 +508,10 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
                 markRenderTapeInvalidOnce("commit_parent_destroy");
             }
         }
-    }
+      });
+    };
+    drainPass(true);
+    drainPass(false);
 }
 
 void D3D9DeviceImpl::NotifyRenderTapeObjectDestroyForChild(
@@ -522,21 +524,38 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDestroyForChild(
         // Transfer the logical lifetime to the bounded pending chunk ref;
         // drain it after command materialization and before raw D9C
         // retainer reset.
+        bool issuedLease = false;
         if (entry && entry->lifetime.wrapperRefs == 1u &&
-            entry->lifetime.pendingChunkRefs == 0u &&
-            recorderState_.commandChunk.referencesObject(
-                dxmt9::d3d9::pe::PeLocalObjectIdentity{
-                    .kind = object.identity.kind, .object = object.object}) &&
-            entry->lifetime.retainPendingChunk()) {
-            (void)entry->lifetime.releaseWrapper();
-            dxmt9DeviceInfoLog(
-                "render_tape_capture object_destroy deferred kind=%u "
-                "generation=%u object_id=%llu pending=%u",
-                object.identity.kind, object.identity.generation,
-                static_cast<unsigned long long>(object.identity.objectId),
-                entry->lifetime.pendingChunkRefs);
-            return;
+            entry->lifetime.pendingChunkRefs == 0u) {
+            issuedLease = recorderState_.commandChunk
+                .visitCommittedPendingChunkLease(
+                    object,
+                    [&](const dxmt9::d3d9::pe::CommittedPendingChunkLease &lease)
+                        noexcept {
+                      // The builder matched the complete wire identity and
+                      // local wrapper pointer. Repeat the registry check at
+                      // the logical boundary so this callback cannot settle a
+                      // different entry if that lookup changes later.
+                      auto *leasedEntry = findRenderTapeObject(lease.object());
+                      if (leasedEntry != entry ||
+                          !renderTapeSameIdentity(leasedEntry->identity,
+                                                  object.identity) ||
+                          lease.object().object != object.object ||
+                          !leasedEntry->lifetime.retainPendingChunk()) {
+                        return false;
+                      }
+                      (void)leasedEntry->lifetime.releaseWrapper();
+                      dxmt9DeviceInfoLog(
+                          "render_tape_capture object_destroy deferred kind=%u "
+                          "generation=%u object_id=%llu pending=%u",
+                          object.identity.kind, object.identity.generation,
+                          static_cast<unsigned long long>(object.identity.objectId),
+                          leasedEntry->lifetime.pendingChunkRefs);
+                      return true;
+                    });
         }
+        if (issuedLease)
+            return;
     }
     const bool retired = unregisterRenderTapeObject(object);
     if (!retired) {
