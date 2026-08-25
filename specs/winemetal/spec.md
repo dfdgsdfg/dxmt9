@@ -78,14 +78,14 @@ rollback possible and prevents a temporary null layer from escaping to present.
 
 If the escape query is unsupported, the unix provider may try the legacy
 `macdrv_functions` path only when the active Wine manifest pins the exact build
-as `legacy-macdrv-symbols`. Direct `dlsym` is not a generic fallback for Wine
-11.x: `RTLD_LOCAL`, private struct churn, and the absence of a persistent client
-view are independent blockers.
+as `legacy-macdrv-symbols:<runtime-id>`. Direct `dlsym` is not a generic
+fallback for Wine 11.x: `RTLD_LOCAL`, private struct churn, and the absence of a
+persistent client view are independent blockers.
 
 The legacy flow remains for exact Wine manifest entries already qualified as
-`legacy-macdrv-symbols`. Wine distribution names identify evidence fixtures;
-they do not name or define the fallback. The old visibility patch is archival
-compatibility material, not the forward deployment strategy.
+`legacy-macdrv-symbols:<runtime-id>`. Wine distribution names identify evidence
+fixtures; they do not name or define the fallback. The old visibility patch is
+archival compatibility material, not the forward deployment strategy.
 
 ## 5. Failure Behavior
 
@@ -103,14 +103,19 @@ D3D9-facing contract rather than an implicit black-window fallback.
 
 ## 6. Compatibility and Rollout
 
-The rollout has two independently versioned halves:
+The rollout has three independently versioned parts:
 
-1. Wine must ship the accepted `MACDRV_ESCAPE_*_SURFACE` implementation.
-2. dxmt9 must ship the matching PE client and unix adoption path.
+1. The selected Wine/deploy lane must provide the required unixlib-loader
+   capability from `R-DEPLOY-3.11`.
+2. Wine must ship the accepted `MACDRV_ESCAPE_*_SURFACE` implementation, or be
+   an exact runtime qualified for the legacy symbol path.
+3. dxmt9 must ship the matching PE client and unix adoption path.
 
-Until both are present, a Gcenx/Heroic runtime remains unsupported by the new
-path. Downstream Wine builds may carry the Wine change before upstream release,
-but the manifest must identify the exact source revision and patch.
+All applicable parts must be present. Loading the unix provider on stock Wine
+does not qualify WSI, and finding a legacy macdrv symbol does not qualify an
+app-local loader. Downstream Wine builds may carry the Wine change before
+upstream release, but the manifest must identify the exact source revision and
+patch.
 
 ## 7. Verification Mapping
 
@@ -120,6 +125,7 @@ but the manifest must identify the exact source revision and patch.
 | PE x64 and WoW64 WSI smoke | Wine escape availability and bridge scalar widths |
 | Reset/additional-swap-chain integration | ordering and per-`HWND` ownership |
 | Negative stock-Wine run | clean unsupported failure, no black-window success |
+| Loader-pass / WSI-fail composition run | successful provider handshake remains distinct from `layer_acquisition=unavailable` |
 | DXMT coexistence smoke | distinct module identities and independent D3D9/D3D11 initialization |
 
 Runtime evidence must record the Wine root hash, escape protocol, dxmt9 bridge

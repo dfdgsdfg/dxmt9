@@ -8,8 +8,14 @@
 # specs/experiments/assets/wine-manifest.schema.toml plus:
 #
 #   metal_surface_protocol — one of "extescape-v1",
-#                            "legacy-macdrv-symbols", "unsupported", or
-#                            "unknown". A runtime probe remains mandatory.
+#                            "legacy-macdrv-symbols:<runtime-id>",
+#                            "unsupported", or "unknown". A runtime probe
+#                            remains mandatory.
+#
+#   unixlib_loader_capabilities — independently qualified deploy capabilities.
+#                                 An empty list means no loader capability has
+#                                 been qualified for this manifest entry; it
+#                                 does not claim that Wine lacks one.
 #
 #   requires_patch  — does this Wine root need the dxmt9 macdrv
 #                     symbol-expose patch applied for the bridge to
@@ -20,7 +26,8 @@
 #
 # Resolution order at run time (R-WMB-15.1):
 #   extescape-v1          → QUERYESCSUPPORT must succeed before GET_SURFACE.
-#   legacy-macdrv-symbols → exact pinned build only; run the legacy probe.
+#   legacy-macdrv-symbols:<runtime-id> → exact pinned build only; run the
+#                                        legacy probe.
 #   unsupported           → reject before D3D9 WSI creation.
 #   unknown               → probe ExtEscape; do not try a generic symbol fallback.
 
@@ -34,6 +41,7 @@ variant                = "extescape"
 version                = "<exact Wine revision>"
 path                   = "$REPO_ROOT/experiments/wine/wine-extescape-pinned-revision"
 metal_surface_protocol = "extescape-v1"
+unixlib_loader_capabilities = ["builtin-pair-v1", "by-name-v1"]
 notes                  = "QUERYESCSUPPORT still gates use; replace with the accepted Wine commit/release before qualification."
 
 # ─── Stock Heroic / Gcenx Wine-11.7. Cannot serve dxmt9. ─────────────────
@@ -50,6 +58,7 @@ path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/
 requires_patch = true
 patch_status   = "unpatched"
 metal_surface_protocol = "unsupported"
+unixlib_loader_capabilities = []
 notes          = "No accepted Metal-surface ExtEscape implementation; the legacy private-symbol path is not qualified for this Wine 11.x build."
 
 # ─── Heroic Wine-11.7-DXMT bundle. Same winemac.so as vanilla 11.7. ──────
@@ -62,6 +71,7 @@ path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-
 requires_patch = true
 patch_status   = "unpatched"
 metal_surface_protocol = "unsupported"
+unixlib_loader_capabilities = []
 notes          = "The '-DXMT' suffix bundles DXMT DLLs but does not add the required Wine Metal-surface ExtEscape implementation."
 
 # ─── Path A: Sikarugir-Engines pre-built Wine (recommended default). ─────
@@ -77,7 +87,8 @@ version        = "wine-9.0 / SikarugirCX 24.0.7 r6"
 path           = "$REPO_ROOT/experiments/wine/sikarugir-cx-24.0.7"
 requires_patch = true
 patch_status   = "applied"
-metal_surface_protocol = "legacy-macdrv-symbols"
+metal_surface_protocol = "legacy-macdrv-symbols:sikarugir-cx-24.0.7"
+unixlib_loader_capabilities = ["builtin-pair-v1"]
 notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible with dxmt9's MemoryWineImageInfo lookups. Verified SFIV end-to-end 2026-05-11."
 
 # ─── Path A alternative: Sikarugir's own Wine 10.0 fork. ──────────────────
@@ -89,7 +100,8 @@ version        = "wine-10.0 / Sikarugir 10.0 r6"
 path           = "$REPO_ROOT/experiments/wine/sikarugir-10.0"
 requires_patch = true
 patch_status   = "applied"
-metal_surface_protocol = "legacy-macdrv-symbols"
+metal_surface_protocol = "legacy-macdrv-symbols:sikarugir-10.0"
+unixlib_loader_capabilities = ["builtin-pair-v1"]
 notes          = "Alternate Sikarugir Wine (non-CrossOver lineage). Same install_wine.py recipe, different engine tag."
 
 # ─── Path B: Self-built Wine with dxmt9 patch applied (R-WMB-10.B). ──────
@@ -102,6 +114,7 @@ path           = "$REPO_ROOT/experiments/wine/wine-source-built-11.7/Contents/Re
 requires_patch = true
 patch_status   = "applied"
 metal_surface_protocol = "unknown"
+unixlib_loader_capabilities = []
 notes          = "Visibility-only self-build is not qualified for Wine 11.x; loader scope, private layout, and client-view lifetime still require evidence."
 
 # ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
@@ -117,4 +130,5 @@ path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossO
 requires_patch = true
 patch_status   = "unsupported"
 metal_surface_protocol = "unsupported"
+unixlib_loader_capabilities = ["builtin-pair-v1"]
 notes          = "Four blockers: (1) Perl bin/wine needs a bottle context (bypassable via cxbottle CLI but does not fix the next three); (2) wow64 missing MemoryWineLoadUnixLibByName (class 1002) — bottle context does NOT bypass; (3) ntdll.so hardcodes /opt/cxoffice/lib/wine and WINEDLLDIR0/WINEDLLPATH overrides don't take effect; (4) CrossOver.app/lib/wine is SIP/codesign-protected — winemetal.so cannot be staged. Use Sikarugir-Engines instead."

@@ -461,17 +461,24 @@ code.
 surface protocol value:
 
 ```toml
-metal_surface_protocol = "extescape-v1" # extescape-v1 | legacy-macdrv-symbols | unsupported | unknown
+metal_surface_protocol = "extescape-v1" # extescape-v1 | legacy-macdrv-symbols:<runtime-id> | unsupported | unknown
 ```
 
 `extescape-v1` requires a successful runtime `QUERYESCSUPPORT`; a manifest
 claim alone must never bypass the probe.
 
+Legacy qualification must include the exact runtime identity in the value, for
+example `legacy-macdrv-symbols:sikarugir-cx-24.0.7-<hash>`. An unqualified
+`legacy-macdrv-symbols` declaration is not sufficient for selection. The
+runtime's unixlib-loader capabilities are recorded separately under
+`R-DEPLOY-3.11` and must not be inferred from this field.
+
 ## 14. Legacy macdrv Symbol Fallback
 
 **R-WMB-14.1** When `MACDRV_ESCAPE_GET_SURFACE` is not supported, dxmt9 may use
 the existing `macdrv_functions` / direct-symbol path only for a Wine build that
-is explicitly pinned as `legacy-macdrv-symbols` and has end-to-end WSI evidence.
+is explicitly pinned as `legacy-macdrv-symbols:<runtime-id>` and has end-to-end
+WSI evidence.
 
 **R-WMB-14.2** Symbol visibility alone is not sufficient qualification for Wine
 11.x. A runtime is incompatible with the legacy path if unixlibs are loaded
@@ -495,8 +502,9 @@ and reproducibility material for already-qualified legacy runtimes.
 There is no silent offscreen-present fallback for a windowed device that
 requires presentation.
 
-**R-WMB-15.2** The compatibility manifest and run result must record both the
-declared protocol and the observed acquisition path. The observed value is one
+**R-WMB-15.2** The compatibility manifest and run result must record the exact
+declared protocol, the observed acquisition path, and the independently
+observed unixlib-loader capability set. The observed acquisition value is one
 of `extescape-v1`, `legacy-macdrv-symbols`, or `unavailable`.
 
 **R-WMB-15.3** As of the contract baseline, these runtime classes are interpreted
@@ -505,8 +513,8 @@ as follows:
 | Wine runtime | Protocol status | Qualification |
 |---|---|---|
 | Wine revision containing the accepted `MACDRV_ESCAPE_*_SURFACE` interface | target | Runtime query, x64/WoW64 smoke, resize, teardown, and present evidence required |
-| Current Gcenx/Heroic Wine 11.x without that Wine change | unsupported | Must fail the probe cleanly; the Heroic `-DXMT` suffix alone is not qualification |
-| Exact audited Wine build with a validated `macdrv_functions` ABI | required legacy fallback | Must use the legacy path only for a manifest entry qualified as `legacy-macdrv-symbols` |
+| Stock upstream Wine or Gcenx/Heroic Wine without that Wine change | unsupported | A working unixlib loader does not provide a Metal surface; the probe must fail cleanly, and a distribution suffix alone is not qualification |
+| Exact audited Wine build with a validated `macdrv_functions` ABI | required legacy fallback | Must use the legacy path only for a manifest entry qualified as `legacy-macdrv-symbols:<runtime-id>` |
 | Self-built Wine carrying only the old visibility patch | unknown | Must not be accepted until loader visibility, layout, and client-view lifetime are all proven |
 
 **R-WMB-15.4** A new Wine minor version is unsupported until its protocol probe,
@@ -520,6 +528,12 @@ continue into that fallback; it must not be treated as terminal
 incompatibility. The `winemetal_dxmt9.*` rename and the addition of ExtEscape
 must not change this Wine-facing fallback behavior. Individual Wine
 distributions are evidence fixtures, not part of the protocol name or contract.
+
+**R-WMB-15.6** WSI protocol qualification and unixlib-loader qualification are
+orthogonal. A windowed deployment is supported only when the selected deploy
+mode satisfies `R-DEPLOY-3.11` and this section selects either a runtime-probed
+`extescape-v1` path or an exact `legacy-macdrv-symbols:<runtime-id>` path. A
+successful provider ABI handshake alone must not enable presentation.
 
 ## 16. Failure and Diagnostics
 
@@ -570,8 +584,14 @@ must show the suffix-qualified dxmt9 modules, an ABI-hash handshake,
 `layer_acquisition=legacy-macdrv-symbols`, successful device creation, and at
 least one successful present. This gate does not claim app-local support on a
 runtime that lacks `MemoryWineLoadUnixLibByName`; app-local support remains
-governed by `R-DEPLOY-3.2`-`R-DEPLOY-3.8` and
-`R-DEPLOY-6.2`-`R-DEPLOY-6.6`.
+governed by `R-DEPLOY-3.2`-`R-DEPLOY-3.12` and
+`R-DEPLOY-6.2`-`R-DEPLOY-6.10`.
+
+**R-WMB-17.5** Integration evidence must cover the composed negative case in
+which the unix provider loads and passes its ABI handshake but no qualified
+Metal-surface protocol is available. The observed loader disposition must
+remain successful, `layer_acquisition` must be `unavailable`, and creation must
+fail according to `R-WMB-16.2` without a black-window success.
 
 ## 18. Non-Goals
 

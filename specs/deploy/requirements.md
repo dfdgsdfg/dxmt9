@@ -17,7 +17,10 @@ dxmt9 must support two deployment modes:
   native DLL search rules, without modifying the Wine runtime.
 
 The two modes must ship the same D3D9 frontend and Metal provider behavior.
-They differ only in how Wine discovers the PE DLLs and the unix provider.
+They differ only in how Wine discovers the PE DLLs and the unix provider. A
+deployment is supported only when its unixlib-loader capability and its Wine
+Metal-surface capability are both qualified; satisfying either capability alone
+is insufficient.
 
 ---
 
@@ -187,6 +190,36 @@ through that handle.
 fail cleanly with diagnostic logging that includes the candidate paths and
 Wine status codes.
 
+**R-DEPLOY-3.9** Wine unixlib loading must be isolated behind one cold bridge
+adapter. The rest of `winemetal_dxmt9.dll` must request either builtin-module
+pairing or by-name/path loading without depending on raw
+`NtQueryVirtualMemory` information-class values, Wine CRT globals, or a
+particular Wine helper-export location.
+
+**R-DEPLOY-3.10** The adapter may use Wine's builtin module pairing,
+`MemoryWineLoadUnixLibByName`, or `__wine_load_unix_lib` when that helper is
+actually linked or exported by the target runtime. It must not assume that
+`__wine_load_unix_lib` is dynamically resolvable from `ntdll.dll`. Raw Wine
+information classes such as 1000 and 1002, when required for native PE
+compatibility, must remain private to this adapter and be guarded by a runtime
+probe and explicit failure status.
+
+**R-DEPLOY-3.11** A deployment/runtime manifest must describe unixlib loading
+as a capability set, not infer it from a Wine version string. The initial
+capability names are:
+
+- `builtin-pair-v1`: pair a loaded Wine builtin PE module with its unixlib;
+- `by-name-v1`: load a unixlib by qualified name or explicit path and return an
+  independent module/call handle.
+
+Runtime install requires `builtin-pair-v1`. Application-local install requires
+`by-name-v1`. A runtime may provide both.
+
+**R-DEPLOY-3.12** Successful unixlib loading proves only provider discovery and
+dispatch. It does not qualify Wine Metal presentation. Windowed D3D9 support
+also requires one independently qualified `metal_surface_protocol` from
+`R-WMB-13.3` and `R-WMB-15.1`.
+
 ---
 
 ## 4. Loader and Override Behavior
@@ -237,13 +270,26 @@ they overwrite in a Wine runtime or prefix.
 - bridge ABI hash shared by `d3d9.dll`, `winemetal_dxmt9.dll`, and
   `winemetal_dxmt9.so`;
 - provider schema/version identifier;
-- required Wine Metal-surface protocol;
+- required Wine Metal-surface protocol and, for a legacy protocol, the exact
+  qualified runtime identity;
 - whether `__wine_unix_call_wow64_funcs` is present;
-- minimum supported Wine version or unixlib feature level;
+- required unixlib-loader capability for each deployment mode;
 - required Wine unix architecture;
 - required PE runtime dependency DLLs;
 - required unix-side dependencies and whether they are packaged or expected
   from the target Wine runtime.
+
+**R-DEPLOY-5.5** Compatibility selection must evaluate loader and Metal-surface
+capabilities independently and accept the deployment only when both match the
+package requirements. A successful `by-name-v1` probe must not turn stock Wine
+without a qualified Metal-surface protocol into a supported runtime. A visible
+legacy macdrv symbol must not compensate for a missing loader capability.
+
+**R-DEPLOY-5.6** Packages and installers must contain no unqualified
+`winemetal.dll` or `winemetal.so` artifact owned by dxmt9. Upgrade from a legacy
+dxmt9 install may remove or restore an old dxmt9-owned unqualified artifact only
+after proving its provenance; it must never delete or replace an upstream DXMT
+artifact by basename alone.
 
 ---
 
@@ -282,3 +328,19 @@ then prove loaded module paths and ABI handshakes for both products. The test
 must exercise a DXMT-backed D3D10/11 application and a dxmt9-backed D3D9
 application sequentially in the same prefix and, where a combined fixture is
 available, in the same process.
+
+**R-DEPLOY-6.8** Loader verification must exercise each declared capability
+independently. It must distinguish provider-load failure from Metal-surface
+acquisition failure in both diagnostics and machine-readable results.
+
+**R-DEPLOY-6.9** Compatibility verification must include the mixed case where
+`by-name-v1` succeeds but no qualified Metal-surface protocol exists. Device or
+swap-chain creation must fail with the WSI unsupported result required by
+`R-WMB-16.2`; it must not report a unixlib-loader failure or present a black
+window as success.
+
+**R-DEPLOY-6.10** Coexistence installation evidence must record checksums before
+and after dxmt9 installation for upstream DXMT's unqualified
+`winemetal.dll` / `winemetal.so`. The checksums must remain unchanged, and the
+dxmt9 package inventory must contain only the suffix-qualified bridge/provider
+pair.

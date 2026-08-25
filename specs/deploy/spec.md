@@ -292,8 +292,8 @@ flowchart TD
 ```
 
 The PE bridge already dispatches generated calls through
-`dxmt9_winemetal_unix_call(code, args)`. The locator extends initialization of
-that function:
+`dxmt9_winemetal_unix_call(code, args)`. A cold loader adapter owns Wine-version
+differences and initializes the handle used by that function:
 
 ```cpp
 enum class BridgeLocatorMode {
@@ -310,43 +310,53 @@ struct BridgeState {
     WineUnloadUnixLibFn unload = nullptr;
     NTSTATUS status = DXMT9_STATUS_DLL_NOT_FOUND;
 };
+
+enum class UnixlibLoaderCapability : uint32_t {
+    BuiltinPairV1 = 1u << 0,
+    ByNameV1 = 1u << 1,
+};
+
+struct WineUnixlibLoader {
+    uint32_t capabilities;
+    NTSTATUS (*loadBuiltin)(HMODULE module, unixlib_handle_t* handle);
+    NTSTATUS (*loadByName)(const UNICODE_STRING& name,
+                           unixlib_module_t* module,
+                           unixlib_handle_t* handle);
+    NTSTATUS (*unload)(unixlib_module_t module);
+};
 ```
+
+`WineUnixlibLoader` is not a new hot-path abstraction. It is initialized once
+before the first provider call and stores plain function pointers and capability
+bits. Raw Wine information classes and Wine CRT/helper differences stay inside
+its implementation.
 
 Pseudo-code:
 
 ```cpp
-static NTSTATUS tryLoadUnixlibName(const UNICODE_STRING& name,
-                                   unixlib_module_t* module,
-                                   unixlib_handle_t* handle) {
-    auto load = resolveProc<WineLoadUnixLibFn>(ntdll, "__wine_load_unix_lib");
-    if (!load)
-        return DXMT9_STATUS_NOT_SUPPORTED;
-    return load(&name, module, handle);
-}
-
 static NTSTATUS initializeProvider(BridgeState& state) {
-    resolve ntdll exports: __wine_unix_call_dispatcher,
-                           __wine_load_unix_lib,
-                           __wine_unload_unix_lib;
+    WineUnixlibLoader loader = probeWineUnixlibLoader();
 
     if (state.mode == BridgeLocatorMode::Builtin) {
-        if (tryBuiltinUnixlibForCurrentModule(state) == STATUS_SUCCESS)
+        require loader.capabilities contains BuiltinPairV1;
+        if (loader.loadBuiltin(currentBridgeModule(), &state.handle) == STATUS_SUCCESS)
             return STATUS_SUCCESS;
     }
 
+    require loader.capabilities contains ByNameV1;
     for (const auto& candidate : appLocalProviderCandidates()) {
-        NTSTATUS status = tryLoadUnixlibName(candidate.name,
-                                             &state.module,
-                                             &state.handle);
+        NTSTATUS status = loader.loadByName(candidate.name,
+                                            &state.module,
+                                            &state.handle);
         log candidate and status;
         if (status == STATUS_SUCCESS)
             return STATUS_SUCCESS;
     }
 
     if (runtimeProviderFallbackAllowed()) {
-        NTSTATUS status = tryLoadUnixlibName(makeUnicodeString(L"winemetal_dxmt9.so"),
-                                             &state.module,
-                                             &state.handle);
+        NTSTATUS status = loader.loadByName(makeUnicodeString(L"winemetal_dxmt9.so"),
+                                            &state.module,
+                                            &state.handle);
         log by-name fallback and status;
         if (status == STATUS_SUCCESS)
             return STATUS_SUCCESS;
@@ -355,6 +365,16 @@ static NTSTATUS initializeProvider(BridgeState& state) {
     return DXMT9_STATUS_DLL_NOT_FOUND;
 }
 ```
+
+The adapter may use Wine's builtin module query for `builtin-pair-v1` and the
+by-name unixlib query for `by-name-v1`. It may call `__wine_load_unix_lib` only
+when that helper is actually linked or exported. In particular, the design does
+not require `GetProcAddress(ntdll, "__wine_load_unix_lib")`: upstream Wine
+declares the helper through its unixlib support library, but that does not make
+an `ntdll.dll` export a stable native-PE contract. Native compatibility code may
+issue the Wine information-class queries directly, but the numeric values,
+WoW64 translation, probing, and error normalization remain private to the
+adapter.
 
 App-local candidate path construction:
 
@@ -369,25 +389,67 @@ App-local candidate path construction:
 
 When a Windows path is used for an explicit local file, convert it to the NT
 path form accepted by Wine's unixlib loader before calling
-`__wine_load_unix_lib`.
+the selected `WineUnixlibLoader` adapter.
 
 ---
 
-## 7. Package Manifest
+## 7. Capability Composition
+
+Provider loading and window-system integration are orthogonal compatibility
+axes:
+
+| Axis | Initial values | Proves |
+|---|---|---|
+| `unixlib_loader_capabilities` | `builtin-pair-v1`, `by-name-v1` | The qualified unix provider can be found and called |
+| `metal_surface_protocol` | `extescape-v1`, `legacy-macdrv-symbols:<runtime-id>`, `unsupported` | A Wine-owned window surface and Metal layer can be acquired and released |
+
+A supported deployment is the intersection of one deployment-mode loader
+requirement and one qualified Metal-surface protocol:
+
+```text
+runtime install   = builtin-pair-v1 AND qualified metal_surface_protocol
+app-local install = by-name-v1      AND qualified metal_surface_protocol
+```
+
+This prevents two recurring false conclusions:
+
+- loading `winemetal_dxmt9.so` on a new stock Wine does not prove that stock
+  Wine exposes a supported Metal surface;
+- finding legacy macdrv symbols does not prove that an app-local provider can
+  be loaded or that the private ABI is qualified.
+
+The package manifest declares required capabilities. The runtime probe records
+observed capabilities and the selected acquisition path. A Wine version is
+diagnostic provenance, not the compatibility decision key.
+
+### Compatibility Classes
+
+| Runtime class | Loader result | Surface result | Support result |
+|---|---|---|---|
+| Stock Wine with by-name unixlib loading but no accepted Metal-surface protocol | pass | unsupported | fail closed at WSI creation |
+| Wine carrying the accepted ExtEscape protocol | mode-dependent pass | `extescape-v1` after runtime query | supported after integration gates |
+| Exact audited legacy runtime | usually `builtin-pair-v1`; app-local only if separately proven | `legacy-macdrv-symbols:<runtime-id>` | supported only for the evidenced deployment modes |
+| Unknown downstream Wine | probe | probe | unsupported until both axes are qualified |
+
+---
+
+## 8. Package Manifest
 
 The root mixed-architecture package step should emit `dxmt9-deploy.json`:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "mode": "app-local",
   "version": "0.1.0",
   "bridge_abi_hash": "<hex>",
   "provider_schema": "dxmt9-winemetal-v1",
-  "required_metal_surface_protocol": "extescape-v1",
+  "required_capabilities": {
+    "unixlib_loader": "by-name-v1",
+    "metal_surface_protocol": "extescape-v1"
+  },
   "d3d9_export_profile": "windows-d3d9-by-wine-tests",
   "has_wow64_unix_call_table": true,
-  "min_wine_unixlib_feature": "MemoryWineLoadUnixLibByName",
   "variants": [
     {
       "name": "x64-on-x86_64-unix",
@@ -439,6 +501,12 @@ single staged package, for example with `"mode": "app-local-staged"`. The
 runtime installer can use the same schema with `"mode": "wine-runtime"` and
 runtime destination paths.
 
+For an exact legacy package, `metal_surface_protocol` contains the qualified
+value `legacy-macdrv-symbols:<runtime-id>`. An unqualified
+`legacy-macdrv-symbols` value is invalid. The package manifest records required
+capabilities; a run result separately records observed loader capabilities,
+the observed WSI acquisition path, and exact Wine provenance.
+
 Every staged binary, including optional PE runtime dependency DLLs, must appear
 in `artifacts` with a checksum. The `pe_dependencies` list remains the compact
 copy list for final staging. The `d3d9_export_profile` field records the export
@@ -449,12 +517,13 @@ table contract validated for the packaged `d3d9.dll`, including factory entries,
 
 ---
 
-## 8. Failure Behavior
+## 9. Failure Behavior
 
 Provider discovery failures must be actionable. At debug log level,
 `winemetal_dxmt9.dll` should print:
 
 - whether builtin lookup was attempted;
+- the loader capabilities observed by the cold adapter;
 - every provider candidate path;
 - the `NTSTATUS` returned for each candidate;
 - the selected provider path and unix-call handle on success;
@@ -462,6 +531,12 @@ Provider discovery failures must be actionable. At debug log level,
   resolved from the package or target Wine runtime;
 - whether a dynamically resolved bridge dependency was missing before provider
   discovery began.
+
+Provider-load failure and Metal-surface acquisition failure are different
+stages and must have different machine-readable dispositions. In particular, a
+stock Wine runtime may load `winemetal_dxmt9.so` successfully and then reject
+windowed device creation because no qualified surface protocol exists. That is
+a WSI compatibility result, not a loader result.
 
 The D3D9 frontend should translate bridge initialization failure into a normal
 D3D9 creation failure. App-local `d3d9.dll` therefore uses dynamic bridge
@@ -471,7 +546,7 @@ Windows loader failures and must be caught by packaging validation.
 
 ---
 
-## 9. Verification Design
+## 10. Verification Design
 
 Runtime lane:
 
@@ -525,3 +600,20 @@ DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=0 \
 
 Expected result: `Direct3DCreate9` fails cleanly and logs that no candidate
 provider was available.
+
+Capability-composition negative test:
+
+1. Use a stock Wine runtime that exposes `by-name-v1` but does not expose an
+   accepted Metal-surface protocol.
+2. Keep `winemetal_dxmt9.so` present and require its ABI handshake to pass.
+3. Attempt windowed device or swap-chain creation.
+
+Expected result: the run records successful provider loading,
+`layer_acquisition=unavailable`, and a WSI creation failure. It must not classify
+the run as a unixlib-loader failure or accept a black/no-op window.
+
+Coexistence verification snapshots the checksums of upstream DXMT's
+`winemetal.dll` and `winemetal.so`, installs dxmt9, and confirms that both
+checksums are unchanged. It then records the loaded paths and independent ABI
+handshakes for DXMT D3D10/11 and dxmt9 D3D9, first sequentially in one prefix
+and then in one process when the combined fixture is available.
