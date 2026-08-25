@@ -9,13 +9,17 @@ Or via meson once the test() entry is registered:
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.wine import resolve  # noqa: E402
+from scripts.run_apps import run_experiment  # noqa: E402
 
 FIXTURE_DIR = REPO_ROOT / "tests" / "scripts" / "fixtures"
 
@@ -150,6 +154,58 @@ class ResolveWineIdTests(unittest.TestCase):
         entry = next(e for e in self.entries if e.id == "fake-vanilla")
         resolve.validate_wsi_spawn(
             entry, allow_unsupported_negative_test=True
+        )
+
+
+class RunnerPreSpawnGateTests(unittest.TestCase):
+    def make_app(self) -> run_experiment.ExperimentApp:
+        return run_experiment.ExperimentApp(
+            name="wsi-gate-fixture",
+            source="fixture",
+            license="mit",
+            source_kind="project-authored",
+            license_scope="project-mit",
+            binary="meson.build",
+            launcher="meson.build",
+            reference="meson.build",
+            features=[],
+            status="untested",
+            wine_id=None,
+        )
+
+    def make_args(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            binary=None,
+            output_suffix=None,
+            wine_id=None,
+            wine_manifest=FIXTURE_DIR / "wine_manifest_good.toml",
+            allow_unsupported_wsi_negative_test=False,
+        )
+
+    def assert_env_selection_never_spawns(self, wine_id: str) -> int:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"DXMT_EXPERIMENT_WINE_ID": wine_id},
+            clear=False,
+        ), mock.patch.object(
+            run_experiment, "DEFAULT_OUTPUT_ROOT", Path(temp_dir)
+        ), mock.patch.object(
+            run_experiment.subprocess, "Popen"
+        ) as popen:
+            result = run_experiment.run_experiment(
+                self.make_app(), self.make_args()
+            )
+            popen.assert_not_called()
+            return result
+
+    def test_env_only_unsupported_entry_is_gated_before_spawn(self):
+        self.assertEqual(
+            self.assert_env_selection_never_spawns("fake-vanilla"), 2
+        )
+
+    def test_env_only_unknown_entry_is_gated_before_spawn(self):
+        self.assertEqual(
+            self.assert_env_selection_never_spawns("not-in-manifest"), 2
         )
 
 

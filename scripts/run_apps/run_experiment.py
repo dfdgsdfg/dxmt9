@@ -858,20 +858,21 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     manifest_entry: WineEntry | None = None
     manifest_source: str | None = None
     cli_wine_id = getattr(args, "wine_id", None)
-    if app.wine_id or cli_wine_id:
+    env_wine_id = os.environ.get("DXMT_EXPERIMENT_WINE_ID")
+    if app.wine_id or cli_wine_id or env_wine_id:
         manifest_path = getattr(args, "wine_manifest", None) or DEFAULT_MANIFEST_PATH
         try:
             entries = load_manifest(manifest_path)
             manifest_entry, manifest_source = resolve_wine_id(
                 entries=entries,
                 cli_arg=cli_wine_id,
-                env_var=os.environ.get("DXMT_EXPERIMENT_WINE_ID"),
+                env_var=env_wine_id,
                 catalogue_value=app.wine_id,
                 app_name=app.name,
             )
         except ManifestError as exc:
             print(f"[runtime] manifest error: {exc}", file=sys.stderr)
-            sys.exit(2)
+            return 2
         print(
             f"[runtime] wine resolved via {manifest_source}: id={manifest_entry.id} "
             f"path={manifest_entry.path}",

@@ -12,5 +12,9 @@ HRESULT dxmt9PeTeardownAndReleaseWsiBinding(
     D9CSwapChain* swapChain, D3D9PeWsiBinding& binding) noexcept;
 HRESULT dxmt9PeTeardownDeviceAndReleaseWsiBinding(
     D9CDevice* device, D3D9PeWsiBinding& binding) noexcept;
+void dxmt9PeFinalizeAndReleaseWsiBinding(
+    D9CSwapChain* swapChain, D3D9PeWsiBinding& binding) noexcept;
+void dxmt9PeFinalizeDeviceAndReleaseWsiBinding(
+    D9CDevice* device, D3D9PeWsiBinding& binding) noexcept;
 void dxmt9PeReleaseWsiBindingAfterQuiescence(
     D3D9PeWsiBinding& binding) noexcept;

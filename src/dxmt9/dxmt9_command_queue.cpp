@@ -784,6 +784,7 @@ CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
       queue_(std::move(queue)), queueView_(queue_.handle), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
+  wsiAdmissionStopped_.store(false, std::memory_order_release);
 }
 
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
@@ -2148,6 +2149,7 @@ void CommandQueue::startThreads(std::function<void()> encodeLoop,
     return;
   }
   stop_ = false;
+  wsiAdmissionStopped_.store(false, std::memory_order_release);
   queueLifecycle_.resetPendingCompletionStop();
   encodeThread_ = std::thread(
       makeQueueWorkerLoop(QueueWorkerRole::Encode, std::move(encodeLoop)));
@@ -4230,7 +4232,10 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
     const bool controlSlotsFree =
         cpuReadyArenaControlSlotsFreeLocked(layouts.size());
     bool reserveStillPressured = true;
-    if (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+    const bool wsiGateActive =
+        wsiQuiescenceActive_.load(std::memory_order_acquire);
+    if (!wsiGateActive &&
+        !arenaAdmissionActive_.load(std::memory_order_relaxed) &&
         !arenaBuildContext_.has_value() && controlSlotsFree) {
       const auto reserveProbe = layouts.size() == 1u
           ? cpuReadyTape_.probeArenaReserve(layouts.front())
@@ -4246,7 +4251,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
     const auto action = render::classifyCpuReadyAdmissionGate({
         .stopped = stop_,
         .poisoned = arenaBuildPoisoned_.load(std::memory_order_acquire),
-        .arenaBuildActive =
+        .arenaBuildActive = wsiGateActive ||
             arenaAdmissionActive_.load(std::memory_order_relaxed),
         .arenaBuildContextPresent = arenaBuildContext_.has_value(),
         .controlSlotsFree = controlSlotsFree,
@@ -4258,6 +4263,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
     writeCv_.wait(lock);
   }
   const bool admitted = !stop_ &&
+      !wsiQuiescenceActive_.load(std::memory_order_acquire) &&
       !arenaBuildPoisoned_.load(std::memory_order_acquire);
   arenaAdmissionWaiterCount_.fetch_sub(1, std::memory_order_acq_rel);
   if (schedulingObservabilityEnabled) {
@@ -5711,7 +5717,11 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
-  if (!tryEnterWsiPresentUse()) {
+  // Replay has already accepted/counts this Present ordinal before reaching
+  // the queue. A replacement gate is transient pressure, not permission to
+  // drop that ordinal: wait until the gate publishes the new binding. Only a
+  // terminal queue stop rejects admission, paired with the ordinal wake path.
+  if (!waitEnterWsiPresentUse()) {
     return 0;
   }
   auto leaveWsiUse = [this](void*) noexcept { leaveWsiPresentUse(); };
@@ -6130,68 +6140,187 @@ void CommandQueue::submitFlush() {
 }
 
 wsi::QuiescenceDisposition CommandQueue::beginWsiQuiescence() noexcept {
-  const auto qmxBegin = queueMutexProbeBegin();
-  std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(
-      qmxBegin, "begin_wsi_quiescence", /*skipHold=*/true);
-  // beginCpuReadyArenaSource(s) publishes both flags while holding mutex_.
-  // Checking them under that same lock pins the drained cold-entry
-  // precondition: no deferred arena flush can masquerade as quiescence.
-  if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
-      activeArenaBuild_.load(std::memory_order_relaxed) ||
-      arenaBuildContext_.has_value()) {
-    return wsi::QuiescenceDisposition::ActiveArena;
-  }
-  if (stop_) {
-    return wsi::QuiescenceDisposition::QueueStopped;
-  }
-  bool expected = false;
-  if (!wsiQuiescenceActive_.compare_exchange_strong(
-          expected, true, std::memory_order_acq_rel)) {
-    return wsi::QuiescenceDisposition::AlreadyActive;
-  }
+  bool gateArmed = false;
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "begin_wsi_quiescence", /*skipHold=*/true);
+    // beginCpuReadyArenaSource(s) publishes both flags while holding mutex_.
+    // Checking them under that same lock pins the drained cold-entry
+    // precondition: no deferred arena flush can masquerade as quiescence.
+    if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_.has_value()) {
+      return wsi::QuiescenceDisposition::ActiveArena;
+    }
+    if (stop_) {
+      return wsi::QuiescenceDisposition::QueueStopped;
+    }
+    {
+      // Lock order is queue mutex -> WSI mutex. Present admission releases
+      // the WSI mutex before it can acquire the queue mutex.
+      std::lock_guard wsiLock(wsiQuiescenceMutex_);
+      if (wsiQuiescenceActive_.load(std::memory_order_relaxed)) {
+        return wsi::QuiescenceDisposition::AlreadyActive;
+      }
+      wsiQuiescenceActive_.store(true, std::memory_order_release);
+      gateArmed = true;
+    }
 
-  // A Present that entered before the gate may still be acquiring a drawable
-  // or publishing its command. Let it retire its producer-side use before the
-  // queue fence fixes the last sequence that can reference the old layer.
-  lock.unlock();
-  {
-    std::unique_lock wsiLock(wsiQuiescenceMutex_);
-    wsiQuiescenceCv_.wait(wsiLock, [this] {
-      return wsiPresentUsers_.load(std::memory_order_acquire) == 0u;
-    });
-  }
-  lock.lock();
-  if (stop_) {
-    wsiQuiescenceActive_.store(false, std::memory_order_release);
-    return wsi::QuiescenceDisposition::QueueStopped;
-  }
-  queueLifecycle_.flushAndWait(
-      lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-        prepareSlotForPublish(*this, pool_, slot,
-                              perf::ChunkPublishReason::Flush);
+    // A Present that entered before the gate may still be acquiring a drawable
+    // or publishing its command. Let it retire its producer-side use before the
+    // queue fence fixes the last sequence that can reference the old layer.
+    lock.unlock();
+    {
+      std::unique_lock wsiLock(wsiQuiescenceMutex_);
+      wsiQuiescenceCv_.wait(wsiLock, [this] {
+        return wsiPresentUsers_.load(std::memory_order_acquire) == 0u;
       });
-  if (stop_) {
-    wsiQuiescenceActive_.store(false, std::memory_order_release);
+    }
+    lock.lock();
+    if (stop_) {
+      endWsiQuiescence();
+      return wsi::QuiescenceDisposition::QueueStopped;
+    }
+    queueLifecycle_.flushAndWait(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::Flush);
+        });
+    if (stop_) {
+      endWsiQuiescence();
+      return wsi::QuiescenceDisposition::QueueStopped;
+    }
+    return wsi::QuiescenceDisposition::Complete;
+  } catch (...) {
+    if (gateArmed) {
+      endWsiQuiescence();
+    }
     return wsi::QuiescenceDisposition::QueueStopped;
   }
-  return wsi::QuiescenceDisposition::Complete;
+}
+
+wsi::QuiescenceDisposition CommandQueue::beginFinalWsiQuiescence() noexcept {
+  bool gateArmed = false;
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "begin_final_wsi_quiescence", /*skipHold=*/true);
+
+    for (;;) {
+      {
+        std::unique_lock wsiLock(wsiQuiescenceMutex_);
+        if (wsiQuiescenceActive_.load(std::memory_order_relaxed)) {
+          lock.unlock();
+          wsiQuiescenceCv_.wait(wsiLock, [this] {
+            return !wsiQuiescenceActive_.load(std::memory_order_acquire);
+          });
+          wsiLock.unlock();
+          lock.lock();
+          continue;
+        }
+        wsiQuiescenceActive_.store(true, std::memory_order_release);
+        gateArmed = true;
+      }
+
+      if (arenaBuildContext_ &&
+          arenaBuildContext_->ownerThread == std::this_thread::get_id()) {
+        const bool batch = arenaBuildContext_->batchMode;
+        const auto ticket = arenaBuildContext_->reservation.ticket;
+        const auto controlIndex = arenaBuildContext_->controlIndex;
+        lock.unlock();
+        if (batch) {
+          (void)abortCpuReadyArenaBatch(ticket, false);
+        } else {
+          // A single-source arena has no recoverable rollback operation. Its
+          // terminal owner fail-stops and settles the reservation before the
+          // stopped-worker join below; it never waits on itself.
+          abortCpuReadyArenaSource(ticket, controlIndex);
+        }
+        lock.lock();
+      }
+
+      // Terminal release owns the obligation until transient arena ownership
+      // is gone. The armed gate prevents a successor arena while writeCv_
+      // releases the queue mutex.
+      writeCv_.wait(lock, [this] {
+        return stop_ ||
+            (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+             !activeArenaBuild_.load(std::memory_order_relaxed) &&
+             !arenaBuildContext_.has_value());
+      });
+      break;
+    }
+
+    lock.unlock();
+    {
+      std::unique_lock wsiLock(wsiQuiescenceMutex_);
+      wsiQuiescenceCv_.wait(wsiLock, [this] {
+        return wsiPresentUsers_.load(std::memory_order_acquire) == 0u;
+      });
+    }
+    lock.lock();
+    if (!stop_) {
+      queueLifecycle_.flushAndWait(
+          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+            prepareSlotForPublish(*this, pool_, slot,
+                                  perf::ChunkPublishReason::Flush);
+          });
+    }
+    const bool stopped = stop_;
+    lock.unlock();
+    if (stopped && threadsStarted_) {
+      // A stopped queue cannot prove callback retirement with flushAndWait.
+      // Joining all workers is the terminal equivalent before registry and
+      // Presenter destruction.
+      stopThreads();
+    }
+    return wsi::QuiescenceDisposition::Complete;
+  } catch (...) {
+    if (gateArmed) {
+      endWsiQuiescence();
+    }
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
 }
 
 void CommandQueue::endWsiQuiescence() noexcept {
-  wsiQuiescenceActive_.store(false, std::memory_order_release);
+  try {
+    std::lock_guard wsiLock(wsiQuiescenceMutex_);
+    wsiQuiescenceActive_.store(false, std::memory_order_release);
+  } catch (...) {
+    wsiQuiescenceActive_.store(false, std::memory_order_release);
+  }
+  wsiQuiescenceCv_.notify_all();
+  writeCv_.notify_all();
 }
 
-bool CommandQueue::tryEnterWsiPresentUse() noexcept {
-  if (wsiQuiescenceActive_.load(std::memory_order_acquire)) {
+bool CommandQueue::waitEnterWsiPresentUse() noexcept {
+  try {
+    std::unique_lock wsiLock(wsiQuiescenceMutex_);
+    wsiQuiescenceCv_.wait(wsiLock, [this] {
+      return !wsiQuiescenceActive_.load(std::memory_order_acquire) ||
+             wsiAdmissionStopped_.load(std::memory_order_acquire);
+    });
+    if (wsiAdmissionStopped_.load(std::memory_order_acquire)) {
+      return false;
+    }
+    wsiPresentUsers_.fetch_add(1u, std::memory_order_acq_rel);
+    return true;
+  } catch (...) {
+    try {
+      std::lock_guard lock(mutex_);
+      presentOrdinalGate_.aborted = true;
+      requestSchedulingStopLocked();
+      presentCompletedCv_.notify_all();
+    } catch (...) {
+      wsiAdmissionStopped_.store(true, std::memory_order_release);
+      wsiQuiescenceCv_.notify_all();
+    }
     return false;
   }
-  wsiPresentUsers_.fetch_add(1u, std::memory_order_acq_rel);
-  if (!wsiQuiescenceActive_.load(std::memory_order_acquire)) {
-    return true;
-  }
-  leaveWsiPresentUse();
-  return false;
 }
 
 void CommandQueue::leaveWsiPresentUse() noexcept {
@@ -6768,6 +6897,8 @@ void CommandQueue::noteInitializerPendingUploads() noexcept {
 
 void CommandQueue::requestSchedulingStopLocked() noexcept {
   stop_ = true;
+  wsiAdmissionStopped_.store(true, std::memory_order_release);
+  wsiQuiescenceCv_.notify_all();
   cpuReadyTape_.stopAdmission();
   notifySchedulingTerminalWaiters(
       render::SchedulingTerminalDisposition::Stop);
@@ -6775,6 +6906,8 @@ void CommandQueue::requestSchedulingStopLocked() noexcept {
 
 void CommandQueue::notifySchedulingTerminalWaiters(
     render::SchedulingTerminalDisposition disposition) noexcept {
+  wsiAdmissionStopped_.store(true, std::memory_order_release);
+  wsiQuiescenceCv_.notify_all();
   schedulingProgressWatchdog_.noteTerminal(
       disposition == render::SchedulingTerminalDisposition::DeviceLoss);
   const auto wake = render::planSchedulingTerminalWake(disposition);
@@ -6824,53 +6957,58 @@ core::PresentId CommandQueue::registerPresenter(Presenter* presenter) noexcept {
   if (!presenter) {
     return {};
   }
-  std::lock_guard lock(presenterRegistryMutex_);
-  if (testOnlyFailNextPresenterRegistration_) {
-    testOnlyFailNextPresenterRegistration_ = false;
-    return {};
-  }
-  std::uint32_t slotIndex = 0;
-  if (presenterFreeHead_ >= 0) {
-    slotIndex = static_cast<std::uint32_t>(presenterFreeHead_);
-    presenterFreeHead_ = presenterSlots_[slotIndex].nextFree;
-    presenterSlots_[slotIndex].nextFree = -1;
-  } else {
-    slotIndex = static_cast<std::uint32_t>(presenterSlots_.size());
-    try {
-      presenterSlots_.emplace_back();
-    } catch (...) {
+  try {
+    std::lock_guard lock(presenterRegistryMutex_);
+    if (testOnlyFailNextPresenterRegistration_) {
+      testOnlyFailNextPresenterRegistration_ = false;
       return {};
     }
+    std::uint32_t slotIndex = 0;
+    if (presenterFreeHead_ >= 0) {
+      slotIndex = static_cast<std::uint32_t>(presenterFreeHead_);
+      presenterFreeHead_ = presenterSlots_[slotIndex].nextFree;
+      presenterSlots_[slotIndex].nextFree = -1;
+    } else {
+      slotIndex = static_cast<std::uint32_t>(presenterSlots_.size());
+      presenterSlots_.emplace_back();
+    }
+    auto& slot = presenterSlots_[slotIndex];
+    slot.presenter = presenter;
+    slot.pendingToken.reset();
+    // Generation is bumped on free; the current value is what the caller
+    // observes for this allocation lifetime.
+    return core::PresentId{encodePresentId(slotIndex, slot.generation)};
+  } catch (...) {
+    return {};
   }
-  auto& slot = presenterSlots_[slotIndex];
-  slot.presenter = presenter;
-  slot.pendingToken.reset();
-  // Generation is bumped on free; the current value is what the caller
-  // observes for this allocation lifetime.
-  return core::PresentId{encodePresentId(slotIndex, slot.generation)};
 }
 
-void CommandQueue::unregisterPresenter(core::PresentId id) {
+void CommandQueue::unregisterPresenter(core::PresentId id) noexcept {
   if (!id) {
     return;
   }
-  std::lock_guard lock(presenterRegistryMutex_);
-  const std::uint32_t slotIndex = decodePresentIdSlot(id);
-  if (slotIndex >= presenterSlots_.size()) {
-    return;
+  try {
+    std::lock_guard lock(presenterRegistryMutex_);
+    const std::uint32_t slotIndex = decodePresentIdSlot(id);
+    if (slotIndex >= presenterSlots_.size()) {
+      return;
+    }
+    auto& slot = presenterSlots_[slotIndex];
+    if (slot.generation != decodePresentIdGeneration(id)) {
+      return;
+    }
+    slot.presenter = nullptr;
+    slot.pendingToken.reset();
+    // Bump generation so any in-flight PresentId carrying the old value
+    // resolves to nullptr in lookupPresenter — the encoder will skip the
+    // present rather than reach into a destroyed Presenter.
+    ++slot.generation;
+    slot.nextFree = presenterFreeHead_;
+    presenterFreeHead_ = static_cast<std::int32_t>(slotIndex);
+  } catch (...) {
+    // A synchronization-runtime failure cannot escape a cold C ABI teardown.
+    // No slot state was changed if mutex acquisition failed.
   }
-  auto& slot = presenterSlots_[slotIndex];
-  if (slot.generation != decodePresentIdGeneration(id)) {
-    return;
-  }
-  slot.presenter = nullptr;
-  slot.pendingToken.reset();
-  // Bump generation so any in-flight PresentId carrying the old value
-  // resolves to nullptr in lookupPresenter — the encoder will skip the
-  // present rather than reach into a destroyed Presenter.
-  ++slot.generation;
-  slot.nextFree = presenterFreeHead_;
-  presenterFreeHead_ = static_cast<std::int32_t>(slotIndex);
 }
 
 Presenter* CommandQueue::lookupPresenter(core::PresentId id) const {

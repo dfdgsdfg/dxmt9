@@ -758,6 +758,9 @@ class CommandQueue {
   // That gate rejects new Present layer users and new CPU-ready arenas while
   // the caller swaps/unregisters the Presenter.
   wsi::QuiescenceDisposition beginWsiQuiescence() noexcept;
+  // Terminal release waits out transient replacement/arena ownership and, if
+  // the queue has stopped, joins its workers before Presenter destruction.
+  wsi::QuiescenceDisposition beginFinalWsiQuiescence() noexcept;
   void endWsiQuiescence() noexcept;
   core::HResult waitForVBlank();
 
@@ -779,7 +782,7 @@ class CommandQueue {
   // against the same PresentId so the encode worker can claim them
   // without the queue carrying a shared_ptr on the PE-visible record.
   core::PresentId registerPresenter(Presenter* presenter) noexcept;
-  void unregisterPresenter(core::PresentId id);
+  void unregisterPresenter(core::PresentId id) noexcept;
   Presenter* lookupPresenter(core::PresentId id) const;
   void stashDrawableToken(core::PresentId id,
                           std::shared_ptr<PresentDrawableToken> token);
@@ -1550,7 +1553,7 @@ class CommandQueue {
       bool tokenStashed) noexcept;
   ActiveArenaAppendResult deferActiveArenaFlush() noexcept;
   ActiveArenaAppendResult rejectIfActiveArena() noexcept;
-  bool tryEnterWsiPresentUse() noexcept;
+  bool waitEnterWsiPresentUse() noexcept;
   void leaveWsiPresentUse() noexcept;
   bool selectCpuReadyArenaSegment(
       core::CpuReadyPublicationTicket ticket,
@@ -1593,6 +1596,7 @@ class CommandQueue {
   std::uint64_t nextArenaBuildGeneration_ = 1;
   std::atomic<bool> wsiQuiescenceActive_{false};
   std::atomic<std::uint32_t> wsiPresentUsers_{0};
+  std::atomic<bool> wsiAdmissionStopped_{true};
   std::mutex wsiQuiescenceMutex_{};
   std::condition_variable wsiQuiescenceCv_{};
   // Native coordinator fault seam: fail one post-reservation semantic

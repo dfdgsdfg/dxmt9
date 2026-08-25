@@ -95,8 +95,10 @@ is preserved when D3D9 reset semantics allow rollback.
 On swap-chain or device destruction:
 
 1. Stop drawable acquisition.
-2. Drain or fence every command buffer that can reference the layer.
-3. Destroy the unix presenter binding and return success to PE.
+2. Wait out an active replay arena and every already-admitted Presenter user;
+   a replay-accepted Present waits behind the gate rather than being dropped.
+3. Fence a live queue, or join stopped queue workers, then invalidate the
+   presenter registry before destroying the unix presenter binding.
 4. Issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
    token, then clear the PE token even if Wine reports a release failure.
 

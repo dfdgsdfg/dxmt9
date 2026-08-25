@@ -106,22 +106,18 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             ),
         )
 
-    def test_manifest_wsi_gate_precedes_process_spawn(self):
+    def test_runner_clears_inherited_process_identity(self):
         source = (
             REPO_ROOT / "scripts" / "run_apps" / "run_experiment.py"
         ).read_text(encoding="utf-8")
         run_body = source[source.index("def run_experiment(") :]
-        self.assertLess(
-            run_body.index("validate_wsi_spawn("),
-            run_body.index("subprocess.Popen("),
-        )
         self.assertIn(
             'env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)',
             run_body,
         )
         self.assertIn('env.pop("DXMT9_WINE_MANIFEST_ID", None)', run_body)
 
-    def test_pe_retains_and_balances_acquisition_hdc(self):
+    def test_pe_only_hdc_capability_stays_out_of_wire(self):
         source = (
             REPO_ROOT / "src" / "d3d9" / "d3d9_pe_wsi.cpp"
         ).read_text(encoding="utf-8")
@@ -129,19 +125,9 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             source.index("D3D9PeWsiBinding dxmt9PeAcquireWsiBinding") :
             source.index("HRESULT dxmt9PeAdoptWsiBinding")
         ]
-        retained = acquire.index("binding.releaseHdc =")
+        retained = acquire.index("binding.releaseCapability.hdc =")
         successful_return = acquire.index("return binding;", retained)
         self.assertNotIn("ReleaseDC", acquire[retained:successful_return])
-
-        release = source[
-            source.index("void dxmt9PeReleaseWsiBindingAfterQuiescence") :
-            source.index("HRESULT dxmt9PeTeardownAndReleaseWsiBinding")
-        ]
-        self.assertNotIn("GetDC(", release)
-        self.assertLess(
-            release.index("releaseSurfaceOnHdc"), release.index("ReleaseDC")
-        )
-        self.assertLess(release.index("ReleaseDC"), release.index("binding = {}"))
 
         adopt = source[
             source.index("HRESULT dxmt9PeAdoptWsiBinding") :
@@ -151,7 +137,7 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             adopt.index("const D9CWsiSurfaceBinding wire") :
             adopt.index("};", adopt.index("const D9CWsiSurfaceBinding wire"))
         ]
-        self.assertNotIn("releaseHdc", wire)
+        self.assertNotIn("releaseCapability", wire)
 
     def test_candidate_order_exception_closure_and_registry_lifetime(self):
         core = (

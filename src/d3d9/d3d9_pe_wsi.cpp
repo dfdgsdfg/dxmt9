@@ -95,7 +95,8 @@ D3D9PeWsiBinding dxmt9PeAcquireWsiBinding(HWND hwnd) noexcept {
             result, sizeof(response), response)) {
       binding.surfaceToken = response.surface;
       binding.layerToken = response.layer;
-      binding.releaseHdc = reinterpret_cast<std::uintptr_t>(hdc);
+      binding.releaseCapability.hdc =
+          reinterpret_cast<std::uintptr_t>(hdc);
       return binding;
     } else {
       if (response.surface != 0u) {
@@ -116,7 +117,9 @@ D3D9PeWsiBinding dxmt9PeAcquireWsiBinding(HWND hwnd) noexcept {
 
 HRESULT dxmt9PeAdoptWsiBinding(
     D9CSwapChain* swapChain, D3D9PeWsiBinding& binding) noexcept {
-  if (!swapChain || !dxmt9::wsi::validAdoptionCandidate(binding)) {
+  if (!swapChain || !dxmt9::wsi::validAdoptionCandidate(binding) ||
+      (binding.protocol == SurfaceProtocol::ExtEscapeV1 &&
+       !binding.releaseCapability.retained())) {
     return D3DERR_NOTAVAILABLE;
   }
   const D9CWsiSurfaceBinding wire{
@@ -159,31 +162,30 @@ HRESULT dxmt9PeAdoptDeviceWsiBinding(
 
 void dxmt9PeReleaseWsiBindingAfterQuiescence(
     D3D9PeWsiBinding& binding) noexcept {
-  if (dxmt9::wsi::hasWineReleaseObligation(binding)) {
-    // A live Wine token is not discardable without the retained acquisition
-    // HDC. Valid acquisition always supplies it; preserving the binding here
-    // makes any corrupted/partial state a visible retryable obligation rather
-    // than silently consuming it.
-    if (!dxmt9::wsi::canAttemptWineRelease(binding, true)) {
-      logWsiFailure(
-          "release-capability",
-          reinterpret_cast<HWND>(
-              static_cast<std::uintptr_t>(binding.hwnd)),
-          0);
-      return;
-    }
-    binding.releaseAttempted = true;
-    HWND hwnd = reinterpret_cast<HWND>(
-        static_cast<std::uintptr_t>(binding.hwnd));
-    HDC hdc = reinterpret_cast<HDC>(binding.releaseHdc);
-    const bool released = releaseSurfaceOnHdc(hdc, binding.surfaceToken);
-    if (hdc && !ReleaseDC(hwnd, hdc)) {
-      logWsiFailure("release-dc", hwnd, 0);
-    }
-    if (!released) {
-      logWsiFailure("release-surface", hwnd, 0);
-    }
+  HWND hwnd = reinterpret_cast<HWND>(
+      static_cast<std::uintptr_t>(binding.hwnd));
+  HDC hdc = reinterpret_cast<HDC>(binding.releaseCapability.hdc);
+  bool surfaceReleased = true;
+  bool dcReleased = true;
+  const auto disposition = dxmt9::wsi::dischargeWineRelease(
+      binding, binding.releaseCapability.retained(), true,
+      [&] {
+        surfaceReleased = releaseSurfaceOnHdc(hdc, binding.surfaceToken);
+      },
+      [&] { dcReleased = hdc && ReleaseDC(hwnd, hdc); });
+  if (disposition == dxmt9::wsi::WineReleaseDisposition::MissingCapability ||
+      disposition ==
+          dxmt9::wsi::WineReleaseDisposition::AwaitingUnixQuiescence) {
+    logWsiFailure("release-capability", hwnd, 0);
+    return;
   }
+  if (!surfaceReleased) {
+    logWsiFailure("release-surface", hwnd, 0);
+  }
+  if (!dcReleased) {
+    logWsiFailure("release-dc", hwnd, 0);
+  }
+  binding.releaseCapability.hdc = 0u;
   binding = {};
 }
 
@@ -220,4 +222,23 @@ HRESULT dxmt9PeTeardownDeviceAndReleaseWsiBinding(
     dxmt9c_swapchain_release(swapChain);
   }
   return hr;
+}
+
+void dxmt9PeFinalizeAndReleaseWsiBinding(
+    D9CSwapChain* swapChain, D3D9PeWsiBinding& binding) noexcept {
+  while (FAILED(dxmt9PeTeardownAndReleaseWsiBinding(
+      swapChain, binding))) {
+    // Terminal ownership cannot be discarded. The unix finalizer is blocking
+    // and non-failable in production; this retry also contains an injected or
+    // transient bridge failure without releasing the sole 6791+HDC capability.
+    SwitchToThread();
+  }
+}
+
+void dxmt9PeFinalizeDeviceAndReleaseWsiBinding(
+    D9CDevice* device, D3D9PeWsiBinding& binding) noexcept {
+  while (FAILED(dxmt9PeTeardownDeviceAndReleaseWsiBinding(
+      device, binding))) {
+    SwitchToThread();
+  }
 }

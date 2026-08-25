@@ -797,7 +797,8 @@ public:
         HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags, wsiBinding, &createFailure);
+                                     pPP->Flags, std::move(wsiBinding),
+                                     &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDevice -> command chunk negotiation failed");
             return createFailure;
@@ -941,7 +942,8 @@ public:
         HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags, wsiBinding, &createFailure);
+                                     pPP->Flags, std::move(wsiBinding),
+                                     &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> command chunk negotiation failed");
             return createFailure;

@@ -181,7 +181,7 @@ D3D9DeviceImpl::~D3D9DeviceImpl() {
     stopPeThreadSampler();
     recorderState_.stateBlockTransaction.discardAll(
         d3d9PeReleaseStateBlockRef);
-    (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(
+    dxmt9PeFinalizeDeviceAndReleaseWsiBinding(
         dev_, implicitWsiBinding_);
     releaseAllBound();
     dxmt9c_device_release(dev_);
@@ -790,7 +790,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateAdditionalSwapChain(
         return D3DERR_NOTAVAILABLE;
     }
     *ppSC = CreatePeSwapChain(sc, this, presentationContext(), diagnosticObserverForChild(),
-                              extended_, pPP->Flags, wsiBinding);
+                              extended_, pPP->Flags,
+                              std::move(wsiBinding));
     if (!*ppSC) {
         dxmt9c_swapchain_release(sc);
         return E_OUTOFMEMORY;
@@ -911,14 +912,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         deviceNotReset_ = true;
         return D3DERR_NOTAVAILABLE;
     }
-    D3D9PeWsiBinding oldBinding = implicitWsiBinding_;
+    D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
     clearPeStateTracking();
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
         dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
-        implicitWsiBinding_ = candidate;
-        candidate = {};
+        implicitWsiBinding_ = std::move(candidate);
         recorderState_.stateBlockTransaction.resetSucceeded(
             d3d9PeReleaseStateBlockRef);
         deviceNotReset_ = false;
@@ -941,9 +941,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     } else {
         if (SUCCEEDED(dxmt9PeAdoptDeviceWsiBinding(dev_, oldBinding))) {
             dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
-            implicitWsiBinding_ = oldBinding;
+            implicitWsiBinding_ = std::move(oldBinding);
         } else {
-            (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(dev_, candidate);
+            dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev_, candidate);
             dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
             implicitWsiBinding_ = {};
         }
@@ -2979,15 +2979,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         recorderState_.stateBlockTransaction.resetFailed();
         return D3DERR_NOTAVAILABLE;
     }
-    D3D9PeWsiBinding oldBinding = implicitWsiBinding_;
+    D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
     clearPeStateTracking();
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {
         dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
-        implicitWsiBinding_ = candidate;
-        candidate = {};
+        implicitWsiBinding_ = std::move(candidate);
         recorderState_.stateBlockTransaction.resetSucceeded(
             d3d9PeReleaseStateBlockRef);
         deviceNotReset_ = false;
@@ -3003,9 +3002,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     } else {
         if (SUCCEEDED(dxmt9PeAdoptDeviceWsiBinding(dev_, oldBinding))) {
             dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
-            implicitWsiBinding_ = oldBinding;
+            implicitWsiBinding_ = std::move(oldBinding);
         } else {
-            (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(dev_, candidate);
+            dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev_, candidate);
             dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
             implicitWsiBinding_ = {};
         }

@@ -378,6 +378,9 @@ class DeviceImpl final : public Device {
   wsi::QuiescenceDisposition beginWsiQuiescence() noexcept override {
     return queue_.beginWsiQuiescence();
   }
+  wsi::QuiescenceDisposition beginFinalWsiQuiescence() noexcept override {
+    return queue_.beginFinalWsiQuiescence();
+  }
   void endWsiQuiescence() noexcept override { queue_.endWsiQuiescence(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {

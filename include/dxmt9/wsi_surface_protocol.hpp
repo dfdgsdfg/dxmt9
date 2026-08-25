@@ -19,10 +19,6 @@ struct SurfaceBindingState {
   std::uint64_t hwnd = 0u;
   std::uint64_t surfaceToken = 0u;
   std::uint64_t layerToken = 0u;
-  // PE-only cold release capability retained from the successful GetDC.
-  // The fixed-width D9CWsiSurfaceBinding wire is built field-by-field and
-  // deliberately excludes this process-local handle.
-  std::uintptr_t releaseHdc = 0u;
   bool unixAdopted = false;
   bool releaseAttempted = false;
 };
@@ -80,8 +76,7 @@ constexpr bool validAdoptionCandidate(
   switch (binding.protocol) {
     case SurfaceProtocol::ExtEscapeV1:
       return binding.hwnd != 0u && binding.surfaceToken != 0u &&
-             binding.layerToken != 0u && binding.releaseHdc != 0u &&
-             !binding.releaseAttempted;
+             binding.layerToken != 0u && !binding.releaseAttempted;
     case SurfaceProtocol::LegacyMacdrvSymbols:
       return binding.hwnd != 0u && binding.surfaceToken == 0u &&
              binding.layerToken == 0u && !binding.releaseAttempted;
@@ -109,14 +104,52 @@ constexpr bool hasWineReleaseObligation(
 }
 
 constexpr bool hasRetainedReleaseCapability(
-    const SurfaceBindingState& binding) noexcept {
-  return hasWineReleaseObligation(binding) && binding.releaseHdc != 0u;
+    const SurfaceBindingState& binding, bool hasAcquisitionDc) noexcept {
+  return hasWineReleaseObligation(binding) && hasAcquisitionDc;
 }
 
 constexpr bool canAttemptWineRelease(
-    const SurfaceBindingState& binding, bool unixQuiescent) noexcept {
+    const SurfaceBindingState& binding, bool hasAcquisitionDc,
+    bool unixQuiescent) noexcept {
   return hasWineReleaseObligation(binding) && unixQuiescent &&
-         hasRetainedReleaseCapability(binding) && !binding.releaseAttempted;
+         hasRetainedReleaseCapability(binding, hasAcquisitionDc) &&
+         !binding.releaseAttempted;
+}
+
+enum class WineReleaseDisposition : std::uint8_t {
+  NothingOwned,
+  MissingCapability,
+  AwaitingUnixQuiescence,
+  DcBalanced,
+  SurfaceAttemptedAndDcBalanced,
+};
+
+// Production-bound cold release seam. The PE passes the retained acquisition
+// HDC through the callbacks; native tests inject counters. A retained DC is
+// balanced exactly once even when the protocol state is partial and no token
+// remains. A live token is never consumed without both unix quiescence and the
+// matching retained capability.
+template <typename ReleaseSurface, typename ReleaseDc>
+WineReleaseDisposition dischargeWineRelease(
+    SurfaceBindingState& binding, bool hasAcquisitionDc,
+    bool unixQuiescent, ReleaseSurface&& releaseSurface,
+    ReleaseDc&& releaseDc) {
+  const bool hasToken = hasWineReleaseObligation(binding);
+  if (!hasAcquisitionDc) {
+    return hasToken ? WineReleaseDisposition::MissingCapability
+                    : WineReleaseDisposition::NothingOwned;
+  }
+  if (hasToken && !unixQuiescent) {
+    return WineReleaseDisposition::AwaitingUnixQuiescence;
+  }
+  if (hasToken && !binding.releaseAttempted) {
+    binding.releaseAttempted = true;
+    releaseSurface();
+    releaseDc();
+    return WineReleaseDisposition::SurfaceAttemptedAndDcBalanced;
+  }
+  releaseDc();
+  return WineReleaseDisposition::DcBalanced;
 }
 
 constexpr bool preserveCurrentBindingOnAdoptionFailure(

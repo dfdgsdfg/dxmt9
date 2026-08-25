@@ -2984,8 +2984,7 @@ HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept {
 
 void D3D9DeviceImpl::takeImplicitWsiBinding(
         D3D9PeWsiBinding& binding) noexcept {
-    implicitWsiBinding_ = binding;
-    binding = {};
+    implicitWsiBinding_ = std::move(binding);
 }
 
 /* =========================================================================
@@ -3006,18 +3005,18 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
             dev, pFactory, adapter, deviceType, behaviorFlags, window, extended,
             implicitSwapchainFlags);
     } catch (const std::bad_alloc&) {
-        (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(dev, wsiBinding);
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = E_OUTOFMEMORY;
         return nullptr;
     } catch (...) {
-        (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(dev, wsiBinding);
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = D3DERR_INVALIDCALL;
         return nullptr;
     }
     if (!device) {
-        (void)dxmt9PeTeardownDeviceAndReleaseWsiBinding(dev, wsiBinding);
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = E_OUTOFMEMORY;
         return nullptr;

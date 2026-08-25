@@ -45,13 +45,21 @@ std::optional<dxmt9::core::QueryType> queryTypeFromD3D(uint32_t type) {
 }  // namespace
 
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* d, uint32_t idx) {
-  auto* swapChain = d->iface->GetSwapChain(idx);
-  if (!swapChain) {
+  dxmt9::com::IDirect3DSwapChain9* swapChain = nullptr;
+  try {
+    swapChain = d && d->iface ? d->iface->GetSwapChain(idx) : nullptr;
+    if (!swapChain) {
+      return nullptr;
+    }
+    auto* out = new D9CSwapChain(swapChain);
+    out->owner = d;
+    return out;
+  } catch (...) {
+    if (swapChain) {
+      swapChain->Release();
+    }
     return nullptr;
   }
-  auto* out = new D9CSwapChain(swapChain);
-  out->owner = d;
-  return out;
 }
 
 extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* d) {
@@ -63,13 +71,23 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
   if (!pp) {
     return nullptr;
   }
-  auto* swapChain = d->iface->CreateAdditionalSwapChain(ppFromC(*pp));
-  if (!swapChain) {
+  dxmt9::com::IDirect3DSwapChain9* swapChain = nullptr;
+  try {
+    swapChain = d && d->iface
+        ? d->iface->CreateAdditionalSwapChain(ppFromC(*pp))
+        : nullptr;
+    if (!swapChain) {
+      return nullptr;
+    }
+    auto* out = new D9CSwapChain(swapChain);
+    out->owner = d;
+    return out;
+  } catch (...) {
+    if (swapChain) {
+      swapChain->Release();
+    }
     return nullptr;
   }
-  auto* out = new D9CSwapChain(swapChain);
-  out->owner = d;
-  return out;
 }
 
 extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(

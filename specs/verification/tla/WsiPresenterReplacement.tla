@@ -1,13 +1,17 @@
 ---------------------- MODULE WsiPresenterReplacement ----------------------
 EXTENDS Naturals, TLC
 
-CONSTANT MaxUsers
+CONSTANTS MaxUsers, MaxPresents
 
 VARIABLES phase, gate, users, arena, pendingOldUses,
-          oldRegistered, candidateRegistered, oldReleased
+          oldRegistered, candidateRegistered, oldReleased,
+          attemptedPresents, acceptedPresents, completedPresents,
+          waitingPresents, pendingPresents
 
 vars == <<phase, gate, users, arena, pendingOldUses,
-          oldRegistered, candidateRegistered, oldReleased>>
+          oldRegistered, candidateRegistered, oldReleased,
+          attemptedPresents, acceptedPresents, completedPresents,
+          waitingPresents, pendingPresents>>
 
 Init ==
   /\ phase = "Idle"
@@ -18,36 +22,60 @@ Init ==
   /\ oldRegistered = TRUE
   /\ candidateRegistered = FALSE
   /\ oldReleased = FALSE
+  /\ attemptedPresents = 0
+  /\ acceptedPresents = 0
+  /\ completedPresents = 0
+  /\ waitingPresents = 0
+  /\ pendingPresents = 0
 
 StartCandidate ==
   /\ phase = "Idle"
   /\ phase' = "Candidate"
   /\ candidateRegistered' = TRUE
   /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  oldRegistered, oldReleased>>
+                  oldRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 CandidateFailure ==
   /\ phase = "Candidate"
   /\ phase' = "Failed"
   /\ candidateRegistered' = FALSE
   /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  oldRegistered, oldReleased>>
+                  oldRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
+
+PresentAttempt ==
+  /\ attemptedPresents < MaxPresents
+  /\ attemptedPresents' = attemptedPresents + 1
+  /\ waitingPresents' = waitingPresents + 1
+  /\ UNCHANGED <<phase, gate, users, arena, pendingOldUses,
+                  oldRegistered, candidateRegistered, oldReleased,
+                  acceptedPresents, completedPresents, pendingPresents>>
 
 PresentEnter ==
   /\ ~gate
-  /\ ~oldReleased
+  /\ waitingPresents > 0
   /\ users < MaxUsers
   /\ users' = users + 1
+  /\ waitingPresents' = waitingPresents - 1
+  /\ acceptedPresents' = acceptedPresents + 1
   /\ UNCHANGED <<phase, gate, arena, pendingOldUses,
-                  oldRegistered, candidateRegistered, oldReleased>>
+                  oldRegistered, candidateRegistered, oldReleased,
+                  attemptedPresents, completedPresents, pendingPresents>>
 
 PresentPublish ==
   /\ users > 0
   /\ pendingOldUses < MaxUsers
   /\ users' = users - 1
-  /\ pendingOldUses' = pendingOldUses + 1
+  /\ pendingPresents' = pendingPresents + 1
+  /\ pendingOldUses' = IF oldRegistered
+                        THEN pendingOldUses + 1
+                        ELSE pendingOldUses
   /\ UNCHANGED <<phase, gate, arena, oldRegistered,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents>>
 
 ArenaBegin ==
   /\ ~gate
@@ -55,7 +83,9 @@ ArenaBegin ==
   /\ ~arena
   /\ arena' = TRUE
   /\ UNCHANGED <<phase, gate, users, pendingOldUses,
-                  oldRegistered, candidateRegistered, oldReleased>>
+                  oldRegistered, candidateRegistered, oldReleased,
+                  attemptedPresents, acceptedPresents, completedPresents,
+                  waitingPresents, pendingPresents>>
 
 ArenaPublish ==
   /\ arena
@@ -63,7 +93,9 @@ ArenaPublish ==
   /\ arena' = FALSE
   /\ pendingOldUses' = pendingOldUses + 1
   /\ UNCHANGED <<phase, gate, users, oldRegistered,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 BeginQuiescence ==
   /\ phase = "Candidate"
@@ -72,13 +104,28 @@ BeginQuiescence ==
   /\ gate' = TRUE
   /\ phase' = "Quiescing"
   /\ UNCHANGED <<users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 GpuComplete ==
-  /\ pendingOldUses > 0
+  /\ pendingPresents > 0
+  /\ pendingPresents' = pendingPresents - 1
+  /\ completedPresents' = completedPresents + 1
+  /\ pendingOldUses' = IF pendingOldUses > 0
+                        THEN pendingOldUses - 1
+                        ELSE pendingOldUses
+  /\ UNCHANGED <<phase, gate, users, arena, oldRegistered,
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, waitingPresents>>
+
+GpuCompleteArena ==
+  /\ pendingOldUses > pendingPresents
   /\ pendingOldUses' = pendingOldUses - 1
   /\ UNCHANGED <<phase, gate, users, arena, oldRegistered,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 FenceComplete ==
   /\ phase = "Quiescing"
@@ -87,7 +134,9 @@ FenceComplete ==
   /\ pendingOldUses = 0
   /\ phase' = "Quiescent"
   /\ UNCHANGED <<gate, users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 CommitReplacement ==
   /\ phase = "Quiescent"
@@ -95,7 +144,9 @@ CommitReplacement ==
   /\ oldRegistered' = FALSE
   /\ phase' = "Swapped"
   /\ UNCHANGED <<gate, users, arena, pendingOldUses,
-                  candidateRegistered, oldReleased>>
+                  candidateRegistered, oldReleased, attemptedPresents,
+                  acceptedPresents, completedPresents, waitingPresents,
+                  pendingPresents>>
 
 ReleaseOld ==
   /\ phase = "Swapped"
@@ -104,7 +155,8 @@ ReleaseOld ==
   /\ gate' = FALSE
   /\ oldReleased' = TRUE
   /\ UNCHANGED <<users, arena, pendingOldUses, oldRegistered,
-                  candidateRegistered>>
+                  candidateRegistered, attemptedPresents, acceptedPresents,
+                  completedPresents, waitingPresents, pendingPresents>>
 
 Stutter ==
   UNCHANGED vars
@@ -112,12 +164,14 @@ Stutter ==
 Next ==
   \/ StartCandidate
   \/ CandidateFailure
+  \/ PresentAttempt
   \/ PresentEnter
   \/ PresentPublish
   \/ ArenaBegin
   \/ ArenaPublish
   \/ BeginQuiescence
   \/ GpuComplete
+  \/ GpuCompleteArena
   \/ FenceComplete
   \/ CommitReplacement
   \/ ReleaseOld
@@ -133,19 +187,47 @@ TypeOK ==
   /\ oldRegistered \in BOOLEAN
   /\ candidateRegistered \in BOOLEAN
   /\ oldReleased \in BOOLEAN
+  /\ attemptedPresents \in 0..MaxPresents
+  /\ acceptedPresents \in 0..MaxPresents
+  /\ completedPresents \in 0..MaxPresents
+  /\ waitingPresents \in 0..MaxPresents
+  /\ pendingPresents \in 0..MaxPresents
+
+PresentOrdinalConservation ==
+  /\ attemptedPresents = waitingPresents + users +
+       pendingPresents + completedPresents
+  /\ acceptedPresents = users + pendingPresents + completedPresents
+  /\ completedPresents <= acceptedPresents
+  /\ acceptedPresents <= attemptedPresents
 
 CandidateFailurePreservesOld ==
   phase = "Failed" => oldRegistered /\ ~oldReleased
 
 ReleaseRequiresActualQuiescence ==
   oldReleased =>
-    ~oldRegistered /\ users = 0 /\ ~arena /\ pendingOldUses = 0
+    ~oldRegistered /\ pendingOldUses = 0
 
 CommittedReplacementWasQuiescent ==
-  phase \in {"Quiescent", "Swapped", "Released"} =>
+  phase \in {"Quiescent", "Swapped"} =>
     users = 0 /\ ~arena /\ pendingOldUses = 0
 
 GateHeldThroughRegistrySwap ==
   phase \in {"Quiescing", "Quiescent", "Swapped"} => gate
+
+Spec ==
+  /\ Init
+  /\ [][Next]_vars
+  /\ WF_vars(PresentAttempt)
+  /\ SF_vars(PresentEnter)
+  /\ SF_vars(PresentPublish)
+  /\ SF_vars(GpuComplete)
+  /\ WF_vars(GpuCompleteArena)
+  /\ WF_vars(BeginQuiescence)
+  /\ WF_vars(FenceComplete)
+  /\ WF_vars(CommitReplacement)
+  /\ WF_vars(ReleaseOld)
+
+AttemptedPresentsEventuallyComplete ==
+  attemptedPresents = MaxPresents ~> completedPresents = MaxPresents
 
 =============================================================================

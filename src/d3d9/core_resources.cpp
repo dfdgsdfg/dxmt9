@@ -37,6 +37,22 @@ namespace dxmt9::core {
 
 namespace {
 
+class WsiQuiescenceScope {
+ public:
+  explicit WsiQuiescenceScope(dxmt9::Device& device) noexcept
+      : device_(&device) {}
+  ~WsiQuiescenceScope() {
+    if (device_) {
+      device_->endWsiQuiescence();
+    }
+  }
+  WsiQuiescenceScope(const WsiQuiescenceScope&) = delete;
+  WsiQuiescenceScope& operator=(const WsiQuiescenceScope&) = delete;
+
+ private:
+  dxmt9::Device* device_;
+};
+
 std::optional<u32> parseEnvU32Auto(const char *name) {
   return dxmt9::util::getenvU32Auto(name);
 }
@@ -371,10 +387,10 @@ bool SwapChain::installPresentOutput(
     upper->queue().unregisterPresenter(candidateId);
     return false;
   }
+  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
-  upper->endWsiQuiescence();
   return true;
 }
 
@@ -399,10 +415,10 @@ void SwapChain::restoreWindowPresenter() noexcept {
     upper->queue().unregisterPresenter(candidateId);
     return;
   }
+  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
-  upper->endWsiQuiescence();
 }
 
 HResult SwapChain::adoptWsiSurface(
@@ -439,13 +455,13 @@ HResult SwapChain::adoptWsiSurface(
     upper->queue().unregisterPresenter(candidateId);
     return D3DERR_NOTAVAILABLE;
   }
+  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   presenter_ = std::move(candidate);
   presentId_ = candidateId;
   wsiProtocol_ = protocol;
   wsiHwnd_ = hwnd;
   wsiLayerToken_ = layerToken;
-  upper->endWsiQuiescence();
   return D3D_OK;
 }
 
@@ -460,15 +476,15 @@ HResult SwapChain::teardownWsiSurface() noexcept {
   if (!upper) {
     return D3DERR_NOTAVAILABLE;
   }
-  const auto quiescence = upper->beginWsiQuiescence();
+  const auto quiescence = upper->beginFinalWsiQuiescence();
   if (!dxmt9::wsi::quiescenceComplete(quiescence)) {
     return D3DERR_NOTAVAILABLE;
   }
+  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
   wsiProtocol_ = 0u;
   wsiHwnd_ = 0u;
   wsiLayerToken_ = 0u;
-  upper->endWsiQuiescence();
   return D3D_OK;
 }
 

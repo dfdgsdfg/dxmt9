@@ -549,12 +549,13 @@ public:
                     D3D9PePresentationContext *recorder = nullptr,
                     D3D9PeDiagnosticObserver *diagnostics = nullptr,
                     bool extended = false,
-                    D3D9PeWsiBinding wsiBinding = {})
+                    D3D9PeWsiBinding *wsiBinding = nullptr)
       : sc_(sc), device_(device), context_(recorder),
-        diagnostics_(diagnostics), extended_(extended),
-        wsiBinding_(wsiBinding) {
+        diagnostics_(diagnostics), extended_(extended) {
     if (device_)
       device_->AddRef();
+    if (wsiBinding)
+      wsiBinding_ = std::move(*wsiBinding);
   }
 
   void setFlagsShadow(DWORD flags) { flagsShadow_ = flags; }
@@ -564,7 +565,7 @@ public:
         entry.second->Release();
     }
     cachedBackBuffers_.clear();
-    (void)dxmt9PeTeardownAndReleaseWsiBinding(sc_, wsiBinding_);
+    dxmt9PeFinalizeAndReleaseWsiBinding(sc_, wsiBinding_);
     dxmt9c_swapchain_release(sc_);
     if (device_)
       device_->Release();
@@ -928,9 +929,9 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
                                          DWORD presentFlagsShadow,
                                          D3D9PeWsiBinding wsiBinding) noexcept {
   auto *impl = peNewNoexcept<D3D9SwapChainImpl>(
-      swapChain, device, recorder, diagnostics, extended, wsiBinding);
+      swapChain, device, recorder, diagnostics, extended, &wsiBinding);
   if (!impl) {
-    (void)dxmt9PeTeardownAndReleaseWsiBinding(swapChain, wsiBinding);
+    dxmt9PeFinalizeAndReleaseWsiBinding(swapChain, wsiBinding);
     return nullptr;
   }
   impl->setFlagsShadow(presentFlagsShadow);

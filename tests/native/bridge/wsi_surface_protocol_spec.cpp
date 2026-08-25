@@ -29,7 +29,6 @@ SurfaceBindingState escapeBinding() {
       .hwnd = 0x100u,
       .surfaceToken = 0x200u,
       .layerToken = 0x300u,
-      .releaseHdc = 0x400u,
   };
 }
 
@@ -137,25 +136,24 @@ void testReleaseIsExactlyOnceAfterQuiescence() {
   SurfaceBindingState binding = escapeBinding();
   check(!binding.unixAdopted,
         "fresh Wine acquisition models a failed unix adoption candidate");
-  check(dxmt9::wsi::hasRetainedReleaseCapability(binding),
+  check(dxmt9::wsi::hasRetainedReleaseCapability(binding, true),
         "acquisition HDC remains a deterministic release capability");
-  check(!dxmt9::wsi::canAttemptWineRelease(binding, false),
+  check(!dxmt9::wsi::canAttemptWineRelease(binding, true, false),
         "failed-adoption release is forbidden before unix acknowledgement");
-  check(dxmt9::wsi::canAttemptWineRelease(binding, true),
+  check(dxmt9::wsi::canAttemptWineRelease(binding, true, true),
         "acquired surface remains releasable when unix adoption fails");
   binding.releaseAttempted = true;
-  check(!dxmt9::wsi::canAttemptWineRelease(binding, true),
+  check(!dxmt9::wsi::canAttemptWineRelease(binding, true, true),
         "failed-adoption release consumes the obligation exactly once");
 
   binding = escapeBinding();
-  binding.releaseHdc = 0u;
-  check(!dxmt9::wsi::validAdoptionCandidate(binding) &&
-            !dxmt9::wsi::canAttemptWineRelease(binding, true),
-        "a live token without its acquisition HDC fails closed before adoption");
+  check(dxmt9::wsi::validAdoptionCandidate(binding) &&
+            !dxmt9::wsi::canAttemptWineRelease(binding, false, true),
+        "protocol validity is separate from the PE-only release capability");
 
   binding = escapeBinding();
   binding.unixAdopted = true;
-  check(dxmt9::wsi::canAttemptWineRelease(binding, true),
+  check(dxmt9::wsi::canAttemptWineRelease(binding, true, true),
         "adopted surface is releasable after presenter quiescence");
 
   SurfaceBindingState legacy{
@@ -165,6 +163,36 @@ void testReleaseIsExactlyOnceAfterQuiescence() {
   };
   check(!dxmt9::wsi::hasWineReleaseObligation(legacy),
         "legacy provider-owned acquisition has no ExtEscape release token");
+}
+
+void testProductionReleaseSeamBalancesCounts() {
+  using dxmt9::wsi::WineReleaseDisposition;
+  SurfaceBindingState binding = escapeBinding();
+  std::uint32_t escapeCalls = 0;
+  std::uint32_t releaseDcCalls = 0;
+  auto disposition = dxmt9::wsi::dischargeWineRelease(
+      binding, true, true, [&] { ++escapeCalls; },
+      [&] { ++releaseDcCalls; });
+  check(disposition == WineReleaseDisposition::SurfaceAttemptedAndDcBalanced &&
+            escapeCalls == 1u && releaseDcCalls == 1u &&
+            binding.releaseAttempted,
+        "live token attempts 6791 once and balances its retained DC once");
+
+  disposition = dxmt9::wsi::dischargeWineRelease(
+      binding, false, true, [&] { ++escapeCalls; },
+      [&] { ++releaseDcCalls; });
+  check(disposition == WineReleaseDisposition::MissingCapability &&
+            escapeCalls == 1u && releaseDcCalls == 1u,
+        "missing HDC keeps the live token as a visible obligation");
+
+  SurfaceBindingState partial{};
+  partial.hwnd = 0x100u;
+  disposition = dxmt9::wsi::dischargeWineRelease(
+      partial, true, true, [&] { ++escapeCalls; },
+      [&] { ++releaseDcCalls; });
+  check(disposition == WineReleaseDisposition::DcBalanced &&
+            escapeCalls == 1u && releaseDcCalls == 2u,
+        "partial state still balances a retained acquisition DC exactly once");
 }
 
 }  // namespace
@@ -177,6 +205,7 @@ int main() {
     testAdoptionRollbackPredicate();
     testTypedOutputRestoreKeepsExtEscapeLayer();
     testReleaseIsExactlyOnceAfterQuiescence();
+    testProductionReleaseSeamBalancesCounts();
   } catch (const std::exception& error) {
     std::cerr << "wsi_surface_protocol_spec failed: " << error.what() << '\n';
     return EXIT_FAILURE;
