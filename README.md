@@ -23,45 +23,44 @@ unix side replays them into Metal command buffers and presents through
 `CAMetalLayer` via `winemac.drv`. Design points, stated plainly:
 
 - **Direct Metal encoding.** One translation step instead of
-  D3D9 → Vulkan → Metal.
+D3D9 → Vulkan → Metal.
 - **Formally verified concurrency.** The concurrency-sensitive
-  subsystems — command queue, resource lifetime, encoder lifecycle,
-  present pacing, bridge wire protocol — are modeled in 20 TLA+ specs
-  checked with TLC on every test run. Debug builds assert the same
-  invariants at runtime.
+subsystems — command queue, resource lifetime, encoder lifecycle,
+present pacing, bridge wire protocol — are modeled in 20 TLA+ specs
+checked with TLC on every test run. Debug builds assert the same
+invariants at runtime.
 - **Data-oriented hot paths.** Draw/state/bridge paths use flat records
-  and arenas, avoiding per-draw heap allocation.
+and arenas, avoiding per-draw heap allocation.
 - **Two deployment lanes.** App-local (copy files next to the game) and
-  Wine-builtin (installed into the Wine runtime); both use the same
-  three binaries.
+Wine-builtin (installed into the Wine runtime); both use the same
+three binaries.
 
 ## Performance
 
 Measured 2026-08-25/26 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
-Sikarugir-CX 24.0.7 Wine:
+Sikarugir-CX 24.0.7 and Heroic Wine Staging 11.16:
 
-| Workload | dxmt9 / Metal | WineD3D / OpenGL | dxmt9 delta |
-|---|---:|---:|---:|
-| 3DMark05 GT1 | `32.3` | `31.4` | `+3.1%` |
-| 3DMark05 GT2 | `30.9` | `30.7` | `+0.5%` |
-| 3DMark05 GT3 | `69.6` | `61.0` | `+14.2%` |
-| Street Fighter IV Benchmark | `44.7` | `37.5`† | n/a† |
 
-One supervised run per workload. Both 3DMark05 columns use the benchmark's own
-observer-free `.3dr` results: dxmt9 reports `32.341735840`, `30.889770508`, and
-`69.609596252` FPS; WineD3D reports `31.382265091`, `30.734268188`, and
-`60.975120544` FPS. SFIV remains a positive-frame sampled average over the
-catalogue's 50-second observation window. The WineD3D reference uses the same
-Sikarugir host runtime with its pristine builtin `d3d9.dll`; loader and adapter
-traces confirm the `wined3d` OpenGL 4.1 path on the Apple M1. Single runs, so no
-run range is quoted — repeated measurements of one build on this host drift
-about ±3% with ambient load and time of day.
+| Workload                    | dxmt9 / Metal (Sikarugir) | WineD3D / OpenGL (Sikarugir) | WineD3D / OpenGL (Heroic 11.16) |
+| --------------------------- | -------------------------: | ----------------------------: | -------------------------------: |
+| 3DMark05 GT1                | `32.3`                    | `31.4`                       | `27.7`                          |
+| 3DMark05 GT2                | `30.9`                    | `30.7`                       | `21.7`                          |
+| 3DMark05 GT3                | `69.6`                    | `61.0`                       | `57.4`                          |
+| Street Fighter IV Benchmark | `44.7`                    | —                            | —                               |
 
-† SFIV is a raw health point, not a matched renderer ratio: WineD3D selected
-1280x800 while dxmt9 ran the documented 1280x720 mode, and an explicit 720p
-application configuration did not change WineD3D's reported drawable mode.
-All captured scenes rendered normally; the dxmt9 runs reported zero GPU
-errors.
+
+One run per renderer/runtime and workload. All three 3DMark05 columns use the
+benchmark's own observer-free `.3dr` results at the same 1024x768 settings:
+dxmt9 reports `32.341735840`, `30.889770508`, and `69.609596252` FPS;
+Sikarugir WineD3D reports `31.382265091`, `30.734268188`, and `60.975120544`
+FPS; Heroic WineD3D reports `27.651369095`, `21.734577179`, and `57.362709045`
+FPS. Relative to WineD3D, dxmt9 is `+3.1% / +0.5% / +14.2%` on Sikarugir and
+`+17.0% / +42.1% / +21.3%` on Heroic. SFIV remains a positive-frame sampled
+average over the catalogue's 50-second observation window. Both WineD3D runs
+use pristine builtin `d3d9.dll`; loaded-module checks confirm the `wined3d`
+OpenGL path on the Apple M1. Single runs, so no run range is quoted — repeated
+measurements of one build on this host drift about ±3% with ambient load and
+time of day.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
@@ -71,18 +70,20 @@ shows where the frame time goes.
 ## Requirements
 
 - macOS on Apple Silicon (current Wine hosts run the x86_64 lane under
-  Rosetta 2).
+Rosetta 2).
 - A Wine build whose `winemac.so` exports `_macdrv_functions` — dxmt9
-  attaches its `CAMetalLayer` through that interface. This is the main
-  compatibility constraint today:
+attaches its `CAMetalLayer` through that interface. This is the main
+compatibility constraint today:
 
-| Wine runtime | Works? | Notes |
-|---|---|---|
-| [Sikarugir](https://github.com/Sikarugir-App) engine `sikarugir-cx-24.0.7` | Yes | The runtime dxmt9 is tested against |
-| Self-built Wine with the macdrv symbol-export patch | Yes | Reproducible-from-source path; see `specs/winemetal/requirements.md` §4 |
-| Heroic / Gcenx Wine builds (`Wine-11.x`, `-DXMT` variants) | No | `winemac.so` is stripped; dxmt9 cannot attach a layer |
-| CrossOver (the commercial product) | No | Wrapper/runtime layout blocks unixlib staging |
-| GPTK 1.1 (Wine 7.7) | No | Too old for this unixlib bridge model |
+
+| Wine runtime                                                               | Works? | Notes                                                                   |
+| -------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------- |
+| [Sikarugir](https://github.com/Sikarugir-App) engine `sikarugir-cx-24.0.7` | Yes    | The runtime dxmt9 is tested against                                     |
+| Self-built Wine with the macdrv symbol-export patch                        | Yes    | Reproducible-from-source path; see `specs/winemetal/requirements.md` §4 |
+| Heroic / Gcenx Wine builds (`Wine-11.x`, `-DXMT` variants)                 | No     | `winemac.so` is stripped; dxmt9 cannot attach a layer                   |
+| CrossOver (the commercial product)                                         | No     | Wrapper/runtime layout blocks unixlib staging                           |
+| GPTK 1.1 (Wine 7.7)                                                        | No     | Too old for this unixlib bridge model                                   |
+
 
 ## Installation
 
@@ -118,14 +119,16 @@ build from source, see [docs/build.md](docs/build.md).
 The concurrency-sensitive parts of the backend are specified in 20 TLA+
 modules under [`specs/verification/tla/`](specs/verification/tla/):
 
-| Area | Specs |
-|---|---|
-| Command queue & encoding | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals`, `CpuReadySessionProgress`, `SessionCapacityLease`, `PostEncodePayloadRetirement`, `EncodeSchedulingProgress`, `ParallelDrawBinding`, `RenderTapeParallelJoin` |
-| Resource & buffer lifetime | `ResourceLifetime`, `BufferBackingVersioning` |
-| Present pacing | `PresentFrameLatency`, `DrawableToken`, `PresentIdAba` |
-| Query resolution | `QuerySeqId` |
-| Bridge wire protocol | `WireObjectRegistry`, `ReplayScopedDrain` |
-| Frame-graph DCE | `DceChunkLookahead` |
+
+| Area                           | Specs                                                                                                                                                                                                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command queue &amp; encoding   | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals`, `CpuReadySessionProgress`, `SessionCapacityLease`, `PostEncodePayloadRetirement`, `EncodeSchedulingProgress`, `ParallelDrawBinding`, `RenderTapeParallelJoin` |
+| Resource &amp; buffer lifetime | `ResourceLifetime`, `BufferBackingVersioning`                                                                                                                                                                                                                                         |
+| Present pacing                 | `PresentFrameLatency`, `DrawableToken`, `PresentIdAba`                                                                                                                                                                                                                                |
+| Query resolution               | `QuerySeqId`                                                                                                                                                                                                                                                                          |
+| Bridge wire protocol           | `WireObjectRegistry`, `ReplayScopedDrain`                                                                                                                                                                                                                                             |
+| Frame-graph DCE                | `DceChunkLookahead`                                                                                                                                                                                                                                                                   |
+
 
 `meson test` runs TLC over every model; to run them alone:
 
@@ -135,13 +138,14 @@ bash scripts/check/verify_tla.sh
 
 ## Status
 
-| Layer | Status |
-|---|---|
-| Core (D3D9 COM surface, device state, draw calls) | Complete |
-| Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
-| Formal verification (TLC, 20 specs) | Complete |
+
+| Layer                                                                                  | Status   |
+| -------------------------------------------------------------------------------------- | -------- |
+| Core (D3D9 COM surface, device state, draw calls)                                      | Complete |
+| Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation)               | Complete |
 | Bridge ABI + PE forwarding (`d3d9.dll` / `winemetal_dxmt9.dll` / `winemetal_dxmt9.so`) | Complete |
-| WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`) | Complete |
+| WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`)                           | Complete |
+
 
 Correctness and performance work is ongoing and documented as it lands;
 see [`docs/perfomance/`](docs/perfomance/) for the measurement trail.
@@ -155,9 +159,4 @@ tests every push; releases are packaged by
 
 ## License
 
-[MIT](LICENSE).
-
-Related projects: [DXMT](https://github.com/3Shain/dxmt) (D3D11/D3D12 →
-Metal, MIT), [d3d9-webgl](https://github.com/LostMyCode/d3d9-webgl)
-(D3D9 reference). Wine's D3D9 tests are used as a behavioral oracle;
-no Wine implementation code is included.
+[MIT](LICENSE)
