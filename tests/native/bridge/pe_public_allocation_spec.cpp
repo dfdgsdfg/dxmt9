@@ -80,27 +80,42 @@ void testProductionDrawCandidateBindings() {
   check(input.good(), "production draw source is available for the binding audit");
   const std::string source{
       std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  const std::filesystem::path hotImplementationPath =
+      sourcePath.parent_path() / "../../../src/d3d9/d3d9_pe_device.cpp";
+  std::ifstream hotInput(hotImplementationPath);
+  check(hotInput.good(),
+        "production hot draw source is available for the binding audit");
+  const std::string hotSource{
+      std::istreambuf_iterator<char>(hotInput),
+      std::istreambuf_iterator<char>()};
   constexpr std::array<std::string_view, 4> drawNames{
       "DrawPrimitive", "DrawIndexedPrimitive", "DrawPrimitiveUP",
       "DrawIndexedPrimitiveUP"};
   for (const auto drawName : drawNames) {
+    const bool inlineOwner = drawName == "DrawIndexedPrimitive";
     const std::string signature =
-        "HRESULT STDMETHODCALLTYPE " + std::string(drawName) + "(";
-    const std::size_t publicBegin = source.find(signature);
+        std::string("HRESULT STDMETHODCALLTYPE ") +
+        (inlineOwner ? "" : "D3D9DeviceImpl::") +
+        std::string(drawName) + "(";
+    const std::string& publicOwner = inlineOwner ? source : hotSource;
+    const std::size_t publicBegin = publicOwner.find(signature);
     check(publicBegin != std::string::npos,
           "production draw entry is present for the binding audit");
+    const std::string& bodyOwner =
+        drawName == "DrawPrimitive" ? source : publicOwner;
     const std::size_t begin = drawName == "DrawPrimitive"
-        ? source.rfind("HRESULT drawPrimitiveCore", publicBegin)
+        ? bodyOwner.find("HRESULT drawPrimitiveCore")
         : publicBegin;
     check(begin != std::string::npos,
           "production draw entry is present for the binding audit");
     if (drawName == "DrawPrimitive") {
-      check(source.find("drawPrimitiveCore", publicBegin) != std::string::npos,
+      check(publicOwner.find("drawPrimitiveCore", publicBegin) !=
+                std::string::npos,
             "DrawPrimitive routes through the shared draw core");
     }
-    const std::size_t next = source.find(
+    const std::size_t next = bodyOwner.find(
         "HRESULT STDMETHODCALLTYPE ", begin + signature.size());
-    const std::string body = source.substr(
+    const std::string body = bodyOwner.substr(
         begin, next == std::string::npos ? std::string::npos : next - begin);
     const std::size_t phase = body.find("prepareSoftwareDrawCandidate([&]");
     check(phase != std::string::npos,

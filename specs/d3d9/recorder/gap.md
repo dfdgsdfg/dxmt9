@@ -62,6 +62,18 @@ PE artifacts optional by running source-only mode.
 
 ## Current bounded implementation note
 
+Binding-section emission no longer constructs a second section-sized wire
+array between `SparseBindingInput` and the final command payload.
+`CommandChunkBuilder::appendGeneratedSectionPayload` reserves the final typed
+range and writes each generated row by record-relative offset while the
+existing record checkpoint owns handle retention and rollback. Native golden
+byte equality, malformed-order rollback/retry, full-snapshot equivalence, and
+warm zero-allocation coverage pass, together with canonical x64/x86 PE and
+x86_64 provider builds. This closes only the redundant binding-emitter copy:
+`PendingDelta` remains the exact retry witness and `PeSparseScratch` remains the
+producer-owned compact projection. Replacing those owners requires a separate
+two-pass `SparseStatePlan` proof rather than treating their storage as dead.
+
 The transition pass closes mutable `LiveShadow`/`PendingDelta` scalar members
 behind allocation-free `PeHotStateShadow::Transition` operations, gives ordinary reads
 const snapshot access, and issues a private `RecordingCapability` only while

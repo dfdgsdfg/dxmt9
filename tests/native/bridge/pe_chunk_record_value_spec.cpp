@@ -688,15 +688,33 @@ void testSparseDrawAndApplyProducerMatrix() {
   std::array duplicateSlots = {
       SparseBindingInput<D9CCommandChunkWireTextureBinding>{
           .wire = {.slot = 0u, .valid = 1u},
+          .object = textureRef,
       },
       SparseBindingInput<D9CCommandChunkWireTextureBinding>{
           .wire = {.slot = 0u, .valid = 1u},
+          .object = textureRef,
       },
   };
   check(!dxmt9::d3d9::pe::appendApplyState(
             builder, 0u, SparseStateInput{.textures = duplicateSlots}) &&
-            !builder.recordActive() && builder.recordCount() == 0u,
+            !builder.recordActive() && builder.recordCount() == 0u &&
+            builder.handleCount() == 0u && builder.payloadBytes() == 0u &&
+            builder.retainedObjectCount() == 0u &&
+            texture.refs == 1u,
         "noncanonical sparse input rolls back transactionally");
+
+  duplicateSlots[1].wire.slot = 1u;
+  check(dxmt9::d3d9::pe::appendApplyState(
+            builder, 0u, SparseStateInput{.textures = duplicateSlots}) &&
+            !builder.recordActive() && builder.recordCount() == 1u &&
+            builder.handleCount() == 1u &&
+            builder.retainedObjectCount() == 1u &&
+            texture.refs == 2u,
+        "generated binding payload retries after rollback without retaining "
+        "partial bytes or active-record state");
+  builder.resetAndReleaseRetained();
+  check(texture.refs == 1u,
+        "generated binding retry releases its retained wrapper on discard");
 }
 
 // testPeStateStagingFeedsProducer lived here. It tested only the fat-packet

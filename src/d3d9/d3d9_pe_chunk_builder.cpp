@@ -151,6 +151,35 @@ bool CommandChunkBuilder::appendPayload(
   return true;
 }
 
+bool CommandChunkBuilder::reservePayload(
+    std::size_t byteCount, std::uint32_t alignment,
+    std::uint32_t* recordRelativeOffset) noexcept {
+  if (!active_.active || sealed_) {
+    return false;
+  }
+  std::size_t start = 0u;
+  if (!alignUp(payload_.size(), alignment, start) ||
+      start < active_.payloadStart ||
+      start - active_.payloadStart >
+          std::numeric_limits<std::uint32_t>::max() ||
+      byteCount > std::numeric_limits<std::uint32_t>::max() -
+                      (start - active_.payloadStart) ||
+      byteCount > std::numeric_limits<std::size_t>::max() - start) {
+    return failActiveRecord();
+  }
+  try {
+    payload_.resize(start, std::byte{0});
+    payload_.resize(start + byteCount, std::byte{0});
+  } catch (...) {
+    return failActiveRecord();
+  }
+  if (recordRelativeOffset) {
+    *recordRelativeOffset =
+        static_cast<std::uint32_t>(start - active_.payloadStart);
+  }
+  return true;
+}
+
 bool CommandChunkBuilder::overwritePayload(
     std::uint32_t recordRelativeOffset,
     std::span<const std::byte> bytes) noexcept {

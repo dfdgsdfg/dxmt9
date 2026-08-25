@@ -316,6 +316,59 @@ class CommandChunkBuilder {
                          recordRelativeOffset);
   }
 
+  // Materializes a typed section directly into its final record payload.
+  // The callback may resolve/retain handles, but it never receives raw
+  // payload storage: one value is prepared at a time and copied into the
+  // already-reserved final range by record-relative offset. This keeps a
+  // payload-vector reallocation or a failed handle append from invalidating a
+  // borrowed pointer, while removing the former section-sized staging array.
+  template <typename T, typename Generate>
+    requires isWireSafeSectionPayload<T> &&
+        std::is_nothrow_invocable_r_v<bool, Generate&, std::size_t, T&>
+  bool appendGeneratedSectionPayload(
+      std::uint16_t kind, std::size_t count, Generate&& generate,
+      std::uint32_t* recordRelativeOffset = nullptr) noexcept {
+    const auto* rule = sectionRule(kind);
+    const auto* activeRule = active_.active ? recordRule(active_.type) : nullptr;
+    if (!rule || !activeRule ||
+        (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
+        kind != ApprovedWireSectionPayload<std::remove_cv_t<T>>::kind ||
+        count == 0u || count > rule->maxCount ||
+        sizeof(T) != rule->elementSize ||
+        count > std::numeric_limits<std::uint32_t>::max() ||
+        count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+      return failActiveRecord();
+    }
+
+    std::uint32_t offset = 0u;
+    if (!reservePayload(count * sizeof(T), rule->payloadAlignment, &offset)) {
+      return false;
+    }
+    for (std::size_t i = 0u; i < count; ++i) {
+      T value{};
+      if (!generate(i, value)) {
+        return failActiveRecord();
+      }
+      // Re-derive the address after the callback. Binding generators may
+      // append handles and retain wrappers, but the final payload is named by
+      // offset rather than by a pointer borrowed across that work.
+      const std::size_t relative =
+          static_cast<std::size_t>(offset) + i * sizeof(T);
+      const std::size_t absolute = active_.payloadStart + relative;
+      if (!active_.active || sealed_ ||
+          absolute < active_.payloadStart ||
+          absolute > payload_.size() ||
+          sizeof(T) > payload_.size() - absolute) {
+        return failActiveRecord();
+      }
+      std::memcpy(payload_.data() + absolute, &value, sizeof(T));
+    }
+    if (recordRelativeOffset) {
+      *recordRelativeOffset = offset;
+    }
+    return true;
+  }
+
   bool appendConstantSectionPayload(
       std::uint16_t kind, std::uint32_t startRegister,
       std::uint32_t registerCount, std::span<const std::byte> registerBytes,
@@ -399,6 +452,8 @@ class CommandChunkBuilder {
   bool appendPayload(std::span<const std::byte> bytes,
                      std::uint32_t alignment = 1u,
                      std::uint32_t* recordRelativeOffset = nullptr) noexcept;
+  bool reservePayload(std::size_t byteCount, std::uint32_t alignment,
+                      std::uint32_t* recordRelativeOffset) noexcept;
   bool overwritePayload(std::uint32_t recordRelativeOffset,
                         std::span<const std::byte> bytes) noexcept;
 

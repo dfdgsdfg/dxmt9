@@ -133,17 +133,25 @@ bool appendBindingSection(
   if (!validSectionCount(kind, inputs.size()) || inputs.size() > Capacity) {
     return false;
   }
-  std::array<Wire, Capacity> values{};
-  for (std::size_t i = 0u; i < inputs.size(); ++i) {
-    values[i] = inputs[i].wire;
-    if (!prepare(values[i], inputs[i].object)) {
-      return false;
-    }
+  const auto* rule = sectionRule(kind);
+  std::uint32_t offset = 0u;
+  if (!rule || !builder.appendGeneratedSectionPayload<Wire>(
+                   kind, inputs.size(),
+                   [&](std::size_t index, Wire& value) noexcept {
+                     value = inputs[index].wire;
+                     return prepare(value, inputs[index].object);
+                   },
+                   &offset)) {
+    return false;
   }
-  return appendPlainSection(
-      builder, kind,
-      std::span<const Wire>(values.data(), inputs.size()), descs,
-      sectionIndex);
+  descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
+      .kind = kind,
+      .elementSize = rule->elementSize,
+      .count = static_cast<std::uint32_t>(inputs.size()),
+      .payloadOffset = offset,
+      .byteSize = static_cast<std::uint32_t>(inputs.size() * sizeof(Wire)),
+  };
+  return true;
 }
 
 std::uint32_t sectionCount(const SparseStateInput& state) {
@@ -237,7 +245,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   bool havePrevious = false;
   std::uint32_t previous = 0u;
   const auto texturePrepare = [&](D9CCommandChunkWireTextureBinding& value,
-                                  const PeWireObjectRef& object) {
+                                  const PeWireObjectRef& object) noexcept {
     value.reserved0 = 0u;
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
@@ -261,7 +269,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   havePrevious = false;
   previous = 0u;
   const auto streamPrepare = [&](D9CCommandChunkWireStreamBinding& value,
-                                 const PeWireObjectRef& object) {
+                                 const PeWireObjectRef& object) noexcept {
     value.reserved0 = 0u;
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
@@ -281,7 +289,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   havePrevious = false;
   previous = 0u;
   const auto shaderPrepare = [&](D9CCommandChunkWireShaderBinding& value,
-                                 const PeWireObjectRef& object) {
+                                 const PeWireObjectRef& object) noexcept {
     value.reserved0 = 0u;
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
@@ -299,7 +307,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
 
   const auto vertexInputPrepare = [&builder](
                                       D9CCommandChunkWireVertexInput& value,
-                                      const PeWireObjectRef& object) {
+                                      const PeWireObjectRef& object) noexcept {
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     if (value.valid > 1u ||
         value.kind > D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
@@ -324,7 +332,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   }
 
   const auto indexPrepare = [&builder](D9CCommandChunkWireIndexBinding& value,
-                                      const PeWireObjectRef& object) {
+                                      const PeWireObjectRef& object) noexcept {
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            (!value.valid || appendNullableHandle(
@@ -342,7 +350,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
   previous = 0u;
   const auto renderTargetPrepare = [&builder, &havePrevious, &previous](
                                        D9CCommandChunkWireRenderTargetBinding& value,
-                                       const PeWireObjectRef& object) {
+                                       const PeWireObjectRef& object) noexcept {
     value.reserved0 = 0u;
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
@@ -362,7 +370,7 @@ bool appendSparseRecord(CommandChunkBuilder& builder,
 
   const auto depthPrepare = [&builder](
                                   D9CCommandChunkWireDepthStencilBinding& value,
-                                  const PeWireObjectRef& object) {
+                                  const PeWireObjectRef& object) noexcept {
     value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            (!value.valid || appendNullableHandle(

@@ -456,6 +456,14 @@ backend chunk retains remain private and do not alter public COM refcount
 observations. The prepare/accept boundary is non-reentrant: preparation reads
 into reusable scratch, and only acceptance settles pending state, so a failed
 append cannot erase a later mutation.
+Prepared binding rows are materialized one row at a time into a builder-reserved
+final section range. The builder exposes no mutable payload span: generators
+receive one qualified wire value, resolve handles through the existing typed
+retention path, and the builder addresses the destination by record-relative
+offset after each callback. A failure rolls payload, handle, and retainer state
+back to the same record checkpoint. This removes the former section-sized
+`Wire[Capacity]` staging copy without weakening the prepared-value retry
+witness owned by `PendingDelta` and reusable producer scratch.
 
 ## 6. Shared predicates and counterexamples
 
