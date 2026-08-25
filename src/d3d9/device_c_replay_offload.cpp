@@ -1048,13 +1048,24 @@ bool drainDeferredReplayForBufferUnlock(D9CBuffer* b) {
           b->desc, b->lastLockFlags,
           upper && upper->dynamicBufferRenameEnabled());
   // In offload mode the class bypass is additionally conditional on this
-  // buffer having no pending mutation task. A Managed NOOVERWRITE unlock takes
-  // the bypass unconditionally today and then performs a FULL synchronous
-  // upload (`exactNoOverwrite` requires DEFAULT), which would race a queued
-  // mutation and lose. The extra `pending` probe is mode-gated, so the
-  // rollback path stays byte-identical.
-  if (noWaitClass && !(managedMutationOffloadEnabled() &&
-                       ledger.pending(*b->replayDrainTarget))) {
+  // buffer having no pending target work — but ONLY for Managed-pool
+  // buffers. A Managed NOOVERWRITE unlock takes the bypass unconditionally
+  // today and then performs a FULL synchronous upload (`exactNoOverwrite`
+  // requires DEFAULT), which would race a queued mutation task and lose.
+  // Mutation tasks exist only for Managed buffers (admission requires the
+  // Managed pool), so a Default-pool NOOVERWRITE unlock keeps its
+  // unconditional bypass: its target's pending window reflects chunk work
+  // only, which the range upload never raced. The first cut of this probe
+  // omitted the pool check and turned ~30k/run Default NOOVERWRITE bypasses
+  // into ~1ms waits (GT2 `+2.30ms/present` at `dxmt9c_buffer_unlock`,
+  // measured 2026-08-25). The probe stays mode-gated, so the rollback path
+  // is byte-identical.
+  constexpr std::uint32_t kD3DPoolManaged = 1u;
+  const bool managedMutationHazard =
+      b->desc.pool == kD3DPoolManaged &&
+      managedMutationOffloadEnabled() &&
+      ledger.pending(*b->replayDrainTarget);
+  if (noWaitClass && !managedMutationHazard) {
     noteDrainFenceMode(noOverwrite ? DrainFenceMode::BypassNoOverwrite
                                    : DrainFenceMode::BypassDiscard);
     return true;
