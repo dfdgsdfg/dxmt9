@@ -302,3 +302,18 @@ specified as `specs/backend/buffer-mutation-offload/` (R-BACK-44.1..44.8,
 commit-time capture is unchanged, byte materialization moves to the replay
 FIFO at its producer-order position, and the R-BACK-2.51(d) unlock drain
 is replaced by ordering for the Managed case.
+
+**Outcome (2026-08-25, implemented as R-BACK-44):** the mode landed
+default-off with its full evidence stack (`BufferMutationOffload.tla` +
+counterexamples, shared predicates, transaction spec) and the GT2 matched
+A/B delivered the predicted win: harmonic scene fps `27.605 -> 28.864`
+(`+4.6%`), p50 `32.81 -> 31.92ms`, producer unlock CPU
+`3,295 -> 1,390ms/run`, managed full uploads `1,227 -> 0`, zero GPU
+errors (`mutation-offload-{off,on}-gt2-r{1,2}`). One field lesson worth
+keeping: the first ON run *regressed* `-2.6%` because a conservatively
+broad guard (the NOOVERWRITE bypass mutation probe, applied without a
+pool check) converted ~30k/run Default NOOVERWRITE bypasses into scoped
+waits — the drain-site sink attributed the `+2.30ms/present` to
+`dxmt9c_buffer_unlock` in one diagnostic run, and scoping the probe to
+the Managed pool restored the win. Promotion gates before any default
+flip are tracked in the topic gap.
