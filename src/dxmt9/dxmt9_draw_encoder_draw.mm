@@ -4669,13 +4669,20 @@ bool encodeDraw(EncodeContext& ctx,
 
         // Diagnostic-only: this whole block is gated by `traceEncode &&
         // !ffLayout && ... `/`forceTrace` above (a debug geometry trace
-        // dump), so the unlocked `indexRecord->shadow`/`contents`/`desc.size`
-        // reads below are outside the production draw path.
+        // dump). Source bytes from the commit-time snapshot first (per the
+        // MissingRequired-abort invariant documented above `stream0Snapshot`)
+        // so a versioned record's bytes are the race-free captured copy; the
+        // unlocked `indexRecord->shadow`/`contents`/`desc.size` reads below
+        // are reached only when no valid snapshot exists, i.e. the record is
+        // not versioned.
         if (hot.indexBuffer || !pv.userIndexData.empty()) {
           const auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
           std::span<const u8> indexBytes;
           if (!pv.userIndexData.empty()) {
             indexBytes = pv.userIndexData;
+          } else if (const auto bytes = snapshotBufferBytes(indexSnapshot);
+                     !bytes.empty()) {
+            indexBytes = bytes;
           } else if (indexRecord && !indexRecord->shadow.empty()) {
             indexBytes = indexRecord->shadow;
           } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
@@ -4835,10 +4842,17 @@ bool encodeDraw(EncodeContext& ctx,
         };
         // Diagnostic-only: gated by the `forceTrace` FFP trace block started
         // above (`debug::fixedFunctionTraceTextureHandle()`); not reached on
-        // the production draw path.
+        // the production draw path. Source from the commit-time snapshot
+        // first (see the `stream0Snapshot`/MissingRequired-abort invariant
+        // above) so a versioned record reads the race-free captured bytes;
+        // the live `indexRecord->shadow`/`contents` reads below are reached
+        // only when no valid snapshot exists (a non-versioned record).
         std::span<const u8> indexBytes;
         if (!pv.userIndexData.empty()) {
           indexBytes = pv.userIndexData;
+        } else if (const auto bytes = snapshotBufferBytes(indexSnapshot);
+                   !bytes.empty()) {
+          indexBytes = bytes;
         } else if (hot.indexBuffer) {
           const auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
           if (indexRecord && !indexRecord->shadow.empty()) {
@@ -6606,6 +6620,7 @@ bool encodeDraw(EncodeContext& ctx,
           !probeApplied &&
           !optimizedApplied &&
           pv.userIndexData.empty() &&
+          !indexSnapshot &&
           indexBufferRecord &&
           indexBufferRecord->buffer &&
           indexBuffer) {

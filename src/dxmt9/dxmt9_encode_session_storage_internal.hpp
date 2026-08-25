@@ -9,6 +9,9 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder_diagnostics.hpp"
+#include "dxmt9_resource_pool.hpp"
+
+#include <dxmt9/assert.hpp>
 
 #include <array>
 #include <cstddef>
@@ -90,6 +93,20 @@ struct StreamIbStagingCache {
     if (count >= entries.size()) {
       return {};
     }
+
+    // Invariant (R-BACK-44.4a): every call site guards its captured
+    // commit-time snapshot first (`!extraSnapshot` / `!stream0Snapshot` /
+    // `!indexSnapshot` in dxmt9_draw_encoder_draw.mm) and only reaches
+    // `findOrStage` when no valid snapshot exists for this record — which,
+    // per `captureChunkBufferBindings`'s MissingRequired abort, means the
+    // record does not have a versioned backing. A staged record must
+    // therefore never carry a versioned backing; `record->shadow`/
+    // `record->contents` below are read without a snapshot precisely
+    // because they are safe to read live for this record.
+    DXMT_ASSERT(!record->hasVersionedBacking() &&
+                "StreamIbStagingCache::findOrStage reached with a versioned "
+                "record; caller must skip staging when a commit-time "
+                "snapshot exists");
 
     std::span<const u8> sourceBytes;
     if (!record->shadow.empty()) {
