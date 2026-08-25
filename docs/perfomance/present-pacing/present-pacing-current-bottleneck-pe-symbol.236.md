@@ -6,7 +6,7 @@ type: leaf
 status: current
 updated: 2026-08-25
 source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-admission-phase-split-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-r1-20260825/analysis/xctrace-metal-gpu-intervals-summary.md; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler-selfpc.csv
-related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.37.md; docs/perfomance/state-churn-encode/overview.md
+related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.38.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
 # Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE `d3d9.dll` Is 10.6%
@@ -152,3 +152,6 @@ If `winemetal.dll` residence instead comes from many direct lock/unlock/upload
 calls, moving commit replay cannot remove it; those calls require a separate
 versioned mutation-stream design with ordered-control, readback, and failure
 semantics. Do not merge uploads or crossings speculatively from this profile.
+The current ledger and the required conservative composition observer are
+specified in
+[append decomposition 38](../state-churn-encode/state-churn-encode-append-decomposition.38.md).

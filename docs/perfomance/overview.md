@@ -83,6 +83,10 @@ wall. See
 The follow-up synchronous-admission split prices a safe replay-worker transfer
 at only `0.17-0.30ms/Present` (`~+0.5%` to `+0.9%` GT2), so that narrow move is
 not the next large FPS lever.
+The remaining GT2 buffer Lock/Unlock residence is `2.203ms/Present`, but its
+bridge-transition component is small. Upload merging remains an observer-first
+lane: prove dead or composable source-qualified buffer generations before
+changing mutation timing.
 
 ### Preserved 2026-07-31 repeated baseline
 

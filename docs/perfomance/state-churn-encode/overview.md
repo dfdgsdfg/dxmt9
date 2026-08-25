@@ -5,7 +5,7 @@ title: "State-Churn Encode — the CPU encode path and draw-run batching - Curre
 type: domain-overview
 status: current
 updated: 2026-08-25
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.37.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.38.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -62,6 +62,13 @@ ticket/loop and snapshot sort are plausibly movable under the existing
 contract, approximately `0.17-0.30ms/Present` or `+0.5%` to `+0.9%` GT2. See
 [append decomposition 37](state-churn-encode-append-decomposition.37.md).
 
+The remaining bridge ledger is larger but semantically harder. Current GT2
+spends `1.622ms/Present` in buffer Unlock and `0.581` in Lock; bare crossings
+are a negligible fraction of those calls. [.38] therefore requires a cold
+source-qualified mutation-composition observer before a versioned upload
+stream is designed. The realistic combined crossing/buffer expectation is
+`+2%` to `+4%`; the all-bridge `+12.6%` figure is only a mathematical ceiling.
+
 The rejected replay-carrier lanes whose history lives in this domain's leaves
 and [log](log.md) were removed from the tree in the H217-H220 cleanup waves:
 chunk-end carry plus the entire `AndRun`/`WithResourceMarking` carrier family
@@ -100,6 +107,7 @@ and these artifacts are not promotion or rejection evidence.
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.38 - Current Buffer-Mutation And Bridge Ledger Requires A Composition Observer](state-churn-encode-append-decomposition.38.md)
 - [state-churn-encode-append-decomposition.37 - Synchronous Admission Phase Split Prices Worker Transfer Below One Percent](state-churn-encode-append-decomposition.37.md)
 - [state-churn-encode-parallel-render-pass.204 - Parallel Render-Pass Worker Gate](state-churn-encode-parallel-render-pass.204.md)
 - [state-churn-encode-encode-phase.203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression](state-churn-encode-encode-phase.203.md)
