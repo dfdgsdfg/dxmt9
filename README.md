@@ -37,21 +37,31 @@ unix side replays them into Metal command buffers and presents through
 
 ## Performance
 
-Measured 2026-08-25 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
+Measured 2026-08-25/26 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
 Sikarugir-CX 24.0.7 Wine:
 
-| Workload | Current sampled FPS |
-|---|---:|
-| 3DMark05 GT1 | `30.9` |
-| 3DMark05 GT2 | `28.9` |
-| 3DMark05 GT3 | `65.5` |
-| Street Fighter IV Benchmark | `44.7` |
+| Workload | dxmt9 / Metal | WineD3D / OpenGL | dxmt9 delta |
+|---|---:|---:|---:|
+| 3DMark05 GT1 | `32.3` | `31.4` | `+3.1%` |
+| 3DMark05 GT2 | `30.9` | `30.7` | `+0.5%` |
+| 3DMark05 GT3 | `69.6` | `61.0` | `+14.2%` |
+| Street Fighter IV Benchmark | `44.7` | `37.5`† | n/a† |
 
-Frame-sampled averages, not benchmark scores: one supervised HEAD run per
-workload (positive-frame average over each 3DMark scene and the SFIV
-catalogue's 50-second observation window). Single runs, so no run range is quoted — repeated
-measurements of one build on this host drift about ±3% with ambient load and
-time of day. All four runs passed with zero GPU errors.
+One supervised run per workload. Both 3DMark05 columns use the benchmark's own
+observer-free `.3dr` results: dxmt9 reports `32.341735840`, `30.889770508`, and
+`69.609596252` FPS; WineD3D reports `31.382265091`, `30.734268188`, and
+`60.975120544` FPS. SFIV remains a positive-frame sampled average over the
+catalogue's 50-second observation window. The WineD3D reference uses the same
+Sikarugir host runtime with its pristine builtin `d3d9.dll`; loader and adapter
+traces confirm the `wined3d` OpenGL 4.1 path on the Apple M1. Single runs, so no
+run range is quoted — repeated measurements of one build on this host drift
+about ±3% with ambient load and time of day.
+
+† SFIV is a raw health point, not a matched renderer ratio: WineD3D selected
+1280x800 while dxmt9 ran the documented 1280x720 mode, and an explicit 720p
+application configuration did not change WineD3D's reported drawable mode.
+All captured scenes rendered normally; the dxmt9 runs reported zero GPU
+errors.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
