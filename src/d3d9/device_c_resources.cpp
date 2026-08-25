@@ -1,4 +1,5 @@
 #include "device_c_provider.hpp"
+#include "device_c_replay_offload.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
 #include "util/log/log.hpp"
 
@@ -23,6 +24,18 @@ struct LockFootprint {
 constexpr uint32_t kD3DLockDiscard = 0x00002000u;
 constexpr uint32_t kD3DLockNoOverwrite = 0x00001000u;
 constexpr uint32_t kD3DLockReadOnly = 0x00000010u;
+
+// The wow64 shadow-lock bookkeeping reset shared by the synchronous and the
+// deferred (R-BACK-44.2) unlock tails. Deliberately does NOT release the
+// low-4GB allocation itself: `releaseShadowLock` does that, and the next lock
+// on this buffer reuses the block when it is large enough.
+void clearShadowLockState(ShadowLock& lock) noexcept {
+  lock.nativePtr = nullptr;
+  lock.nativePitch = 0;
+  lock.rowBytes = 0;
+  lock.rows = 0;
+  lock.active = false;
+}
 constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr uint32_t kD3DFmtA8R8G8B8 = 21u;
 constexpr uint32_t kD3DFmtA8P8 = 40u;
@@ -1259,6 +1272,11 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   if (!b || !b->obj) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  // R-BACK-44.2 — one decision, taken by the bridge fence that skipped the
+  // pre-mutation drain on the strength of it. Cleared unconditionally so a
+  // later unlock on this wrapper cannot inherit it.
+  const bool offloadPlanned = b->mutationOffloadPlanned;
+  b->mutationOffloadPlanned = false;
   const auto start = std::chrono::steady_clock::now();
   const uint64_t handle = bufferHandleValue(b);
   const bool traceBuffer = shouldTraceBufferHandle(b);
@@ -1282,11 +1300,68 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
                     static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
                     b->wow64Lock.rowBytes);
     }
-    b->wow64Lock.nativePtr = nullptr;
-    b->wow64Lock.nativePitch = 0;
-    b->wow64Lock.rowBytes = 0;
-    b->wow64Lock.rows = 0;
-    b->wow64Lock.active = false;
+    // NOTE the deliberate asymmetry with the legacy path below: the wow64
+    // shadow-lock BOOKKEEPING is cleared only after the transaction commits
+    // (R-BACK-44.2's deferred lock-state clearing), while the writeback memcpy
+    // above must happen first because the staged dirty span is read out of the
+    // core storage it wrote into.
+    if (!offloadPlanned) {
+      clearShadowLockState(b->wow64Lock);
+    }
+  }
+  if (offloadPlanned) {
+    const auto coreStart = std::chrono::steady_clock::now();
+    const auto offloaded = dxmt9::d3d9::offloadManagedBufferMutation(b);
+    if (offloaded == dxmt9::d3d9::BufferMutationOffloadResult::
+                         RejectedPreEffect) {
+      // Step-1 failure. Nothing rotated, nothing enqueued, and NO lock state
+      // cleared on any layer — PE `lastLock*`, the wow64 shadow lock, and the
+      // core `locked_` metadata are all still exactly as the app left them, so
+      // the app may simply call Unlock again. `unlockPeBuffer`
+      // (d3d9_pe_device_child_buffer.cpp) clears its own `D3D9PeBufferLockState`
+      // only on SUCCEEDED(), so the PE layer stays consistent with this.
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    if (offloaded ==
+        dxmt9::d3d9::BufferMutationOffloadResult::Committed) {
+      // Step 3 has published the task. Only now is it safe to clear lock state
+      // on every layer.
+      if (shadowActive) {
+        clearShadowLockState(b->wow64Lock);
+      }
+      b->obj->finishDeferredUnlock();
+      const auto coreNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - coreStart).count());
+      if (traceBuffer) {
+        bufferTraceLog("buffer_trace unlock_deferred buffer=%p handle=0x%llx offset=%u actual_size=%u flags=0x%x",
+                       static_cast<void*>(b), static_cast<unsigned long long>(handle),
+                       b->lastLockOffset, b->lastLockSize, b->lastLockFlags);
+      }
+      b->lastLockReadOnly = false;
+      b->lastLockOffset = 0;
+      b->lastLockSize = 0;
+      b->lastLockFlags = 0;
+      b->lastLockSucceeded = false;
+      const auto elapsedNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start).count());
+      dxmt9::perf::countD3D9BufferUnlock(elapsedNs, writebackNs, coreNs,
+                                         writebackBytes, !wasReadOnly,
+                                         shadowActive);
+      return dxmt9::core::D3D_OK;
+    }
+    // NotAdmitted is unreachable for a planned unlock (the transaction never
+    // re-derives admission), but if it ever became reachable the synchronous
+    // path below would run WITHOUT the pre-mutation drain the fence skipped.
+    // Take the conservative global drain first so it cannot.
+    if (shadowActive) {
+      clearShadowLockState(b->wow64Lock);
+    }
+    if (!dxmt9::d3d9::drainDeferredReplay(
+            b->device, "dxmt9c_buffer_unlock_offload_fallback")) {
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
   }
   const auto coreStart = std::chrono::steady_clock::now();
   b->obj->unlock(!b->lastLockReadOnly);

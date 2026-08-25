@@ -1528,6 +1528,17 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9BufferUnlockUploadCalls{0};
   std::atomic<std::uint64_t> d3d9BufferUnlockReadonlyCalls{0};
   std::atomic<std::uint64_t> d3d9BufferUnlockShadowCalls{0};
+  // R-BACK-44.2 — the Managed mutation-offload subset of the family above.
+  // `Deferred*` counts the unlocks whose byte materialization was handed to the
+  // replay offload worker (so they contribute nothing to
+  // `d3d9_buffer_upload_full_*`); `DeferredRejected*` counts admitted-class
+  // unlocks whose reserve/stage step failed pre-effect and therefore returned a
+  // retryable failure with every layer's lock state intact.
+  std::atomic<std::uint64_t> d3d9BufferUnlockDeferredCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockDeferredStagedBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockDeferredStageNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockDeferredRotateNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnlockDeferredRejectedCalls{0};
   // Buffer::unlock backend-call split (present-pacing-bridge-crossing-decomposition.237
   // R-237.4).
   std::atomic<std::uint64_t> d3d9BufferUploadFullCalls{0};
@@ -1925,6 +1936,16 @@ struct Counters {
   std::atomic<std::uint64_t> offloadPushBackpressureWaits{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaitNs{0};
   std::atomic<std::uint64_t> offloadWorkerIdleWaitNs{0};
+  // R-BACK-44.3 — worker-side application of Managed buffer mutation tasks.
+  // `CopyForwardBytes` is what the untouched region cost (pool shadow -> leased
+  // backing) and `PatchBytes` what the app actually wrote, so the ratio sizes
+  // how much of the old full-buffer upload the staged-dirty-span split removed.
+  std::atomic<std::uint64_t> offloadBufferMutationApplied{0};
+  std::atomic<std::uint64_t> offloadBufferMutationApplyNs{0};
+  std::atomic<std::uint64_t> offloadBufferMutationApplyMaxNs{0};
+  std::atomic<std::uint64_t> offloadBufferMutationCopyForwardBytes{0};
+  std::atomic<std::uint64_t> offloadBufferMutationPatchBytes{0};
+  std::atomic<std::uint64_t> offloadBufferMutationDiscarded{0};
   std::atomic<std::uint64_t> completionEnqueueSamples{0};
   std::atomic<std::uint64_t> completionEnqueuePendingDepthMax{0};
   std::atomic<std::uint64_t> completionEnqueueWhileWaiting{0};

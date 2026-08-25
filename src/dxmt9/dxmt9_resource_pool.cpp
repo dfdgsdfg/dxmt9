@@ -1495,6 +1495,118 @@ bool Pool::uploadBufferData(WMT::Device device,
   });
 }
 
+bool Pool::bufferHasVersionedBacking(u64 handleValue) const noexcept {
+  bool versioned = false;
+  bufferArena_.inspect(handleValue, [&versioned](const BufferRecord& record) {
+    versioned = record.hasVersionedBacking();
+  });
+  return versioned;
+}
+
+ManagedBufferMutationLease Pool::rotateManagedBufferForMutation(
+    WMT::Device device, u64 handleValue, u64 completedSeqId) {
+  // R-BACK-44.2 step 2. Everything `uploadBufferData` does above EXCEPT the
+  // two `std::memcpy`s — which is precisely the split the mode exists to make:
+  // the parts a later synchronous observer can see (backing identity, content
+  // revision) stay on the producer thread, the byte motion does not.
+  ManagedBufferMutationLease lease;
+  bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    if (!record.isManagedVersioned || record.renameRing.empty()) {
+      return;
+    }
+    const auto selection = rotateBufferBacking(device, record, completedSeqId);
+    // TLA+: BufferBackingVersioning.NoUploadOverwriteInFlight — unchanged by
+    // deferring the copy, because the selection logic itself is unchanged and
+    // the task's residency lease keeps the chosen entry out of the next
+    // rotation's idle set until the bytes have landed.
+    DXMT_ASSERT(record.renameActiveIndex < record.renameRing.size());
+    DXMT_ASSERT(record.renameRing[record.renameActiveIndex].lastUsedSeqId <=
+                completedSeqId);
+    // Counted here rather than at apply so the managed-upload family keeps
+    // meaning "bytes this unlock committed to publish", which is what it meant
+    // on the synchronous path.
+    perf::countManagedBufferUpload(static_cast<u64>(record.desc.size));
+    switch (selection) {
+      case BufferBackingSelection::ActiveIdle:
+        perf::countManagedBufferBackingInPlace();
+        break;
+      case BufferBackingSelection::ReusedIdle:
+        perf::countManagedBufferBackingReuse();
+        break;
+      case BufferBackingSelection::Fresh:
+        perf::countManagedBufferBackingFresh();
+        break;
+    }
+    ++record.contentRevision;
+    auto& active = record.renameRing[record.renameActiveIndex];
+    lease.valid = true;
+    lease.renameIndex = record.renameActiveIndex;
+    lease.metalHandle = active.buffer ? active.buffer.handle : 0u;
+    lease.contents = active.contents;
+    lease.contentRevision = record.contentRevision;
+    lease.byteSize = record.desc.size;
+    lease.backingResidency = active.replayResidency;
+  });
+  return lease;
+}
+
+ManagedBufferMutationApplyResult Pool::applyManagedBufferMutation(
+    u64 handleValue,
+    const ManagedBufferMutationLease& lease,
+    u64 offset,
+    const std::uint8_t* bytes,
+    std::size_t byteCount) {
+  ManagedBufferMutationApplyResult result;
+  if (!lease.valid) {
+    return result;
+  }
+  bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    if (!record.isManagedVersioned ||
+        lease.renameIndex >= record.renameRing.size()) {
+      return;
+    }
+    auto& entry = record.renameRing[lease.renameIndex];
+    const u64 entryHandle = entry.buffer ? entry.buffer.handle : 0u;
+    // The lease names a concrete allocation, not "whatever is active now".
+    // A mismatch is not recoverable by retargeting: the bytes belong to that
+    // allocation and nothing else, so the caller fail-stops.
+    if (entryHandle != lease.metalHandle || entry.contents != lease.contents) {
+      return;
+    }
+    const auto size = static_cast<std::size_t>(record.desc.size);
+    if (record.shadow.size() != size) {
+      record.shadow.resize(size);
+    }
+    const auto patchOffset =
+        std::min(static_cast<std::size_t>(offset), size);
+    const auto patchLength = std::min(byteCount, size - patchOffset);
+    const auto tailOffset = patchOffset + patchLength;
+    const auto tailLength = size - tailOffset;
+    auto* contents = static_cast<std::uint8_t*>(entry.contents);
+    // Copy-forward FIRST, while `record.shadow` still holds the pre-mutation
+    // content; patching it below is what makes it post-mutation.
+    if (contents) {
+      if (patchOffset != 0u) {
+        std::memcpy(contents, record.shadow.data(), patchOffset);
+      }
+      if (tailLength != 0u) {
+        std::memcpy(contents + tailOffset, record.shadow.data() + tailOffset,
+                    tailLength);
+      }
+      result.copyForwardBytes = patchOffset + tailLength;
+    }
+    if (patchLength != 0u && bytes != nullptr) {
+      std::memcpy(record.shadow.data() + patchOffset, bytes, patchLength);
+      if (contents) {
+        std::memcpy(contents + patchOffset, bytes, patchLength);
+      }
+      result.patchBytes = patchLength;
+    }
+    result.applied = true;
+  });
+  return result;
+}
+
 bool Pool::uploadBufferDataRange(WMT::Device device,
                                  u64 handleValue,
                                  u64 offset,

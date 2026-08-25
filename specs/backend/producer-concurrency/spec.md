@@ -369,6 +369,18 @@ review obligation, not a resolved fact):
 
 ## 4. Ordering protocols
 
+- **Managed mutation-offload subpath under the `visibility-wait` ceiling**
+  (`dxmt9c_buffer_unlock`): the entry keeps its table class — it still
+  returns the staging/rotation/admission acknowledgement and its
+  non-admitted classes still perform the R-BACK-2.51(d) wait. When
+  `DXMT9_MANAGED_MUTATION_OFFLOAD` admits a plain Managed writable unlock
+  (`admitsManagedMutationOffload` in
+  `src/dxmt9/dxmt9_mutation_offload_predicates.hpp`), the pre-mutation
+  drain is replaced by the reserve/rotate/commit FIFO admission of
+  R-BACK-44.2 under R-BACK-2.51(d)(iv) — a mode-conditional non-waiting
+  `state-mutation-ack`-shaped subpath, not a reclassification. TLA+:
+  `BufferMutationOffload` (production cfg plus the out-of-order-apply and
+  deferred-rotation counterexamples).
 - **Arena-stamp + frozen-ticket re-stamp** (`R-BACK-43.6` reference): a mark
   ticket read lock-free may be stale against a concurrent slot advance;
   under the re-acquired queue mutex the ticket is frozen, so one re-read plus

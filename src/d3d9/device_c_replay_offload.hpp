@@ -19,6 +19,7 @@
 #include "device_c_chunk_registry.hpp"
 #include "device_c_chunk_validate.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/dxmt9_managed_mutation_lease.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -99,6 +100,7 @@ struct ReplayDrainFailure {
 };
 
 struct RawCommandChunk;
+struct BufferMutationTask;
 
 class ReplayDrainLedger {
  public:
@@ -106,6 +108,10 @@ class ReplayDrainLedger {
       std::uint64_t handleValue);
   bool publishInline(RawCommandChunk& chunk) noexcept;
   void publishReplayed(const RawCommandChunk& chunk) noexcept;
+  // R-BACK-44.5 — the mutation half of the same publication, so the existing
+  // resource-scoped fence (R-BACK-2.51(d)(i)) covers pending mutations with no
+  // change at all on the reader side.
+  void publishMutationReplayed(const BufferMutationTask& task) noexcept;
   ReplayDrainResult wait(ReplayDrainTarget& target) noexcept;
   bool pending(const ReplayDrainTarget& target) const noexcept;
   void stop() noexcept;
@@ -121,6 +127,13 @@ class ReplayDrainLedger {
   friend struct ReplayDrainLedgerTestAccess;
 
   void publishAcceptedLocked(RawCommandChunk& chunk) noexcept;
+  // R-BACK-44.2 step 3. Unlike the chunk publication this takes `max`, not a
+  // plain assignment: the ordinal was fixed at reserve, and a chunk pushed
+  // between reserve and commit may already have published a HIGHER queued
+  // watermark against the same buffer. Overwriting it with the older ordinal
+  // would tell a direct reader it was caught up while that chunk is still
+  // queued.
+  void publishMutationAcceptedLocked(BufferMutationTask& task) noexcept;
 
   mutable std::mutex mutex_;
   std::condition_variable cv_;
@@ -168,6 +181,64 @@ struct RawCommandChunk {
   // plus direct Legacy replay; true permits structural lane planning.
   bool cpuReadyTapePlanningEnabled = false;
   bool resourcesMarkedBeforeReplay = false;
+};
+
+// R-BACK-44.2a — one Managed writable unlock whose byte materialization was
+// handed to the offload worker. It is the second alternative of the FIFO queue
+// element; a chunk and a mutation are ordered against each other by nothing
+// more than their position in the one deque, which is what keeps R-BACK-44.3's
+// ordering argument to a single sentence.
+//
+// Everything the worker needs is a VALUE here, resolved on the producer thread
+// before the unlock returned. Nothing is looked up again at apply time except
+// the pool record itself, which the `coreBuffer` retention keeps alive.
+struct BufferMutationTask {
+  // R-BACK-44.2a retention. Holding the core buffer is what makes
+  // `Buffer::invalidate()` -> `destroyBuffer` unreachable while the task is
+  // queued, so the pool record cannot become `destroyPending` and `gcArena`
+  // cannot reach it — the same pin obligation a chunk discharges by retaining
+  // its wrappers.
+  std::shared_ptr<dxmt9::core::Buffer> coreBuffer;
+  // Owned rather than borrowed: the D9CBuffer wrapper may be released between
+  // commit and apply, and the worker still has to publish completion against
+  // this target (R-BACK-44.5).
+  std::shared_ptr<ReplayDrainTarget> ledgerTarget;
+  std::uint64_t bufferHandle = 0;
+  dxmt9::resources::ManagedBufferMutationLease lease;
+  std::vector<std::uint8_t> stagedBytes;
+  std::uint64_t lockedOffset = 0;
+  // The reserved FIFO ordinal, fixed at reserve (R-BACK-44.2 step 1) and
+  // published against `ledgerTarget` at commit (step 3).
+  ReplaySeq replaySeq = 0;
+};
+
+// The FIFO element. Exactly one of three states:
+//   * placeholder (`reservationId != 0`)      — reserved, not yet committed;
+//   * mutation    (`mutation != nullptr`)     — a committed BufferMutationTask;
+//   * chunk       (everything else)           — a RawCommandChunk.
+// The mutation payload is behind a `unique_ptr` so a chunk-only queue keeps its
+// element size, and so `commitMutation` is a pointer move — i.e. noexcept,
+// which is what makes R-BACK-44.2 step 3 infallible.
+struct ReplayQueueItem {
+  RawCommandChunk chunk;
+  std::unique_ptr<BufferMutationTask> mutation;
+  std::uint64_t reservationId = 0;
+  std::size_t chargedBytes = 0;
+
+  bool placeholder() const noexcept { return reservationId != 0u; }
+  bool isMutation() const noexcept { return mutation != nullptr; }
+};
+
+// Handle returned by `ReplayOffloadQueue::reserveMutation`. `replaySeq` is the
+// FIFO ordinal the mutation will carry; it is allocated from the ledger under
+// BOTH the queue and ledger mutexes so a concurrent chunk push — which takes
+// the same two locks in the same order — can never be assigned an ordinal
+// between this reservation and the queue position it already occupies.
+struct ReplayQueueMutationReservation {
+  std::uint64_t id = 0;
+  ReplaySeq replaySeq = 0;
+
+  bool valid() const noexcept { return id != 0u; }
 };
 
 class ReplayBufferSnapshotResolver {
@@ -375,7 +446,7 @@ class ReplayOffloadQueue {
                      ReplayQueueAllocationFailure* allocationFailure = nullptr)
       : maxChunks_(maxChunks), maxBytes_(maxBytes),
         observabilityEnabled_(replayOffloadObservabilityEnabled()),
-        queue_(ReplayQueueAllocator<RawCommandChunk>(allocationFailure)),
+        queue_(ReplayQueueAllocator<ReplayQueueItem>(allocationFailure)),
         testOnlyAllocationFailure_(allocationFailure) {}
 
   // RejectedPreEffect preserves caller ownership. Accepted adopts the chunk
@@ -423,19 +494,25 @@ class ReplayOffloadQueue {
         return ReplayQueuePushDisposition::RejectedPreEffect;
       }
       try {
-        queue_.push_back(std::move(chunk));
+        queue_.emplace_back();
       } catch (...) {
         return ReplayQueuePushDisposition::RejectedPreEffect;
       }
-      queuedBytes_ += queue_.back().recordBytes;
-      ledger->publishAcceptedLocked(queue_.back());
+      // Element construction is the only throwing step; the chunk's own move
+      // assignment is noexcept, so the caller keeps ownership on any failure.
+      queue_.back().chunk = std::move(chunk);
+      queue_.back().chargedBytes = queue_.back().chunk.recordBytes;
+      queuedBytes_ += queue_.back().chargedBytes;
+      ledger->publishAcceptedLocked(queue_.back().chunk);
     } else {
       try {
-        queue_.push_back(std::move(chunk));
+        queue_.emplace_back();
       } catch (...) {
         return ReplayQueuePushDisposition::RejectedPreEffect;
       }
-      queuedBytes_ += queue_.back().recordBytes;
+      queue_.back().chunk = std::move(chunk);
+      queue_.back().chargedBytes = queue_.back().chunk.recordBytes;
+      queuedBytes_ += queue_.back().chargedBytes;
     }
     if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::AfterAdoption) {
       testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;
@@ -461,26 +538,158 @@ class ReplayOffloadQueue {
            ReplayQueuePushDisposition::Accepted;
   }
 
-  bool pop(RawCommandChunk& out) {
+  // R-BACK-44.2's reservation, half one: fix the FIFO ordinal and charge the
+  // staged-byte budget with NO externally visible effect. The reservation is a
+  // real deque element from this instant, which is the whole scheme — see the
+  // `placeholder()` note on `pop` below for why the worker cannot walk past it.
+  // Returns an invalid handle on stop/poison or allocation failure; the caller
+  // then rejects the unlock pre-effect, with every layer's lock state intact.
+  ReplayQueueMutationReservation reserveMutation(
+      std::size_t bytes, ReplayDrainLedger& ledger) noexcept try {
     std::unique_lock lock(mutex_);
-    if (!stop_ && queue_.empty()) {
-      // Worker idle: counted only when the queue is actually empty.
+    const auto admissible = [&] {
+      // Same oversize escape hatch the chunk path has: a staged span larger
+      // than the byte bound must still be admitted once the queue is empty.
+      return stop_ || (queue_.size() < maxChunks_ &&
+                       (queue_.empty() || queuedBytes_ + bytes <= maxBytes_));
+    };
+    if (!admissible()) {
       const auto waitStart = std::chrono::steady_clock::now();
-      workCv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+      if (observabilityEnabled_) {
+        notePushWaitEnter();
+      }
+      spaceCv_.wait(lock, admissible);
+      if (observabilityEnabled_) {
+        notePushWaitExit();
+      }
+      notePushBackpressureWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - waitStart).count()));
+    }
+    if (stop_) return {};
+    ReplaySeq reserved = 0;
+    {
+      // queue -> ledger, the subsystem's only nested order. Taking the ordinal
+      // here — under both locks, with the placeholder already appended — is
+      // what makes "a chunk pushed between reserve and commit lands after the
+      // mutation" true of the ordinal as well as of the queue position.
+      std::unique_lock ledgerLock(ledger.mutex_);
+      if (!ledger.accepting_ || ledger.terminal()) {
+        return {};
+      }
+      queue_.emplace_back();
+      reserved = ledger.nextSeq_++;
+    }
+    auto& slot = queue_.back();
+    slot.reservationId = nextReservationId_++;
+    slot.chargedBytes = bytes;
+    queuedBytes_ += bytes;
+    return {slot.reservationId, reserved};
+  } catch (...) {
+    // `emplace_back` is the only throwing step and it precedes every visible
+    // effect (ordinal, byte charge), so a failure here is pre-effect.
+    return {};
+  }
+
+  // R-BACK-44.2 step 3, and infallible by construction: the deque element
+  // already exists and the payload is a pointer move. A vanished reservation
+  // is only reachable through a teardown drain that cleared the queue after
+  // this reservation was taken; the task is then dropped (and counted as
+  // discarded by the caller), which is exactly the disposition R-BACK-44.7
+  // gives every other pending task on that path.
+  bool commitMutation(const ReplayQueueMutationReservation& reservation,
+                      std::unique_ptr<BufferMutationTask> task,
+                      ReplayDrainLedger& ledger) noexcept {
+    if (!reservation.valid() || !task) {
+      return false;
+    }
+    std::unique_lock lock(mutex_);
+    const auto found = findReservationLocked(reservation.id);
+    if (found == queue_.end()) {
+      return false;
+    }
+    task->replaySeq = reservation.replaySeq;
+    found->mutation = std::move(task);
+    found->reservationId = 0u;
+    {
+      std::lock_guard ledgerLock(ledger.mutex_);
+      ledger.publishMutationAcceptedLocked(*found->mutation);
+    }
+    workCv_.notify_one();
+    return true;
+  }
+
+  // Every abandon path: staging failure, an invalid lease (i.e. no rotation
+  // happened), or any other pre-effect rejection.
+  void releaseMutation(
+      const ReplayQueueMutationReservation& reservation) noexcept {
+    if (!reservation.valid()) {
+      return;
+    }
+    std::lock_guard lock(mutex_);
+    const auto found = findReservationLocked(reservation.id);
+    if (found == queue_.end()) {
+      return;
+    }
+    queuedBytes_ -= found->chargedBytes;
+    queue_.erase(found);
+    spaceCv_.notify_all();
+    // The head may have just become poppable, and the queue may have just
+    // become empty.
+    workCv_.notify_all();
+    drainCv_.notify_all();
+  }
+
+  // Single-consumer. Returns false when the queue is empty, or when the head
+  // is an UNCOMMITTED RESERVATION: the worker must not run past a reserved
+  // ordinal, and it cannot, because the reservation physically occupies that
+  // deque position and nothing pops from the middle. The window is producer-
+  // side straight-line code between `reserveMutation` and `commitMutation`
+  // with no waits in it, so head-blocking here is microseconds.
+  bool pop(ReplayQueueItem& out) {
+    std::unique_lock lock(mutex_);
+    const auto ready = [&] {
+      return stop_ || (!queue_.empty() && !queue_.front().placeholder());
+    };
+    if (!ready()) {
+      // Worker idle: counted only when there is nothing it may consume.
+      const auto waitStart = std::chrono::steady_clock::now();
+      workCv_.wait(lock, ready);
       noteWorkerIdleWait(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - waitStart).count()));
     }
-    if (queue_.empty()) return false;  // stop_ with empty queue
+    if (queue_.empty() || queue_.front().placeholder()) {
+      return false;  // stop_ with an empty queue or an unresolved reservation
+    }
     out = std::move(queue_.front());
     queue_.pop_front();
-    queuedBytes_ -= out.recordBytes;
+    queuedBytes_ -= out.chargedBytes;
     inFlight_ = true;
     if (observabilityEnabled_) {
       noteReplayInflightRaw(true);
     }
     spaceCv_.notify_all();
     return true;
+  }
+
+  // Teardown drain (R-BACK-44.7): move every committed item out in FIFO order
+  // so the caller can release chunk wrapper retention and mutation leases
+  // without replaying them. Placeholders own nothing and are simply dropped;
+  // their producer's `commitMutation` / `releaseMutation` then no-ops. Never
+  // waits, so it cannot deadlock against a producer mid-transaction.
+  void drainRemaining(std::vector<ReplayQueueItem>& out) {
+    std::lock_guard lock(mutex_);
+    for (auto& item : queue_) {
+      if (item.placeholder()) {
+        continue;
+      }
+      out.push_back(std::move(item));
+    }
+    queue_.clear();
+    queuedBytes_ = 0u;
+    spaceCv_.notify_all();
+    drainCv_.notify_all();
   }
 
   void markReplayDone() {
@@ -564,6 +773,16 @@ class ReplayOffloadQueue {
   }
 
  private:
+  using ItemDeque =
+      std::deque<ReplayQueueItem, ReplayQueueAllocator<ReplayQueueItem>>;
+
+  ItemDeque::iterator findReservationLocked(std::uint64_t id) noexcept {
+    return std::find_if(queue_.begin(), queue_.end(),
+                        [id](const ReplayQueueItem& item) {
+                          return item.reservationId == id;
+                        });
+  }
+
   const std::size_t maxChunks_;
   const std::size_t maxBytes_;
   const bool observabilityEnabled_;
@@ -571,7 +790,8 @@ class ReplayOffloadQueue {
   std::condition_variable workCv_;
   std::condition_variable spaceCv_;
   std::condition_variable drainCv_;
-  std::deque<RawCommandChunk, ReplayQueueAllocator<RawCommandChunk>> queue_;
+  ItemDeque queue_;
+  std::uint64_t nextReservationId_ = 1;
   std::size_t queuedBytes_ = 0;
   bool inFlight_ = false;
   bool stop_ = false;
@@ -678,15 +898,18 @@ bool bufferLockClassBypassesReplay(const D9CBufferDesc& desc,
 class ReplayOffloadWorker {
  public:
   using ReplayFn = int32_t (*)(D9CDevice*, RawCommandChunk&);
+  using ApplyMutationFn = int32_t (*)(D9CDevice*, BufferMutationTask&);
   using FailurePublishedHook = void (*)(void*);
 
   // Queue bound: 64 chunks / 8 MiB ~= 2+ frames of GT1 chunks (about
   // 14 chunks/present, ~200 KB/present).
   explicit ReplayOffloadWorker(ReplayFn replay = nullptr,
                                FailurePublishedHook failureHook = nullptr,
-                               void* failureHookContext = nullptr)
+                               void* failureHookContext = nullptr,
+                               ApplyMutationFn applyMutation = nullptr)
       : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()),
         replay_(replay),
+        applyMutation_(applyMutation),
         failureHook_(failureHook),
         failureHookContext_(failureHookContext) {}
   ~ReplayOffloadWorker() { stop(); }
@@ -710,6 +933,7 @@ class ReplayOffloadWorker {
   std::atomic<bool> failed_{false};
   D9CDevice* owner_ = nullptr;
   ReplayFn replay_ = nullptr;
+  ApplyMutationFn applyMutation_ = nullptr;
   FailurePublishedHook failureHook_ = nullptr;
   void* failureHookContext_ = nullptr;
   bool testOnlyFailStart_ = false;
@@ -719,6 +943,42 @@ class ReplayOffloadWorker {
 // completion before releasing retained wrappers so its target pointers remain
 // alive through the publication.
 int32_t replayRawChunk(D9CDevice* d, RawCommandChunk& chunk);
+
+// Applies one committed mutation task at its FIFO position (R-BACK-44.3).
+// A negative return fail-stops the worker under the existing poison
+// discipline; there is no "skip" disposition, because a skipped mutation is a
+// silently wrong buffer.
+int32_t applyBufferMutationTask(D9CDevice* d, BufferMutationTask& task);
+
+// getenv("DXMT9_MANAGED_MUTATION_OFFLOAD"), read once. Unset, empty, and "0"
+// select the byte-identical synchronous upload path (R-BACK-44.1).
+bool managedMutationOffloadEnabled() noexcept;
+
+// R-BACK-44.1 scope gate for one pending unlock, evaluated through the shared
+// predicate `dxmt9::resources::mutation_offload::admitsManagedMutationOffload`.
+// Reads only state the caller already owns plus one buffer-arena probe for the
+// record's `hasVersionedBacking`, and costs a single cached bool when the mode
+// is off.
+bool admitsManagedMutationOffload(D9CBuffer* b) noexcept;
+
+enum class BufferMutationOffloadResult : std::uint8_t {
+  // Nothing was attempted; the caller must run the synchronous upload path.
+  NotAdmitted,
+  // Reserved, staged, rotated, committed and published. The caller may now —
+  // and only now — clear lock state on every layer.
+  Committed,
+  // R-BACK-44.2 step-1 failure: no rotation, no revision bump, no enqueue.
+  // The caller must leave every layer's lock state intact and return a
+  // retryable failure so the unlock can be attempted again.
+  RejectedPreEffect,
+};
+
+// The R-BACK-44.2 reserve -> stage -> rotate -> commit transaction. Called
+// only when `admitsManagedMutationOffload` already held for this unlock (the
+// bridge fence evaluated it and skipped the pre-mutation drain on the strength
+// of it), so it never re-derives admission — re-deriving it would open a window
+// where the fence was skipped and the synchronous path ran anyway.
+BufferMutationOffloadResult offloadManagedBufferMutation(D9CBuffer* b) noexcept;
 
 // Releases every wrapper retained during canonical admission and clears the list.
 // Namespace linkage allows both the commit push-failure path and the offload

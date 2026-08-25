@@ -269,6 +269,13 @@ struct D9CBuffer {
   uint32_t lastLockSize = 0;
   uint32_t lastLockFlags = 0;
   bool lastLockSucceeded = false;
+  // R-BACK-44.1/44.2 — set by `drainDeferredReplayForBufferUnlock` when it
+  // skipped the pre-mutation drain because this unlock is taking the ordered
+  // FIFO-mutation admission path instead, and consumed (and cleared) by the
+  // provider unlock body. One decision, one owner: re-deriving admission in
+  // the body would open a window where the fence was skipped and the
+  // synchronous upload ran anyway. Always false with the mode off.
+  bool mutationOffloadPlanned = false;
   std::shared_ptr<dxmt9::d3d9::ReplayDrainTarget> replayDrainTarget;
 
   explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o,

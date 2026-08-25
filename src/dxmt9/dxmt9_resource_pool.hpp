@@ -139,6 +139,7 @@
 
 #include "dxmt9/core.hpp"
 #include "dxmt9_heap_manager.hpp"
+#include "dxmt9_managed_mutation_lease.hpp"
 #include "dxmt9_mark_reclaim_predicates.hpp"
 #include "dxmt9_resource_lifetime.hpp"
 #include "../winemetal/Metal.hpp"
@@ -665,6 +666,38 @@ struct Pool {
                              const std::uint8_t* bytes,
                              std::size_t byteCount,
                              u64 completedSeqId);
+
+  // R-BACK-44.1 — the pool record's own rename-ring test, exposed so the
+  // producer can evaluate the shared admission predicate
+  // (`dxmt9_mutation_offload_predicates.hpp`) without reaching into a raw
+  // `findBuffer` view. Arena shared lock only; false for a missing handle.
+  bool bufferHasVersionedBacking(u64 handleValue) const noexcept;
+
+  // R-BACK-44.2 step 2 — the LOGICAL half of a Managed writable-unlock upload:
+  // backing selection under the same R-BACK-5.8 / 5.11 rules
+  // `uploadBufferData` uses, the `renameActiveIndex` / `buffer` / `contents`
+  // mirror update, and the `contentRevision` bump — with the two byte copies
+  // left for `applyManagedBufferMutation` on the offload worker. Returns the
+  // concrete ring-entry lease (R-BACK-44.2a) the task will apply to; an
+  // invalid lease means nothing was rotated. Same locking as
+  // `uploadBufferData`: the buffer arena's unique lock, no queue mutex needed.
+  ManagedBufferMutationLease rotateManagedBufferForMutation(
+      WMT::Device device, u64 handleValue, u64 completedSeqId);
+
+  // R-BACK-44.3 — the BYTE half, run on the offload worker at the task's
+  // reserved FIFO position. Copies the untouched region forward from
+  // `record.shadow` (which at this point holds exactly the pre-mutation
+  // content, by induction over the same FIFO order) into the LEASED backing,
+  // then patches the staged dirty span into both the leased backing and the
+  // shadow. Writes nothing and reports `applied=false` when the lease no
+  // longer names the same ring entry, which the caller must treat as a
+  // fail-stop rather than a skip.
+  ManagedBufferMutationApplyResult applyManagedBufferMutation(
+      u64 handleValue,
+      const ManagedBufferMutationLease& lease,
+      u64 offset,
+      const std::uint8_t* bytes,
+      std::size_t byteCount);
 
   // Look up or create immutable Metal index buffers containing reordered index
   // bytes derived from a stable source buffer. Entries are keyed by source

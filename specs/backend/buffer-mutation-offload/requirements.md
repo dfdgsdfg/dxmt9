@@ -46,8 +46,10 @@ transaction with this order (2026-08-25 review finding 4):
    `DXMT9_OFFLOAD_QUEUE_BYTES` bounds, review finding 9) — with no
    externally visible side effect; then copy the exact dirty span
    (`lockedOffset_`, `lockedSize_` bytes of the core CPU `storage_`, after
-   the wow64 shadow writeback) into task-owned storage and take a concrete
-   backing/record lease (R-BACK-44.2a);
+   the wow64 shadow writeback) into task-owned storage and take the record
+   half of the R-BACK-44.2a lease (core-buffer retention + drain-target
+   ownership); the concrete ring-entry half is produced by step 2's
+   rotation — both halves are task-owned before step 3 commits;
 2. perform the logical backing rotation synchronously: backing selection
    under the existing R-BACK-5.8 / R-BACK-5.11 rules (idle-reuse check
    against `completedSeqId`, fresh allocation fallback, never blocking on
@@ -123,6 +125,13 @@ pending mutation tasks on that buffer through the existing resource-scoped
 replay ledger (R-BACK-2.51(d)(i)), whose `lastQueuedSeq` publication is
 extended to mutation tasks by R-BACK-44.2(3). Read locks of Managed
 buffers remain served from the core CPU `storage_` and are unaffected.
+In offload mode the Managed `NOOVERWRITE` unlock's unconditional replay
+bypass is additionally conditional on the buffer's drain target having no
+pending work: a Managed `NOOVERWRITE` unlock performs a full synchronous
+upload (the exact-range path is Default-only), which would otherwise race
+a queued mutation task and lose the ordering argument. Mode-off keeps the
+bypass byte-identical. (Managed + `D3DUSAGE_DYNAMIC` is an app contract
+violation, but it must not corrupt.)
 
 In offload mode the Managed plain writable unlock itself no longer
 performs the R-BACK-2.51(d) pre-mutation drain. This is not a local

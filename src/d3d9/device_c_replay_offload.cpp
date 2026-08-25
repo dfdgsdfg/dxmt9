@@ -12,6 +12,7 @@
 // the upperDevice shared_ptr from the fail-stop path below (mirrors the
 // same include-for-the-same-reason comment in device_c_chunk_replay.cpp).
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_mutation_offload_predicates.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include "dxmt9/assert.hpp"
@@ -22,7 +23,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
+#include <span>
+#include <vector>
 
 namespace dxmt9::d3d9 {
 
@@ -147,6 +151,24 @@ bool ReplayDrainLedger::publishInline(RawCommandChunk& chunk) noexcept {
   }
   publishAcceptedLocked(chunk);
   return true;
+}
+
+void ReplayDrainLedger::publishMutationAcceptedLocked(
+    BufferMutationTask& task) noexcept {
+  if (auto* target = task.ledgerTarget.get()) {
+    target->lastQueuedSeq = std::max(target->lastQueuedSeq, task.replaySeq);
+  }
+  cv_.notify_all();
+}
+
+void ReplayDrainLedger::publishMutationReplayed(
+    const BufferMutationTask& task) noexcept {
+  std::lock_guard lock(mutex_);
+  if (auto* target = task.ledgerTarget.get()) {
+    target->lastReplayedSeq =
+        std::max(target->lastReplayedSeq, task.replaySeq);
+  }
+  cv_.notify_all();
 }
 
 void ReplayDrainLedger::publishReplayed(
@@ -318,6 +340,28 @@ bool ReplayOffloadWorker::start(D9CDevice* device) noexcept {
   return true;
 }
 
+namespace {
+
+// R-BACK-44.7 — release every item a teardown/fail-stop drain took out of the
+// queue, in the FIFO order it took them. A chunk gives up its wrapper
+// retention; a mutation task gives up its core-buffer retention and its ring
+// entry's residency lease when its `unique_ptr` dies, so the only thing the
+// drain owes is the counter that says the bytes were never published.
+void releaseDrainedQueueItems(std::vector<ReplayQueueItem>& items) {
+  for (auto& item : items) {
+    if (item.isMutation()) {
+      dxmt9::perf::countOffloadBufferMutationDiscarded();
+      item.mutation.reset();
+      continue;
+    }
+    item.chunk.bufferSnapshots.clear();
+    releaseRetainedWrappers(item.chunk);
+  }
+  items.clear();
+}
+
+}  // namespace
+
 void ReplayOffloadWorker::stop() {
   if (owner_) {
     owner_->replayDrainLedger.stop();
@@ -331,16 +375,61 @@ void ReplayOffloadWorker::stop() {
   // single-threaded and normally finds nothing left. Kept here in case a
   // future change manages to leave a chunk queued across a stop() that
   // did not go through the fail-stop path.
-  RawCommandChunk drained;
-  while (queue_.pop(drained)) {
-    releaseRetainedWrappers(drained);
-    queue_.markReplayDone();
-  }
+  std::vector<ReplayQueueItem> drained;
+  queue_.drainRemaining(drained);
+  releaseDrainedQueueItems(drained);
 }
 
 void ReplayOffloadWorker::run(D9CDevice* device) {
-  RawCommandChunk chunk;
-  while (queue_.pop(chunk)) {
+  ReplayQueueItem item;
+  while (queue_.pop(item)) {
+    if (item.isMutation()) {
+      // R-BACK-44.3 — the mutation alternative of the same FIFO position. No
+      // coalescing, reordering, or elision: one task, applied here, between
+      // the replay of the chunk before it and the chunk after it.
+      auto& task = *item.mutation;
+      int32_t hr = dxmt9::core::D3D_OK;
+      try {
+        hr = applyMutation_ ? applyMutation_(device, task)
+                            : applyBufferMutationTask(device, task);
+      } catch (const std::bad_alloc&) {
+        hr = dxmt9::core::E_OUTOFMEMORY;
+      } catch (...) {
+        hr = dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      if (hr < 0) {
+        // Same fail-stop discipline as a failed chunk replay: an application
+        // failure is never a recoverable unlock result (R-BACK-44.7).
+        device->replayDrainLedger.publishFailure();
+        failed_.store(true, std::memory_order_release);
+        device->replayDrainLedger.poison();
+        queue_.stop();
+        if (!applyMutation_) {
+          DXMT_ASSERT(false && "deferred buffer mutation apply failed");
+        }
+        if (failureHook_) {
+          try {
+            failureHook_(failureHookContext_);
+          } catch (...) {
+            // A test/diagnostic hook cannot interrupt terminal settlement.
+          }
+        }
+        if (device->iface) {
+          if (auto upper = device->dev().upperDevice()) {
+            upper->abortPresentOrdinalWaits();
+          }
+        }
+        dxmt9::perf::countOffloadBufferMutationDiscarded();
+        item.mutation.reset();
+        queue_.markReplayDone();
+        break;
+      }
+      device->replayDrainLedger.publishMutationReplayed(task);
+      item.mutation.reset();
+      queue_.markReplayDone();
+      continue;
+    }
+    auto& chunk = item.chunk;
     int32_t hr = dxmt9::core::D3D_OK;
     try {
       hr = replay_ ? replay_(device, chunk)
@@ -393,20 +482,18 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
     releaseRetainedWrappers(chunk);
     queue_.markReplayDone();
   }
-  // Drain epilogue: release wrapper retention for any chunks left queued
-  // when the loop above exited. Reached either via the fail-stop `break`
-  // (the remaining queued chunks were never popped/replayed, so their
-  // retained wrappers would otherwise leak) or via a normal stop()-with-
-  // empty-queue exit (a no-op drain, since ReplayOffloadQueue::pop() already
-  // returns queued items after stop() -- only returning false once stopped
-  // *and* empty -- so the loop above already replayed everything in that
-  // case). Single-threaded: this is still the worker thread itself, and no
+  // Drain epilogue: release retention for any items left queued when the loop
+  // above exited. Reached either via a fail-stop `break` (the remaining queued
+  // items were never popped, so their retained wrappers / core-buffer
+  // retentions would otherwise leak) or via a normal stop()-with-empty-queue
+  // exit (a no-op drain, since pop() keeps returning queued items after stop()
+  // -- only returning false once stopped *and* empty, or blocked behind an
+  // unresolved reservation -- so the loop above already consumed everything in
+  // that case). Single-threaded: this is still the worker thread itself, and no
   // other thread calls pop()/markReplayDone() on this queue.
-  RawCommandChunk drained;
-  while (queue_.pop(drained)) {
-    releaseRetainedWrappers(drained);
-    queue_.markReplayDone();
-  }
+  std::vector<ReplayQueueItem> drained;
+  queue_.drainRemaining(drained);
+  releaseDrainedQueueItems(drained);
 }
 
 // Per-call-site attribution for the drain fence
@@ -781,15 +868,177 @@ bool drainDeferredReplayForBufferLock(D9CBuffer* b,
   return true;
 }
 
+bool managedMutationOffloadEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_MANAGED_MUTATION_OFFLOAD");
+    return value && value[0] != '\0' &&
+           !(value[0] == '0' && value[1] == '\0');
+  }();
+  return enabled;
+}
+
+bool admitsManagedMutationOffload(D9CBuffer* b) noexcept {
+  // The mode conjunct is hoisted so the default path costs one cached bool and
+  // never probes the buffer arena. The shared predicate below still evaluates
+  // it, so the two spellings cannot drift.
+  if (!managedMutationOffloadEnabled()) {
+    return false;
+  }
+  if (!b || !b->obj || !b->device || !b->lastLockSucceeded) {
+    return false;
+  }
+  // The core lock must still be open: the staged span is read out of the core
+  // `storage_` using the LIVE lock extent, and lock-state clearing on every
+  // layer is what R-BACK-44.2 defers until the task is committed.
+  if (!b->obj->locked()) {
+    return false;
+  }
+  const auto& upper = b->obj->backend();
+  if (!upper) {
+    return false;
+  }
+  auto* worker = b->device->replayOffload.get();
+  const bool offloadReplayActive =
+      offloadCommitReplayEnabled() && worker != nullptr && !worker->failed() &&
+      !worker->queue().stopped() && !b->device->replayDrainLedger.terminal();
+  if (!offloadReplayActive) {
+    return false;
+  }
+  return dxmt9::resources::mutation_offload::admitsManagedMutationOffload(
+      managedMutationOffloadEnabled(), offloadReplayActive, b->desc.pool,
+      b->lastLockFlags, upper->bufferHasVersionedBacking(b->obj->handle()));
+}
+
+int32_t applyBufferMutationTask(D9CDevice* d, BufferMutationTask& task) {
+  if (!d || !task.coreBuffer || !task.lease.valid) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto& upper = task.coreBuffer->backend();
+  if (!upper) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  const auto result = upper->applyManagedBufferMutation(
+      task.coreBuffer->handle(), task.lease, task.lockedOffset,
+      std::span<const std::uint8_t>(task.stagedBytes));
+  if (!result.applied) {
+    // The lease named a concrete ring entry; if it no longer names the same
+    // allocation the staged bytes have nowhere correct to land, so this is a
+    // fail-stop rather than a skip (R-BACK-44.7).
+    DXMT_ASSERT(false && "leased buffer mutation backing no longer matches");
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  dxmt9::perf::countOffloadBufferMutationApplied(
+      static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start).count()),
+      result.copyForwardBytes, result.patchBytes);
+  return dxmt9::core::D3D_OK;
+}
+
+BufferMutationOffloadResult offloadManagedBufferMutation(
+    D9CBuffer* b) noexcept {
+  if (!b || !b->obj || !b->device || !b->device->replayOffload) {
+    return BufferMutationOffloadResult::NotAdmitted;
+  }
+  const auto& upper = b->obj->backend();
+  if (!upper) {
+    return BufferMutationOffloadResult::NotAdmitted;
+  }
+  auto& queue = b->device->replayOffload->queue();
+  auto& ledger = b->device->replayDrainLedger;
+
+  // The exact dirty span, clamped to what both the core storage and the pool
+  // record can actually hold. `storage_.size()` is never below `desc.size` for
+  // a Managed buffer (constructed at that size; `lock` only ever grows it), so
+  // in practice this clamps nothing — it exists so a malformed extent becomes a
+  // shorter patch rather than an out-of-bounds read.
+  const auto storage = b->obj->bytes();
+  const auto logicalSize = static_cast<std::size_t>(b->obj->desc().size);
+  const auto bounded = std::min(storage.size(), logicalSize);
+  const auto offset =
+      std::min(static_cast<std::size_t>(b->obj->lockedOffset()), bounded);
+  const auto length = std::min(static_cast<std::size_t>(b->obj->lockedSize()),
+                               bounded - offset);
+
+  const auto stageStart = std::chrono::steady_clock::now();
+  // Step 1: reserve first, so the FIFO ordinal is fixed before anything else
+  // in this transaction happens, then stage into task-owned storage.
+  const auto reservation = queue.reserveMutation(length, ledger);
+  if (!reservation.valid()) {
+    dxmt9::perf::countD3D9BufferUnlockDeferredRejected();
+    return BufferMutationOffloadResult::RejectedPreEffect;
+  }
+  std::unique_ptr<BufferMutationTask> task;
+  try {
+    task = std::make_unique<BufferMutationTask>();
+    if (length != 0u) {
+      task->stagedBytes.assign(storage.data() + offset,
+                               storage.data() + offset + length);
+    }
+  } catch (...) {
+    queue.releaseMutation(reservation);
+    dxmt9::perf::countD3D9BufferUnlockDeferredRejected();
+    return BufferMutationOffloadResult::RejectedPreEffect;
+  }
+  // R-BACK-44.2a's record lease: retaining the core buffer is what keeps the
+  // pool record un-destroyed until the task is applied or discarded. Taken
+  // here, in step 1, alongside the staging; the CONCRETE ring-entry lease can
+  // only be known once step 2 has chosen the entry.
+  task->coreBuffer = b->obj;
+  task->ledgerTarget = b->replayDrainTarget;
+  task->bufferHandle = b->obj->handle().value;
+  task->lockedOffset = offset;
+  const auto stageNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - stageStart).count());
+
+  // Step 2: the logical rotation. All-or-nothing — an invalid lease means the
+  // pool did not touch the record, so releasing the reservation restores the
+  // pre-transaction state exactly.
+  const auto rotateStart = std::chrono::steady_clock::now();
+  task->lease = upper->rotateManagedBufferForMutation(b->obj->handle());
+  const auto rotateNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - rotateStart).count());
+  if (!task->lease.valid) {
+    queue.releaseMutation(reservation);
+    dxmt9::perf::countD3D9BufferUnlockDeferredRejected();
+    return BufferMutationOffloadResult::RejectedPreEffect;
+  }
+
+  // Step 3: infallible commit at the reserved position + ledger publication.
+  const auto stagedBytes =
+      static_cast<std::uint64_t>(task->stagedBytes.size());
+  if (!queue.commitMutation(reservation, std::move(task), ledger)) {
+    // Only reachable when a teardown drain cleared the queue after this
+    // reservation was taken; the task is dropped on the same terms every other
+    // pending task on that path is (R-BACK-44.7).
+    dxmt9::perf::countOffloadBufferMutationDiscarded();
+  }
+  dxmt9::perf::countD3D9BufferUnlockDeferred(stagedBytes, stageNs, rotateNs);
+  return BufferMutationOffloadResult::Committed;
+}
+
 bool drainDeferredReplayForBufferUnlock(D9CBuffer* b) {
   if (!b || !b->device) {
     return true;
   }
   auto& ledger = b->device->replayDrainLedger;
   if (ledger.terminal()) {
+    b->mutationOffloadPlanned = false;
     noteDrainFenceMode(DrainFenceMode::Terminal);
     drainDeferredReplay(b->device, "dxmt9c_buffer_unlock_fallback");
     return false;
+  }
+  // R-BACK-2.51(d)(iv) / R-BACK-44.5: a Managed plain writable unlock in
+  // offload mode substitutes ordered FIFO-mutation admission for the
+  // pre-mutation wait. The decision is taken ONCE, here, and handed to the
+  // provider entry through the wrapper, so the fence and the unlock body can
+  // never disagree about which path this call is on.
+  b->mutationOffloadPlanned = admitsManagedMutationOffload(b);
+  if (b->mutationOffloadPlanned) {
+    return true;
   }
   const bool noOverwrite =
       (b->lastLockFlags & kD3DLockNoOverwrite) != 0u;
@@ -798,7 +1047,14 @@ bool drainDeferredReplayForBufferUnlock(D9CBuffer* b) {
       b->lastLockSucceeded && bufferLockClassBypassesReplay(
           b->desc, b->lastLockFlags,
           upper && upper->dynamicBufferRenameEnabled());
-  if (noWaitClass) {
+  // In offload mode the class bypass is additionally conditional on this
+  // buffer having no pending mutation task. A Managed NOOVERWRITE unlock takes
+  // the bypass unconditionally today and then performs a FULL synchronous
+  // upload (`exactNoOverwrite` requires DEFAULT), which would race a queued
+  // mutation and lose. The extra `pending` probe is mode-gated, so the
+  // rollback path stays byte-identical.
+  if (noWaitClass && !(managedMutationOffloadEnabled() &&
+                       ledger.pending(*b->replayDrainTarget))) {
     noteDrainFenceMode(noOverwrite ? DrainFenceMode::BypassNoOverwrite
                                    : DrainFenceMode::BypassDiscard);
     return true;

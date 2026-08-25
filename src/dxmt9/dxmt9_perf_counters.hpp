@@ -1363,6 +1363,19 @@ void countD3D9BufferUnlock(std::uint64_t nanoseconds,
                            std::uint64_t writebackBytes,
                            bool uploaded,
                            bool shadowActive);
+// R-BACK-44.2 — the Managed mutation-offload subset of the family above, so the
+// synchronous half's shrink is attributable rather than inferred from the
+// aggregate. `stagedBytes` is the exact dirty span copied into task-owned
+// storage; `stageNanoseconds` times that copy plus the reservation;
+// `rotateNanoseconds` times the synchronous logical backing rotation (step 2).
+// A deferred unlock never reaches `uploadBufferData`, so it contributes to
+// neither `d3d9_buffer_upload_full_*` nor `managed_buffer_upload_bytes`.
+void countD3D9BufferUnlockDeferred(std::uint64_t stagedBytes,
+                                   std::uint64_t stageNanoseconds,
+                                   std::uint64_t rotateNanoseconds);
+// R-BACK-44.2 step-1 failure: admitted class, reserve/stage rejected, nothing
+// rotated, no lock state cleared, retryable HRESULT returned to the app.
+void countD3D9BufferUnlockDeferredRejected();
 // Buffer::unlock backend-call split (present-pacing-bridge-crossing-decomposition.237
 // R-237.4: decomposes d3d9_buffer_unlock_core_ms, the b->obj->unlock() span above,
 // into its three backend calls in src/d3d9/core_buffer.cpp). Full/range uploads are
@@ -1844,6 +1857,16 @@ void countMarkTicketRestamp(bool restamped);
 void countOffloadPushBackpressureWait();
 void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds);
 void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds);
+// R-BACK-44.3 — one Managed buffer mutation task applied on the offload worker
+// at its reserved FIFO position. `copyForwardBytes` is the untouched region
+// copied from the pool CPU shadow into the leased backing; `patchBytes` is the
+// staged dirty span written into both the leased backing and the shadow.
+void countOffloadBufferMutationApplied(std::uint64_t nanoseconds,
+                                       std::uint64_t copyForwardBytes,
+                                       std::uint64_t patchBytes);
+// R-BACK-44.7 — a queued mutation task released without application by a
+// teardown/fail-stop drain. Its draws are discarded on the same paths.
+void countOffloadBufferMutationDiscarded();
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
                             bool whileWaiting,
                             bool hasPresent);

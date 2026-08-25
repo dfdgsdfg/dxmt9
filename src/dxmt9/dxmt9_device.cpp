@@ -291,6 +291,33 @@ class DeviceImpl final : public Device {
                                         static_cast<std::size_t>(byteCount),
                                         queue_.completedSeqId_);
   }
+  bool bufferHasVersionedBacking(core::BufferHandle handle) override {
+    return queue_.pool().bufferHasVersionedBacking(handle.value);
+  }
+  resources::ManagedBufferMutationLease
+  rotateManagedBufferForMutation(core::BufferHandle handle) override {
+    // Same lock shape as uploadBufferData: the queue mutex is taken only to
+    // read `completedSeqId_`; the record mutation itself is serialized by the
+    // buffer arena's unique lock.
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().rotateManagedBufferForMutation(
+        wmt_device_, handle.value, queue_.completedSeqId_);
+  }
+  resources::ManagedBufferMutationApplyResult applyManagedBufferMutation(
+      core::BufferHandle handle,
+      const resources::ManagedBufferMutationLease& lease,
+      std::uint64_t offset,
+      std::span<const std::uint8_t> bytes) override {
+    // Deliberately WITHOUT the queue mutex: the apply reads and writes only
+    // arena-protected record state (`shadow`, the leased ring entry's
+    // `contents`) and needs no GPU watermark, and it runs on the replay
+    // offload worker, which already holds the queue mutex for large stretches
+    // of `submitDrawRunBatch`. The record cannot be reclaimed underneath it
+    // because the task holds a `core::Buffer` retention (R-BACK-44.2a), which
+    // is what keeps `destroyBuffer`/`destroyPending` unreachable.
+    return queue_.pool().applyManagedBufferMutation(
+        handle.value, lease, offset, bytes.data(), bytes.size());
+  }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
     return queue_.mapBuffer(handle, flags);
   }

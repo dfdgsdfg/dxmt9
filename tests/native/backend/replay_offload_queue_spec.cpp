@@ -46,10 +46,10 @@ void testFifoPushPop() {
   dxmt9::d3d9::ReplayOffloadQueue q(4, 1 << 20);
   check(q.push(makeChunk(16)), "push 1");
   check(q.push(makeChunk(32)), "push 2");
-  dxmt9::d3d9::RawCommandChunk out;
-  check(q.pop(out) && out.recordBytes == 16, "fifo order 1");
+  dxmt9::d3d9::ReplayQueueItem out;
+  check(q.pop(out) && out.chunk.recordBytes == 16, "fifo order 1");
   q.markReplayDone();
-  check(q.pop(out) && out.recordBytes == 32, "fifo order 2");
+  check(q.pop(out) && out.chunk.recordBytes == 32, "fifo order 2");
   q.markReplayDone();
   check(q.depth() == 0, "drained depth");
 }
@@ -57,7 +57,7 @@ void testFifoPushPop() {
 void testDrainWaitsForInFlight() {
   dxmt9::d3d9::ReplayOffloadQueue q(4, 1 << 20);
   check(q.push(makeChunk(8)), "push");
-  dxmt9::d3d9::RawCommandChunk out;
+  dxmt9::d3d9::ReplayQueueItem out;
   check(q.pop(out), "pop");
   bool drained = false;
   std::thread waiter([&] { q.waitDrained(); drained = true; });
@@ -75,7 +75,7 @@ void testBoundedPushBlocksUntilPop() {
   std::thread producer([&] { pushed = q.push(makeChunk(8)); });
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   check(!pushed, "push blocks while full");
-  dxmt9::d3d9::RawCommandChunk out;
+  dxmt9::d3d9::ReplayQueueItem out;
   check(q.pop(out), "pop frees slot");
   q.markReplayDone();
   producer.join();
@@ -85,7 +85,7 @@ void testBoundedPushBlocksUntilPop() {
 void testStopReleasesEverything() {
   dxmt9::d3d9::ReplayOffloadQueue q(1, 1 << 20);
   std::thread popper([&] {
-    dxmt9::d3d9::RawCommandChunk out;
+    dxmt9::d3d9::ReplayQueueItem out;
     check(!q.pop(out), "pop returns false after stop with empty queue");
   });
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -130,12 +130,12 @@ void testFailureDispositionAndByteAdoption() {
         "synthetic post-adoption disposition is effect-unknown");
   check(q.queuedBytesForTest() == 23u && target.lastQueuedSeq != 0u,
         "post-adoption bytes and ledger publish exactly once");
-  RawCommandChunk adopted;
-  check(q.pop(adopted) && adopted.recordBytes == 23u,
+  ReplayQueueItem adopted;
+  check(q.pop(adopted) && adopted.chunk.recordBytes == 23u,
         "effect-unknown queue retains adopted chunk ownership");
   check(q.queuedBytesForTest() == 0u,
         "queued byte count changes only at adoption and pop");
-  releaseRetainedWrappers(adopted);
+  releaseRetainedWrappers(adopted.chunk);
   check(adoptedRetained->refs.load() == 1u,
         "effect-unknown queue releases its adopted wrapper exactly once");
   delete adoptedRetained;
@@ -161,7 +161,7 @@ void testWorkerStartFailureRollsBack() {
 void testWaitDrainedIsStopAware() {
   dxmt9::d3d9::ReplayOffloadQueue q(4, 1 << 20);
   check(q.push(makeChunk(8)), "push");
-  dxmt9::d3d9::RawCommandChunk out;
+  dxmt9::d3d9::ReplayQueueItem out;
   check(q.pop(out), "pop leaves one chunk in flight");
   std::atomic<bool> drained{false};
   std::thread waiter([&] {
@@ -199,8 +199,9 @@ void testOversizedChunkAdmittedWhenQueueEmpty() {
   check(admitted,
         "an oversized chunk must be admitted immediately when the queue is "
         "empty, not blocked forever on the byte bound");
-  dxmt9::d3d9::RawCommandChunk out;
-  check(q.pop(out) && out.recordBytes == 64, "oversized chunk pops back out intact");
+  dxmt9::d3d9::ReplayQueueItem out;
+  check(q.pop(out) && out.chunk.recordBytes == 64,
+        "oversized chunk pops back out intact");
   q.markReplayDone();
 }
 
@@ -214,10 +215,12 @@ void testPopDrainsQueuedItemsAfterStop() {
   check(q.push(makeChunk(8)), "push 1");
   check(q.push(makeChunk(16)), "push 2");
   q.stop();
-  dxmt9::d3d9::RawCommandChunk out;
-  check(q.pop(out) && out.recordBytes == 8, "pop after stop returns first queued item");
+  dxmt9::d3d9::ReplayQueueItem out;
+  check(q.pop(out) && out.chunk.recordBytes == 8,
+        "pop after stop returns first queued item");
   q.markReplayDone();
-  check(q.pop(out) && out.recordBytes == 16, "pop after stop returns second queued item");
+  check(q.pop(out) && out.chunk.recordBytes == 16,
+        "pop after stop returns second queued item");
   q.markReplayDone();
   check(!q.pop(out), "pop returns false once stopped and empty");
   check(q.depth() == 0, "depth reaches 0 after both markReplayDone calls");
@@ -251,10 +254,11 @@ void testAcceptedPushPublishesLedgerBeforePop() {
   check(target.lastQueuedSeq == 1 && target.lastReplayedSeq == 0,
         "accepted push publishes queued watermark");
 
-  RawCommandChunk out;
+  ReplayQueueItem out;
   check(q.pop(out), "published entry pops");
-  check(out.replaySeq == 1, "owned entry carries published replay sequence");
-  ledger.publishReplayed(out);
+  check(out.chunk.replaySeq == 1,
+        "owned entry carries published replay sequence");
+  ledger.publishReplayed(out.chunk);
   q.markReplayDone();
   check(target.lastReplayedSeq == 1, "replay completion catches target up");
 }
@@ -269,12 +273,12 @@ void testConcurrentPopSeesPublishedMonotonicSequences() {
   std::thread consumer([&] {
     start.arrive_and_wait();
     for (std::size_t index = 0; index < poppedSequences.size(); ++index) {
-      RawCommandChunk out;
+      ReplayQueueItem out;
       check(q.pop(out), "concurrent consumer pops accepted entry");
-      poppedSequences[index] = out.replaySeq;
-      check(out.replaySeq == index + 1u,
+      poppedSequences[index] = out.chunk.replaySeq;
+      check(out.chunk.replaySeq == index + 1u,
             "consumer cannot pop before replay-sequence publication");
-      ledger.publishReplayed(out);
+      ledger.publishReplayed(out.chunk);
       q.markReplayDone();
     }
   });
@@ -331,9 +335,9 @@ void testScopedWaitIsResourceLocal() {
   });
   start.arrive_and_wait();
 
-  RawCommandChunk out;
+  ReplayQueueItem out;
   check(q.pop(out), "resource A pop");
-  ledger.publishReplayed(out);
+  ledger.publishReplayed(out.chunk);
   q.markReplayDone();
   waiter.join();
   check(returned.load(std::memory_order_acquire),
@@ -707,7 +711,7 @@ void testCleanStopWithInflightEntryWakesScopedWaiter() {
   auto chunk = makeChunk(8);
   chunk.ledgerTargets.push_back(&target);
   check(q.push(std::move(chunk), &ledger), "in-flight stop push");
-  RawCommandChunk inFlight;
+  ReplayQueueItem inFlight;
   check(q.pop(inFlight), "in-flight stop pop");
   std::atomic<ReplayDrainResult> result{ReplayDrainResult::CaughtUp};
   std::barrier start{2};

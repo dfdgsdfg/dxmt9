@@ -1940,6 +1940,26 @@ class Buffer {
   void invalidate();
   std::span<const u8> bytes() const noexcept { return storage_; }
 
+  // R-BACK-44.2 — the Managed mutation-offload transaction needs the live lock
+  // extent to stage the exact dirty span, and it must still be readable AFTER
+  // the transaction's staging step because lock-state clearing on every layer is
+  // deferred until the task is committed. These are plain reads of the same
+  // fields `unlock()` consumes; they are meaningful only while `locked()`.
+  bool locked() const noexcept { return locked_; }
+  u64 lockedOffset() const noexcept { return lockedOffset_; }
+  u64 lockedSize() const noexcept { return lockedSize_; }
+  u32 lockedFlags() const noexcept { return lockedFlags_; }
+  const std::shared_ptr<dxmt9::Device>& backend() const noexcept {
+    return backend_;
+  }
+
+  // R-BACK-44.2 step 3's tail: the same unmap + lock-state clearing `unlock()`
+  // performs, with the byte materialization omitted because a committed
+  // mutation task now owns it. Split out rather than expressed as
+  // `unlock(false)` because that spelling means "read-only lock, nothing to
+  // publish", and this one means "the publish is queued".
+  void finishDeferredUnlock();
+
  private:
   friend class Device;
 

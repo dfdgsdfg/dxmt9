@@ -311,7 +311,7 @@ void testWarmRecordImportReplayAllocations() {
   dxmt9::d3d9::RawCommandChunk warmChunk;
   warmChunk.recordBytes = 1u;
   check(queue.push(std::move(warmChunk)), "offload queue warm push succeeds");
-  dxmt9::d3d9::RawCommandChunk popped;
+  dxmt9::d3d9::ReplayQueueItem popped;
   check(queue.pop(popped), "offload queue warm pop succeeds");
   queue.markReplayDone();
 

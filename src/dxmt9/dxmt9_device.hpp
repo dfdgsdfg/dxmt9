@@ -131,6 +131,22 @@ class Device {
     (void)byteCount;
     uploadBufferData(handle, fullBytes);
   }
+  // R-BACK-44.x — Managed buffer mutation offload. Defaulted to "not
+  // available" so every stub/test backend keeps the synchronous upload path:
+  // `bufferHasVersionedBacking` returning false makes the shared admission
+  // predicate reject, which is the same answer the mode-off rollback gives.
+  virtual bool bufferHasVersionedBacking(core::BufferHandle) { return false; }
+  virtual resources::ManagedBufferMutationLease
+  rotateManagedBufferForMutation(core::BufferHandle) {
+    return {};
+  }
+  virtual resources::ManagedBufferMutationApplyResult
+  applyManagedBufferMutation(core::BufferHandle,
+                             const resources::ManagedBufferMutationLease&,
+                             std::uint64_t /*offset*/,
+                             std::span<const std::uint8_t> /*bytes*/) {
+    return {};
+  }
   virtual void uploadTextureLevel(core::TextureHandle, std::uint32_t /*level*/,
                                     std::uint32_t /*width*/, std::uint32_t /*height*/,
                                     std::uint32_t /*depth*/, std::uint32_t /*pitch*/,

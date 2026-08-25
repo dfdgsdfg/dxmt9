@@ -112,6 +112,10 @@ void Buffer::unlock(bool upload) {
           static_cast<std::uint32_t>(desc_.pool));
     }
   }
+  finishDeferredUnlock();
+}
+
+void Buffer::finishDeferredUnlock() {
   if (backend_ && handle_) {
     const auto unmapStart = std::chrono::steady_clock::now();
     backend_->unmapBuffer(handle_);

@@ -294,7 +294,16 @@ classifiable to one target resource, is device-wide, spans multiple resources,
 performs readback, present, reset, shutdown, query, or state-block work, or
 observes a stopped or poisoned replay worker, it must use the existing global
 drain and propagate its fail-stop outcome before entering the provider as the
-conservative fallback. A provider-facing call that is intentionally exempt
+conservative fallback; or (iv) a Managed plain writable buffer unlock admitted
+by the R-BACK-44 mutation-offload mode (`DXMT9_MANAGED_MUTATION_OFFLOAD`,
+`specs/backend/buffer-mutation-offload/requirements.md`) may substitute
+ordered FIFO-mutation admission for the pre-mutation wait: the unlock's
+reserve/rotate/commit transaction (R-BACK-44.2) fixes the mutation's FIFO
+ordinal before the logical rotation becomes visible, publishes it against the
+buffer's resource-scoped drain target, and the replay worker applies the byte
+materialization at exactly that position (R-BACK-44.3), so every consumer
+outside that order remains covered by fence (i) unchanged. A provider-facing
+call that is intentionally exempt
 from draining, including `BeginScene` and `EndScene`, must still acquire-check
 the device terminal replay state and must not enter the provider after stop or
 poison. Wrapper lifetime-only addref/release calls are the sole exception and

@@ -5396,6 +5396,20 @@ void countD3D9BufferUnlock(std::uint64_t nanoseconds,
   if (shadowActive) add(c.d3d9BufferUnlockShadowCalls);
 }
 
+void countD3D9BufferUnlockDeferred(std::uint64_t stagedBytes,
+                                   std::uint64_t stageNanoseconds,
+                                   std::uint64_t rotateNanoseconds) {
+  auto& c = counters();
+  add(c.d3d9BufferUnlockDeferredCalls);
+  add(c.d3d9BufferUnlockDeferredStagedBytes, stagedBytes);
+  add(c.d3d9BufferUnlockDeferredStageNs, stageNanoseconds);
+  add(c.d3d9BufferUnlockDeferredRotateNs, rotateNanoseconds);
+}
+
+void countD3D9BufferUnlockDeferredRejected() {
+  add(counters().d3d9BufferUnlockDeferredRejectedCalls);
+}
+
 void countD3D9BufferUploadFull(std::uint64_t nanoseconds,
                                 std::uint64_t bytes,
                                 std::uint32_t pool) {
@@ -6473,6 +6487,21 @@ void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds) {
 
 void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds) {
   add(counters().offloadWorkerIdleWaitNs, nanoseconds);
+}
+
+void countOffloadBufferMutationApplied(std::uint64_t nanoseconds,
+                                       std::uint64_t copyForwardBytes,
+                                       std::uint64_t patchBytes) {
+  auto& c = counters();
+  add(c.offloadBufferMutationApplied);
+  add(c.offloadBufferMutationApplyNs, nanoseconds);
+  updateMax(c.offloadBufferMutationApplyMaxNs, nanoseconds);
+  add(c.offloadBufferMutationCopyForwardBytes, copyForwardBytes);
+  add(c.offloadBufferMutationPatchBytes, patchBytes);
+}
+
+void countOffloadBufferMutationDiscarded() {
+  add(counters().offloadBufferMutationDiscarded);
 }
 
 SchedulingProgressFrontierSnapshot snapshotSchedulingProgressFrontier() {
