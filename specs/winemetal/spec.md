@@ -40,7 +40,7 @@ sequenceDiagram
     Bridge->>Provider: wine_unix_call(adopt, POD tokens)
     Provider->>Presenter: borrow CAMetalLayer token
     Presenter-->>D9: success
-    D9->>Mac: ReleaseDC(HWND, HDC)
+    D9->>D9: retain acquisition HDC as PE-only cold state
 ```
 
 The compatibility header owns the escape values and payload layout. PE passes
@@ -67,6 +67,7 @@ sequenceDiagram
     Queue-->>Provider: quiescent
     Provider-->>D9: old layer no longer referenced
     D9->>Mac: ExtEscape(MACDRV_ESCAPE_RELEASE_SURFACE, token)
+    D9->>Mac: ReleaseDC(HWND, acquisition HDC)
     D9->>D9: clear token regardless of release result
 ```
 
@@ -121,7 +122,9 @@ patch.
 
 | Evidence | Contract |
 |---|---|
-| `dxmt9-wsi-surface-protocol-spec` | payload width, response validation, fail-closed selection, rollback, balanced release, exact legacy selection |
+| `dxmt9-wsi-surface-protocol-spec` | payload width, fixed-`cbOutput` response validation, fail-closed selection, rollback, retained release capability, exact legacy identity |
+| `dxmt9-cpu-ready-arena-lease-spec` + `WsiPresenterReplacement.tla` | candidate registry failure preservation, active-arena rejection, gate-held registry swap, and fence-before-release safety |
+| `dxmt9-run-experiment-wsi-acquisition` + `dxmt9-wine-resolve` | identity-qualified legacy manifest resolution and unsupported/unknown pre-spawn gate |
 | PE x64 and WoW64 WSI smoke | Wine escape availability and bridge scalar widths |
 | Reset/additional-swap-chain integration | ordering and per-`HWND` ownership |
 | Negative stock-Wine run | clean unsupported failure, no black-window success |

@@ -8,7 +8,7 @@
 // (including D3D9DeviceImpl::Present) and the vtable are emitted by this TU.
 
 #if defined(_WIN64)
-static_assert(sizeof(D3D9DeviceImpl) == 106968);
+static_assert(sizeof(D3D9DeviceImpl) == 106976);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #elif defined(_WIN32)
 static_assert(sizeof(D3D9DeviceImpl) == 105752);

@@ -3909,6 +3909,9 @@ CommandQueue::beginCpuReadyArenaSource(
     return {.status = CpuReadyArenaBeginStatus::Stopped,
             .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
   }
+  if (wsiQuiescenceActive_.load(std::memory_order_relaxed)) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -4033,6 +4036,9 @@ CommandQueue::beginCpuReadyArenaSources(
   if (stop_) {
     return {.status = CpuReadyArenaBeginStatus::Stopped,
             .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
+  }
+  if (wsiQuiescenceActive_.load(std::memory_order_relaxed)) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   }
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
@@ -5705,6 +5711,13 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
+  if (!tryEnterWsiPresentUse()) {
+    return 0;
+  }
+  auto leaveWsiUse = [this](void*) noexcept { leaveWsiPresentUse(); };
+  std::unique_ptr<void, decltype(leaveWsiUse)> wsiUseScope(
+      this, leaveWsiUse);
+
   // Cumulative per-site DXMT9_PERF_QUEUE_MUTEX_SPLIT emission, once every 60
   // presents. Periodic rather than at teardown, matching the drain-fence-site
   // sink (DXMT9_PERF_DRAIN_FENCE_SITES): 3DMark05 never releases the device,
@@ -6114,6 +6127,80 @@ void CommandQueue::submitFlush() {
         prepareSlotForPublish(*this, pool_, slot,
                               perf::ChunkPublishReason::Flush);
       });
+}
+
+wsi::QuiescenceDisposition CommandQueue::beginWsiQuiescence() noexcept {
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "begin_wsi_quiescence", /*skipHold=*/true);
+  // beginCpuReadyArenaSource(s) publishes both flags while holding mutex_.
+  // Checking them under that same lock pins the drained cold-entry
+  // precondition: no deferred arena flush can masquerade as quiescence.
+  if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+      activeArenaBuild_.load(std::memory_order_relaxed) ||
+      arenaBuildContext_.has_value()) {
+    return wsi::QuiescenceDisposition::ActiveArena;
+  }
+  if (stop_) {
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
+  bool expected = false;
+  if (!wsiQuiescenceActive_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    return wsi::QuiescenceDisposition::AlreadyActive;
+  }
+
+  // A Present that entered before the gate may still be acquiring a drawable
+  // or publishing its command. Let it retire its producer-side use before the
+  // queue fence fixes the last sequence that can reference the old layer.
+  lock.unlock();
+  {
+    std::unique_lock wsiLock(wsiQuiescenceMutex_);
+    wsiQuiescenceCv_.wait(wsiLock, [this] {
+      return wsiPresentUsers_.load(std::memory_order_acquire) == 0u;
+    });
+  }
+  lock.lock();
+  if (stop_) {
+    wsiQuiescenceActive_.store(false, std::memory_order_release);
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
+  queueLifecycle_.flushAndWait(
+      lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+        prepareSlotForPublish(*this, pool_, slot,
+                              perf::ChunkPublishReason::Flush);
+      });
+  if (stop_) {
+    wsiQuiescenceActive_.store(false, std::memory_order_release);
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
+  return wsi::QuiescenceDisposition::Complete;
+}
+
+void CommandQueue::endWsiQuiescence() noexcept {
+  wsiQuiescenceActive_.store(false, std::memory_order_release);
+}
+
+bool CommandQueue::tryEnterWsiPresentUse() noexcept {
+  if (wsiQuiescenceActive_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  wsiPresentUsers_.fetch_add(1u, std::memory_order_acq_rel);
+  if (!wsiQuiescenceActive_.load(std::memory_order_acquire)) {
+    return true;
+  }
+  leaveWsiPresentUse();
+  return false;
+}
+
+void CommandQueue::leaveWsiPresentUse() noexcept {
+  const auto previous =
+      wsiPresentUsers_.fetch_sub(1u, std::memory_order_acq_rel);
+  DXMT_ASSERT(previous != 0u);
+  if (previous == 1u) {
+    wsiQuiescenceCv_.notify_all();
+  }
 }
 
 bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
@@ -6733,11 +6820,15 @@ void CommandQueue::runCompletionWatcherLoop() {
   }
 }
 
-core::PresentId CommandQueue::registerPresenter(Presenter* presenter) {
+core::PresentId CommandQueue::registerPresenter(Presenter* presenter) noexcept {
   if (!presenter) {
     return {};
   }
   std::lock_guard lock(presenterRegistryMutex_);
+  if (testOnlyFailNextPresenterRegistration_) {
+    testOnlyFailNextPresenterRegistration_ = false;
+    return {};
+  }
   std::uint32_t slotIndex = 0;
   if (presenterFreeHead_ >= 0) {
     slotIndex = static_cast<std::uint32_t>(presenterFreeHead_);
@@ -6745,7 +6836,11 @@ core::PresentId CommandQueue::registerPresenter(Presenter* presenter) {
     presenterSlots_[slotIndex].nextFree = -1;
   } else {
     slotIndex = static_cast<std::uint32_t>(presenterSlots_.size());
-    presenterSlots_.emplace_back();
+    try {
+      presenterSlots_.emplace_back();
+    } catch (...) {
+      return {};
+    }
   }
   auto& slot = presenterSlots_[slotIndex];
   slot.presenter = presenter;

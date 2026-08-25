@@ -2159,18 +2159,25 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
 
   // Installs a typed cold-path output target for provider identity replay.
   // Existing queue binding and Presenter encode semantics remain in use.
-  bool installPresentOutput(std::shared_ptr<dxmt9::PresentOutput> output);
-  void restoreWindowPresenter();
+  bool installPresentOutput(
+      std::shared_ptr<dxmt9::PresentOutput> output) noexcept;
+  void restoreWindowPresenter() noexcept;
   HResult adoptWsiSurface(
-      u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken);
-  HResult teardownWsiSurface();
+      u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken) noexcept;
+  HResult teardownWsiSurface() noexcept;
 
  private:
   std::unique_ptr<dxmt9::Presenter> makeWindowPresenter(
-      u32 protocol, u64 hwnd, u64 layerToken) const;
+      u32 protocol, u64 hwnd, u64 layerToken,
+      HResult& failure) const noexcept;
+  std::shared_ptr<dxmt9::Device> lockUpperDevice() const noexcept;
   void unregisterPresenter();
 
   std::weak_ptr<Device> owner_;
+  // Kept separately so SwapChain member destruction can unregister before
+  // the upper queue dies even after owner_.lock() stops succeeding while the
+  // owning core::Device destructor is already running.
+  std::weak_ptr<dxmt9::Device> upperDevice_;
   SwapChainHandle handle_{};
   PresentParameters params_{};
   std::shared_ptr<Surface> backBuffer_;

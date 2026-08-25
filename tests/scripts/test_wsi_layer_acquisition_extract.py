@@ -106,6 +106,107 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
             ),
         )
 
+    def test_manifest_wsi_gate_precedes_process_spawn(self):
+        source = (
+            REPO_ROOT / "scripts" / "run_apps" / "run_experiment.py"
+        ).read_text(encoding="utf-8")
+        run_body = source[source.index("def run_experiment(") :]
+        self.assertLess(
+            run_body.index("validate_wsi_spawn("),
+            run_body.index("subprocess.Popen("),
+        )
+        self.assertIn(
+            'env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)',
+            run_body,
+        )
+        self.assertIn('env.pop("DXMT9_WINE_MANIFEST_ID", None)', run_body)
+
+    def test_pe_retains_and_balances_acquisition_hdc(self):
+        source = (
+            REPO_ROOT / "src" / "d3d9" / "d3d9_pe_wsi.cpp"
+        ).read_text(encoding="utf-8")
+        acquire = source[
+            source.index("D3D9PeWsiBinding dxmt9PeAcquireWsiBinding") :
+            source.index("HRESULT dxmt9PeAdoptWsiBinding")
+        ]
+        retained = acquire.index("binding.releaseHdc =")
+        successful_return = acquire.index("return binding;", retained)
+        self.assertNotIn("ReleaseDC", acquire[retained:successful_return])
+
+        release = source[
+            source.index("void dxmt9PeReleaseWsiBindingAfterQuiescence") :
+            source.index("HRESULT dxmt9PeTeardownAndReleaseWsiBinding")
+        ]
+        self.assertNotIn("GetDC(", release)
+        self.assertLess(
+            release.index("releaseSurfaceOnHdc"), release.index("ReleaseDC")
+        )
+        self.assertLess(release.index("ReleaseDC"), release.index("binding = {}"))
+
+        adopt = source[
+            source.index("HRESULT dxmt9PeAdoptWsiBinding") :
+            source.index("HRESULT dxmt9PeAdoptDeviceWsiBinding")
+        ]
+        wire = adopt[
+            adopt.index("const D9CWsiSurfaceBinding wire") :
+            adopt.index("};", adopt.index("const D9CWsiSurfaceBinding wire"))
+        ]
+        self.assertNotIn("releaseHdc", wire)
+
+    def test_candidate_order_exception_closure_and_registry_lifetime(self):
+        core = (
+            REPO_ROOT / "src" / "d3d9" / "core_resources.cpp"
+        ).read_text(encoding="utf-8")
+        install = core[
+            core.index("bool SwapChain::installPresentOutput") :
+            core.index("void SwapChain::restoreWindowPresenter")
+        ]
+        self.assertLess(
+            install.index("registerPresenter(candidate.get())"),
+            install.index("beginWsiQuiescence()"),
+        )
+        self.assertLess(
+            install.index("beginWsiQuiescence()"),
+            install.index("unregisterPresenter();"),
+        )
+        self.assertLess(
+            install.index("unregisterPresenter();"),
+            install.index("presentId_ = candidateId"),
+        )
+
+        unregister = core[
+            core.index("void SwapChain::unregisterPresenter") :
+            core.index("std::shared_ptr<dxmt9::Device> SwapChain::lockUpperDevice")
+        ]
+        self.assertLess(
+            unregister.index("queue().unregisterPresenter"),
+            unregister.index("presenter_.reset()"),
+        )
+        self.assertIn("upperDevice_.lock()", core)
+
+        boundary = (
+            REPO_ROOT
+            / "src"
+            / "d3d9"
+            / "device_c_swapchain_query_stateblock.cpp"
+        ).read_text(encoding="utf-8")
+        adopt = boundary[
+            boundary.index("dxmt9c_swapchain_adopt_wsi_surface") :
+            boundary.index("dxmt9c_swapchain_teardown_wsi_surface")
+        ]
+        self.assertIn("catch (const std::bad_alloc&)", adopt)
+        self.assertIn("catch (...)", adopt)
+
+        queue = (
+            REPO_ROOT / "src" / "dxmt9" / "dxmt9_command_queue.cpp"
+        ).read_text(encoding="utf-8")
+        registration = queue[
+            queue.index("CommandQueue::registerPresenter") :
+            queue.index("CommandQueue::unregisterPresenter")
+        ]
+        self.assertIn("presenterSlots_.emplace_back()", registration)
+        self.assertIn("catch (...)", registration)
+
 
 if __name__ == "__main__":
     unittest.main()

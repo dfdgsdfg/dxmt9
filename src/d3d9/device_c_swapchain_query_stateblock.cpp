@@ -6,6 +6,8 @@
 // matches Wine's "stateblock apply re-derives derived state" oracle.
 #include "dxmt9/dxmt9_device.hpp"
 
+#include <new>
+
 using namespace dxmt9::d3d9::devicec;
 
 namespace {
@@ -76,16 +78,26 @@ extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(
       binding->structSize != sizeof(D9CWsiSurfaceBinding)) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  return s->iface->coreSwapChain().adoptWsiSurface(
-      binding->protocol, binding->hwnd,
-      binding->surfaceToken, binding->layerToken);
+  try {
+    return s->iface->coreSwapChain().adoptWsiSurface(
+        binding->protocol, binding->hwnd,
+        binding->surfaceToken, binding->layerToken);
+  } catch (const std::bad_alloc&) {
+    return dxmt9::core::E_OUTOFMEMORY;
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
 }
 
 extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* s) {
   if (!s || !s->iface) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  return s->iface->coreSwapChain().teardownWsiSurface();
+  try {
+    return s->iface->coreSwapChain().teardownWsiSurface();
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {

@@ -1,0 +1,8 @@
+manifest_version = 1
+
+[[wine]]
+id = "legacy-runtime"
+source = "manual"
+variant = "patched"
+path = "/tmp/legacy-runtime"
+metal_surface_protocol = "legacy-macdrv-symbols:other-runtime"

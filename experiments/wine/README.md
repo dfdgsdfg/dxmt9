@@ -24,7 +24,7 @@ The script:
 3. Renames `bin/wine` → `bin/wine.real` and `bin/wineserver` → `bin/wineserver.real`, then writes thin Bash shims that export `DYLD_FALLBACK_LIBRARY_PATH` and `DYLD_FALLBACK_FRAMEWORK_PATH` pointing at `vendor/` so Wine's `dlopen()` calls (FreeType etc.) find the co-located dylibs and framework bundles.
 4. Audits the bundle's `winemac.so` for the `_macdrv_functions` symbol (refuses to register a stripped build).
 5. Appends a `[[wine]]` entry to `manifest.toml` with
-   `metal_surface_protocol="legacy-macdrv-symbols"` and its archival patch
+   `metal_surface_protocol="legacy-macdrv-symbols:<target-id>"` and its archival patch
    metadata.
 
 ## Directory layout

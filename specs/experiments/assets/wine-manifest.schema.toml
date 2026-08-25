@@ -10,7 +10,8 @@
 #   variant  — vanilla | dxmt | vk | kegworks | patched
 #   path     — wine root directory (contains bin/wine and lib/wine/...)
 #              May start with $HOME or $REPO_ROOT (expanded at load time).
-#   metal_surface_protocol — extescape-v1 | legacy-macdrv-symbols |
+#   metal_surface_protocol — extescape-v1 |
+#                            legacy-macdrv-symbols:<matching-id> |
 #                            unsupported | unknown
 # Optional:
 #   version  — free-form version string (e.g. "11.7", "2.1").
@@ -73,7 +74,7 @@ source      = "sikarugir"
 variant     = "kegworks"
 path        = "/Applications/Sikarugir.app/Contents/SharedSupport/wine/bin/wine"
 notes       = "https://github.com/Sikarugir-App/Sikarugir."
-metal_surface_protocol = "legacy-macdrv-symbols"
+metal_surface_protocol = "legacy-macdrv-symbols:sikarugir-default"
 
 # ─── Manually-placed Wine bundle under experiments/wine/ ────────────────
 [[wine]]

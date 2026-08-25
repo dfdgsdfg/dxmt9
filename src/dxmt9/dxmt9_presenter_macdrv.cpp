@@ -42,8 +42,9 @@ LayerAcquisition acquireLegacyLayerForHwnd(u64 hwnd, u64 seqId) {
   traceEvent("legacy-layer.ensure.begin", seqId, hwnd);
 
   // This function is reachable only after PE selected an exact manifest entry
-  // qualified as legacy-macdrv-symbols. The unix helpers resolve the aggregate
-  // macdrv_functions table only; direct per-symbol dlsym is not supported.
+  // qualified as legacy-macdrv-symbols:<runtime-id>. The unix helpers resolve
+  // the aggregate macdrv_functions table only; direct per-symbol dlsym is not
+  // supported.
   auto macdrvDevice = WMT::CreateMacdrvMetalDevice();
   if (macdrvDevice) {
     result.macdrvDeviceHandle = macdrvDevice.handle;

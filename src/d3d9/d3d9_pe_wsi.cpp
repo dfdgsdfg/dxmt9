@@ -36,12 +36,17 @@ void logLayerAcquisition(const char* path, HWND hwnd) noexcept {
 }
 
 bool legacyRuntimeQualified() noexcept {
-  char value[64]{};
-  const DWORD count = GetEnvironmentVariableA(
-      "DXMT9_WINE_METAL_SURFACE_PROTOCOL", value, sizeof(value));
-  return count != 0u && count < sizeof(value) &&
+  char protocol[256]{};
+  char runtimeId[256]{};
+  const DWORD protocolCount = GetEnvironmentVariableA(
+      "DXMT9_WINE_METAL_SURFACE_PROTOCOL", protocol, sizeof(protocol));
+  const DWORD runtimeIdCount = GetEnvironmentVariableA(
+      "DXMT9_WINE_MANIFEST_ID", runtimeId, sizeof(runtimeId));
+  return protocolCount != 0u && protocolCount < sizeof(protocol) &&
+         runtimeIdCount != 0u && runtimeIdCount < sizeof(runtimeId) &&
          dxmt9::wsi::isLegacyProtocolDeclaration(
-             std::string_view(value, count));
+             std::string_view(protocol, protocolCount),
+             std::string_view(runtimeId, runtimeIdCount));
 }
 
 bool releaseSurfaceOnHdc(HDC hdc, std::uint64_t surfaceToken) noexcept {
@@ -86,9 +91,12 @@ D3D9PeWsiBinding dxmt9PeAcquireWsiBinding(HWND hwnd) noexcept {
     const int result = ExtEscape(
         hdc, MACDRV_ESCAPE_GET_SURFACE, 0, nullptr, sizeof(response),
         reinterpret_cast<LPSTR>(&response));
-    if (dxmt9::wsi::validEscapeResponse(result, sizeof(response), response)) {
+    if (dxmt9::wsi::validGetSurfaceEscapeCall(
+            result, sizeof(response), response)) {
       binding.surfaceToken = response.surface;
       binding.layerToken = response.layer;
+      binding.releaseHdc = reinterpret_cast<std::uintptr_t>(hdc);
+      return binding;
     } else {
       if (response.surface != 0u) {
         (void)releaseSurfaceOnHdc(hdc, response.surface);
@@ -151,12 +159,24 @@ HRESULT dxmt9PeAdoptDeviceWsiBinding(
 
 void dxmt9PeReleaseWsiBindingAfterQuiescence(
     D3D9PeWsiBinding& binding) noexcept {
-  if (dxmt9::wsi::canAttemptWineRelease(binding, true)) {
+  if (dxmt9::wsi::hasWineReleaseObligation(binding)) {
+    // A live Wine token is not discardable without the retained acquisition
+    // HDC. Valid acquisition always supplies it; preserving the binding here
+    // makes any corrupted/partial state a visible retryable obligation rather
+    // than silently consuming it.
+    if (!dxmt9::wsi::canAttemptWineRelease(binding, true)) {
+      logWsiFailure(
+          "release-capability",
+          reinterpret_cast<HWND>(
+              static_cast<std::uintptr_t>(binding.hwnd)),
+          0);
+      return;
+    }
     binding.releaseAttempted = true;
     HWND hwnd = reinterpret_cast<HWND>(
         static_cast<std::uintptr_t>(binding.hwnd));
-    HDC hdc = GetDC(hwnd);
-    const bool released = hdc && releaseSurfaceOnHdc(hdc, binding.surfaceToken);
+    HDC hdc = reinterpret_cast<HDC>(binding.releaseHdc);
+    const bool released = releaseSurfaceOnHdc(hdc, binding.surfaceToken);
     if (hdc && !ReleaseDC(hwnd, hdc)) {
       logWsiFailure("release-dc", hwnd, 0);
     }

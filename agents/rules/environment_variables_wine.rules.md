@@ -14,7 +14,7 @@ harnesses:
 |---|---|
 | `DXMT9_WINEMETAL_SO` | Explicit winemetal.so provider path for app-local bridge loading |
 | `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy runtime-by-name provider fallback |
-| `DXMT9_WINE_METAL_SURFACE_PROTOCOL` | Harness-owned Wine WSI protocol declaration. Only the exact value `legacy-macdrv-symbols` qualifies the legacy aggregate-table fallback; `extescape-v1` remains gated by `QUERYESCSUPPORT` |
+| `DXMT9_WINE_METAL_SURFACE_PROTOCOL` / `DXMT9_WINE_MANIFEST_ID` | Harness-owned Wine WSI declaration and resolved manifest identity. Only `legacy-macdrv-symbols:<runtime-id>` whose suffix equals `DXMT9_WINE_MANIFEST_ID` qualifies the legacy aggregate-table fallback; `extescape-v1` remains gated by `QUERYESCSUPPORT`. The harness clears inherited values when no manifest entry is resolved |
 | `DXMT_EXPERIMENT_WINE_DLLOVERRIDES` | Wine `WINEDLLOVERRIDES` snippet for the experiment harness |
 | `DXMT_EXPERIMENT_WINE_ID` | Select a Wine manifest entry for experiment runs |
 | `DXMT_EXPERIMENT_CX_BOTTLE` | Select a CrossOver bottle for experiment launchers |

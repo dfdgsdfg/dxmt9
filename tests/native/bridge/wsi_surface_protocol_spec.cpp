@@ -29,6 +29,7 @@ SurfaceBindingState escapeBinding() {
       .hwnd = 0x100u,
       .surfaceToken = 0x200u,
       .layerToken = 0x300u,
+      .releaseHdc = 0x400u,
   };
 }
 
@@ -39,16 +40,17 @@ void testWireLayoutAndEscapeValidation() {
   static_assert(sizeof(D9CWsiSurfaceBinding) == 32u);
 
   const macdrv_escape_surface valid{0x200u, 0x300u};
-  check(dxmt9::wsi::validEscapeResponse(1, sizeof(valid), valid),
-        "positive exact-width response with both tokens is valid");
-  check(!dxmt9::wsi::validEscapeResponse(0, sizeof(valid), valid),
+  check(dxmt9::wsi::validGetSurfaceEscapeCall(1, sizeof(valid), valid),
+        "positive fixed-cbOutput call with both tokens is valid");
+  check(!dxmt9::wsi::validGetSurfaceEscapeCall(0, sizeof(valid), valid),
         "failed get escape is rejected");
-  check(!dxmt9::wsi::validEscapeResponse(1, sizeof(valid) - 1u, valid),
-        "malformed response width is rejected");
-  check(!dxmt9::wsi::validEscapeResponse(
+  check(!dxmt9::wsi::validGetSurfaceEscapeCall(
+            1, sizeof(valid) - 1u, valid),
+        "incorrect cbOutput call shape is rejected");
+  check(!dxmt9::wsi::validGetSurfaceEscapeCall(
             1, sizeof(valid), macdrv_escape_surface{0u, valid.layer}),
         "zero surface token is rejected");
-  check(!dxmt9::wsi::validEscapeResponse(
+  check(!dxmt9::wsi::validGetSurfaceEscapeCall(
             1, sizeof(valid), macdrv_escape_surface{valid.surface, 0u}),
         "zero layer token is rejected");
 }
@@ -63,12 +65,40 @@ void testUnsupportedQueryAndLegacySelection() {
   check(dxmt9::wsi::selectSurfaceProtocol(true, true) ==
             SurfaceProtocol::ExtEscapeV1,
         "ExtEscape takes precedence over legacy qualification");
-  check(dxmt9::wsi::isLegacyProtocolDeclaration("legacy-macdrv-symbols"),
-        "exact legacy manifest value is accepted");
-  check(!dxmt9::wsi::isLegacyProtocolDeclaration("macdrv_functions"),
+  check(dxmt9::wsi::isLegacyProtocolDeclaration(
+            "legacy-macdrv-symbols:fixture-a", "fixture-a"),
+        "identity-qualified legacy manifest value is accepted");
+  check(!dxmt9::wsi::isLegacyProtocolDeclaration(
+            "legacy-macdrv-symbols", "fixture-a"),
+        "unqualified legacy declaration is rejected");
+  check(!dxmt9::wsi::isLegacyProtocolDeclaration(
+            "legacy-macdrv-symbols:fixture-b", "fixture-a"),
+        "legacy declaration for a different runtime is rejected");
+  check(!dxmt9::wsi::isLegacyProtocolDeclaration(
+            "macdrv_functions", "fixture-a"),
         "generic aggregate-table discovery is not manifest qualification");
-  check(!dxmt9::wsi::isLegacyProtocolDeclaration("legacy-macdrv-symbols-v2"),
+  check(!dxmt9::wsi::isLegacyProtocolDeclaration(
+            "legacy-macdrv-symbols-v2:fixture-a", "fixture-a"),
         "near-match legacy declaration is rejected");
+}
+
+void testCandidateFailureAndQuiescenceDisposition() {
+  using dxmt9::wsi::QuiescenceDisposition;
+  check(!dxmt9::wsi::presenterReplacementMayCommit(
+            false, false, QuiescenceDisposition::Complete),
+        "candidate construction failure preserves the current Presenter");
+  check(!dxmt9::wsi::presenterReplacementMayCommit(
+            true, false, QuiescenceDisposition::Complete),
+        "candidate registry failure preserves the current PresentId");
+  check(!dxmt9::wsi::presenterReplacementMayCommit(
+            true, true, QuiescenceDisposition::ActiveArena),
+        "active arena cannot masquerade as WSI quiescence");
+  check(!dxmt9::wsi::presenterReplacementMayCommit(
+            true, true, QuiescenceDisposition::QueueStopped),
+        "stopped queue cannot acknowledge WSI quiescence");
+  check(dxmt9::wsi::presenterReplacementMayCommit(
+            true, true, QuiescenceDisposition::Complete),
+        "only a valid registered candidate plus actual quiescence may commit");
 }
 
 void testAdoptionRollbackPredicate() {
@@ -107,6 +137,8 @@ void testReleaseIsExactlyOnceAfterQuiescence() {
   SurfaceBindingState binding = escapeBinding();
   check(!binding.unixAdopted,
         "fresh Wine acquisition models a failed unix adoption candidate");
+  check(dxmt9::wsi::hasRetainedReleaseCapability(binding),
+        "acquisition HDC remains a deterministic release capability");
   check(!dxmt9::wsi::canAttemptWineRelease(binding, false),
         "failed-adoption release is forbidden before unix acknowledgement");
   check(dxmt9::wsi::canAttemptWineRelease(binding, true),
@@ -114,6 +146,12 @@ void testReleaseIsExactlyOnceAfterQuiescence() {
   binding.releaseAttempted = true;
   check(!dxmt9::wsi::canAttemptWineRelease(binding, true),
         "failed-adoption release consumes the obligation exactly once");
+
+  binding = escapeBinding();
+  binding.releaseHdc = 0u;
+  check(!dxmt9::wsi::validAdoptionCandidate(binding) &&
+            !dxmt9::wsi::canAttemptWineRelease(binding, true),
+        "a live token without its acquisition HDC fails closed before adoption");
 
   binding = escapeBinding();
   binding.unixAdopted = true;
@@ -135,6 +173,7 @@ int main() {
   try {
     testWireLayoutAndEscapeValidation();
     testUnsupportedQueryAndLegacySelection();
+    testCandidateFailureAndQuiescenceDisposition();
     testAdoptionRollbackPredicate();
     testTypedOutputRestoreKeepsExtEscapeLayer();
     testReleaseIsExactlyOnceAfterQuiescence();

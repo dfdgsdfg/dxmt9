@@ -375,6 +375,10 @@ class DeviceImpl final : public Device {
   }
   void abortPresentOrdinalWaits() override { queue_.abortPresentOrdinalWaits(); }
   void flush() override { queue_.submitFlush(); }
+  wsi::QuiescenceDisposition beginWsiQuiescence() noexcept override {
+    return queue_.beginWsiQuiescence();
+  }
+  void endWsiQuiescence() noexcept override { queue_.endWsiQuiescence(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
     return queue_.readbackSurface(desc, pixels);

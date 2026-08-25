@@ -25,7 +25,7 @@ version        = "wine-9.0 / SikarugirCX 24.0.7 r6"
 path           = "$REPO_ROOT/experiments/wine/sikarugir-cx-24.0.7"
 requires_patch = true
 patch_status   = "applied"
-metal_surface_protocol = "legacy-macdrv-symbols"
+metal_surface_protocol = "legacy-macdrv-symbols:sikarugir-cx-24.0.7"
 notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible. Verified SFIV end-to-end 2026-05-11. Default wine_id for wild experiments on this machine."
 
 # ─── Documented-as-broken: stripped Heroic / Gcenx builds. ────────────────

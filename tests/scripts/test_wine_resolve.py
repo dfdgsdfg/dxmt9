@@ -41,13 +41,28 @@ class LoadManifestTests(unittest.TestCase):
         self.assertIsNone(vanilla.notes)
         self.assertEqual(dxmt.notes, "second entry, exercises optional fields")
         self.assertEqual(vanilla.metal_surface_protocol, "unsupported")
-        self.assertEqual(dxmt.metal_surface_protocol, "legacy-macdrv-symbols")
+        self.assertEqual(
+            dxmt.metal_surface_protocol,
+            "legacy-macdrv-symbols:fake-dxmt",
+        )
 
     def test_invalid_surface_protocol_raises(self):
         fixture = FIXTURE_DIR / "wine_manifest_invalid_protocol.toml"
         with self.assertRaises(resolve.ManifestError) as cm:
             resolve.load_manifest(fixture)
         self.assertIn("metal_surface_protocol", str(cm.exception))
+
+    def test_unqualified_legacy_surface_protocol_raises(self):
+        fixture = FIXTURE_DIR / "wine_manifest_unqualified_legacy.toml"
+        with self.assertRaises(resolve.ManifestError) as cm:
+            resolve.load_manifest(fixture)
+        self.assertIn("legacy-macdrv-symbols:legacy-runtime", str(cm.exception))
+
+    def test_mismatched_legacy_identity_raises(self):
+        fixture = FIXTURE_DIR / "wine_manifest_mismatched_legacy.toml"
+        with self.assertRaises(resolve.ManifestError) as cm:
+            resolve.load_manifest(fixture)
+        self.assertIn("legacy-macdrv-symbols:legacy-runtime", str(cm.exception))
 
     def test_duplicate_id_raises(self):
         with self.assertRaises(resolve.ManifestError) as cm:
@@ -120,6 +135,22 @@ class ResolveWineIdTests(unittest.TestCase):
                 app_name="some-app",
             )
         self.assertIn("some-app", str(cm.exception))
+
+    def test_spawn_gate_accepts_identity_qualified_legacy(self):
+        entry = next(e for e in self.entries if e.id == "fake-dxmt")
+        resolve.validate_wsi_spawn(entry)
+
+    def test_spawn_gate_rejects_unsupported_without_opt_in(self):
+        entry = next(e for e in self.entries if e.id == "fake-vanilla")
+        with self.assertRaises(resolve.ManifestError) as cm:
+            resolve.validate_wsi_spawn(entry)
+        self.assertIn("not spawnable", str(cm.exception))
+
+    def test_spawn_gate_allows_unsupported_only_for_negative_test(self):
+        entry = next(e for e in self.entries if e.id == "fake-vanilla")
+        resolve.validate_wsi_spawn(
+            entry, allow_unsupported_negative_test=True
+        )
 
 
 if __name__ == "__main__":

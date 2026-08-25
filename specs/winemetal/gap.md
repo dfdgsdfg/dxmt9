@@ -26,13 +26,13 @@ compatibility class, not a generally supported runtime.
 | Area | Status | Gap |
 |---|---|---|
 | Shared escape compatibility declaration | ✅ | `winemac_surface_escape.h` pins 6790/6791 and the two-`uint64_t` payload to the cited Wine revision with LGPL attribution |
-| PE `QUERYESCSUPPORT` / get-surface path | ✅ | PE owns `GetDC`/probe/get/`ReleaseDC`, validates both tokens, defensively releases malformed partial results, and fails closed |
+| PE `QUERYESCSUPPORT` / get-surface path | ✅ | PE retains the acquisition HDC until 6791 is attempted, balances `ReleaseDC` afterward, validates both zero-initialized output fields, defensively releases malformed partial results, and keeps HDC out of every wire record |
 | Cold PE/unix layer adoption call | ✅ | Dedicated fixed-width `D9CWsiSurfaceBinding` adopt/teardown operations leave `CommandChunk` unchanged |
-| Ordered exactly-once surface release | ✅ implementation | Presenter teardown joins acquisition threads and flushes GPU work before PE consumes and clears the one release obligation; Wine integration evidence remains below |
+| Ordered exactly-once surface release | ✅ implementation | A dedicated queue gate rejects active arenas/new Presenter users, waits existing users, and performs a non-deferred GPU fence before registry teardown; PE then consumes the one release obligation |
 | Reset and additional-swap-chain rebind | ✅ implementation | Candidate-first adoption preserves the old binding on failure and releases the replaced token only after unix acknowledgement |
 | Qualified `macdrv_functions` fallback | ✅ implementation | Only `legacy-macdrv-symbols:<runtime-id>` whose suffix matches the resolved manifest entry selects the aggregate-table path; generic direct-symbol and Cocoa-view fallbacks were removed |
-| Runtime protocol manifest | ✅ | Resolver requires a validated `metal_surface_protocol`; harness exports the declaration and preserves declared plus observed values in `result.json` |
-| Native protocol tests | ✅ | `dxmt9-wsi-surface-protocol-spec` covers widths, unsupported query, malformed/zero response, rollback, exactly-once release, and legacy selection |
+| Runtime protocol manifest | ✅ | Resolver requires `legacy-macdrv-symbols:<matching-id>` and the harness exports both values; unsupported/unknown entries fail before spawn unless the explicit negative-test opt-in is used |
+| Native protocol tests | ✅ | Protocol and queue specs cover fixed call shape, retained release capability, candidate/registry failure preservation, actual quiescence dispositions, exactly-once release state, and identity-qualified legacy selection; script tests pin resolver and pre-spawn gates |
 | x64 and WoW64 Wine integration | ❌ | Requires a Wine build carrying the accepted escape implementation and evidence for create/present/reset/destroy |
 | Post-change `macdrv_functions` regression | ❌ rerun required | Existing builtin x64/WoW64 legacy smoke evidence predates both ExtEscape dispatch and the `winemetal_dxmt9.*` rename; both lanes must pass R-WMB-17.4 on an exact audited fixture before rollout |
 | Unsupported Gcenx/Heroic behavior | ⚠️ implementation complete, evidence open | Source and native predicates fail with `D3DERR_NOTAVAILABLE` plus `layer_acquisition=unavailable`; a negative stock-Wine run is still required |

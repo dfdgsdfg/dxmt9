@@ -122,6 +122,11 @@ struct CommandQueueArenaLeaseTestAccess {
         reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)));
   }
 
+  static void failNextPresenterRegistration(CommandQueue& queue) {
+    std::lock_guard lock(queue.presenterRegistryMutex_);
+    queue.testOnlyFailNextPresenterRegistration_ = true;
+  }
+
   static bool appendStashedPresent(CommandQueue& queue,
                                    core::PresentId id) {
     core::SwapDesc desc{};
@@ -1365,6 +1370,54 @@ void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
         "recoverable EventSerial fallback");
 }
 
+void testWsiQuiescenceAndRegistryFailureDisposition() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using dxmt9::wsi::QuiescenceDisposition;
+
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const auto currentId =
+      CommandQueueArenaLeaseTestAccess::registerFakePresenter(queue);
+  check(currentId && queue.lookupPresenter(currentId) ==
+            reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)),
+        "current Presenter registry binding must exist");
+  CommandQueueArenaLeaseTestAccess::failNextPresenterRegistration(queue);
+  const auto failedCandidate = queue.registerPresenter(
+      reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(2)));
+  check(!failedCandidate && queue.lookupPresenter(currentId) ==
+            reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)),
+        "injected candidate registry failure preserves the current PresentId");
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  CommandQueue activeQueue(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto active = activeQueue.beginCpuReadyArenaSource(131, layout);
+  check(active.has_value(), "active-arena WSI fixture admission must succeed");
+  check(activeQueue.beginWsiQuiescence() ==
+            QuiescenceDisposition::ActiveArena,
+        "WSI quiescence must fail closed instead of deferring active arena flush");
+  (void)active->abortForFallback();
+
+  check(queue.beginWsiQuiescence() == QuiescenceDisposition::Complete,
+        "idle queue must establish actual WSI quiescence");
+  check(queue.beginWsiQuiescence() == QuiescenceDisposition::AlreadyActive,
+        "a second cold replacement cannot overlap the armed WSI gate");
+  check(queue.submitPresent({}) == 0u,
+        "armed WSI gate rejects new Presenter users before registry swap");
+  check(queue.beginCpuReadyArenaSource(133, layout).status ==
+            CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure,
+        "armed WSI gate rejects a new CPU-ready arena");
+  queue.endWsiQuiescence();
+  queue.unregisterPresenter(currentId);
+
+  CommandQueue stopped(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  CommandQueueArenaLeaseTestAccess::setStopped(stopped);
+  check(stopped.beginWsiQuiescence() ==
+            QuiescenceDisposition::QueueStopped,
+        "stopped queue has a distinct non-quiescent disposition");
+}
+
 }  // namespace
 
 int main() {
@@ -1389,6 +1442,7 @@ int main() {
     testBatchBuilderFailureRollsBackForEventSerialFallback();
     testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
+    testWsiQuiescenceAndRegistryFailureDisposition();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

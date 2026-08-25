@@ -34,6 +34,7 @@ from scripts.wine.resolve import (  # noqa: E402
     WineEntry,
     load_manifest,
     resolve_wine_id,
+    validate_wsi_spawn,
 )
 from scripts.wine.bootstrap_prefix import (  # noqa: E402
     APPS_3RD_ROOT,
@@ -876,6 +877,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             f"path={manifest_entry.path}",
             file=sys.stderr,
         )
+        try:
+            validate_wsi_spawn(
+                manifest_entry,
+                allow_unsupported_negative_test=getattr(
+                    args, "allow_unsupported_wsi_negative_test", False
+                ),
+            )
+        except ManifestError as exc:
+            print(f"[runtime] WSI gate: {exc}", file=sys.stderr)
+            return 2
         # R-RT-6.3: warn when a non-vanilla variant is selected without an
         # explicit alternatives entry or --allow-non-vanilla override.
         if manifest_entry.variant != "vanilla":
@@ -1059,10 +1070,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 ),
             }
         )
+        env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)
+        env.pop("DXMT9_WINE_MANIFEST_ID", None)
         if manifest_entry is not None:
             env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"] = (
                 manifest_entry.metal_surface_protocol
             )
+            env["DXMT9_WINE_MANIFEST_ID"] = manifest_entry.id
         if app.wine_dll_overrides:
             env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
         if app.cx_bottle:
@@ -1320,6 +1334,12 @@ def main() -> int:
         "--allow-non-vanilla",
         action="store_true",
         help="Suppress the warning when wine variant != vanilla (R-RT-6.3).",
+    )
+    run_parser.add_argument(
+        "--allow-unsupported-wsi-negative-test",
+        action="store_true",
+        help="Allow an unsupported/unknown manifest entry only for an "
+             "intentional negative compatibility run.",
     )
     run_parser.add_argument("--prefix", help="Wine prefix path")
     run_parser.add_argument("--binary", help="Override the binary path for this run")
