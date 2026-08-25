@@ -5396,6 +5396,43 @@ void countD3D9BufferUnlock(std::uint64_t nanoseconds,
   if (shadowActive) add(c.d3d9BufferUnlockShadowCalls);
 }
 
+void countD3D9BufferUploadFull(std::uint64_t nanoseconds,
+                                std::uint64_t bytes,
+                                std::uint32_t pool) {
+  auto& c = counters();
+  add(c.d3d9BufferUploadFullCalls);
+  add(c.d3d9BufferUploadFullNs, nanoseconds);
+  updateMax(c.d3d9BufferUploadFullMaxNs, nanoseconds);
+  add(c.d3d9BufferUploadFullBytes, bytes);
+  switch (pool) {
+    case 0:
+      add(c.d3d9BufferUploadFullDefaultCalls);
+      add(c.d3d9BufferUploadFullDefaultBytes, bytes);
+      break;
+    case 1:
+      add(c.d3d9BufferUploadFullManagedCalls);
+      add(c.d3d9BufferUploadFullManagedBytes, bytes);
+      break;
+    default:
+      break;
+  }
+}
+
+void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.d3d9BufferUploadRangeCalls);
+  add(c.d3d9BufferUploadRangeNs, nanoseconds);
+  updateMax(c.d3d9BufferUploadRangeMaxNs, nanoseconds);
+  add(c.d3d9BufferUploadRangeBytes, bytes);
+}
+
+void countD3D9BufferUnmap(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.d3d9BufferUnmapCalls);
+  add(c.d3d9BufferUnmapNs, nanoseconds);
+  updateMax(c.d3d9BufferUnmapMaxNs, nanoseconds);
+}
+
 void countD3D9SurfaceLockRect(std::uint64_t coreNanoseconds,
                               std::uint64_t shadowNanoseconds,
                               std::uint64_t bytes,

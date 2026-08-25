@@ -1363,6 +1363,18 @@ void countD3D9BufferUnlock(std::uint64_t nanoseconds,
                            std::uint64_t writebackBytes,
                            bool uploaded,
                            bool shadowActive);
+// Buffer::unlock backend-call split (present-pacing-bridge-crossing-decomposition.237
+// R-237.4: decomposes d3d9_buffer_unlock_core_ms, the b->obj->unlock() span above,
+// into its three backend calls in src/d3d9/core_buffer.cpp). Full/range uploads are
+// mutually exclusive per unlock (exact-range NOOVERWRITE takes the range path; every
+// other upload takes the full path); unmap always runs. pool is the static_cast<u32>
+// of dxmt9::core::Pool at call time; only Default/Managed get a byte-and-call split,
+// matching the range path being Default-only by construction.
+void countD3D9BufferUploadFull(std::uint64_t nanoseconds,
+                                std::uint64_t bytes,
+                                std::uint32_t pool);
+void countD3D9BufferUploadRange(std::uint64_t nanoseconds, std::uint64_t bytes);
+void countD3D9BufferUnmap(std::uint64_t nanoseconds);
 // dxmt9c_surface_lock_rect attribution (state-churn-encode-append-decomposition.24/.26:
 // 1.33 ms/call, 0.58 ms/present on GT2, confirmed NOT a drain-fence wait).
 // coreNanoseconds times the s->obj->lockRect(...) call into core Surface/Texture

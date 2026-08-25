@@ -75,6 +75,18 @@ round-trip (bridge opcode row) vs unix `d3d9_buffer_unlock_cpu_ms` vs its
 writeback/core children, so dispatch overhead and the writeback/core split
 are both derivable from one run.
 
+R-237.4 (follow-up split, after the core-unlock verdict below): the core
+unlock span decomposes into an unconditional `d3d9_buffer_upload_*` /
+`d3d9_buffer_unmap_*` family instrumented in `Buffer::unlock`
+(`src/d3d9/core_buffer.cpp`) around the three backend calls:
+  - full uploads (`uploadBufferData`): calls / ms / max ms / bytes, with a
+    Default-vs-Managed pool byte-and-call split (the range path is
+    Default-only by construction, so only full uploads need the split);
+  - range uploads (`uploadBufferDataRange`): calls / ms / max ms / bytes;
+  - `unmapBuffer`: calls / ms / max ms.
+Same observer constraints as R-237.2; the three child spans plus untimed
+residue must account for the parent `d3d9_buffer_unlock_core_ms`.
+
 ## Method (planned)
 
 GT2, perf profile, no-gputrace, 120s supervised probe with
@@ -123,13 +135,53 @@ Two write-amplification mechanisms are visible in the same run
    `storage_.assign(max(size, desc.size), 0)` — a full-buffer zero write on
    each of the `8,952` DISCARD locks, inside the lock core span.
 
+## Result (R-237.4 split)
+
+Run: `app-d3d9-3dmark05-bridge-upload-split-gt2-r1` (GT2, perf profile,
+no-gputrace, 120s, status pass, `1,796` presents, `38,767` unlocks).
+
+Core unlock `3,449.6ms/run` decomposes with `9.7ms` untimed residue:
+
+| child | calls | ms/run | ms/present | share of core | bytes | effective GB/s |
+|---|---:|---:|---:|---:|---:|---:|
+| full uploads (`uploadBufferData`) | `9,669` | `2,860.3` | `1.593` | **`82.9%`** | `15.57GB` | `5.4` |
+| - Default pool | `8,446` | - | - | - | `6.64GB` | - |
+| - Managed pool | `1,223` | - | - | - | `8.92GB` | - |
+| range uploads (`uploadBufferDataRange`) | `29,098` | `576.1` | `0.321` | `16.7%` | `1.65GB` | `2.9` |
+| `unmapBuffer` | `38,767` | `3.5` | `0.002` | `0.1%` | - | - |
+
+**Verdict: full-buffer uploads own the bridge-residence wall.** Total
+uploaded bytes are `17.22GB` against `5.66GB` locked — `3.0x` overall write
+amplification; the full-upload path alone locks `~4.0GB` (total minus the
+range path's exact `1.65GB`) but uploads `15.57GB`, a `3.9x` amplification.
+The `5.4GB/s` effective rate (vs `~28GB/s` for the healthy shadow memcpy)
+says the span is not pure byte motion — arena allocation/page-fault/hazard
+overhead rides with it — but the byte volume is the first-order lever
+either way.
+
+Ceiling estimate: range-limiting the full-upload paths to the locked span
+would cut upload volume from `15.57GB` to `~4GB`; at the measured rate that
+is `~1.2ms/present` of producer-thread time against GT2's `~33ms` frame —
+a `~+3.5%` class candidate before adding the lock-side DISCARD zero-fill
+saving, i.e. larger than the admission-slab ceiling (`~+2.7%`) at far lower
+contract risk.
+
 ## Follow-ups
 
-- Split the core unlock span: `uploadBufferData` vs `uploadBufferDataRange`
-  vs `unmapBuffer`, with per-path call counts and bytes (default-pool upload
-  bytes are the missing volume figure).
-- Candidate mechanisms (bounded contracts, not yet licensed): range-limit
-  uploads for DISCARD/plain locks (upload only the locked span), skip the
-  DISCARD zero-fill and shadow pre-copy (DISCARD's prior content is
-  undefined by contract), and managed-pool dirty-range tracking. Each needs
-  its own correctness argument before an A/B.
+- Candidate mechanisms, now sized (bounded contracts, not yet licensed):
+  1. **Range-limit non-DISCARD full uploads** (Managed + plain Default
+     locks): `storage_` mirrors the backend copy outside the locked span by
+     construction, so uploading only `[lockedOffset_, lockedSize_)` is
+     semantically sufficient if the mirror invariant is proven (every prior
+     byte reached the backend before). Managed alone is `8.92GB/run` from
+     `1,223` calls.
+  2. **Range-limit DISCARD uploads**: prior content is undefined by
+     contract, but current behavior uploads the zero-fill, so stale GPU
+     bytes replace zeros for out-of-contract readers — needs the visual
+     gate family (`v0.0.3` anchor), not just counters.
+  3. **Skip the DISCARD zero-fill + shadow pre-copy on lock** (lock-side
+     companions of 2, `d3d9_buffer_lock_shadow_copy_ms` + the
+     `storage_.assign` inside lock core).
+- Each candidate needs: mirror-invariant argument (or zero-fill contract
+  decision), a native spec pinning the upload-range choice, and a GT2
+  ABBA with visual gates before promotion.

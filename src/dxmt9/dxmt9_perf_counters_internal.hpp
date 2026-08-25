@@ -1528,6 +1528,23 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9BufferUnlockUploadCalls{0};
   std::atomic<std::uint64_t> d3d9BufferUnlockReadonlyCalls{0};
   std::atomic<std::uint64_t> d3d9BufferUnlockShadowCalls{0};
+  // Buffer::unlock backend-call split (present-pacing-bridge-crossing-decomposition.237
+  // R-237.4).
+  std::atomic<std::uint64_t> d3d9BufferUploadFullCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullDefaultCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullDefaultBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullManagedCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadFullManagedBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeMaxNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUploadRangeBytes{0};
+  std::atomic<std::uint64_t> d3d9BufferUnmapCalls{0};
+  std::atomic<std::uint64_t> d3d9BufferUnmapNs{0};
+  std::atomic<std::uint64_t> d3d9BufferUnmapMaxNs{0};
   // dxmt9c_surface_lock_rect / dxmt9c_texture_lock_rect attribution
   // (state-churn-encode-append-decomposition.24/.26). *_core_ns times the
   // obj->lockRect(...) call into core; *_shadow_ns times the wow64 pointer-

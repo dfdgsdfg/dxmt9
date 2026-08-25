@@ -1,7 +1,9 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <memory>
 
@@ -63,14 +65,32 @@ void Buffer::unlock(bool upload) {
         lockedOffset_ <= storage_.size() &&
         lockedSize_ <= storage_.size() - lockedOffset_;
     if (exactNoOverwrite) {
+      const auto rangeStart = std::chrono::steady_clock::now();
       backend_->uploadBufferDataRange(
           handle_, storage_, lockedOffset_, lockedSize_);
+      const auto rangeNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - rangeStart).count());
+      dxmt9::perf::countD3D9BufferUploadRange(
+          rangeNs, static_cast<std::uint64_t>(lockedSize_));
     } else {
+      const auto fullStart = std::chrono::steady_clock::now();
       backend_->uploadBufferData(handle_, storage_);
+      const auto fullNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - fullStart).count());
+      dxmt9::perf::countD3D9BufferUploadFull(
+          fullNs, static_cast<std::uint64_t>(storage_.size()),
+          static_cast<std::uint32_t>(desc_.pool));
     }
   }
   if (backend_ && handle_) {
+    const auto unmapStart = std::chrono::steady_clock::now();
     backend_->unmapBuffer(handle_);
+    const auto unmapNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - unmapStart).count());
+    dxmt9::perf::countD3D9BufferUnmap(unmapNs);
   }
   locked_ = false;
   lockedOffset_ = 0;
