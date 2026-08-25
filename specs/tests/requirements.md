@@ -571,10 +571,10 @@ meson setup build-x86_64-builtin \
 meson compile -C build-x86_64-builtin
 
 cp build-win32-x64-builtin/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
-cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
-  <wine-root>/lib/wine/x86_64-windows/winemetal.dll
-cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
-  <wine-root>/lib/wine/x86_64-unix/winemetal.so
+cp build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll \
+  <wine-root>/lib/wine/x86_64-windows/winemetal_dxmt9.dll
+cp build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so \
+  <wine-root>/lib/wine/x86_64-unix/winemetal_dxmt9.so
 WINEDLLOVERRIDES="d3d9=n,b" wine build/wsi_present/wsi_present_x64.exe
 ```
 

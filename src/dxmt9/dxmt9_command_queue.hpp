@@ -23,6 +23,7 @@
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9/wsi_surface_protocol.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -749,6 +750,18 @@ class CommandQueue {
   // failed offload worker on this device).
   void abortPresentOrdinalWaits();
   void submitFlush();
+  // Cold WSI replacement fence. Unlike submitFlush(), this never records a
+  // deferred flush against an active CPU-ready arena and then reports success.
+  // The drained bridge entry must reach this operation with no active arena;
+  // otherwise replacement fails closed and keeps the current Presenter/lease.
+  // Complete leaves a short-lived gate armed until endWsiQuiescence().
+  // That gate rejects new Present layer users and new CPU-ready arenas while
+  // the caller swaps/unregisters the Presenter.
+  wsi::QuiescenceDisposition beginWsiQuiescence() noexcept;
+  // Terminal release waits out transient replacement/arena ownership and, if
+  // the queue has stopped, joins its workers before Presenter destruction.
+  wsi::QuiescenceDisposition beginFinalWsiQuiescence() noexcept;
+  void endWsiQuiescence() noexcept;
   core::HResult waitForVBlank();
 
   // Per-swapchain Presenter registry. Each core::SwapChain registers its
@@ -768,8 +781,8 @@ class CommandQueue {
   // Drawable tokens from async / sync acquire-on-submit are stashed
   // against the same PresentId so the encode worker can claim them
   // without the queue carrying a shared_ptr on the PE-visible record.
-  core::PresentId registerPresenter(Presenter* presenter);
-  void unregisterPresenter(core::PresentId id);
+  core::PresentId registerPresenter(Presenter* presenter) noexcept;
+  void unregisterPresenter(core::PresentId id) noexcept;
   Presenter* lookupPresenter(core::PresentId id) const;
   void stashDrawableToken(core::PresentId id,
                           std::shared_ptr<PresentDrawableToken> token);
@@ -1540,6 +1553,8 @@ class CommandQueue {
       bool tokenStashed) noexcept;
   ActiveArenaAppendResult deferActiveArenaFlush() noexcept;
   ActiveArenaAppendResult rejectIfActiveArena() noexcept;
+  bool waitEnterWsiPresentUse() noexcept;
+  void leaveWsiPresentUse() noexcept;
   bool selectCpuReadyArenaSegment(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
@@ -1579,6 +1594,11 @@ class CommandQueue {
   std::atomic<bool> arenaBuildPoisoned_{false};
   std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
   std::uint64_t nextArenaBuildGeneration_ = 1;
+  std::atomic<bool> wsiQuiescenceActive_{false};
+  std::atomic<std::uint32_t> wsiPresentUsers_{0};
+  std::atomic<bool> wsiAdmissionStopped_{true};
+  std::mutex wsiQuiescenceMutex_{};
+  std::condition_variable wsiQuiescenceCv_{};
   // Native coordinator fault seam: fail one post-reservation semantic
   // preflight, restore the exact tentative prefix, then return from the
   // manually-driven encode loop. Never set by production.
@@ -1720,6 +1740,9 @@ class CommandQueue {
   mutable std::mutex presenterRegistryMutex_{};
   std::vector<PresenterSlot> presenterSlots_{};
   std::int32_t presenterFreeHead_ = -1;
+  // Native cold-boundary fault seam: fail one registry allocation without
+  // mutating the current Presenter binding.
+  bool testOnlyFailNextPresenterRegistration_ = false;
 
  public:
   // Limits accessor — value member, not a borrowed pointer.

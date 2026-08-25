@@ -174,7 +174,7 @@ if is_variable('winemetal_dll')
   d3d9_conformance_runtime_targets += custom_target(
     'd3d9_conformance_runtime_winemetal',
     input: winemetal_dll,
-    output: 'winemetal.dll',
+    output: 'winemetal_dxmt9.dll',
     command: [
       python3,
       '-c',

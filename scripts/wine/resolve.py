@@ -28,6 +28,7 @@ class WineEntry:
     source: str
     variant: str
     path: Path
+    metal_surface_protocol: str
     version: str | None = None
     notes: str | None = None
 
@@ -41,7 +42,37 @@ class WineEntry:
         )
 
 
-_REQUIRED_FIELDS = ("id", "source", "variant", "path")
+_REQUIRED_FIELDS = ("id", "source", "variant", "path", "metal_surface_protocol")
+_METAL_SURFACE_PROTOCOLS = frozenset(
+    ("extescape-v1", "unsupported", "unknown")
+)
+_LEGACY_METAL_SURFACE_PROTOCOL_PREFIX = "legacy-macdrv-symbols:"
+
+
+def legacy_metal_surface_protocol(runtime_id: str) -> str:
+    return f"{_LEGACY_METAL_SURFACE_PROTOCOL_PREFIX}{runtime_id}"
+
+
+def validate_wsi_spawn(
+    entry: WineEntry, *, allow_unsupported_negative_test: bool = False
+) -> None:
+    """Fail closed before spawning a runtime without a supported WSI path."""
+    if entry.metal_surface_protocol in (
+        "extescape-v1",
+        legacy_metal_surface_protocol(entry.id),
+    ):
+        return
+    if allow_unsupported_negative_test and entry.metal_surface_protocol in (
+        "unsupported",
+        "unknown",
+    ):
+        return
+    raise ManifestError(
+        f"wine entry id={entry.id}: metal_surface_protocol "
+        f"{entry.metal_surface_protocol!r} is not spawnable for windowed WSI; "
+        "use the negative-compatibility opt-in only for an intentional "
+        "unsupported/unknown test"
+    )
 
 
 def _expand_path(raw: str) -> Path:
@@ -75,12 +106,22 @@ def load_manifest(path: Path) -> list[WineEntry]:
                 f"wine[{idx}]: duplicate id '{wid}' (also at index {seen[wid]})"
             )
         seen[wid] = idx
+        protocol = raw["metal_surface_protocol"]
+        if protocol not in _METAL_SURFACE_PROTOCOLS and protocol != (
+            legacy_metal_surface_protocol(wid)
+        ):
+            raise ManifestError(
+                f"wine[{idx}]: invalid metal_surface_protocol {protocol!r}; "
+                f"legacy entries must use "
+                f"{legacy_metal_surface_protocol(wid)!r}"
+            )
         entries.append(
             WineEntry(
                 id=wid,
                 source=raw["source"],
                 variant=raw["variant"],
                 path=_expand_path(raw["path"]),
+                metal_surface_protocol=protocol,
                 version=raw.get("version"),
                 notes=raw.get("notes"),
             )

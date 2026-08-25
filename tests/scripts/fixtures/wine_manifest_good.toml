@@ -5,10 +5,12 @@ id      = "fake-vanilla"
 source  = "manual"
 variant = "vanilla"
 path    = "$REPO_ROOT/tests/scripts/fixtures/fake_wine_root"
+metal_surface_protocol = "unsupported"
 
 [[wine]]
 id      = "fake-dxmt"
 source  = "manual"
 variant = "dxmt"
 path    = "$REPO_ROOT/tests/scripts/fixtures/fake_wine_root_dxmt"
+metal_surface_protocol = "legacy-macdrv-symbols:fake-dxmt"
 notes   = "second entry, exercises optional fields"

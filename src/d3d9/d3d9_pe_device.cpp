@@ -8,10 +8,10 @@
 // (including D3D9DeviceImpl::Present) and the vtable are emitted by this TU.
 
 #if defined(_WIN64)
-static_assert(sizeof(D3D9DeviceImpl) == 106928);
+static_assert(sizeof(D3D9DeviceImpl) == 106976);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #elif defined(_WIN32)
-static_assert(sizeof(D3D9DeviceImpl) == 105712);
+static_assert(sizeof(D3D9DeviceImpl) == 105752);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #endif
 
@@ -2982,6 +2982,11 @@ HRESULT D3D9DeviceImpl::FlushPeRecorderForChild() noexcept {
     return flushPeRecorder(PeRecorderFlushReason::Child);
 }
 
+void D3D9DeviceImpl::takeImplicitWsiBinding(
+        D3D9PeWsiBinding& binding) noexcept {
+    implicitWsiBinding_ = std::move(binding);
+}
+
 /* =========================================================================
  * Factory function (called from factory.cpp)
  * ========================================================================= */
@@ -2991,6 +2996,7 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
                                      DWORD behaviorFlags,
                                      HWND window, bool extended,
                                      DWORD implicitSwapchainFlags,
+                                     D3D9PeWsiBinding wsiBinding,
                                      HRESULT* failureReason) noexcept {
     if (failureReason) *failureReason = D3DERR_NOTAVAILABLE;
     D3D9DeviceImpl* device = nullptr;
@@ -2999,19 +3005,23 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
             dev, pFactory, adapter, deviceType, behaviorFlags, window, extended,
             implicitSwapchainFlags);
     } catch (const std::bad_alloc&) {
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = E_OUTOFMEMORY;
         return nullptr;
     } catch (...) {
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = D3DERR_INVALIDCALL;
         return nullptr;
     }
     if (!device) {
+        dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev, wsiBinding);
         if (dev) dxmt9c_device_release(dev);
         if (failureReason) *failureReason = E_OUTOFMEMORY;
         return nullptr;
     }
+    device->takeImplicitWsiBinding(wsiBinding);
     if (!device->commandChunkReady()) {
         delete device;
         return nullptr;

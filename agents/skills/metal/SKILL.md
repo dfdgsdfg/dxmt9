@@ -1440,7 +1440,7 @@ samples, pass sidecar `--encoder-breakdown-seq-range MIN:MAX` to forward
 `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN/MAX` and let the join coverage gate prove
 the range covered xctrace's RenderPass seq window. If rows appear before
 `MIN`, treat the run as a stale-provider diagnostic first: rebuild and restage
-the active Wine unix `winemetal.so` before reading FPS or route timing.
+the active Wine unix `winemetal_dxmt9.so` before reading FPS or route timing.
 
 References:
 - `agents/rules/metal_debugging.rules.md` §9 — probe-class → flag → domain map and standard recipe.

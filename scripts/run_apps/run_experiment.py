@@ -34,6 +34,7 @@ from scripts.wine.resolve import (  # noqa: E402
     WineEntry,
     load_manifest,
     resolve_wine_id,
+    validate_wsi_spawn,
 )
 from scripts.wine.bootstrap_prefix import (  # noqa: E402
     APPS_3RD_ROOT,
@@ -75,16 +76,15 @@ PE_RECORDER_COUNTER_PATTERN = re.compile(
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 # R-WMB-6.2 / test_wild.rules.md: surface which WSI layer acquisition path the
-# presenter (`dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) selected.
+# PE WSI control path selected after a successful unix adoption.
 # The presenter emits one line per process via the dxmt9-wsi logger tag, e.g.:
-#   [dxmt9-wsi] info: layer_acquisition=macdrv_functions hwnd=0x12345
+#   [dxmt9-wsi] info: layer_acquisition=extescape-v1 hwnd=0x12345
 WSI_LAYER_ACQUISITION_PATTERN = re.compile(
-    r"^\[dxmt9-wsi\]\s+\w+:\s+layer_acquisition=([A-Za-z0-9_]+)"
+    r"^\[dxmt9-wsi\]\s+\w+:\s+layer_acquisition=([A-Za-z0-9_-]+)"
 )
 VALID_WSI_LAYER_ACQUISITION_PATHS = (
-    "macdrv_functions",
-    "legacy_macdrv_get_cocoa_view",
-    "fallback_nil",
+    "extescape-v1",
+    "legacy-macdrv-symbols",
     "unavailable",
 )
 # The launcher records the experiment profile it resolved
@@ -556,10 +556,10 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
 # failures visible in the artifact instead of requiring someone to suspect them.
 STAGED_ARTIFACTS = (
     "lib/wine/x86_64-windows/d3d9.dll",
-    "lib/wine/x86_64-windows/winemetal.dll",
-    "lib/wine/x86_64-unix/winemetal.so",
+    "lib/wine/x86_64-windows/winemetal_dxmt9.dll",
+    "lib/wine/x86_64-unix/winemetal_dxmt9.so",
     "lib/wine/i386-windows/d3d9.dll",
-    "lib/wine/i386-windows/winemetal.dll",
+    "lib/wine/i386-windows/winemetal_dxmt9.dll",
 )
 
 
@@ -694,12 +694,11 @@ def extract_wsi_layer_acquisition(log_path: Path) -> str:
     """Return the WSI layer acquisition path the presenter selected.
 
     Parses the one-time `[dxmt9-wsi] info: layer_acquisition=<path> hwnd=...`
-    line emitted by `dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd` (R-WMB-6.2
-    / `agents/rules/test_wild.rules.md`). Returns one of
-    `VALID_WSI_LAYER_ACQUISITION_PATHS`. If the log is absent, never emitted
-    (e.g. process exited before presenting), or contains an unrecognised value,
-    returns ``"unavailable"`` so callers can distinguish "never reached the
-    presenter" from a recorded selection.
+    line emitted by the PE WSI control path after unix adoption (R-WMB-15.2 /
+    `agents/rules/test_wild.rules.md`). Returns one of
+    `VALID_WSI_LAYER_ACQUISITION_PATHS`, or the verbatim token for a future
+    path unknown to this parser. If the log is absent or never emitted (e.g.
+    the process exited before adoption), returns ``"unavailable"``.
     """
     if not log_path.exists():
         return "unavailable"
@@ -859,25 +858,36 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     manifest_entry: WineEntry | None = None
     manifest_source: str | None = None
     cli_wine_id = getattr(args, "wine_id", None)
-    if app.wine_id or cli_wine_id:
+    env_wine_id = os.environ.get("DXMT_EXPERIMENT_WINE_ID")
+    if app.wine_id or cli_wine_id or env_wine_id:
         manifest_path = getattr(args, "wine_manifest", None) or DEFAULT_MANIFEST_PATH
         try:
             entries = load_manifest(manifest_path)
             manifest_entry, manifest_source = resolve_wine_id(
                 entries=entries,
                 cli_arg=cli_wine_id,
-                env_var=os.environ.get("DXMT_EXPERIMENT_WINE_ID"),
+                env_var=env_wine_id,
                 catalogue_value=app.wine_id,
                 app_name=app.name,
             )
         except ManifestError as exc:
             print(f"[runtime] manifest error: {exc}", file=sys.stderr)
-            sys.exit(2)
+            return 2
         print(
             f"[runtime] wine resolved via {manifest_source}: id={manifest_entry.id} "
             f"path={manifest_entry.path}",
             file=sys.stderr,
         )
+        try:
+            validate_wsi_spawn(
+                manifest_entry,
+                allow_unsupported_negative_test=getattr(
+                    args, "allow_unsupported_wsi_negative_test", False
+                ),
+            )
+        except ManifestError as exc:
+            print(f"[runtime] WSI gate: {exc}", file=sys.stderr)
+            return 2
         # R-RT-6.3: warn when a non-vanilla variant is selected without an
         # explicit alternatives entry or --allow-non-vanilla override.
         if manifest_entry.variant != "vanilla":
@@ -1061,6 +1071,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 ),
             }
         )
+        env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)
+        env.pop("DXMT9_WINE_MANIFEST_ID", None)
+        if manifest_entry is not None:
+            env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"] = (
+                manifest_entry.metal_surface_protocol
+            )
+            env["DXMT9_WINE_MANIFEST_ID"] = manifest_entry.id
         if app.wine_dll_overrides:
             env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
         if app.cx_bottle:
@@ -1153,6 +1170,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "source": manifest_entry.source,
                 "variant": manifest_entry.variant,
                 "path": str(manifest_entry.path),
+                "metal_surface_protocol": manifest_entry.metal_surface_protocol,
             }
             result["prefix_bootstrap"] = prefix_bootstrap_payload
         dxmt9_perf_counters = extract_dxmt9_perf_counters(log_path)
@@ -1178,11 +1196,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         perf_probe_timings = extract_perf_probe_timings(log_path)
         if perf_probe_timings:
             result["perf_probe_timings"] = perf_probe_timings
-        # R-WMB-6.2 / test_wild.rules.md: record which WSI layer acquisition
-        # path the presenter selected so wild-experiment triage can tell at a
-        # glance whether the run hit `macdrv_functions`, the legacy fallback,
-        # or never reached the presenter at all.
+        # R-WMB-15.2: preserve the manifest declaration and the observed WSI
+        # selection independently; an ExtEscape claim never bypasses probing.
         result["wsi"] = {
+            "declared_protocol": (
+                manifest_entry.metal_surface_protocol
+                if manifest_entry is not None
+                else "unknown"
+            ),
             "layer_acquisition": extract_wsi_layer_acquisition(log_path),
         }
 
@@ -1315,6 +1336,12 @@ def main() -> int:
         action="store_true",
         help="Suppress the warning when wine variant != vanilla (R-RT-6.3).",
     )
+    run_parser.add_argument(
+        "--allow-unsupported-wsi-negative-test",
+        action="store_true",
+        help="Allow an unsupported/unknown manifest entry only for an "
+             "intentional negative compatibility run.",
+    )
     run_parser.add_argument("--prefix", help="Wine prefix path")
     run_parser.add_argument("--binary", help="Override the binary path for this run")
     run_parser.add_argument(
@@ -1323,10 +1350,10 @@ def main() -> int:
         help="Override timeout seconds; <= 0 disables unless the catalogue entry requires a positive timeout",
     )
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
-    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
+    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal_dxmt9.dll")
     run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
-    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal.dll")
-    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
+    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal_dxmt9.dll")
+    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal_dxmt9.so")
     run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
     run_parser.add_argument(
         "--stage-mingw-runtime",

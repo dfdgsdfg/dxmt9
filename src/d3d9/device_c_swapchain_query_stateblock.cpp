@@ -6,6 +6,8 @@
 // matches Wine's "stateblock apply re-derives derived state" oracle.
 #include "dxmt9/dxmt9_device.hpp"
 
+#include <new>
+
 using namespace dxmt9::d3d9::devicec;
 
 namespace {
@@ -43,13 +45,21 @@ std::optional<dxmt9::core::QueryType> queryTypeFromD3D(uint32_t type) {
 }  // namespace
 
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* d, uint32_t idx) {
-  auto* swapChain = d->iface->GetSwapChain(idx);
-  if (!swapChain) {
+  dxmt9::com::IDirect3DSwapChain9* swapChain = nullptr;
+  try {
+    swapChain = d && d->iface ? d->iface->GetSwapChain(idx) : nullptr;
+    if (!swapChain) {
+      return nullptr;
+    }
+    auto* out = new D9CSwapChain(swapChain);
+    out->owner = d;
+    return out;
+  } catch (...) {
+    if (swapChain) {
+      swapChain->Release();
+    }
     return nullptr;
   }
-  auto* out = new D9CSwapChain(swapChain);
-  out->owner = d;
-  return out;
 }
 
 extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* d) {
@@ -61,13 +71,51 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
   if (!pp) {
     return nullptr;
   }
-  auto* swapChain = d->iface->CreateAdditionalSwapChain(ppFromC(*pp));
-  if (!swapChain) {
+  dxmt9::com::IDirect3DSwapChain9* swapChain = nullptr;
+  try {
+    swapChain = d && d->iface
+        ? d->iface->CreateAdditionalSwapChain(ppFromC(*pp))
+        : nullptr;
+    if (!swapChain) {
+      return nullptr;
+    }
+    auto* out = new D9CSwapChain(swapChain);
+    out->owner = d;
+    return out;
+  } catch (...) {
+    if (swapChain) {
+      swapChain->Release();
+    }
     return nullptr;
   }
-  auto* out = new D9CSwapChain(swapChain);
-  out->owner = d;
-  return out;
+}
+
+extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(
+    D9CSwapChain* s, const D9CWsiSurfaceBinding* binding) {
+  if (!s || !s->iface || !binding ||
+      binding->structSize != sizeof(D9CWsiSurfaceBinding)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  try {
+    return s->iface->coreSwapChain().adoptWsiSurface(
+        binding->protocol, binding->hwnd,
+        binding->surfaceToken, binding->layerToken);
+  } catch (const std::bad_alloc&) {
+    return dxmt9::core::E_OUTOFMEMORY;
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* s) {
+  if (!s || !s->iface) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  try {
+    return s->iface->coreSwapChain().teardownWsiSurface();
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {

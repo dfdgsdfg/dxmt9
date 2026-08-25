@@ -134,10 +134,10 @@ code normally.
 | `DXMT_EXPERIMENT_WINE_ROOT` | Resolved Wine root directory (manifest-resolved or legacy-detected). |
 | `DXMT_EXPERIMENT_WINE_BIN` | Resolved `wine`/`wine64` executable path. |
 | `DXMT_EXPERIMENT_PE_BUILD_DIR` | Staged 64-bit PE build dir containing `d3d9.dll`. |
-| `DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR` | Staged 64-bit builtin runtime `winemetal.dll` build dir. |
+| `DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR` | Staged 64-bit builtin runtime `winemetal_dxmt9.dll` build dir. |
 | `DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR` | Staged 32-bit PE build dir containing `d3d9.dll`. |
-| `DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR` | Staged 32-bit builtin runtime `winemetal.dll` build dir. |
-| `DXMT_EXPERIMENT_UNIX_BUILD_DIR` | Unix build dir containing `winemetal.so`. |
+| `DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR` | Staged 32-bit builtin runtime `winemetal_dxmt9.dll` build dir. |
+| `DXMT_EXPERIMENT_UNIX_BUILD_DIR` | Unix build dir containing `winemetal_dxmt9.so`. |
 | `DXMT_EXPERIMENT_OUTPUT_DIR` | This run's `experiments/output/<app-runid>/` path. |
 | `DXMT_EXPERIMENT_LOG` | Path to this domain's own `dxmt9.log` (the captured launcher stdout+stderr file). |
 | `DXMT_EXPERIMENT_CAPTURE_PATH` | Path the launcher should pass through for dxmt9's internal backbuffer dump (`actual.bmp`). |

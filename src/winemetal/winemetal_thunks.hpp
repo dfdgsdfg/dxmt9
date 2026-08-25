@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-// Shader-service unix-call IDs. Owned by winemetal.so's __wine_unix_call
+// Shader-service unix-call IDs. Owned by winemetal_dxmt9.so's __wine_unix_call
 // dispatch table at slots 0..3. The generated device_c bridge entries
 // (BridgeOpcode in dxmt9_bridge_ops.generated.h) are renumbered to start
 // at DXMT9_WINEMETAL_BRIDGE_OP_BASE so the two ID spaces don't collide
@@ -22,7 +22,7 @@ extern "C" {
 // entries) is reserved at a fixed positional index so it does not drift
 // when dxmt9c_* prototypes are added or removed. Its handler returns the
 // unix-side dxmt9::bridge::kBridgeAbiHash so the PE-side DllMain can
-// detect a winemetal.dll/winemetal.so version skew at load time.
+// detect a winemetal_dxmt9.dll/winemetal_dxmt9.so version skew at load time.
 enum dxmt9_winemetal_call_id {
   DXMT9_WINEMETAL_CALL_COMPILE_SHADER = 0,
   DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE = 1,

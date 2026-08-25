@@ -13,7 +13,8 @@ artifact discovery remains owned by `specs/deploy/`.
 
 The legacy macdrv symbol-bridge requirements retain their stable IDs except for
 the retired `R-WMB-7.x` generic-probe contract. That legacy contract applies
-only to exact Wine builds qualified as `legacy-macdrv-symbols`; it is not the
+only to exact Wine builds qualified as
+`legacy-macdrv-symbols:<runtime-id>`; it is not the
 forward compatibility strategy for current Wine 11.x. Sections 11-18 define
 the primary `ExtEscape` surface protocol proposed by [Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
 and consumed by [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166).
@@ -380,8 +381,10 @@ not release the layer independently of the associated Wine surface.
 **R-WMB-12.5** `MACDRV_ESCAPE_RELEASE_SURFACE` must be issued exactly once for
 every successfully acquired surface token. Before release, the unix presenter
 must stop drawable acquisition and drain or fence every command buffer that can
-reference the layer. PE then releases the surface through the HDC/`ExtEscape`
-path after the unix teardown or rebind call returns.
+reference the layer. PE retains the acquisition HDC as cold state, releases the
+surface through that same HDC/`ExtEscape` path after the unix teardown or
+rebind call returns, and balances the HDC with `ReleaseDC` after the release
+attempt. No HDC crosses the PE/unix wire or enters a `CommandChunk`.
 
 **R-WMB-12.6** A reset or additional-swap-chain rebind must not expose a half-
 updated pair. The new surface is acquired and validated first; the unix
@@ -420,7 +423,7 @@ runtime's unixlib-loader capabilities are recorded separately under
 ## 14. Legacy macdrv Symbol Fallback
 
 **R-WMB-14.1** When `MACDRV_ESCAPE_GET_SURFACE` is not supported, dxmt9 may use
-the existing `macdrv_functions` / direct-symbol path only for a Wine build that
+the existing aggregate `macdrv_functions` path only for a Wine build that
 is explicitly pinned as `legacy-macdrv-symbols:<runtime-id>` and has end-to-end
 WSI evidence.
 
@@ -467,8 +470,8 @@ matching filename or successful `nm` symbol audit is not sufficient evidence.
 
 **R-WMB-15.5** The existing `macdrv_functions` acquisition path is a required
 legacy fallback for every exact Wine manifest entry qualified as
-`legacy-macdrv-symbols`. A failed `QUERYESCSUPPORT` probe on such an entry must
-continue into that fallback; it must not be treated as terminal
+`legacy-macdrv-symbols:<runtime-id>`. A failed `QUERYESCSUPPORT` probe on such
+an entry must continue into that fallback; it must not be treated as terminal
 incompatibility. The `winemetal_dxmt9.*` rename and the addition of ExtEscape
 must not change this Wine-facing fallback behavior. Individual Wine
 distributions are evidence fixtures, not part of the protocol name or contract.
@@ -481,9 +484,10 @@ successful provider ABI handshake alone must not enable presentation.
 
 ## 16. Failure and Diagnostics
 
-**R-WMB-16.1** A failed `GetDC`, `QUERYESCSUPPORT`, get-surface escape, response
-size check, zero layer token, unix adoption, or release must produce one scoped
-diagnostic containing the stage, `HWND`, Wine version/root when known, and Wine
+**R-WMB-16.1** A failed `GetDC`, `QUERYESCSUPPORT`, get-surface escape, fixed
+`cbOutput` call-shape check, zero output token, unix adoption, or release must
+produce one scoped diagnostic containing the stage, `HWND`, Wine version/root
+when known, and Wine
 or GDI status.
 
 **R-WMB-16.2** Unsupported acquisition must fail device or swap-chain creation
@@ -523,7 +527,8 @@ module identity. Artifact-name ownership is specified by `R-DEPLOY-2.11`.
 
 **R-WMB-17.4** Every ExtEscape or bridge-module rename change must pass builtin
 x64 and WoW64 WSI smoke through the existing `macdrv_functions` fallback on at
-least one exact audited `legacy-macdrv-symbols` runtime before rollout. Evidence
+least one exact audited `legacy-macdrv-symbols:<runtime-id>` runtime before
+rollout. Evidence
 must show the suffix-qualified dxmt9 modules, an ABI-hash handshake,
 `layer_acquisition=legacy-macdrv-symbols`, successful device creation, and at
 least one successful present. This gate does not claim app-local support on a

@@ -235,9 +235,8 @@ extern "C" void MTLCaptureManager_stopCapture(obj_handle_t mgr) {
 
 extern "C" obj_handle_t MacdrvMetalDevice_create() {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
-  auto pfn_create_metal_device = macdrv_functions
-                                     ? macdrv_functions->macdrv_create_metal_device
-                                     : resolveMacdrvSymbol<macdrv_metal_device (*)()>("macdrv_create_metal_device");
+  auto pfn_create_metal_device =
+      macdrv_functions ? macdrv_functions->macdrv_create_metal_device : nullptr;
   if (!pfn_create_metal_device) {
     return NULL_OBJECT_HANDLE;
   }
@@ -246,9 +245,8 @@ extern "C" obj_handle_t MacdrvMetalDevice_create() {
 
 extern "C" void MacdrvMetalDevice_release(obj_handle_t device) {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
-  auto pfn_release_metal_device = macdrv_functions
-                                      ? macdrv_functions->macdrv_release_metal_device
-                                      : resolveMacdrvSymbol<void (*)(macdrv_metal_device)>("macdrv_release_metal_device");
+  auto pfn_release_metal_device =
+      macdrv_functions ? macdrv_functions->macdrv_release_metal_device : nullptr;
   if (pfn_release_metal_device && device) {
     pfn_release_metal_device((macdrv_metal_device)device);
   }
@@ -536,18 +534,12 @@ extern "C" void MetalLayer_setMaximumDrawableCount(obj_handle_t layer, uint32_t 
 
 extern "C" obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer) {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
-  auto pfn_get_win_data = macdrv_functions ? macdrv_functions->get_win_data
-                                           : resolveMacdrvSymbol<macdrv_win_data *(*)(HWND)>("get_win_data");
-  auto pfn_release_win_data = macdrv_functions ? macdrv_functions->release_win_data
-                                               : resolveMacdrvSymbol<void (*)(macdrv_win_data *)>("release_win_data");
-  auto pfn_create_metal_view = macdrv_functions
-                                   ? macdrv_functions->macdrv_view_create_metal_view
-                                   : resolveMacdrvSymbol<macdrv_metal_view (*)(macdrv_view, macdrv_metal_device)>(
-                                         "macdrv_view_create_metal_view");
-  auto pfn_get_metal_layer = macdrv_functions
-                                 ? macdrv_functions->macdrv_view_get_metal_layer
-                                 : resolveMacdrvSymbol<macdrv_metal_layer (*)(macdrv_metal_view)>(
-                                       "macdrv_view_get_metal_layer");
+  auto pfn_get_win_data = macdrv_functions ? macdrv_functions->get_win_data : nullptr;
+  auto pfn_release_win_data = macdrv_functions ? macdrv_functions->release_win_data : nullptr;
+  auto pfn_create_metal_view =
+      macdrv_functions ? macdrv_functions->macdrv_view_create_metal_view : nullptr;
+  auto pfn_get_metal_layer =
+      macdrv_functions ? macdrv_functions->macdrv_view_get_metal_layer : nullptr;
 
   if (!pfn_get_win_data || !pfn_release_win_data || !pfn_create_metal_view || !pfn_get_metal_layer) {
     if (layer) {
@@ -579,14 +571,10 @@ extern "C" obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t devi
 extern "C" obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, obj_handle_t device,
                                                       obj_handle_t *layer) {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
-  auto pfn_create_metal_view = macdrv_functions
-                                   ? macdrv_functions->macdrv_view_create_metal_view
-                                   : resolveMacdrvSymbol<macdrv_metal_view (*)(macdrv_view, macdrv_metal_device)>(
-                                         "macdrv_view_create_metal_view");
-  auto pfn_get_metal_layer = macdrv_functions
-                                 ? macdrv_functions->macdrv_view_get_metal_layer
-                                 : resolveMacdrvSymbol<macdrv_metal_layer (*)(macdrv_metal_view)>(
-                                       "macdrv_view_get_metal_layer");
+  auto pfn_create_metal_view =
+      macdrv_functions ? macdrv_functions->macdrv_view_create_metal_view : nullptr;
+  auto pfn_get_metal_layer =
+      macdrv_functions ? macdrv_functions->macdrv_view_get_metal_layer : nullptr;
 
   if (!pfn_create_metal_view || !pfn_get_metal_layer || !cocoa_view) {
     if (layer) {
@@ -608,38 +596,11 @@ extern "C" obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, ob
 
 extern "C" void ReleaseMetalView(obj_handle_t view) {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
-  auto pfn_release_metal_view = macdrv_functions
-                                    ? macdrv_functions->macdrv_view_release_metal_view
-                                    : resolveMacdrvSymbol<void (*)(macdrv_metal_view)>(
-                                          "macdrv_view_release_metal_view");
+  auto pfn_release_metal_view =
+      macdrv_functions ? macdrv_functions->macdrv_view_release_metal_view : nullptr;
   if (pfn_release_metal_view && view) {
     pfn_release_metal_view((macdrv_metal_view)view);
   }
-}
-
-// Legacy fallback — old macdrv only exports macdrv_get_cocoa_view and has no
-// macdrv_functions / get_win_data. The caller's best bet is to install a
-// fresh CAMetalLayer directly on the window's NSView.
-extern "C" obj_handle_t AcquireLegacyHwndLayer(intptr_t hwnd) {
-  using GetCocoaViewFn = NSView *(*)(void *);
-  auto pfn_get_cocoa_view = resolveMacdrvSymbol<GetCocoaViewFn>("macdrv_get_cocoa_view");
-  if (!pfn_get_cocoa_view) {
-    return NULL_OBJECT_HANDLE;
-  }
-  NSView *view = pfn_get_cocoa_view(reinterpret_cast<void *>(static_cast<uintptr_t>(hwnd)));
-  if (!view) {
-    return NULL_OBJECT_HANDLE;
-  }
-  __block CAMetalLayer *result = nil;
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    @autoreleasepool {
-      CAMetalLayer *newLayer = [CAMetalLayer layer];
-      view.wantsLayer = YES;
-      view.layer = newLayer;
-      result = [newLayer retain];
-    }
-  });
-  return static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>(result));
 }
 
 // ---------------------------------------------------------------------------

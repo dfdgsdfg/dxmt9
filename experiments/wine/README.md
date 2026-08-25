@@ -23,7 +23,9 @@ The script:
 2. Fetches the matching `Template-*.tar.xz` from [`Sikarugir-App/Wrapper`](https://github.com/Sikarugir-App/Wrapper) and drops its `Frameworks/*.dylib` files plus their version-alias symlinks (FreeType, libinotify, etc.) and `.framework` bundles (GStreamer.framework, SikarugirSdk.framework) into `experiments/wine/vendor/`. A single shared `vendor/` is reused by every installed wine engine on this machine.
 3. Renames `bin/wine` → `bin/wine.real` and `bin/wineserver` → `bin/wineserver.real`, then writes thin Bash shims that export `DYLD_FALLBACK_LIBRARY_PATH` and `DYLD_FALLBACK_FRAMEWORK_PATH` pointing at `vendor/` so Wine's `dlopen()` calls (FreeType etc.) find the co-located dylibs and framework bundles.
 4. Audits the bundle's `winemac.so` for the `_macdrv_functions` symbol (refuses to register a stripped build).
-5. Appends a `[[wine]]` entry to `manifest.toml` with `requires_patch=true, patch_status="applied"`.
+5. Appends a `[[wine]]` entry to `manifest.toml` with
+   `metal_surface_protocol="legacy-macdrv-symbols:<target-id>"` and its archival patch
+   metadata.
 
 ## Directory layout
 
@@ -69,7 +71,12 @@ Sikarugir's (and any other macOS) Wine re-runs `wineboot` at every `wine` invoca
 
 ## Manually-placed bundles
 
-Drop a Heroic-style bundle (the `Contents/Resources/wine/` layout) into this directory; it is gitignored. Reference it in `manifest.toml` with `source = "manual"` and a `$REPO_ROOT/experiments/wine/...` path. Always run `scripts/wine/check_patch.py` (when it lands) after placing the bundle — bundles whose `winemac.so` is stripped will fail at runtime regardless of the source label.
+Drop a Heroic-style bundle (the `Contents/Resources/wine/` layout) into this
+directory; it is gitignored. Reference it in `manifest.toml` with `source =
+"manual"`, a `$REPO_ROOT/experiments/wine/...` path, and an exact
+`metal_surface_protocol`. A new Wine build remains `unknown` until its WSI
+protocol is qualified; symbol visibility alone does not qualify the legacy
+path.
 
 ## What is and isn't committed
 

@@ -160,15 +160,16 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         )
         canonical = GENERATOR.canonicalize_schema(protos, records)
 
-        self.assertEqual(len(protos), 163)
+        self.assertEqual(len(protos), 165)
         self.assertEqual(protos[0].name, "dxmt9c_factory_create")
         self.assertEqual(protos[-1].name, "dxmt9c_vdecl_get_declaration")
         self.assertIn("op|ordinal=0|dxmt9c_factory_create|", canonical)
         self.assertIn(
-            "op|ordinal=162|dxmt9c_vdecl_get_declaration|", canonical
+            "op|ordinal=164|dxmt9c_vdecl_get_declaration|", canonical
         )
         record_names = {record.name for record in records}
         self.assertIn("D9CCommandChunk", record_names)
+        self.assertIn("D9CWsiSurfaceBinding", record_names)
         self.assertIn("Dxmt9WinemetalCompileShaderParams", record_names)
         self.assertIn("layout-context|", canonical)
         self.assertNotEqual(GENERATOR.compute_bridge_abi_hash(protos, records), 0)

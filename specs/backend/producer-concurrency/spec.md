@@ -258,11 +258,13 @@ dxmt9c_surface_lock_rect visibility-wait
 dxmt9c_surface_release state-mutation-ack
 dxmt9c_surface_unlock_rect visibility-wait
 dxmt9c_swapchain_addref state-mutation-ack
+dxmt9c_swapchain_adopt_wsi_surface ordering-fence
 dxmt9c_swapchain_get_back_buffer app-return-value
 dxmt9c_swapchain_get_depth_stencil app-return-value
 dxmt9c_swapchain_get_present_params app-return-value
 dxmt9c_swapchain_present ordering-fence
 dxmt9c_swapchain_release state-mutation-ack
+dxmt9c_swapchain_teardown_wsi_surface ordering-fence
 dxmt9c_texture_addref state-mutation-ack
 dxmt9c_texture_generate_mip_sublevels ordering-fence
 dxmt9c_texture_get_level_count app-return-value

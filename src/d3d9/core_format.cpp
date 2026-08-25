@@ -593,7 +593,7 @@ std::vector<DisplayMode> makeAdapterModes(Format format,
 }
 
 // hashBytes / hashString moved to src/util/util_hash.cpp so the ELF
-// winemetal.so unix module can link them without pulling d3d9 in.
+// winemetal_dxmt9.so unix module can link them without pulling d3d9 in.
 
 DeviceCaps makeDefaultCaps(const BackendLimits &limits) {
   constexpr u32 kCaps = 0x00000000u;

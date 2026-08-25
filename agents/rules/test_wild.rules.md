@@ -23,7 +23,7 @@ compatibility matrix.
 | Self-built Wine with `wine/patches/winemac-expose-symbols-<ver>.patch` | Yes (alternative) | The reproducible-from-source path; see `specs/winemetal/requirements.md` R-WMB-10.B. |
 | `Wine-11.x` / `Wine-11.x-DXMT` (Heroic / Gcenx redistributed) | **No** | `winemac.so` is stripped (md5-identical between vanilla and `-DXMT`). The `-DXMT` suffix bundles pre-built dxmt D3D11 DLLs only and does **not** patch `winemac.so`. Runtime probe rejects them. |
 | Heroic `Wine-Crossover-23.7.1-1` | **No** | Same stripping pattern; Heroic PR #5488 itself documents this build as a fallback "only when no other option works." |
-| CodeWeavers CrossOver product (licensed) | **No** | Audited 2026-05-11: four independent blockers — Perl `bin/wine` wrapper (bottle-context required, also bypassable via `cxbottle` CLI but does not fix the next three), wow64 missing `MemoryWineLoadUnixLibByName` (class 1002) and **bottle context does not bypass it**, `ntdll.so` hardcodes `/opt/cxoffice/lib/wine` with no working `WINEDLLDIR` override, and `CrossOver.app/lib/wine/` is SIP/codesign-protected so `winemetal.so` cannot be staged. See `specs/winemetal/requirements.md` §6.2. |
+| CodeWeavers CrossOver product (licensed) | **No** | Audited 2026-05-11: four independent blockers — Perl `bin/wine` wrapper (bottle-context required, also bypassable via `cxbottle` CLI but does not fix the next three), wow64 missing `MemoryWineLoadUnixLibByName` (class 1002) and **bottle context does not bypass it**, `ntdll.so` hardcodes `/opt/cxoffice/lib/wine` with no working `WINEDLLDIR` override, and `CrossOver.app/lib/wine/` is SIP/codesign-protected so `winemetal_dxmt9.so` cannot be staged. See `specs/winemetal/requirements.md` §6.2. |
 | `Wine-*-VK` / Proton-style VK builds | No | Substitutes a different `d3d9.dll` and reroutes through Vulkan; the comparison is no longer "dxmt9 vs. Wine builtin." |
 
 **Reason — concrete incident (2026-05-10):** SFIV under `Wine-11.6-DXMT`
@@ -143,19 +143,19 @@ Before reporting a dxmt9 regression from a wild run, confirm:
    `build-win32-x86-builtin` mismatched against `build/` has bitten us
    before — when in doubt rebuild every staged directory.
 4. **`abi-hash handshake OK` is in `<binary>_dxmt9.log`.** If it is
-   absent the PE-side `winemetal.dll` either failed `DllMain` or never
+   absent the PE-side `winemetal_dxmt9.dll` either failed `DllMain` or never
    ran the handshake; further bridge errors are downstream of that.
-5. **`winemetal.so` install_name deps are `@rpath/winemac.so` /
+5. **`winemetal_dxmt9.so` install_name deps are `@rpath/winemac.so` /
    `@rpath/ntdll.so`.** Bare-dep `.so` files (`winemac.so` /
    `ntdll.so` without the `@rpath/` prefix) silently break Wine's
    `NtQueryVirtualMemory(info=kMemoryWineLoadUnixLib=1000)` lookup —
    the bridge falls through to the unsupported `info=1002` path and
-   `DllMain` rejects `winemetal.dll` with `abi-hash unix-call
+   `DllMain` rejects `winemetal_dxmt9.dll` with `abi-hash unix-call
    failed status=0xc0000003`. The
    `winemetal_unix_install_name_fixup` `custom_target` in
    `src/winemetal/unix/meson.build` is supposed to rewrite the deps
    to `@rpath/...` post-link, but it only runs when the canonical
-   build target is invoked. A direct `ninja src/winemetal/unix/winemetal.so`
+   build target is invoked. A direct `ninja src/winemetal/unix/winemetal_dxmt9.so`
    skips the stamp and leaves the .so with bare deps. The audit
    `scripts/check/audit_winemetal_install_names.py`
    (`dxmt9-winemetal-install-name-audit` meson test) checks for this

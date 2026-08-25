@@ -597,7 +597,7 @@ pointer"* — which is exactly the hole: pending initializer uploads are not
 encoders and are not covered by R-VERIF-3.1's C++ realisation.
 
 The crash is unrecoverable rather than fatal: AGX faults on `dxmt9-encode`, a
-native pthread created inside `winemetal.so` with no Wine TEB, so Wine's ntdll
+native pthread created inside `winemetal_dxmt9.so` with no Wine TEB, so Wine's ntdll
 handler dereferences a NULL `NtCurrentTeb()` and faults again. The thread wedges,
 and the app thread waits forever in
 `commit_chunk -> getRenderTargetData -> submitFlush -> waitForSequence`.

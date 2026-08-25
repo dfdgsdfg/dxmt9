@@ -69,7 +69,7 @@ dxmt9_winemetal_unix_framework_dep = dependency('appleframeworks', modules: [
 ])
 
 dxmt9_winemetal_unix_module = shared_library(
-  'winemetal',
+  'winemetal_dxmt9',
   files(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
@@ -109,7 +109,7 @@ dxmt9_winemetal_unix_module = shared_library(
   #     → dxmt9p_factory_create  (d3d9/device_c_factory.cpp)
   #       → core::Factory(...) using dxmt9::Device + CommandQueue
   #         + Presenter from dxmt9_runtime_lib.
-  # Mirrors libdxmt9_native.dylib's link_whole set so winemetal.so is a
+  # Mirrors libdxmt9_native.dylib's link_whole set so winemetal_dxmt9.so is a
   # self-contained .so replica of the native runtime, loadable as a
   # Wine unix module.
   link_whole: [
@@ -125,7 +125,7 @@ dxmt9_winemetal_unix_module = shared_library(
     dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
-  link_args: ['-Wl,-install_name,@rpath/winemetal.so'] + dxmt9_winemetal_unix_common_link_args,
+  link_args: ['-Wl,-install_name,@rpath/winemetal_dxmt9.so'] + dxmt9_winemetal_unix_common_link_args,
   build_rpath: dxmt9_winemetal_unix_build_rpath,
   install_rpath: '@loader_path/',
   override_options: dxmt9_winemetal_unix_override_options,
@@ -139,7 +139,7 @@ if host_machine.system() == 'darwin' and dxmt9_winemetal_unix_needs_install_name
     input: dxmt9_winemetal_unix_module,
     # depends: forces stamp invalidation when the shared_library is
     # re-linked (input: alone tracks only the artifact path, not the
-    # build-rule output). Without this, ninja can leave winemetal.so with
+    # build-rule output). Without this, ninja can leave winemetal_dxmt9.so with
     # bare 'winemac.so' / 'ntdll.so' install_names after a relink, which
     # breaks DYLD resolution at test runtime (SIGABRT during dyld load).
     depends: dxmt9_winemetal_unix_module,

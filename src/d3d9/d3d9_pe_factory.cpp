@@ -6,6 +6,7 @@
 #include <cstring>
 #include <new>
 #include "d3d9_pe.hpp"
+#include "d3d9_pe_wsi.hpp"
 
 // Pull in only the inline capability-pair helpers from core_format_utils.hpp.
 // The header's lower section depends on dxmt9/core.hpp which redefines the
@@ -22,6 +23,26 @@
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
 static constexpr uint32_t kD9CDeviceTypeHal = 0u;
+
+static HRESULT adoptInitialWsiBinding(
+        D9CDevice* device, D3D9PeWsiBinding& binding) noexcept {
+    if (!device || !dxmt9::wsi::validAdoptionCandidate(binding)) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+    D9CSwapChain* swapChain = dxmt9c_device_get_swap_chain(device, 0u);
+    if (!swapChain) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+    const HRESULT hr = dxmt9PeAdoptWsiBinding(swapChain, binding);
+    dxmt9c_swapchain_release(swapChain);
+    if (FAILED(hr)) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+    return D3D_OK;
+}
 
 static bool isKnownDeviceType(D3DDEVTYPE type) {
     return type == D3DDEVTYPE_HAL ||
@@ -751,21 +772,33 @@ public:
         if (!cpp.deviceWindow) {
             cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         }
+        D3D9PeWsiBinding wsiBinding = dxmt9PeAcquireWsiBinding(
+            reinterpret_cast<HWND>(static_cast<uintptr_t>(cpp.deviceWindow)));
+        if (!dxmt9::wsi::validAdoptionCandidate(wsiBinding)) {
+            return D3DERR_NOTAVAILABLE;
+        }
         D9CDevice* dev = nullptr;
         const HRESULT hr = hr32(dxmt9c_factory_create_device2(f_, adapter, &cpp,
                                                               behaviorFlags, nullptr, &dev));
         if (FAILED(hr)) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
             dxmt9FactoryDebugLog("CreateDevice -> failed hr=0x%08x", (unsigned)hr);
             return hr;
         }
         if (!dev) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
             dxmt9FactoryDebugLog("CreateDevice -> succeeded without device");
             return D3DERR_INVALIDCALL;
+        }
+        if (FAILED(adoptInitialWsiBinding(dev, wsiBinding))) {
+            dxmt9c_device_release(dev);
+            return D3DERR_NOTAVAILABLE;
         }
         HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags, &createFailure);
+                                     pPP->Flags, std::move(wsiBinding),
+                                     &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDevice -> command chunk negotiation failed");
             return createFailure;
@@ -880,6 +913,11 @@ public:
         if (!cpp.deviceWindow) {
             cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         }
+        D3D9PeWsiBinding wsiBinding = dxmt9PeAcquireWsiBinding(
+            reinterpret_cast<HWND>(static_cast<uintptr_t>(cpp.deviceWindow)));
+        if (!dxmt9::wsi::validAdoptionCandidate(wsiBinding)) {
+            return D3DERR_NOTAVAILABLE;
+        }
         D9CDisplayModeEx cdme{};
         if (pFsMode) cdme = toCdme(*pFsMode);
         D9CDevice* dev = nullptr;
@@ -888,17 +926,24 @@ public:
                                                               pFsMode ? &cdme : nullptr,
                                                               &dev));
         if (FAILED(hr)) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
             dxmt9FactoryDebugLog("CreateDeviceEx -> failed hr=0x%08x", (unsigned)hr);
             return hr;
         }
         if (!dev) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
             dxmt9FactoryDebugLog("CreateDeviceEx -> succeeded without device");
             return D3DERR_INVALIDCALL;
+        }
+        if (FAILED(adoptInitialWsiBinding(dev, wsiBinding))) {
+            dxmt9c_device_release(dev);
+            return D3DERR_NOTAVAILABLE;
         }
         HRESULT createFailure = D3DERR_NOTAVAILABLE;
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
-                                     pPP->Flags, &createFailure);
+                                     pPP->Flags, std::move(wsiBinding),
+                                     &createFailure);
         if (!*ppDevice) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> command chunk negotiation failed");
             return createFailure;

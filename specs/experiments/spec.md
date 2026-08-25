@@ -21,7 +21,7 @@ Each experiment is a launcher script that:
 ```mermaid
 graph LR
     subgraph Launcher["experiments/launchers/<app>.sh"]
-        INJECT["Inject native backend\nor install d3d9.dll + winemetal.dll + winemetal.so"]
+        INJECT["Inject native backend\nor install d3d9.dll + winemetal_dxmt9.dll + winemetal_dxmt9.so"]
         RUN["Run app for N frames"]
         SHOT["Capture screenshot"]
         CMP["SSIM vs reference\n≥ 0.90 = pass"]
@@ -59,10 +59,10 @@ Wine DLL override:
 
 ```sh
 cp build-win32-x64-builtin/src/win32/d3d9.dll "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
-cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
-  "<wine-root>/lib/wine/x86_64-windows/winemetal.dll"
-cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
-  "<wine-root>/lib/wine/x86_64-unix/winemetal.so"
+cp build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll \
+  "<wine-root>/lib/wine/x86_64-windows/winemetal_dxmt9.dll"
+cp build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so \
+  "<wine-root>/lib/wine/x86_64-unix/winemetal_dxmt9.so"
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 

@@ -537,8 +537,8 @@ of the test suite: it is a cross-compiled Win32 PE executable that exercises
 the full presentation stack end-to-end under Wine, including:
 
 - `d3d9.dll` PE wrapper (COM entry points)
-- `winemetal.dll` PE bridge/service module (Wine-visible thunk layer)
-- `winemetal.so` unix-side Metal backend
+- `winemetal_dxmt9.dll` PE bridge/service module (Wine-visible thunk layer)
+- `winemetal_dxmt9.so` unix-side Metal backend
 - Legacy `macdrv_get_cocoa_view` or Heroic `macdrv_functions` HWND→Cocoa resolution
 - `WineWindow -> contentView -> WineMetalView -> CAMetalLayer` fallback on Heroic Wine 11.5
 - Metal `nextDrawable` + `presentDrawable` on a real `CAMetalLayer`
@@ -547,8 +547,8 @@ the full presentation stack end-to-end under Wine, including:
 sequenceDiagram
     participant App as wsi_present_x64.exe
     participant D3D as d3d9.dll (PE)
-    participant Bridge as winemetal.dll (PE bridge)
-    participant Unix as winemetal.so
+    participant Bridge as winemetal_dxmt9.dll (PE bridge)
+    participant Unix as winemetal_dxmt9.so
     participant Wine as winemac.drv
 
     App->>D3D: Direct3DCreate9()
@@ -597,11 +597,11 @@ meson setup build-x86_64-builtin \
 meson compile -C build-x86_64-builtin
 
 cp build-win32-x64-builtin/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
-cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
-  <wine-root>/lib/wine/x86_64-windows/winemetal.dll
-cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
-  <wine-root>/lib/wine/x86_64-unix/winemetal.so
-WINEDLLOVERRIDES="d3d9,winemetal=n,b" wine build/wsi_present/wsi_present_x64.exe
+cp build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll \
+  <wine-root>/lib/wine/x86_64-windows/winemetal_dxmt9.dll
+cp build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so \
+  <wine-root>/lib/wine/x86_64-unix/winemetal_dxmt9.so
+WINEDLLOVERRIDES="d3d9,winemetal_dxmt9=n,b" wine build/wsi_present/wsi_present_x64.exe
 ```
 
 Requires a recent Wine64-capable build on macOS plus a Wine toolchain install
@@ -636,8 +636,8 @@ clean-room local test implementations.
 sequenceDiagram
     participant Test as d3d9_conformance_*.exe
     participant D3D as d3d9.dll
-    participant Bridge as winemetal.dll
-    participant Unix as winemetal.so
+    participant Bridge as winemetal_dxmt9.dll
+    participant Unix as winemetal_dxmt9.so
 
     Test->>D3D: Direct3DCreate9 / Direct3DCreate9Ex
     Test->>D3D: COM calls under test
@@ -788,8 +788,8 @@ manifest remains the source of truth.
 # App-local lane example.
 mkdir -p build/conformance-stage
 cp build-win32-x64/src/win32/d3d9.dll build/conformance-stage/
-cp build-win32-x64/src/winemetal/winemetal.dll build/conformance-stage/
-cp build-x86_64/src/winemetal/unix/winemetal.so build/conformance-stage/
+cp build-win32-x64/src/winemetal/winemetal_dxmt9.dll build/conformance-stage/
+cp build-x86_64/src/winemetal/unix/winemetal_dxmt9.so build/conformance-stage/
 # Copy every PE runtime dependency listed in the selected deploy manifest variant,
 # unless this is a statically linked app-local package with an empty dependency list.
 for dep in libc++.dll libunwind.dll; do
@@ -799,15 +799,15 @@ for dep in libc++.dll libunwind.dll; do
 done
 cp tests/conformance/d3d9/d3d9_*_x64.exe build/conformance-stage/
 (cd build/conformance-stage && \
-  WINEDLLOVERRIDES="d3d9,winemetal=n,b" \
-  DXMT9_WINEMETAL_SO="$PWD/winemetal.so" \
+  WINEDLLOVERRIDES="d3d9,winemetal_dxmt9=n,b" \
+  DXMT9_WINEMETAL_SO="$PWD/winemetal_dxmt9.so" \
   DYLD_LIBRARY_PATH="<wine-root>/lib/wine/x86_64-unix${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
   wine d3d9_factory_ex_x64.exe)
 ```
 
-For the builtin lane, install `d3d9.dll`, `winemetal.dll`, and `winemetal.so`
+For the builtin lane, install `d3d9.dll`, `winemetal_dxmt9.dll`, and `winemetal_dxmt9.so`
 with the deployment helper, then run the same PE executables with
-`WINEDLLOVERRIDES="d3d9,winemetal=n,b"` as described in the deployment spec.
+`WINEDLLOVERRIDES="d3d9,winemetal_dxmt9=n,b"` as described in the deployment spec.
 
 ---
 

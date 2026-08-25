@@ -5,6 +5,7 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_device.hpp"
+#include "dxmt9/wsi_surface_protocol.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -266,11 +267,18 @@ bool Presenter::takePresentMirror(
   return true;
 }
 
-Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
+Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint32_t protocol,
+                     uint64_t layerToken,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath)
     : device_(device), hwnd_(hwnd),
-      acquisition_(presentimpl::acquireLayerForHwnd(hwnd, seqId)),
+      acquisition_(protocol == static_cast<uint32_t>(
+                                    wsi::SurfaceProtocol::ExtEscapeV1)
+          ? presentimpl::borrowLayerForHwnd(hwnd, layerToken, 0ull)
+          : protocol == static_cast<uint32_t>(
+                            wsi::SurfaceProtocol::LegacyMacdrvSymbols)
+              ? presentimpl::acquireLegacyLayerForHwnd(hwnd, 0ull)
+              : presentimpl::LayerAcquisition{}),
       layer_(acquisition_.layerHandle),
       policy_(resolveAcquirePolicyFromEnv()),
       archive_(archive), archivePath_(archivePath) {}
@@ -947,7 +955,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   // The originating core::SwapChain owns the Presenter; the queue
   // resolved the SwapDesc::presentId to a non-owning pointer before
   // calling encodePresent. Missing presenter = no layer available
-  // (hwnd=0 or failed acquisition in SwapChain::ensurePresenter), or a
+  // (hwnd=0 or failed cold WSI adoption), or a
   // stale id from a destroyed swapchain.
   if (!presenter) {
     perf::countPresentSkipped();

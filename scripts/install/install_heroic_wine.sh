@@ -17,7 +17,7 @@ Options:
                           <wine-root>/lib/wine/x86_64-windows.
                           Default: <repo>/build-win32-x64-builtin/src/win32
   --runtime-pe-build-dir <path>
-                          Directory containing builtin winemetal.dll for
+                          Directory containing builtin winemetal_dxmt9.dll for
                           <prefix>/system32 and
                           <wine-root>/lib/wine/x86_64-windows.
                           Default: <repo>/build-win32-x64-builtin/src/winemetal
@@ -25,11 +25,11 @@ Options:
                           Directory containing 32-bit d3d9.dll
                           for <prefix>/syswow64.
   --wow64-runtime-pe-build-dir <path>
-                          Directory containing builtin 32-bit winemetal.dll for
+                          Directory containing builtin 32-bit winemetal_dxmt9.dll for
                           <prefix>/syswow64 and
                           <wine-root>/lib/wine/i386-windows.
                           Default: <repo>/build-win32-x86-builtin/src/winemetal
-  --unix-build-dir <path> Directory containing winemetal.so.
+  --unix-build-dir <path> Directory containing winemetal_dxmt9.so.
                           Default: <repo>/build-x86_64-builtin/src
   --mingw-bin-dir <path>  Directory containing libc++.dll and libunwind.dll.
                           Default: ~/llvm-mingw/x86_64-w64-mingw32/bin
@@ -43,17 +43,17 @@ runtime and prefix:
   64-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/system32
   - d3d9.dll      -> <wine-root>/lib/wine/x86_64-windows
-  - winemetal.dll -> <prefix>/drive_c/windows/system32
-  - winemetal.dll -> <wine-root>/lib/wine/x86_64-windows
-  - winemetal.so  -> <wine-root>/lib/wine/x86_64-unix
+  - winemetal_dxmt9.dll -> <prefix>/drive_c/windows/system32
+  - winemetal_dxmt9.dll -> <wine-root>/lib/wine/x86_64-windows
+  - winemetal_dxmt9.so  -> <wine-root>/lib/wine/x86_64-unix
   - libc++.dll    -> <prefix>/drive_c/windows/system32
   - libunwind.dll -> <prefix>/drive_c/windows/system32
 
   Optional WoW64 32-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/syswow64
   - d3d9.dll      -> <wine-root>/lib/wine/i386-windows
-  - winemetal.dll -> <prefix>/drive_c/windows/syswow64
-  - winemetal.dll -> <wine-root>/lib/wine/i386-windows
+  - winemetal_dxmt9.dll -> <prefix>/drive_c/windows/syswow64
+  - winemetal_dxmt9.dll -> <wine-root>/lib/wine/i386-windows
   - libc++.dll    -> <prefix>/drive_c/windows/syswow64
   - libunwind.dll -> <prefix>/drive_c/windows/syswow64
 
@@ -337,12 +337,12 @@ if [[ -n "$wow64_runtime_pe_build_dir" && ! -d "$i386_windows_runtime_dir" ]]; t
   exit 1
 fi
 
-if [[ ! -f "$unix_build_dir/winemetal/unix/winemetal.so" && -f "$repo_root/build/src/winemetal/unix/winemetal.so" ]]; then
+if [[ ! -f "$unix_build_dir/winemetal/unix/winemetal_dxmt9.so" && -f "$repo_root/build/src/winemetal/unix/winemetal_dxmt9.so" ]]; then
   unix_build_dir="$repo_root/build/src"
 fi
 
-if [[ ! -f "$runtime_pe_build_dir/winemetal.dll" ]]; then
-  printf 'error: could not locate winemetal.dll in runtime PE build dir: %s\n' "$runtime_pe_build_dir" >&2
+if [[ ! -f "$runtime_pe_build_dir/winemetal_dxmt9.dll" ]]; then
+  printf 'error: could not locate winemetal_dxmt9.dll in runtime PE build dir: %s\n' "$runtime_pe_build_dir" >&2
   exit 1
 fi
 
@@ -350,7 +350,7 @@ if [[ -z "$wow64_runtime_pe_build_dir" && -n "$wow64_pe_build_dir" ]]; then
   wow64_runtime_pe_build_dir="$wow64_pe_build_dir"
 fi
 
-if [[ -z "$wow64_runtime_pe_build_dir" && -f "$repo_root/build-win32-x86-builtin/src/winemetal/winemetal.dll" ]]; then
+if [[ -z "$wow64_runtime_pe_build_dir" && -f "$repo_root/build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll" ]]; then
   if [[ -z "$wow64_pe_build_dir" ]]; then
     wow64_pe_build_dir="$repo_root/build-win32-x86-builtin/src/win32"
   fi
@@ -358,30 +358,30 @@ if [[ -z "$wow64_runtime_pe_build_dir" && -f "$repo_root/build-win32-x86-builtin
 fi
 
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
-  if [[ ! -f "$wow64_runtime_pe_build_dir/winemetal.dll" ]]; then
-    printf 'error: could not locate 32-bit winemetal.dll in runtime PE build dir: %s\n' "$wow64_runtime_pe_build_dir" >&2
+  if [[ ! -f "$wow64_runtime_pe_build_dir/winemetal_dxmt9.dll" ]]; then
+    printf 'error: could not locate 32-bit winemetal_dxmt9.dll in runtime PE build dir: %s\n' "$wow64_runtime_pe_build_dir" >&2
     exit 1
   fi
 fi
 
 ensure_meson_postprocess "$pe_build_dir/d3d9.dll"
-ensure_meson_postprocess "$runtime_pe_build_dir/winemetal.dll"
+ensure_meson_postprocess "$runtime_pe_build_dir/winemetal_dxmt9.dll"
 if [[ -n "$wow64_pe_build_dir" ]]; then
   ensure_meson_postprocess "$wow64_pe_build_dir/d3d9.dll"
 fi
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
-  ensure_meson_postprocess "$wow64_runtime_pe_build_dir/winemetal.dll"
+  ensure_meson_postprocess "$wow64_runtime_pe_build_dir/winemetal_dxmt9.dll"
 fi
-winemetal_unix_so="$unix_build_dir/winemetal/unix/winemetal.so"
+winemetal_unix_so="$unix_build_dir/winemetal/unix/winemetal_dxmt9.so"
 ensure_meson_artifact "$winemetal_unix_so"
 ensure_winemetal_unix_fixup "$winemetal_unix_so"
 audit_winemetal_unix_install_names "$winemetal_unix_so"
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
 install_file "$pe_build_dir/d3d9.dll" "$windows_runtime_dir/d3d9.dll"
-install_file "$runtime_pe_build_dir/winemetal.dll" "$system32_dir/winemetal.dll"
-install_file "$runtime_pe_build_dir/winemetal.dll" "$windows_runtime_dir/winemetal.dll"
-install_file "$winemetal_unix_so" "$unix_runtime_dir/winemetal.so"
+install_file "$runtime_pe_build_dir/winemetal_dxmt9.dll" "$system32_dir/winemetal_dxmt9.dll"
+install_file "$runtime_pe_build_dir/winemetal_dxmt9.dll" "$windows_runtime_dir/winemetal_dxmt9.dll"
+install_file "$winemetal_unix_so" "$unix_runtime_dir/winemetal_dxmt9.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
 install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
 
@@ -393,8 +393,8 @@ if [[ -n "$wow64_pe_build_dir" ]]; then
 fi
 
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
-  install_file "$wow64_runtime_pe_build_dir/winemetal.dll" "$syswow64_dir/winemetal.dll"
-  install_file "$wow64_runtime_pe_build_dir/winemetal.dll" "$i386_windows_runtime_dir/winemetal.dll"
+  install_file "$wow64_runtime_pe_build_dir/winemetal_dxmt9.dll" "$syswow64_dir/winemetal_dxmt9.dll"
+  install_file "$wow64_runtime_pe_build_dir/winemetal_dxmt9.dll" "$i386_windows_runtime_dir/winemetal_dxmt9.dll"
 fi
 
 wine_bin="$wine_root/bin/wine"
@@ -413,5 +413,5 @@ Wine runtime:
   $wine_root
 
 Run with:
-  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9,winemetal=n,b" "$wine_bin" game.exe
+  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9,winemetal_dxmt9=n,b" "$wine_bin" game.exe
 EOF

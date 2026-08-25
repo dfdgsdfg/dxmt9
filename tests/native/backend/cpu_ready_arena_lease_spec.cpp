@@ -48,7 +48,7 @@ struct CommandQueueArenaLeaseTestAccess {
 
   static void setStopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
-    queue.stop_ = true;
+    queue.requestSchedulingStopLocked();
   }
 
   static void stopCpuReadyTape(CommandQueue& queue) {
@@ -120,6 +120,11 @@ struct CommandQueueArenaLeaseTestAccess {
   static core::PresentId registerFakePresenter(CommandQueue& queue) {
     return queue.registerPresenter(
         reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)));
+  }
+
+  static void failNextPresenterRegistration(CommandQueue& queue) {
+    std::lock_guard lock(queue.presenterRegistryMutex_);
+    queue.testOnlyFailNextPresenterRegistration_ = true;
   }
 
   static bool appendStashedPresent(CommandQueue& queue,
@@ -1365,6 +1370,128 @@ void testBatchRollbackFailureDoesNotReportRecoverableFallback() {
         "recoverable EventSerial fallback");
 }
 
+void testWsiQuiescenceAndRegistryFailureDisposition() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using dxmt9::wsi::QuiescenceDisposition;
+
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const auto currentId =
+      CommandQueueArenaLeaseTestAccess::registerFakePresenter(queue);
+  check(currentId && queue.lookupPresenter(currentId) ==
+            reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)),
+        "current Presenter registry binding must exist");
+  CommandQueueArenaLeaseTestAccess::failNextPresenterRegistration(queue);
+  const auto failedCandidate = queue.registerPresenter(
+      reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(2)));
+  check(!failedCandidate && queue.lookupPresenter(currentId) ==
+            reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)),
+        "injected candidate registry failure preserves the current PresentId");
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  CommandQueue activeQueue(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto active = activeQueue.beginCpuReadyArenaSource(131, layout);
+  check(active.has_value(), "active-arena WSI fixture admission must succeed");
+  check(activeQueue.beginWsiQuiescence() ==
+            QuiescenceDisposition::ActiveArena,
+        "WSI quiescence must fail closed instead of deferring active arena flush");
+  (void)active->abortForFallback();
+
+  check(queue.beginWsiQuiescence() == QuiescenceDisposition::Complete,
+        "idle queue must establish actual WSI quiescence");
+  check(queue.beginWsiQuiescence() == QuiescenceDisposition::AlreadyActive,
+        "a second cold replacement cannot overlap the armed WSI gate");
+  std::atomic<bool> presentStarted{false};
+  std::atomic<bool> presentReturned{false};
+  std::atomic<std::uint64_t> presentSeq{0u};
+  std::thread presentThread([&] {
+    core::SwapDesc present{};
+    present.pacedByPresentOrdinal = true;
+    presentStarted.store(true, std::memory_order_release);
+    presentSeq.store(queue.submitPresent(present), std::memory_order_release);
+    presentReturned.store(true, std::memory_order_release);
+  });
+  while (!presentStarted.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  check(!presentReturned.load(std::memory_order_acquire),
+        "armed WSI gate must retain rather than drop a Present ordinal");
+  check(queue.beginCpuReadyArenaSource(133, layout).status ==
+            CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure,
+        "armed WSI gate rejects a new CPU-ready arena");
+  queue.endWsiQuiescence();
+  presentThread.join();
+  check(presentReturned.load(std::memory_order_acquire) &&
+            presentSeq.load(std::memory_order_acquire) != 0u,
+        "gate release notifies and admits the retained Present exactly once");
+  queue.unregisterPresenter(currentId);
+
+  CommandQueue terminalWaiter(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  check(terminalWaiter.beginWsiQuiescence() ==
+            QuiescenceDisposition::Complete,
+        "terminal waiter fixture must arm its gate");
+  std::atomic<bool> stoppedReturned{false};
+  std::atomic<std::uint64_t> stoppedSeq{1u};
+  std::thread stoppedPresent([&] {
+    stoppedSeq.store(terminalWaiter.submitPresent({}),
+                     std::memory_order_release);
+    stoppedReturned.store(true, std::memory_order_release);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  check(!stoppedReturned.load(std::memory_order_acquire),
+        "gated Present waits before terminal stop");
+  CommandQueueArenaLeaseTestAccess::setStopped(terminalWaiter);
+  stoppedPresent.join();
+  check(stoppedReturned.load(std::memory_order_acquire) &&
+            stoppedSeq.load(std::memory_order_acquire) == 0u,
+        "terminal stop wakes and explicitly rejects the retained admission");
+  terminalWaiter.endWsiQuiescence();
+
+  CommandQueue finalQueue(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto finalArena = finalQueue.beginCpuReadyArenaSource(134, layout);
+  check(finalArena.has_value(),
+        "final teardown fixture must own an active arena");
+  std::atomic<bool> finalReturned{false};
+  std::atomic<QuiescenceDisposition> finalDisposition{
+      QuiescenceDisposition::QueueStopped};
+  std::thread finalizer([&] {
+    finalDisposition.store(finalQueue.beginFinalWsiQuiescence(),
+                           std::memory_order_release);
+    finalReturned.store(true, std::memory_order_release);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  check(!finalReturned.load(std::memory_order_acquire),
+        "terminal teardown retains ownership while an arena is active");
+  (void)finalArena->abortForFallback();
+  finalizer.join();
+  check(finalDisposition.load(std::memory_order_acquire) ==
+            QuiescenceDisposition::Complete,
+        "terminal teardown waits for arena settlement then fences");
+  finalQueue.endWsiQuiescence();
+
+  CommandQueue sameOwnerFinalQueue(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto sameOwnerArena =
+      sameOwnerFinalQueue.beginCpuReadyArenaSource(135, layout);
+  check(sameOwnerArena.has_value(),
+        "same-owner terminal fixture must own an active arena");
+  check(sameOwnerFinalQueue.beginFinalWsiQuiescence() ==
+            QuiescenceDisposition::Complete,
+        "terminal teardown settles rather than waiting on its own arena");
+  sameOwnerFinalQueue.endWsiQuiescence();
+
+  CommandQueue stopped(
+      CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  CommandQueueArenaLeaseTestAccess::setStopped(stopped);
+  check(stopped.beginWsiQuiescence() ==
+            QuiescenceDisposition::QueueStopped,
+        "stopped queue has a distinct non-quiescent disposition");
+}
+
 }  // namespace
 
 int main() {
@@ -1389,6 +1516,7 @@ int main() {
     testBatchBuilderFailureRollsBackForEventSerialFallback();
     testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures();
     testBatchRollbackFailureDoesNotReportRecoverableFallback();
+    testWsiQuiescenceAndRegistryFailureDisposition();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

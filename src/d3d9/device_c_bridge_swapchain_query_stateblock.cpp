@@ -15,8 +15,12 @@
   } while (false)
 
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* arg0, uint32_t index) {
-  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_get_swap_chain");
-  return dxmt9p_device_get_swap_chain(arg0, index);
+  try {
+    DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_get_swap_chain");
+    return dxmt9p_device_get_swap_chain(arg0, index);
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* arg0) {
@@ -25,8 +29,31 @@ extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* arg0) {
 }
 
 extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* arg0, const D9CPresentParams* arg1) {
-  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_create_additional_swap_chain");
-  return dxmt9p_device_create_additional_swap_chain(arg0, arg1);
+  try {
+    DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_create_additional_swap_chain");
+    return dxmt9p_device_create_additional_swap_chain(arg0, arg1);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+extern "C" int32_t dxmt9c_swapchain_adopt_wsi_surface(
+    D9CSwapChain* arg0, const D9CWsiSurfaceBinding* arg1) {
+  try {
+    DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_swapchain_adopt_wsi_surface");
+    return dxmt9p_swapchain_adopt_wsi_surface(arg0, arg1);
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* arg0) {
+  try {
+    DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_swapchain_teardown_wsi_surface");
+    return dxmt9p_swapchain_teardown_wsi_surface(arg0);
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* arg0, uint32_t type) {

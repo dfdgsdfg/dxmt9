@@ -95,8 +95,8 @@ def package_pe_lane(output_dir: Path, lane: PeLane) -> tuple[list[dict[str, str]
     ))
     artifacts.append(copy_required_binary(
         output_dir,
-        lane.build_dir / "winemetal" / "winemetal.dll",
-        pe_dir / "winemetal.dll",
+        lane.build_dir / "winemetal" / "winemetal_dxmt9.dll",
+        pe_dir / "winemetal_dxmt9.dll",
     ))
 
     pe_dependencies: list[str] = []
@@ -113,8 +113,8 @@ def package_pe_lane(output_dir: Path, lane: PeLane) -> tuple[list[dict[str, str]
 def package_unix_provider(output_dir: Path, unix_build_dir: Path, unix_arch: str) -> dict[str, str]:
     return copy_required_binary(
         output_dir,
-        unix_build_dir / "winemetal" / "unix" / "winemetal.so",
-        output_dir / "unix" / unix_arch / "winemetal.so",
+        unix_build_dir / "winemetal" / "unix" / "winemetal_dxmt9.so",
+        output_dir / "unix" / unix_arch / "winemetal_dxmt9.so",
     )
 
 

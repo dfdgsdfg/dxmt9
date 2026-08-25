@@ -19,7 +19,7 @@ bridge_gen_inc = include_directories('.')
 # header, the winemetal unix schema, and shader/thunk POD declarations and
 # emits the per-op bridge tables plus the ABI fingerprint.
 # The .generated.cpp files are consumed by the PE-side d3d9 forwarder
-# (client) and the unix-side winemetal.so dispatch (server).
+# (client) and the unix-side winemetal_dxmt9.so dispatch (server).
 python3 = find_program('python3', required: true)
 device_c_unix_schema = custom_target(
   'dxmt9_device_c_unix_schema_codegen',
@@ -69,8 +69,8 @@ if host_machine.system() == 'darwin'
     subdir('tests')
   endif
 elif host_machine.system() == 'windows'
-  # Cross-build: produces the PE d3d9.dll + winemetal.dll thunk pair.
-  # Native winemetal.so (Mach-O) comes from the darwin build.
+  # Cross-build: produces the PE d3d9.dll + winemetal_dxmt9.dll thunk pair.
+  # Native winemetal_dxmt9.so (Mach-O) comes from the darwin build.
   subdir('src/util')
   subdir('src/winemetal')
   subdir('src/d3d9')

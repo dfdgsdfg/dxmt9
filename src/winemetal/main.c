@@ -25,7 +25,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     (void)init_unix_call();
   }
   /* ABI handshake — call the reserved DXMT9_WINEMETAL_CALL_ABI_HASH slot
-   * in winemetal.so and compare with the codegen-time hash baked into
+   * in winemetal_dxmt9.so and compare with the codegen-time hash baked into
    * this TU's dxmt9_bridge_ops.generated.h. On mismatch
    * dxmt9_winemetal_check_abi_handshake logs the skew and returns 0;
    * we propagate that as DllMain failure so the loader rejects the DLL

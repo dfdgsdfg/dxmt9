@@ -85,7 +85,7 @@ class SummarizeXctraceCpuThreadsTests(unittest.TestCase):
                           <tagged-backtrace id="bt2">
                             <backtrace>
                               <frame id="f3" name="dxmt9p_device_commit_chunk">
-                                <binary id="b2" name="winemetal.so"/>
+                                <binary id="b2" name="winemetal_dxmt9.so"/>
                               </frame>
                             </backtrace>
                           </tagged-backtrace>

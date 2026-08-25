@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Audit the winemetal.so install_name fixup state.
+"""Audit the winemetal_dxmt9.so install_name and fixup state.
 
-When `winemetal.so` is linked the resulting Mach-O has `LC_LOAD_DYLIB`
+When `winemetal_dxmt9.so` is linked the resulting Mach-O has `LC_LOAD_DYLIB`
 entries with bare names `winemac.so` and `ntdll.so` (the names the linker
 saw from `-lwinemac` / `-lntdll`). Wine's PE/unix bridge lookup —
 specifically `NtQueryVirtualMemory(info=kMemoryWineLoadUnixLib=1000)`
 in `winemetal_bridge.cpp:initializeDispatcherOnlyFallback` — needs those
 deps to use the `@rpath/` prefix so the resolution machinery picks the
-copy adjacent to `lib/wine/x86_64-windows/winemetal.dll` rather than
+copy adjacent to `lib/wine/x86_64-windows/winemetal_dxmt9.dll` rather than
 relying on bare dyld search paths.
 
 The `winemetal_unix_install_name_fixup` `custom_target` in
 `src/winemetal/unix/meson.build` runs `install_name_tool -change` to
 convert bare deps to `@rpath/`. But it only runs when the canonical
-build target is invoked — a `ninja src/winemetal/unix/winemetal.so`
+build target is invoked — a `ninja src/winemetal/unix/winemetal_dxmt9.so`
 direct build (common during iterative work) skips the stamp target
 and the .so ends up with bare deps that silently break the bridge
 (`NtQueryVirtualMemory(info=1000) -> STATUS_DLL_NOT_FOUND`).
 
-This audit walks every `winemetal.so` under known build dirs and
+This audit walks every `winemetal_dxmt9.so` under known build dirs, verifies
+the module id is `@rpath/winemetal_dxmt9.so`, and
 asserts every dep is either `@rpath/<name>` or a system framework /
 absolute path. Bare `<name>.so` entries fail the audit.
 
@@ -40,7 +41,7 @@ BARE_DEP_NAMES = {"winemac.so", "ntdll.so"}
 
 
 def find_winemetal_sos(repo_root: pathlib.Path) -> list[pathlib.Path]:
-    """Find every build-output winemetal.so worth auditing.
+    """Find every build-output winemetal_dxmt9.so worth auditing.
 
     Walks the repository's top-level `build*` directories. Worktree
     artifacts under `.claude/worktrees/` are skipped — they belong to
@@ -52,7 +53,7 @@ def find_winemetal_sos(repo_root: pathlib.Path) -> list[pathlib.Path]:
             continue
         if not entry.name.startswith("build"):
             continue
-        for so_path in entry.rglob("winemetal.so"):
+        for so_path in entry.rglob("winemetal_dxmt9.so"):
             # Skip worktree builds and ninja's internal artifact dirs.
             if ".claude" in so_path.parts or ".p" in so_path.parts:
                 continue
@@ -64,6 +65,17 @@ def audit_one(so_path: pathlib.Path) -> list[str]:
     """Return a list of human-readable failures for this .so (empty == OK)."""
     failures: list[str] = []
     try:
+        install_id = subprocess.check_output(
+            ["otool", "-D", str(so_path)],
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).splitlines()
+        if len(install_id) < 2 or install_id[1].strip() != "@rpath/winemetal_dxmt9.so":
+            actual = install_id[1].strip() if len(install_id) >= 2 else "<missing>"
+            failures.append(
+                f"{so_path}: install id '{actual}' is not "
+                "'@rpath/winemetal_dxmt9.so'"
+            )
         out = subprocess.check_output(
             ["otool", "-L", str(so_path)],
             text=True,
@@ -98,7 +110,7 @@ def main() -> int:
     if not sos:
         # No .so artifacts yet — nothing to audit, but report so the
         # invocation does not silently become a no-op.
-        print("audit_winemetal_install_names: no winemetal.so artifacts "
+        print("audit_winemetal_install_names: no winemetal_dxmt9.so artifacts "
               "found under top-level build* dirs; skipping.", file=sys.stderr)
         return 0
 

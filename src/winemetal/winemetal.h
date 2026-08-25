@@ -1765,12 +1765,6 @@ WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t d
 WINEMETAL_API obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, obj_handle_t device,
                                                         obj_handle_t *layer);
 
-// Legacy fallback — used when the running macdrv exports macdrv_get_cocoa_view
-// but does not have macdrv_functions / get_win_data (i.e. pre-Metal-view macdrv).
-// Installs a fresh CAMetalLayer on the window's NSView via dispatch_sync to
-// the main thread. Returns the layer handle (retained +1), or 0 on failure.
-WINEMETAL_API obj_handle_t AcquireLegacyHwndLayer(intptr_t hwnd);
-
 WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
 
 WINEMETAL_API void MTLCommandEncoder_setLabel(obj_handle_t encoder, obj_handle_t label);

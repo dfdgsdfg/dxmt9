@@ -52,7 +52,7 @@ sequenceDiagram
     Bridge->>Provider: wine_unix_call(adopt)
     Provider->>Presenter: borrow CAMetalLayer
     Presenter-->>D9: presentation handle or failure
-    D9->>Mac: ReleaseDC(HWND, HDC)
+    D9->>D9: retain acquisition HDC as PE-only cold state
 ```
 
 PE code owns GDI calls and treats both returned values as opaque `uint64_t`
@@ -60,10 +60,10 @@ tokens. The cold adoption call is separate from recorded command chunks. Only
 the unix provider converts the nonzero `layer` value to a borrowed
 `CAMetalLayer` reference.
 
-If `QUERYESCSUPPORT` fails, dxmt9 may use the old `macdrv_functions` or direct-
-symbol path only for an exact Wine build declared and proven as
-`legacy-macdrv-symbols`. There is no generic `dlsym` fallback for current Wine
-11.x builds.
+If `QUERYESCSUPPORT` fails, dxmt9 may use only the old aggregate
+`macdrv_functions` path for an exact Wine build declared and proven as
+`legacy-macdrv-symbols:<runtime-id>`. There is no generic direct-symbol or
+Cocoa fallback for current Wine 11.x builds.
 
 ## 2. Swap-Chain Lifecycle
 
@@ -95,8 +95,10 @@ is preserved when D3D9 reset semantics allow rollback.
 On swap-chain or device destruction:
 
 1. Stop drawable acquisition.
-2. Drain or fence every command buffer that can reference the layer.
-3. Destroy the unix presenter binding and return success to PE.
+2. Wait out an active replay arena and every already-admitted Presenter user;
+   a replay-accepted Present waits behind the gate rather than being dropped.
+3. Fence a live queue, or join stopped queue workers, then invalidate the
+   presenter registry before destroying the unix presenter binding.
 4. Issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
    token, then clear the PE token even if Wine reports a release failure.
 
@@ -150,7 +152,8 @@ The filename split does not make an unmodified Wine runtime compatible. The
 primary WSI path additionally requires a Wine revision that implements the
 accepted surface escape protocol. Until then, current Gcenx/Heroic Wine 11.x
 without the Wine change is unsupported, while an exact Wine build qualified as
-`legacy-macdrv-symbols` must retain the existing `macdrv_functions` fallback.
+`legacy-macdrv-symbols:<runtime-id>` must retain the existing
+`macdrv_functions` fallback.
 
 ## 6. Evidence
 

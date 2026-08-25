@@ -40,7 +40,7 @@ sequenceDiagram
     Bridge->>Provider: wine_unix_call(adopt, POD tokens)
     Provider->>Presenter: borrow CAMetalLayer token
     Presenter-->>D9: success
-    D9->>Mac: ReleaseDC(HWND, HDC)
+    D9->>D9: retain acquisition HDC as PE-only cold state
 ```
 
 The compatibility header owns the escape values and payload layout. PE passes
@@ -67,12 +67,34 @@ sequenceDiagram
     Queue-->>Provider: quiescent
     Provider-->>D9: old layer no longer referenced
     D9->>Mac: ExtEscape(MACDRV_ESCAPE_RELEASE_SURFACE, token)
+    D9->>Mac: ReleaseDC(HWND, acquisition HDC)
     D9->>D9: clear token regardless of release result
 ```
 
 For reset/rebind, PE acquires the candidate first. Unix adopts it atomically;
 only a successful adoption permits release of the old token. This keeps reset
 rollback possible and prevents a temporary null layer from escaping to present.
+
+The retained HDC is a move-only PE capability separate from the portable token
+state. Moving a device or swap-chain binding transfers both together; neither
+the HDC nor its capability appears in `D9CWsiSurfaceBinding` or recorded replay.
+A partial state that still owns the HDC balances `ReleaseDC` once even when no
+surface token remains. A live token without the HDC remains an explicit
+unfulfilled obligation and is not cleared.
+
+### 3.1 Queue and registry lock order
+
+The WSI gate follows one lock order. Candidate/final quiescence acquires the
+queue mutex before the WSI mutex; Present admission holds only the WSI mutex,
+increments its active-user count, then releases it before any queue or registry
+operation. Quiescence releases the queue mutex while waiting for active WSI
+users, reacquires it for the completion fence, and touches the presenter
+registry only after that fence while the gate remains armed. The completion
+thread uses the queue lifecycle mutex path and never acquires the WSI or
+registry mutex. Final teardown arms the gate before waiting on an active arena;
+if the queue is terminal, it joins encode/finish/completion workers before
+registry invalidation and Presenter destruction. `endWsiQuiescence()` clears
+the gate and notifies both blocked Presents and arena-admission waiters.
 
 ## 4. Legacy Fallback
 
@@ -121,7 +143,9 @@ patch.
 
 | Evidence | Contract |
 |---|---|
-| Native fake-escape protocol tests | response validation, rollback, balanced release |
+| `dxmt9-wsi-surface-protocol-spec` | payload width, fixed-`cbOutput` response validation, fail-closed selection, callback-counted 6791/DC discharge, partial-state DC balance, missing-capability preservation, exact legacy identity |
+| `dxmt9-cpu-ready-arena-lease-spec` + `WsiPresenterReplacement.tla` | candidate registry failure preservation, gate wait/notify conservation, terminal stop wake, active-arena finalization, attempted/accepted/completed ordinal conservation/liveness, and fence-before-release safety |
+| `dxmt9-run-experiment-wsi-acquisition` + `dxmt9-wine-resolve` | identity-qualified legacy resolution plus mocked-`Popen` proof that CLI/catalogue/environment unsupported or unknown selection is gated before spawn |
 | PE x64 and WoW64 WSI smoke | Wine escape availability and bridge scalar widths |
 | Reset/additional-swap-chain integration | ordering and per-`HWND` ownership |
 | Negative stock-Wine run | clean unsupported failure, no black-window success |
@@ -131,3 +155,8 @@ patch.
 Runtime evidence must record the Wine root hash, escape protocol, dxmt9 bridge
 ABI hash, and loaded paths for `d3d9.dll`, `winemetal_dxmt9.dll`, and
 `winemetal_dxmt9.so`.
+
+The implementation surfaces are `d3d9_pe_wsi.cpp` for HDC/escape ownership,
+`dxmt9c_swapchain_{adopt,teardown}_wsi_surface` for the cold POD bridge, and
+`SwapChain::{adopt,teardown}WsiSurface` for candidate-first replacement and
+unix quiescence acknowledgement.

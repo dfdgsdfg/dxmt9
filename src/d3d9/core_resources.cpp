@@ -5,6 +5,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/wsi_surface_protocol.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>
@@ -34,6 +36,22 @@ namespace dxmt9::core {
 // per-class units (declared in core_resources_internal.hpp).
 
 namespace {
+
+class WsiQuiescenceScope {
+ public:
+  explicit WsiQuiescenceScope(dxmt9::Device& device) noexcept
+      : device_(&device) {}
+  ~WsiQuiescenceScope() {
+    if (device_) {
+      device_->endWsiQuiescence();
+    }
+  }
+  WsiQuiescenceScope(const WsiQuiescenceScope&) = delete;
+  WsiQuiescenceScope& operator=(const WsiQuiescenceScope&) = delete;
+
+ private:
+  dxmt9::Device* device_;
+};
 
 std::optional<u32> parseEnvU32Auto(const char *name) {
   return dxmt9::util::getenvU32Auto(name);
@@ -257,7 +275,9 @@ SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle,
     : owner_(std::move(owner)), handle_(handle), params_(params),
       backBuffer_(std::move(backBuffer)),
       depthStencilSurface_(std::move(depthStencil)) {
-  ensurePresenter();
+  if (auto ownerRef = owner_.lock()) {
+    upperDevice_ = ownerRef->upperDevice();
+  }
 }
 
 SwapChain::~SwapChain() {
@@ -266,73 +286,206 @@ SwapChain::~SwapChain() {
   // invalidates any in-flight PresentId so a late submitPresent / encode
   // sees a nullptr and skips the present instead of dereferencing
   // freed memory.
-  unregisterPresenter();
+  (void)teardownWsiSurface();
 }
 
 void SwapChain::unregisterPresenter() {
   if (presentId_.value != 0) {
-    if (auto owner = owner_.lock()) {
-      if (const auto& upper = owner->upperDevice()) {
-        upper->queue().unregisterPresenter(presentId_);
-      }
+    if (auto upper = lockUpperDevice()) {
+      upper->queue().unregisterPresenter(presentId_);
     }
     presentId_ = {};
   }
   presenter_.reset();
 }
 
-void SwapChain::ensurePresenter() {
-  auto owner = owner_.lock();
-  if (!owner) {
-    return;
+std::shared_ptr<dxmt9::Device> SwapChain::lockUpperDevice() const noexcept {
+  if (auto upper = upperDevice_.lock()) {
+    return upper;
   }
-  const auto &upper = owner->upperDevice();
+  if (auto owner = owner_.lock()) {
+    return owner->upperDevice();
+  }
+  return {};
+}
+
+std::unique_ptr<dxmt9::Presenter> SwapChain::makeWindowPresenter(
+    u32 protocol, u64 hwnd, u64 layerToken,
+    HResult& failure) const noexcept {
+  failure = D3DERR_NOTAVAILABLE;
+  const auto upper = lockUpperDevice();
   if (!upper) {
-    return;
+    return {};
   }
   auto wmtDevice = upper->wmtDevice();
   if (!wmtDevice) {
-    return;
+    return {};
   }
-  const u64 hwnd = params_.deviceWindow.value;
   if (!hwnd) {
-    return;
+    return {};
   }
-  presenter_ = std::make_unique<dxmt9::Presenter>(wmtDevice, hwnd, 0ull,
-                                                  upper->shaderArchive(),
-                                                  upper->shaderArchivePath());
-  if (!presenter_->valid()) {
-    presenter_.reset();
-    return;
+  const auto surfaceProtocol = static_cast<dxmt9::wsi::SurfaceProtocol>(protocol);
+  if (!dxmt9::wsi::validPresenterRestoreBinding(
+          surfaceProtocol, hwnd, layerToken)) {
+    return {};
   }
-  presentId_ = upper->queue().registerPresenter(presenter_.get());
+  if (surfaceProtocol == dxmt9::wsi::SurfaceProtocol::ExtEscapeV1) {
+    try {
+      return std::make_unique<dxmt9::Presenter>(
+          wmtDevice, hwnd, protocol, layerToken, upper->shaderArchive(),
+          upper->shaderArchivePath());
+    } catch (const std::bad_alloc&) {
+      failure = E_OUTOFMEMORY;
+      return {};
+    } catch (...) {
+      return {};
+    }
+  }
+  if (surfaceProtocol == dxmt9::wsi::SurfaceProtocol::LegacyMacdrvSymbols) {
+    try {
+      return std::make_unique<dxmt9::Presenter>(
+          wmtDevice, hwnd, protocol, 0ull, upper->shaderArchive(),
+          upper->shaderArchivePath());
+    } catch (const std::bad_alloc&) {
+      failure = E_OUTOFMEMORY;
+      return {};
+    } catch (...) {
+      return {};
+    }
+  }
+  return {};
 }
 
 bool SwapChain::installPresentOutput(
-    std::shared_ptr<dxmt9::PresentOutput> output) {
-  auto owner = owner_.lock();
-  if (!owner || !output) {
+    std::shared_ptr<dxmt9::PresentOutput> output) noexcept {
+  if (!output) {
     return false;
   }
-  const auto& upper = owner->upperDevice();
+  const auto upper = lockUpperDevice();
   if (!upper || !upper->wmtDevice()) {
     return false;
   }
-  unregisterPresenter();
-  presenter_ = std::make_unique<dxmt9::Presenter>(
-      upper->wmtDevice(), std::move(output), upper->shaderArchive(),
-      upper->shaderArchivePath());
-  if (!presenter_->valid()) {
-    presenter_.reset();
+  std::unique_ptr<dxmt9::Presenter> candidate;
+  try {
+    candidate = std::make_unique<dxmt9::Presenter>(
+        upper->wmtDevice(), std::move(output), upper->shaderArchive(),
+        upper->shaderArchivePath());
+  } catch (...) {
     return false;
   }
-  presentId_ = upper->queue().registerPresenter(presenter_.get());
-  return presentId_.value != 0u;
+  if (!candidate || !candidate->valid()) {
+    return false;
+  }
+  const PresentId candidateId =
+      upper->queue().registerPresenter(candidate.get());
+  if (!candidateId) {
+    return false;
+  }
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::presenterReplacementMayCommit(
+          true, true, quiescence)) {
+    upper->queue().unregisterPresenter(candidateId);
+    return false;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
+  unregisterPresenter();
+  presenter_ = std::move(candidate);
+  presentId_ = candidateId;
+  return true;
 }
 
-void SwapChain::restoreWindowPresenter() {
+void SwapChain::restoreWindowPresenter() noexcept {
+  const auto upper = lockUpperDevice();
+  if (!upper) {
+    return;
+  }
+  HResult failure = D3DERR_NOTAVAILABLE;
+  auto candidate = makeWindowPresenter(
+      wsiProtocol_, wsiHwnd_, wsiLayerToken_, failure);
+  if (!candidate || !candidate->valid()) {
+    return;
+  }
+  const PresentId candidateId = upper->queue().registerPresenter(candidate.get());
+  if (!candidateId) {
+    return;
+  }
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::presenterReplacementMayCommit(
+          true, true, quiescence)) {
+    upper->queue().unregisterPresenter(candidateId);
+    return;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
   unregisterPresenter();
-  ensurePresenter();
+  presenter_ = std::move(candidate);
+  presentId_ = candidateId;
+}
+
+HResult SwapChain::adoptWsiSurface(
+    u32 protocol, u64 hwnd, u64 surfaceToken, u64 layerToken) noexcept {
+  if (hwnd == 0u ||
+      (protocol == static_cast<u32>(dxmt9::wsi::SurfaceProtocol::ExtEscapeV1) &&
+       (surfaceToken == 0u || layerToken == 0u)) ||
+      (protocol == static_cast<u32>(
+                       dxmt9::wsi::SurfaceProtocol::LegacyMacdrvSymbols) &&
+       (surfaceToken != 0u || layerToken != 0u))) {
+    return D3DERR_NOTAVAILABLE;
+  }
+
+  const auto upper = lockUpperDevice();
+  if (!upper) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  HResult failure = D3DERR_NOTAVAILABLE;
+  auto candidate = makeWindowPresenter(protocol, hwnd, layerToken, failure);
+  if (!candidate || !candidate->valid()) {
+    return failure;
+  }
+  const PresentId candidateId = upper->queue().registerPresenter(candidate.get());
+  if (!candidateId) {
+    return E_OUTOFMEMORY;
+  }
+
+  // Candidate-first replacement: construction and registry allocation cannot
+  // disturb the current presenter. Only after both succeed do we drain every
+  // layer user, retire the old binding, and publish the replacement.
+  const auto quiescence = upper->beginWsiQuiescence();
+  if (!dxmt9::wsi::presenterReplacementMayCommit(
+          true, true, quiescence)) {
+    upper->queue().unregisterPresenter(candidateId);
+    return D3DERR_NOTAVAILABLE;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
+  unregisterPresenter();
+  presenter_ = std::move(candidate);
+  presentId_ = candidateId;
+  wsiProtocol_ = protocol;
+  wsiHwnd_ = hwnd;
+  wsiLayerToken_ = layerToken;
+  return D3D_OK;
+}
+
+HResult SwapChain::teardownWsiSurface() noexcept {
+  if (!presenter_) {
+    wsiProtocol_ = 0u;
+    wsiHwnd_ = 0u;
+    wsiLayerToken_ = 0u;
+    return D3D_OK;
+  }
+  const auto upper = lockUpperDevice();
+  if (!upper) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  const auto quiescence = upper->beginFinalWsiQuiescence();
+  if (!dxmt9::wsi::quiescenceComplete(quiescence)) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  WsiQuiescenceScope quiescenceScope(*upper);
+  unregisterPresenter();
+  wsiProtocol_ = 0u;
+  wsiHwnd_ = 0u;
+  wsiLayerToken_ = 0u;
+  return D3D_OK;
 }
 
 bool SwapChain::displaySyncEnabled() const noexcept {

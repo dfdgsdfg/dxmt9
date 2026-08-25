@@ -60,10 +60,10 @@ dxmt9 supports two deployment lanes:
 
 | Lane | Use case | PE DLLs | Unix provider |
 |---|---|---|---|
-| Wine runtime builtin | DXMT-style runtime integration | Wine-builtin `d3d9.dll` + `winemetal.dll` | runtime-installed `winemetal.so` |
-| Native app-local | DXVK-style per-application package | native PE `d3d9.dll` + `winemetal.dll` beside the game | app-local `winemetal.so` |
+| Wine runtime builtin | DXMT-style runtime integration | Wine-builtin `d3d9.dll` + `winemetal_dxmt9.dll` | runtime-installed `winemetal_dxmt9.so` |
+| Native app-local | DXVK-style per-application package | native PE `d3d9.dll` + `winemetal_dxmt9.dll` beside the game | app-local `winemetal_dxmt9.so` |
 
-Both lanes intentionally keep `winemetal.so` as a separate Wine unixlib
+Both lanes intentionally keep `winemetal_dxmt9.so` as a separate Wine unixlib
 provider. A `d3d9.dll`-only app-local package is not a supported artifact.
 
 Set common paths first:
@@ -86,7 +86,7 @@ meson test -C build
 
 Output:
 
-- `build/src/winemetal/unix/winemetal.so`
+- `build/src/winemetal/unix/winemetal_dxmt9.so`
 
 To use the Homebrew LLVM toolchain explicitly:
 
@@ -111,13 +111,13 @@ meson compile -C build-x86_64-builtin
 
 Output:
 
-- `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
+- `build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so`
 
-The link against the Wine runtime matters: `winemetal.so` must carry
+The link against the Wine runtime matters: `winemetal_dxmt9.so` must carry
 `@rpath/winemac.so` / `@rpath/ntdll.so` install-name dependencies for
 Wine's unixlib lookup to accept it. The canonical build target runs an
 install-name fixup post-link; a direct
-`ninja src/winemetal/unix/winemetal.so` skips it. The audit
+`ninja src/winemetal/unix/winemetal_dxmt9.so` skips it. The audit
 `scripts/check/audit_winemetal_install_names.py` (meson test
 `dxmt9-winemetal-install-name-audit`) checks for this regression.
 
@@ -151,13 +151,13 @@ Outputs:
 
 | Arch | D3D9 DLL | Bridge DLL |
 |---|---|---|
-| x64 | `build-win32-x64-builtin/src/win32/d3d9.dll` | `build-win32-x64-builtin/src/winemetal/winemetal.dll` |
-| x86 | `build-win32-x86-builtin/src/win32/d3d9.dll` | `build-win32-x86-builtin/src/winemetal/winemetal.dll` |
+| x64 | `build-win32-x64-builtin/src/win32/d3d9.dll` | `build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll` |
+| x86 | `build-win32-x86-builtin/src/win32/d3d9.dll` | `build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll` |
 
 ### Lane 2: Native App-Local
 
 The app-local lane disables builtin post-processing. Native `d3d9.dll` does not
-statically import `winemetal.dll`; it loads the sibling bridge DLL from the
+statically import `winemetal_dxmt9.dll`; it loads the sibling bridge DLL from the
 application directory at runtime.
 
 Build the 64-bit app-local PE DLLs:
@@ -190,14 +190,14 @@ Package outputs:
 dist/dxmt9-app-local/
   dxmt9-deploy.json
   pe/x64/d3d9.dll
-  pe/x64/winemetal.dll
+  pe/x64/winemetal_dxmt9.dll
   pe/x64/libc++.dll
   pe/x64/libunwind.dll
   pe/x86/d3d9.dll
-  pe/x86/winemetal.dll
+  pe/x86/winemetal_dxmt9.dll
   pe/x86/libc++.dll
   pe/x86/libunwind.dll
-  unix/x86_64-unix/winemetal.so
+  unix/x86_64-unix/winemetal_dxmt9.so
 ```
 
 This is the same package the release workflow
@@ -210,17 +210,17 @@ This is the same package the release workflow
 | Binary | Kind | Role |
 |---|---|---|
 | `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
-| `winemetal.dll` | PE DLL | PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `winemetal.so` |
-| `winemetal.so` | Wine unixlib provider | Single unix-side root for generated dispatch, provider/runtime code, and shader-service handlers |
+| `winemetal_dxmt9.dll` | PE DLL | PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `winemetal_dxmt9.so` |
+| `winemetal_dxmt9.so` | Wine unixlib provider | Single unix-side root for generated dispatch, provider/runtime code, and shader-service handlers |
 
 The two lanes differ only in how those binaries are discovered:
 
 - Builtin: Wine loads builtin `d3d9.dll`; `d3d9.dll` imports builtin
-  `winemetal.dll`; `winemetal.dll` uses Wine builtin unixlib metadata to find
-  runtime-installed `winemetal.so`.
+  `winemetal_dxmt9.dll`; `winemetal_dxmt9.dll` uses Wine builtin unixlib metadata to find
+  runtime-installed `winemetal_dxmt9.so`.
 - App-local: Wine's normal DLL search loads `d3d9.dll` next to the game;
-  `d3d9.dll` dynamically loads sibling `winemetal.dll`; `winemetal.dll` locates
-  `winemetal.so` from `DXMT9_WINEMETAL_SO`, its own directory, or the process
+  `d3d9.dll` dynamically loads sibling `winemetal_dxmt9.dll`; `winemetal_dxmt9.dll` locates
+  `winemetal_dxmt9.so` from `DXMT9_WINEMETAL_SO`, its own directory, or the process
   executable directory. Runtime provider fallback is disabled unless
   `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=1` is set.
 
@@ -280,14 +280,14 @@ Manual install layout:
 | Arch | Source | Destination |
 |---|---|---|
 | x64 | `build-win32-x64-builtin/src/win32/d3d9.dll` | `$WINE_ROOT/lib/wine/x86_64-windows/d3d9.dll` |
-| x64 | `build-win32-x64-builtin/src/winemetal/winemetal.dll` | `$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll` |
+| x64 | `build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll` | `$WINE_ROOT/lib/wine/x86_64-windows/winemetal_dxmt9.dll` |
 | x64 | `~/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll` | `$WINEPREFIX/drive_c/windows/system32/libc++.dll` |
 | x64 | `~/llvm-mingw/x86_64-w64-mingw32/bin/libunwind.dll` | `$WINEPREFIX/drive_c/windows/system32/libunwind.dll` |
 | x86 | `build-win32-x86-builtin/src/win32/d3d9.dll` | `$WINE_ROOT/lib/wine/i386-windows/d3d9.dll` |
-| x86 | `build-win32-x86-builtin/src/winemetal/winemetal.dll` | `$WINE_ROOT/lib/wine/i386-windows/winemetal.dll` |
+| x86 | `build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll` | `$WINE_ROOT/lib/wine/i386-windows/winemetal_dxmt9.dll` |
 | x86 | `~/llvm-mingw/i686-w64-mingw32/bin/libc++.dll` | `$WINEPREFIX/drive_c/windows/syswow64/libc++.dll` |
 | x86 | `~/llvm-mingw/i686-w64-mingw32/bin/libunwind.dll` | `$WINEPREFIX/drive_c/windows/syswow64/libunwind.dll` |
-| host | `build-x86_64-builtin/src/winemetal/unix/winemetal.so` | `$WINE_ROOT/lib/wine/x86_64-unix/winemetal.so` |
+| host | `build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so` | `$WINE_ROOT/lib/wine/x86_64-unix/winemetal_dxmt9.so` |
 
 The helper also mirrors the PE DLLs into prefix `system32` and `syswow64`
 because some launcher workflows inspect prefix DLLs before applying builtin
@@ -319,10 +319,10 @@ For a 64-bit game:
 ```sh
 GAME_DIR="/path/to/game"
 cp dist/dxmt9-app-local/pe/x64/d3d9.dll "$GAME_DIR/"
-cp dist/dxmt9-app-local/pe/x64/winemetal.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x64/winemetal_dxmt9.dll "$GAME_DIR/"
 cp dist/dxmt9-app-local/pe/x64/libc++.dll "$GAME_DIR/"
 cp dist/dxmt9-app-local/pe/x64/libunwind.dll "$GAME_DIR/"
-cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal.so "$GAME_DIR/"
+cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal_dxmt9.so "$GAME_DIR/"
 ```
 
 For a 32-bit game:
@@ -330,10 +330,10 @@ For a 32-bit game:
 ```sh
 GAME_DIR="/path/to/game"
 cp dist/dxmt9-app-local/pe/x86/d3d9.dll "$GAME_DIR/"
-cp dist/dxmt9-app-local/pe/x86/winemetal.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x86/winemetal_dxmt9.dll "$GAME_DIR/"
 cp dist/dxmt9-app-local/pe/x86/libc++.dll "$GAME_DIR/"
 cp dist/dxmt9-app-local/pe/x86/libunwind.dll "$GAME_DIR/"
-cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal.so "$GAME_DIR/"
+cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal_dxmt9.so "$GAME_DIR/"
 ```
 
 Run without forcing Wine's builtin D3D9:
@@ -374,7 +374,7 @@ itself and only needs a Java runtime.
 include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h, device_c.h)
 src/             Implementation (D3D9 frontend, Metal runtime, util, bridge layers)
   win32/         Win32 PE forwarding layer (`d3d9.dll`)
-  winemetal/     Unified bridge stack (`winemetal.dll` + `winemetal.so`)
+  winemetal/     Unified bridge stack (`winemetal_dxmt9.dll` + `winemetal_dxmt9.so`)
 cross/           Meson cross/native files for macOS unix and Windows PE builds
 tests/           Regression and conformance suites
   native/        Fast native unit/spec tests by owner (core, shader, backend,

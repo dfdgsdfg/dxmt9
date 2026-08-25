@@ -238,6 +238,13 @@ class Device {
   // in waitPresentOrdinalBoundary must be released instead of hanging.
   virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
+  virtual wsi::QuiescenceDisposition beginWsiQuiescence() noexcept {
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
+  virtual wsi::QuiescenceDisposition beginFinalWsiQuiescence() noexcept {
+    return wsi::QuiescenceDisposition::QueueStopped;
+  }
+  virtual void endWsiQuiescence() noexcept {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
   virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }
 

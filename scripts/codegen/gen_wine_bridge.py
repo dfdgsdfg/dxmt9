@@ -10,10 +10,10 @@ from dataclasses import dataclass
 
 # Schema-content version tag. Bump when the canonical schema string format
 # below changes (e.g. addition of new fields / record-schema emission). Bumping
-# the tag forces a hash mismatch between previously-built winemetal.dll /
-# winemetal.so even when the underlying device_c.h prototypes are unchanged,
+# the tag forces a hash mismatch between previously-built winemetal_dxmt9.dll /
+# winemetal_dxmt9.so even when the underlying device_c.h prototypes are unchanged,
 # so old binaries are caught instead of silently misbehaving.
-ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v6"  # v6: dispatch ordinals + POD records + ABI context
+ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v7-qualified-module"  # v7: dxmt9-owned module namespace
 
 # 64-bit FNV-1a constants. Chosen because the implementation is trivially
 # deterministic across Python versions and does not depend on hashlib's
@@ -408,7 +408,7 @@ def write_ops_header(
     # Pulls in DXMT9_WINEMETAL_BRIDGE_OP_BASE — first slot consumed by the
     # device_c bridge. Slots 0..BASE-1 are owned by the shader unix-call IDs
     # in the same dispatch table; renumbering BridgeOpcode here keeps the
-    # two ID spaces from colliding when winemetal.so unifies them.
+    # two ID spaces from colliding when winemetal_dxmt9.so unifies them.
     lines.append('#include "winemetal/winemetal_thunks.hpp"')
     lines.append("")
     lines.append("namespace dxmt9::bridge {")
@@ -533,7 +533,7 @@ def write_client_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append("}")
     lines.append("")
     lines.append("void initializeWinemetalBridge() {")
-    lines.append("  const std::wstring path = moduleSiblingPath(reinterpret_cast<HMODULE>(&__ImageBase), L\"winemetal.dll\");")
+    lines.append("  const std::wstring path = moduleSiblingPath(reinterpret_cast<HMODULE>(&__ImageBase), L\"winemetal_dxmt9.dll\");")
     lines.append("  if (path.empty()) {")
     lines.append("    g_winemetal_bridge_status = DXMT9_STATUS_DLL_NOT_FOUND;")
     lines.append("    return;")

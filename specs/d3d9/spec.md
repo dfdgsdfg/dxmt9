@@ -126,7 +126,7 @@ loader-safe `Direct3DCreate9On12` stubs, so applications with static imports do
 not fail before reaching factory creation.
 
 Auxiliary exports are deliberately implemented on the PE side. They must not
-force `winemetal.so` provider loading, and their safe-call behaviour is covered
+force `winemetal_dxmt9.so` provider loading, and their safe-call behaviour is covered
 by the Wine-oracle conformance harness:
 
 | Export / interface | PE-side behaviour |
@@ -235,7 +235,7 @@ backend as a single bridge operation when it is full or when ordering requires i
 
 ```mermaid
 graph LR
-    subgraph PE["PE side: d3d9.dll + winemetal.dll"]
+    subgraph PE["PE side: d3d9.dll + winemetal_dxmt9.dll"]
         DEV["IDirect3DDevice9 impl"]
         STATE["DeviceState (shadow)"]
         RES["Resource COM wrappers"]
@@ -243,7 +243,7 @@ graph LR
         BRIDGE["winemetal bridge ABI\ncommitChunk()\ncreate/destroy/map/unmap\nwaitFrameToken()"]
     end
 
-    subgraph Unix["Unix side: winemetal.so"]
+    subgraph Unix["Unix side: winemetal_dxmt9.so"]
         CQ["CommandQueue\nchunk import + encode thread"]
         MTL["Metal backend\nPSO cache\nResource allocator\nPresenter"]
     end

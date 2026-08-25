@@ -319,11 +319,11 @@ D3D9 PE layer:
 
 ```
 d3d8.dll  (PE, user-facing)
-  └── imports winemetal.dll
-        └── dispatches to winemetal.so (Wine unix module, Metal backend)
+  └── imports winemetal_dxmt9.dll
+        └── dispatches to winemetal_dxmt9.so (Wine unix module, Metal backend)
 ```
 
 `d3d8.dll` is built with the same `llvm-mingw` cross-compile setup used for
-`d3d9.dll`. It may use the same provider C ABI exposed through `winemetal.dll`
+`d3d9.dll`. It may use the same provider C ABI exposed through `winemetal_dxmt9.dll`
 if needed, but in practice it should delegate through the in-process
 `IDirect3D9` / `IDirect3DDevice9` COM interfaces exposed by the D3D9 layer.

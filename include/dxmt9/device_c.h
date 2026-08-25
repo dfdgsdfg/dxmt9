@@ -1,5 +1,5 @@
-/* dxmt9/device_c.h -- C ABI bridge between the PE winemetal.dll bridge and
- * the unix-side winemetal.so module. All types use stdint / plain C so this
+/* dxmt9/device_c.h -- C ABI bridge between the PE winemetal_dxmt9.dll bridge and
+ * the unix-side winemetal_dxmt9.so module. All types use stdint / plain C so this
  * header is safe to include from both Apple clang (Mach-O) and llvm-mingw
  * (PE) compilations.
  *
@@ -70,6 +70,19 @@ typedef struct D9CPresentParams {
     uint32_t fullScreenRefreshRateHz;
     uint32_t presentationInterval;
 } D9CPresentParams;
+
+/* Dedicated cold WSI bootstrap payload. The scalar tokens originate in
+ * winemac.drv and are opaque to PE code; they never enter CommandChunk. */
+typedef struct D9CWsiSurfaceBinding {
+    uint32_t structSize;
+    uint32_t protocol;
+    uint64_t hwnd;
+    uint64_t surfaceToken;
+    uint64_t layerToken;
+} D9CWsiSurfaceBinding;
+
+#define D9C_WSI_SURFACE_PROTOCOL_EXTESCAPE_V1 1u
+#define D9C_WSI_SURFACE_PROTOCOL_LEGACY_MACDRV_SYMBOLS 2u
 
 typedef struct D9CDisplayModeEx {
     uint32_t width, height, refreshRate;
@@ -1193,6 +1206,9 @@ DXMT9_NODISCARD D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice*, uint32_t 
 uint32_t    dxmt9c_device_get_swap_chain_count(D9CDevice*);
 DXMT9_NODISCARD D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice*,
                                                           const D9CPresentParams*);
+DXMT9_NODISCARD int32_t dxmt9c_swapchain_adopt_wsi_surface(
+    D9CSwapChain*, const D9CWsiSurfaceBinding*);
+DXMT9_NODISCARD int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain*);
 
 /* ── resource creation ───────────────────────────────────────────────────── */
 

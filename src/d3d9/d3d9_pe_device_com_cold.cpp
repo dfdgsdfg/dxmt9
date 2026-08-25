@@ -144,7 +144,7 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
     }
     initGammaRampIdentity();
     // DXMT9_PE_MODULE_MAP: dump the loaded-module map after all modules
-    // (game exe, our PE d3d9.dll/winemetal.dll, Wine DLLs) are loaded.
+    // (game exe, our PE d3d9.dll/winemetal_dxmt9.dll, Wine DLLs) are loaded.
     // Device creation happens well after process/module init, so this is
     // a safe, one-time-per-device site for the Tier 1 PE symbolication
     // diagnostic.
@@ -181,6 +181,8 @@ D3D9DeviceImpl::~D3D9DeviceImpl() {
     stopPeThreadSampler();
     recorderState_.stateBlockTransaction.discardAll(
         d3d9PeReleaseStateBlockRef);
+    dxmt9PeFinalizeDeviceAndReleaseWsiBinding(
+        dev_, implicitWsiBinding_);
     releaseAllBound();
     dxmt9c_device_release(dev_);
     if (factory_) factory_->Release();
@@ -772,10 +774,24 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateAdditionalSwapChain(
     cpp.deviceWindow     = (uint64_t)(uintptr_t)effectiveDeviceWindow;
     cpp.windowed         = pPP->Windowed ? 1u : 0u;
     cpp.presentationInterval = pPP->PresentationInterval;
+    D3D9PeWsiBinding wsiBinding =
+        dxmt9PeAcquireWsiBinding(effectiveDeviceWindow);
+    if (!dxmt9::wsi::validAdoptionCandidate(wsiBinding)) {
+        return D3DERR_NOTAVAILABLE;
+    }
     D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
-    if (!sc) return D3DERR_INVALIDCALL;
+    if (!sc) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
+        return D3DERR_INVALIDCALL;
+    }
+    if (FAILED(dxmt9PeAdoptWsiBinding(sc, wsiBinding))) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(wsiBinding);
+        dxmt9c_swapchain_release(sc);
+        return D3DERR_NOTAVAILABLE;
+    }
     *ppSC = CreatePeSwapChain(sc, this, presentationContext(), diagnosticObserverForChild(),
-                              extended_, pPP->Flags);
+                              extended_, pPP->Flags,
+                              std::move(wsiBinding));
     if (!*ppSC) {
         dxmt9c_swapchain_release(sc);
         return E_OUTOFMEMORY;
@@ -865,7 +881,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     cpp.multiSampleType  = (uint32_t)pPP->MultiSampleType;
     cpp.multiSampleQuality = pPP->MultiSampleQuality;
     cpp.swapEffect       = (uint32_t)pPP->SwapEffect;
-    cpp.deviceWindow     = (uint64_t)(uintptr_t)pPP->hDeviceWindow;
+    HWND effectiveDeviceWindow = pPP->hDeviceWindow ? pPP->hDeviceWindow
+                                                    : creationWindow_;
+    cpp.deviceWindow     = (uint64_t)(uintptr_t)effectiveDeviceWindow;
     cpp.windowed         = pPP->Windowed ? 1u : 0u;
     cpp.enableAutoDepthStencil = pPP->EnableAutoDepthStencil ? 1u : 0u;
     cpp.autoDepthStencilFormat = (uint32_t)pPP->AutoDepthStencilFormat;
@@ -885,10 +903,22 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         deviceNotReset_ = true;
         return D3DERR_INVALIDCALL;
     }
+    D3D9PeWsiBinding candidate =
+        dxmt9PeAcquireWsiBinding(effectiveDeviceWindow);
+    if (!dxmt9::wsi::validAdoptionCandidate(candidate) ||
+        FAILED(dxmt9PeAdoptDeviceWsiBinding(dev_, candidate))) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
+        recorderState_.stateBlockTransaction.resetFailed();
+        deviceNotReset_ = true;
+        return D3DERR_NOTAVAILABLE;
+    }
+    D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
     clearPeStateTracking();
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
+        implicitWsiBinding_ = std::move(candidate);
         recorderState_.stateBlockTransaction.resetSucceeded(
             d3d9PeReleaseStateBlockRef);
         deviceNotReset_ = false;
@@ -909,6 +939,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         recorderState_.peState.maintenance().pendingViewport() = false;
         recorderState_.peState.maintenance().pendingScissor()  = false;
     } else {
+        if (SUCCEEDED(dxmt9PeAdoptDeviceWsiBinding(dev_, oldBinding))) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
+            implicitWsiBinding_ = std::move(oldBinding);
+        } else {
+            dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev_, candidate);
+            dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
+            implicitWsiBinding_ = {};
+        }
         recorderState_.stateBlockTransaction.resetFailed();
     }
     if (peCaptureState_ &&
@@ -2911,7 +2949,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
     cpp.multiSampleType  = (uint32_t)pPP->MultiSampleType;
     cpp.multiSampleQuality = pPP->MultiSampleQuality;
     cpp.swapEffect       = (uint32_t)pPP->SwapEffect;
-    cpp.deviceWindow     = (uint64_t)(uintptr_t)pPP->hDeviceWindow;
+    HWND effectiveDeviceWindow = pPP->hDeviceWindow ? pPP->hDeviceWindow
+                                                    : creationWindow_;
+    cpp.deviceWindow     = (uint64_t)(uintptr_t)effectiveDeviceWindow;
     cpp.windowed         = pPP->Windowed ? 1u : 0u;
     cpp.enableAutoDepthStencil = pPP->EnableAutoDepthStencil ? 1u : 0u;
     cpp.autoDepthStencilFormat = (uint32_t)pPP->AutoDepthStencilFormat;
@@ -2931,11 +2971,22 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
             recorderState_.stateBlockTransaction.isPoisoned()));
     if (FAILED(flushHr)) return flushHr;
     releaseAllBound();
+    D3D9PeWsiBinding candidate =
+        dxmt9PeAcquireWsiBinding(effectiveDeviceWindow);
+    if (!dxmt9::wsi::validAdoptionCandidate(candidate) ||
+        FAILED(dxmt9PeAdoptDeviceWsiBinding(dev_, candidate))) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
+        recorderState_.stateBlockTransaction.resetFailed();
+        return D3DERR_NOTAVAILABLE;
+    }
+    D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
     clearPeStateTracking();
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {
+        dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
+        implicitWsiBinding_ = std::move(candidate);
         recorderState_.stateBlockTransaction.resetSucceeded(
             d3d9PeReleaseStateBlockRef);
         deviceNotReset_ = false;
@@ -2949,6 +3000,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         recorderState_.peState.maintenance().pendingViewport() = false;
         recorderState_.peState.maintenance().pendingScissor()  = false;
     } else {
+        if (SUCCEEDED(dxmt9PeAdoptDeviceWsiBinding(dev_, oldBinding))) {
+            dxmt9PeReleaseWsiBindingAfterQuiescence(candidate);
+            implicitWsiBinding_ = std::move(oldBinding);
+        } else {
+            dxmt9PeFinalizeDeviceAndReleaseWsiBinding(dev_, candidate);
+            dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
+            implicitWsiBinding_ = {};
+        }
         recorderState_.stateBlockTransaction.resetFailed();
     }
     if (peCaptureState_ &&

@@ -2,6 +2,7 @@
 
 #include "d3d9_pe_child_context.hpp"
 #include "d3d9_pe_diagnostic_observer.hpp"
+#include "d3d9_pe_wsi.hpp"
 
 IDirect3DSurface9 *CreatePeSurface(
     D9CSurface *, IDirect3DDevice9 *, IUnknown *,
@@ -43,4 +44,4 @@ IDirect3DStateBlock9 *CreatePeStateBlock(
 IDirect3DSwapChain9Ex *CreatePeSwapChain(
     D9CSwapChain *, IDirect3DDevice9 *, D3D9PePresentationContext * = nullptr,
     D3D9PeDiagnosticObserver * = nullptr, bool = false,
-    DWORD = 0) noexcept;
+    DWORD = 0, D3D9PeWsiBinding = {}) noexcept;

@@ -195,14 +195,14 @@ D3D with the Sikarugir ABI handshake OK and passes the expanded SWVP draw,
 clipping, stream-frequency, pixel-shader, and texture readback sections.
 Focused P8/A8P8 visual rerun is still pending after the pre-transformed
 `D3DFVF_XYZRHW` half-pixel correction because the current conformance prefix
-now fails `winemetal.dll`/`winemetal.so` attach before `d3d9.dll` loads. The
-conformance runner stages `winemetal.so` next to the app-local builtin PE and
+now fails `winemetal_dxmt9.dll`/`winemetal_dxmt9.so` attach before `d3d9.dll` loads. The
+conformance runner stages `winemetal_dxmt9.so` next to the app-local builtin PE and
 passes `DXMT9_WINEMETAL_SO`, but this Sikarugir build reports
 `MemoryWineLoadUnixLibByName` as unsupported and the app-local builtin load does
 not register a unixlib path for the base `MemoryWineLoadUnixLib` lookup.
-Forcing `winemetal=b` still hits the copied prefix `system32/winemetal.dll`
+Forcing `winemetal_dxmt9=b` still hits the copied prefix `system32/winemetal_dxmt9.dll`
 without a unixlib path, and removing both the app-local and prefix copies leaves
-Wine unable to resolve `winemetal.dll` from the packaged builtin directory. Do
+Wine unable to resolve `winemetal_dxmt9.dll` from the packaged builtin directory. Do
 not treat the PE P8 visual scaffold as a fresh Wine-run pass until that runtime
 path is repaired. Native Metal integration now covers P8/A8P8 D9C palette
 expansion and matching UpdateTexture destination-palette re-expansion through
