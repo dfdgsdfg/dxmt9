@@ -117,6 +117,47 @@ class WsiLayerAcquisitionExtractTests(unittest.TestCase):
         )
         self.assertIn('env.pop("DXMT9_WINE_MANIFEST_ID", None)', run_body)
 
+    def test_conformance_runner_declares_the_wsi_identity(self):
+        # The PE gate gives a legacy runtime a layer only when the harness
+        # declares `legacy-macdrv-symbols:<id>` AND the matching id. The D3D9
+        # conformance runner used to declare neither, so every
+        # CreateDevice/CreateDeviceEx fail-closed with D3DERR_NOTAVAILABLE --
+        # visible as only 11 failures, because most cases skip a missing
+        # device and still report PASS.
+        source = (
+            REPO_ROOT / "scripts" / "tools" / "run_d3d9_conformance.py"
+        ).read_text(encoding="utf-8")
+        env_body = source[source.index("def build_env(") : source.index(
+            "def run_chunk(")]
+        self.assertIn(
+            'env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)', env_body)
+        self.assertIn('env.pop("DXMT9_WINE_MANIFEST_ID", None)', env_body)
+        self.assertIn(
+            'env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"]', env_body)
+        self.assertIn('env["DXMT9_WINE_MANIFEST_ID"]', env_body)
+
+    def test_conformance_runner_resolves_the_default_wine_root(self):
+        import importlib.util
+
+        path = REPO_ROOT / "scripts" / "tools" / "run_d3d9_conformance.py"
+        spec = importlib.util.spec_from_file_location(
+            "run_d3d9_conformance_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class _Args:
+            wine = module.DEFAULT_WINE
+            wine_manifest = module.DEFAULT_WINE_MANIFEST
+            wine_id = None
+
+        entry = module.resolve_wine_identity(_Args())
+        # The default runtime is a legacy-qualified entry; its declaration must
+        # be exactly `legacy-macdrv-symbols:<id>` or the PE gate rejects it.
+        self.assertEqual(
+            entry.metal_surface_protocol,
+            f"legacy-macdrv-symbols:{entry.id}",
+        )
+
     def test_pe_only_hdc_capability_stays_out_of_wire(self):
         source = (
             REPO_ROOT / "src" / "d3d9" / "d3d9_pe_wsi.cpp"

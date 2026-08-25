@@ -58,6 +58,15 @@ import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.wine.resolve import (  # noqa: E402
+    ManifestError,
+    WineEntry,
+    load_manifest,
+    validate_wsi_spawn,
+)
 
 DEFAULT_EXE = REPO_ROOT / "build-win32-x64-builtin/tests/conformance/d3d9/dxmt9-d3d9-conformance.exe"
 DEFAULT_EXE_DIR = DEFAULT_EXE.parent
@@ -66,6 +75,7 @@ DEFAULT_PREFIX = REPO_ROOT / "tmp/conformance-prefix"
 DEFAULT_OUTPUT = REPO_ROOT / "tmp/d3d9-conformance-results.json"
 DEFAULT_ARCHIVE_ROOT = REPO_ROOT / "experiments/output"
 DEFAULT_MANIFEST = REPO_ROOT / "tests/conformance/d3d9/MANIFEST.toml"
+DEFAULT_WINE_MANIFEST = REPO_ROOT / "experiments/wine/manifest.toml"
 DEFAULT_WINEMETAL_SO = REPO_ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so"
 TEST_SOURCE = REPO_ROOT / "tests/conformance/d3d9/d3d9_conformance.c"
 
@@ -129,6 +139,19 @@ def parse_args() -> argparse.Namespace:
                    help="Wine binary path.")
     p.add_argument("--prefix", type=Path, default=DEFAULT_PREFIX,
                    help="WINEPREFIX path.")
+    p.add_argument("--wine-manifest", type=Path, default=DEFAULT_WINE_MANIFEST,
+                   help="Wine root registry used to declare the WSI surface "
+                        f"protocol (default: "
+                        f"{DEFAULT_WINE_MANIFEST.relative_to(REPO_ROOT)}).")
+    p.add_argument("--wine-id", default=None,
+                   help="Manifest id describing --wine. Default: match the "
+                        "wine root (--wine's grandparent) against the "
+                        "manifest paths.")
+    p.add_argument("--allow-unsupported-wsi-negative-test", action="store_true",
+                   help="Run even though the resolved runtime declares no "
+                        "usable WSI surface protocol. Device creation then "
+                        "fail-closes with D3DERR_NOTAVAILABLE, so use this "
+                        "only for a deliberate negative-compatibility run.")
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
                    help="JSON output path.")
     p.add_argument("--archive-root", type=Path, default=DEFAULT_ARCHIVE_ROOT,
@@ -433,8 +456,56 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     args.staged_build = staged
 
 
+def resolve_wine_identity(args: argparse.Namespace) -> WineEntry:
+    """Resolve the manifest entry that describes `--wine`.
+
+    The PE side gates windowed WSI layer acquisition on the harness declaring
+    the runtime's surface protocol: `legacy-macdrv-symbols:<id>` qualifies only
+    when `DXMT9_WINE_METAL_SURFACE_PROTOCOL` and `DXMT9_WINE_MANIFEST_ID` agree
+    exactly (`legacyRuntimeQualified()` in src/d3d9/d3d9_pe_wsi.cpp). With the
+    declaration absent, `dxmt9PeAcquireWsiBinding` fail-closes and every
+    CreateDevice/CreateDeviceEx returns D3DERR_NOTAVAILABLE -- which does not
+    show up as a suite-wide failure, because most cases skip a missing device
+    and still report PASS. Only the handful that assert on the HRESULT fail.
+    So resolving this is a precondition for the run meaning anything, not a
+    convenience: see specs/d3d9/wsi/spec.md and the same block in
+    scripts/run_apps/run_experiment.py.
+    """
+    entries = load_manifest(args.wine_manifest)
+    if args.wine_id:
+        for entry in entries:
+            if entry.id == args.wine_id:
+                return entry
+        raise ManifestError(
+            f"--wine-id={args.wine_id!r} not found in {args.wine_manifest}"
+        )
+    # `--wine` points at <root>/bin/wine; the manifest keys on <root>.
+    root = args.wine.resolve().parent.parent
+    for entry in entries:
+        try:
+            if entry.path.resolve() == root:
+                return entry
+        except OSError:
+            continue
+    raise ManifestError(
+        f"wine root {root} is not registered in {args.wine_manifest}; "
+        "pass --wine-id to name the manifest entry it corresponds to"
+    )
+
+
 def build_env(args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
+    # Harness-owned WSI declaration. Cleared first so an inherited value from
+    # an unrelated runtime can never qualify this one (the PE gate compares the
+    # protocol suffix against the id, so a stale pair is a real hazard).
+    env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)
+    env.pop("DXMT9_WINE_MANIFEST_ID", None)
+    wine_entry: WineEntry | None = getattr(args, "wine_entry", None)
+    if wine_entry is not None:
+        env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"] = (
+            wine_entry.metal_surface_protocol
+        )
+        env["DXMT9_WINE_MANIFEST_ID"] = wine_entry.id
     # Wine requires an absolute WINEPREFIX; a relative path silently resolves
     # to the wrong/default prefix (without the staged dxmt9 trio), so the
     # conformance exe loads no dxmt9 and emits no verdicts -> false all-skip.
@@ -518,6 +589,25 @@ def main() -> int:
         sys.exit(f"wine binary not found: {args.wine}")
     if not args.prefix.exists():
         sys.exit(f"wine prefix not found: {args.prefix} — run wineboot first")
+
+    args.wine_entry = None
+    try:
+        args.wine_entry = resolve_wine_identity(args)
+        validate_wsi_spawn(
+            args.wine_entry,
+            allow_unsupported_negative_test=(
+                args.allow_unsupported_wsi_negative_test),
+        )
+    except ManifestError as exc:
+        if not args.allow_unsupported_wsi_negative_test:
+            sys.exit(f"WSI gate: {exc}")
+        print(f"[runner] WSI gate bypassed: {exc}", file=sys.stderr)
+    if args.wine_entry is not None:
+        print(f"[runner] wine identity: id={args.wine_entry.id} "
+              f"metal_surface_protocol="
+              f"{args.wine_entry.metal_surface_protocol}",
+              file=sys.stderr)
+
     stage_app_local_unixlib(args)
     stage_builtin_pe_dlls(args)
 
@@ -754,6 +844,11 @@ def main() -> int:
                     "skip_aux": bool(args.skip_aux),
                     "chunk_size": args.chunk_size,
                     "wine": str(args.wine),
+                    "wine_id": (
+                        args.wine_entry.id if args.wine_entry else None),
+                    "metal_surface_protocol": (
+                        args.wine_entry.metal_surface_protocol
+                        if args.wine_entry else None),
                     "prefix": str(args.prefix),
                     "summary": summary,
                     "aux_summary": aux_summary,
