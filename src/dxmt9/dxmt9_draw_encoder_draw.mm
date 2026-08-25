@@ -4359,26 +4359,42 @@ bool encodeDraw(EncodeContext& ctx,
                 << std::dec
                 << " snapshot=" << (stream0Snapshot ? 1 : 0)
                 << " offset=" << vertexBufferOffset
-                << " stride=" << hot.streamStrides[0]
-                << " shadowBytes=" << buffer->shadow.size()
-                << " contents=" << (buffer->contents ? 1 : 0);
+                << " stride=" << hot.streamStrides[0];
+          if (stream0Snapshot) {
+            // A snapshot is present: `buffer->shadow`/`buffer->contents` are
+            // live producer-owned fields that rotation may mutate without the
+            // arena lock held here, so they must not be read for tracing.
+            // Report the snapshot's own fields instead.
+            trace << " snapshotMetal=0x" << std::hex
+                  << static_cast<unsigned long long>(stream0Snapshot->metalHandle)
+                  << std::dec
+                  << " snapshotBytes=" << stream0Snapshot->byteSize
+                  << " snapshotContents="
+                  << (stream0Snapshot->contentsAddress != 0 ? 1 : 0);
+          } else {
+            trace << " shadowBytes=" << buffer->shadow.size()
+                  << " contents=" << (buffer->contents ? 1 : 0);
+          }
           emitQueueTraceLine(trace.str());
         }
         // `buffer->shadow`/`buffer->contents` are `arena-protected` and only
         // mutated (uploadBufferData / uploadBufferDataRange / finalizeBufferMap,
         // all under bufferArena_.update()'s unique lock) on the producer
-        // thread. This branch is reached only when `stream0Snapshot` produced
-        // no bytes, which — by the same MissingRequired-abort argument above —
+        // thread. The live-read branch below fires only when `stream0Snapshot`
+        // is absent, which — by the same MissingRequired-abort argument above —
         // means this record does not have a versioned backing. For a
         // non-versioned record, `CommandQueue::mapBuffer`'s SLOW lane
         // (waitSeq != 0) drains a sequence wait before `finalizeBufferMap`/
         // `uploadBufferData*` can mutate `shadow`/`contents`, so any mutation
         // is ordered-after completion of the encode work that could
         // concurrently read this record. `desc.size` is immutable-after-init
-        // (set once at BufferRecord construction, never reassigned).
-        if (const auto bytes = snapshotBufferBytes(stream0Snapshot);
-            !bytes.empty()) {
-          vertexBytes = bytes;
+        // (set once at BufferRecord construction, never reassigned). When a
+        // snapshot IS present but its bytes are unavailable (e.g. a
+        // shared-buffer import with `contentsAddress == 0`), the bytes are
+        // simply unavailable — live shadow/contents must not be substituted,
+        // since that would reintroduce the race the snapshot exists to avoid.
+        if (stream0Snapshot) {
+          vertexBytes = snapshotBufferBytes(stream0Snapshot);
         } else if (!buffer->shadow.empty()) {
           vertexBytes = buffer->shadow;
         } else if (buffer->contents) {
@@ -4680,9 +4696,12 @@ bool encodeDraw(EncodeContext& ctx,
           std::span<const u8> indexBytes;
           if (!pv.userIndexData.empty()) {
             indexBytes = pv.userIndexData;
-          } else if (const auto bytes = snapshotBufferBytes(indexSnapshot);
-                     !bytes.empty()) {
-            indexBytes = bytes;
+          } else if (indexSnapshot) {
+            // A snapshot is present but its bytes may be unavailable (e.g.
+            // `contentsAddress == 0`); do not fall through to the live
+            // `indexRecord` reads below, since that would reintroduce the
+            // race the snapshot exists to avoid.
+            indexBytes = snapshotBufferBytes(indexSnapshot);
           } else if (indexRecord && !indexRecord->shadow.empty()) {
             indexBytes = indexRecord->shadow;
           } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
@@ -4850,9 +4869,10 @@ bool encodeDraw(EncodeContext& ctx,
         std::span<const u8> indexBytes;
         if (!pv.userIndexData.empty()) {
           indexBytes = pv.userIndexData;
-        } else if (const auto bytes = snapshotBufferBytes(indexSnapshot);
-                   !bytes.empty()) {
-          indexBytes = bytes;
+        } else if (indexSnapshot) {
+          // A snapshot is present but its bytes may be unavailable; do not
+          // fall through to the live `indexRecord` reads below.
+          indexBytes = snapshotBufferBytes(indexSnapshot);
         } else if (hot.indexBuffer) {
           const auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
           if (indexRecord && !indexRecord->shadow.empty()) {
@@ -4986,15 +5006,18 @@ bool encodeDraw(EncodeContext& ctx,
           // whenever a valid commit-time snapshot already answers the
           // condition. `liveMetalHandle`/`shadowBytes`/`hasContents` below
           // are diagnostic-only (`[dxmt9-encode-stream]` trace) — read them
-          // only under `traceEncode` instead of unconditionally, since they
-          // are otherwise unused arena-protected live-view reads.
+          // only under `traceEncode` AND only when no snapshot is present;
+          // when a snapshot exists, rotation may mutate `buffer`/`shadow`/
+          // `contents` under the arena lock without this unlocked read
+          // observing it, so the trace uses the snapshot's own fields
+          // instead (see below).
           if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
               buffer && ((extraSnapshot && extraSnapshot->valid()) || buffer->buffer)) {
             extraRecord = buffer;
             extraVertexBuffer = WMT::Buffer{extraSnapshot
                 ? extraSnapshot->metalHandle
                 : buffer->buffer.handle};
-            if (traceEncode) {
+            if (traceEncode && !extraSnapshot) {
               liveMetalHandle = buffer->buffer.handle;
               shadowBytes = buffer->shadow.size();
               hasContents = buffer->contents != nullptr;
@@ -5053,9 +5076,18 @@ bool encodeDraw(EncodeContext& ctx,
                 << " offset=" << extraVertexBufferOffset
                 << " stride=" << streamBinding.stride
                 << " declFallback=" << (usedDeclBytes ? 1 : 0)
-                << " shadowBytes=" << shadowBytes
-                << " contents=" << (hasContents ? 1 : 0)
                 << " bound=" << (extraVertexBuffer ? 1 : 0);
+          if (extraSnapshot) {
+            trace << " snapshotMetal=0x" << std::hex
+                  << static_cast<unsigned long long>(extraSnapshot->metalHandle)
+                  << std::dec
+                  << " snapshotBytes=" << extraSnapshot->byteSize
+                  << " snapshotContents="
+                  << (extraSnapshot->contentsAddress != 0 ? 1 : 0);
+          } else {
+            trace << " shadowBytes=" << shadowBytes
+                  << " contents=" << (hasContents ? 1 : 0);
+          }
           emitQueueTraceLine(trace.str());
         }
         if (extraVertexBuffer) {
@@ -5646,12 +5678,13 @@ bool encodeDraw(EncodeContext& ctx,
       std::span<const u8> indexBytes;
       if (!pv.userIndexData.empty()) {
         indexBytes = pv.userIndexData;
+      } else if (indexSnapshot) {
+        // A snapshot is present but its bytes may be unavailable; do not
+        // fall through to the live `indexRecord` reads below.
+        indexBytes = snapshotBufferBytes(indexSnapshot);
       } else {
         auto* indexRecord = ctx.pool.findBuffer(hot.indexBuffer.value);
-        if (const auto bytes = snapshotBufferBytes(indexSnapshot);
-            !bytes.empty()) {
-          indexBytes = bytes;
-        } else if (indexRecord && !indexRecord->shadow.empty()) {
+        if (indexRecord && !indexRecord->shadow.empty()) {
           indexBytes = indexRecord->shadow;
         } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
           indexBytes = std::span<const u8>(static_cast<const u8*>(indexRecord->contents),
@@ -5684,10 +5717,11 @@ bool encodeDraw(EncodeContext& ctx,
         std::vector<ExpandedExtraStream> expandedExtraStreams;
         std::vector<u8> expandedVertices;
         auto resolveStreamBytes = [&](u32 stream) -> std::span<const u8> {
-          if (const auto bytes =
-                  snapshotBufferBytes(streamBindingSnapshot(bindingSnapshot, stream));
-              !bytes.empty()) {
-            return bytes;
+          if (const auto* streamSnapshot =
+                  streamBindingSnapshot(bindingSnapshot, stream)) {
+            // A snapshot is present but its bytes may be unavailable; do not
+            // fall through to the live buffer reads below.
+            return snapshotBufferBytes(streamSnapshot);
           }
           if (hot.streamBuffers[stream]) {
             if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
@@ -6027,9 +6061,10 @@ bool encodeDraw(EncodeContext& ctx,
                 ? indexSnapshot->metalHandle
                 : buffer->buffer.handle};
             if (needIndexBytesForDiagnostics) {
-              if (const auto bytes = snapshotBufferBytes(indexSnapshot);
-                  !bytes.empty()) {
-                indexBytesForReuse = bytes;
+              if (indexSnapshot) {
+                // A snapshot is present but its bytes may be unavailable;
+                // do not fall through to the live `buffer` reads below.
+                indexBytesForReuse = snapshotBufferBytes(indexSnapshot);
               } else if (!buffer->shadow.empty()) {
                 indexBytesForReuse = buffer->shadow;
               } else if (buffer->contents) {
@@ -6778,10 +6813,11 @@ bool encodeDraw(EncodeContext& ctx,
               dumpExtraStreams{};
           std::size_t dumpExtraStreamCount = 0u;
           auto resolveDumpStreamBytes = [&](u32 stream) -> std::span<const u8> {
-            if (const auto bytes =
-                    snapshotBufferBytes(streamBindingSnapshot(bindingSnapshot, stream));
-                !bytes.empty()) {
-              return bytes;
+            if (const auto* streamSnapshot =
+                    streamBindingSnapshot(bindingSnapshot, stream)) {
+              // A snapshot is present but its bytes may be unavailable; do
+              // not fall through to the live buffer reads below.
+              return snapshotBufferBytes(streamSnapshot);
             }
             if (hot.streamBuffers[stream]) {
               if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);

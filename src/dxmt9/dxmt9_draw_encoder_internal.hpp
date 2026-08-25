@@ -1842,6 +1842,20 @@ inline CompatibleIndexedDrawMerge makeCompatibleIndexedDrawMerge(
   return result;
 }
 
+// Returns the CPU-visible byte span for a commit-time buffer binding
+// snapshot, or an empty span when the snapshot is absent or was captured
+// without readable bytes (e.g. a shared-buffer import with
+// `contentsAddress == 0`, or a zero-length backing). A snapshot's byte-view
+// callers MUST branch on the snapshot POINTER, never on this span's
+// emptiness: a non-null snapshot with an empty span means the bytes are
+// UNAVAILABLE, not that the caller should fall back to reading the live
+// (arena-protected, possibly-rotated) `BufferRecord` — that fallback would
+// reintroduce the very race the snapshot exists to avoid. Defined out of
+// line in dxmt9_draw_encoder_draw.mm; declared here so tests can exercise
+// the pure decision shape directly.
+std::span<const u8> snapshotBufferBytes(
+    const core::DrawBufferBindingSnapshot* snapshot) noexcept;
+
 // A versioned MANAGED/DYNAMIC index binding is just as immutable for one
 // submitted draw as a non-versioned BufferRecord: the snapshot pins its
 // concrete backing until seqId completion and carries the exact content

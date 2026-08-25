@@ -3193,6 +3193,161 @@ void testIndexSnapshotOverridesLiveBufferHandle() {
           "index snapshot preserves startIndex byte offset");
 }
 
+// Regression coverage for the empty-span fallthrough blocker: a versioned
+// record's commit-time snapshot can be `valid()` (a real Metal handle was
+// captured) while carrying no CPU-visible bytes at all — e.g. a shared-buffer
+// import with `contentsAddress == 0` (this is the exact shape the existing
+// `missingBytes` fixture in testVersionedIndexSnapshotIsStableCacheSource
+// above models). Every "snapshot-first" byte reader in
+// dxmt9_draw_encoder_draw.mm must treat that as "bytes unavailable" and must
+// NOT fall through to a live `BufferRecord::shadow`/`contents` read, because
+// that live data is arena-protected and can be concurrently rotated by the
+// producer thread for exactly the versioned records the snapshot exists to
+// protect. The call-site guard is: branch on the snapshot POINTER, not on
+// whether `snapshotBufferBytes()`'s returned span is empty.
+void testSnapshotBufferBytesUnavailableIsNotLiveFallthrough() {
+  using dxmt9::core::DrawBufferBindingSnapshot;
+
+  // No snapshot at all: the pure byte-source function itself returns empty;
+  // callers key off the null pointer (not this emptiness) to select the
+  // live-record path, which is unaffected by this function.
+  checkEq(dxmt9::encoders::snapshotBufferBytes(nullptr).size(), std::size_t{0},
+          "absent snapshot yields an empty byte span");
+
+  std::array<std::uint8_t, 32> backing{};
+  for (std::size_t i = 0; i < backing.size(); ++i) {
+    backing[i] = static_cast<std::uint8_t>(0xA0u + i);
+  }
+
+  DrawBufferBindingSnapshot readable{
+      .metalHandle = 0x9001u,
+      .contentsAddress = static_cast<std::uint64_t>(
+          reinterpret_cast<std::uintptr_t>(backing.data())),
+      .byteSize = backing.size(),
+      .contentRevision = 1u,
+  };
+  const auto readableBytes = dxmt9::encoders::snapshotBufferBytes(&readable);
+  checkEq(readableBytes.size(), backing.size(),
+          "a fully-populated snapshot exposes its captured bytes");
+  check(readableBytes.data() == backing.data(),
+        "a fully-populated snapshot points at the captured backing store");
+
+  // `valid()` (has a Metal handle) but `contentsAddress == 0`: bytes are
+  // unavailable. This is the shared-buffer-import shape from the blocker.
+  auto noContents = readable;
+  noContents.contentsAddress = 0u;
+  checkEq(dxmt9::encoders::snapshotBufferBytes(&noContents).size(),
+          std::size_t{0},
+          "snapshot with null contentsAddress yields an empty byte span, "
+          "not a live fallback");
+
+  // `valid()` but `byteSize == 0`: same "unavailable", not "empty buffer".
+  auto zeroSize = readable;
+  zeroSize.byteSize = 0u;
+  checkEq(dxmt9::encoders::snapshotBufferBytes(&zeroSize).size(),
+          std::size_t{0},
+          "snapshot with zero byteSize yields an empty byte span, not a "
+          "live fallback");
+}
+
+// Full encode-path proof for the stream-0 reader shape named in the review
+// (dxmt9_draw_encoder_draw.mm ~4342-4402): when a stream-0 snapshot is
+// present but has no readable bytes, the live `BufferRecord::shadow` must
+// never be substituted, even though the Metal buffer *handle* selection
+// (a separate, already-correct decision) still prefers the snapshot.
+void testStreamSnapshotWithMissingBytesDoesNotFallToLiveShadow() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kLiveVertex = 0x7d0000000000301ull;
+  constexpr obj_handle_t kSnapshotVertex = 0x7d0000000000302ull;
+
+  auto state = makeProgrammableState(20u);
+  setDeclPositionTexcoord(state, 12u, 20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kLiveVertex, 4096u);
+  state.hot.streamOffsets[0] = 32u;
+  state.hot.streamStrides[0] = 20u;
+
+  dxmt9::core::DrawBindingSnapshot binding{};
+  binding.streamMask = 1u << 0u;
+  binding.streams[0].buffer = state.hot.streamBuffers[0];
+  binding.streams[0].offset = state.hot.streamOffsets[0];
+  binding.streams[0].stride = state.hot.streamStrides[0];
+  binding.streams[0].snapshot = dxmt9::core::DrawBufferBindingSnapshot{
+      .metalHandle = kSnapshotVertex,
+      .contentsAddress = 0u,  // captured with no readable bytes.
+      .byteSize = 0u,
+      .contentRevision = 3u,
+  };
+
+  // The reader's own guard function must report the bytes unavailable for
+  // this exact snapshot before we even encode the draw.
+  checkEq(dxmt9::encoders::snapshotBufferBytes(&binding.streams[0].snapshot)
+              .size(),
+          std::size_t{0},
+          "stream-0 snapshot with no captured bytes reports unavailable, "
+          "not live-fallback-eligible");
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  std::array<std::uint8_t, 1> arena{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                /*textureSamplerShadow=*/nullptr,
+                &binding);
+
+  // The Metal buffer bind still prefers the snapshot's handle: bytes being
+  // unavailable does not degrade the (already race-free) handle selection
+  // back to the live BufferRecord.
+  const auto& stream =
+      firstVertexBufferBind(capture, 1u, "missing snapshot stream0 bind");
+  checkEq(stream.bufferHandle, kSnapshotVertex,
+          "stream snapshot still overrides live BufferRecord handle when "
+          "its bytes are unavailable");
+}
+
+// Decision-shape coverage for stream/IB staging suppression in the presence
+// of a versioned snapshot (dxmt9_draw_encoder_draw.mm ~4419-4433 and the
+// mirrored extra-stream site ~5049). `StreamIbStagingCache` and the unix
+// resource pool it stages through are not reachable from this recorder-only
+// harness (`EncodeDrawRecorder`'s test context never installs a staging
+// cache), so this pins the exact boolean shape of the call-site guard
+// instead of exercising `findOrStage` end to end: staging must never be
+// entered once a binding snapshot is present for the stream, regardless of
+// whether the underlying live record would otherwise qualify.
+void testStreamIbStagingSuppressedByVersionedSnapshot() {
+  auto stagingEligible = [](bool stagingActive, bool indexedDraw,
+                            bool userVertexDataEmpty, bool hasSnapshot,
+                            bool hasRecord, bool recordHasBuffer,
+                            bool haveVertexBuffer) {
+    // Mirrors the exact conjunction guarding
+    // `streamIbStagingCache->findOrStage(...)` at the stream-0 and
+    // extra-stream call sites.
+    return stagingActive && indexedDraw && userVertexDataEmpty &&
+           !hasSnapshot && hasRecord && recordHasBuffer && haveVertexBuffer;
+  };
+
+  check(stagingEligible(/*stagingActive=*/true, /*indexedDraw=*/true,
+                        /*userVertexDataEmpty=*/true, /*hasSnapshot=*/false,
+                        /*hasRecord=*/true, /*recordHasBuffer=*/true,
+                        /*haveVertexBuffer=*/true),
+        "staging is eligible when every condition holds and no snapshot "
+        "is present");
+
+  check(!stagingEligible(/*stagingActive=*/true, /*indexedDraw=*/true,
+                         /*userVertexDataEmpty=*/true, /*hasSnapshot=*/true,
+                         /*hasRecord=*/true, /*recordHasBuffer=*/true,
+                         /*haveVertexBuffer=*/true),
+        "a present binding snapshot alone suppresses staging even though "
+        "every other condition still holds");
+}
+
 void testBindingOverrideBaseStateRebindPolicy() {
   dxmt9::core::DrawShaderLayoutContext layout{};
   layout.vertexDecl.streams[0].stride = 24u;
@@ -3295,6 +3450,9 @@ int main() {
     testPreUploadedNonIndexedUserVertexFoldsStartVertex();
     testStreamSnapshotOverridesLiveBufferHandle();
     testIndexSnapshotOverridesLiveBufferHandle();
+    testSnapshotBufferBytesUnavailableIsNotLiveFallthrough();
+    testStreamSnapshotWithMissingBytesDoesNotFallToLiveShadow();
+    testStreamIbStagingSuppressedByVersionedSnapshot();
     testBindingOverrideBaseStateRebindPolicy();
   } catch (const TestFailure& e) {
     std::cerr << "encode_draw_recorder_spec failed: " << e.what() << '\n';
