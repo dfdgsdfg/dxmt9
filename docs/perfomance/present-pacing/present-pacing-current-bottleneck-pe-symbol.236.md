@@ -5,8 +5,8 @@ title: "Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE d3d
 type: leaf
 status: current
 updated: 2026-08-25
-source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-r1-20260825/analysis/xctrace-metal-gpu-intervals-summary.md; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler-selfpc.csv
-related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/state-churn-encode/overview.md
+source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-admission-phase-split-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-r1-20260825/analysis/xctrace-metal-gpu-intervals-summary.md; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler-selfpc.csv
+related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.37.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
 # Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE `d3d9.dll` Is 10.6%
@@ -137,13 +137,18 @@ CPU-ready Direct lane to defer the exact owning-`seqId` mark until after strict
 admission, but it deliberately keeps identities, backing snapshots, wrapper
 retention, and raw residency on the producer side. That is the safe cut line.
 
-A bounded next experiment should therefore measure the synchronous prepare,
-import, mark/capture, enqueue, and present-wait phases separately, then move
-only the portion for which the admission packet already contains an immutable
-capability. If mark/capture dominates, the structural solution is a typed
-per-chunk access summary plus captured backing-generation tokens that the
-worker can consume exactly once. If `winemetal.dll` residence instead comes
-from many direct lock/unlock/upload calls, moving commit replay cannot remove
-it; those calls require a separate versioned mutation-stream design with
-ordered-control, readback, and failure semantics. Do not merge uploads or
-crossings speculatively from the current profile alone.
+The follow-up phase split is now complete. It measures `0.334ms/Present` in
+prepare, `0.463` in mark/capture, `0.027` in enqueue, `0.104` in present wait,
+and `0.029` residual inside a `0.958ms/Present` synchronous parent. Within
+mark/capture, queue-ticket lock wait is `0.147`, identity/ledger dedup `0.103`,
+core exact-mark plus backing capture `0.330` including that lock, and snapshot
+sort `0.021ms/Present`.
+
+This prices the existing-contract transfer at only `0.17-0.30ms/Present`, or
+roughly `+0.5%` to `+0.9%` GT2: exact marking and sort may move, but canonical
+identities and backing capture remain synchronous. See
+[append decomposition 37](../state-churn-encode/state-churn-encode-append-decomposition.37.md).
+If `winemetal.dll` residence instead comes from many direct lock/unlock/upload
+calls, moving commit replay cannot remove it; those calls require a separate
+versioned mutation-stream design with ordered-control, readback, and failure
+semantics. Do not merge uploads or crossings speculatively from this profile.

@@ -5,7 +5,7 @@ title: "State-Churn Encode — the CPU encode path and draw-run batching - Curre
 type: domain-overview
 status: current
 updated: 2026-08-25
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.37.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -55,6 +55,13 @@ by safe producer/replay/encode overlap whose CB/pass/tile shape remains neutral.
 The commit-replay offload remains engine-default ON since `d45af067` (H216 in
 [present-pacing](../present-pacing/index.md)).
 
+The current synchronous-admission phase split further closes a tempting overlap
+branch. The full parent is `0.958ms/Present`, but immutable prepare is `0.334`,
+present wait is `0.104`, and mark/capture is `0.463`. Only the exact-mark
+ticket/loop and snapshot sort are plausibly movable under the existing
+contract, approximately `0.17-0.30ms/Present` or `+0.5%` to `+0.9%` GT2. See
+[append decomposition 37](state-churn-encode-append-decomposition.37.md).
+
 The rejected replay-carrier lanes whose history lives in this domain's leaves
 and [log](log.md) were removed from the tree in the H217-H220 cleanup waves:
 chunk-end carry plus the entire `AndRun`/`WithResourceMarking` carrier family
@@ -93,6 +100,7 @@ and these artifacts are not promotion or rejection evidence.
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.37 - Synchronous Admission Phase Split Prices Worker Transfer Below One Percent](state-churn-encode-append-decomposition.37.md)
 - [state-churn-encode-parallel-render-pass.204 - Parallel Render-Pass Worker Gate](state-churn-encode-parallel-render-pass.204.md)
 - [state-churn-encode-encode-phase.203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression](state-churn-encode-encode-phase.203.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)

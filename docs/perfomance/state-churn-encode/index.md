@@ -4,17 +4,17 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching"
 type: domain-index
 status: current
-updated: 2026-07-20
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+updated: 2026-08-25
+source: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.37.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/state-churn-encode/overview.md; docs/perfomance/state-churn-encode/log.md
 ---
 
 # State-Churn Encode — the CPU encode path and draw-run batching
 
-Latest tracked row: [phase 203](state-churn-encode-encode-phase.203.md) - the
-direct-cbuf dirty-rebind correctness gate is deterministic and the
-constants-only Stage 2 path is now default-on. Explicit value `0` retains the
-slot-30 rollback lane; repeated GPU-phase sampling remains a watchpoint.
+Latest tracked row:
+[append decomposition 37](state-churn-encode-append-decomposition.37.md) - the
+current GT2 synchronous-admission split prices a safe replay-worker transfer
+at approximately `0.17-0.30ms/Present`, or only about `+0.5%` to `+0.9%`.
 
 Current status: the commit-replay offload is engine-default ON (`d45af067`, H216 in [present-pacing](../present-pacing/index.md)), and the rejected replay-carrier lanes documented in this domain's history (chunk-end carry + `AndRun`/`WithResourceMarking` family, draw-run preflush merge/mixed-carrier, compact uniform submission carrier, canonical draw-run fast path, publish-time PSO prefetch) were removed from the tree in the H217-H220 cleanup waves — see the [overview](overview.md) current-status section.
 
@@ -26,6 +26,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.37 - Synchronous Admission Phase Split Prices Worker Transfer Below One Percent](state-churn-encode-append-decomposition.37.md)
 - [state-churn-encode-append-decomposition.16 - The Setup Prologue Is Half A Per-Draw Metal Debug Group](state-churn-encode-append-decomposition.16.md)
 - [state-churn-encode-append-decomposition.17 - Current-HEAD Producer-Wall Resize: PE Layer 10.3 ms, Drain Fence Harvested, Chunk-Seal Cadence Is The Lead](state-churn-encode-append-decomposition.17.md)
 - [state-churn-encode-append-decomposition.18 - Chunk-Seal Cadence A/B: 2 ms Of Producer CPU Removed, Zero FPS, And No Stage Owns The 37 ms Frame](state-churn-encode-append-decomposition.18.md)

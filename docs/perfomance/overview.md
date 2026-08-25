@@ -80,6 +80,9 @@ bridge/resource-update traffic and replay snapshot materialization, or overlap
 those proven ranges, before treating parallel Metal encoding as the primary
 wall. See
 [present-pacing-current-bottleneck-pe-symbol.236](present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md).
+The follow-up synchronous-admission split prices a safe replay-worker transfer
+at only `0.17-0.30ms/Present` (`~+0.5%` to `+0.9%` GT2), so that narrow move is
+not the next large FPS lever.
 
 ### Preserved 2026-07-31 repeated baseline
 
