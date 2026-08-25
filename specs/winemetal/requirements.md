@@ -11,11 +11,11 @@ This spec governs how dxmt9 obtains a Wine-owned `CAMetalLayer` for a Win32
 `HWND`. D3D9-visible swap-chain behavior remains owned by `specs/d3d9/wsi/`;
 artifact discovery remains owned by `specs/deploy/`.
 
-Sections 1-10 preserve the implemented legacy macdrv symbol-bridge contract and
-its stable requirement IDs. That contract applies only to exact Wine builds
-qualified as `legacy-macdrv-symbols`; it is not the forward compatibility
-strategy for current Wine 11.x. Sections 11-18 define the primary `ExtEscape`
-surface protocol proposed by [Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
+The legacy macdrv symbol-bridge requirements retain their stable IDs except for
+the retired `R-WMB-7.x` generic-probe contract. That legacy contract applies
+only to exact Wine builds qualified as `legacy-macdrv-symbols`; it is not the
+forward compatibility strategy for current Wine 11.x. Sections 11-18 define
+the primary `ExtEscape` surface protocol proposed by [Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
 and consumed by [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166).
 Numeric values and wire layout remain revision-pinned until Wine accepts and
 merges a stable interface. Where a legacy requirement conflicts with
@@ -141,8 +141,8 @@ requires_patch = true   # default false
   symbols natively (Wine ≤ 11.6, CrossOver-derived builds) or its
   exposure status is unknown / unverified.
 - `true` — the Wine root needs the dxmt9 patch applied for the
-  bridge to work. dxmt9's runtime probe (R-WMB-7) will fail fast if
-  the symbols are missing.
+  legacy bridge to work. WSI selection and failure follow `R-WMB-15.1` and
+  `R-WMB-16.2`.
 
 **R-WMB-5.2** A second optional field:
 
@@ -161,8 +161,8 @@ root for a wild experiment (in `scripts/run_apps/run_experiment.py`):
    error before launch, with a message naming the patch path and a
    pointer to this spec.
 2. If `requires_patch = true` and `patch_status = "unknown"` → warn
-   at run start. dxmt9's runtime probe (R-WMB-7) is the secondary
-   gate.
+   at run start. Exact legacy-runtime qualification under `R-WMB-14.1` is the
+   secondary gate.
 3. If `requires_patch = false` → no extra check; trust the operator's
    declaration.
 
@@ -203,7 +203,7 @@ have not migrated.
 `Wine-11.x`, `Wine-11.x-DXMT`, `Wine-Crossover-*`) is **not** a
 supported source for dxmt9 today. Heroic's UI may still advertise
 "DXMT compatibility" — that label refers to the pre-bundled D3D11
-DLL set, not to a patched `winemac.so`. The runtime probe (R-WMB-7)
+DLL set, not to a patched `winemac.so`. WSI selection under `R-WMB-15.1`
 will reject any of these Wine roots once dxmt9 attempts to attach a
 Metal layer. Operators must use Sikarugir-Engines pre-builds, the
 licensed CodeWeavers CrossOver product (with the info-class
@@ -221,62 +221,6 @@ wild experiment is the **local POSIX path** to the executable inside
 `Z:` drive (mapped to `/`). The `install_drive_letter` field stays
 in CATALOGUE for documentation but is no longer load-bearing for the
 launch path.
-
----
-
-## 7. Runtime Probe and Failure Mode
-
-**R-WMB-7.1** At first call into the bridge
-(`src/winemetal/unix/winemetal_private_api.mm`'s
-`CreateMetalViewFromHWND` and friends), dxmt9 must:
-1. Attempt `dlsym(RTLD_DEFAULT, "macdrv_functions")` first.
-2. Fall back to direct `dlsym(RTLD_DEFAULT, "macdrv_view_create_metal_view")` etc.
-3. If neither yields a non-NULL function pointer for the symbols in §2:
-   - Emit **one** `[Error]` line via the dxmt9 logger naming this
-     spec, the missing symbol(s), the active Wine root, and a
-     remediation hint.
-   - Propagate `D3DERR_NOTAVAILABLE` (or equivalent) from the next
-     `CreateDevice` / present-time call that triggers the lookup.
-   - Do **not** silently return success and render to an offscreen
-     drawable.
-
-**R-WMB-7.2** The error is emitted at most once per process to avoid
-log spam. A repeat lookup on the same path uses the cached "missing"
-state.
-
-**R-WMB-7.3** The remediation hint must list, in order:
-1. "Use a Wine build that exposes macdrv symbols (CrossOver Wine 24+, or a Heroic build patched per `wine/patches/winemac-expose-symbols-<ver>.patch`)."
-2. "If you have a custom Wine, run `scripts/wine/check_patch.py <root>` to confirm the symbols are visible."
-3. A link to this spec (`specs/winemetal/{requirements,spec}.md`).
-
-**R-WMB-7.4** The presenter
-(`src/dxmt9/dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) emits
-one info-level log line per process recording which path was taken:
-
-```
-[dxmt9-wsi] info: layer_acquisition=<path> hwnd=0x<hex>
-```
-
-where `<path>` is one of `macdrv_functions` (modern, primary),
-`legacy_macdrv_get_cocoa_view` (legacy fallback), or `fallback_nil`
-(both lookups failed). The experiment harness
-(`scripts/run_apps/run_experiment.py::extract_wsi_layer_acquisition`)
-parses this line and surfaces it in `result.json`:
-
-```json
-{
-  "wsi": {
-    "layer_acquisition": "macdrv_functions"
-  }
-}
-```
-
-If the log never reaches the presenter (process crashed before
-`Present`, or `dxmt9.log` is absent), the value is `"unavailable"`.
-This field gives wild-experiment triage a single, machine-readable
-signal of whether the runtime hit the validated `macdrv_functions`
-path (R-WMB-6.2 supported set) or silently degraded — see
-`agents/rules/test_wild.rules.md` "Diagnostic Checklist".
 
 ---
 
@@ -320,8 +264,8 @@ how to add a new Wine version row to R-WMB-6.2.
 ## 10. Setup Workflows
 
 Two recipes are supported. Both result in a `[[wine]]` entry whose
-`patch_status = "applied"` and whose probe (R-WMB-7) finds
-`macdrv_functions`.
+`patch_status = "applied"` and whose exact runtime identity qualifies the
+`macdrv_functions` path under `R-WMB-14.1` and `R-WMB-15.5`.
 
 ### 10.A — Sikarugir pre-built Wine (recommended)
 

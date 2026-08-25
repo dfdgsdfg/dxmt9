@@ -14,6 +14,9 @@ Domain-level maintenance history for `winemetal/` specs. Keep current implementa
 - Made WSI qualification compose with deployment loader capabilities, required
   exact legacy runtime identities, and added the loader-pass / WSI-fail
   verification class for stock current Wine.
+- Retired `R-WMB-7.1`-`R-WMB-7.4`, whose unconditional aggregate/direct
+  `dlsym` order conflicted with the selected `extescape-v1` first,
+  exact-qualified legacy second, fail-closed acquisition contract.
 
 ## 2026-07-08
 
