@@ -4,26 +4,39 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+updated: 2026-08-25
+source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-> **Superseded on 2026-07-31 for the headline number.** GT2 now runs at
-> `17.085` sampled FPS (`16.701-17.314` over three runs at `890d78b1`), wall
-> p50/p95 `52.804 / 75.220ms`, GPU-CB p50/p95 `2.259 / 2.354ms`, zero GPU
-> errors — see the [root table](overview.md#current-multi-workload-baseline).
-> Every FPS and GPU-CB figure below predates `d63f7a65`, the DEF-overlay
-> register-file copy removal, which more than doubled this scene
-> ([defselect.02](shader-codegen/shader-codegen-defselect.02.md)); the GPU-CB
-> p50 in particular moves `23.2 -> 2.3ms`. The **analysis** below — bottleneck
-> attribution, policy stack, phase-aligned drawable lifecycle — remains valid
-> for the runtime it describes and is why this section is annotated rather than
-> replaced.
+> **Current-cap check on 2026-08-25 at `e32da591`: `28.311` sampled FPS.**
+> The one completed no-gputrace run records `1,840` frames over `64.993s`, wall
+> p50/p95 `32.326 / 44.567ms`, steady median `30.93` FPS, `3.999` command
+> buffers and `15.778` render passes per Present, and zero GPU errors. A clean
+> 10-second Time Profiler interval makes the producer the first CPU ceiling
+> (`10.117s` runnable versus encode `6.022s` and replay `5.709s`), while a
+> 250 Hz PE sample assigns only `10.6%` of producer samples to `d3d9.dll` and
+> finds no dominant PE leaf. See
+> [H236](present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md).
+> Historical figures below remain evidence for the runtime they describe, not
+> current ownership.
 
 ## Current Result
+
+### 2026-08-25 current result
+
+The current run is a health/ceiling measurement rather than an A/B promotion
+gate. Its CB/pass shape is stable and all error counters are clean. H236 closes
+broad PE setter tuning: constant-shadow/equality/apply/setter/touch PCs account
+for about `2.0%` of the whole producer sample, handle/ref/COM PCs about `1.3%`,
+and sparse-plan PCs about `0.4%`. The supported next CPU work is structural
+bridge/resource-update reduction, replay snapshot/materialization reduction,
+or proven overlap; parallel Metal encoding remains subordinate to that owner
+split.
+
+### Preserved pre-current history
 
 The latest post-policy stack combines V2 MANAGED backing versioning, the
 restored version-aware opaque-depth index cache, direct constant-buffer
@@ -121,6 +134,12 @@ index retains content-stable identity and the exact payload comparison gate;
 both scout environment variables were removed after promotion.
 
 ## Remaining Bottleneck Attribution
+
+> **Current attribution supersedes this historical section.** H236 observes a
+> continuously runnable producer, with replay and encode as secondary CPU
+> ceilings and no dominant `d3d9.dll` PC bucket. The drawable/GPU figures below
+> explain the earlier runtime only. Do not use its `115.5ms/present` encode
+> number to plan current work.
 
 The next owner is not queue publication latency. At the valid-run median,
 publish-to-encode-dequeue is `0.003ms/present`, dequeue-to-command-buffer

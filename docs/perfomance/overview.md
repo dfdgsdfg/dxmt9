@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-31
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-baseline-gt{1,2,3}-r{1,2,3}; experiments/output/app-d3d9-sfiv-benchmark-baseline-sfiv-r{1,2}; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+updated: 2026-08-25
+source: docs/perfomance/index.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-current-cap-gt{1,2,3}-r1-20260825; experiments/output/app-d3d9-sfiv-benchmark-current-cap-sfiv-r1-20260825; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -20,7 +20,7 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/
 > bottleneck taxonomy and the cross-workload baseline; that one joins the four
 > views for a single workload.
 
-Date: 2026-07-29
+Date: 2026-08-25
 
 Scope:
 
@@ -51,6 +51,37 @@ already-ready successor in `536` frames and omits `30` commands. See
 [hidden-backend-storage-shape.42](hidden-backend-storage/hidden-backend-storage-shape.42.md).
 
 ## Current Multi-Workload Baseline
+
+The current no-gputrace health sweep was measured on 2026-08-25 from
+`e32da591`. It uses the canonical staged builds, the `perf` profile, frame
+sampling, and one completed run per workload. These single runs are current-cap
+checks, not promotion A/B evidence or replacements for repeated distributions.
+
+| Workload | Sampled average FPS | Wall p50 / p95 | CB / pass per Present | GPU errors |
+|---|---:|---:|---:|---:|
+| [3DMark05 GT1](overview-3dmark05-gt1.md) | `30.646` | `31.689 / 49.332ms` | `4.000 / 10.717` | `0` |
+| [3DMark05 GT2](overview-3dmark05-gt2.md) | `28.311` | `32.326 / 44.567ms` | `3.999 / 15.778` | `0` |
+| [3DMark05 GT3](overview-3dmark05-gt3.md) | `64.875` | `14.325 / 24.509ms` | `4.000 / 14.697` | `0` |
+| [SFIV Benchmark](overview-sfiv.md) | `43.252` | `16.802 / 51.525ms` | `3.939 / 22.904` | `0` |
+
+All four runs completed with zero GPU command-buffer errors. The accepted
+artifact and interpretation boundary is
+[baselines-wild-fps-refresh.04](baselines/baselines-wild-fps-refresh.04.md).
+The values preserve the 2026-08-23 current range; a single sweep does not
+attribute the cumulative gain from the older row below.
+
+The current GT2 bottleneck probe adds the missing CPU ownership split. During
+its clean 10-second scene interval, the producer is runnable for `10.117s`,
+while encode and replay carry `6.022s` and `5.709s`. A 250 Hz PE symbol sample
+then attributes only `10.6%` of producer samples to `d3d9.dll`, with no single
+PE leaf dominant. The first ceiling is therefore producer-thread saturation,
+but broad PE setter tuning is no longer the supported next step. Reduce
+bridge/resource-update traffic and replay snapshot materialization, or overlap
+those proven ranges, before treating parallel Metal encoding as the primary
+wall. See
+[present-pacing-current-bottleneck-pe-symbol.236](present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md).
+
+### Preserved 2026-07-31 repeated baseline
 
 The 2026-07-31 baseline was measured from `890d78b1` on a 16 GB MacBook Air
 (`MacBookAir10,1`) with an Apple M1 8-core GPU, macOS 26.5.2 (`25F84`), and the
@@ -411,6 +442,7 @@ flowchart TD
 
 | Class | Symptom counters | Typical root cause | Preferred fix direction |
 |---|---|---|---|
+| Producer-thread saturation | Time Profiler running time by producer/replay/encode thread, PE module/PC samples, bridge/resource mutation counts | The application-facing producer remains continuously runnable while replay and encode retain slack. The 2026-08-25 GT2 sample assigns only `10.6%` of producer PCs to `d3d9.dll`; work in the game, Wine/bridge, and downstream snapshot construction composes the wall rather than one PE setter leaf. | First run the PE module/PC sampler to bound the dxmt9-owned share. When no leaf dominates, stop local setter tuning and reduce boundary crossings, resource-update traffic, or replay snapshot/materialization; prove overlap without increasing CB/pass/tile shape. |
 | Commit chunk replay | `bridge_commit_latency_ns`, `commit_chunk_import_cpu_ms`, `commit_chunk_handle_cpu_ms`, `commit_chunk_replay_cpu_ms`, `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`, draw-run child timers, `submit_draw_run_*_cpu_ms`, `submit_draw_run_batch_*_cpu_ms` | Unix-side record replay, draw-run scanning, snapshot/draw submission construction, queued submission flushing, or queue slot append/resource-mark/chunk-commit work. With the engine-default commit-replay offload, this class runs on the device-owned replay worker rather than inside the synchronous `commit_chunk` call (only validation/import/handle-marking stay app-thread synchronous); `bridge_commit_latency_ns` then measures raw-queue push backpressure, and a large historical value is not necessarily raw PE/unix bridge overhead. | Split replay and submit children first; optimize snapshot/draw submission, record dispatch, draw-run scan, constant-upload pass-through, submission batch construction, resource marking, and chunk append/publish cost before changing the ABI. Replay-worker-side CPU wins are FPS-flat while the worker has idle headroom; check worker idle before promoting them. |
 | Snapshot cache invalidation | `d3d9_snapshot_cache_lookup_cpu_ms`, `d3d9_snapshot_cache_miss_cpu_ms`, `d3d9_snapshot_cache_uniform_refresh_cpu_ms`, `d3d9_snapshot_uniform_build_calls`, `draw_uniform_payload_appends`, `draw_uniform_payload_append_bytes`, `draw_packet_declared_nonbinding`, `draw_packet_actual_nonbinding`, `draw_packet_redundant_nonbinding`, `draw_packet_redundant_uniform` | D3D9 snapshot submission rebuilds shader layout, hot state, or uniform payload too often. Current GT1 proof rejects broad same-value non-binding deltas (`redundant_nonbinding=0`), and the accepted cache-hit uniform refresh fast path proves a large part is real component payload construction/hash rather than redundant invalidation. | Keep cache-hit shader-constant refresh on the fast path. Remaining work is miss hot-build, VS indexed constant fallback, and stronger proof before revisiting invalidation policy. |
 | Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
@@ -762,19 +794,27 @@ attractive but weak fixes:
 
 ## Recommended Investigation Order
 
-1. Attribute wall time into CPU encode, GPU execution, and sync/present waits.
-2. If CPU encode dominates, inspect draw-run breaks, payload upload frequency,
-   bind churn, FVF/declaration decode, and PSO lookup.
-3. If GPU execution dominates, rank render passes, tile preservation, store/load
+1. Attribute wall time into producer, replay, CPU encode, GPU execution, and
+   sync/present waits; do not collapse all CPU work into an encode bucket.
+2. If the producer is saturated, run the PE module/PC sampler. Optimize a PE
+   leaf only when it owns enough whole-thread weight; otherwise investigate
+   bridge/resource-update traffic and replay snapshot/materialization.
+3. If replay or CPU encode dominates, inspect draw-run breaks, payload upload
+   frequency, bind churn, FVF/declaration decode, PSO lookup, and safe overlap.
+4. If GPU execution dominates, rank render passes, tile preservation, store/load
    actions, shader families, texture sampling, and overdraw.
-4. If sync dominates, split present acquire, present boundary, completion
+5. If sync dominates, split present acquire, present boundary, completion
    dequeue age/status, query/readback, and ring pressure before changing
    latency policy.
-5. Only after attribution is stable, choose a design change and validate with
+6. Only after attribution is stable, choose a design change and validate with
    counters plus image/golden correctness checks.
 
 ## Open Areas
 
+- Structural reduction of producer-side bridge/resource-update traffic after
+  PE symbol sampling has ruled out a dominant local setter leaf.
+- Replay snapshot/materialization reduction or safe producer/replay/encode
+  overlap without increasing command-buffer, render-pass, or tile cost.
 - Draw-run planner support for benign interleaved records such as stable
   constant uploads.
 - Payload-liveness model that proves when a constant/upload record can be

@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-08-11
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md; experiments/output/app-d3d9-3dmark05-encode-partition-serial-carrier-off-gt2/result.json; experiments/output/app-d3d9-3dmark05-encode-partition-serial-review-gt2/result.json
+updated: 2026-08-25
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/state-churn-encode/state-churn-encode-parallel-render-pass.204.md
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -40,11 +40,20 @@ bottleneck — that is owned by [hidden-backend-storage](../hidden-backend-stora
 
 ## Current Status After The Engine-Default Offload And The Dead-Lane Cleanup
 
-The commit-replay offload is engine-default ON since `d45af067`
-(H216 in [present-pacing](../present-pacing/index.md)), so this domain's
-whole replay/submit cost class now runs on a device-owned worker that idles
-`~39.4ms/present` — worker-side CPU wins are FPS-flat until the worker stops
-having idle headroom, and the residual FPS wall is the game's own CPU (H212).
+The current GT2 ownership probe changes the frontier from the older idle-worker
+snapshot. In a clean 10-second interval the producer is runnable for `10.117s`,
+while encode and replay carry `6.022s` and `5.709s`; replay and encode therefore
+remain meaningful secondary ceilings, but neither is the first serialized
+wall. The paired PE sampler assigns only `10.6%` of producer samples to
+`d3d9.dll` and finds no dominant setter/state leaf. See
+[H236](../present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md).
+
+The supported next step is not another broad PE micro-optimization or immediate
+promotion of parallel render-pass workers. It is structural reduction of
+bridge/resource-update traffic and replay snapshot/materialization, followed
+by safe producer/replay/encode overlap whose CB/pass/tile shape remains neutral.
+The commit-replay offload remains engine-default ON since `d45af067` (H216 in
+[present-pacing](../present-pacing/index.md)).
 
 The rejected replay-carrier lanes whose history lives in this domain's leaves
 and [log](log.md) were removed from the tree in the H217-H220 cleanup waves:
@@ -55,9 +64,9 @@ merge/mixed-carrier lanes (`92047c4e`), the compact uniform submission carrier
 byte-arena storage remains), the canonical draw-run fast path (`c33d250a`),
 and the legacy publish-time PSO prefetch pair (`8d16f290`). Treat those leaf
 documents as historical evidence, not open work. The domain frontier is
-encode-side P4 overlap and pass-streaming (R-BACK-2.39/2.40/2.43, still open),
-plus the live-default diagnostic A/B switches (encode-slot PSO memos,
-unpublished-slot PSO prefetch probe, sparse const records).
+replay snapshot/materialization reduction and proven CPU-stage overlap, plus
+the live-default diagnostic A/B switches. Parallel provider policy remains an
+explicit, evidence-gated lane after H212 rejected it as the default.
 
 ## Serial Encode-Partition Identity Cost Non-Claim
 

@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "Baselines — the reference captures every other experiment compares against"
 type: domain-index
 status: current
-updated: 2026-08-04
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-serial-partition-ab.02.md
+updated: 2026-08-25
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md
 related: docs/perfomance/baselines/overview.md; docs/perfomance/baselines/log.md
 ---
 
 # Baselines — the reference captures every other experiment compares against
 
-Latest tracked row: `H15` - A latest black-geometry / transparent-weapon report invalidates the current performance direction (rejected as a wall; accepted as a baseline gate).
+Latest tracked result: the 2026-08-25 current-cap sweep preserves the post-PE-boundary throughput range at GT1 `30.6`, GT2 `28.3`, GT3 `64.9`, and SFIV `43.3` sampled FPS.
 
 ## Start Here
 
@@ -21,6 +21,8 @@ Latest tracked row: `H15` - A latest black-geometry / transparent-weapon report 
 
 ## Recent Leaf Documents
 
+- [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) — 2026-08-25 current-cap single-run sweep at `e32da591`: GT1 `30.646`, GT2 `28.311`, GT3 `64.875`, SFIV `43.252`; normal captures, production CB/pass locality, and zero GPU errors.
+- [baselines-wild-fps-refresh.03](baselines-wild-fps-refresh.03.md) — 2026-08-23 post-PE-boundary single-run sweep: GT1 `30.91`, GT2 `29.04`, GT3 `65.86`, SFIV `44.22`; all deltas to the current sweep remain inside the approximately `+/-3%` ambient band.
 - [baselines-serial-partition-ab.02](baselines-serial-partition-ab.02.md) —
   2026-08-04 matched pre-partition/HEAD regression gate: GT1 `-0.42%`, GT2
   `+1.11%`, GT3 `-0.11%`, and cooled SFIV `+0.67%`; all perf-neutral with

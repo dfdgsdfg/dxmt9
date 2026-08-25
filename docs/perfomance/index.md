@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Documentation Index"
 type: root-index
 status: current
-updated: 2026-07-25
-source: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+updated: 2026-08-25
+source: docs/perfomance/overview.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 related: docs/perfomance/log.md
 ---
 
@@ -16,13 +16,14 @@ This is the entry point for the `docs/perfomance/` tree.
 ## Root Documents
 
 - [DXMT9 performance bottleneck model](overview.md) - general CPU/GPU/sync
-  model for dxmt9.
+  model for dxmt9 and the current four-workload health sweep.
 - [One frame, end to end](frame-lifecycle.md) - stages, state hand-off,
   thread concurrency, and measured per-stage cost joined in one place.
 - [3DMark05 GT1 investigation map](overview-3dmark05-gt1.md) - current
   experiment knowledge graph and domain map.
 - [3DMark05 GT2 current baseline](overview-3dmark05-gt2.md) - completed
-  frame-sampled baseline and comparison limits.
+  frame-sampled current-cap result, producer/replay/encode ownership, and
+  comparison limits.
 - [3DMark05 GT3 current baseline](overview-3dmark05-gt3.md) - completed
   frame-sampled baseline and preserved exact V1/V2 comparison.
 - [SFIV Benchmark investigation map](overview-sfiv.md) - D3D9 validation,

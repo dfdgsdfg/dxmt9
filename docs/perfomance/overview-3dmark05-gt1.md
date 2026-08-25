@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-29
-source: experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
+updated: 2026-08-25
+source: experiments/output/app-d3d9-3dmark05-current-cap-gt1-r1-20260825; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -28,6 +28,14 @@ Target workload: `app-d3d9-3dmark05`, GT1 path under
 `DXMT_EXPERIMENT_PROFILE=perf`.
 
 ## Current Measured Baseline
+
+> **Current-cap check on 2026-08-25 at `e32da591`: `30.646` sampled FPS.**
+> The one completed run records `3,256` positive frames over `106.245s`, wall
+> p50/p95 `31.689 / 49.332ms`, steady median `31.49` FPS, `4.000` command
+> buffers and `10.717` render passes per Present, and zero GPU errors. This is
+> a single-run health point within the 2026-08-23 range, not a new repeated
+> promotion baseline. See
+> [baselines-wild-fps-refresh.04](baselines/baselines-wild-fps-refresh.04.md).
 
 > **Re-measured 2026-07-31 at `890d78b1`: `21.095` sampled FPS**
 > (`21.065-21.335` over three runs), wall p50/p95 `41.917 / 66.127ms`, GPU-CB
@@ -110,7 +118,7 @@ mix together:
 |---|---|---|
 | Hot-frame GPU cost | Top render encoders are dominated by hidden Apple vertex/tiler/parameter-buffer storage, not dxmt CPU upload bytes or visible `VSOut` width. | [hidden-backend-storage](hidden-backend-storage/overview.md), [tvb-mechanism-proof](tvb-mechanism-proof/overview.md) |
 | Proven GPU lever | Reducing VS invocations through semantic-safe opaque-depth index-cache locality moves the hidden-write bucket and passed the full promotion proof (H195). Since `d45af067` (H216) the flag is engine-default ON, coupled to the commit-replay offload. | [index-cache-locality](index-cache-locality/overview.md) |
-| Wallclock / FPS cost | The engine-default trio (commit-replay offload, coupled index-cache, ungated PE readonly managed-buffer lock cache) is promoted and cumulative: GT1 `1,800 -> 2,220-2,293` presents/120s (`~+26%`, H211/H216). The residual wall is the game's own Rosetta CPU + Wine thunking (H212): dxmt9 unix app-thread cost is `~1.8%` of the frame; PE recording is `~8.5ms/present` (H213). | [present-pacing](present-pacing/overview.md), [state-churn-encode](state-churn-encode/overview.md), [snapshot-cache](snapshot-cache/overview.md) |
+| Wallclock / FPS cost | The current GT2-qualified ownership probe shows a saturated producer but assigns only `10.6%` of its samples to `d3d9.dll`, with no dominant PE leaf (H236). GT1 still needs its own module split before transferring that exact percentage, but the result closes broad PE setter tuning as a general strategy and points toward bridge/resource-update traffic, replay materialization, and safe overlap. | [present-pacing](present-pacing/overview.md), [state-churn-encode](state-churn-encode/overview.md), [snapshot-cache](snapshot-cache/overview.md) |
 | Correctness gate | Visual parity is a promotion gate, not a proof of a hardware wall. Weapon/muzzle/bloom reports require same-frame or draw-local final-writer proof before redirecting the performance plan. | [snapshot-cache](snapshot-cache/overview.md), [backend-shape-classifiers](backend-shape-classifiers/overview.md) |
 | Pass/store and backend-shape alternatives | Render-pass store traffic, Tile-FFP, mesh/object, programmable tile routes, PSO/state shape, and visible-width probes remain either rejected-current or reduced-A/B prerequisites. | [render-pass-store](render-pass-store/overview.md), [hidden-backend-storage](hidden-backend-storage/overview.md), [vsout-layout](vsout-layout/overview.md), [shader-codegen](shader-codegen/overview.md) |
 

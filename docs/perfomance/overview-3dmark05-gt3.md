@@ -4,24 +4,27 @@ workload: 3DMark05 GT3
 title: "3DMark05 GT3 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725
+updated: 2026-08-25
+source: experiments/output/app-d3d9-3dmark05-current-cap-gt3-r1-20260825; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
 # 3DMark05 GT3 Performance — Current Baseline
 
-> **Superseded on 2026-07-31 for the headline number.** GT3 now runs at
-> `33.426` sampled FPS (`33.346-33.649` over three runs at `890d78b1`), wall
-> p50/p95 `27.147 / 47.351ms`, GPU-CB p50/p95 `2.887 / 3.564ms`, zero GPU
-> errors — see the [root table](overview.md#current-multi-workload-baseline).
-> That is `+20.0%` over the `27.858` below, with GPU-CB p50 `11.275 -> 2.887ms`,
-> from `d63f7a65` ([defselect.02](shader-codegen/shader-codegen-defselect.02.md)).
-> The 2026-07-31 capture shows the airship, deck, water, and two correctly
-> skinned crew figures. The **analysis** below remains valid for the runtime it
-> describes.
+> **Current-cap check on 2026-08-25 at `e32da591`: `64.875` sampled FPS.**
+> The one completed run records `5,062` positive frames over `78.027s`, wall
+> p50/p95 `14.325 / 24.509ms`, steady median `69.91` FPS, `4.000` command
+> buffers and `14.697` render passes per Present, and zero GPU errors. This
+> single run preserves the current range but does not provide a fresh GT3
+> Time Profiler ownership split; retain CPU/pacing-tail classification as
+> provisional. See
+> [baselines-wild-fps-refresh.04](baselines/baselines-wild-fps-refresh.04.md).
 
 ## Current Result
+
+The 2026-08-25 current-cap row above is the current health number. The detailed
+tables below are preserved historical baselines and comparisons; their FPS and
+GPU-CB values are not current ownership evidence.
 
 Three completed current-runtime runs used the V2-only command wire,
 `-gt3 -nosplash -nosysteminfo -noscreens`, no Metal frame capture, frame

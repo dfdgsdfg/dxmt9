@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-08-05
-source: docs/perfomance/overview-3dmark05-gt2.md
+updated: 2026-08-25
+source: docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H233` - a clean `0eaa0d27` / `c8d8f83d` GT2 comparison fixes the segmented-Arena regression boundary: full-arena admission pressure creates 17.16 session releases per Present and raises command buffers 5.93x.
+Latest tracked row: `H236` - current GT2 saturates the app/PE producer thread, but module-qualified sampling assigns only 10.6% to PE `d3d9.dll`; broad recorder-local tuning is closed as an FPS lane.
 
 ## Start Here
 
@@ -22,6 +22,8 @@ Latest tracked row: `H233` - a clean `0eaa0d27` / `c8d8f83d` GT2 comparison fixe
 
 ## Recent Leaf Documents
 
+- [present-pacing-current-bottleneck-pe-symbol.236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 10.6%](present-pacing-current-bottleneck-pe-symbol.236.md)
+- [present-pacing-sfiv-current-tail-attribution.235 - Current SFIV Tail Is CPU/Producer Cadence, Not A GPU Hot Frame](present-pacing-sfiv-current-tail-attribution.235.md)
 - [present-pacing-arena-admission-regression-boundary.233 - Segmented Arena Admission Turns Capacity Pressure Into Session Fragmentation](present-pacing-arena-admission-regression-boundary.233.md)
 - [present-pacing-post-defselect-cpu-attribution.05 - The Producer Thread Cannot Be Split By Image](present-pacing-post-defselect-cpu-attribution.05.md)
 - [present-pacing-drain-fence-attribution.207 - The Blocked Locks Are Mostly MANAGED](present-pacing-drain-fence-attribution.207.md)

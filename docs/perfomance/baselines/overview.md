@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "Baselines — the reference captures every other experiment compares against - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-08
-source: docs/perfomance/baselines/log.md; docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-08-25
+source: docs/perfomance/baselines/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md
 related: docs/perfomance/baselines/index.md; docs/perfomance/baselines/log.md
 ---
 
@@ -45,6 +45,7 @@ current whole-run reference in [overview-3dmark05-gt1](../overview-3dmark05-gt1.
 | H13 | Current `.gputrace` / System Trace preflight is operational for file/sidecar routes, while Xcode `developerTools` attach remains blocked | accepted current preflight plus file export | baselines-gputrace-preflight.02 *(removed: evidence-missing; in git history)* now records `~168GiB` free, full Xcode, Developer Mode enabled, file `.gputrace` dry-run passing through `--with-wine-capture-layer`, System Trace sidecar dry-run passing the `4096MiB` guard, and a real `capture-layer-current-r2-20260619` file-route export finalized into Xcode/dxmt reports. The old `~605MiB < 2048MiB` disk block is historical only. The Xcode `developerTools` route is still unavailable because attach preflight stays at `process-list-loading` / `Getting Process List...`; use file `.gputrace` or System Trace until that preflight passes. |
 | H14 | Current capture-layer file route can produce Xcode encoder counters again | accepted | baselines-gputrace-capture.02 (`frame60.gputrace` written, performance export and encoder counters exported; latest current-worktree `--with-wine-capture-layer` wrapper run has `10` encoder rows, Xcode reports `35.919ms`, `10` render encoders, `396` draw calls, top-three `98.26%`) |
 | H15 | A latest black-geometry / transparent-weapon report invalidates the current performance direction | rejected as a wall; accepted as a baseline gate | [snapshot-cache-visual.02](../snapshot-cache/snapshot-cache-visual.02.md) keeps `v0.0.3` as the visual-safe anchor. For the sampled black-foreground firefight window, H169 rejects full-cbuf as the owner and H172 shows the broad dark class in `v0.0.3`; separate weapon/lighting artifacts still need same-frame or draw-local proof before perf runs are promoted. |
+| H16 | The PE/DOD refactor series changed the current wild-workload ceiling | rejected as a measurable single-run shift | [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) records GT1 `30.646`, GT2 `28.311`, GT3 `64.875`, and SFIV `43.252` at `e32da591`. Every delta from the 2026-08-23 sweep is inside the approximately `+/-3%` ambient band, with normal captures and zero GPU errors. |
 
 ## Current Navigation
 

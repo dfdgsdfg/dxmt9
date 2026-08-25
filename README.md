@@ -37,15 +37,15 @@ unix side replays them into Metal command buffers and presents through
 
 ## Performance
 
-Measured 2026-08-23 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
+Measured 2026-08-25 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
 Sikarugir-CX 24.0.7 Wine:
 
 | Workload | Current sampled FPS |
 |---|---:|
-| 3DMark05 GT1 | `30.9` |
-| 3DMark05 GT2 | `29.0` |
-| 3DMark05 GT3 | `65.9` |
-| Street Fighter IV Benchmark | `44.2` |
+| 3DMark05 GT1 | `30.6` |
+| 3DMark05 GT2 | `28.3` |
+| 3DMark05 GT3 | `64.9` |
+| Street Fighter IV Benchmark | `43.3` |
 
 Frame-sampled averages, not benchmark scores: one supervised HEAD run per
 workload (positive-frame average over each 3DMark scene and the SFIV
@@ -54,7 +54,7 @@ measurements of one build on this host drift about ±3% with ambient load and
 time of day. All four runs passed with zero GPU errors.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
-[wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.03.md)
+[wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
 for the measurements and limitations. [One frame end to end](docs/perfomance/frame-lifecycle.md)
 shows where the frame time goes.
 

@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-12
-source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-08-25
+source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
@@ -39,22 +39,25 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 | H216 | The promoted trio becomes the engine default | accepted default promotion | [present-pacing-engine-default-trio.203](present-pacing-engine-default-trio.203.md) flips `DXMT9_OFFLOAD_COMMIT_REPLAY` to engine-default ON with the index-cache default following it (`d45af067`), after all three blockers fell (per-present boundary suppression + ordinal latency cap `72132513`, R-BACK-2.51(g)/(h); the native-spec harness drain gap that masqueraded as heap corruption `cad446ce`). Pure engine-default proof: pair env set nowhere, `2,220` presents, trio counters live, `present_boundary_skipped` exactly `1.0/present`, zero GPU errors. |
 | H217-H220 | Rejected experiment lanes removed from the tree | accepted cleanup waves | Four removal waves delete every rejected carrier whose reopen premise died with the engine-default offload (H195) and the H212 game-CPU attribution: open-CB/tail-present/split-present family + `DXMT9_FS_HALF_PRECISION` (`6379d5c8`, orphan sweep `a083bc8f`), draw-run preflush merge/mixed-carrier (`92047c4e`), chunk-end carry + the `AndRun`/`WithResourceMarking` carrier family + chunk-end flush probe (`570a5cde`, `04c9a827`), compact uniform submission carrier, canonical draw-run fast path, legacy publish-time PSO prefetch pair, and PE flush-after-clear/draw pacing probes (`bb1bec1d`, `c33d250a`, `8d16f290`, `f1224bdf`). Cooled GT1 smokes stay at `2,280` presents / zero GPU errors with the trio live. Every opt-in lane left is a live-default diagnostic A/B switch or an open frontier. See the [log](log.md) H217-H220 rows for per-wave detail. |
 | H221 | Probe-wrapper defaults aligned with the promoted engine defaults | accepted policy change | `run_3dmark05_perf_probe.sh` now pins `DXMT9_OFFLOAD_COMMIT_REPLAY` / `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` to `1` by default like the engine (`e5129346`); env `0` is the off switch. Probe `result.json` baselines after 2026-07-12 are trio-on by default; reproduce historical default-off recipes by passing `0` explicitly. |
+| H236 | Current GT2 first ceiling is the saturated producer thread, but PE `d3d9.dll` is only 10.6% | accepted current attribution | [present-pacing-current-bottleneck-pe-symbol.236](present-pacing-current-bottleneck-pe-symbol.236.md) joins a clean current-cap run, a ten-second Time Profiler interval, a Metal stage sidecar, and the Tier 2 PE sampler. Producer utilization is one full core versus encode `60%` and replay `57%`; PE module shares are game `64.3%`, `winemetal.dll` `13.9%`, and `d3d9.dll` `10.6%`. The PE module has no single dominant remaining leaf. |
 
 ## Current Frontier
 
 The engine-default trio is promoted and the dead lanes are gone; the honest
 remaining branches are:
 
-- **Game-CPU residual (dominant):** the wall is the game's own Rosetta guest
-  code plus Wine thunking (H212) — dxmt9-named producer cost is `~3ms/present`
-  and the offload worker idles `~39.4ms/present`, so producer-side dxmt9 CPU
-  wins have a small ceiling.
-- **PE recording cost:** `~8.5ms/present` recorder core (H213). The inline
-  const delta (`DXMT9_PE_INLINE_CONST_DELTA`, R-BACK-2.52) is
-  mechanism-proven but FPS-null and stays opt-in (H214).
-- **Encode-side P4 overlap** and **pass-streaming**
-  (R-BACK-2.39/2.40/2.43 remain open future-design requirements; the removed
-  open-CB carrier is historical evidence, not the design).
+- **Producer thread (dominant, but mostly outside PE):** H236 measures one full
+  producer core. The game executable owns `64.3%`; PE `d3d9.dll` owns `10.6%`
+  and has no remaining single large leaf. Broad recorder-local tuning is closed
+  as an FPS lane.
+- **Bridge/resource updates:** PE `winemetal.dll` owns `13.9%`. Keep only
+  structural work that removes buffer lock/unlock/upload traffic or bridge
+  crossings; another local cache needs a new exact hot symbol first.
+- **Replay and encode second ceilings:** replay and encode use approximately
+  `57%` and `60%` of separate cores. The live dxmt9 branches are replay
+  snapshot/materialization elimination and safe CPU-stage overlap. Parallel
+  render encoding remains non-default after duplicated CPU cost outweighed its
+  chunk-wall reduction.
 
 ## Current Navigation
 
@@ -64,6 +67,7 @@ remaining branches are:
 
 ## Recent Leaf Documents
 
+- [present-pacing-current-bottleneck-pe-symbol.236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 10.6%](present-pacing-current-bottleneck-pe-symbol.236.md)
 - [present-pacing-engine-default-trio.203 - The Promoted Trio Becomes The Engine Default](present-pacing-engine-default-trio.203.md)
 - [present-pacing-archive-prewarm-hardening.202 - Archive Prewarm Hardening Closes The Startup-Flake Class](present-pacing-archive-prewarm-hardening.202.md)
 - [present-pacing-inline-const-delta.201 - Inline Const Delta Proves Mechanism But Lands Inside The Noise Band](present-pacing-inline-const-delta.201.md)

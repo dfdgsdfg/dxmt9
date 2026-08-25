@@ -4,8 +4,8 @@ workload: SFIV Benchmark (D3D9)
 title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-08-23
-source: experiments/apps_3rd/app-d3d9-sfiv-benchmark/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-d3d9ex-device-create-debug-r1-20260823; experiments/output/app-d3d9-sfiv-benchmark-post-writing-frontier-frame-sampling-r1; traces/app-d3d9-sfiv-post-writing-frontier-tail-r1/metal-system.trace
+updated: 2026-08-25
+source: experiments/apps_3rd/app-d3d9-sfiv-benchmark/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe; experiments/output/app-d3d9-sfiv-benchmark-current-cap-sfiv-r1-20260825; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; experiments/output/app-d3d9-sfiv-benchmark-d3d9ex-device-create-debug-r1-20260823; experiments/output/app-d3d9-sfiv-benchmark-post-writing-frontier-frame-sampling-r1; traces/app-d3d9-sfiv-post-writing-frontier-tail-r1/metal-system.trace
 related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md; docs/perfomance/present-pacing/present-pacing-sfiv-current-tail-attribution.235.md
 ---
 
@@ -27,6 +27,14 @@ base D3D9. The historical measurements below are retained; only their API
 label is corrected.
 
 ## Current Measured Baseline
+
+The 2026-08-25 current-cap run records `2,859` positive frames at `43.252`
+sampled FPS, wall p50/p95 `16.802 / 51.525ms`, steady median `59.49` FPS,
+`3.939` command buffers and `22.904` render passes per Present, and zero GPU
+errors. This single-run health point agrees with the 2026-08-23 conclusion:
+the remaining wall is a CPU/pacing tail, not a recurring GPU-hot frame. It does
+not replace the duration-matched repeated baseline below. See
+[baselines-wild-fps-refresh.04](baselines/baselines-wild-fps-refresh.04.md).
 
 The 2026-08-23 queue-frontier validation adds a current single-run health and
 tail-attribution point without replacing the duration-matched baseline below.
