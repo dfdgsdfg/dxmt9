@@ -42,10 +42,10 @@ Sikarugir-CX 24.0.7 Wine:
 
 | Workload | Current sampled FPS |
 |---|---:|
-| 3DMark05 GT1 | `30.6` |
-| 3DMark05 GT2 | `28.3` |
-| 3DMark05 GT3 | `64.9` |
-| Street Fighter IV Benchmark | `43.3` |
+| 3DMark05 GT1 | `30.9` |
+| 3DMark05 GT2 | `28.9` |
+| 3DMark05 GT3 | `65.5` |
+| Street Fighter IV Benchmark | `44.7` |
 
 Frame-sampled averages, not benchmark scores: one supervised HEAD run per
 workload (positive-frame average over each 3DMark scene and the SFIV
