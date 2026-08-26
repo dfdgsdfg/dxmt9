@@ -24,20 +24,30 @@ This installs system and bootstrap tools:
 |---|---|
 | `meson` + `ninja` | Build system |
 | `ripgrep` | Fast repository/script helper searches |
-| `mise` | Project tool runtime manager for `uv` |
+| `mise` | Owns the exact Python and uv tool versions and project task environment |
 | `llvm` | C++20 / ObjC++ compiler and `clang-tidy` |
 | `clang-format` | Source formatter |
 | `temurin`, `tla+-toolbox` (casks) | Java runtime and TLC model checker for formal verification |
 | `msitools`, `winetricks` | Optional Wine experiment helpers |
 
-**Python via uv** (see `.mise.toml`, `.python-version`, and `pyproject.toml`):
+**Python via mise + uv** (see `.mise.toml`, `.python-version`,
+`pyproject.toml`, and the committed `uv.lock`):
 
 ```sh
 mise trust
 mise install
-uv python install
-uv sync
+mise run python:check
 ```
+
+`mise` pins Python and uv; the sync task binds uv's internal project environment
+to that exact mise Python and installs only the committed lockfile resolution.
+There is no activation step and no environment path is added to `PATH`. Run
+repository Python commands through `scripts/run_python.sh`; it resolves the
+pinned tools and invokes `uv run --locked`. Meson and repository shell entry
+points use the same launcher and therefore never select a system, Homebrew,
+Conda, or agent-specific Python. The launcher creates or synchronizes the
+environment on demand; `mise run python:sync` remains available for CI and an
+explicit eager sync.
 
 **llvm-mingw** (required for the Win32 PE bridge DLLs):
 
@@ -181,7 +191,7 @@ meson compile -C build-win32-x86
 Create a mixed x64/x86 app-local package:
 
 ```sh
-python3 scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
+scripts/run_python.sh scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
 ```
 
 Package outputs:

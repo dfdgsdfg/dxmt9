@@ -82,7 +82,7 @@ two required positional arguments (`before`, `after`).
 ### 3.1 `compare_xcode_dxmt_bottlenecks.py`
 
 18 `--require-*` flags (verified:
-`python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py --help | grep -cE '^  --require-'`
+`scripts/run_python.sh scripts/tools/compare_xcode_dxmt_bottlenecks.py --help | grep -cE '^  --require-'`
 → `18`) plus 12 `--max-*` regression-tolerance flags (same method,
 `--max-` → `12`), for 30 gate-shaping flags out of 35 total (the
 remaining 5 are `--before-label`/`--after-label`/`--top`/`--output`/
@@ -195,7 +195,7 @@ against freshly generated fixtures, not inferred from source alone.
 Two bit-identical 8x8 all-black (RGB `(0,0,0)`) PNGs:
 
 ```sh
-$ python3 scripts/tools/compare_experiment_images.py \
+$ scripts/run_python.sh scripts/tools/compare_experiment_images.py \
     --before black1.png --after black2.png \
     --policy exact --output report.md
 $ echo "exit=$?"
@@ -234,7 +234,7 @@ sidecars (`format`/`metalPixelFormat`/`width`/`height`/`rowBytes`/
 `byteCount` all equal):
 
 ```sh
-$ python3 scripts/tools/compare_attachment_dumps.py \
+$ scripts/run_python.sh scripts/tools/compare_attachment_dumps.py \
     --before zero1.bin --after zero2.bin --require-exact \
     --output report.md --summary-output summary.csv
 $ echo "exit=$?"

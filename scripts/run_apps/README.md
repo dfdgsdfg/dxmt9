@@ -7,9 +7,12 @@ wired to Meson tests; they are evidence-gathering tools.
 
 - `run_experiment.py` — core runner: stages a Wine prefix, launches the app,
   collects logs and metrics. All other entries here call this.
-  - `python3 run_experiment.py list` — list catalogue entries.
-  - `python3 run_experiment.py run <name>` — run one app.
-  - `python3 run_experiment.py run <name> --build` — first run the app's
+  - `scripts/run_python.sh scripts/run_apps/run_experiment.py list` — list
+    catalogue entries.
+  - `scripts/run_python.sh scripts/run_apps/run_experiment.py run <name>` — run
+    one app.
+  - `scripts/run_python.sh scripts/run_apps/run_experiment.py run <name>
+    --build` — first run the app's
     `build_script` field from `experiments/CATALOGUE.toml`, then run. Errors if
     the app has no `build_script` declared.
 Per-app shell wrappers are legacy. Three were removed on 2026-07-29:
@@ -22,7 +25,7 @@ the manifest — for an app that has since left the catalogue. Run these apps th
 same way every other catalogue entry is run:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
+scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
 ```
 
 The Wine runtime comes from the entry's `wine_id` in

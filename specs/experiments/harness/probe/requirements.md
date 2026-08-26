@@ -37,7 +37,7 @@ and prints a suggested `finalize_3dmark05_perf_probe.sh` command line
 for the `join` domain to run afterward. Instantiates R-HARN-1.1.
 
 **R-HARN-PROBE-1.2** `scripts/tools/run_3dmark05_perf_probe.sh`
-invokes `python3 scripts/run_apps/run_experiment.py run
+invokes `scripts/run_python.sh scripts/run_apps/run_experiment.py run
 app-d3d9-3dmark05 --output-suffix "$suffix" --timeout "$timeout"` as a
 subprocess of its own `run-capture` work; this domain therefore sits
 strictly on top of a `runner`-domain run rather than replacing it. A

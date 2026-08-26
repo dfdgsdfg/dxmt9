@@ -1165,7 +1165,7 @@ if (( semantic_image_compare_requested )); then
 fi
 
 summary_cmd=(
-  python3 scripts/tools/summarize_3dmark05_perf.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/summarize_3dmark05_perf.py
   "$output_dir"
   --output "$summary_path"
 )
@@ -1174,14 +1174,14 @@ if (( require_current_uniform_compact_saved_bytes_present )); then
 fi
 
 index_cache_runtime_cmd=(
-  python3 scripts/tools/summarize_index_cache_runtime.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/summarize_index_cache_runtime.py
   --run "$after_label=$encoders_csv,$probe_draws_csv"
   --output "$index_cache_runtime_report"
   --csv-output "$index_cache_runtime_csv"
 )
 
 xcode_summary_cmd=(
-  python3 scripts/tools/summarize_xcode_encoder_counters.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/summarize_xcode_encoder_counters.py
   "$xcode_csv"
   --dxmt-encoders-csv "$encoders_csv"
   --dxmt-streams-csv "$stream_csv"
@@ -1209,7 +1209,7 @@ if (( require_dxmt_join_coverage )); then
 fi
 
 class_proxy_cmd=(
-  python3 scripts/tools/analyze_indexed_probe_classes.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/analyze_indexed_probe_classes.py
   "$probe_draws_csv"
   --group row-state-class
   --joined-summary "$joined_csv"
@@ -1219,7 +1219,7 @@ class_proxy_cmd=(
 )
 
 shader_dump_cmd=(
-  python3 scripts/tools/analyze_shader_dumps.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/analyze_shader_dumps.py
   "$joined_csv"
   --shader-dir "$shader_msl_dir"
   --output "$shader_dump_report"
@@ -1232,7 +1232,7 @@ fi
 perf_compare_cmd=()
 if [[ -n "$baseline_output" ]]; then
   perf_compare_cmd=(
-    python3 scripts/tools/compare_3dmark05_perf_counters.py
+    "$repo_root/scripts/run_python.sh" scripts/tools/compare_3dmark05_perf_counters.py
     "$baseline_output"
     "$output_dir"
     --before-label "$before_label"
@@ -1418,7 +1418,7 @@ fi
 xcode_compare_cmd=()
 if [[ -n "$baseline_joined" ]]; then
   xcode_compare_cmd=(
-    python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py
+    "$repo_root/scripts/run_python.sh" scripts/tools/compare_xcode_dxmt_bottlenecks.py
     "$baseline_joined"
     "$joined_csv"
     --before-label "$before_label"
@@ -1563,7 +1563,7 @@ fi
 semantic_image_compare_cmd=()
 if (( semantic_image_compare_requested )); then
   semantic_image_compare_cmd=(
-    python3 scripts/tools/compare_experiment_images.py
+    "$repo_root/scripts/run_python.sh" scripts/tools/compare_experiment_images.py
     --before "$semantic_image_before"
     --after "$semantic_image_after"
     --label-before "$before_label"
@@ -1686,7 +1686,7 @@ if ((${#semantic_image_compare_cmd[@]})); then
   run_cmd "${semantic_image_compare_cmd[@]}"
 fi
 
-python3 - "$trace_artifacts_json" \
+"$repo_root/scripts/run_python.sh" - "$trace_artifacts_json" \
   "$run_id" \
   "$output_dir" \
   "$trace_dir" \

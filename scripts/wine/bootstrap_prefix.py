@@ -20,9 +20,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Support both `python3 -m scripts.wine.bootstrap_prefix` and direct
-# `python3 scripts/wine/bootstrap_prefix.py` invocations by ensuring the
-# repo root is on sys.path before the sibling import.
+# Support both module and direct script invocations through the project Python
+# launcher by ensuring the repo root is on sys.path before the sibling import.
 _REPO_ROOT_GUESS = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT_GUESS) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT_GUESS))

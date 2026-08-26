@@ -276,7 +276,7 @@ class ProfileSummaryReportingTests(unittest.TestCase):
             json.dumps(result_payload), encoding="utf-8"
         )
         completed = subprocess.run(
-            ["python3", str(PERF_SUMMARIZER), str(run_dir)],
+            [sys.executable, str(PERF_SUMMARIZER), str(run_dir)],
             text=True,
             capture_output=True,
             check=False,

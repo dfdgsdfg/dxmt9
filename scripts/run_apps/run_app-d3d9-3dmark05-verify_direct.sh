@@ -25,7 +25,7 @@ if [[ "${DXMT_3DMARK05_DIRECT_DRY_RUN:-0}" != "0" ]]; then
   exit 0
 fi
 
-python3 - "$repo_root" "$timeout_sec" "$@" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$repo_root" "$timeout_sec" "$@" <<'PY'
 import os
 import signal
 import subprocess

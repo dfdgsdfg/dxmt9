@@ -9,12 +9,12 @@ tlc_workers="${DXMT9_TLC_WORKERS:-auto}"
 # The PE recorder TLA module is generated from the same bounded decision table
 # included by the production C++ algebra.  A stale generated module is a
 # model/code binding failure, not a harmless documentation diff.
-python3 "$repo_root/scripts/check/gen_pe_transition_table.py" --check
-python3 "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
-python3 "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
-python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
-python3 "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
-python3 "$repo_root/scripts/check/check_pe_scalar_projection_model.py"
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_transition_table.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/check_pe_scalar_projection_model.py"
 
 jar_dir=""
 if command -v tlc >/dev/null 2>&1; then

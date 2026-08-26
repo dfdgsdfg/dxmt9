@@ -431,7 +431,7 @@ if [[ "$measure_index_reuse" != 1 ]]; then
 fi
 
 summary_cmd=(
-  python3 "$repo_root/scripts/tools/summarize_xctrace_metal_intervals.py"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_xctrace_metal_intervals.py"
   --gpu-intervals "$metal_gpu_intervals_xml"
   --dxmt-encoders "$encoders_csv"
   --indexed-probe-draws "$probe_draws_csv"
@@ -446,7 +446,7 @@ summary_cmd=(
 )
 
 cpu_summary_cmd=(
-  python3 "$repo_root/scripts/tools/summarize_xctrace_cpu_threads.py"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_xctrace_cpu_threads.py"
   --time-profile "$xctrace_time_profile_xml"
   --output-csv "$xctrace_cpu_summary_csv"
   --output-md "$xctrace_cpu_summary_md"
@@ -480,7 +480,7 @@ fi
 
 if (( dry_run )); then
   if [[ "$free_mb" != unknown && "$min_free_mb" != 0 && "$free_mb" -lt "$min_free_mb" ]]; then
-    echo "dry-run: free space is below the system-trace launch guard; run python3 scripts/tools/summarize_3dmark05_cleanup_candidates.py before recording"
+    echo "dry-run: free space is below the system-trace launch guard; run scripts/run_python.sh scripts/tools/summarize_3dmark05_cleanup_candidates.py before recording"
   fi
   exit 0
 fi
@@ -488,7 +488,7 @@ fi
 if [[ "$free_mb" != unknown && "$min_free_mb" != 0 && "$free_mb" -lt "$min_free_mb" ]]; then
   echo "insufficient free space for 3DMark05 system trace sidecar: ${free_mb}MiB available, ${min_free_mb}MiB required" >&2
   echo "free space under the repository volume or rerun with --min-free-mb N / DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB=N after deliberately accepting the risk" >&2
-  echo "non-destructive cleanup report: python3 scripts/tools/summarize_3dmark05_cleanup_candidates.py" >&2
+  echo "non-destructive cleanup report: scripts/run_python.sh scripts/tools/summarize_3dmark05_cleanup_candidates.py" >&2
   exit 2
 fi
 
@@ -600,7 +600,7 @@ if (( export_cpu_summary )); then
   echo "wrote xctrace CPU thread summary md: $xctrace_cpu_summary_md"
   echo "wrote xctrace CPU thread verdict json: $xctrace_cpu_verdict_json"
   if [[ -s "$xctrace_cpu_verdict_json" ]]; then
-    cpu_verdict_status=$(python3 - "$xctrace_cpu_verdict_json" <<'PY'
+    cpu_verdict_status=$("$repo_root/scripts/run_python.sh" - "$xctrace_cpu_verdict_json" <<'PY'
 import json
 import sys
 
@@ -609,7 +609,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 print(verdict.get("status", "unknown"))
 PY
 )
-    cpu_verdict=$(python3 - "$xctrace_cpu_verdict_json" <<'PY'
+    cpu_verdict=$("$repo_root/scripts/run_python.sh" - "$xctrace_cpu_verdict_json" <<'PY'
 import json
 import sys
 

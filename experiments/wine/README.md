@@ -12,7 +12,7 @@ Operator workflow for the Wine root manifest used by wild experiments.
 Run once per machine:
 
 ```sh
-python3 scripts/wine/install_wine.py \
+scripts/run_python.sh scripts/wine/install_wine.py \
   --engine sikarugir-cx-24.0.7 \
   --target-id sikarugir-cx-24.0.7 \
   --register-in-manifest
@@ -49,7 +49,7 @@ experiments/wine/
 After install, the resolver picks it up automatically:
 
 ```sh
-python3 scripts/wine/resolve.py --list   # should show OK sikarugir-cx-24.0.7
+scripts/run_python.sh scripts/wine/resolve.py --list   # should show OK sikarugir-cx-24.0.7
 ```
 
 CATALOGUE entries point at this manifest id via `wine_id = "sikarugir-cx-24.0.7"`.

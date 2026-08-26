@@ -40,9 +40,8 @@ experiments/apps/**/*.trace.txt
 **/__pycache__
 specs/**/plan.md
 *.plan.md
-# Local uv resolver state and caches; checked-in experiment manifests are not
-# covered by these patterns.
-uv.lock
+# Local uv resolver state and caches. `uv.lock` is committed and is the single
+# dependency-resolution source for developer, Meson, and CI Python runs.
 .uv/
 .uv-cache/
 uv-cache/

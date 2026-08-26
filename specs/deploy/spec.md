@@ -188,7 +188,7 @@ layout. A packaging step should collect the artifacts into a flat app-local
 directory and generate a manifest.
 
 ```sh
-python3 scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
+scripts/run_python.sh scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
 ```
 
 ---

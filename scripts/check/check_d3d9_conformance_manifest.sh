@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 manifest="$repo_root/tests/conformance/d3d9/MANIFEST.toml"
 
-python3 - "$repo_root" "$manifest" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$repo_root" "$manifest" <<'PY'
 from __future__ import annotations
 
 import re

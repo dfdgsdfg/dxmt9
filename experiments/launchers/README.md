@@ -117,14 +117,14 @@ Commercial / 3rd-party titles (require external prefix):
     `--probe-apply-index-cache-opt-candidate-unsafe-nonopaque` only with tight
     row/class filters and same-input semantic replay validation; it bypasses
     the opaque-depth-write safety gate and can change final color writers. Use
-    `python3 scripts/tools/compare_experiment_images.py --before
+    `scripts/run_python.sh scripts/tools/compare_experiment_images.py --before
     <baseline>/actual.png --after <candidate>/actual.png --crop-bottom 96
     --output <trace-run>/analysis/<name>-image-compare.md` as a screenshot
     sanity check when a visual regression is suspected. Treat cross-run image
     comparison as a frame/time-drift detector unless the two captures are known
     to represent the same presented frame; exact correctness proof still needs
     a same-run replay or draw-local comparison. After the run,
-    `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
+    `scripts/run_python.sh scripts/tools/summarize_3dmark05_perf.py experiments/output/<run>`
     writes `3dmark05-perf-encoders.csv` and
     `3dmark05-perf-encoder-streams.csv` for UI-free per-encoder analysis, with
     top-encoder tables for cbuf bytes, transient vertex bytes, transient source
@@ -162,7 +162,7 @@ Commercial / 3rd-party titles (require external prefix):
     (`run_timeout_sec=180`, `allow_timeout=true`, `require_positive_timeout=true`)
     because the app can hang on the final frame after useful output is already
     present. Routine runs should use
-    `python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05` with the
+    `scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark05` with the
     catalogue timeout, or pass an explicit positive `--timeout N`; `--timeout 0`
     is rejected for this app. If
     `experiments/launchers/app-d3d9-3dmark05.sh` is started directly from a
@@ -645,7 +645,7 @@ Commercial / 3rd-party titles (require external prefix):
     be inspected as subtype evidence, but they are not sufficient as the main
     gate for hidden-expanded storage.
     Combine that CSV with a joined Xcode/dxmt summary and shader-dump summary
-    using `python3 scripts/tools/plan_3dmark05_mini_replay.py --joined
+    using `scripts/run_python.sh scripts/tools/plan_3dmark05_mini_replay.py --joined
     <frameN-xcode-dxmt-joined-summary.csv> --shader-summary
     <frameN-shader-dump-summary.csv> --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --output
@@ -658,7 +658,7 @@ Commercial / 3rd-party titles (require external prefix):
     tightly filtered no-mutate scout when those bytes are needed. Do not reuse
     a draw-index window from an older run unless the same run's probe CSV proves
     it still selects the target group. Use
-    `python3 scripts/tools/select_3dmark05_payload_window.py --probe-draws
+    `scripts/run_python.sh scripts/tools/select_3dmark05_payload_window.py --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --row SEQ/ENC --max-draws N
     --output <trace-run>/analysis/frameN-payload-window-selection.json` to rank
     same-run shader/state groups and emit the exact
@@ -706,7 +706,7 @@ Commercial / 3rd-party titles (require external prefix):
     section classifies whether the payload is production proof, mechanism-only,
     or should block further production gputrace spending.
     Once payloads exist, build the next harness input with
-    `python3 scripts/tools/build_3dmark05_mini_replay_manifest.py
+    `scripts/run_python.sh scripts/tools/build_3dmark05_mini_replay_manifest.py
     --shader-summary <frameN-shader-dump-summary.csv> --probe-draws
     <3dmark05-perf-indexed-probe-draws.csv> --geometry-dir
     <trace-run>/analysis/geometry --payload-selection
@@ -714,7 +714,7 @@ Commercial / 3rd-party titles (require external prefix):
     <frameN-mini-replay-manifest.json>`. Use `--row SEQ/ENC` as an additional
     filter only when the payload scout was intentionally row-local.
     Prepare an isolated Metal replay app with
-    `python3 scripts/tools/run_3dmark05_mini_replay.py
+    `scripts/run_python.sh scripts/tools/run_3dmark05_mini_replay.py
     <frameN-mini-replay-manifest.json> --output-dir <trace-run>/analysis/mini-replay`.
     Add `--run --repeat N` for a no-capture smoke test. After enough disk is
     available, add `--capture-path <trace-run>/analysis/mini-replay.gputrace`
@@ -810,7 +810,7 @@ Commercial / 3rd-party titles (require external prefix):
   injects different env vars / args.
 - Run via:
   ```
-  python3 scripts/run_apps/run_experiment.py run <name>
-  DXMT_EXPERIMENT_PROFILE=perf python3 scripts/run_apps/run_experiment.py run <name>
-  python3 scripts/run_apps/run_experiment.py run <name> --build
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run <name>
+  DXMT_EXPERIMENT_PROFILE=perf scripts/run_python.sh scripts/run_apps/run_experiment.py run <name>
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run <name> --build
   ```

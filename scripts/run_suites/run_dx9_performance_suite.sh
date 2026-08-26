@@ -107,7 +107,7 @@ suite_log="$suite_dir/suite.log"
 
 cleanup_stale_prefixes() {
   printf '==> cleaning stale temp prefixes\n' | tee -a "$suite_log"
-  python3 "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
   printf '\n' | tee -a "$suite_log"
 }
 
@@ -117,7 +117,7 @@ run_lane() {
   shift 2
 
   local -a cmd=(
-    python3
+    "$repo_root/scripts/run_python.sh"
     "$repo_root/scripts/run_apps/run_experiment.py"
     run
     "$app"
@@ -153,7 +153,7 @@ for app in "${apps[@]}"; do
     --unix-build-dir "$repo_root/build-x86_64-builtin/src"
 done
 
-status=$(python3 - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
+status=$("$repo_root/scripts/run_python.sh" - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
 from __future__ import annotations
 
 import json

@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+
+      - name: Sync locked Python environment
+        run: mise run python:sync
+
       - name: Install build tools
         run: brew install meson ninja
 
@@ -55,7 +63,7 @@ jobs:
       - name: Install Wine runtime
         if: steps.cache-wine.outputs.cache-hit != 'true'
         run: |
-          python3 scripts/wine/install_wine.py \
+          scripts/run_python.sh scripts/wine/install_wine.py \
             --engine "$SIKARUGIR_ENGINE" \
             --target-id "$SIKARUGIR_ENGINE"
 
@@ -84,7 +92,7 @@ jobs:
       # --- Package ---
       - name: Package app-local
         run: |
-          python3 scripts/tools/package_app_local.py --clean \
+          scripts/run_python.sh scripts/tools/package_app_local.py --clean \
             --output-dir dist/dxmt9-app-local
 
       - name: Create tarball

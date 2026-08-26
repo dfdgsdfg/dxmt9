@@ -5,6 +5,20 @@ layouts, TLA+ verification) lives in [`docs/build.md`](../../docs/build.md).
 This file carries only the operational rules an agent needs when driving
 builds.
 
+## Rule: Python is the mise/uv project environment
+
+`.mise.toml` owns the exact Python and uv versions; `pyproject.toml` plus the
+committed `uv.lock` own dependencies. Run `mise install` before configuring a
+build directory. Drive ad hoc repository Python commands through
+`scripts/run_python.sh`; do not assume a caller's `python3` resolves to the
+project environment. Meson deliberately binds only that launcher, and uv
+lazily synchronizes the locked environment. It is an internal cache: do not
+activate it, add it to PATH, or repair it with `/usr/bin/python3`, Homebrew
+Python, Conda, or an agent-specific interpreter. The sync task must keep it
+based on `mise which python`, even when another compatible Python already
+created it. After changing either tool or dependency metadata, update the lock
+deliberately and run `mise run python:check`.
+
 ## Rule: build directory names are a contract
 
 Scripts, launchers, and `package_app_local.py` resolve build outputs by

@@ -34,7 +34,7 @@ if [[ -n "$diff_output" ]]; then
   exit 1
 fi
 
-python3 - "$manifest" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$manifest" <<'PY'
 from __future__ import annotations
 
 import sys

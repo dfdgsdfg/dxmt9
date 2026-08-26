@@ -88,7 +88,7 @@ suite_log="$suite_dir/suite.log"
 
 cleanup_stale_prefixes() {
   printf '==> cleaning stale temp prefixes\n' | tee -a "$suite_log"
-  python3 "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
   printf '\n' | tee -a "$suite_log"
 }
 
@@ -99,7 +99,7 @@ run_lane() {
   local suffix=$2
   local overrides=$3
   local -a cmd=(
-    python3
+    "$repo_root/scripts/run_python.sh"
     "$repo_root/scripts/run_apps/run_experiment.py"
     run
     "$app"
@@ -126,7 +126,7 @@ for app in "${apps[@]}"; do
   run_lane "$app" "dxmt9-compare" "d3d9=n,b"
 done
 
-status=$(python3 - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
+status=$("$repo_root/scripts/run_python.sh" - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
 from __future__ import annotations
 
 import json

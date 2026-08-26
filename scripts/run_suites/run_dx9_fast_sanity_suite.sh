@@ -126,7 +126,7 @@ status=0
 
 cleanup_stale_prefixes() {
   printf '==> cleaning stale temp prefixes\n' | tee -a "$suite_log"
-  python3 "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
   printf '\n' | tee -a "$suite_log"
 }
 
@@ -173,7 +173,7 @@ run_lane() {
   binary=$(binary_for_app "$app" "$arch")
 
   local -a cmd=(
-    python3
+    "$repo_root/scripts/run_python.sh"
     "$repo_root/scripts/run_apps/run_experiment.py"
     run
     "$app"
@@ -215,7 +215,7 @@ for app in "${apps[@]}"; do
   run_lane "$app" "builtin-x86" "x86" "d3d9=b" "$x86_pe_build_dir" "$x86_runtime_pe_build_dir"
 done
 
-python3 - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
 from __future__ import annotations
 
 import json

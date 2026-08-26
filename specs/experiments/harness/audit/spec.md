@@ -36,7 +36,7 @@ path under `traces/`, since that tree is gitignored.
 | `audit_winemetal_install_names.py` | 123 | Walks every `winemetal_dxmt9.so` under top-level `build*` directories, asserts its install id is `@rpath/winemetal_dxmt9.so`, and verifies `otool -L` shows no bare `winemac.so`/`ntdll.so` dependency. |
 | `check_d3d9_conformance_manifest.sh` | 203 | Validates `tests/conformance/d3d9/MANIFEST.toml`: required fields, enum values, evidence lane/arch/status consistency against declared `lanes`/`arches`, requirement-ID pattern, license fields, and — the referent-existence case cited in requirements.md R-HARN-AUDIT-4.4 — that each evidence `source` (`path:line`) resolves to an existing file with the line in range, and that `source_file` (when set) exists and contains the named `function` text. |
 | `check_d3d9_conformance_status.py` | 315 | Reads the same manifest and renders a text/Markdown/Mermaid status report (counts by status, next actions, per-status buckets); optionally exits non-zero via `--fail-if-full-support-missing`. |
-| `check_drift.sh` | 6 | Thin forwarder: `python3 scripts/tools/shader_corpus_tool.py drift "$@"`. |
+| `check_drift.sh` | 6 | Thin forwarder: `scripts/run_python.sh scripts/tools/shader_corpus_tool.py drift "$@"`. |
 | `check_manifest.sh` | 138 | Validates the shader corpus `MANIFEST.toml`: the referent-existence case cited in requirements.md R-HARN-AUDIT-4.4 is its `comm -3` diff between the actual `*.shader_test` files under `tests/shader_runner/corpus/` and the `file = "..."` entries the manifest declares (lines 14-29), plus a TOML-level field/enum check and a per-file provenance-comment check. |
 | `verify_tla.sh` | 40 | Runs the TLA+ model checker (`tlc`, or a downloaded `tla2tools.jar`) over every `.tla`/`.cfg` pair under `specs/verification/tla/`. |
 
@@ -104,7 +104,7 @@ R-HARN-AUDIT-4.2's "live-reproduced instance" requirement.
 ```sh
 $ git status --porcelain -- docs/perfomance | grep -cE '^(\?\?|A)'
 0
-$ python3 scripts/check/audit_perf_docs_sources.py
+$ scripts/run_python.sh scripts/check/audit_perf_docs_sources.py
 audit_perf_docs_sources: OK (0 new leaf file(s) checked)
 $ echo "exit=$?"
 exit=0
@@ -133,7 +133,7 @@ not exist:
 ```sh
 $ ls traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/frame60-counters-xcode.csv
 ls: ...: No such file or directory
-$ python3 scripts/check/audit_perf_docs_sources.py \
+$ scripts/run_python.sh scripts/check/audit_perf_docs_sources.py \
     --path docs/perfomance/baselines/baselines-frame60.02.md
 audit_perf_docs_sources: OK (1 new leaf file(s) checked)
 $ echo "exit=$?"
@@ -151,10 +151,10 @@ independently of that earlier count.
 ### 3.3 The registered conformance-status test skips its own strict gate
 
 ```sh
-$ python3 scripts/check/check_d3d9_conformance_status.py \
+$ scripts/run_python.sh scripts/check/check_d3d9_conformance_status.py \
     --fail-if-full-support-missing >/dev/null 2>&1; echo "exit=$?"
 exit=1
-$ python3 scripts/check/check_d3d9_conformance_status.py \
+$ scripts/run_python.sh scripts/check/check_d3d9_conformance_status.py \
     >/dev/null 2>&1; echo "exit=$?"
 exit=0
 ```

@@ -1047,10 +1047,10 @@ DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check/check_drift.sh
 
 ```sh
 # Opcodes with no passing test (coverage gap):
-python3 scripts/tools/shader_corpus_tool.py gaps --fail-on-metadata-gaps
+scripts/run_python.sh scripts/tools/shader_corpus_tool.py gaps --fail-on-metadata-gaps
 
 # Per-file Meson corpus shards use the same status filter:
-python3 scripts/tools/shader_corpus_tool.py list-files --status passing
+scripts/run_python.sh scripts/tools/shader_corpus_tool.py list-files --status passing
 
 # Tests behind upstream vkd3d HEAD:
 # (compare recorded provenance commits against the configured checkout)

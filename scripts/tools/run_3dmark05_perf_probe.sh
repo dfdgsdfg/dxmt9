@@ -12,7 +12,7 @@ keep_frontmost=${DXMT_3DMARK05_KEEP_FRONTMOST:-0}
 keep_frontmost_interval_sec=${DXMT_3DMARK05_KEEP_FRONTMOST_INTERVAL_SEC:-1}
 keep_frontmost_process=${DXMT_3DMARK05_KEEP_FRONTMOST_PROCESS:-3DMark05.exe}
 capture_delay_sec=${DXMT_3DMARK05_CAPTURE_DELAY_SEC:-}
-catalogue_capture_delay_sec=$(python3 - "$repo_root/experiments/CATALOGUE.toml" <<'PY'
+catalogue_capture_delay_sec=$("$repo_root/scripts/run_python.sh" - "$repo_root/experiments/CATALOGUE.toml" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
@@ -3106,7 +3106,7 @@ if [[ -n "$capture_delay_sec" && ! "$capture_delay_sec" =~ ^[0-9]+([.][0-9]+)?$ 
   exit 2
 fi
 effective_capture_delay_sec=${capture_delay_sec:-$catalogue_capture_delay_sec}
-watchdog_base_sec=$(python3 - "$timeout" "$effective_capture_delay_sec" <<'PY'
+watchdog_base_sec=$("$repo_root/scripts/run_python.sh" - "$timeout" "$effective_capture_delay_sec" <<'PY'
 import sys
 
 timeout = float(sys.argv[1])
@@ -4941,7 +4941,7 @@ fi
 
 cmd=(
   caffeinate -dimsu
-  python3 scripts/run_apps/run_experiment.py
+  "$repo_root/scripts/run_python.sh" scripts/run_apps/run_experiment.py
   run app-d3d9-3dmark05
   --output-suffix "$suffix"
   --timeout "$timeout"
@@ -4992,7 +4992,7 @@ fi
 counter_compare_cmd=()
 if [[ -n "$compare_baseline_output" ]]; then
   counter_compare_cmd=(
-    python3 scripts/tools/compare_3dmark05_perf_counters.py
+    "$repo_root/scripts/run_python.sh" scripts/tools/compare_3dmark05_perf_counters.py
     "$compare_baseline_output"
     "$output_dir"
     --before-label baseline
@@ -5562,7 +5562,7 @@ xctrace_export_cmd=(
   --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]'
 )
 xctrace_summary_cmd=(
-  python3 scripts/tools/summarize_xctrace_metal_intervals.py
+  "$repo_root/scripts/run_python.sh" scripts/tools/summarize_xctrace_metal_intervals.py
   --gpu-intervals "$metal_gpu_intervals_xml"
   --dxmt-encoders "$encoders_csv"
   --indexed-probe-draws "$probe_draws_csv"
@@ -5897,7 +5897,7 @@ trap 'stop_3dmark05_frontmost_loop' EXIT
 start_3dmark05_frontmost_loop
 (
   cd "$repo_root"
-  python3 scripts/tools/run_with_timeout.py \
+  "$repo_root/scripts/run_python.sh" scripts/tools/run_with_timeout.py \
     --timeout "$watchdog_base_sec" \
     --slack "$timeout_slack" \
     --label 3dmark05-perf-wrapper \
@@ -5909,7 +5909,7 @@ trap - EXIT
 cleanup_3dmark05_probe_wineserver
 
 summary_cmd=(
-  python3 "$repo_root/scripts/tools/summarize_3dmark05_perf.py"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_3dmark05_perf.py"
   "$output_dir"
   --output "$summary_path"
 )
@@ -5917,7 +5917,7 @@ if (( require_current_uniform_compact_saved_bytes_present )); then
   summary_cmd+=(--require-uniform-compact-saved-bytes-present)
 fi
 "${summary_cmd[@]}"
-python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
   --run "$suffix=$encoders_csv,$probe_draws_csv" \
   --output "$index_cache_runtime_report" \
   --csv-output "$index_cache_runtime_csv"
@@ -5925,7 +5925,7 @@ python3 "$repo_root/scripts/tools/summarize_index_cache_runtime.py" \
 if (( visibility_scout )); then
   if [[ -f "$visibility_scout_path" ]]; then
     visibility_summary_cmd=(
-      python3 "$repo_root/scripts/tools/summarize_visibility_scout.py"
+      "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_visibility_scout.py"
       "$visibility_scout_path"
       --probe-draws "$probe_draws_csv"
       --output "$visibility_scout_summary_output"
@@ -5947,16 +5947,16 @@ fi
 
 if (( dump_framegraph_dag )); then
   if find "$framegraph_dag_dir" -maxdepth 1 -name 'dag-frame*-chunk*-*.json' -print -quit | grep -q .; then
-    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+    "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
       --summary-csv "$framegraph_dag_summary_csv" \
       --csv "$framegraph_dag_candidates_csv" \
       --markdown "$framegraph_dag_summary"
-    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+    "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
       --stage pre-opt \
       --summary-csv "$framegraph_dag_preopt_summary_csv" \
       --csv "$framegraph_dag_preopt_candidates_csv" \
       --markdown "$framegraph_dag_preopt_summary"
-    python3 "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
+    "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/summarize_framegraph_dag.py" "$framegraph_dag_dir" \
       --stage post-opt \
       --summary-csv "$framegraph_dag_postopt_summary_csv" \
       --csv "$framegraph_dag_postopt_candidates_csv" \
@@ -5999,7 +5999,7 @@ if (( capture_gputrace )); then
   fi
 fi
 
-python3 - "$trace_artifacts_json" \
+"$repo_root/scripts/run_python.sh" - "$trace_artifacts_json" \
   "$run_id" \
   "$output_dir" \
   "$trace_dir" \

@@ -214,7 +214,7 @@ each run and is allowed to wipe it on next run of the same experiment.
 **R-RT-7.1** Existing prefixes at `~/Games/_Prefixes/<name>/` are not
 migrated automatically. Each affected experiment is converted by:
 1. Re-installing the game into `experiments/apps_3rd/<name>/`.
-2. Running `python3 scripts/run_apps/run_experiment.py run <name> --rebuild-prefix`.
+2. Running `scripts/run_python.sh scripts/run_apps/run_experiment.py run <name> --rebuild-prefix`.
 3. Verifying the run.
 
 **R-RT-7.2** SFIV is the first experiment converted (this spec's driving

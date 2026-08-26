@@ -19,7 +19,7 @@ compatibility matrix.
 
 | Runtime | Use as default? | Why |
 |---------|-----------------|-----|
-| **`sikarugir-cx-24.0.7`** (Sikarugir-App/Engines pre-built) | **Yes** | Installed in one command via `python3 scripts/wine/install_wine.py --engine sikarugir-cx-24.0.7 --target-id sikarugir-cx-24.0.7 --register-in-manifest`. Pre-built `winemac.so` exposes `_macdrv_functions`; wow64 is compatible with dxmt9's `MemoryWineImageInfo` lookup. Verified SFIV end-to-end 2026-05-11 (status pass, 76 s benchmark). |
+| **`sikarugir-cx-24.0.7`** (Sikarugir-App/Engines pre-built) | **Yes** | Installed in one command via `scripts/run_python.sh scripts/wine/install_wine.py --engine sikarugir-cx-24.0.7 --target-id sikarugir-cx-24.0.7 --register-in-manifest`. Pre-built `winemac.so` exposes `_macdrv_functions`; wow64 is compatible with dxmt9's `MemoryWineImageInfo` lookup. Verified SFIV end-to-end 2026-05-11 (status pass, 76 s benchmark). |
 | Self-built Wine with `wine/patches/winemac-expose-symbols-<ver>.patch` | Yes (alternative) | The reproducible-from-source path; see `specs/winemetal/requirements.md` R-WMB-10.B. |
 | **`3shain-v9.9`** (3Shain/wine fork `v9.9-mingw` — the upstream-DXMT author's Wine) | Yes (alternative) | `winemac.so` exports `_macdrv_functions` with the exact table layout dxmt9 mirrors; triangle x64+x86/wow64 and SFIV verified end-to-end 2026-08-26 reusing the sikarugir-linked `winemetal_dxmt9.so` unmodified. **Caveat:** no bundled Wine Mono/Gecko — bootstrap a fresh/updated prefix once with `WINEDLLOVERRIDES="mscoree=;mshtml="` or a headless run hangs forever on the mono-install dialog. See `specs/winemetal/requirements.md` R-WMB-6.2. |
 | `Wine-11.x` / `Wine-11.x-DXMT` (Heroic / Gcenx redistributed) | **No** | `winemac.so` is stripped (md5-identical between vanilla and `-DXMT`). The `-DXMT` suffix bundles pre-built dxmt D3D11 DLLs only and does **not** patch `winemac.so`. Runtime probe rejects them. |
@@ -42,7 +42,7 @@ differently — the dxmt9 bridge was fine, the runtime was the variable.
 and it is the same for GT1/GT2/GT3, SFIV, and everything else:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run <app-id>
+scripts/run_python.sh scripts/run_apps/run_experiment.py run <app-id>
 ```
 
 Per-app shell wrappers under `scripts/run_apps/` are **legacy — do not add
@@ -94,7 +94,7 @@ wine_id = "heroic-11.7"
 On the command line, `--wine-id` overrides the CATALOGUE default:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run <app-id> --wine-id heroic-11.7
+scripts/run_python.sh scripts/run_apps/run_experiment.py run <app-id> --wine-id heroic-11.7
 ```
 
 What to avoid — never hardcode a Wine path or default to a non-vanilla variant. Both bypass the manifest:

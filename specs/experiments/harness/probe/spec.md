@@ -133,14 +133,14 @@ a deliberate late-failure diagnostic where the expected evidence is
 exit.
 
 **Outer watchdog.** The whole supervised invocation —
-`caffeinate -dimsu python3 scripts/run_apps/run_experiment.py run
+`caffeinate -dimsu scripts/run_python.sh scripts/run_apps/run_experiment.py run
 app-d3d9-3dmark05 --output-suffix "$suffix" --timeout "$timeout"`,
 optionally wrapped in
 `bash scripts/tools/run_with_wine_metal_capture_layer.sh --wine-root ... --allow-3dmark05 --`
 (`run_3dmark05_perf_probe.sh:5084-5102`) — is opened in a
 subshell at `:6010` (the `(` line; `:6009` is the unrelated preceding
 `start_3dmark05_frontmost_loop` call) and launched under
-`python3 scripts/tools/run_with_timeout.py --timeout
+`scripts/run_python.sh scripts/tools/run_with_timeout.py --timeout
 "$watchdog_base_sec" --slack "$timeout_slack" --label
 3dmark05-perf-wrapper -- env "${env_args[@]}" "${cmd[@]}"` at
 `:6012-6017`, where

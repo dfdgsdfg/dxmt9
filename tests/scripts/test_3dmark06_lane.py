@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tomllib
 import unittest
 from pathlib import Path
@@ -80,7 +81,7 @@ class ThreeDMark06LaneTests(unittest.TestCase):
     def test_catalogue_runner_rejects_disabled_timeout(self) -> None:
         result = subprocess.run(
             [
-                os.environ.get("PYTHON", "python3"),
+                sys.executable,
                 str(RUNNER),
                 "run",
                 "app-d3d9-3dmark06",

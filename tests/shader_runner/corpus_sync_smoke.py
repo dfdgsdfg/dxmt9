@@ -110,7 +110,7 @@ def main() -> int:
 
         gaps = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 str(root / "scripts" / "tools" / "shader_corpus_tool.py"),
                 "gaps",
                 "--root",

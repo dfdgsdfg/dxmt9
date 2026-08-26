@@ -1,6 +1,7 @@
 import csv
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,7 +94,7 @@ class SummarizeColorAttachmentDumpsTests(unittest.TestCase):
 
             result = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     str(root),
                     "--roi",
@@ -148,7 +149,7 @@ class SummarizeColorAttachmentDumpsTests(unittest.TestCase):
 
             result = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     str(root),
                     "--roi",

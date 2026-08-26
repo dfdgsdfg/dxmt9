@@ -20,7 +20,10 @@ bridge_gen_inc = include_directories('.')
 # emits the per-op bridge tables plus the ABI fingerprint.
 # The .generated.cpp files are consumed by the PE-side d3d9 forwarder
 # (client) and the unix-side winemetal_dxmt9.so dispatch (server).
-python3 = find_program('python3', required: true)
+python3 = find_program(
+  join_paths(meson.project_source_root(), 'scripts', 'run_python.sh'),
+  required: true,
+)
 device_c_unix_schema = custom_target(
   'dxmt9_device_c_unix_schema_codegen',
   input: files('include/dxmt9/device_c.h'),

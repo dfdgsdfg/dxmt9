@@ -24,7 +24,7 @@ asserts every dep is either `@rpath/<name>` or a system framework /
 absolute path. Bare `<name>.so` entries fail the audit.
 
 Run manually:
-    python3 scripts/check/audit_winemetal_install_names.py
+    scripts/run_python.sh scripts/check/audit_winemetal_install_names.py
 
 Or as a meson test:
     meson test -C build dxmt9-winemetal-install-name-audit

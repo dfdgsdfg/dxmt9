@@ -99,7 +99,7 @@ for mode in "${modes[@]}"; do
   printf '==> render mode: %s\n' "$mode"
 
   cmd=(
-    python3
+    "$repo_root/scripts/run_python.sh"
     "$repo_root/scripts/tools/run_d3d9_conformance.py"
     --output "$result_json"
   )
@@ -127,7 +127,7 @@ done
 # Aggregate per-mode verdicts and decide pass/fail. The conformance runner
 # always exits 0 and only records verdicts to JSON, so the merge-blocking
 # gate is computed here from the per-mode result files.
-python3 - "$repo_root" "$summary_json" "$out_dir" "${modes[@]}" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$repo_root" "$summary_json" "$out_dir" "${modes[@]}" <<'PY'
 from __future__ import annotations
 
 import json

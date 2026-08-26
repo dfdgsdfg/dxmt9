@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
 usage() {
   cat <<'EOF'
 usage: run_with_wine_metal_capture_layer.sh --wine-root PATH [options] -- COMMAND [ARGS...]
@@ -174,7 +176,7 @@ run_status=0
 restore
 trap - EXIT INT TERM
 
-python3 - "$target_real" "$backup_real" "$target_preloader" "$backup_preloader" <<'PY' || \
+"$script_dir/../run_python.sh" - "$target_real" "$backup_real" "$target_preloader" "$backup_preloader" <<'PY' || \
   fail "restore verification failed"
 import pathlib
 import sys

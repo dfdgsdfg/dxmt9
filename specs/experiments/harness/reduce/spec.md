@@ -23,7 +23,7 @@ numbers on 2026-07-27, and against the real output directories
 `traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/analysis/`
 as noted per section. Column counts were derived by importing each
 script as a module and reading its column-list constant's length
-(`python3 -c 'exec(open(path).read()); print(len(CONST))'` style, run
+(`scripts/run_python.sh -c 'exec(open(path).read()); print(len(CONST))'` style, run
 without invoking `main()`), not by hand-counting prose, then
 cross-checked against the real CSV header field counts in those
 directories.

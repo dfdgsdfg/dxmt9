@@ -46,7 +46,6 @@ if host_machine.system() == 'darwin'
   endif
 endif
 
-python3 = find_program('python3', required: true)
 bash = find_program('bash', required: true)
 assert_perf_counters = find_program(
   join_paths(meson.project_source_root(), 'scripts', 'check', 'assert_perf_counters.py'),
@@ -210,6 +209,11 @@ test('dxmt9-perf-counter-schema-audit', python3,
      is_parallel: false)
 test('dxmt9-perf-docs-source-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_docs_sources.py')],
+     is_parallel: false)
+test('dxmt9-python-environment-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_python_environment.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
      is_parallel: false)
 # Diffs the dxmt9c_* wire-symbol set (five device_c_bridge_*.cpp forwarder
 # files, plus any stray extern "C" dxmt9c_* definition elsewhere under src/)

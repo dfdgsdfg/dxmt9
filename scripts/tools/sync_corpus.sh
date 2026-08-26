@@ -3,4 +3,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-python3 "$repo_root/scripts/tools/shader_corpus_tool.py" sync "$@"
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/shader_corpus_tool.py" sync "$@"

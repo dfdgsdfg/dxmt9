@@ -7,6 +7,7 @@ import csv
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,7 +43,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
 
             result = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     str(temp_path),
                     "--require-uniform-compact-saved-bytes-present",
@@ -71,7 +72,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
 
             result = subprocess.run(
                 [
-                    "python3",
+                    sys.executable,
                     str(SCRIPT),
                     str(temp_path),
                     "--require-uniform-compact-saved-bytes-present",
@@ -306,7 +307,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                ["python3", str(SCRIPT), str(temp_path)],
+                [sys.executable, str(SCRIPT), str(temp_path)],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -371,7 +372,7 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                ["python3", str(SCRIPT), str(temp_path)],
+                [sys.executable, str(SCRIPT), str(temp_path)],
                 text=True,
                 capture_output=True,
                 check=False,

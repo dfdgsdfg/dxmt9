@@ -79,7 +79,7 @@ status=0
 
 cleanup_stale_prefixes() {
   printf '==> cleaning stale temp prefixes\n' | tee -a "$suite_log"
-  python3 "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
+  "$repo_root/scripts/run_python.sh" "$repo_root/scripts/tools/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
   printf '\n' | tee -a "$suite_log"
 }
 
@@ -88,7 +88,7 @@ cleanup_stale_prefixes
 for app in "${apps[@]}"; do
   printf '==> %s\n' "$app" | tee -a "$suite_log"
   cmd=(
-    python3
+    "$repo_root/scripts/run_python.sh"
     "$repo_root/scripts/run_apps/run_experiment.py"
     run
     "$app"
@@ -110,7 +110,7 @@ for app in "${apps[@]}"; do
   printf '\n' | tee -a "$suite_log"
 done
 
-python3 - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
+"$repo_root/scripts/run_python.sh" - "$repo_root" "$summary_json" "$summary_md" "${apps[@]}" <<'PY'
 from __future__ import annotations
 
 import json

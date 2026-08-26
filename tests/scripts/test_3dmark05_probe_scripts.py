@@ -439,8 +439,13 @@ esac
         process_env = os.environ.copy()
         if env:
             process_env.update(env)
+        command = (
+            [sys.executable, str(script), *args]
+            if script.suffix == ".py"
+            else [str(script), *args]
+        )
         return subprocess.run(
-            [str(script), *args],
+            command,
             cwd=REPO_ROOT,
             env=process_env,
             text=True,
@@ -614,7 +619,7 @@ esac
             "--label",
             "test-watchdog",
             "--",
-            "python3",
+            sys.executable,
             "-c",
             "import time; time.sleep(5)",
         )
@@ -2940,7 +2945,7 @@ OUT
             )
 
             result = subprocess.run(
-                ["python3", str(SUMMARIZER), str(output_dir)],
+                [sys.executable, str(SUMMARIZER), str(output_dir)],
                 cwd=REPO_ROOT,
                 text=True,
                 capture_output=True,

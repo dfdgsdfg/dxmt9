@@ -37,7 +37,7 @@ for entry in "${suites[@]}"; do
   boundary="${entry%% *}"
   app="${entry##* }"
   echo "==> ${boundary} via ${app}"
-  python3 "$runner" \
+  "$repo_root/scripts/run_python.sh" "$runner" \
     --app "$app" \
     --mode default \
     --runs "$runs" \

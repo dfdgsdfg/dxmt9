@@ -51,7 +51,7 @@ self_supervise_app-d3d9-3dmark05_if_needed() {
     exit 0
   fi
 
-  python3 - "$0" "$timeout_sec" "$@" <<'PY'
+  "$exp_repo_root/scripts/run_python.sh" - "$0" "$timeout_sec" "$@" <<'PY'
 import os
 import signal
 import subprocess

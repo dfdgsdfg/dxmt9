@@ -184,7 +184,7 @@ correct behavior, not as a deviation.
 option lines as of 2026-07-29:
 
 ```
-$ python3 scripts/tools/run_3dmark05_mini_replay.py --help | grep -oE '^  --[a-z-]+' | sort -u | wc -l
+$ scripts/run_python.sh scripts/tools/run_3dmark05_mini_replay.py --help | grep -oE '^  --[a-z-]+' | sort -u | wc -l
 19
 ```
 
@@ -1169,12 +1169,12 @@ build/tools/dxmt9-render-tape validate frame.tape \
   --verified-blob <sha256>:<bytes>
 build/tools/dxmt9-render-tape inspect frame.tape \
   --verified-blob <sha256>:<bytes>
-python3 scripts/tools/run_dxmt9_render_tape.py pack \
+scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py pack \
   --events frame.tape --blob mutation.bin --output-dir frame-tape-bundle
-python3 scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
-python3 scripts/tools/run_dxmt9_render_tape.py provider-replay frame-tape-bundle
-python3 scripts/tools/run_dxmt9_render_tape.py parallel-verify frame-tape-bundle
-python3 scripts/tools/run_dxmt9_render_tape.py executable-project frame-tape-bundle \
+scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py validate frame-tape-bundle
+scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py provider-replay frame-tape-bundle
+scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py parallel-verify frame-tape-bundle
+scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py executable-project frame-tape-bundle \
   --command-event-ordinal N --first-record N --record-count N \
   --output-dir projected-bundle
 ```

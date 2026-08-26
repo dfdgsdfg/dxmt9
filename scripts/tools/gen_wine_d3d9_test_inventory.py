@@ -427,7 +427,9 @@ def main() -> None:
     lines.append("# Reproduce the inventory verbatim from a clean tree:")
     lines.append(f"git -C \"$DXMT9_REPO\" checkout {self_prov['hash']}")
     lines.append(f"git -C \"$WINE_REPO\"  checkout {prov['hash']}")
-    lines.append("python3 scripts/tools/gen_wine_d3d9_test_inventory.py")
+    lines.append(
+        "scripts/run_python.sh scripts/tools/gen_wine_d3d9_test_inventory.py"
+    )
     lines.append("```")
     lines.append("")
     lines.append("## Legend")
@@ -499,7 +501,9 @@ def main() -> None:
     lines.append("Regenerate this file with:")
     lines.append("")
     lines.append("```sh")
-    lines.append("python3 scripts/tools/gen_wine_d3d9_test_inventory.py")
+    lines.append(
+        "scripts/run_python.sh scripts/tools/gen_wine_d3d9_test_inventory.py"
+    )
     lines.append("```")
     lines.append("")
     lines.append("The generator reads Wine source from `$WINE_REPO` (default")

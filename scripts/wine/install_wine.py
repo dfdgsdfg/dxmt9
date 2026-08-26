@@ -4,7 +4,7 @@ Spec: specs/winemetal/requirements.md §10.A.
 Operator workflow: see experiments/wine/README.md.
 
 Single command per machine:
-    python3 scripts/wine/install_wine.py \\
+    scripts/run_python.sh scripts/wine/install_wine.py \\
         --engine sikarugir-cx-24.0.7 \\
         --target-id sikarugir-cx-24.0.7 \\
         --register-in-manifest
@@ -368,7 +368,7 @@ def _cli() -> int:
     print(f"  vendor dylibs      : {result.dylibs_copied} files + {result.dylib_symlinks_created} version-alias symlinks → {VENDOR_DIR}/")
     print()
     print("Verify with:")
-    print(f"  python3 scripts/wine/resolve.py --list")
+    print("  scripts/run_python.sh scripts/wine/resolve.py --list")
     print(f"  WINEPREFIX=$HOME/.wine-sika-test {result.target_dir}/bin/wine --version")
     return 0
 

@@ -80,9 +80,9 @@ fi
 cat <<EOF
 
 Experiment commands:
-  python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
 EOF

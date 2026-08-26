@@ -531,7 +531,7 @@ Workflow:
 5. Run:
 
    ```sh
-   python3 scripts/tools/analyze_xcode_replay_variance.py \
+   scripts/run_python.sh scripts/tools/analyze_xcode_replay_variance.py \
      traces/<run>/analysis/replay-variance/run*-counters-xcode.csv \
      --output traces/<run>/analysis/replay-variance-report.md \
      --summary-output traces/<run>/analysis/replay-variance-summary.csv \
@@ -619,7 +619,7 @@ classifies against the same module map. Join its cumulative
 `[dxmt9-pe-sampler]` groups with
 
 ```sh
-python3 scripts/tools/symbolicate_xctrace_pe.py \
+scripts/run_python.sh scripts/tools/symbolicate_xctrace_pe.py \
   --sampler-log traces/<run>/3dmark05-direct.log \
   --output-csv traces/<run>/analysis/pe-sampler.csv \
   --output-md  traces/<run>/analysis/pe-sampler.md
@@ -689,7 +689,7 @@ or the matching run's `experiments/output/<app-id>/result.json` counters.
 Run the policy A/B harness:
 
 ```sh
-python3 scripts/tools/run_dx9_present_policy_ab.py \
+scripts/run_python.sh scripts/tools/run_dx9_present_policy_ab.py \
   --mode default --mode async --runs 5 \
   --cv-tolerance 0.02
 ```

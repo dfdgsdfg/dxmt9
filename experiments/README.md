@@ -21,15 +21,15 @@ Spec: `specs/experiments/runtime/{requirements,spec}.md`.
 Primary entrypoint:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py list
-python3 scripts/run_apps/run_experiment.py run conf-d3d9-wsi-present
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06 --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+scripts/run_python.sh scripts/run_apps/run_experiment.py list
+scripts/run_python.sh scripts/run_apps/run_experiment.py run conf-d3d9-wsi-present
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06 --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
 DX9 regression suite:
@@ -60,8 +60,8 @@ bash scripts/run_suites/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
 Stale temp-prefix cleanup for interrupted suite runs:
 
 ```sh
-python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --dry-run
-python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --all
+scripts/run_python.sh scripts/tools/cleanup_dxmt9_temp_prefixes.py --dry-run
+scripts/run_python.sh scripts/tools/cleanup_dxmt9_temp_prefixes.py --all
 ```
 
 Notes:
@@ -79,18 +79,18 @@ Build-then-run via the consolidated runner. Pass `--build` to invoke the
 app's `build_script` (declared in `CATALOGUE.toml`) before launching:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-basic-hlsl --build --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --build --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --build --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --build --wine-root "$WINE_ROOT"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --build --wine-root "$WINE_ROOT"
 ```
 
 Wrappers that still need extra setup (default-prefix injection or installer
 extraction) remain as shell scripts:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
 3DMark06 is commercial and is not vendored. Place a complete installed payload
@@ -102,11 +102,11 @@ a Professional Edition feature. Examples:
 
 ```sh
 DXMT_3DMARK06_RESULT_FILE=dxmt9_gt1.3dr \
-  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
 
 DXMT_3DMARK06_ARGS="-hdr1 -nosplash -nosysteminfo -noscreens" \
 DXMT_3DMARK06_RESULT_FILE=dxmt9_hdr1.3dr \
-  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
 ```
 
 Permanent-prefix installer for Heroic:

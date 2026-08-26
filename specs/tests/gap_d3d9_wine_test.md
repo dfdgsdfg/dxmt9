@@ -59,7 +59,7 @@ the same commit in the Wine checkout before opening the source.
 # Reproduce the inventory verbatim from a clean tree:
 git -C "$DXMT9_REPO" checkout ccc58d74941d111e92dee8125cfa230f78034bb9
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
-python3 scripts/tools/gen_wine_d3d9_test_inventory.py
+scripts/run_python.sh scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
 
 ## Legend
@@ -388,7 +388,7 @@ Source: [`dlls/d3d9/tests/stateblock.c`](https://gitlab.winehq.org/wine/wine/-/b
 Regenerate this file with:
 
 ```sh
-python3 scripts/tools/gen_wine_d3d9_test_inventory.py
+scripts/run_python.sh scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
 
 The generator reads Wine source from `$WINE_REPO` (default

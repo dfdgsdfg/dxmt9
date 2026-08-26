@@ -74,7 +74,7 @@ Those extras are written by the `probe`-domain
 `run_id="app-d3d9-3dmark05-${suffix}"` independently — matching this
 domain's own `<app-runid>` naming convention rather than being told
 the path in band — and separately invokes
-`python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
+`scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
 --output-suffix "$suffix"` so both scripts' outputs land in the same
 directory. `3DMark05_dxmt9.log` specifically is the dxmt9 runtime's
 own default-named log file: the probe wrapper points `DXMT_LOG_PATH`

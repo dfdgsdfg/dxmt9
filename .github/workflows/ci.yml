@@ -13,6 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+
+      - name: Sync locked Python environment
+        run: mise run python:sync
+
       # TLC (scripts/check/verify_tla.sh) needs a Java runtime; it
       # downloads tla2tools.jar itself.
       - uses: actions/setup-java@v4
