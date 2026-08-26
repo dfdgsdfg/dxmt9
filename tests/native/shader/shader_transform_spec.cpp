@@ -1205,9 +1205,18 @@ std::vector<u32> makePs30TranscendentalOpcodeBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
       makeVersionToken(false, 3, 0),
-      makeInstructionToken(kD3DSIO_SINCOS, 2),
+      makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_TEMP, 0),
-      makeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_SINCOS, 2),
+      makeDstToken(kD3DSPR_TEMP, 0, 0x3u),
+      makeSrcToken(kD3DSPR_CONST, 0, makeSwizzle(0u, 0u, 0u, 0u)),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_SINCOS, 2),
+      makeDstToken(kD3DSPR_TEMP, 1, 0x3u),
+      makeSrcToken(kD3DSPR_CONST, 0, makeSwizzle(1u, 1u, 1u, 1u)),
       makeInstructionToken(kD3DSIO_LOG, 2),
       makeDstToken(kD3DSPR_TEMP, 1),
       makeSrcToken(kD3DSPR_CONST, 1),
@@ -2708,8 +2717,16 @@ void testPs30ArithmeticOpcodeLoweringContracts() {
 
 void testPs30TranscendentalOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30TranscendentalOpcodeBytecode());
-  checkContains(source, "float4(sin(psConsts.psFloatConst[0]), cos(psConsts.psFloatConst[0]), 0.0f, 0.0f)",
-                "SINCOS lowers to sin/cos vector construction");
+  checkContains(source, "r[0] = psConsts.psFloatConst[2];",
+                "SINCOS partial destination has an established z/w source value");
+  checkContains(source,
+                "dxmt9_merge(r[0], float4(cos((float4(psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x)).x), sin((float4(psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x, psConsts.psFloatConst[0].x)).x), 0.0f, 0.0f), 3u)",
+                "SINCOS uses cosine/sine order and preserves z/w for replicated x source");
+  checkContains(source,
+                "dxmt9_merge(r[1], float4(cos((float4(psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y)).x), sin((float4(psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].y)).x), 0.0f, 0.0f), 3u)",
+                "SINCOS applies the same scalar contract to a replicated non-x source");
+  checkNotContains(source, "float4(sin(psConsts.psFloatConst[0]), cos(psConsts.psFloatConst[0]), 0.0f, 0.0f)",
+                   "SINCOS does not construct vectors from vector-valued sin/cos calls");
   checkContains(source, "float4(log2(abs(psConsts.psFloatConst[1])))",
                 "LOG lowers to D3D9 abs log2 expression");
   checkContains(source, "float4(exp2(psConsts.psFloatConst[2]))", "EXP lowers to exp2 expression");

@@ -297,6 +297,14 @@ std::string applySwizzle(const std::string& expr, const std::array<u8, 4>& swizz
   return out.str();
 }
 
+// D3D9 SINCOS consumes the scalar value replicated by the source swizzle and
+// writes cosine/sine to x/y. Keep the scalar extraction explicit so a
+// replicated source remains valid MSL (sin/cos on a float4 cannot initialize
+// a four-scalar constructor) and so both shader-model lowering paths agree.
+std::string makeSincosValue(const std::string& source) {
+  return "float4(cos((" + source + ").x), sin((" + source + ").x), 0.0f, 0.0f)";
+}
+
 std::string texkillMaskCondition(const std::string& value, u32 mask) {
   std::ostringstream condition;
   bool first = true;
@@ -2310,7 +2318,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               break;
             }
             case kD3DSIO_SINCOS:
-              value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
+              value = makeSincosValue(readSrc(1));
               break;
             case kD3DSIO_M4x4: {
               const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
@@ -3562,7 +3570,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             break;
           }
           case kD3DSIO_SINCOS:
-            value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
+            value = makeSincosValue(readSrc(1));
             break;
           case kD3DSIO_M4x4: {
             const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
