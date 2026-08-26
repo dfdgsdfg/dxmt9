@@ -76,10 +76,11 @@ Full prerequisites (`llvm-mingw`, `uv`, `WINE_ROOT`, etc.) are in
 Toolchain is **Meson + Ninja, C++20 / C17**. The repo keeps four staging build
 dirs (the runner scripts and `test_wild.rules.md` expect these exact names):
 
-Python tooling is one locked environment: run `mise install` once.
-`.mise.toml` pins Python/uv, `uv.lock` pins packages, and Meson executes Python
-only through `scripts/run_python.sh`, which lets uv lazily synchronize its
-project environment. It is not activated or added to PATH; do not fall back to
+Python tooling is one uv-owned locked environment. `.python-version` pins the
+exact uv-managed Python, `uv.lock` pins packages, and Meson executes Python only
+through `scripts/run_python.sh`. mise is optional: when installed it supplies
+the pinned uv and project tasks; otherwise the launcher accepts a compatible
+PATH uv. The environment is not activated or added to PATH; do not fall back to
 a system or Conda interpreter.
 
 | Dir | Cross/native file | Produces |

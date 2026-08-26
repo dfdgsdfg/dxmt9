@@ -1,10 +1,9 @@
 [tools]
-python = "3.13.15"
 uv = "0.12.5"
 
 [tasks."python:sync"]
 description = "Sync uv's project environment from the committed lockfile"
-run = "uv sync --locked --python \"$(mise which python)\""
+run = "uv sync --locked --managed-python"
 
 [tasks."python:check"]
 description = "Verify the pinned Python/uv environment contract"

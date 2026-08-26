@@ -24,14 +24,14 @@ This installs system and bootstrap tools:
 |---|---|
 | `meson` + `ninja` | Build system |
 | `ripgrep` | Fast repository/script helper searches |
-| `mise` | Owns the exact Python and uv tool versions and project task environment |
+| `mise` | Optional manager for the pinned uv version and project tasks/environment |
 | `llvm` | C++20 / ObjC++ compiler and `clang-tidy` |
 | `clang-format` | Source formatter |
 | `temurin`, `tla+-toolbox` (casks) | Java runtime and TLC model checker for formal verification |
 | `msitools`, `winetricks` | Optional Wine experiment helpers |
 
-**Python via mise + uv** (see `.mise.toml`, `.python-version`,
-`pyproject.toml`, and the committed `uv.lock`):
+**Python via uv, optionally launched by mise** (see `.mise.toml`,
+`.python-version`, `pyproject.toml`, and the committed `uv.lock`):
 
 ```sh
 mise trust
@@ -39,15 +39,22 @@ mise install
 mise run python:check
 ```
 
-`mise` pins Python and uv; the sync task binds uv's internal project environment
-to that exact mise Python and installs only the committed lockfile resolution.
+mise pins uv and provides the convenience tasks above, but it does not own
+Python. uv reads the exact request from `.python-version`, accepts only an
+uv-managed interpreter, and installs the committed lockfile resolution. If
+mise is unavailable, install a compatible uv on `PATH` and use:
+
+```sh
+uv sync --locked --managed-python
+scripts/run_python.sh scripts/check/audit_python_environment.py
+```
+
 There is no activation step and no environment path is added to `PATH`. Run
-repository Python commands through `scripts/run_python.sh`; it resolves the
-pinned tools and invokes `uv run --locked`. Meson and repository shell entry
-points use the same launcher and therefore never select a system, Homebrew,
-Conda, or agent-specific Python. The launcher creates or synchronizes the
-environment on demand; `mise run python:sync` remains available for CI and an
-explicit eager sync.
+repository Python commands through `scripts/run_python.sh`; it prefers the
+mise-pinned uv when available and otherwise invokes the PATH uv. Meson and
+repository shell entry points use the same launcher and therefore never select
+a system, Homebrew, Conda, or agent-specific Python. The launcher creates or
+synchronizes the environment on demand.
 
 **llvm-mingw** (required for the Win32 PE bridge DLLs):
 
