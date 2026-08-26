@@ -28,6 +28,27 @@ patch_status   = "applied"
 metal_surface_protocol = "legacy-macdrv-symbols:sikarugir-cx-24.0.7"
 notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible. Verified SFIV end-to-end 2026-05-11. Default wine_id for wild experiments on this machine."
 
+# ─── Path B candidate: 3Shain/wine fork (upstream-DXMT author's Wine). ────
+# Downloaded from https://github.com/3Shain/wine/releases/tag/v9.9-mingw
+# (wine.tar.gz, 2024-07-31). Static audit 2026-08-26: winemac.so exports
+# _macdrv_functions (10-slot table, slot order identical to dxmt9's
+# macdrv_functions_t mirror) plus flat get_win_data/release_win_data/
+# macdrv_view_{create_metal_view,get_metal_layer,release_metal_view} and
+# helper macdrv_get_client_cocoa_view; macdrv_win_data.client_cocoa_view
+# confirmed at offset 0x18 (4-pointer prefix matches the mirror). Real
+# Mach-O bin/wine (no Perl wrapper), new-style wow64 layout
+# (i386-windows PE + x86_64-unix only). Runtime verification pending.
+[[wine]]
+id             = "3shain-v9.9"
+source         = "3shain"
+variant        = "patched"
+version        = "wine-9.9-4-g496a727 / 3Shain fork v9.9-mingw"
+path           = "$REPO_ROOT/experiments/wine/3shain-v9.9"
+requires_patch = true
+patch_status   = "applied"
+metal_surface_protocol = "legacy-macdrv-symbols:3shain-v9.9"
+notes          = "3Shain/wine fork release v9.9-mingw (the upstream-DXMT author's Wine). _macdrv_functions exported with dxmt9-compatible slot layout. Runtime verified 2026-08-26: conf-d3d9-triangle PASS on both x64 and x86/wow64 lanes (abi-hash handshake OK, layer_acquisition=legacy-macdrv-symbols), reusing the sikarugir-linked winemetal_dxmt9.so without rebuild. CAVEAT: tarball bundles no Wine Mono/Gecko — a fresh-prefix bootstrap hangs forever on the interactive mono-install dialog; bootstrap with WINEDLLOVERRIDES='mscoree=;mshtml=' (wineboot ~48s) before harness runs. SFIV end-to-end verified 2026-08-26 on the shared prefix (rendered benchmark scene, 50.73 avg fps at capture, layer_acquisition=legacy-macdrv-symbols) — accepted alternative runtime; see R-WMB-6.2."
+
 # ─── Documented-as-broken: stripped Heroic / Gcenx builds. ────────────────
 # Kept so the runtime probe (R-WMB-7) can refuse them with a clear pointer
 # to spec. The harness will hard-error rather than silently producing a
