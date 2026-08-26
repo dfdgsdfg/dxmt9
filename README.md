@@ -46,10 +46,10 @@ Sikarugir-CX 24.0.7 and Heroic Wine Staging 11.16:
 | 3DMark05 GT1                | `32.3`                    | `31.4`                       | `27.7`                          |
 | 3DMark05 GT2                | `30.9`                    | `30.7`                       | `21.7`                          |
 | 3DMark05 GT3                | `69.6`                    | `61.0`                       | `57.4`                          |
-| 3DMark06 GT1                | `15.5`                    | —                            | —                               |
-| 3DMark06 GT2                | `32.8`                    | —                            | —                               |
-| 3DMark06 HDR1               | `30.1`                    | —                            | —                               |
-| 3DMark06 HDR2               | `30.1`                    | —                            | —                               |
+| 3DMark06 GT1                | `15.5`                    | `16.0`                       | `14.9`                          |
+| 3DMark06 GT2                | `32.8`                    | `18.9`                       | `16.5`                          |
+| 3DMark06 HDR1               | `30.1`                    | `37.6`                       | `29.7`                          |
+| 3DMark06 HDR2               | `30.1`                    | `15.6`                       | `13.6`                          |
 | Street Fighter IV Benchmark | `44.7`                    | —                            | —                               |
 
 
@@ -70,13 +70,23 @@ errors, or rejected command chunks. 3DMark06 Advanced Edition does not emit
 observer-free per-test `.3dr` results through this command-line lane. Its
 Professional-only per-test selectors are accepted as arguments but do not
 start the installed Advanced Edition, so HDR selection was made once in the
-UI before the observer-only run. Both WineD3D runs use pristine builtin
-`d3d9.dll`; loaded-module checks confirm the `wined3d` OpenGL path on the Apple
-M1. Single runs, so no run range is quoted — repeated measurements of one build
-on this host drift about ±3% with ambient load and time of day.
+UI before the observer-only run. The Sikarugir WineD3D 3DMark06 column is one
+graphics-only Advanced Edition run whose Result Details report `15.976`,
+`18.897`, `37.620`, and `15.577` FPS (SM2.0 score `2092`, HDR score `2660`).
+The matching Heroic 11.16 Result Details report `14.945`, `16.542`, `29.688`,
+and `13.636` FPS (SM2.0 score `1889`, HDR score `2176`). A second Heroic run
+stayed within `1.72%` scene by scene.
+WineD3D did not enumerate 1280x720 on this host, so both runs used its nearest
+default mode, 1280x800; their official result averages and the dxmt9 1280x720
+frame-sampled scene averages are useful renderer baselines, not a strict A/B.
+Both WineD3D baselines use pristine builtin `d3d9.dll`; loaded-module checks
+confirm the `wined3d` OpenGL path on the Apple M1. One accepted run per runtime
+is quoted; the extra Heroic scout is only a repeatability check. Measurements
+of one build on this host drift about ±3% with ambient load and time of day.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
+and [3DMark06 WineD3D baseline](docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md)
 for the measurements and limitations. [One frame end to end](docs/perfomance/frame-lifecycle.md)
 shows where the frame time goes.
 

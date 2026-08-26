@@ -1,11 +1,11 @@
 ---
 domain: baselines
-workload: 3DMark05 GT1
+workload: 3DMark05 + 3DMark06 + SFIV
 title: "Baselines — the reference captures every other experiment compares against - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-08-25
-source: docs/perfomance/baselines/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md
+updated: 2026-08-26
+source: docs/perfomance/baselines/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md
 related: docs/perfomance/baselines/index.md; docs/perfomance/baselines/log.md
 ---
 
@@ -46,6 +46,7 @@ current whole-run reference in [overview-3dmark05-gt1](../overview-3dmark05-gt1.
 | H14 | Current capture-layer file route can produce Xcode encoder counters again | accepted | baselines-gputrace-capture.02 (`frame60.gputrace` written, performance export and encoder counters exported; latest current-worktree `--with-wine-capture-layer` wrapper run has `10` encoder rows, Xcode reports `35.919ms`, `10` render encoders, `396` draw calls, top-three `98.26%`) |
 | H15 | A latest black-geometry / transparent-weapon report invalidates the current performance direction | rejected as a wall; accepted as a baseline gate | [snapshot-cache-visual.02](../snapshot-cache/snapshot-cache-visual.02.md) keeps `v0.0.3` as the visual-safe anchor. For the sampled black-foreground firefight window, H169 rejects full-cbuf as the owner and H172 shows the broad dark class in `v0.0.3`; separate weapon/lighting artifacts still need same-frame or draw-local proof before perf runs are promoted. |
 | H16 | The PE/DOD refactor series changed the current wild-workload ceiling | rejected as a measurable single-run shift | [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) records GT1 `30.646`, GT2 `28.311`, GT3 `64.875`, and SFIV `43.252` at `e32da591`. Every delta from the 2026-08-23 sweep is inside the approximately `+/-3%` ambient band, with normal captures and zero GPU errors. |
+| H17 | One WineD3D result can stand in for the current 3DMark06 renderer comparison | rejected as an aggregate; accepted as per-runtime, per-scene baselines | [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) records Sikarugir at GT1 `15.976`, GT2 `18.897`, HDR1 `37.620`, HDR2 `15.577`, and Heroic 11.16 at `14.945`, `16.542`, `29.688`, `13.636` official FPS. Both WineD3D runs use 1280x800 and the same official observer; Heroic is `6.5-21.1%` lower. Their mode and observer still differ from dxmt9's 1280x720 frame sampling, so no strict dxmt9 percentage is assigned. |
 
 ## Current Navigation
 
@@ -55,4 +56,10 @@ current whole-run reference in [overview-3dmark05-gt1](../overview-3dmark05-gt1.
 
 ## Recent Leaf Documents
 
-> 7 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
+- [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) —
+  current pristine Sikarugir and Heroic 11.16 WineD3D 3DMark06 graphics
+  baselines.
+- [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) — current
+  dxmt9 3DMark05/SFIV whole-run throughput surface.
+
+Older and non-recheckable baseline history is retained in [log](log.md).

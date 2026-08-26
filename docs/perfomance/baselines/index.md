@@ -1,17 +1,19 @@
 ---
 domain: baselines
-workload: 3DMark05 GT1
+workload: 3DMark05 + 3DMark06 + SFIV
 title: "Baselines — the reference captures every other experiment compares against"
 type: domain-index
 status: current
-updated: 2026-08-25
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md
+updated: 2026-08-26
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md
 related: docs/perfomance/baselines/overview.md; docs/perfomance/baselines/log.md
 ---
 
 # Baselines — the reference captures every other experiment compares against
 
-Latest tracked result: the 2026-08-25 current-cap sweep preserves the post-PE-boundary throughput range at GT1 `30.6`, GT2 `28.3`, GT3 `64.9`, and SFIV `43.3` sampled FPS.
+Latest tracked result: the 2026-08-26 3DMark06 WineD3D graphics baselines record
+Sikarugir GT1/GT2/HDR1/HDR2 at `15.976 / 18.897 / 37.620 / 15.577` and Heroic
+11.16 at `14.945 / 16.542 / 29.688 / 13.636` official FPS at 1280x800.
 
 ## Start Here
 
@@ -21,6 +23,10 @@ Latest tracked result: the 2026-08-25 current-cap sweep preserves the post-PE-bo
 
 ## Recent Leaf Documents
 
+- [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) —
+  2026-08-26 pristine Sikarugir and Heroic 11.16 WineD3D graphics-only
+  baselines; builtin OpenGL identity proven, with 1280x800 and result-source
+  limitations explicit.
 - [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) — 2026-08-25 current-cap single-run sweep at `e32da591`: GT1 `30.646`, GT2 `28.311`, GT3 `64.875`, SFIV `43.252`; normal captures, production CB/pass locality, and zero GPU errors.
 - [baselines-wild-fps-refresh.03](baselines-wild-fps-refresh.03.md) — 2026-08-23 post-PE-boundary single-run sweep: GT1 `30.91`, GT2 `29.04`, GT3 `65.86`, SFIV `44.22`; all deltas to the current sweep remain inside the approximately `+/-3%` ambient band.
 - [baselines-serial-partition-ab.02](baselines-serial-partition-ab.02.md) —
