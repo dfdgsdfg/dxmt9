@@ -217,6 +217,29 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits, b
   return srgb ? toSrgbPixelFormat(pixelFormat) : pixelFormat;
 }
 
+float toMetalDepthBiasConstant(float normalizedBias,
+                               WMTPixelFormat depthFormat) {
+  float scale = 0.0f;
+  switch (depthFormat) {
+    case WMTPixelFormatDepth16Unorm:
+      scale = 65536.0f;
+      break;
+    case WMTPixelFormatDepth24Unorm_Stencil8:
+      scale = 16777216.0f;
+      break;
+    case WMTPixelFormatDepth32Float:
+    case WMTPixelFormatDepth32Float_Stencil8:
+      // Metal uses the floating-point format's least-representable-value
+      // representation. 2^23 preserves D3D9's normalized constant near the
+      // far plane and matches the established D32-float emulation policy.
+      scale = 8388608.0f;
+      break;
+    default:
+      break;
+  }
+  return normalizedBias * scale;
+}
+
 bool formatHasStencilAspect(Format format) {
   switch (format) {
     case Format::D24S8:

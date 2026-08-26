@@ -96,7 +96,7 @@ a `file:line` anchor checked against the live tree.
 | `AlphaCmpCaps` sourced from `alphaCmpCaps` | C.7 | `src/d3d9/device_c_format_utils.cpp:295`; `src/d3d9/d3d9_pe_factory.cpp:268` |
 | `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel populated (stable FNV-1a) | C.9 | `src/d3d9/core_factory.cpp:276-299,303-327` |
 | `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus` |
-| `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState` | B.10#1 | `src/dxmt9/dxmt9_draw_encoder.mm:556-564` |
+| `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState`, with normalized constant bias scaled from the actual Metal depth format | B.10#1 | `src/dxmt9/dxmt9_format_convert.cpp` `toMetalDepthBiasConstant`; `src/dxmt9/dxmt9_render_pass_internal.hpp` `metalDepthBiasForDrawState`; positive and negative shader-corpus readbacks |
 | `D3DLIGHT_POINT` / `D3DLIGHT_SPOT` FFP lighting (Position/Range/Atten/Theta/Phi) | B.5/B.10#5 | `src/dxmt9/dxmt9_ffp_shaders.cpp:168-284` |
 | `D3DGAMMARAMP` real impl + PE shadow + unix bridge | B.9/D.* | `src/d3d9/d3d9_pe_device.cpp:578-612 (citation unresolved — could not verify against source history),2244-2261` |
 | `INTZ` vendor format accepted | C.5 | `src/d3d9/device_c_format_utils.cpp:85` |
@@ -688,7 +688,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | COLORWRITEENABLE3 | 192 | ✅ `core::RS_COLOR_WRITE_ENABLE3` | ✅ | ⚠️ | ✅ per-RT blend attachment mask | ✅ backend pipeline-key gate | Closed 2026-05-24 |
 | BLENDFACTOR | 193 | ✅ `core::RS_BLEND_FACTOR` (core_constants.hpp:387) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:62` (using-decl); fed into setBlendColor | ⚠️ no spec | RGBA u32 split to 4 floats |
 | SRGBWRITEENABLE | 194 | ✅ `core::RS_SRGB_WRITE_ENABLE` (core_constants.hpp:388) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:629`, `dxmt9_draw_encoder.mm:951` | ⚠️ implicit via pipeline key | |
-| DEPTHBIAS | 195 | ✅ `core::RS_DEPTH_BIAS` (core_constants.hpp) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm` feeds Metal depth bias | ✅ backend depth-bias gate | Closed 2026-05-24 |
+| DEPTHBIAS | 195 | ✅ `core::RS_DEPTH_BIAS` (`core_constants.hpp`) | ✅ | ⚠️ | ✅ `toMetalDepthBiasConstant` scales normalized bias by the active Metal depth format | ✅ native conversion truth table plus positive/negative GPU readbacks | Closed 2026-08-26; D24S8 fallback uses D32F units |
 | (196 dead) | 196 | n/a | n/a | n/a | n/a | n/a | |
 | (197 dead) | 197 | n/a | n/a | n/a | n/a | n/a | |
 | WRAP8 | 198 | ✅ `core::RS_WRAP8` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | Shadowed/readable; representative high-range wrap coverage |
@@ -1037,8 +1037,8 @@ closure list for behavioral gates.
 | NULL | 'NULL' (0x4c4c554e) | OK | OK | OK | OK | colorless render target with no color backing; NULL RT depth-only runtime probe covered. |
 | ATOC | 'ATOC' (0x434f5441) | OK | OK | OK | OK | alpha-to-coverage token path wired through pipeline key. |
 | NVDB | 'NVDB' (0x4244564e) | OK | OK | NO | OK | explicitly classified unsupported; Metal has no depth-bounds equivalent. |
-| GET4 | 'GET4' (0x34544547) | NO | NO | partial | warn | absent from `Format` enum, but explicitly short-circuited as NOTAVAILABLE in `device_c_factory.cpp:179, 186` (CheckDeviceFormat path) with a Wine-policy comment. |
-| GET1 | 'GET1' (0x31544547) | NO | NO | NO | NO | absent. |
+| GET4 | 'GET4' (0x34544547) | state token | n/a | OK | OK | Unadvertised runtime compatibility path: compatible point-sampled 2D textures lower TEX/TEXLDL/TEXLDD to Metal red-channel gather with D3D9 ordering. `CheckDeviceFormat(GET4)` intentionally remains NOTAVAILABLE. |
+| GET1 | 'GET1' (0x31544547) | state token | n/a | OK | OK | Disables the retained GET4 sampler state and is excluded from numeric MIPMAPLODBIAS handling. |
 | R2VB | 'R2VB' | NO | NO | NO | NO | absent. |
 | ATI1 | 'ATI1' (826889281) | OK | OK | OK | OK | -> `BC4_RUnorm` (single-channel BC4). `core_format_caps_spec.cpp:122`. |
 | ATI2 | 'ATI2' (843666497) | OK | OK | OK | OK | -> `BC5_RGUnorm` (two-channel BC5). `core_format_caps_spec.cpp:118-135`. |
@@ -1206,15 +1206,15 @@ Anchor: `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus`, no core-side m
 | C.3 Depth/stencil | 11 | 9 | 7 | 7 |
 | C.4 FOURCC standard (video + DXT) | 11 | 5 | 5 | 7 |
 | C.5 Index + Float | 8 | 8 | 8 | 7 |
-| C.6 FOURCC vendor pseudo | 13 | 2 | 2 (+1 partial GET4) | 5 |
-| **D3DFORMAT subtotal** | **72** | **43** | **41** | **45** |
+| C.6 FOURCC vendor pseudo | 13 | 2 (+2 sampler-state tokens, excluded from the D3DFORMAT subtotal) | 4 | 7 |
+| **D3DFORMAT subtotal** | **72** | **43** | **43** | **47** |
 | C.7 D3DCAPS9 fields | 75 | 65 (53 explicit + 12 acceptable defaults) | 74 | 21 |
 | C.8 D3DPRESENT_PARAMETERS | 14 | 11 (3 PE-shadow-only) | 11 | 11 |
 | C.9 D3DDISPLAYMODE/EX | 7 | 7 | 7 | 7 |
 | C.10 D3DADAPTER_IDENTIFIER9 | 10 | 8 | 8 | 10 |
 | C.11 D3DRASTER_STATUS | 2 | 0 | 0 | 2 |
 | **Caps + present + display + adapter + raster subtotal** | **108** | **91** | **100** | **51** |
-| **Grand total** | **180** | **134** | **141** | **96** |
+| **Grand total** | **180** | **134** | **143** | **98** |
 
 Top defects worth flagging:
 

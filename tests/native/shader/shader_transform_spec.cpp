@@ -247,6 +247,15 @@ std::string translatePixel(std::span<const u32> words, bool samplerLodBias) {
   return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
 }
 
+std::string translatePixelWithFetch4(std::span<const u32> words, u32 fetch4Mask) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.fetch4SamplerMask = fetch4Mask;
+  return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+}
+
 std::string translatePixelWithAlphaTestStrip(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
@@ -1930,6 +1939,31 @@ void testPs20MipLodBiasClearOmitsShaderSideBias() {
                 "bias-off translated PS still samples through the sampler register slot");
 }
 
+void testPs20Fetch4GatherReplacesImplicitSample() {
+  const auto source = translatePixelWithFetch4(makePs20TexturedBytecode(7), 1u << 7);
+  checkContains(source, "tex7.gather(samp7",
+                "FETCH4 lowers TEX to a gather on the declared sampler");
+  checkContains(source, "float2(0.498046875f) / float2(tex7.get_width(), tex7.get_height())",
+                "FETCH4 applies the inward-biased half-texel offset");
+  checkContains(source, "int2(0), component::x).zxyw",
+                "FETCH4 gathers red and applies the D3D9 swizzle");
+  checkNotContains(source, "tex7.sample(samp7",
+                   "FETCH4 TEX does not retain the ordinary sample operation");
+}
+
+void testPs30Fetch4ExplicitLodIgnoresLodOperand() {
+  const auto source = translatePixelWithFetch4(makePs30TextureLodOpcodeBytecode(),
+                                               (1u << 3) | (1u << 4));
+  checkContains(source, "tex3.gather(samp3",
+                "FETCH4 replaces TEXLDD with a gather");
+  checkContains(source, "tex4.gather(samp4",
+                "FETCH4 replaces TEXLDL with a gather");
+  checkNotContains(source, "level(",
+                   "FETCH4 ignores the explicit TEXLDL level");
+  checkNotContains(source, "gradient2d(",
+                   "FETCH4 ignores the explicit TEXLDD gradients");
+}
+
 void testFfpMipLodBiasEmitsShaderSideBias() {
   // Same specs/d3d9/gap_d3d9.md B.3 contract for the fixed-function pixel path: with the
   // variant flag SET a textured FFP stage threads its per-sampler LOD bias
@@ -1977,6 +2011,26 @@ void testFfpMipLodBiasClearOmitsShaderSideBias() {
                    "bias-off FFP PS samples without a bias() argument");
   checkContains(source, "tex0.sample(samp0",
                 "bias-off FFP PS still samples its bound texture");
+}
+
+void testFfpFetch4GatherEmission() {
+  FfpPixelKey key{};
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.fetch4SamplerMask = 1u;
+  const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkContains(source, "tex0.gather(samp0",
+                "FFP FETCH4 routes the active stage through gather");
+  checkContains(source,
+                "float2(0.498046875f) / float2(tex0.get_width(), tex0.get_height())",
+                "FFP FETCH4 applies the inward-biased half-texel offset");
+  checkContains(source, "int2(0), component::x).zxyw",
+                "FFP FETCH4 gathers red and applies the D3D9 swizzle");
 }
 
 void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
@@ -3554,8 +3608,11 @@ int main() {
     testPs20SamplerRegisterSlotMapping();
     testPs20MipLodBiasEmitsShaderSideBias();
     testPs20MipLodBiasClearOmitsShaderSideBias();
+    testPs20Fetch4GatherReplacesImplicitSample();
+    testPs30Fetch4ExplicitLodIgnoresLodOperand();
     testFfpMipLodBiasEmitsShaderSideBias();
     testFfpMipLodBiasClearOmitsShaderSideBias();
+    testFfpFetch4GatherEmission();
     testTranslatedAlphaTestDebugStripOmitsTailDiscard();
     testFfpAlphaTestDebugStripOmitsDiscard();
     testPs30InputSemanticTexcoordMapping();

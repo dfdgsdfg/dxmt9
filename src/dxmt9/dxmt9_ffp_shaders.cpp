@@ -1222,9 +1222,17 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     if (context.forceTextureWhiteForDebug) {
       return std::string("float4(1.0f)");
     }
-    std::string sample = "tex" + std::to_string(stage) + ".sample(samp" +
-                         std::to_string(stage) + ", " + coord +
-                         biasArg(stage) + ")";
+    std::string sample;
+    if (stage < kMaxTextureStages &&
+        (context.fetch4SamplerMask & (1u << stage)) != 0u) {
+      const auto texture = "tex" + std::to_string(stage);
+      sample = texture + ".gather(samp" + std::to_string(stage) + ", " + coord +
+              " + float2(0.498046875f) / float2(" + texture + ".get_width(), " +
+              texture + ".get_height()), int2(0), component::x).zxyw";
+    } else {
+      sample = "tex" + std::to_string(stage) + ".sample(samp" +
+               std::to_string(stage) + ", " + coord + biasArg(stage) + ")";
+    }
     if ((context.x8AlphaOneTextureMask & (1u << stage)) != 0u) {
       sample = "dxmt9_x8_alpha_one(" + sample + ")";
     }

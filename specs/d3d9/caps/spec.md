@@ -40,6 +40,16 @@ are implementation guidance for the normative rules in
 | `ExtentsAdjust` | 0.0f | |
 | `StencilCaps` | KEEP \| ZERO \| REPLACE \| INCRSAT \| DECRSAT \| INVERT \| INCR \| DECR \| TWOSIDED | All stencil ops |
 
+### Depth-bias mapping
+
+`D3DRS_DEPTHBIAS` is a normalized depth offset, while Metal's constant
+`depthBias` is expressed in units of the active depth format. The backend must
+scale the D3D9 value from the actual Metal depth attachment format: `2^16` for
+`Depth16Unorm`, `2^24` for `Depth24Unorm_Stencil8`, and `2^23` for
+`Depth32Float` or `Depth32Float_Stencil8`. This includes the D24S8-to-D32FS8
+fallback required by `R-CAPS-4`. `D3DRS_SLOPESCALEDEPTHBIAS` is passed through
+without this conversion.
+
 ## Blending
 
 | Field | Value |

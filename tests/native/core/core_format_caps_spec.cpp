@@ -362,6 +362,29 @@ void testD32LockableAndQ16W16V16U16Formats() {
           D3DERR_NOTAVAILABLE, "Q16W16V16U16 depth-stencil usage rejected");
 }
 
+void testMetalDepthBiasConversion() {
+  constexpr float kShadowBias = 0.00045f;
+  checkNear(dxmt9::convert::toMetalDepthBiasConstant(
+                kShadowBias, WMTPixelFormatDepth16Unorm),
+            kShadowBias * 65536.0f, 0.001f,
+            "D16 normalized depth bias converts to Metal units");
+  checkNear(dxmt9::convert::toMetalDepthBiasConstant(
+                kShadowBias, WMTPixelFormatDepth24Unorm_Stencil8),
+            kShadowBias * 16777216.0f, 0.01f,
+            "D24 normalized depth bias converts to Metal units");
+  checkNear(dxmt9::convert::toMetalDepthBiasConstant(
+                kShadowBias, WMTPixelFormatDepth32Float_Stencil8),
+            kShadowBias * 8388608.0f, 0.01f,
+            "D32F normalized depth bias converts to Metal units");
+  checkNear(dxmt9::convert::toMetalDepthBiasConstant(
+                -kShadowBias, WMTPixelFormatDepth32Float),
+            -kShadowBias * 8388608.0f, 0.01f,
+            "negative normalized depth bias preserves its sign");
+  checkEq(dxmt9::convert::toMetalDepthBiasConstant(
+              kShadowBias, WMTPixelFormatBGRA8Unorm),
+          0.0f, "non-depth formats reject depth bias conversion");
+}
+
 void testFourccPseudoFormatClassification() {
   // specs/d3d9/formats/requirements.md R-FORMAT-11..14 — classification of
   // five vendor FOURCC pseudo-formats. CLASSIFICATION ONLY: the runtime
@@ -554,6 +577,7 @@ int main() {
     testSigned3DcAndUnsupportedFormatCaps();
     testVendorDepthPseudoFormats();
     testD32LockableAndQ16W16V16U16Formats();
+    testMetalDepthBiasConversion();
     testFourccPseudoFormatClassification();
     testHelpers();
     testDeviceCPresentIntervalMapping();

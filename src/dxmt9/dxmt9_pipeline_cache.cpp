@@ -91,7 +91,7 @@ void traceDrawPipelineBuild(const char* stage,
   }
   util::logf(util::LogLevel::Info, "dxmt9-pipeline-cache",
              "draw-pso %s variant=0x%llx source=0x%llx tile=%u tile_base=%u "
-             "argbuf=%u argbuf_direct_cbuf=%u resource_array=%u fragmentless=%u sample=%u "
+             "argbuf=%u argbuf_direct_cbuf=%u resource_array=%u fetch4=0x%x fragmentless=%u sample=%u "
              "color0=%u depth=%u stencil=%u vsout=0x%x alpha_to_coverage=%u",
              stage ? stage : "unknown",
              static_cast<unsigned long long>(key.hash),
@@ -101,6 +101,7 @@ void traceDrawPipelineBuild(const char* stage,
              key.argbufHybridMode ? 1u : 0u,
              key.argbufDirectCbufMode ? 1u : 0u,
              key.argbufResourceArray ? 1u : 0u,
+             static_cast<unsigned>(key.fetch4SamplerMask),
              key.fragmentlessDepthOnly ? 1u : 0u,
              static_cast<unsigned>(std::max(1u, key.sampleCount)),
              static_cast<unsigned>(key.colorFormats[0]),
@@ -172,6 +173,22 @@ u32 x8AlphaOneTextureMask(resources::Pool& pool,
     }
   }
   return mask;
+}
+
+bool fetch4CompatibleFormat(core::Format format) noexcept {
+  switch (format) {
+    case core::Format::INTZ:
+    case core::Format::DF16:
+    case core::Format::DF24:
+    case core::Format::R16F:
+    case core::Format::R32F:
+    case core::Format::A8:
+    case core::Format::L8:
+    case core::Format::L16:
+      return true;
+    default:
+      return false;
+  }
 }
 
 void stampX8AlphaOneTextureMask(ShaderVariantKey& key,
@@ -560,6 +577,36 @@ void logPipelineBuildFailureOnce(const char* stage,
 
 }  // namespace
 
+u32 fetch4SamplerMaskForDraw(const resources::Pool& pool,
+                             core::FlatDrawStateView state,
+                             u32 activeFragmentTextureMask) noexcept {
+  if (!state.hot) {
+    return 0;
+  }
+  u32 mask = 0;
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    const u32 bit = 1u << stage;
+    if ((activeFragmentTextureMask & bit) == 0u || !state.hot->textures[stage]) {
+      continue;
+    }
+    const u32 rawSelector = core::flatStateOr(
+        state.hot->samplerStates[stage], core::SAMP_MIPMAP_LOD_BIAS, 0u);
+    const u32 magFilter = core::flatStateOr(
+        state.hot->samplerStates[stage], core::SAMP_MAG_FILTER, 0u);
+    if (rawSelector != core::kFourCcGet4 || magFilter != 1u) {
+      continue;
+    }
+    const auto* texture = pool.findTexture(state.hot->textures[stage].value);
+    if (!texture || !fetch4CompatibleFormat(texture->desc.format) ||
+        (texture->desc.type != core::TextureType::TwoD &&
+         texture->desc.type != core::TextureType::Array2D)) {
+      continue;
+    }
+    mask |= bit;
+  }
+  return mask;
+}
+
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
@@ -864,6 +911,10 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // bias-on (slot-4 + bias()) and bias-off (plain sample) variants of the same
   // shader hit distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.samplerLodBias));
+  // ATI FETCH4 changes the fragment sampling operation and must therefore be
+  // part of the PSO identity even when the underlying shader bytecode is the
+  // same. GET1/ordinary numeric LOD-bias states leave this mask clear.
+  hash = mix(hash, key.fetch4SamplerMask);
   // Diagnostic depth-only backend-shape probe: fragmentless and ordinary
   // draw PSOs must never alias even when their shader/input state matches.
   hash = mix(hash, static_cast<u64>(key.fragmentlessDepthOnly));
@@ -1593,6 +1644,10 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     key = makeShaderVariantKey(
         state, colorFormats, blendAttachments, depthFormat, stencilFormat,
         forceTextureWhiteOverride);
+    key.fetch4SamplerMask = fetch4SamplerMaskForDraw(pool, state, key.textureMask);
+    if (key.fetch4SamplerMask != 0u) {
+      key.hash = mix(mix(key.hash, 0x666574636834ull), key.fetch4SamplerMask);
+    }
     // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
     // tile-stage and fragment-stage variants share an FFPKeyPS but land in
     // distinct cache entries.
@@ -1627,6 +1682,7 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     // a sampler carries a non-zero LOD bias. makeShaderVariantKey already
     // computed key.samplerLodBias from the same predicate the encoder bind reads.
     shaderSource.samplerLodBias = key.samplerLodBias;
+    shaderSource.fetch4SamplerMask = key.fetch4SamplerMask;
     shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
     shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
     shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
@@ -1775,6 +1831,10 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   auto key = makeShaderVariantKey(
       state, colorFormats, blendAttachments, depthFormat, stencilFormat,
       forceTextureWhiteOverride);
+  key.fetch4SamplerMask = fetch4SamplerMaskForDraw(pool, state, key.textureMask);
+  if (key.fetch4SamplerMask != 0u) {
+    key.hash = mix(mix(key.hash, 0x666574636834ull), key.fetch4SamplerMask);
+  }
   key.tileFfpMode = false;
   key.tileFfpBaseColor = true;
   // A2C is applied by the tile pass (or, where the tile kernel cannot, the
@@ -1784,6 +1844,7 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   shaderSource.samplerLodBias = key.samplerLodBias;
+  shaderSource.fetch4SamplerMask = key.fetch4SamplerMask;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
   shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;

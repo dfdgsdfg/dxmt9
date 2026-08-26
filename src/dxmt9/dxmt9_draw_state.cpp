@@ -462,9 +462,13 @@ SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state) {
   // into bias(). Default 0.0 keeps the common no-bias case a no-op.
   SamplerLodBias out;
   for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
-    out.bias[stage] = std::bit_cast<f32>(core::flatStateOr(
+    const u32 rawBias = core::flatStateOr(
         state.hot->samplerStates[stage], core::SAMP_MIPMAP_LOD_BIAS,
-        std::bit_cast<u32>(0.0f)));
+        std::bit_cast<u32>(0.0f));
+    // GET4/GET1 are vendor control tokens in this slot, not IEEE-754 values.
+    out.bias[stage] = (rawBias == core::kFourCcGet4 || rawBias == core::kFourCcGet1)
+                          ? 0.0f
+                          : std::bit_cast<f32>(rawBias);
   }
   return out;
 }
@@ -478,9 +482,13 @@ bool anySamplerLodBiasNonzero(core::FlatDrawStateView state) {
   // dropping the slot-4 SamplerLodBias param + bind + per-sample bias() to the
   // pre-feature plain-sample form.
   for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
-    const f32 bias = std::bit_cast<f32>(core::flatStateOr(
+    const u32 rawBias = core::flatStateOr(
         state.hot->samplerStates[stage], core::SAMP_MIPMAP_LOD_BIAS,
-        std::bit_cast<u32>(0.0f)));
+        std::bit_cast<u32>(0.0f));
+    if (rawBias == core::kFourCcGet4 || rawBias == core::kFourCcGet1) {
+      continue;
+    }
+    const f32 bias = std::bit_cast<f32>(rawBias);
     if (bias != 0.0f) {
       return true;
     }

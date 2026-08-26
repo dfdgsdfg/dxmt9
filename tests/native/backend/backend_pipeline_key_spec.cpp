@@ -870,6 +870,24 @@ void testSamplerLodBiasVariantBit() {
         "non-zero SAMP_MIPMAPLODBIAS on a later sampler stage sets the variant bit");
 
   checkEq(SAMP_MIPMAP_LOD_BIAS, 8u, "D3DSAMP_MIPMAPLODBIAS sampler-state code");
+
+  // ATI GET4/GET1 occupy the same DWORD slot but are control tokens, not
+  // floating-point LOD bias values. Neither token may activate the numeric
+  // bias variant or leak into the slot-4 upload.
+  desc.samplers[0].states[SAMP_MIPMAP_LOD_BIAS] = kFourCcGet4;
+  desc.samplers[3].states[SAMP_MIPMAP_LOD_BIAS] = kFourCcGet1;
+  const auto fetchTokens = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!fetchTokens.samplerLodBias,
+        "GET4/GET1 sampler control tokens do not enable numeric LOD bias");
+
+  auto fetch4 = fetchTokens;
+  fetch4.fetch4SamplerMask = 1u << 0u;
+  check(!(fetch4 == fetchTokens), "FETCH4 sampler mask changes the PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(fetch4) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(fetchTokens),
+        "FETCH4 sampler mask changes the PSO key hash");
+  checkEq(kFourCcGet4, 0x34544547u, "GET4 FOURCC value");
+  checkEq(kFourCcGet1, 0x31544547u, "GET1 FOURCC value");
 }
 
 void testFragmentlessDepthOnlyVariantBit() {

@@ -931,11 +931,9 @@ void configurePreparedRenderPassEncoder(
                  static_cast<double>(hot.viewport.viewport.maxZ)};
   encoder.setViewport(vp);
   countViewportBind();
-  // D3D9 RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS are stored as DWORDs but
-  // semantically float (see setRasterizerCullMode for the per-draw equivalent).
-  // Prologue value is the initial baseline; per-draw rebinds will override.
-  const float prologueDepthBias =
-      std::bit_cast<float>(core::flatStateOr(hot.renderStates, core::RS_DEPTH_BIAS, 0u));
+  // Prologue value is the initial baseline; per-draw rebinds will override it.
+  // Convert D3D9 normalized constant bias to the active Metal depth format.
+  const float prologueDepthBias = metalDepthBiasForDrawState(ctx, hot);
   const float prologueSlopeScale = std::bit_cast<float>(
       core::flatStateOr(hot.renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
   encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone, WMTDepthClipModeClip,

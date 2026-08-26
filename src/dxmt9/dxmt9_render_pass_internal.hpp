@@ -6,11 +6,13 @@
 
 #include "dxmt9_encode_session_storage_internal.hpp"
 #include "dxmt9_debug_trace.hpp"
+#include "dxmt9_format_convert.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_pass_close_ledger.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -56,6 +58,23 @@ inline WMTWinding frontFaceWinding() {
   return debug::frontFaceCounterClockwise()
              ? WMTWindingCounterClockwise
              : WMTWindingClockwise;
+}
+
+inline float metalDepthBiasForDrawState(
+    EncodeContext& ctx, const core::FlatDrawStateRecord& hot) {
+  const float normalizedBias = std::bit_cast<float>(
+      core::flatStateOr(hot.renderStates, core::RS_DEPTH_BIAS, 0u));
+  if (normalizedBias == 0.0f || !hot.depthStencil.handle) {
+    return 0.0f;
+  }
+  const auto* surface = ctx.pool.findSurface(hot.depthStencil.handle.value);
+  if (!surface || !surface->desc.depthStencil ||
+      !convert::formatHasDepthAspect(surface->desc.format)) {
+    return 0.0f;
+  }
+  return convert::toMetalDepthBiasConstant(
+      normalizedBias,
+      convert::toPixelFormat(surface->desc.format, ctx.limits));
 }
 
 struct RenderEncoderGpuAttachment {

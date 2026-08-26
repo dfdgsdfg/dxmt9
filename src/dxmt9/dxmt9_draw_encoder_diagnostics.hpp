@@ -439,6 +439,7 @@ struct ActiveEncoderBreakdown {
     bool argbufResourceArray = false;
     bool argbufDirectCbufMode = false;
     bool samplerLodBias = false;
+    u32 fetch4SamplerMask = 0;
     u32 x8AlphaOneTextureMask = 0;
     u64 vertexSourceHash = 0;
     u64 pixelSourceHash = 0;
@@ -2057,6 +2058,7 @@ struct ActiveEncoderBreakdown {
                                     bool argbufResourceArray,
                                     bool argbufDirectCbufMode,
                                     bool samplerLodBias,
+                                    u32 fetch4SamplerMask,
                                     u32 x8AlphaOneTextureMask,
                                     u64& vertexSourceHash,
                                     u64& pixelSourceHash) const {
@@ -2071,6 +2073,7 @@ struct ActiveEncoderBreakdown {
           entry.argbufResourceArray == argbufResourceArray &&
           entry.argbufDirectCbufMode == argbufDirectCbufMode &&
           entry.samplerLodBias == samplerLodBias &&
+          entry.fetch4SamplerMask == fetch4SamplerMask &&
           entry.x8AlphaOneTextureMask == x8AlphaOneTextureMask) {
         vertexSourceHash = entry.vertexSourceHash;
         pixelSourceHash = entry.pixelSourceHash;
@@ -2086,6 +2089,7 @@ struct ActiveEncoderBreakdown {
                                      bool argbufResourceArray,
                                      bool argbufDirectCbufMode,
                                      bool samplerLodBias,
+                                     u32 fetch4SamplerMask,
                                      u32 x8AlphaOneTextureMask,
                                      u64 vertexSourceHash,
                                      u64 pixelSourceHash) {
@@ -2103,6 +2107,7 @@ struct ActiveEncoderBreakdown {
         .argbufResourceArray = argbufResourceArray,
         .argbufDirectCbufMode = argbufDirectCbufMode,
         .samplerLodBias = samplerLodBias,
+        .fetch4SamplerMask = fetch4SamplerMask,
         .x8AlphaOneTextureMask = x8AlphaOneTextureMask,
         .vertexSourceHash = vertexSourceHash,
         .pixelSourceHash = pixelSourceHash,

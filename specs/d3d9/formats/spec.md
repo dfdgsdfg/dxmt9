@@ -167,6 +167,26 @@ behaviour in R-FORMAT-11..14, R-CORE-3.9).
 | `RAWZ` | none | **Unsupported** | Legacy NVIDIA raw-depth read; no Metal path. |
 | `ATI1` / `ATI2` | BC4_RUnorm / BC5_RGUnorm | **Required** | Compressed; see Compressed Texture Formats table. |
 
+### FETCH4 sampler control
+
+ATI FETCH4 is a sampler-state control rather than a creatable format. Writing
+`GET4` (`MAKEFOURCC('G','E','T','4')`) to `D3DSAMP_MIPMAPLODBIAS` enables a
+four-neighbour red-channel fetch for a compatible 2D texture while
+`D3DSAMP_MAGFILTER` is `D3DTEXF_POINT`; writing `GET1` disables it. The runtime
+accepts `INTZ`, `DF16`, `DF24`, `R16F`, `R32F`, `A8`, `L8`, and `L16` for this
+compatibility path. GET4/GET1 are never interpreted as floating-point LOD
+biases.
+
+The Metal lowering uses `gather(..., component::x)` with the compatibility
+offset `0.498046875 / textureSize` and reorders the result to D3D9 FETCH4
+channel order. `TEX`, `TEXLDL`, and `TEXLDD` all select that gather while
+FETCH4 is active; explicit level and gradient operands do not alter the
+vendor operation. The per-sampler mask is part of `ShaderVariantKey` and
+`ShaderSourceContext`, so ordinary sampling and FETCH4 cannot share a stale
+pipeline or source. The public `CheckDeviceFormat(GET4)` capability probe
+remains fail-closed with `D3DERR_NOTAVAILABLE`; this is an unadvertised runtime
+compatibility path for applications that use the raw sampler token.
+
 **RESZ resolve mechanism.** RESZ is not storage. The runtime trigger is
 `SetRenderState(D3DRS_POINTSIZE, 0x7FA05000)` while the multisampled
 depth surface is bound at texture stage 0. The PE layer recognises the

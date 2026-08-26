@@ -588,6 +588,10 @@ inline constexpr u32 RS_ADAPTIVETESS_Y = 181;
 inline constexpr u32 kFourCcAtoc = 0x434F5441u;  // 'ATOC' (little-endian byte order)
 inline constexpr u32 kFourCcA2M1 = 0x314D3241u;  // 'A2M1' enable alias
 inline constexpr u32 kFourCcA2M0 = 0x304D3241u;  // 'A2M0' disable alias
+// ATI FETCH4 uses the sampler's MIPMAPLODBIAS DWORD as an out-of-band
+// selector. Keep these values separate from numeric LOD-bias handling.
+inline constexpr u32 kFourCcGet4 = 0x34544547u;  // 'GET4'
+inline constexpr u32 kFourCcGet1 = 0x31544547u;  // 'GET1'
 
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;

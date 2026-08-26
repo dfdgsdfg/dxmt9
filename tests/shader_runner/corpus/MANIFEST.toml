@@ -2087,6 +2087,18 @@ oracle = "Wine d3d9 visual.c test_depthbias behavior, reduced to constant DEPTHB
 oracle-date = "2026-05-23"
 
 [[test]]
+file = "render_state/dxmt9_depth_bias_positive_fractional_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "D3D9 normalized positive DEPTHBIAS semantics, reduced from the 3DMark06 GT1 shadow-map value"
+oracle-date = "2026-08-26"
+
+[[test]]
 file = "render_state/dxmt9_cull_none_keeps_clockwise_triangle.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -2745,6 +2757,18 @@ models = ["ffp"]
 opcodes = ["TEX"]
 oracle = "Wine d3d9 visual.c texture_mipmaps_test / maxmip_test behavior, zero-bias control for D3DSAMP_MIPMAPLODBIAS"
 oracle-date = "2026-05-25"
+
+[[test]]
+file = "texture/dxmt9_fetch4_r32f_gather_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "ATI D3D9 FETCH4 GET4 sampler-state contract and DXVK D3D9 gather ordering: R32F 2x2 neighbours return in D3D9 B/R/G/A order after the half-texel gather offset"
+oracle-date = "2026-08-26"
 
 [[test]]
 file = "vs_specific/dxmt9_vs_constant_no_clamp_readback.shader_test"

@@ -1291,7 +1291,14 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
       // D3DSAMP_MIPMAPLODBIAS is a float passed as a DWORD bit-cast; thread it
       // through the same float->u32 helper the bumpenv float TSS states use so
       // dxmt9_draw_state.cpp::buildSamplerLodBias can bit_cast<f32> it back.
-      sampler.states[SAMP_MIPMAP_LOD_BIAS] = bitCastFloatState(value);
+      const auto token = normalizeToken(value);
+      if (token == "fetch4" || token == "get4") {
+        sampler.states[SAMP_MIPMAP_LOD_BIAS] = 0x34544547u;  // 'GET4'
+      } else if (token == "fetch1" || token == "get1") {
+        sampler.states[SAMP_MIPMAP_LOD_BIAS] = 0x31544547u;  // 'GET1'
+      } else {
+        sampler.states[SAMP_MIPMAP_LOD_BIAS] = bitCastFloatState(value);
+      }
     } else {
       fail("unsupported dxmt9-sampler state");
     }

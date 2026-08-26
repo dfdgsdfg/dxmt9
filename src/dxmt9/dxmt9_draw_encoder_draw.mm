@@ -396,19 +396,17 @@ WMTDepthClipMode depthClipModeFromRenderState(
 
 void setRasterizerCullMode(EncodeContext& ctx,
                            WMT::RenderCommandEncoder& encoder,
-                           const core::FlatRenderStateSet& renderStates,
+                           const core::FlatDrawStateRecord& hot,
                            WMTCullMode cullMode) {
   cullMode = applyDebugCullOverride(cullMode);
-  // D3D9 RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS are stored as DWORDs but
-  // semantically float; bit_cast restores the IEEE 754 layout that
-  // MTLRenderCommandEncoder.setDepthBias:slopeScale:clamp: expects. clamp is
-  // not exposed by D3D9 RS and is left at 0.0f (Metal's "unbounded" sentinel).
-  const float depthBias = std::bit_cast<float>(
-      core::flatStateOr(renderStates, core::RS_DEPTH_BIAS, 0u));
+  // D3D9 stores the constant bias as normalized depth. Metal expects units of
+  // the active depth format, so resolve the actual attachment format before
+  // issuing the dynamic rasterizer state. Slope scale already matches.
+  const float depthBias = metalDepthBiasForDrawState(ctx, hot);
   const float slopeScale = std::bit_cast<float>(
-      core::flatStateOr(renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
-  recordedSetRasterizerState(ctx, encoder, triangleFillModeFromRenderState(renderStates), cullMode,
-                             depthClipModeFromRenderState(renderStates), frontFaceWinding(),
+      core::flatStateOr(hot.renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
+  recordedSetRasterizerState(ctx, encoder, triangleFillModeFromRenderState(hot.renderStates), cullMode,
+                             depthClipModeFromRenderState(hot.renderStates), frontFaceWinding(),
                              depthBias, slopeScale, 0.0f);
   countRasterizerBind();
 }
@@ -565,6 +563,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool argbufResourceArray,
                                              bool argbufDirectCbufMode,
                                              bool samplerLodBias,
+                                             u32 fetch4SamplerMask,
                                              u32 x8AlphaOneTextureMask,
                                              std::optional<bool> forceTextureWhiteOverride = std::nullopt,
                                              bool fragmentlessDepthOnly = false) {
@@ -585,6 +584,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   context.argbufDirectCbufMode =
       argbufHybridMode && !context.argbufResourceArray && argbufDirectCbufMode;
   context.samplerLodBias = samplerLodBias;
+  context.fetch4SamplerMask = fetch4SamplerMask;
   context.x8AlphaOneTextureMask = x8AlphaOneTextureMask;
   try {
     if (fragmentlessDepthOnly) {
@@ -642,6 +642,12 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                              vsOutLayoutKey);
   }
   const bool samplerLodBias = anySamplerLodBiasNonzero(drawState);
+  const u32 activeFragmentTextureMask = drawState.hasShaderContext()
+      ? drawshader::activeFragmentTextureMaskForShader(
+            drawState.shaderContext().pixelShader, drawState.hot->textureMask)
+      : 0u;
+  const u32 fetch4SamplerMask =
+      pipeline::fetch4SamplerMaskForDraw(pool, drawState, activeFragmentTextureMask);
   const u32 x8AlphaOneTextureMask = x8AlphaOneTextureMaskForDraw(drawState, pool);
   u64 vertexShaderSourceHash = 0;
   u64 pixelShaderSourceHash = 0;
@@ -650,11 +656,13 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
           argbufHybridMode && argbufResourceArray,
           argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode,
           samplerLodBias,
+          fetch4SamplerMask,
           x8AlphaOneTextureMask,
           vertexShaderSourceHash, pixelShaderSourceHash)) {
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
-        argbufDirectCbufMode, samplerLodBias, x8AlphaOneTextureMask,
+        argbufDirectCbufMode, samplerLodBias, fetch4SamplerMask,
+        x8AlphaOneTextureMask,
         forceTextureWhiteOverride, fragmentlessDepthOnly);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
@@ -663,6 +671,7 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
         argbufHybridMode && argbufResourceArray,
         argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode,
         samplerLodBias,
+        fetch4SamplerMask,
         x8AlphaOneTextureMask,
         vertexShaderSourceHash, pixelShaderSourceHash);
   }
@@ -4270,7 +4279,7 @@ bool encodeDraw(EncodeContext& ctx,
       countViewportBind();
       recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
       countScissorBind();
-      setRasterizerCullMode(ctx, encoder, hot.renderStates, effectiveCullMode);
+      setRasterizerCullMode(ctx, encoder, hot, effectiveCullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};

@@ -166,6 +166,11 @@ struct ShaderVariantKey {
   // the common no-bias draw skips the per-draw slot-4 upload + bind. bias-on
   // and bias-off draws therefore hash to distinct PSOs (mirrors tileFfpMode).
   bool samplerLodBias = false;
+  // ATI FETCH4 compatibility mask. Bits identify active fragment samplers
+  // whose raw MIPMAPLODBIAS state is GET4, whose texture is a supported
+  // single-channel format, and whose MAGFILTER is POINT. GET1 and ordinary
+  // numeric LOD bias never set this mask.
+  u32 fetch4SamplerMask = 0;
   // Diagnostic depth-only backend-shape probe. When set, the render PSO uses
   // the ordinary vertex stage but omits the fragment function. This bit is
   // separate from source hashes so fragmentless and normal PSOs cannot alias.
@@ -550,6 +555,13 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        u32 depthFormat,
                                        u32 stencilFormat,
                                        std::optional<bool> forceTextureWhiteOverride = std::nullopt);
+
+// Resolve the bounded ATI FETCH4 selector from active sampler state and the
+// pool's concrete texture formats. The pipeline cache stamps this result on
+// both the PSO key and the shader-source context.
+u32 fetch4SamplerMaskForDraw(const resources::Pool& pool,
+                             core::FlatDrawStateView state,
+                             u32 activeFragmentTextureMask) noexcept;
 
 // R-BACK-13.* — per-pass tile-shader FFP classifier/selector. Encapsulates
 // the selection flow described in spec.md §13.1. Pure value transform; no

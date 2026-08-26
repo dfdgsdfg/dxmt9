@@ -155,14 +155,14 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_default_attribute_components` | 27807 | ✅ | `dxmt9_ffp_decl_missing_texcoord_default_readback` |
 | `test_default_diffuse` | 27607 | ✅ | `dxmt9_ffp_decl_missing_defaults_readback` |
 | `test_depth_stencil_init` | 22556 | ✅ | `test_visual_depth_stencil_init_policy` |
-| `test_depthbias` | 21851 | ✅ | `dxmt9_depth_bias_occlusion_readback` |
+| `test_depthbias` | 21851 | ✅ | `dxmt9_depth_bias_occlusion_readback`; `dxmt9_depth_bias_positive_fractional_readback`; `core_format_caps_spec` `testMetalDepthBiasConversion` |
 | `test_desktop_window` | 25880 | ⚠️ | `test_device_desktop_window_present_policy` accepts either a real host-view-backed `CreateDevice` + `Clear` + `Present` success or dxmt9's clean `D3DERR_NOTAVAILABLE` fail-closed result when the desktop HWND has no host client view; Wine's headless/offscreen success remains an explicit parity gap. |
 | `test_draw_mapped_buffer` | 26213 | ✅ | `test_draw_mapped_buffer_policy` |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | `test_draw_indexed_primitive_up_independence_policy` |
 | `test_dsy` | 23840 | ✅ | `dxmt9_dsy_vpos_readback` |
 | `test_dynamic_map_synchronization` | 26843 | ✅ | `test_vb_lock_flags` |
 | `test_evict_bound_resources` | 23967 | ✅ | `test_visual_evict_managed_resources_policy` |
-| `test_fetch4` | 15189 | ✅ | `test_vendor_policy_fetch4_caps` |
+| `test_fetch4` | 15189 | ⚠️ | `test_vendor_policy_fetch4_caps` pins the intentional unadvertised capability policy; `dxmt9_fetch4_r32f_gather_readback` pins the GET4/GET1 runtime gather contract. Full Wine test parity remains open because the capability oracle differs. |
 | `test_ffp_w` | 28095 | ✅ | `dxmt9_ffp_xyzw_w_divide_readback`, `dxmt9_ffp_w_rhw_fog_readback` |
 | `test_filling_convention` | 26975 | ✅ | `test_visual_filling_convention_caps_policy` |
 | `test_flip` | 22028 | ✅ | `test_visual_swapchain_flip_present_policy` |

@@ -32,6 +32,12 @@ WMTPixelFormat toPixelFormat(core::Format format, const core::BackendLimits& lim
 WMTPixelFormat toPixelFormat(core::Format format, const core::BackendLimits& limits, bool srgb);
 WMTPixelFormat toSrgbPixelFormat(WMTPixelFormat format);
 
+// D3D9 stores DEPTHBIAS as a normalized depth offset, while Metal's constant
+// factor is expressed in units of the active depth format's least
+// representable value. Convert only the constant factor; slope scale already
+// has matching semantics.
+float toMetalDepthBiasConstant(float normalizedBias, WMTPixelFormat depthFormat);
+
 bool formatHasStencilAspect(core::Format format);
 bool formatHasDepthAspect(core::Format format);
 

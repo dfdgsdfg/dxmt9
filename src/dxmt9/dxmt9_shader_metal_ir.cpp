@@ -1419,6 +1419,19 @@ std::string textureGradientExpression(TextureType type,
   }
 }
 
+std::string fetch4SampleExpression(u32 sampler,
+                                   const std::string& coord,
+                                   bool flip2D) {
+  const std::string texture = "tex" + std::to_string(sampler);
+  // D3D9 ATI FETCH4 returns the four neighboring red samples in D3D's
+  // B,G,R,A ordering. The small inward-biased half-texel offset is the DXVK
+  // compatibility rule that avoids the visible grid on shadow textures.
+  const std::string sampleCoord = sampleCoordExpression(TextureType::TwoD, coord, flip2D);
+  return texture + ".gather(samp" + std::to_string(sampler) + ", " + sampleCoord +
+         " + float2(0.498046875f) / float2(" + texture + ".get_width(), " +
+         texture + ".get_height()), int2(0), component::x).zxyw";
+}
+
 void emitFragmentTextureArguments(std::ostringstream& out,
                                   const std::array<bool, kMaxSamplers>& samplerUsage,
                                   const SpirvModule& module,
@@ -3049,6 +3062,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           (sampler >= context.textures.size() || !context.textures[sampler])) {
         return std::string("float4(0.0f, 0.0f, 0.0f, 1.0f)");
       }
+      if (sampler < kMaxSamplers &&
+          (context.fetch4SamplerMask & (1u << sampler)) != 0u) {
+        return wrapTextureSample(
+            sampler, fetch4SampleExpression(sampler, coord, forcePixelVFlip));
+      }
       // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): thread the per-sampler mip LOD
       // bias into the implicit-gradient sample. The bias rides the slot-4
       // SamplerLodBias uniform (8 stages). PSO-variant gated on the same flag
@@ -3703,6 +3721,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               } else if (context.unboundTextureFallback &&
                   (sampler >= context.textures.size() || !context.textures[sampler])) {
                 value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
+              } else if (sampler < kMaxSamplers &&
+                         (context.fetch4SamplerMask & (1u << sampler)) != 0u) {
+                value = wrapTextureSample(
+                    sampler, fetch4SampleExpression(sampler, coord, forcePixelVFlip));
               } else {
                 value = wrapTextureSample(
                     sampler,
@@ -3721,6 +3743,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	              } else if (context.unboundTextureFallback &&
 	                  (sampler >= context.textures.size() || !context.textures[sampler])) {
 	                value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
+	              } else if (sampler < kMaxSamplers &&
+	                         (context.fetch4SamplerMask & (1u << sampler)) != 0u) {
+	                value = wrapTextureSample(
+	                    sampler, fetch4SampleExpression(sampler, coord, forcePixelVFlip));
 	              } else {
 	                value = wrapTextureSample(
                       sampler,

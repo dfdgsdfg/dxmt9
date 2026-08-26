@@ -63,6 +63,10 @@ struct ShaderSourceContext {
   // same predicate gates the encoder's slot-4 bind, keeping declaration and
   // binding in lockstep.
   bool samplerLodBias = false;
+  // ATI FETCH4 sampler mask resolved by the pipeline cache. A set bit routes
+  // fragment samples on that stage through Metal gather; the mask is clear
+  // for GET1, numeric LOD bias, unsupported formats, and non-point MAGFILTER.
+  std::uint32_t fetch4SamplerMask = 0;
   // R-BACK-13.1 — tile-FFP base-colour pass gate. When true the FFP pixel
   // emitter produces the *base-colour* variant: it computes the same FFP
   // texture-stage / vertex colour but emits NEITHER the fog blend NOR the
