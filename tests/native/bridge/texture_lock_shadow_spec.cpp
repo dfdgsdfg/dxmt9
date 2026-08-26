@@ -20,12 +20,18 @@
 // block (BC formats require at least blockHeight texels of vertical
 // span in the backing storage). See the comment block on
 // computeShadowBytesUpperBound() in device_c_common.hpp.
+//
+// 3DMark06 HDR1 exposed the 3D counterpart: D3DX loaded a 128x128x128 volume,
+// but the shadow covered one 16KB slice. The allocator's 64KB bucket hid the
+// first four slices; D3DX then faulted at shadowBase + 0x10000 while beginning
+// slice 4. Volume shadows must preserve both slice stride and slice count.
 
 #include "device_c_common.hpp"
 
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -57,6 +63,7 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 }
 
 using dxmt9::d3d9::devicec::computeShadowBytesUpperBound;
+using dxmt9::d3d9::devicec::computeShadowVolumeBytesUpperBound;
 
 void testSfivBc3Level9RegressionShadowFloorClearsObservedFaultOffsets() {
   // SFIV repro inputs: BC3 256x256 base, level 9 -> 1x1 mip, native
@@ -132,6 +139,25 @@ void testBlockHeightZeroFallsBackToOne() {
           "zero blockHeight is treated as 1 and protected by the floor");
 }
 
+void testVolumeShadowCoversEverySlice() {
+  // 32x32x16 BGRA8 volume: D3DX's simple-copy path advances by SlicePitch
+  // before copying the next slice. A one-slice shadow faults exactly at the
+  // start of slice 1; the volume bound must cover all 16 slices.
+  const size_t slicePitch = 128u * 32u;
+  const size_t bytes = computeShadowVolumeBytesUpperBound(
+      /*perSliceBytes=*/slicePitch, /*shadowSlicePitch=*/slicePitch,
+      /*slices=*/16u);
+  checkEq(bytes, slicePitch * 16u, "volume shadow covers every slice");
+}
+
+void testVolumeShadowOverflowFailsClosed() {
+  checkEq(computeShadowVolumeBytesUpperBound(
+              /*perSliceBytes=*/4096u,
+              /*shadowSlicePitch=*/std::numeric_limits<size_t>::max(),
+              /*slices=*/2u),
+          size_t{0}, "volume shadow overflow fails closed");
+}
+
 }  // namespace
 
 int main() {
@@ -142,6 +168,8 @@ int main() {
     testCompressedLargeMipKeepsNaturalBound();
     testZeroDimensionsReturnZero();
     testBlockHeightZeroFallsBackToOne();
+    testVolumeShadowCoversEverySlice();
+    testVolumeShadowOverflowFailsClosed();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

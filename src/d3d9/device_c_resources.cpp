@@ -32,8 +32,11 @@ constexpr uint32_t kD3DLockReadOnly = 0x00000010u;
 void clearShadowLockState(ShadowLock& lock) noexcept {
   lock.nativePtr = nullptr;
   lock.nativePitch = 0;
+  lock.nativeSlicePitch = 0;
+  lock.shadowSlicePitch = 0;
   lock.rowBytes = 0;
   lock.rows = 0;
+  lock.slices = 0;
   lock.active = false;
 }
 constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
@@ -323,20 +326,42 @@ void expandP8SubresourceToBackend(D9CTexture* texture, uint32_t subresource) {
 void copyNativeToShadow(ShadowLock& shadow) {
   auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
   auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
-  for (uint32_t row = 0; row < shadow.rows; ++row) {
-    std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
-                src + static_cast<size_t>(row) * shadow.nativePitch,
-                shadow.rowBytes);
+  const uint32_t slices = std::max(1u, shadow.slices);
+  const size_t nativeSlicePitch = shadow.nativeSlicePitch
+                                      ? shadow.nativeSlicePitch
+                                      : static_cast<size_t>(shadow.nativePitch) * shadow.rows;
+  const size_t shadowSlicePitch = shadow.shadowSlicePitch
+                                      ? shadow.shadowSlicePitch
+                                      : static_cast<size_t>(shadow.nativePitch) * shadow.rows;
+  for (uint32_t slice = 0; slice < slices; ++slice) {
+    for (uint32_t row = 0; row < shadow.rows; ++row) {
+      std::memcpy(dst + static_cast<size_t>(slice) * shadowSlicePitch +
+                          static_cast<size_t>(row) * shadow.nativePitch,
+                  src + static_cast<size_t>(slice) * nativeSlicePitch +
+                          static_cast<size_t>(row) * shadow.nativePitch,
+                  shadow.rowBytes);
+    }
   }
 }
 
 void copyShadowToNative(const ShadowLock& shadow) {
   auto* dst = static_cast<uint8_t*>(shadow.nativePtr);
   auto* src = static_cast<const uint8_t*>(shadow.shadow.ptr);
-  for (uint32_t row = 0; row < shadow.rows; ++row) {
-    std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
-                src + static_cast<size_t>(row) * shadow.nativePitch,
-                shadow.rowBytes);
+  const uint32_t slices = std::max(1u, shadow.slices);
+  const size_t nativeSlicePitch = shadow.nativeSlicePitch
+                                      ? shadow.nativeSlicePitch
+                                      : static_cast<size_t>(shadow.nativePitch) * shadow.rows;
+  const size_t shadowSlicePitch = shadow.shadowSlicePitch
+                                      ? shadow.shadowSlicePitch
+                                      : static_cast<size_t>(shadow.nativePitch) * shadow.rows;
+  for (uint32_t slice = 0; slice < slices; ++slice) {
+    for (uint32_t row = 0; row < shadow.rows; ++row) {
+      std::memcpy(dst + static_cast<size_t>(slice) * nativeSlicePitch +
+                          static_cast<size_t>(row) * shadow.nativePitch,
+                  src + static_cast<size_t>(slice) * shadowSlicePitch +
+                          static_cast<size_t>(row) * shadow.nativePitch,
+                  shadow.rowBytes);
+    }
   }
 }
 
@@ -936,12 +961,18 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     const auto shadowStart = std::chrono::steady_clock::now();
     const auto& desc = t->obj->desc();
-    const uint32_t levelWidth = std::max(1u, desc.width >> std::min(level, 31u));
-    const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
+    const uint32_t mipLevel = t->obj->mipLevelForSubresource(level);
+    const uint32_t levelWidth = mipDimension(desc.width, mipLevel);
+    const uint32_t levelHeight = mipDimension(desc.height, mipLevel);
+    const uint32_t levelDepth = desc.type == dxmt9::core::TextureType::Volume
+                                    ? mipDimension(desc.depth, mipLevel)
+                                    : 1u;
     const auto footprint = lockFootprint(desc.format, levelWidth, levelHeight, r);
     const uint32_t rowBytes = footprint.rowBytes;
     const uint32_t rows = footprint.rows;
-    lockRectBytes = static_cast<std::uint64_t>(rowBytes) * static_cast<std::uint64_t>(rows);
+    lockRectBytes = static_cast<std::uint64_t>(rowBytes) *
+                    static_cast<std::uint64_t>(rows) *
+                    static_cast<std::uint64_t>(levelDepth);
     // SFIV BC3 level-9 page-fault repro (2026-05-10): for tiny mips
     // (e.g. 1x1 BC3) Metal/the runtime reports `lock.pitch` equal to
     // the BASE-level row pitch (1024 for a 256x256 BC3 base), and the
@@ -969,8 +1000,17 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
         dxmt9::core::formatRowPitch(desc.format, levelWidth);
     const uint32_t effectiveHeight =
         (rowBytes != 0 && lock.pitch > levelRowPitch) ? desc.height : rectHeight;
-    const size_t shadowBytes =
+    const size_t perSliceShadowBytes =
         computeShadowBytesUpperBound(lock.pitch, effectiveHeight, blockHeight);
+    const size_t nativeSlicePitch =
+        dxmt9::core::formatByteSize(desc.format, levelWidth, levelHeight);
+    // D3DLOCKED_BOX::SlicePitch is exposed by the PE facade as RowPitch times
+    // the logical texel height. Keep the low-4GB shadow in that same layout;
+    // the core texture may use a tighter block-row slice pitch internally.
+    const size_t shadowSlicePitch =
+        static_cast<size_t>(lock.pitch) * static_cast<size_t>(levelHeight);
+    const size_t shadowBytes = computeShadowVolumeBytesUpperBound(
+        perSliceShadowBytes, shadowSlicePitch, levelDepth);
     auto& shadow = t->wow64Locks[level];
     if (rowBytes == 0 || rows == 0) {
       dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
@@ -992,15 +1032,19 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     }
     shadow.nativePtr = lock.data;
     shadow.nativePitch = lock.pitch;
+    shadow.nativeSlicePitch = nativeSlicePitch;
+    shadow.shadowSlicePitch = shadowSlicePitch;
     shadow.rowBytes = rowBytes;
     shadow.rows = rows;
+    shadow.slices = levelDepth;
     shadow.active = true;
     copyNativeToShadow(shadow);
     out->pitch = static_cast<int32_t>(shadow.nativePitch);
     out->bits = shadow.shadow.ptr;
-    dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p pitch=%u rowBytes=%u rows=%u",
+    dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p pitch=%u rowBytes=%u rows=%u slices=%u nativeSlicePitch=%zu shadowSlicePitch=%zu bytes=%zu",
                   static_cast<void*>(t), level, shadow.nativePtr, out->bits,
-                  shadow.nativePitch, rowBytes, rows);
+                  shadow.nativePitch, rowBytes, rows, shadow.slices,
+                  shadow.nativeSlicePitch, shadow.shadowSlicePitch, shadowBytes);
     lockRectShadowNs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - shadowStart).count());
@@ -1039,9 +1083,9 @@ extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* t, uint32_t level) {
     if (shadow.active) {
       copyShadowToNative(shadow);
       shadow.active = false;
-      dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
+      dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u slices=%u",
                     static_cast<void*>(t), level, shadow.nativePtr, shadow.shadow.ptr,
-                    shadow.rowBytes, shadow.rows);
+                    shadow.rowBytes, shadow.rows, shadow.slices);
     }
   }
   dxmt9DebugLog("texture_unlock_rect texture=%p level=%u", static_cast<void*>(t), level);

@@ -46,8 +46,11 @@ struct Low4GBAllocation {
 struct ShadowLock {
   void* nativePtr = nullptr;
   uint32_t nativePitch = 0;
+  size_t nativeSlicePitch = 0;
+  size_t shadowSlicePitch = 0;
   uint32_t rowBytes = 0;
   uint32_t rows = 0;
+  uint32_t slices = 0;
   bool active = false;
   Low4GBAllocation shadow{};
 };
@@ -114,6 +117,12 @@ bool isWow64NativePointerAllowed(uint64_t value);
 // See R-BACK fix for the SFIV BC3 level-9 page-fault (2026-05-10).
 size_t computeShadowBytesUpperBound(uint32_t nativePitch, uint32_t rectHeight,
                                     uint32_t blockHeight);
+// Extends a one-slice shadow bound across a volume's app-visible SlicePitch.
+// Returns zero on an empty input or overflow so callers fail closed instead of
+// returning a truncated low-4GB range to D3DX.
+size_t computeShadowVolumeBytesUpperBound(size_t perSliceBytes,
+                                          size_t shadowSlicePitch,
+                                          uint32_t slices);
 
 class ScopedWow64ClientCall {
  public:

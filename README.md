@@ -46,6 +46,8 @@ Sikarugir-CX 24.0.7 and Heroic Wine Staging 11.16:
 | 3DMark05 GT1                | `32.3`                    | `31.4`                       | `27.7`                          |
 | 3DMark05 GT2                | `30.9`                    | `30.7`                       | `21.7`                          |
 | 3DMark05 GT3                | `69.6`                    | `61.0`                       | `57.4`                          |
+| 3DMark06 GT1                | `15.5`                    | —                            | —                               |
+| 3DMark06 GT2                | `32.8`                    | —                            | —                               |
 | Street Fighter IV Benchmark | `44.7`                    | —                            | —                               |
 
 
@@ -56,11 +58,16 @@ Sikarugir WineD3D reports `31.382265091`, `30.734268188`, and `60.975120544`
 FPS; Heroic WineD3D reports `27.651369095`, `21.734577179`, and `57.362709045`
 FPS. Relative to WineD3D, dxmt9 is `+3.1% / +0.5% / +14.2%` on Sikarugir and
 `+17.0% / +42.1% / +21.3%` on Heroic. SFIV remains a positive-frame sampled
-average over the catalogue's 50-second observation window. Both WineD3D runs
-use pristine builtin `d3d9.dll`; loaded-module checks confirm the `wined3d`
-OpenGL path on the Apple M1. Single runs, so no run range is quoted — repeated
-measurements of one build on this host drift about ±3% with ambient load and
-time of day.
+average over the catalogue's 50-second observation window. The 3DMark06 GT1
+and GT2 figures are `DXMT9_PERF_FRAME_SAMPLING=1` scene averages at 1280x720:
+`1,634` frames / `105.725` seconds and `2,216` frames / `67.508` seconds.
+3DMark06 Advanced Edition does not emit observer-free per-test `.3dr` results
+through this command-line lane. HDR figures remain pending a dedicated run;
+HDR1 now enters and renders Canyon Flight after fixing the WoW64 volume-lock
+shadow's missing slice extent. Both WineD3D runs use pristine builtin
+`d3d9.dll`; loaded-module checks confirm the `wined3d` OpenGL path on the Apple
+M1. Single runs, so no run range is quoted — repeated measurements of one build
+on this host drift about ±3% with ambient load and time of day.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)

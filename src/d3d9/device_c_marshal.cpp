@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <mutex>
 
 #if defined(__APPLE__)
@@ -367,6 +368,23 @@ size_t computeShadowBytesUpperBound(uint32_t nativePitch, uint32_t rectHeight,
                               static_cast<uint64_t>(bh) *
                               kCompressedMipMinBlockRows;
   return static_cast<size_t>(std::max(paddedBytes, floorBytes));
+}
+
+size_t computeShadowVolumeBytesUpperBound(size_t perSliceBytes,
+                                          size_t shadowSlicePitch,
+                                          uint32_t slices) {
+  if (perSliceBytes == 0 || shadowSlicePitch == 0 || slices == 0) {
+    return 0;
+  }
+  if (slices == 1) {
+    return perSliceBytes;
+  }
+  const size_t precedingSlices = static_cast<size_t>(slices - 1u);
+  if (shadowSlicePitch >
+      (std::numeric_limits<size_t>::max() - perSliceBytes) / precedingSlices) {
+    return 0;
+  }
+  return precedingSlices * shadowSlicePitch + perSliceBytes;
 }
 
 bool isWow64NativePointerAllowed(uint64_t value) {
