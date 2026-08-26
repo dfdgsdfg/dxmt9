@@ -28,6 +28,7 @@ python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --wine-roo
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --wine-root "$WINE_ROOT"
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --wine-root "$WINE_ROOT"
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06 --wine-root "$WINE_ROOT"
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
@@ -90,6 +91,22 @@ extraction) remain as shell scripts:
 
 ```sh
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+```
+
+3DMark06 is commercial and is not vendored. Place a complete installed payload
+with `3DMark06.exe` at
+`experiments/apps_3rd/app-d3d9-3dmark06/`, or pass its absolute POSIX path with
+`--binary`. The first runtime qualification must verify that the installed
+edition accepts the per-test command-line switches; those switches are normally
+a Professional Edition feature. Examples:
+
+```sh
+DXMT_3DMARK06_RESULT_FILE=dxmt9_gt1.3dr \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
+
+DXMT_3DMARK06_ARGS="-hdr1 -nosplash -nosysteminfo -noscreens" \
+DXMT_3DMARK06_RESULT_FILE=dxmt9_hdr1.3dr \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
 ```
 
 Permanent-prefix installer for Heroic:

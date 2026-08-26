@@ -9,7 +9,8 @@ tags: [specs, experiments, runtime, requirements]
 
 This spec governs how dxmt9 manages the **non-source artifacts** that wild
 experiments need to run: the Wine runtime binary, the per-experiment Wine
-prefix, and the externally-installed app binaries (e.g. SFIV, 3DMark05).
+prefix, and the externally-installed app binaries (e.g. SFIV, 3DMark05,
+3DMark06).
 
 It is a sibling to `specs/experiments/requirements.md` (which covers what an
 experiment is and how its pass criteria are evaluated). This document covers
@@ -56,7 +57,7 @@ Reason: keeps the experiment namespace cohesive and matches existing
 | Path | Committed? | Purpose |
 |---|---|---|
 | `experiments/apps/` | yes | Existing — small fixture EXEs (D9VK, BasicHLSL). Unchanged. |
-| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, 3DMark05, etc.). One subdirectory per app. |
+| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, 3DMark05, 3DMark06, etc.). One subdirectory per app. |
 | `experiments/prefixs/` | no (gitignored) | New — per-experiment Wine prefixes. One subdirectory per app. |
 | `experiments/wine/` | mixed | New — manifest committed; downloaded Wine bundles gitignored. |
 | `experiments/wine/manifest.toml` | yes | New — Wine root catalogue (see §3). |

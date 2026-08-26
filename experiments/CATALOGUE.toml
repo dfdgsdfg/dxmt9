@@ -572,6 +572,29 @@ wine_alternatives = []
 install_drive_letter = "d"
 
 [[app]]
+name = "app-d3d9-3dmark06"
+source = "local-external"
+license = "commercial"
+source_kind = "external-application"
+license_scope = "external-not-vendored"
+binary = "experiments/apps_3rd/app-d3d9-3dmark06/3DMark06.exe"
+launcher = "experiments/launchers/app-d3d9-3dmark06.sh"
+reference = "experiments/references/app-d3d9-3dmark06.png"
+features = ["commercial", "benchmark", "d3d9", "stress", "scene", "sm2", "sm3", "hdr"]
+status = "exploratory"
+requires_wine = true
+window_title = "3DMark06"
+capture_delay_sec = 70.0
+run_timeout_sec = 180
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+require_positive_timeout = true
+wine_id = "sikarugir-cx-24.0.7"
+wine_alternatives = []
+install_drive_letter = "d"
+
+[[app]]
 name = "app-d3d9-sfiv-benchmark"
 source = "local-external"
 license = "commercial"

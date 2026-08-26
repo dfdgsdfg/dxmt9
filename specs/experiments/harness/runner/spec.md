@@ -221,6 +221,17 @@ file today — they exist only in
 `scripts/tools/run_3dmark05_perf_probe.sh` and
 `experiments/launchers/app-d3d9-3dmark05.sh` source.
 
+The 3DMark06 launcher deliberately does not inherit that split ownership or
+the 3DMark05-only direct/probe path. `app-d3d9-3dmark06.sh` is invoked through
+`run_experiment.py`, reads only its caller-owned `DXMT_3DMARK06_*` inputs, and
+uses the common launcher for staging and execution. Its default effective
+stream is one SM2 graphics test (`-gt1`) followed by
+`-nosplash -nosysteminfo -noscreens`; `DXMT_3DMARK06_ARGS` replaces that
+complete stream. `DXMT_3DMARK06_RESULT_FILE`, when non-empty, is appended as
+the final positional argument. `DXMT_3DMARK06_DRY_RUN` is a pre-staging plan
+inspection path and does not reach `run-capture`. GT2 and the two HDR/SM3
+tests remain explicit caller selections (`-gt2`, `-hdr1`, `-hdr2`).
+
 ---
 
 ## 5. Mode Table

@@ -321,6 +321,11 @@ test('dxmt9-3dmark05-probe-scripts', python3,
      suite: ['scripts'],
      timeout: 120,
      is_parallel: false)
+test('dxmt9-3dmark06-lane', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_3dmark06_lane.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
 test('dxmt9-analyze-alpha-backend-candidates', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_alpha_backend_candidates.py')],
      workdir: meson.project_source_root(),

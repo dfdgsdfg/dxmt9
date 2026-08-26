@@ -1,7 +1,7 @@
 # Wild Testing Rules — Wine Runtime Selection
 
 Rules for running dxmt9 against real D3D9 binaries (catalogue experiments,
-SFIV, 3DMark05, etc.) in `experiments/`. They cover the host Wine
+SFIV, 3DMark05, and 3DMark06) in `experiments/`. They cover the host Wine
 runtime, not the dxmt9 build itself.
 
 > **Spec:** the mechanics of the manifest, prefix bootstrap, and apps_3rd

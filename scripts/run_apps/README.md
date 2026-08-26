@@ -29,6 +29,11 @@ The Wine runtime comes from the entry's `wine_id` in
 `experiments/CATALOGUE.toml`; override it per run with `--wine-id`, never by
 reintroducing a hardcoded `--wine-root` default in a wrapper.
 
+`app-d3d9-3dmark06` likewise has no `scripts/run_apps/` wrapper. Stage its
+external payload under `experiments/apps_3rd/app-d3d9-3dmark06/` and invoke it
+through `run_experiment.py`; its per-test selection and `.3dr` output inputs
+are documented in `experiments/launchers/README.md`.
+
 - `run_app-d3d9-3dmark05-verify_direct.sh` — direct foreground runner for the
   existing 3DMark05 verify prefix. It enables `DXMT_3DMARK05_DIRECT=1` on the
   regular 3DMark05 launcher and uses `DXMT_3DMARK05_ARGS` when a manual

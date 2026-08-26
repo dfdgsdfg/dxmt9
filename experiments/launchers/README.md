@@ -39,6 +39,8 @@ Self-authored apps:
 Commercial / 3rd-party titles (require external prefix):
 
 - `app-d3d9-3dmark05.sh` — 3DMark05 (external prefix; GT1/GT2/GT3).
+- `app-d3d9-3dmark06.sh` — 3DMark06 (external payload; SM2 GT1/GT2 and
+  HDR/SM3 HDR1/HDR2).
 - `app-d3d9-sfiv-benchmark.sh` — SFIV benchmark (Heroic + CrossOver
   oracle lanes (the CrossOver oracle wrapper was removed on 2026-07-29;
   `agents/rules/test_wild.rules.md` rejects CrossOver as a runtime)
@@ -140,6 +142,22 @@ Commercial / 3rd-party titles (require external prefix):
     Use it for unattended perf runs together with an unlocked desktop; keep
     `DXMT_3DMARK05_AUTO_ENTER=1` available as a fallback for editions that do
     not honor command-line result runs.
+  - `app-d3d9-3dmark06` follows the same bounded-run convention without the
+    3DMark05-only direct/probe wrapper. Its default arguments are
+    `-gt1 -nosplash -nosysteminfo -noscreens`; set `DXMT_3DMARK06_ARGS` to
+    select `-gt2`, `-hdr1`, or `-hdr2`, and set
+    `DXMT_3DMARK06_RESULT_FILE=<name>.3dr` to append the result file as the
+    final positional argument. Most command-line test-selection switches are
+    a 3DMark06 Professional Edition facility; an installed Basic or Advanced
+    edition must not be treated as a valid per-test lane until its own CLI
+    behavior is observed. The switch definitions are recorded in Futuremark's
+    [3DMark06 whitepaper](https://s3.amazonaws.com/download-aws.futuremark.com/3DMark06_Whitepaper.pdf).
+    Use `DXMT_3DMARK06_DRY_RUN=1 bash
+    experiments/launchers/app-d3d9-3dmark06.sh` to inspect the plan without
+    staging or launching Wine. The unlocked-session guard defaults on, while
+    the still-unqualified Enter fallback defaults off; enable it explicitly
+    with `DXMT_3DMARK06_AUTO_ENTER=1` only if the installed edition needs UI
+    confirmation.
   - `app-d3d9-3dmark05` is timeout-tolerant in the catalogue
     (`run_timeout_sec=180`, `allow_timeout=true`, `require_positive_timeout=true`)
     because the app can hang on the final frame after useful output is already

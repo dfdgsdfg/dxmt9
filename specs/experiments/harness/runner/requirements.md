@@ -74,8 +74,8 @@ reached run-capture" from "reached run-capture and failed"
 ## 3. Positive Timeout for Apps That Can Hang
 
 **R-HARN-RUN-3.1** For a catalogue app whose `[[app]]` entry sets
-`require_positive_timeout = true` — `app-d3d9-3dmark05` is the only
-such entry today — a `run_experiment.py run <app> --timeout <value>`
+`require_positive_timeout = true` — currently `app-d3d9-3dmark05` and
+`app-d3d9-3dmark06` — a `run_experiment.py run <app> --timeout <value>`
 invocation with `value <= 0` exits non-zero before any Wine process is
 launched, with a diagnostic naming the app and the violated
 constraint. Instantiates R-HARN-2.1 (an unbounded hang that never
