@@ -80,6 +80,7 @@ compatibility constraint today:
 | -------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------- |
 | [Sikarugir](https://github.com/Sikarugir-App) engine `sikarugir-cx-24.0.7` | Yes    | The runtime dxmt9 is tested against                                     |
 | Self-built Wine with the macdrv symbol-export patch                        | Yes    | Reproducible-from-source path; see `specs/winemetal/requirements.md` §4 |
+| [3Shain/wine](https://github.com/3Shain/wine) fork release `v9.9-mingw`    | Yes    | The upstream-DXMT author's Wine; also serves DXMT's D3D10/11 DLLs, so one runtime covers D3D9–11. No bundled Wine Mono/Gecko: bootstrap fresh prefixes once with `WINEDLLOVERRIDES="mscoree=;mshtml="` |
 | Heroic / Gcenx Wine builds (`Wine-11.x`, `-DXMT` variants)                 | No     | `winemac.so` is stripped; dxmt9 cannot attach a layer                   |
 | CrossOver (the commercial product)                                         | No     | Wrapper/runtime layout blocks unixlib staging                           |
 | GPTK 1.1 (Wine 7.7)                                                        | No     | Too old for this unixlib bridge model                                   |
