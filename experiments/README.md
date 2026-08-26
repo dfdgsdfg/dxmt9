@@ -116,6 +116,12 @@ DXMT_3DMARK06_LANE=cpu \
 3DMark05 uses the same convention through `DXMT_3DMARK05_LANE`. Named results
 are preserved in `result.json:benchmark_lane`; reserve the product-specific
 `*_ARGS` variables for custom selections that have no canonical preset.
+Catalogue runs automatically supply a unique product-specific `.3dr` result
+basename when `DXMT_3DMARK*_RESULT_FILE` is unset. Newly created or overwritten
+regular result files are copied atomically to `<output>/benchmark-results/` and
+listed with their source and digest in `result.json:benchmark_result_files`.
+Editions that do not emit a file record `status=not_emitted`; stale files in the
+benchmark directory are not reused.
 
 Permanent-prefix installer for Heroic:
 

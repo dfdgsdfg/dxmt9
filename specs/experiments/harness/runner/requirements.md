@@ -184,3 +184,22 @@ performance and correctness workloads. CPU lanes are diagnostic workloads for
 application/Wine/Rosetta/PE-bridge scheduling and must not be treated as direct
 renderer throughput scores. `feature`, `batch`, and `all` are microbenchmark or
 coverage suites, not replacements for the scene-lane promotion gates.
+
+**R-HARN-RUN-6.5** A catalogue 3DMark05 or 3DMark06 run must request one
+run-unique `.3dr` basename when the caller did not set the product-specific
+`DXMT_3DMARK*_RESULT_FILE`. Before spawning the launcher, the runner must
+snapshot regular `.3dr` files under the benchmark working directory, the Wine
+prefix user tree, and the resolved requested-file parent. After the child has
+settled or been terminated, it must consider only newly created or
+content/metadata-modified regular files. Pre-existing unchanged files and
+symlinks must not be attributed to the run.
+
+**R-HARN-RUN-6.6** Every discovered result file must be copied through a
+temporary file and atomically published under
+`experiments/output/<app-runid>/benchmark-results/`. `result.json` must record
+the requested environment/value/mode/resolved source, search roots, capture
+status, requested-file absence, and each file's source, artifact-relative path,
+change class, byte count, source modification time, and SHA-256 digest. A
+missing `.3dr` is an observed `not_emitted` disposition rather than a renderer
+failure because some qualified editions or manually selected lanes do not emit
+one; a discovered file that cannot be copied is an artifact-capture failure.

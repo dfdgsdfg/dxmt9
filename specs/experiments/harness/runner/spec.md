@@ -21,6 +21,7 @@ from the parent spec rather than redefined here.
 | Script | Role |
 |---|---|
 | `scripts/run_apps/run_experiment.py` | The domain's core. Loads `experiments/CATALOGUE.toml`, resolves the Wine manifest entry and prefix, optionally runs `stage_dxmt9()` (`build-stage`), spawns the catalogue launcher subprocess and captures the on-screen frame (`run-capture`), and writes `result.json`. |
+| `scripts/run_apps/benchmark_result_artifacts.py` | Cold 3DMark result custody helper. Plans the pre-spawn `.3dr` snapshot, detects created/modified regular files after settlement, and atomically publishes digest-qualified copies into the run artifact. |
 | `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` | Direct (non-catalogue-supervised) wrapper around `experiments/launchers/app-d3d9-3dmark05.sh`, for standalone debugging outside `run_experiment.py`'s supervision. Applies its own `DXMT_3DMARK05_DIRECT_TIMEOUT` (default `120`) watchdog and kills the process group on timeout. |
 | `experiments/launchers/*.sh` | One launcher per catalogue app (e.g. `app-d3d9-3dmark05.sh`, `conf-d3d9-fast-sanity.sh`, `perf-d3d9-present-loop.sh`), plus shared `common.sh`. These are the processes `run_experiment.py` spawns for `run-capture`; they start Wine and the target binary. |
 | `scripts/run_suites/*.sh` | Batch drivers invoking `run_experiment.py` (or the catalogue launchers) over a fixed app list: `run_dx9_fast_sanity_suite.sh`, `run_dx9_regression_suite.sh`, `run_dx9_performance_suite.sh`, `run_dx9_builtin_oracle_suite.sh`, `run_dx9_oracle_compare_suite.sh`, `run_d3d9_conformance_render_modes.sh`, `run_boundary_audit_suite.sh`. |
@@ -52,6 +53,7 @@ This domain writes:
 | `reference.png` | `app.reference_path` exists | Symlink to the catalogue reference image. |
 | `diff.png` | both `actual.png` and a reference exist | Heat-diff image from `write_diff_image`. |
 | `ssim.txt` | both exist and SSIM was computed | SSIM score, 6 decimal places. |
+| `benchmark-results/*.3dr` | a 3DMark child created or modified a regular result file during this run | Atomically published benchmark-owned result bytes; provenance and SHA-256 are in `result.json:benchmark_result_files`. |
 
 Verified against
 `experiments/output/app-d3d9-3dmark05-vertexremap-enc1-r1/`, which
@@ -180,18 +182,20 @@ supervision. Unlike the table in §4, this family does **not** have a
 single owning domain today, and the deviation is precise enough to
 name per variable rather than paper over:
 
-- `DXMT_3DMARK05_PREFIX`, `_WINE_ROOT`, `_WINESERVER`,
-  `_RESULT_FILE`, and `_LOG` are set only by the `probe`-domain
-  `scripts/tools/run_3dmark05_perf_probe.sh` (lines 4200-4205);
+- `DXMT_3DMARK05_PREFIX`, `_WINE_ROOT`, `_WINESERVER`, and `_LOG` are set only
+  by the `probe`-domain `scripts/tools/run_3dmark05_perf_probe.sh`;
   `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` (this
-  domain's own direct wrapper) does not set any of these five.
+  domain's own direct wrapper) does not set any of these four.
   Ownership belongs to `probe`, not to this domain.
+- `DXMT_3DMARK05_RESULT_FILE` is explicitly set by the probe domain for its
+  direct path. On a catalogue path this runner preserves a caller value or
+  conditionally injects a unique basename before spawn, then uses the same
+  value to resolve R-HARN-RUN-6.5 capture provenance. The direct and catalogue
+  setters are mutually exclusive within one run.
 - `DXMT_3DMARK05_DIRECT` is set by **both** domains, on different
   invocation paths: this domain's own
-  `run_app-d3d9-3dmark05-verify_direct.sh:15` (`export
-  DXMT_3DMARK05_DIRECT=1`) and the `probe`-domain
-  `run_3dmark05_perf_probe.sh:4199` (`"DXMT_3DMARK05_DIRECT=1"` in its
-  `env_args`). The two setters are mutually exclusive within any one
+  `run_app-d3d9-3dmark05-verify_direct.sh` and the `probe`-domain
+  `run_3dmark05_perf_probe.sh`. The two setters are mutually exclusive within any one
   run — a probe-driven run never goes through the verify-direct
   wrapper and vice versa — but the variable itself does not have one
   fixed owning domain the way `specs/experiments/harness/spec.md` §4
@@ -200,7 +204,7 @@ name per variable rather than paper over:
   `specs/experiments/harness/gap.md` entry can cite them without
   re-deriving the finding.
 - `DXMT_3DMARK05_DIRECT_TIMEOUT` is set only by this domain's
-  `run_app-d3d9-3dmark05-verify_direct.sh:16`; no `probe`-domain
+  `run_app-d3d9-3dmark05-verify_direct.sh`; no `probe`-domain
   script sets it. Ownership is genuinely this domain's.
 - `DXMT_3DMARK05_LANE`, `_ARGS`, `_KILL_SERVER_ON_EXIT`,
   `_ALLOW_UNSUPERVISED`, and `_REQUIRE_UNLOCKED` are read by
@@ -255,6 +259,30 @@ The mapping defines invocations, not evidence. In particular, 3DMark06
 per-test switches still require a Professional-edition qualification, while CPU
 results remain mixed application/Wine/Rosetta/renderer diagnostics rather than
 graphics promotion metrics.
+
+### 4.1 Benchmark result-file capture
+
+`prepare_benchmark_result_capture()` owns the pre-spawn side of
+R-HARN-RUN-6.5. It preserves an explicit `DXMT_3DMARK05_RESULT_FILE` or
+`DXMT_3DMARK06_RESULT_FILE`; otherwise it injects a run-unique relative
+basename, which the launcher appends as its final positional argument. The
+snapshot includes SHA-256 as well as size and nanosecond modification time so
+same-name overwrites are distinguishable from stale files.
+
+`collect_benchmark_result_files()` repeats the bounded scan after process
+settlement, classifies changed files as `created` or `modified`, and calls
+`_atomic_copy_benchmark_result()` for each. The copy is flushed and fsynced in
+the artifact directory before `os.replace()` exposes the final filename; a
+source recheck and digest comparison reject a file still changing during
+copy. Basename collisions receive a digest-qualified suffix. Reusing an output
+suffix first clears only that run directory's `benchmark-results/` child so a
+prior artifact cannot survive as evidence for the new run.
+
+`result.json:benchmark_result_files.status` is `captured`, `not_emitted`, or
+`error`. `missing_requested` specifically describes the resolved requested
+source rather than merely asking whether any changed `.3dr` was found. Missing
+output remains non-fatal for 3DMark06 Advanced Edition and UI-selected runs;
+copy errors enter `failures` as `benchmark_result_capture`.
 
 ---
 

@@ -158,13 +158,19 @@ Commercial / 3rd-party titles (require external prefix):
     argument after the test options, for example `-gt1 ... dxmt9_gt1.3dr`.
     Use it for unattended perf runs together with an unlocked desktop; keep
     `DXMT_3DMARK05_AUTO_ENTER=1` available as a fallback for editions that do
-    not honor command-line result runs.
+    not honor command-line result runs. Catalogue runs inject a unique basename
+    when this variable is unset, then atomically collect only result files that
+    were created or modified during the run under
+    `<output>/benchmark-results/`; inspect
+    `result.json:benchmark_result_files` for provenance or `not_emitted`.
   - `app-d3d9-3dmark06` follows the same bounded-run convention without the
     3DMark05-only direct/probe wrapper. Its default arguments are
     `-gt1 -nosplash -nosysteminfo -noscreens`; set `DXMT_3DMARK06_LANE` to
     select a canonical lane, and set
     `DXMT_3DMARK06_RESULT_FILE=<name>.3dr` to append the result file as the
-    final positional argument. Most command-line test-selection switches are
+    final positional argument. The catalogue runner applies the same automatic
+    request and bounded result collection used for 3DMark05. Most command-line
+    test-selection switches are
     a 3DMark06 Professional Edition facility; an installed Basic or Advanced
     edition must not be treated as a valid per-test lane until its own CLI
     behavior is observed. The switch definitions are recorded in Futuremark's

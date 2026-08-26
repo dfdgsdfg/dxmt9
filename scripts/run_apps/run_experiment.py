@@ -42,6 +42,11 @@ from scripts.wine.bootstrap_prefix import (  # noqa: E402
     BootstrapResult,
     bootstrap as bootstrap_prefix,
 )
+from scripts.run_apps.benchmark_result_artifacts import (  # noqa: E402
+    BenchmarkResultCapturePlan,
+    collect_benchmark_result_files,
+    prepare_benchmark_result_capture,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -875,6 +880,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     for path in (actual_path, actual_dump_path, diff_path, ssim_path, reference_link_path, log_path, result_path):
         if path.exists() or path.is_symlink():
             path.unlink()
+    benchmark_result_dir = output_dir / "benchmark-results"
+    if benchmark_result_dir.is_symlink() or benchmark_result_dir.is_file():
+        benchmark_result_dir.unlink()
+    elif benchmark_result_dir.is_dir():
+        shutil.rmtree(benchmark_result_dir)
 
     # Resolve a manifest entry first when the app or CLI requests one. This
     # implements R-RT-6.1 (CLI > env > CATALOGUE) and feeds both the prefix
@@ -973,6 +983,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     timed_out = False
     process_started_at: float | None = None
     process_finished_at: float | None = None
+    benchmark_result_plan: BenchmarkResultCapturePlan | None = None
+    benchmark_result_payload: dict[str, Any] | None = None
     previous_signal_handlers: dict[signal.Signals, Any] = {}
 
     def cleanup_temp_prefix() -> None:
@@ -1107,6 +1119,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if app.cx_bottle:
             env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
+        benchmark_result_plan = prepare_benchmark_result_capture(
+            app_name=app.name,
+            workdir=binary_path.parent,
+            prefix=prefix,
+            output_name=output_name,
+            env=env,
+        )
+
         with log_path.open("wb") as log_fp:
             process_started_at = time.monotonic()
             process = subprocess.Popen(
@@ -1154,6 +1174,12 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 process_finished_at = time.monotonic()
                 log_fp.flush()
 
+        if benchmark_result_plan is not None:
+            benchmark_result_payload = collect_benchmark_result_files(
+                benchmark_result_plan,
+                output_dir=output_dir,
+            )
+
         performance: dict[str, Any] = {}
         if process_started_at is not None and process_finished_at is not None:
             elapsed = max(0.0, process_finished_at - process_started_at)
@@ -1189,6 +1215,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         benchmark_lane = extract_3dmark_lane(log_path)
         if benchmark_lane is not None:
             result["benchmark_lane"] = benchmark_lane
+        if benchmark_result_payload is not None:
+            result["benchmark_result_files"] = benchmark_result_payload
+            if benchmark_result_payload["errors"]:
+                result["failures"].append({
+                    "type": "benchmark_result_capture",
+                    "errors": benchmark_result_payload["errors"],
+                })
         # R-RT-6.2: record the resolved manifest entry and the prefix
         # bootstrap result for diagnostic cross-reference.
         if manifest_entry is not None:
