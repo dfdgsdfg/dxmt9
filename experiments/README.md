@@ -101,13 +101,21 @@ edition accepts the per-test command-line switches; those switches are normally
 a Professional Edition feature. Examples:
 
 ```sh
+DXMT_3DMARK06_LANE=gt1 \
 DXMT_3DMARK06_RESULT_FILE=dxmt9_gt1.3dr \
   scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
 
-DXMT_3DMARK06_ARGS="-hdr1 -nosplash -nosysteminfo -noscreens" \
+DXMT_3DMARK06_LANE=hdr1 \
 DXMT_3DMARK06_RESULT_FILE=dxmt9_hdr1.3dr \
   scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
+
+DXMT_3DMARK06_LANE=cpu \
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06
 ```
+
+3DMark05 uses the same convention through `DXMT_3DMARK05_LANE`. Named results
+are preserved in `result.json:benchmark_lane`; reserve the product-specific
+`*_ARGS` variables for custom selections that have no canonical preset.
 
 Permanent-prefix installer for Heroic:
 

@@ -202,8 +202,9 @@ name per variable rather than paper over:
 - `DXMT_3DMARK05_DIRECT_TIMEOUT` is set only by this domain's
   `run_app-d3d9-3dmark05-verify_direct.sh:16`; no `probe`-domain
   script sets it. Ownership is genuinely this domain's.
-- `DXMT_3DMARK05_KILL_SERVER_ON_EXIT`, `_ALLOW_UNSUPERVISED`, and
-  `_REQUIRE_UNLOCKED` are read by `app-d3d9-3dmark05.sh` with inline
+- `DXMT_3DMARK05_LANE`, `_ARGS`, `_KILL_SERVER_ON_EXIT`,
+  `_ALLOW_UNSUPERVISED`, and `_REQUIRE_UNLOCKED` are read by
+  `app-d3d9-3dmark05.sh` with inline
   bash defaults (`${VAR:-default}`) but are not assigned by any
   harness script in either domain; there is no ownership conflict
   because there is no in-repo setter to conflict.
@@ -221,16 +222,39 @@ file today — they exist only in
 `scripts/tools/run_3dmark05_perf_probe.sh` and
 `experiments/launchers/app-d3d9-3dmark05.sh` source.
 
-The 3DMark06 launcher deliberately does not inherit that split ownership or
-the 3DMark05-only direct/probe path. `app-d3d9-3dmark06.sh` is invoked through
-`run_experiment.py`, reads only its caller-owned `DXMT_3DMARK06_*` inputs, and
-uses the common launcher for staging and execution. Its default effective
-stream is one SM2 graphics test (`-gt1`) followed by
-`-nosplash -nosysteminfo -noscreens`; `DXMT_3DMARK06_ARGS` replaces that
-complete stream. `DXMT_3DMARK06_RESULT_FILE`, when non-empty, is appended as
-the final positional argument. `DXMT_3DMARK06_DRY_RUN` is a pre-staging plan
-inspection path and does not reach `run-capture`. GT2 and the two HDR/SM3
-tests remain explicit caller selections (`-gt2`, `-hdr1`, `-hdr2`).
+The two 3DMark launchers share one cold selection table in
+`experiments/launchers/3dmark_lane_presets.sh`. The table owns only test
+selection and the standard headless suffix; 3DMark05 retains its direct/probe
+ownership and 3DMark06 remains a regular `run_experiment.py` launcher.
+
+| Lane | 3DMark05 selection | 3DMark06 selection | Use |
+|---|---|---|---|
+| `gt1` | `-gt1` | `-gt1` | Default bounded graphics scene |
+| `gt2` | `-gt2` | `-gt2` | Graphics scene |
+| `gt3` | `-gt3` | — | 3DMark05 graphics scene |
+| `sm2` | — | `-gt1 -gt2` | 3DMark06 SM2 scene pair |
+| `hdr1` / `hdr2` | — | `-hdr1` / `-hdr2` | 3DMark06 HDR/SM3 scenes |
+| `hdr` | — | `-hdr1 -hdr2` | 3DMark06 HDR/SM3 pair |
+| `graphics` | `-gtall` | `-gtall` | Product graphics suite |
+| `cpu1` / `cpu2` | `-cpu1` / `-cpu2` | `-cpu1` / `-cpu2` | Individual CPU diagnostics |
+| `cpu` | `-cpuall` | `-cpuall` | CPU diagnostic suite |
+| `score` | `-gtall -cpuall` | `-gtall -cpuall` | Score-producing suite |
+| `feature` | `-featureall` | `-featureall` | Feature microbenchmarks |
+| `batch` | `-batchall` | `-batchall` | Batch-size microbenchmarks |
+| `all` | `-gtall -cpuall -featureall -batchall` | same | Explicit exhaustive suite |
+
+`DXMT_3DMARK05_LANE` and `DXMT_3DMARK06_LANE` select those rows. A non-empty
+product-specific `*_ARGS` value wins and is recorded as `custom`; this preserves
+the historical escape hatch without letting an unlabelled argument string look
+like a canonical lane. Both launchers emit `[3dmark-lane]`, and the catalogue
+runner copies it into `result.json:benchmark_lane`. Result-file arguments remain
+final positional arguments. `DXMT_3DMARK06_DRY_RUN` resolves and prints this
+same identity before staging or `run-capture`.
+
+The mapping defines invocations, not evidence. In particular, 3DMark06
+per-test switches still require a Professional-edition qualification, while CPU
+results remain mixed application/Wine/Rosetta/renderer diagnostics rather than
+graphics promotion metrics.
 
 ---
 

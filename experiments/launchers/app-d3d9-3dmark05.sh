@@ -3,12 +3,10 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/common.sh"
+source "$script_dir/3dmark_lane_presets.sh"
 
-# Keep heuristic runs scoped to the first benchmark by default. Broader suites
-# must be requested explicitly through DXMT_3DMARK05_ARGS.
-default_3dmark05_selection_args="-gt1"
-default_3dmark05_runner_args="-nosplash -nosysteminfo -noscreens"
-default_3dmark05_args="$default_3dmark05_selection_args $default_3dmark05_runner_args"
+dxmt_resolve_3dmark_lane \
+  05 "${DXMT_3DMARK05_LANE:-gt1}" "${DXMT_3DMARK05_ARGS:-}"
 dxmt_3dmark05_auto_enter_pid=""
 
 validate_timeout_app-d3d9-3dmark05() {
@@ -232,7 +230,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   mkdir -p "$(dirname -- "$log_path")"
   : > "$log_path"
 
-  read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
+  read -r -a dxmt_3dmark05_args <<< "$DXMT_3DMARK_RESOLVED_ARGS"
   append_result_file_app-d3d9-3dmark05
 
   export DXMT_EXPERIMENT_WORKDIR
@@ -241,7 +239,7 @@ if [[ "${DXMT_3DMARK05_DIRECT:-0}" != "0" ]]; then
   echo "[3dmark05-direct] prefix=$prefix"
   echo "[3dmark05-direct] wine=$wine_bin"
   echo "[3dmark05-direct] log=$log_path"
-  echo "[3dmark05-direct] default_selection=GT1-only"
+  dxmt_print_3dmark_lane_identity 05
   echo "[3dmark05-direct] args=${dxmt_3dmark05_args[*]}"
 
   require_unlocked_session_app-d3d9-3dmark05
@@ -282,8 +280,8 @@ if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
   schedule_app-d3d9-3dmark05_enter 120
 fi
 
-read -r -a dxmt_3dmark05_args <<< "${DXMT_3DMARK05_ARGS:-$default_3dmark05_args}"
+read -r -a dxmt_3dmark05_args <<< "$DXMT_3DMARK_RESOLVED_ARGS"
 append_result_file_app-d3d9-3dmark05
-echo "[3dmark05] default_selection=GT1-only"
+dxmt_print_3dmark_lane_identity 05
 echo "[3dmark05] args=${dxmt_3dmark05_args[*]}"
 exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "${dxmt_3dmark05_args[@]}"

@@ -53,22 +53,60 @@ class ThreeDMark06LaneTests(unittest.TestCase):
         result = dry_run()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("default_selection=GT1-only", result.stdout)
+        self.assertIn("[3dmark-lane] product=06 lane=gt1 source=preset", result.stdout)
         self.assertIn("args=-gt1 -nosplash -nosysteminfo -noscreens", result.stdout)
         self.assertIn("workdir=/tmp/3DMark06 Install", result.stdout)
 
-    def test_hdr_selection_override_replaces_default(self) -> None:
+    def test_named_presets_cover_every_supported_lane_class(self) -> None:
+        expected = {
+            "gt2": "-gt2",
+            "sm2": "-gt1 -gt2",
+            "hdr1": "-hdr1",
+            "hdr2": "-hdr2",
+            "hdr": "-hdr1 -hdr2",
+            "graphics": "-gtall",
+            "cpu1": "-cpu1",
+            "cpu2": "-cpu2",
+            "cpu": "-cpuall",
+            "score": "-gtall -cpuall",
+            "feature": "-featureall",
+            "batch": "-batchall",
+            "all": "-gtall -cpuall -featureall -batchall",
+        }
+
+        for lane, selection in expected.items():
+            with self.subTest(lane=lane):
+                result = dry_run(DXMT_3DMARK06_LANE=lane)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"[3dmark-lane] product=06 lane={lane} source=preset",
+                    result.stdout,
+                )
+                self.assertIn(
+                    f"args={selection} -nosplash -nosysteminfo -noscreens",
+                    result.stdout,
+                )
+
+    def test_raw_args_override_is_reported_as_custom(self) -> None:
         result = dry_run(
-            DXMT_3DMARK06_ARGS="-hdr1 -nosplash -nosysteminfo -noscreens"
+            DXMT_3DMARK06_LANE="cpu",
+            DXMT_3DMARK06_ARGS="-hdr1 -nosplash",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("args=-hdr1 -nosplash -nosysteminfo -noscreens", result.stdout)
+        self.assertIn("[3dmark-lane] product=06 lane=custom source=args", result.stdout)
+        self.assertIn("args=-hdr1 -nosplash", result.stdout)
         self.assertNotIn("args=-gt1", result.stdout)
+
+    def test_invalid_named_preset_fails_before_staging(self) -> None:
+        result = dry_run(DXMT_3DMARK06_LANE="gt3")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown 3DMark06 lane 'gt3'", result.stderr)
 
     def test_result_file_is_the_last_positional_argument(self) -> None:
         result = dry_run(
-            DXMT_3DMARK06_ARGS="-gt2 -nosplash -nosysteminfo -noscreens",
+            DXMT_3DMARK06_LANE="gt2",
             DXMT_3DMARK06_RESULT_FILE="dxmt9_gt2.3dr",
         )
 

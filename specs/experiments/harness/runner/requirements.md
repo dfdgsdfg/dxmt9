@@ -154,3 +154,33 @@ claim that this domain owns the whole `DXMT_EXPERIMENT_*` namespace.
 The `probe` domain's own `requirements.md` is where ownership of
 `DXMT_EXPERIMENT_PROFILE` and `DXMT_EXPERIMENT_CAPTURE_DIR` belongs.
 Instantiates R-HARN-1.3.
+
+---
+
+## 6. Canonical 3DMark Lanes
+
+**R-HARN-RUN-6.1** The 3DMark05 and 3DMark06 launchers must resolve named
+benchmark lanes through the shared
+`experiments/launchers/3dmark_lane_presets.sh` table. Each product defaults to
+the bounded `gt1` lane. A named lane must produce a fixed test-selection stream
+followed by `-nosplash -nosysteminfo -noscreens`; an unknown name must fail
+before Wine is launched.
+
+**R-HARN-RUN-6.2** `DXMT_3DMARK05_ARGS` and `DXMT_3DMARK06_ARGS` remain
+complete raw argument overrides for compatibility and experimental selections.
+When a raw override is non-empty it must take precedence over the corresponding
+`DXMT_3DMARK05_LANE` or `DXMT_3DMARK06_LANE`, and the resolved lane identity
+must be `custom` with source `args`. The launcher must not append the standard
+headless arguments to a raw override.
+
+**R-HARN-RUN-6.3** Every launched 3DMark preset or custom stream must emit one
+machine-readable `[3dmark-lane]` identity containing product, resolved lane,
+and selection source. `run_experiment.py` must preserve that identity as
+`result.json:benchmark_lane`. A non-3DMark experiment must not gain a
+`benchmark_lane` field.
+
+**R-HARN-RUN-6.4** Scene lanes (`gt*`, `hdr*`) may be used as graphics
+performance and correctness workloads. CPU lanes are diagnostic workloads for
+application/Wine/Rosetta/PE-bridge scheduling and must not be treated as direct
+renderer throughput scores. `feature`, `batch`, and `all` are microbenchmark or
+coverage suites, not replacements for the scene-lane promotion gates.

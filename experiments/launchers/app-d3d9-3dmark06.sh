@@ -3,13 +3,10 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/common.sh"
+source "$script_dir/3dmark_lane_presets.sh"
 
-# 3DMark06 separates the graphics suite into two SM2 tests (-gt1/-gt2) and
-# two HDR/SM3 tests (-hdr1/-hdr2). Keep routine runs bounded to the first SM2
-# test; broader or different selections are explicit DXMT_3DMARK06_ARGS input.
-default_3dmark06_selection_args="-gt1"
-default_3dmark06_runner_args="-nosplash -nosysteminfo -noscreens"
-default_3dmark06_args="$default_3dmark06_selection_args $default_3dmark06_runner_args"
+dxmt_resolve_3dmark_lane \
+  06 "${DXMT_3DMARK06_LANE:-gt1}" "${DXMT_3DMARK06_ARGS:-}"
 dxmt_3dmark06_auto_enter_pid=""
 
 append_result_file_3dmark06() {
@@ -88,13 +85,13 @@ cleanup_3dmark06() {
 default_binary="$exp_repo_root/experiments/apps_3rd/app-d3d9-3dmark06/3DMark06.exe"
 binary=${DXMT_EXPERIMENT_BINARY:-$default_binary}
 workdir=$(dirname -- "$binary")
-read -r -a dxmt_3dmark06_args <<< "${DXMT_3DMARK06_ARGS:-$default_3dmark06_args}"
+read -r -a dxmt_3dmark06_args <<< "$DXMT_3DMARK_RESOLVED_ARGS"
 append_result_file_3dmark06
 
 if [[ "${DXMT_3DMARK06_DRY_RUN:-0}" != "0" ]]; then
   echo "[3dmark06-dry-run] binary=$binary"
   echo "[3dmark06-dry-run] workdir=$workdir"
-  echo "[3dmark06-dry-run] default_selection=GT1-only"
+  dxmt_print_3dmark_lane_identity 06
   echo "[3dmark06-dry-run] args=${dxmt_3dmark06_args[*]}"
   printf '[3dmark06-dry-run] command='
   printf ' %q' "${DXMT_EXPERIMENT_WINE_BIN:-wine}" "$binary" "${dxmt_3dmark06_args[@]}"
@@ -114,6 +111,6 @@ if [[ "${DXMT_3DMARK06_AUTO_ENTER:-0}" != "0" ]]; then
   schedule_3dmark06_enter
 fi
 
-echo "[3dmark06] default_selection=GT1-only"
+dxmt_print_3dmark_lane_identity 06
 echo "[3dmark06] args=${dxmt_3dmark06_args[*]}"
 exp_run_wine_binary "$binary" "${dxmt_3dmark06_args[@]}"

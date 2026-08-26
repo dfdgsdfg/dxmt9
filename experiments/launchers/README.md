@@ -38,9 +38,10 @@ Self-authored apps:
 
 Commercial / 3rd-party titles (require external prefix):
 
-- `app-d3d9-3dmark05.sh` — 3DMark05 (external prefix; GT1/GT2/GT3).
-- `app-d3d9-3dmark06.sh` — 3DMark06 (external payload; SM2 GT1/GT2 and
-  HDR/SM3 HDR1/HDR2).
+- `app-d3d9-3dmark05.sh` — 3DMark05 (external prefix; named graphics, CPU,
+  feature, and batch lanes).
+- `app-d3d9-3dmark06.sh` — 3DMark06 (external payload; named SM2, HDR/SM3,
+  CPU, feature, and batch lanes).
 - `app-d3d9-sfiv-benchmark.sh` — SFIV benchmark (Heroic + CrossOver
   oracle lanes (the CrossOver oracle wrapper was removed on 2026-07-29;
   `agents/rules/test_wild.rules.md` rejects CrossOver as a runtime)
@@ -137,6 +138,22 @@ Commercial / 3rd-party titles (require external prefix):
     `DXMT_3DMARK05_REQUIRE_UNLOCKED=0` is set deliberately; locked-session
     attempts otherwise produce factory-only perf logs and misleading black
     captures.
+  - Both 3DMark launchers use reusable named presets. Set
+    `DXMT_3DMARK05_LANE` or `DXMT_3DMARK06_LANE`; both default to `gt1`.
+    Every preset appends `-nosplash -nosysteminfo -noscreens`, and the resolved
+    product/name/source is written to `result.json:benchmark_lane`.
+
+    | Preset | 3DMark05 | 3DMark06 |
+    |---|---|---|
+    | Scene | `gt1`, `gt2`, `gt3` | `gt1`, `gt2`, `hdr1`, `hdr2` |
+    | Scene groups | `graphics` | `sm2`, `hdr`, `graphics` |
+    | CPU | `cpu1`, `cpu2`, `cpu` | `cpu1`, `cpu2`, `cpu` |
+    | Suites | `score`, `feature`, `batch`, `all` | same |
+
+    CPU presets are scheduling/bridge diagnostics, and feature/batch presets
+    are microbenchmarks; they are not graphics-scene promotion gates. The raw
+    `DXMT_3DMARK05_ARGS` and `DXMT_3DMARK06_ARGS` escape hatches remain, take
+    precedence over a named preset, and are recorded as lane `custom`.
   - `DXMT_3DMARK05_RESULT_FILE=<name>.3dr` appends the documented result-file
     argument after the test options, for example `-gt1 ... dxmt9_gt1.3dr`.
     Use it for unattended perf runs together with an unlocked desktop; keep
@@ -144,8 +161,8 @@ Commercial / 3rd-party titles (require external prefix):
     not honor command-line result runs.
   - `app-d3d9-3dmark06` follows the same bounded-run convention without the
     3DMark05-only direct/probe wrapper. Its default arguments are
-    `-gt1 -nosplash -nosysteminfo -noscreens`; set `DXMT_3DMARK06_ARGS` to
-    select `-gt2`, `-hdr1`, or `-hdr2`, and set
+    `-gt1 -nosplash -nosysteminfo -noscreens`; set `DXMT_3DMARK06_LANE` to
+    select a canonical lane, and set
     `DXMT_3DMARK06_RESULT_FILE=<name>.3dr` to append the result file as the
     final positional argument. Most command-line test-selection switches are
     a 3DMark06 Professional Edition facility; an installed Basic or Advanced

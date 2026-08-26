@@ -39,13 +39,13 @@ are documented in `experiments/launchers/README.md`.
 
 - `run_app-d3d9-3dmark05-verify_direct.sh` — direct foreground runner for the
   existing 3DMark05 verify prefix. It enables `DXMT_3DMARK05_DIRECT=1` on the
-  regular 3DMark05 launcher and uses `DXMT_3DMARK05_ARGS` when a manual
-  heuristic run needs different switches. The default run enables only the first
-  benchmark, GT1:
+  regular 3DMark05 launcher and uses the same `DXMT_3DMARK05_LANE` presets as
+  catalogue runs. `DXMT_3DMARK05_ARGS` remains the raw custom escape hatch.
+  The default run enables only the first benchmark, GT1:
   `-gt1 -nosplash -nosysteminfo -noscreens`. GT2/GT3/CPU/feature tests stay
-  disabled unless requested explicitly. Use
-  `DXMT_3DMARK05_ARGS='-gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens'`
-  for the full suite. By default it stages the current dxmt9 x64/x86 PE DLLs
+  disabled unless requested explicitly. Use `DXMT_3DMARK05_LANE=all` for the
+  full suite or `DXMT_3DMARK05_LANE=cpu` for the CPU diagnostics. By default it
+  stages the current dxmt9 x64/x86 PE DLLs
   plus the unix provider into the verify prefix before launch; set
   `DXMT_3DMARK05_STAGE=0` only when intentionally testing the already-installed
   prefix binaries. The direct wrapper supervises the launcher with

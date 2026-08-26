@@ -95,6 +95,7 @@ VALID_WSI_LAYER_ACQUISITION_PATHS = (
 # `debug` profile costs ~4x throughput; a measurement that does not name its
 # profile has already been misread once as a renderer regression.
 EXPERIMENT_PROFILE_PATTERN = re.compile(r"^\[experiment\]\s+profile:\s+(.*)$")
+THREEDMARK_LANE_PATTERN = re.compile(r"^\[3dmark-lane\]\s+(.*)$")
 _DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
@@ -750,6 +751,29 @@ def extract_experiment_profile(log_path: Path) -> dict[str, str]:
     return unavailable
 
 
+def extract_3dmark_lane(log_path: Path) -> dict[str, str] | None:
+    """Return the canonical 3DMark lane resolved by the launcher.
+
+    The launcher is authoritative because it has already applied raw-argument
+    precedence and validated the product-specific preset table. Non-3DMark
+    experiments return ``None`` and therefore do not gain a misleading lane.
+    """
+    if not log_path.exists():
+        return None
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = THREEDMARK_LANE_PATTERN.match(line)
+        if not match:
+            continue
+        fields = dict(PERF_COUNTER_VALUE_PATTERN.findall(match.group(1)))
+        if {"product", "lane", "source"}.issubset(fields):
+            return {
+                "product": f"3dmark{fields['product']}",
+                "name": fields["lane"],
+                "source": fields["source"],
+            }
+    return None
+
+
 def extract_perf_probe_timings(log_path: Path) -> dict[str, int | float | str]:
     if not log_path.exists():
         return {}
@@ -1162,6 +1186,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             # alongside the profile that produced it.
             "profile": extract_experiment_profile(log_path),
         }
+        benchmark_lane = extract_3dmark_lane(log_path)
+        if benchmark_lane is not None:
+            result["benchmark_lane"] = benchmark_lane
         # R-RT-6.2: record the resolved manifest entry and the prefix
         # bootstrap result for diagnostic cross-reference.
         if manifest_entry is not None:
