@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Documentation Index"
 type: root-index
 status: current
-updated: 2026-08-25
-source: docs/perfomance/overview.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
+updated: 2026-08-26
+source: docs/perfomance/overview.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dmark06-gt2.md; docs/perfomance/overview-3dmark06-hdr1.md; docs/perfomance/overview-3dmark06-hdr2.md; docs/perfomance/overview-sfiv.md
 related: docs/perfomance/log.md
 ---
 
@@ -26,6 +26,14 @@ This is the entry point for the `docs/perfomance/` tree.
   comparison limits.
 - [3DMark05 GT3 current baseline](overview-3dmark05-gt3.md) - completed
   frame-sampled baseline and preserved exact V1/V2 comparison.
+- [3DMark06 GT1 current bottleneck](overview-3dmark06-gt1.md) - CPU-led frame
+  with secondary vertex/front-end and ALU pressure.
+- [3DMark06 GT2 current bottleneck](overview-3dmark06-gt2.md) - replay/encode
+  serialization with a mixed secondary GPU workload.
+- [3DMark06 HDR1 current bottleneck](overview-3dmark06-hdr1.md) - PSO
+  provider/cache churn before FP render-target traffic.
+- [3DMark06 HDR2 current bottleneck](overview-3dmark06-hdr2.md) - unowned
+  application/PE/pacing wall time before Metal work.
 - [SFIV Benchmark investigation map](overview-sfiv.md) - D3D9 validation,
   current performance improvement, flicker triage, and historical scene-pass
   GPU stall track.
