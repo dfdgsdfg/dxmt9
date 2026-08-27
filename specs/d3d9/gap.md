@@ -13,7 +13,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 | Area | Status | Evidence / notes |
 |---|---|---|
-| Factory, adapter enum, `CheckDeviceFormat` / conversion | ⚠️ | Functional path exists. **T3 (2026-05-08)**: `CheckDepthStencilMatch` now does real bit-depth compatibility (not unconditional `S_OK`); `CheckDeviceFormatConversion` does real format-pair check (identity + A8R8G8B8↔X8R8G8B8) instead of unconditional `D3DERR_NOTAVAILABLE`; `CheckDeviceFormat` rejects VB/IB rtype with `D3DERR_INVALIDCALL` and downgrades AUTOGENMIPMAP success to `D3DOK_NOAUTOGEN`. Helpers in `core_format_utils.hpp`. PE factory still needs adapter index validation, fullscreen display format strictness, adapter format allowlist, resource type mapping parity. |
+| Factory, adapter enum, `CheckDeviceFormat` / conversion | ⚠️ | Functional path exists. **T3 (2026-05-08)**: `CheckDepthStencilMatch` now does real bit-depth compatibility (not unconditional `S_OK`); `CheckDeviceFormatConversion` does real format-pair check (identity + A8R8G8B8↔X8R8G8B8) instead of unconditional `D3DERR_NOTAVAILABLE`; `CheckDeviceFormat` rejects VB/IB rtype with `D3DERR_INVALIDCALL`. **R-FORMAT-16 (2026-08-27):** supported AUTOGENMIPMAP queries now return `D3D_OK` and use a one-public-level / complete-hidden-Metal-pyramid implementation. Helpers in `core_format_utils.hpp`. PE factory still needs adapter index validation, fullscreen display format strictness, adapter format allowlist, resource type mapping parity. |
 | `GetAdapterIdentifier` | ✅ | `Factory::getAdapterIdentifier()` |
 | `EnumAdapterModes` | ✅ | `Factory::enumAdapterModes()` |
 | `GetAdapterDisplayMode` | ✅ | `Factory::getAdapterDisplayMode()` |

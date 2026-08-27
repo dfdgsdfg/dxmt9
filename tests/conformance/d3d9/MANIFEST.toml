@@ -3203,15 +3203,15 @@ arches = ["x64", "x86"]
 area = "resource-wrappers"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
-acceptance = ["GetDC/ReleaseDC, LOD, filter, and D3DFMT_UNKNOWN failures match Wine oracle. AUTOGENMIPMAP path gracefully degrades to D3DOK_NOAUTOGEN per CheckDeviceFormat — covered as a fallback assertion, not exercised at runtime."]
-status = "partial"
+acceptance = ["GetDC/ReleaseDC, LOD, filter, and D3DFMT_UNKNOWN failures match Wine oracle. Supported AUTOGENMIPMAP formats return D3D_OK, expose one public level, and drive a complete hidden mip pyramid."]
+status = "implemented"
 
 [[case.evidence]]
 lane = "builtin"
 arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing after removing premature SKIP marker; autogen subset gracefully degrades to D3DOK_NOAUTOGEN."
+summary = "Historical 2026-05-24 evidence predates AUTOGEN promotion; current acceptance requires fresh builtin evidence for the real path."
 
 [[case]]
 executable = "d3d9_stateblock_x64.exe"

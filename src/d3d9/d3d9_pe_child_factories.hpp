@@ -41,6 +41,14 @@ IDirect3DStateBlock9 *CreatePeStateBlock(
     D9CStateBlock *, IDirect3DDevice9 *, D3D9PeStateBlockContext * = nullptr,
     D3D9PeDiagnosticObserver * = nullptr,
     StateBlockCaptureDisposition = StateBlockCaptureDisposition::All) noexcept;
+
+// AUTOGEN is an object-local D3D9 semantic state. The device asks for the
+// generation-qualified raw texture only when a currently bound sampler is
+// dirty, then settles it clean after the ordered bridge operation succeeds.
+bool D3D9PeGetDirtyAutogenTexture(
+    IDirect3DBaseTexture9 *, D9CTexture **out) noexcept;
+void D3D9PeSetAutogenTextureClean(IDirect3DBaseTexture9 *) noexcept;
+void D3D9PeMarkSurfaceAutogenDirty(IDirect3DSurface9 *) noexcept;
 IDirect3DSwapChain9Ex *CreatePeSwapChain(
     D9CSwapChain *, IDirect3DDevice9 *, D3D9PePresentationContext * = nullptr,
     D3D9PeDiagnosticObserver * = nullptr, bool = false,

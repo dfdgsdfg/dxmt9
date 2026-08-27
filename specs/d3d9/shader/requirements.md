@@ -176,6 +176,29 @@ GLSL emitter applies the same clamp for the same reason. The clamp
 must respect the per-output precision plan: a `Float` output is
 clamped against `0.0` / `1.0`, a `Half` output against `0.0h` / `1.0h`.
 
+### 2.7 Reciprocal Edge Semantics
+
+**R-CORE-SHADER-2.12** `RCP` lowering MUST preserve the sign of its source.
+The translator MUST NOT clamp the source to a positive epsilon. A zero source
+maps to infinity according to the D3D9 instruction contract.
+
+**R-CORE-SHADER-2.13** `RSQ` lowering MUST take the absolute value of its
+source before the reciprocal square root. It MUST NOT clamp zero to an
+epsilon; a zero source maps to infinity. Both vertex and pixel lowering paths
+must implement the same edge semantics.
+
+**R-CORE-SHADER-2.14** `POW` lowering MUST evaluate `abs(src0)^src1` and
+replicate the scalar result. Both the GPU emitter and the PE software vertex
+interpreter MUST apply the absolute value before exponentiation.
+
+**R-CORE-SHADER-2.15** A pixel-shader `vPos` / `D3DSPR_MISCTYPE` position
+input MUST expose D3D9 integer pixel-center coordinates. Because Metal
+`[[position]]` exposes half-integer pixel centers, the translator MUST subtract
+`(0.5, 0.5)` from `xy` only. It MUST preserve Metal-provided `z` and `w`.
+The Wine `d3d9/visual.c:test_fragment_coords` fractional-position oracle and
+absolute-coordinate probes under viewport, scissor, and MRT state gate this
+conversion.
+
 ---
 
 ## 3. Precision and VSOut Layout
@@ -202,7 +225,10 @@ sufficient for `Half`: a register or output field may be classified `Half`
 only when every reaching write into that value is half-safe and every
 consumer either accepts `Half` or has an explicit boundary cast. If a register
 has mixed `_pp` and non-`_pp` writes and the pass cannot prove component-local
-safety, the whole register must remain `Float`.
+safety, the whole register must remain `Float`. In particular, preserving the
+modifier must not by itself emit an eager `float -> half -> float` destination
+conversion; without a proved `Half` classification, execution remains full
+precision.
 
 ### 3.2 Mandatory Float Regions
 

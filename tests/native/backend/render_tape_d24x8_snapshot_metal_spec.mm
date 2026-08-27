@@ -9,6 +9,7 @@
 #include "dxmt9/dxmt9_blit_encoders.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -301,6 +302,20 @@ std::uint64_t hash(std::span<const std::uint8_t> bytes) {
   return value;
 }
 
+float depthAt(const CanonicalDepth& depth, std::uint32_t x, std::uint32_t y) {
+  check(x < depth.width && y < depth.height,
+        "depth oracle coordinate stays inside the captured extent");
+  float value = 0.0f;
+  const auto offset = static_cast<std::size_t>(y) * depth.pitch +
+                      static_cast<std::size_t>(x) * sizeof(float);
+  std::memcpy(&value, depth.bytes.data() + offset, sizeof(value));
+  return value;
+}
+
+void checkDepthNear(float actual, float expected, std::string_view message) {
+  check(std::abs(actual - expected) <= 0.01f, message);
+}
+
 void testRejectionMatrix(MTLPixelFormat physicalFormat) {
   constexpr std::uint32_t width = 17;
   constexpr std::uint32_t height = 11;
@@ -405,6 +420,14 @@ int main() {
                    captured.height, captured.pitch, captured.bytes.size(),
                    true) == SnapshotStatus::Ready,
           "captured runtime surface passes the exact capability contract");
+    // The source pass clears to 0.271828 and writes 0.812345 only inside the
+    // 9×6 scissor rectangle. This is an independent pixel oracle for the
+    // depth2d<float> read path; byte-exact capture/replay alone could mask a
+    // symmetric read/write mistake.
+    checkDepthNear(depthAt(captured, 0u, 0u), 0.271828f,
+                   "depth2d read returns the clear value outside the patch");
+    checkDepthNear(depthAt(captured, 4u, 3u), 0.812345f,
+                   "depth2d read returns the drawn value inside the patch");
     check(seedDepth(queue, device, destination, writePipeline, depthState,
                     captured),
           "canonical bytes seed a second physical depth surface");

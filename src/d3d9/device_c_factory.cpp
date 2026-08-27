@@ -11,6 +11,7 @@ constexpr uint32_t kD3DFmtA8P8 = 40u;
 constexpr uint32_t kD3DFmtP8 = 41u;
 constexpr uint32_t kD3DUsageRenderTarget = 0x00000001u;
 constexpr uint32_t kD3DUsageDepthStencil = 0x00000002u;
+constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr uint32_t kD3DResourceTypeTexture = 3u;
 constexpr uint32_t kD3DResourceTypeVolumeTexture = 4u;
 constexpr uint32_t kD3DResourceTypeCubeTexture = 5u;
@@ -41,7 +42,8 @@ bool supportedPalettizedTextureQuery(uint32_t d3dFmt, uint32_t usage,
        resourceType != kD3DResourceTypeCubeTexture)) {
     return false;
   }
-  return (usage & (kD3DUsageRenderTarget | kD3DUsageDepthStencil)) == 0;
+  return (usage & (kD3DUsageRenderTarget | kD3DUsageDepthStencil |
+                   kD3DUsageAutoGenMipmap)) == 0;
 }
 
 }  // namespace

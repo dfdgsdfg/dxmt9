@@ -1279,11 +1279,11 @@ clockwise.
    out.position = ndc;
    ```
 
-5. **Half-pixel offset**: D3D9 pixel centers are at half-integer coordinates. Metal
-   follows the convention that pixels are at integer coordinates (like OpenGL ES).
-   For texture sampling with a direct viewport-to-texel mapping, add a half-pixel
-   offset to UV coordinates in the vertex shader when rendering full-screen quads or
-   UI elements.
+5. **Half-pixel offset**: Raster-position conventions differ by stage. D3D9
+   shader-model 3 `vPos` exposes integer pixel centers, while Metal fragment
+   `[[position]]` exposes half-integer centers, so pixel-shader position input
+   lowering subtracts `0.5` from `xy`. Vertex-position fixup remains the separate
+   clip-space conversion described above.
 
 ### 7.4 Texture Coordinate Differences
 

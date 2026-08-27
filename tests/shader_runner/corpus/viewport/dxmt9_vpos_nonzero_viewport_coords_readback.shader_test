@@ -20,5 +20,5 @@ ffff0300 05000051 a00f0000 3c800000 3c800000 00000000 3f800000
 clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-viewport 16 16 32 32
 dxmt9-draw-vs-color-triangle
-probe (40, 32) rgba(0.6328125, 0.5078125, 0.0, 1.0) 1
+probe (40, 32) rgba(0.625, 0.5, 0.0, 1.0) 1
 probe (8, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

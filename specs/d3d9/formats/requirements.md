@@ -117,3 +117,28 @@ depth-bounds test is a performance-only, correctness-neutral
 optimization; reporting it unavailable causes conformant applications to
 disable it and fall back to normal depth testing, so no rendering
 regression results.
+
+**R-FORMAT-15** A shader-visible `INTZ`, `DF16`, or `DF24` resource backed by
+a Metal depth pixel format must use a typed `depth2d<float>` direct shader
+binding for ordinary samples. The scalar Metal result is exposed to D3D9 as
+`float4(depth, 0, 0, 1)`. The active depth-stage mask must participate in
+shader/pipeline identity, and a native depth resource must never enter a
+homogeneous `texture2d<float>` argument-buffer array. ATI FETCH4 is a separate
+compatibility operation: validated GET4 stages retain the direct gather lane
+and do not use `depth2d`, but they remain excluded from the resource array.
+
+**R-FORMAT-16** A supported 2D or cube `D3DUSAGE_AUTOGENMIPMAP` query shall
+return `D3D_OK`, not `D3DOK_NOAUTOGEN`; dynamic combinations and volume or
+surface resource types remain unavailable. The D3D9 object exposes exactly one
+public level while the backend owns a complete hidden mip pyramid. Every successful
+level-0 write marks that pyramid dirty, including CPU unlock, clear,
+render-target draw, `UpdateSurface`, `StretchRect`, and `ColorFill` paths;
+`UpdateTexture` may instead generate the destination pyramid as part of the
+ordered copy operation. Before the next draw samples a dirty texture, all
+earlier replay effects shall complete, the full pyramid shall be regenerated,
+and only then may the sampling draw execute. The dirty-to-clean transition
+occurs only after successful generation.
+
+AUTOGEN creation accepts only `Levels=0` or `Levels=1`, rejects SYSTEMMEM, and
+rejects volume textures. These are creation-time semantic errors and shall be
+rejected on the PE side before a resource crosses the provider boundary.

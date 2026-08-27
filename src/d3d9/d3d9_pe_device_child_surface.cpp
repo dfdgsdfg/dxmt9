@@ -3,6 +3,7 @@
  * IDirect3DVolumeTexture9 (and the inner IDirect3DVolume9 helper). */
 
 #include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_autogen_mipmap.hpp"
 #include "d3d9_pe_child_scopes.hpp"
 #include "d3d9_pe_child_validation.hpp"
 #include "d3d9_pe_validated_object_writer.hpp"
@@ -40,11 +41,13 @@ static_assert(rt_format::X4R4G4B4 == D3DFMT_X4R4G4B4);
 static_assert(rt_format::A8 == D3DFMT_A8);
 static_assert(rt_format::A8B8G8R8 == D3DFMT_A8B8G8R8);
 static_assert(rt_format::X8B8G8R8 == D3DFMT_X8B8G8R8);
+static_assert(rt_format::A16B16G16R16 == D3DFMT_A16B16G16R16);
 static_assert(rt_format::A8P8 == D3DFMT_A8P8);
 static_assert(rt_format::P8 == D3DFMT_P8);
 static_assert(rt_format::L8 == D3DFMT_L8);
 static_assert(rt_format::A8L8 == D3DFMT_A8L8);
 static_assert(rt_format::V8U8 == D3DFMT_V8U8);
+static_assert(rt_format::Q8W8V8U8 == D3DFMT_Q8W8V8U8);
 static_assert(rt_format::L16 == D3DFMT_L16);
 static_assert(rt_format::DXT1 == D3DFMT_DXT1);
 static_assert(rt_format::DXT2 == D3DFMT_DXT2);
@@ -181,6 +184,30 @@ static bool textureIsManaged(D9CTexture *texture) {
   return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) &&
          desc.pool == D3DPOOL_MANAGED;
 }
+
+static bool textureIsAutogen(D9CTexture *texture) {
+  D9CSurfaceDesc desc{};
+  return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) &&
+         (desc.usage & D3DUSAGE_AUTOGENMIPMAP) != 0u;
+}
+
+struct PeAutogenMipmapState {
+  dxmt9::d3d9::pe::AutogenMipmapState value{};
+
+  explicit PeAutogenMipmapState(D9CTexture *texture) noexcept {
+    value.enabled = textureIsAutogen(texture);
+    value.dirty = value.enabled;
+  }
+
+  void markDirty() noexcept {
+    value = dxmt9::d3d9::pe::transitionAutogenMipmap(
+        value, dxmt9::d3d9::pe::AutogenMipmapEvent::RenderTargetWrite);
+  }
+  void settleClean() noexcept {
+    value = dxmt9::d3d9::pe::transitionAutogenMipmap(
+        value, dxmt9::d3d9::pe::AutogenMipmapEvent::GenerationSucceeded);
+  }
+};
 
 static DWORD setTextureLod(D9CTexture *texture, DWORD &lod, DWORD value) {
   if (!textureIsManaged(texture)) {
@@ -789,6 +816,10 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   // owning texture and accept a redundant Unlock with S_OK (cube and
   // volume containers do not — see test_texture_level_surface_unlock_policy).
   bool ownerIsTexture2D_ = false;
+  // Non-owning identity backed by container_'s retained IUnknown reference.
+  // It is used only by the device's recorder-thread-confined AUTOGEN dirty
+  // transition and never crosses the PE/unix boundary.
+  IDirect3DBaseTexture9 *textureContainer_ = nullptr;
   // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
   // surface aliases caller-owned memory; LockRect short-circuits the
   // bridge path and returns userMemory_ + userMemoryPitch_ directly.
@@ -869,6 +900,7 @@ public:
       if (SUCCEEDED(container_->QueryInterface(IID_IDirect3DBaseTexture9,
                                                reinterpret_cast<void **>(&base))) &&
           base) {
+        textureContainer_ = base;
         ownerIsTexture2D_ = (base->GetType() == D3DRTYPE_TEXTURE);
         base->Release();
       }
@@ -898,6 +930,9 @@ public:
   D9CSurface *raw() const { return s_; }
   IDirect3DDevice9 *ownerDevice() const { return device_; }
   bool textureAlias() const { return textureAlias_; }
+  IDirect3DBaseTexture9 *textureContainer() const noexcept {
+    return textureContainer_;
+  }
   const dxmt9::d3d9::pe::SurfaceRef &wireObject() const {
     return wireObject_;
   }
@@ -1195,6 +1230,8 @@ public:
         }
       }
       locked_ = false;
+      if ((lockFlags_ & D3DLOCK_READONLY) == 0u)
+        D3D9PeMarkSurfaceAutogenDirty(this);
       lockBits_ = nullptr;
       lockFlags_ = 0u;
       linearLock_ = false;
@@ -1381,6 +1418,8 @@ public:
       locked_ = false;
     }
     if (SUCCEEDED(hr)) {
+      if ((lockFlags_ & D3DLOCK_READONLY) == 0u)
+        D3D9PeMarkSurfaceAutogenDirty(this);
       lockBits_ = nullptr;
       lockFlags_ = 0u;
       blockLock_ = false;
@@ -1531,6 +1570,7 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   // wrapper handed out by GetSurfaceLevel borrows from here.
   PeLevelSurfaceCache levelSurfaces_{};
   dxmt9::util::ComPrivateData privateData_{};
+  PeAutogenMipmapState autogenState_;
 
 public:
   D3D9TextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
@@ -1540,7 +1580,8 @@ public:
                   int32_t userMemoryPitch = 0)
       : t_(t), device_(device), context_(recorder),
         diagnostics_(diagnostics),
-        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
+        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch),
+        autogenState_(t) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -1566,6 +1607,7 @@ public:
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
+  PeAutogenMipmapState &autogenState() noexcept { return autogenState_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -1666,7 +1708,8 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
-    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
+    if (SUCCEEDED(hr32(dxmt9c_texture_generate_mip_sublevels(t_))))
+      autogenState_.settleClean();
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
@@ -2007,6 +2050,8 @@ public:
         }
       }
       lockBits_ = nullptr;
+      if ((lockFlags_ & D3DLOCK_READONLY) == 0u && level == 0u)
+        autogenState_.markDirty();
       lockFlags_ = 0u;
       linearLock_ = false;
       linearLockLayout_ = {};
@@ -2100,6 +2145,8 @@ public:
       dxmt9DeviceDebugLog("texture_unlock_rect -> hr=0x%08x", (unsigned)hr);
     }
     if (SUCCEEDED(hr)) {
+      if ((lockFlags_ & D3DLOCK_READONLY) == 0u && level == 0u)
+        autogenState_.markDirty();
       if (snapshotStatus ==
           dxmt9::d3d9::RenderTapeFullSnapshotStatus::Required) {
         if (FAILED(textureLevelDesc(t_, level, &snapshotDesc))) {
@@ -2187,13 +2234,14 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   // surface wrapper handed out by GetCubeMapSurface borrows from here.
   PeLevelSurfaceCache levelSurfaces_{};
   dxmt9::util::ComPrivateData privateData_{};
+  PeAutogenMipmapState autogenState_;
 
 public:
   D3D9CubeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
                       D3D9PeSurfaceTextureContext *recorder = nullptr,
                       D3D9PeDiagnosticObserver *diagnostics = nullptr)
       : t_(t), device_(device), context_(recorder),
-        diagnostics_(diagnostics) {
+        diagnostics_(diagnostics), autogenState_(t) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -2219,6 +2267,7 @@ public:
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
+  PeAutogenMipmapState &autogenState() noexcept { return autogenState_; }
 
   bool subresourceIndex(D3DCUBEMAP_FACES face, UINT level, UINT &out) const {
     const UINT mipCount = dxmt9c_texture_get_level_count(t_);
@@ -2324,7 +2373,8 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
-    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
+    if (SUCCEEDED(hr32(dxmt9c_texture_generate_mip_sublevels(t_))))
+      autogenState_.settleClean();
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
@@ -2520,6 +2570,8 @@ public:
       }
     }
     const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, idx));
+    if (SUCCEEDED(hr) && level == 0u)
+      autogenState_.markDirty();
     if (SUCCEEDED(hr) && capture.active) {
       if ((capture.flags & D3DLOCK_READONLY) != 0u) {
         const dxmt9::d3d9::RenderTapeCpuReadControl payload{
@@ -2706,13 +2758,14 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   dxmt9::d3d9::pe::TextureRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
+  PeAutogenMipmapState autogenState_;
 
 public:
   D3D9VolumeTextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
                         D3D9PeSurfaceTextureContext *recorder = nullptr,
                         D3D9PeDiagnosticObserver *diagnostics = nullptr)
       : t_(t), device_(device), context_(recorder),
-        diagnostics_(diagnostics) {
+        diagnostics_(diagnostics), autogenState_(t) {
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -2735,6 +2788,7 @@ public:
   const dxmt9::d3d9::pe::TextureRef &wireObject() const {
     return wireObject_;
   }
+  PeAutogenMipmapState &autogenState() noexcept { return autogenState_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -2831,7 +2885,8 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
-    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
+    if (SUCCEEDED(hr32(dxmt9c_texture_generate_mip_sublevels(t_))))
+      autogenState_.settleClean();
   }
   HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level,
                                          D3DVOLUME_DESC *pD) noexcept override {
@@ -2916,7 +2971,10 @@ public:
   HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
     if (level >= dxmt9c_texture_get_level_count(t_))
       return D3DERR_INVALIDCALL;
-    return unlockTextureBox(t_, level, context_);
+    const HRESULT hr = unlockTextureBox(t_, level, context_);
+    if (SUCCEEDED(hr) && level == 0u)
+      autogenState_.markDirty();
+    return hr;
   }
   HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX *) noexcept override {
     // stub: Wine returns S_OK; dxmt9 uploads dirty regions via the chunk recorder,
@@ -2928,6 +2986,68 @@ public:
 /* =========================================================================
  * Public factory + trusted reference helpers for surface/texture family.
  * ========================================================================= */
+
+namespace {
+
+template <typename Impl>
+Impl *validatedPeTextureImpl(IDirect3DBaseTexture9 *texture) noexcept {
+  auto *impl = dynamic_cast<Impl *>(texture);
+  return impl && static_cast<IDirect3DBaseTexture9 *>(impl) == texture
+             ? impl
+             : nullptr;
+}
+
+template <typename Fn>
+bool withPeAutogenTexture(IDirect3DBaseTexture9 *texture, Fn &&fn) noexcept {
+  if (!texture)
+    return false;
+  if (auto *impl = validatedPeTextureImpl<D3D9TextureImpl>(texture)) {
+    fn(*impl);
+    return true;
+  }
+  if (auto *impl = validatedPeTextureImpl<D3D9CubeTextureImpl>(texture)) {
+    fn(*impl);
+    return true;
+  }
+  if (auto *impl = validatedPeTextureImpl<D3D9VolumeTextureImpl>(texture)) {
+    fn(*impl);
+    return true;
+  }
+  return false;
+}
+
+} // namespace
+
+bool D3D9PeGetDirtyAutogenTexture(
+    IDirect3DBaseTexture9 *texture, D9CTexture **out) noexcept {
+  if (out)
+    *out = nullptr;
+  if (!out)
+    return false;
+  bool dirty = false;
+  withPeAutogenTexture(texture, [&](auto &impl) noexcept {
+    if (impl.autogenState().value.generationRequired()) {
+      *out = impl.raw();
+      dirty = *out != nullptr;
+    }
+  });
+  return dirty;
+}
+
+void D3D9PeSetAutogenTextureClean(IDirect3DBaseTexture9 *texture) noexcept {
+  withPeAutogenTexture(texture, [](auto &impl) noexcept {
+    impl.autogenState().settleClean();
+  });
+}
+
+void D3D9PeMarkSurfaceAutogenDirty(IDirect3DSurface9 *surface) noexcept {
+  auto *impl = dynamic_cast<D3D9SurfaceImpl *>(surface);
+  if (!impl || static_cast<IDirect3DSurface9 *>(impl) != surface)
+    return;
+  withPeAutogenTexture(impl->textureContainer(), [](auto &texture) noexcept {
+    texture.autogenState().markDirty();
+  });
+}
 
 IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,

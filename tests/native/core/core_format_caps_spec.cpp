@@ -139,6 +139,19 @@ void testFormatAndCaps() {
           "AdapterIdentifier::whqlLevel stays 0 on Apple Silicon");
 
   checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8, UsageTexture), D3D_OK, "A8R8G8B8 texture support");
+  checkEq(factory.checkDeviceFormat(0, Format::A16B16G16R16F,
+                                    UsageTexture | UsageRenderTarget |
+                                        UsageAutoGenMipmap),
+          D3D_OK, "RGBA16Float render-target AUTOGEN support");
+  checkEq(factory.checkDeviceFormat(0, Format::DXT1,
+                                    UsageTexture | UsageAutoGenMipmap),
+          D3DERR_NOTAVAILABLE, "compressed AUTOGEN rejects unsupported Metal generation");
+  checkEq(factory.checkDeviceFormat(0, Format::D24S8,
+                                    UsageTexture | UsageAutoGenMipmap),
+          D3DERR_NOTAVAILABLE, "depth AUTOGEN rejects unsupported color pyramid");
+  checkEq(factory.checkDeviceFormat(0, Format::A32B32G32R32F,
+                                    UsageTexture | UsageAutoGenMipmap),
+          D3DERR_NOTAVAILABLE, "non-filterable 32-bit float AUTOGEN rejects");
   checkEq(factory.checkDeviceFormat(0, Format::L8, UsageRenderTarget), D3DERR_NOTAVAILABLE,
           "L8 render-target support");
   checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8,
@@ -365,23 +378,30 @@ void testD32LockableAndQ16W16V16U16Formats() {
 void testMetalDepthBiasConversion() {
   constexpr float kShadowBias = 0.00045f;
   checkNear(dxmt9::convert::toMetalDepthBiasConstant(
-                kShadowBias, WMTPixelFormatDepth16Unorm),
+                kShadowBias, Format::D16, WMTPixelFormatDepth16Unorm),
             kShadowBias * 65536.0f, 0.001f,
             "D16 normalized depth bias converts to Metal units");
   checkNear(dxmt9::convert::toMetalDepthBiasConstant(
-                kShadowBias, WMTPixelFormatDepth24Unorm_Stencil8),
+                kShadowBias, Format::D24S8,
+                WMTPixelFormatDepth24Unorm_Stencil8),
             kShadowBias * 16777216.0f, 0.01f,
             "D24 normalized depth bias converts to Metal units");
   checkNear(dxmt9::convert::toMetalDepthBiasConstant(
-                kShadowBias, WMTPixelFormatDepth32Float_Stencil8),
+                kShadowBias, Format::D32F_LOCKABLE,
+                WMTPixelFormatDepth32Float_Stencil8),
             kShadowBias * 8388608.0f, 0.01f,
             "D32F normalized depth bias converts to Metal units");
   checkNear(dxmt9::convert::toMetalDepthBiasConstant(
-                -kShadowBias, WMTPixelFormatDepth32Float),
+                -kShadowBias, Format::D32F_LOCKABLE,
+                WMTPixelFormatDepth32Float),
             -kShadowBias * 8388608.0f, 0.01f,
             "negative normalized depth bias preserves its sign");
+  checkNear(dxmt9::convert::toMetalDepthBiasConstant(
+                kShadowBias, Format::DF24, WMTPixelFormatDepth32Float),
+            kShadowBias * 16777216.0f, 0.01f,
+            "DF24 keeps logical 24-bit bias units on Depth32Float backing");
   checkEq(dxmt9::convert::toMetalDepthBiasConstant(
-              kShadowBias, WMTPixelFormatBGRA8Unorm),
+              kShadowBias, Format::A8R8G8B8, WMTPixelFormatBGRA8Unorm),
           0.0f, "non-depth formats reject depth bias conversion");
 }
 

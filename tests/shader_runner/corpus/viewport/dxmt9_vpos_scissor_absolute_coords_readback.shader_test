@@ -16,6 +16,6 @@ clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-render-state scissor=on
 dxmt9-scissor 16 16 48 48
 dxmt9-draw-solid-quad
-probe (20, 20) rgba(0.3203125, 0.3203125, 0.0, 1.0) 1
-probe (40, 32) rgba(0.6328125, 0.5078125, 0.0, 1.0) 1
+probe (20, 20) rgba(0.3125, 0.3125, 0.0, 1.0) 1
+probe (40, 32) rgba(0.625, 0.5, 0.0, 1.0) 1
 probe (8, 20) rgba(0.0, 0.0, 0.0, 1.0) 1

@@ -3124,6 +3124,13 @@ public:
 
     HRESULT requestReszDepthResolve() noexcept;
 
+    // Wine's AUTOGEN contract is a small recorder-thread-confined state
+    // machine: rendering/clearing a texture-backed RT marks its hidden mip
+    // pyramid dirty; the next draw that samples it first drains earlier
+    // replay, generates the pyramid, and only then records the draw.
+    HRESULT generateBoundAutogenMipmaps() noexcept;
+    void markBoundRenderTargetsAutogenDirty() noexcept;
+
     /* ── render states ── */
     template<typename HotSetter>
     HRESULT setRenderStateCore(D3DRENDERSTATETYPE state, DWORD value,
@@ -3476,6 +3483,10 @@ public:
             return candidateHr;
         });
         drawSwvpPhase.stop();
+        if (SUCCEEDED(hr)) {
+            const HRESULT mipHr = generateBoundAutogenMipmaps();
+            if (FAILED(mipHr)) return finishPeCall(mipHr);
+        }
         bool appendedDraw = false;
         if (hr == S_OK) {
             dxmt9DeviceDebugLog("device_draw_primitive swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
@@ -3499,6 +3510,7 @@ public:
             appendedDraw = SUCCEEDED(hr);
         }
         if (SUCCEEDED(hr) && appendedDraw) {
+            markBoundRenderTargetsAutogenDirty();
             if (!swvpDraw.vertices.empty()) {
                 clearPendingHotState();
                 recorderState_.peState.maintenance().pendingFvf() = true;
@@ -3555,6 +3567,10 @@ public:
             return candidateHr;
         });
         drawSwvpPhase.stop();
+        if (SUCCEEDED(hr)) {
+            const HRESULT mipHr = generateBoundAutogenMipmaps();
+            if (FAILED(mipHr)) return finishPeCall(mipHr);
+        }
         bool appendedDraw = false;
         if (hr == S_OK) {
             dxmt9DeviceDebugLog("device_draw_indexed_primitive swvp_fallback device=%p fvf=0x%x stride=%u vertexBytes=%zu indexBytes=%zu",
@@ -3584,6 +3600,7 @@ public:
             appendedDraw = SUCCEEDED(hr);
         }
         if (SUCCEEDED(hr) && appendedDraw) {
+            markBoundRenderTargetsAutogenDirty();
             if (!swvpDraw.vertices.empty()) {
                 clearPendingHotState();
                 recorderState_.peState.maintenance().pendingFvf() = true;

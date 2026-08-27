@@ -62,6 +62,18 @@ void D3D9DeviceImpl::markRenderTapeInvalidOnce(
         peCaptureState_->renderTapeRegistry.invalidGeneration = object->identity.generation;
         peCaptureState_->renderTapeRegistry.invalidObjectId = object->identity.objectId;
     }
+    dxmt9DeviceInfoLog(
+        "render_tape_capture registry_invalid reason=%s kind=%u generation=%u "
+        "object_id=%llu subresource=%u format=%u width=%u height=%u pitch=%d "
+        "bytes=%llu",
+        reason ? reason : "unknown",
+        peCaptureState_->renderTapeRegistry.invalidKind,
+        peCaptureState_->renderTapeRegistry.invalidGeneration,
+        static_cast<unsigned long long>(
+            peCaptureState_->renderTapeRegistry.invalidObjectId),
+        subresource, diagnostic.format, diagnostic.width, diagnostic.height,
+        diagnostic.pitch,
+        static_cast<unsigned long long>(diagnostic.bytes));
 }
 
 RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(

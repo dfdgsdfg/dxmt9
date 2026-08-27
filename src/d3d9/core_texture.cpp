@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <span>
 #include <string>
@@ -140,10 +141,6 @@ void Texture::unlockRect(u32 subresource) {
   if (subresource < levels_.size()) {
     levels_[subresource].dirty = true;
     syncLevelToBackend(subresource);
-    if ((desc_.usage & UsageAutoGenMipmap) != 0 &&
-        mipLevelForSubresource(subresource) == 0) {
-      static_cast<void>(generateMipSubLevels());
-    }
   }
   locked_ = false;
 }
@@ -235,6 +232,17 @@ HResult Texture::generateMipSubLevels() {
     return D3DERR_INVALIDCALL;
   }
 
+  // AUTOGEN has a deliberately split topology: D3D9 exposes only level 0,
+  // while the Metal TextureRecord owns the complete hidden pyramid. Generate
+  // that physical chain before consulting the public level count, and do not
+  // synthesize inaccessible CPU-shadow levels.
+  if ((desc_.usage & UsageAutoGenMipmap) != 0u) {
+    if (backend_ && handle_) {
+      return backend_->generateTextureMipSublevels(handle_);
+    }
+    return D3D_OK;
+  }
+
   const u32 mipLevels = levelCount();
   if (mipLevels <= 1) {
     return D3D_OK;
@@ -302,7 +310,8 @@ void Texture::syncLevelToBackend(u32 subresource) {
   }
   if (const auto wanted = detail::textureDumpHandle();
       wanted && *wanted == handle_.value) {
-    const auto path = (std::filesystem::path(detail::textureDumpDir()) /
+    const auto dumpDir = std::filesystem::path(detail::textureDumpDir());
+    const auto path = (dumpDir /
                        ("dxmt9_tex_" + std::to_string(handle_.value) +
                         "_subresource_" + std::to_string(subresource) + ".bmp"))
                           .string();
@@ -321,6 +330,30 @@ void Texture::syncLevelToBackend(u32 subresource) {
           "format=%u size=%ux%u pitch=%u",
           handle_.value, subresource, static_cast<unsigned>(desc_.format),
           storage.width, storage.height, storage.pitch);
+    }
+    const auto rawPath =
+        dumpDir /
+        ("dxmt9_tex_" + std::to_string(handle_.value) +
+         "_subresource_" + std::to_string(subresource) + "_" +
+         std::to_string(storage.width) + "x" +
+         std::to_string(storage.height) + "x" +
+         std::to_string(storage.depth) + "_pitch" +
+         std::to_string(storage.pitch) + "_slice" +
+         std::to_string(storage.slicePitch) + ".bin");
+    std::error_code ec;
+    std::filesystem::create_directories(rawPath.parent_path(), ec);
+    std::ofstream raw(rawPath, std::ios::binary | std::ios::trunc);
+    raw.write(reinterpret_cast<const char*>(storage.bytes.data()),
+              static_cast<std::streamsize>(storage.bytes.size()));
+    if (raw.good()) {
+      detail::emitRenderTrace(
+          "texture raw dump handle=0x%llx subresource=%u path=%s "
+          "format=%u size=%ux%ux%u pitch=%u slicePitch=%u bytes=%zu",
+          static_cast<unsigned long long>(handle_.value), subresource,
+          rawPath.string().c_str(),
+          static_cast<unsigned>(desc_.format), storage.width, storage.height,
+          storage.depth, storage.pitch, storage.slicePitch,
+          storage.bytes.size());
     }
   }
   backend_->uploadTextureLevel(

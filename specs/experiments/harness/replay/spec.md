@@ -287,6 +287,20 @@ anything — buffer 0 and buffer 3 do not conflict with this domain's
 own reserved vertex-buffer slots 1 (stream0) and 5 (`DrawVolatile`,
 `setVertexBytes:...atIndex:5`).
 
+The replay-side `DrawVolatile` mirrors the production struct extent,
+including `streamInstanceDivisors[16]`, and file-backed cbuf allocations are
+zero-padded to 16-byte alignment. These are binding-storage obligations, not
+captured semantic bytes: the manifest retains the exact authored payload
+length while the Metal buffer is large enough for the dumped MSL argument ABI
+(R-HARN-REPLAY-5.4).
+
+The generated encoder also sets `MTLWindingClockwise`, matching the production
+`frontFaceWinding()` default before the captured cull mode is applied. This is
+part of the replay state contract; Metal's default winding is not used.
+The captured cull value is already a `WMTCullMode` observer value
+(`0=None`, `1=Front`, `2=Back`); replay does not run D3D9-to-Metal cull
+conversion a second time.
+
 `transform_msl` raises when neither shape is found for a stage
 (§2, `load_manifest`'s sibling failure-naming pattern). No third shape
 is declared or handled; per R-HARN-REPLAY-5.3, recognizing one would
@@ -416,6 +430,12 @@ tell what the contract is protecting against.
    `render_source()` bakes into the generated `.mm` the same record
    `prepare()` writes to the summary, so the artifact cannot name a
    format the replay did not render with.
+   The declared color set now also includes A16B16G16R16F
+   (`core::Format` 11) as `MTLPixelFormatRGBA16Float`, which is the
+   production attachment shape captured by 3DMark06 HDR1 water draws.
+   Its readback uses an eight-byte row pitch and converts half-float
+   RGB to the PPM oracle; the four-byte UNORM readback path is not
+   reused for this attachment.
 
 3. **Fixed in `36a41ad5` (defect 4) — every replay lane rendered
    fully black.** All four lanes captured during the vertex-remap

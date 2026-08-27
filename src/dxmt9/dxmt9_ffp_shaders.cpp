@@ -1023,7 +1023,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // alias block re-binds the `tex<stage>` / `samp<stage>` names off the
   // argbuf so every downstream sample site is byte-identical.
   const bool argbufResourceArray =
-      argbufHybrid && context.argbufResourceArray && hasTextureParams;
+      argbufHybrid && context.argbufResourceArray && hasTextureParams &&
+      context.sampledDepthTextureMask == 0u && context.fetch4SamplerMask == 0u;
   // R-BACK-13.1 — when this is the tile-FFP base-colour variant, the fog
   // blend and the alpha-test discard are NOT emitted here; the tile kernel
   // (makeFfpTilePixelSource) applies them over the rasterized base colour in
@@ -1117,7 +1118,8 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
-      // FFP textures are always texture2d<float>; alias each active stage.
+      // Color FFP textures use the homogeneous argbuf texture2d ABI. Depth
+      // stages are excluded from this lane by argbufResourceArray above.
       for (size_t i = 0; i < sampledStages.size(); ++i) {
         const size_t stage = sampledStages[i];
         out << "  texture2d<float> tex" << stage << " = abuf.textures["
@@ -1136,7 +1138,10 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         if (i != 0) {
           out << ", ";
         }
-        out << "texture2d<float> tex" << stage << " [[texture(" << stage
+        const bool depthTexture =
+            (context.sampledDepthTextureMask & (1u << stage)) != 0u;
+        out << (depthTexture ? "depth2d<float> tex" : "texture2d<float> tex")
+            << stage << " [[texture(" << stage
             << ")]], sampler samp" << stage << " [[sampler(" << stage << ")]]";
       }
       if (emitLodBias) {
@@ -1157,7 +1162,10 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         if (i != 0) {
           out << ", ";
         }
-        out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
+        const bool depthTexture =
+            (context.sampledDepthTextureMask & (1u << stage)) != 0u;
+        out << (depthTexture ? "depth2d<float> tex" : "texture2d<float> tex")
+            << stage << " [[texture(" << stage << ")]], sampler samp" << stage
             << " [[sampler(" << stage << ")]]";
       }
       if (emitLodBias) {
@@ -1219,7 +1227,14 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     return s.str();
   };
   const auto sampleExpr = [&](size_t stage, std::string coord) {
-    if (context.forceTextureWhiteForDebug) {
+    const u32 whiteMask = context.forceTextureWhiteSamplerMaskForDebug;
+    const bool forceTextureWhite = context.forceTextureWhiteForDebug &&
+        (whiteMask == 0u ||
+         (stage < kMaxTextureStages && (whiteMask & (1u << stage)) != 0u));
+    if (forceTextureWhite ||
+        (context.forceSampledDepthWhiteForDebug &&
+         stage < kMaxTextureStages &&
+         (context.sampledDepthTextureMask & (1u << stage)) != 0u)) {
       return std::string("float4(1.0f)");
     }
     std::string sample;
@@ -1232,6 +1247,11 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     } else {
       sample = "tex" + std::to_string(stage) + ".sample(samp" +
                std::to_string(stage) + ", " + coord + biasArg(stage) + ")";
+      if ((context.sampledDepthTextureMask & (1u << stage)) != 0u) {
+        // Metal depth textures return a scalar; D3D9 texture operations expose
+        // a float4 register value, so widen before the fixed-function combine.
+        sample = "float4(" + sample + ", 0.0f, 0.0f, 1.0f)";
+      }
     }
     if ((context.x8AlphaOneTextureMask & (1u << stage)) != 0u) {
       sample = "dxmt9_x8_alpha_one(" + sample + ")";

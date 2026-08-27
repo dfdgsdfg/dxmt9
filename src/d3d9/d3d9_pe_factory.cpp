@@ -584,6 +584,20 @@ public:
                                  (unsigned)rtype);
             return D3DERR_INVALIDCALL;
         }
+        // AUTOGEN is a 2D/cube texture capability. Wine rejects the
+        // DYNAMIC+AUTOGEN combination and volume/surface resource queries;
+        // volume texture creation is rejected by the matching PE creation
+        // validator as well.
+        if ((usage & D3DUSAGE_AUTOGENMIPMAP) != 0u) {
+            if ((usage & D3DUSAGE_DYNAMIC) != 0u ||
+                (rtype != D3DRTYPE_TEXTURE &&
+                 rtype != D3DRTYPE_CUBETEXTURE)) {
+                dxmt9FactoryDebugLog(
+                    "CheckDeviceFormat -> unsupported AUTOGEN usage/rtype usage=0x%x rtype=%u",
+                    (unsigned)usage, (unsigned)rtype);
+                return D3DERR_NOTAVAILABLE;
+            }
+        }
         /* vendor_policy_fetch4_caps: sampleable-depth (USAGE_DEPTHSTENCIL on
          * a TEXTURE resource) for D24S8 must report NOTAVAILABLE so apps
          * fall off the FETCH4 fast path. dxmt9 does not implement
@@ -601,15 +615,10 @@ public:
         }
         HRESULT hr = hr32(dxmt9c_factory_check_device_format2(
             f_, adapter, (uint32_t)fmt, usage, (uint32_t)rtype));
-        /* D3DUSAGE_AUTOGENMIPMAP is informational: when the underlying
-         * format is otherwise supported but we cannot drive HW mipmap
-         * autogen, return D3DOK_NOAUTOGEN (a SUCCESS code) so the app
-         * knows to fall back to manual mipmap generation. dxmt9 currently
-         * has no autogen path, so any successful AUTOGENMIPMAP query is
-         * downgraded. See Wine test_check_device_format autogen loop. */
-        if (SUCCEEDED(hr) && (usage & D3DUSAGE_AUTOGENMIPMAP)) {
-            hr = D3DOK_NOAUTOGEN;
-        }
+        /* A successful AUTOGENMIPMAP query is real support: the public
+         * texture exposes level 0 while the unix provider allocates and
+         * generates the complete hidden Metal mip pyramid. Unsupported
+         * format/usage combinations retain the provider's NOTAVAILABLE. */
         dxmt9FactoryDebugLog("CheckDeviceFormat -> hr=0x%08x", (unsigned)hr);
         return hr;
     }

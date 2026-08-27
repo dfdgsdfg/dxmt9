@@ -245,13 +245,19 @@ class MiniReplayScriptTests(unittest.TestCase):
         }), encoding="utf-8")
         return manifest, output_dir
 
-    def write_texture_sidecar_fixture(self, root: Path) -> Path:
+    def write_texture_sidecar_fixture(self, root: Path, *, include_snorm: bool = False) -> Path:
         texture_dir = root / "textures"
         texture_dir.mkdir()
-        for handle, stage, value in (
-            ("0x200000100000001", 0, b"\x7f"),
-            ("0x200000100000003", 3, b"\x40"),
-        ):
+        entries = [
+            ("0x200000100000001", 0, b"\x7f", 10, "L8"),
+            ("0x200000100000003", 3, b"\x40", 10, "L8"),
+        ]
+        if include_snorm:
+            entries.append((
+                "0x20000010000000f", 5, b"\x10\x20\x30\x7f",
+                72, "Q8W8V8U8",
+            ))
+        for handle, stage, value, pixel_format, format_name in entries:
             bin_name = f"texture-h{handle}-seq60-enc2-fragment{stage}-linear-slice0-level0.bin"
             json_name = f"texture-h{handle}-seq60-enc2-fragment{stage}-linear.json"
             texture_dir.joinpath(bin_name).write_bytes(value)
@@ -265,10 +271,10 @@ class MiniReplayScriptTests(unittest.TestCase):
                 "srgb": 0,
                 "shaderReadView": 1,
                 "format": 22,
-                "formatName": "L8",
+                "formatName": format_name,
                 "type": 0,
-                "storageMetalPixelFormat": 10,
-                "shaderMetalPixelFormat": 10,
+                "storageMetalPixelFormat": pixel_format,
+                "shaderMetalPixelFormat": pixel_format,
                 "width": 1,
                 "height": 1,
                 "depth": 1,
@@ -279,9 +285,9 @@ class MiniReplayScriptTests(unittest.TestCase):
                     "width": 1,
                     "height": 1,
                     "depth": 1,
-                    "rowBytes": 1,
-                    "bytesPerImage": 1,
-                    "byteCount": 1,
+                    "rowBytes": len(value),
+                    "bytesPerImage": len(value),
+                    "byteCount": len(value),
                     "path": bin_name,
                 }],
             }), encoding="utf-8")
@@ -311,6 +317,8 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["draw_order"], "original")
             self.assertEqual(summary["primitive_order"], "original")
             self.assertFalse(summary["force_fragment_primitive_id"])
+            self.assertFalse(summary["disable_cull"])
+            self.assertFalse(summary["disable_depth"])
             self.assertEqual(summary["depth_clear"], 1.0)
             self.assertIsNone(summary["depth_input"])
             self.assertIsNone(summary["color_output"])
@@ -341,13 +349,20 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertNotIn("pass.stencilAttachment.texture = depth;", objc)
             self.assertIn("pass.depthAttachment.loadAction = MTLLoadActionClear;", objc)
             self.assertIn("pass.depthAttachment.clearDepth = 1;", objc)
+            self.assertIn("[encoder setFrontFacingWinding:MTLWindingClockwise];", objc)
+            self.assertIn("case 1: return MTLCullModeFront;", objc)
+            self.assertIn("case 2: return MTLCullModeBack;", objc)
             self.assertIn("static bool writePpm(const char* path,", objc)
             self.assertIn("DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH", objc)
             self.assertIn("copyFromTexture:color", objc)
+            self.assertIn("mini replay command buffer failed", objc)
             self.assertIn("destinationBytesPerRow:4096", objc)
             self.assertIn("const char* vsConstsPath;", objc)
             self.assertIn("bufferFromFileOrDefault(device, draw.vsConstsPath, vsConsts)", objc)
             self.assertIn("const char* extraStreamPaths[16];", objc)
+            self.assertIn("unsigned streamInstanceDivisors[16];", objc)
+            self.assertIn("const NSUInteger length = ([data length] + 15u)", objc)
+            self.assertIn("DrawVolatile dv = {};", objc)
             self.assertIn("draw.stream1.bin", objc)
             self.assertIn("[encoder setVertexBuffer:dummyVertexStream offset:0 atIndex:6];", objc)
             self.assertIn("[encoder setFragmentTexture:whiteTexture atIndex:0];", objc)
@@ -413,6 +428,153 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("draw.fragmentTextures[3]", objc)
             self.assertIn("textureInputs[textureIndex] : whiteTexture", objc)
             self.assertNotIn("[encoder setFragmentTexture:whiteTexture atIndex:0];", objc)
+
+    def test_texture_input_accepts_q8w8v8u8_snorm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            texture_dir = self.write_texture_sidecar_fixture(root, include_snorm=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--texture-input-dir",
+                    str(texture_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(
+                (output_dir / "mini-replay-summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["texture_input_count"], 3)
+            self.assertIn(
+                "MTLPixelFormatRGBA8Snorm",
+                (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_hdr_color_attachment_uses_rgba16float(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["draws"][0]["attachments"]["colors"][0]["format"] = 11
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(
+                (output_dir / "mini-replay-summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                summary["attachment_formats"]["color"]["metal_pixel_format"],
+                "MTLPixelFormatRGBA16Float",
+            )
+            self.assertIn(
+                "psoDesc.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;",
+                (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                    encoding="utf-8"
+                ),
+            )
+            objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("destinationBytesPerRow:8192", objc)
+            self.assertIn("8192, 8,\n                    false, true", objc)
+
+    def test_texture_lod_diagnostic_uses_selected_stage_and_mip_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--force-fragment-texture-lod",
+                    "0",
+                    "--sampler-mip-filter",
+                    "linear",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(
+                (output_dir / "mini-replay-summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["force_fragment_texture_lod"], 0)
+            self.assertEqual(summary["texture_coordinate"], "xy")
+            self.assertEqual(summary["sampler_mip_filter"], "linear")
+            self.assertIn(
+                "tex0.calculate_clamped_lod(samp0, in.texcoord0.xy)",
+                (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "samplerDesc.mipFilter = MTLSamplerMipFilterLinear;",
+                (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_texture_alpha_diagnostic_uses_selected_coordinate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, output_dir = self.write_manifest_fixture(root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    str(manifest),
+                    "--output-dir",
+                    str(output_dir),
+                    "--force-fragment-texture-alpha",
+                    "0",
+                    "--texture-coordinate",
+                    "zw",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(
+                (output_dir / "mini-replay-summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["force_fragment_texture_alpha"], 0)
+            self.assertEqual(summary["texture_coordinate"], "zw")
+            self.assertIn(
+                "tex0.sample(samp0, in.texcoord0.zw).a",
+                (output_dir / "dxmt9_fs.replay.metal").read_text(encoding="utf-8"),
+            )
 
     def test_force_fragment_primitive_id_rewrites_fragment_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -506,7 +668,7 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertEqual(summary["color_output"], str(color_output))
             self.assertIn("failed to open color output", objc)
             self.assertIn("writePpm(colorOutputPath, pixels, 1024, 768,", objc)
-            self.assertIn("4096, true", objc)
+            self.assertIn("4096, 4,\n                    true, false", objc)
 
     def test_trim_vsout_to_fs_reads_removes_unread_replay_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

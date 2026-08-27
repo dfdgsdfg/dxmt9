@@ -73,7 +73,7 @@ namespace dxmt9::archive_prewarm {
 // drift never reads from a stale archive. Keep this in step with
 // pipeline::kShaderEmitterVersion / kShaderSourceLayoutVersion when those
 // source-identity fields change the generated MSL contract.
-inline constexpr std::uint32_t kArchiveAbiVersion = 4;
+inline constexpr std::uint32_t kArchiveAbiVersion = 6;
 
 // R-BACK-3.8 — prewarm mode selection.
 enum class Mode {

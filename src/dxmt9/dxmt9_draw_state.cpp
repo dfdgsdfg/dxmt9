@@ -470,10 +470,27 @@ SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state) {
                           ? 0.0f
                           : std::bit_cast<f32>(rawBias);
   }
+  const auto probePs = debug::probeForceSamplerMipNonePixelShaderHash();
+  const auto probeStage = debug::probeForceSamplerMipNoneStage();
+  const auto probeBias = debug::probeForceSamplerLodBias();
+  if (probePs.has_value() && probeStage.has_value() && probeBias.has_value() &&
+      *probeStage < core::kMaxTextureStages && state.hasShaderContext() &&
+      state.shaderContext().pixelShader.hash == *probePs) {
+    out.bias[*probeStage] = static_cast<f32>(*probeBias);
+  }
   return out;
 }
 
 bool anySamplerLodBiasNonzero(core::FlatDrawStateView state) {
+  const auto probePs = debug::probeForceSamplerMipNonePixelShaderHash();
+  const auto probeStage = debug::probeForceSamplerMipNoneStage();
+  const auto probeBias = debug::probeForceSamplerLodBias();
+  if (probePs.has_value() && probeStage.has_value() && probeBias.has_value() &&
+      *probeStage < core::kMaxTextureStages && *probeBias != 0 &&
+      state.hasShaderContext() &&
+      state.shaderContext().pixelShader.hash == *probePs) {
+    return true;
+  }
   // PSO-variant gate predicate (gap_d3d9 B.3): single source of truth shared by
   // the PSO key (emit) and the slot-4 encoder bind. True iff some sampler
   // stage's SAMP_MIPMAP_LOD_BIAS DWORD bit-casts to a non-zero float. Reads the

@@ -53,10 +53,6 @@ class WsiQuiescenceScope {
   dxmt9::Device* device_;
 };
 
-std::optional<u32> parseEnvU32Auto(const char *name) {
-  return dxmt9::util::getenvU32Auto(name);
-}
-
 std::string getenvString(const char *name) {
   return dxmt9::util::getenvString(name);
 }
@@ -143,8 +139,8 @@ bool renderTraceEnabled() {
   return enabled;
 }
 
-std::optional<u32> textureDumpHandle() {
-  static const auto value = parseEnvU32Auto("DXMT_DUMP_TEXTURE_HANDLE");
+std::optional<u64> textureDumpHandle() {
+  static const auto value = dxmt9::util::getenvU64Auto("DXMT_DUMP_TEXTURE_HANDLE");
   return value;
 }
 

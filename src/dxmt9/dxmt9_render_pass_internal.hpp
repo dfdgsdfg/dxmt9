@@ -74,6 +74,7 @@ inline float metalDepthBiasForDrawState(
   }
   return convert::toMetalDepthBiasConstant(
       normalizedBias,
+      surface->desc.format,
       convert::toPixelFormat(surface->desc.format, ctx.limits));
 }
 

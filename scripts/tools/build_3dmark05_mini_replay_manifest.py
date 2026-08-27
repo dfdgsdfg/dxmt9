@@ -21,6 +21,9 @@ from typing import Any
 from analyze_shader_dumps import parse_vsout_fields, stage_in_read_fields
 
 
+MAX_FRAGMENT_SAMPLERS = 16
+
+
 def as_int(value: Any) -> int:
     try:
         text = str(value)
@@ -315,7 +318,7 @@ def selected_payloads(
 
 def texture_metadata(payload: dict[str, str]) -> list[dict[str, Any]]:
     textures: list[dict[str, Any]] = []
-    for stage in range(8):
+    for stage in range(MAX_FRAGMENT_SAMPLERS):
         handle = payload.get(f"texture{stage}_handle", "")
         if as_int(handle) == 0:
             continue

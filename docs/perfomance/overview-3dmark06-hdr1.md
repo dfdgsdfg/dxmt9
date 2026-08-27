@@ -4,8 +4,8 @@ workload: 3DMark06 HDR1
 title: "3DMark06 HDR1 Performance — Current Bottleneck"
 type: root-overview
 status: current
-updated: 2026-08-26
-source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-hdr1-ui-r4-20260826; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/analysis/frame1200-counters-xcode.csv
+updated: 2026-08-27
+source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-hdr1-ui-r4-20260826; experiments/output/app-d3d9-3dmark06-hdr1-autogen-fix-r115-20260827; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/analysis/frame1200-counters-xcode.csv
 related: docs/perfomance/overview-3dmark06-hdr2.md; docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dmark06-gt2.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md
 ---
 
@@ -15,6 +15,17 @@ related: docs/perfomance/overview-3dmark06-hdr2.md; docs/perfomance/overview-3dm
 > bottleneck.** Floating-point render-target transitions and attachment
 > traffic are real secondary costs, but optimizing render passes before the
 > PSO path would target the wrong owner.
+
+> **Correctness addendum (2026-08-27):** the former angle-dependent water
+> crop/checker pattern was stale reflection mips, not a shader or sampler-LOD
+> defect. The PE factory advertised `D3DOK_NOAUTOGEN`, so 3DMark created an
+> explicit 11-level fallback texture but updated only level 0. R-FORMAT-16 now
+> exposes the required one-level D3D9 object over a complete hidden Metal
+> pyramid and regenerates it after ordered level-0 writes before sampling.
+> The `hdr1-autogen-fix-r115` perf wild run completed 2,820 Presents with a
+> clean scene capture and zero Metal command-buffer errors, chunk rejects, or
+> missing-pipeline draws. The short black interval also occurs on the WineD3D
+> control and is benchmark scene sequencing, not this defect.
 
 ## Measurement Contract
 
@@ -46,6 +57,9 @@ The 2026-08-26 measurement used the Apple M1 8-core GPU, Sikarugir-CX 24.0.7,
 | GPU command buffers | `10.969ms/present` |
 
 The counter-enabled FPS is only `0.6%` below observer-free throughput.
+These 2026-08-26 throughput values predate the R-FORMAT-16 correctness fix and
+must not be used as a post-fix promotion baseline without a fresh official
+result run.
 
 ## PSO And Command Shape
 

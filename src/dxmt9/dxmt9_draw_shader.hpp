@@ -26,6 +26,12 @@ struct ShaderSourceContext {
   core::ShaderRef pixelShader{};
   std::array<bool, core::kMaxTextures> textures{};
   std::array<core::TextureType, core::kMaxTextures> textureTypes{};
+  // Fragment sampler stages whose bound D3D9 resource is a depth-as-texture
+  // format (DF16/DF24/INTZ).  These stages use Metal's depth2d<float>
+  // declaration and scalar sample result, which the emitter widens back to
+  // the D3D9 float4 contract.  The mask is resolved from the pool at PSO
+  // construction time; zero is the ordinary color-texture path.
+  std::uint32_t sampledDepthTextureMask = 0;
   std::uint32_t sampleCount = 1;
   std::uint32_t clipPlaneMask = 0;
   bool unboundTextureFallback = false;
@@ -109,6 +115,13 @@ struct ShaderSourceContext {
   // generated fragment shaders keep their normal body shape but replace texture
   // sample results with float4(1), isolating sample/texture source effects.
   bool forceTextureWhiteForDebug = false;
+  // Zero keeps the historical all-sampler white probe. Otherwise only the
+  // named sampler stages are substituted.
+  std::uint32_t forceTextureWhiteSamplerMaskForDebug = 0u;
+  // Diagnostic sampled-depth source classifier. Unlike the broad white-texture
+  // probe, this replaces only stages named by sampledDepthTextureMask and keeps
+  // all material/color texture samples intact.
+  bool forceSampledDepthWhiteForDebug = false;
   // Pair-local VSOut layout selected from fragment-input liveness when
   // DXMT9_TRIM_UNUSED_VARYINGS is enabled. Full layout by default.
   shaders::VSOutLayout vsOutLayout{};

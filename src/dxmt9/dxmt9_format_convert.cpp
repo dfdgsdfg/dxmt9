@@ -218,9 +218,19 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits, b
 }
 
 float toMetalDepthBiasConstant(float normalizedBias,
-                               WMTPixelFormat depthFormat) {
+                               Format logicalDepthFormat,
+                               WMTPixelFormat metalDepthFormat) {
+  // DF24 is a fixed 24-bit D3D9 vendor format even though Metal has no
+  // sampleable Depth24 texture and therefore backs it with Depth32Float.
+  // Applications choose their normalized bias against the advertised DF24
+  // precision, so using the physical float format's 2^23 unit would halve
+  // the requested offset and reintroduce shadow acne.
+  if (logicalDepthFormat == Format::DF24) {
+    return normalizedBias * 16777216.0f;
+  }
+
   float scale = 0.0f;
-  switch (depthFormat) {
+  switch (metalDepthFormat) {
     case WMTPixelFormatDepth16Unorm:
       scale = 65536.0f;
       break;

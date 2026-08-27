@@ -37,15 +37,20 @@ using u64 = std::uint64_t;
 // Shader-source identity that is orthogonal to D3D9 input state. Bump the
 // emitter/layout versions when MSL text or host-visible source layout changes;
 // debugEnvKey covers source-affecting env toggles for the current process.
+// v6: D3D9 RCP/RSQ preserve signed/zero edge semantics without epsilon clamps.
+// v5: D3DSPDM_PARTIALPRECISION remains decoded metadata but no longer forces
+// an eager float4(half4(...)) destination conversion.
+// v4: depth-as-texture fragment resources use Metal depth2d declarations and
+// scalar-to-float4 sample widening (DF16/DF24/INTZ).
 // v3: H228 single-variant alpha test — the fragment alpha-test tail reads the
 // per-draw FsVolatile immediate at fragment buffer 5 (new prelude struct +
 // entry-point param) instead of FfpPsConsts, and the alpha-test variant-key
 // bit is gone.
 // Debug-env schema v3 retires four rejected translated-VS/VSOut diagnostic
 // axes; the remaining key covers only live source-affecting env surfaces.
-inline constexpr u32 kShaderEmitterVersion = 3u;
+inline constexpr u32 kShaderEmitterVersion = 6u;
 inline constexpr u32 kShaderSourceLayoutVersion = 3u;
-inline constexpr u32 kShaderDebugEnvSchemaVersion = 3u;
+inline constexpr u32 kShaderDebugEnvSchemaVersion = 4u;
 
 struct BlendAttachmentKey {
   bool blendingEnabled = false;
@@ -103,6 +108,9 @@ struct ShaderVariantKey {
   u64 debugEnvKey = 0;
   bool textured = false;
   u32 textureMask = 0;
+  // Fragment stages bound to DF16/DF24/INTZ depth resources. This changes the
+  // Metal resource declaration and therefore is part of PSO identity.
+  u32 sampledDepthTextureMask = 0;
   bool linear = false;
   bool clipPlanes = false;
   // H224 — fragment fog-tail PSO-variant gate. True iff the resolved draw
@@ -212,6 +220,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool disableAlphaTest,
                                 bool disableFog,
                                 bool forceTextureWhite,
+                                u32 forceTextureWhiteSamplerMask,
+                                bool forceSampledDepthWhite,
                                 std::string_view fragmentMode,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,
@@ -562,6 +572,26 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
 u32 fetch4SamplerMaskForDraw(const resources::Pool& pool,
                              core::FlatDrawStateView state,
                              u32 activeFragmentTextureMask) noexcept;
+
+// Resolve depth-as-texture fragment stages. Only ordinary 2D depth resources
+// are admitted to the depth2d lane; unsupported resource shapes remain on the
+// legacy direct lane rather than being misdeclared. FETCH4 stages are excluded
+// because depth2d gather support is not a validated Metal contract.
+u32 sampledDepthTextureMaskForDraw(const resources::Pool& pool,
+                                   core::FlatDrawStateView state,
+                                   u32 activeFragmentTextureMask) noexcept;
+u32 sampledDepthTextureMaskForDraw(const resources::Pool& pool,
+                                   core::FlatDrawStateView state,
+                                   u32 activeFragmentTextureMask,
+                                   u32 fetch4SamplerMask) noexcept;
+
+// The slot-30 resource-array ABI has one texture2d<float> descriptor shape.
+// Reject missing/non-2D bound resources so mixed arrays cannot disagree with
+// the shader emitter's direct-binding fallback.
+bool resourceArrayTextureBindingEligibleForDraw(
+    const resources::Pool& pool,
+    core::FlatDrawStateView state,
+    u32 activeFragmentTextureMask) noexcept;
 
 // R-BACK-13.* — per-pass tile-shader FFP classifier/selector. Encapsulates
 // the selection flow described in spec.md §13.1. Pure value transform; no

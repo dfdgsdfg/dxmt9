@@ -487,6 +487,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*disableAlphaTest=*/false,
       /*disableFog=*/false,
       /*forceTextureWhite=*/false,
+      /*forceTextureWhiteSamplerMask=*/0u,
+      /*forceSampledDepthWhite=*/false,
       "",
       /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false,
@@ -502,6 +504,8 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*disableAlphaTest=*/true,
       /*disableFog=*/true,
       /*forceTextureWhite=*/true,
+      /*forceTextureWhiteSamplerMask=*/1u << 11,
+      /*forceSampledDepthWhite=*/true,
       "uv",
       /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false,
@@ -510,6 +514,26 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*probeHalfVSOut=*/true,
       /*probeFragmentlessKeepVSOut=*/true);
   check(debugOff != debugUv, "pure debug env key responds to source-affecting values");
+
+  const auto sampledDepthWhite = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
+      /*trimUnusedVaryings=*/false,
+      /*forceFullscreenVertex=*/false,
+      /*flipTranslatedVertexY=*/false,
+      /*forceFragmentShaderColor=*/false,
+      /*disableAlphaTest=*/false,
+      /*disableFog=*/false,
+      /*forceTextureWhite=*/false,
+      /*forceTextureWhiteSamplerMask=*/0u,
+      /*forceSampledDepthWhite=*/true,
+      "",
+      /*forcePixelVFlip=*/false,
+      /*debugFfpUv=*/false,
+      /*debugFfpTexture=*/false,
+      /*debugFfpAlpha=*/false,
+      /*probeHalfVSOut=*/false,
+      /*probeFragmentlessKeepVSOut=*/false);
+  check(debugOff != sampledDepthWhite,
+        "sampled-depth white source probe receives a distinct cache key");
 
   auto debugEnvChanged = base;
   debugEnvChanged.debugEnvKey = base.debugEnvKey ^ 0x9e3779b97f4a7c15ull;
@@ -890,6 +914,104 @@ void testSamplerLodBiasVariantBit() {
   checkEq(kFourCcGet1, 0x31544547u, "GET1 FOURCC value");
 }
 
+void testFetch4FormatEligibilityAndStageKeyIdentity() {
+  // GET4 is a sampler control token.  The format-qualified resolver must
+  // reject an ordinary colour texture while admitting the two vendor depth
+  // pseudo-formats, and the resulting mask must remain part of PSO identity.
+  dxmt9::resources::Pool pool{};
+  BackendLimits limits{};
+  const auto makeTexture = [&](Format format) {
+    TextureDesc texture{};
+    texture.width = 4u;
+    texture.height = 4u;
+    texture.levels = 1u;
+    texture.format = format;
+    texture.pool = Pool::SystemMem;
+    return pool.createTexture(WMT::Device{}, limits, texture);
+  };
+
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x5301u;
+  desc.pixelShader.hash = 0x5302u;
+  desc.textures[0].handle = makeTexture(Format::A8R8G8B8);
+  desc.textures[1].handle = makeTexture(Format::DF24);
+  desc.textures[2].handle = makeTexture(Format::INTZ);
+  for (std::size_t stage = 0; stage < 3u; ++stage) {
+    desc.samplers[stage].states[SAMP_MIPMAP_LOD_BIAS] = kFourCcGet4;
+    desc.samplers[stage].states[SAMP_MAG_FILTER] = 1u;  // D3DTEXF_POINT
+  }
+  const auto fixture = makeFlatDrawFixture(desc);
+  const auto mask = dxmt9::pipeline::fetch4SamplerMaskForDraw(
+      pool, fixture.view(), (1u << 0u) | (1u << 1u) | (1u << 2u));
+  checkEq(mask, (1u << 1u) | (1u << 2u),
+          "FETCH4 admits DF24/INTZ but rejects an ordinary colour texture");
+
+  const auto ordinary = makeVariantKey(fixture);
+  auto df24AndIntz = ordinary;
+  df24AndIntz.fetch4SamplerMask = mask;
+  check(!(df24AndIntz == ordinary),
+        "colour sampling and DF24/INTZ FETCH4 sampling cannot share a PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(df24AndIntz) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(ordinary),
+        "colour sampling and DF24/INTZ FETCH4 sampling cannot share a PSO hash");
+
+  auto df24Only = ordinary;
+  df24Only.fetch4SamplerMask = 1u << 1u;
+  auto intzOnly = ordinary;
+  intzOnly.fetch4SamplerMask = 1u << 2u;
+  check(!(df24Only == intzOnly),
+        "FETCH4 stage identity remains distinct when two depth formats are used at different stages");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(df24Only) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(intzOnly),
+        "FETCH4 stage identity changes the PSO hash");
+}
+
+void testSampledDepthMaskAndPipelineIdentity() {
+  dxmt9::resources::Pool pool{};
+  BackendLimits limits{};
+  const auto makeTexture = [&](Format format) {
+    TextureDesc texture{};
+    texture.width = 4u;
+    texture.height = 4u;
+    texture.levels = 1u;
+    texture.type = TextureType::TwoD;
+    texture.format = format;
+    texture.pool = Pool::SystemMem;
+    return pool.createTexture(WMT::Device{}, limits, texture);
+  };
+
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x5401u;
+  desc.pixelShader.hash = 0x5402u;
+  desc.textures[0].handle = makeTexture(Format::A8R8G8B8);
+  desc.textures[1].handle = makeTexture(Format::DF16);
+  desc.textures[2].handle = makeTexture(Format::DF24);
+  desc.textures[3].handle = makeTexture(Format::INTZ);
+  const auto fixture = makeFlatDrawFixture(desc);
+  constexpr u32 activeMask = 0xfu;
+  const auto sampledDepth = dxmt9::pipeline::sampledDepthTextureMaskForDraw(
+      pool, fixture.view(), activeMask, /*fetch4SamplerMask=*/0u);
+  checkEq(sampledDepth, 0xeu,
+          "ordinary DF16/DF24/INTZ stages enter the typed sampled-depth lane");
+
+  const auto withFetch4 = dxmt9::pipeline::sampledDepthTextureMaskForDraw(
+      pool, fixture.view(), activeMask, /*fetch4SamplerMask=*/1u << 2u);
+  checkEq(withFetch4, 0xau,
+          "a validated FETCH4 stage remains on its separate gather compatibility lane");
+  check(!dxmt9::pipeline::resourceArrayTextureBindingEligibleForDraw(
+            pool, fixture.view(), activeMask),
+        "native depth formats never enter the homogeneous color resource array, including FETCH4");
+
+  const auto base = makeVariantKey(fixture);
+  auto depth = base;
+  depth.sampledDepthTextureMask = sampledDepth;
+  check(!(depth == base),
+        "ordinary color and typed sampled-depth resources cannot share a PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(depth) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(base),
+        "sampled-depth stage identity participates in the PSO hash");
+}
+
 void testFragmentlessDepthOnlyVariantBit() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0x5100u;
@@ -1056,6 +1178,8 @@ int main() {
     testAlphaTestAndFogTailVariantKeyBits();
     testAlphaToCoverageRenderStateHack();
     testSamplerLodBiasVariantBit();
+    testFetch4FormatEligibilityAndStageKeyIdentity();
+    testSampledDepthMaskAndPipelineIdentity();
     testFragmentlessDepthOnlyVariantBit();
     testResolveDrawPipelineStateCarriesDirectCbufStage2bBit();
     testDirectCbufDefaultOnPolicyAndOptOut();

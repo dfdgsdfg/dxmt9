@@ -3272,7 +3272,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 diagnosticsState.activeColorAttachmentDump,
                 drawStateView,
                 encoderDrawIndexBeforeEncode,
-                commandIndex)) {
+                commandIndex,
+                absoluteDrawIndex)) {
           diagnosticsState.activeColorAttachmentDump.afterDraw = true;
           diagnosticsState.activeColorAttachmentDump.draw = encoderDrawIndexBeforeEncode;
           diagnosticsState.activeColorAttachmentDump.commandIndex = commandIndex;

@@ -38,21 +38,8 @@ void check_hr_at(int line, HRESULT actual, HRESULT expected, const char *call) {
   }
 }
 
-void check_hr_any_at(int line, HRESULT actual, HRESULT expected_a,
-    HRESULT expected_b, const char *call) {
-  if (actual != expected_a && actual != expected_b) {
-    std::printf("FAIL:%d: %s returned 0x%08lx, expected 0x%08lx or 0x%08lx\n",
-        line, call, static_cast<unsigned long>(actual),
-        static_cast<unsigned long>(expected_a),
-        static_cast<unsigned long>(expected_b));
-    ++failures;
-  }
-}
-
 #define CHECK(condition) check_at(__LINE__, !!(condition), #condition)
 #define CHECK_HR(actual, expected) check_hr_at(__LINE__, (actual), (expected), #actual)
-#define CHECK_HR_ANY(actual, expected_a, expected_b) \
-  check_hr_any_at(__LINE__, (actual), (expected_a), (expected_b), #actual)
 
 template <typename T>
 void release_if(T *object) {
@@ -289,18 +276,7 @@ void check_autogen(Fixture *fixture) {
   HRESULT hr = fixture->d3d9->CheckDeviceFormat(D3DADAPTER_DEFAULT,
       D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_AUTOGENMIPMAP,
       D3DRTYPE_TEXTURE, D3DFMT_X8R8G8B8);
-  if (hr != D3D_OK) {
-    // D3DOK_NOAUTOGEN / D3DERR_NOTAVAILABLE is the documented Wine
-    // contract when the format would otherwise work but the runtime
-    // lacks hardware autogen — exactly the dxmt9 case. The other
-    // probes in this test (GetDC, LOD, format-UNKNOWN) covered the
-    // Wine `test_getdc` / `test_format_unknown` oracles already; we
-    // record the autogen subset as gracefully degraded without
-    // emitting a runner-level SKIP marker (which would otherwise
-    // demote the entire test verdict).
-    CHECK_HR_ANY(hr, D3DOK_NOAUTOGEN, D3DERR_NOTAVAILABLE);
-    return;
-  }
+  CHECK_HR(hr, D3D_OK);
 
   IDirect3DTexture9 *texture = nullptr;
   hr = fixture->device->CreateTexture(64, 64, 0, D3DUSAGE_AUTOGENMIPMAP,

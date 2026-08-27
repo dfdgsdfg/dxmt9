@@ -229,6 +229,7 @@ using core::SAMP_MAX_ANISOTROPY;
 using core::SAMP_MAX_MIP_LEVEL;
 using core::SAMP_MIN_FILTER;
 using core::SAMP_MIP_FILTER;
+using core::SAMP_MIPMAP_LOD_BIAS;
 using core::kMaxSamplers;
 using core::kMaxTextureStages;
 
@@ -697,6 +698,7 @@ struct ColorAttachmentDumpConfig {
   std::optional<u64> commandIndex;
   std::optional<u64> commandIndexMin;
   std::optional<u64> commandIndexMax;
+  std::optional<u64> commandDrawIndex;
   std::optional<u64> texture0;
   std::vector<u64> texture0s;
   std::string path;
@@ -819,6 +821,8 @@ const ColorAttachmentDumpConfig& colorAttachmentDumpConfig() {
         parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MIN");
     result.commandIndexMax =
         parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_INDEX_MAX");
+    result.commandDrawIndex =
+        parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_COMMAND_DRAW_INDEX");
     result.texture0 = parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0");
     result.texture0s =
         parseEnvU64ListAuto("DXMT9_DUMP_COLOR_ATTACHMENT_TEXTURE0S");
@@ -854,6 +858,7 @@ const ColorAttachmentDumpConfig& colorAttachmentDumpConfig() {
                       result.commandIndex.has_value() ||
                       result.commandIndexMin.has_value() ||
                       result.commandIndexMax.has_value() ||
+                      result.commandDrawIndex.has_value() ||
                       result.texture0.has_value() ||
                       !result.texture0s.empty());
     return result;
@@ -1104,6 +1109,10 @@ bool colorAttachmentDumpMatches(const ActiveColorAttachmentDump& active) {
       active.commandIndex > *config.commandIndexMax) {
     return false;
   }
+  if (config.commandDrawIndex.has_value() &&
+      active.commandDrawIndex != *config.commandDrawIndex) {
+    return false;
+  }
   if (config.texture0.has_value() && *config.texture0 != active.texture0) {
     return false;
   }
@@ -1151,7 +1160,8 @@ bool colorAttachmentDumpAfterDrawWantsSplit(
     const ActiveColorAttachmentDump& active,
     core::FlatDrawStateView drawState,
     u64 encoderDrawIndex,
-    u64 commandIndex) {
+    u64 commandIndex,
+    u64 commandDrawIndex) {
   const auto& config = colorAttachmentDumpConfig();
   if (!config.enabled || !config.afterDraw || !active.handle || !active.texture ||
       !drawState.hot) {
@@ -1183,6 +1193,10 @@ bool colorAttachmentDumpAfterDrawWantsSplit(
       commandIndex > *config.commandIndexMax) {
     return false;
   }
+  if (config.commandDrawIndex.has_value() &&
+      commandDrawIndex != *config.commandDrawIndex) {
+    return false;
+  }
   const u64 texture0 = drawState.hot->textures[0]
       ? drawState.hot->textures[0].value
       : 0ull;
@@ -1199,6 +1213,7 @@ bool colorAttachmentDumpAfterDrawWantsSplit(
          config.commandIndex.has_value() ||
          config.commandIndexMin.has_value() ||
          config.commandIndexMax.has_value() ||
+         config.commandDrawIndex.has_value() ||
          config.texture0.has_value() ||
          !config.texture0s.empty();
 }
@@ -2360,6 +2375,23 @@ std::optional<u64> effectDrawTracePrimitiveTypeFilter() {
   return value;
 }
 
+std::optional<u64> effectDrawTracePrimitiveCountFilter() {
+  static const auto value =
+      parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_PRIMITIVE_COUNT");
+  return value;
+}
+
+std::optional<u64> effectDrawTracePixelShaderFilter() {
+  static const auto value = parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_PS");
+  return value;
+}
+
+std::optional<u64> effectDrawTraceDepthAttachmentFormatFilter() {
+  static const auto value =
+      parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_DEPTH_ATTACHMENT_FORMAT");
+  return value;
+}
+
 bool effectDrawTracePointSpriteOnly() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE_POINT_SPRITE");
@@ -2422,6 +2454,7 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
                      bool indexedDraw,
                      bool fixedFunctionPath,
                      bool preTransformed,
+                     u32 activeFragmentTextureMask,
                      u64 vertexShaderHash,
                      u64 pixelShaderHash) {
   if (!effectDrawTraceEnabled()) {
@@ -2468,6 +2501,15 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       static_cast<u64>(primitiveType) != *primitiveTypeFilter) {
     return;
   }
+  if (const auto primitiveCountFilter = effectDrawTracePrimitiveCountFilter();
+      primitiveCountFilter.has_value() &&
+      static_cast<u64>(primitiveCount) != *primitiveCountFilter) {
+    return;
+  }
+  if (const auto pixelShaderFilter = effectDrawTracePixelShaderFilter();
+      pixelShaderFilter.has_value() && pixelShaderHash != *pixelShaderFilter) {
+    return;
+  }
   const bool pointScaleState =
       core::flatStateOr(hot.renderStates, RS_POINT_SCALE_ENABLE, 0u) != 0u;
   const float pointSize = std::bit_cast<float>(
@@ -2480,10 +2522,70 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       core::flatStateOr(hot.renderStates, RS_COLOR_WRITE_ENABLE, 0xfu);
   const auto encoderDrawIndex =
       encoderBreakdown ? encoderBreakdown->stats.drawCalls + 1ull : 0ull;
+  const auto sampler0AddressU =
+      core::flatStateOr(hot.samplerStates[0], SAMP_ADDRESS_U, 1u);
+  const auto sampler0AddressV =
+      core::flatStateOr(hot.samplerStates[0], SAMP_ADDRESS_V, 1u);
+  const auto sampler0AddressW =
+      core::flatStateOr(hot.samplerStates[0], SAMP_ADDRESS_W, 1u);
+  const auto sampler0BorderColor =
+      core::flatStateOr(hot.samplerStates[0], SAMP_BORDER_COLOR, 0u);
+  const auto sampler0MagFilter =
+      core::flatStateOr(hot.samplerStates[0], SAMP_MAG_FILTER, 0u);
+  const auto sampler0MinFilter =
+      core::flatStateOr(hot.samplerStates[0], SAMP_MIN_FILTER, 0u);
+  const auto sampler0MipFilter =
+      core::flatStateOr(hot.samplerStates[0], SAMP_MIP_FILTER, 0u);
+  const float sampler0LodBias = std::bit_cast<float>(
+      core::flatStateOr(hot.samplerStates[0], SAMP_MIPMAP_LOD_BIAS, 0u));
+  const auto sampler0MaxMipLevel =
+      core::flatStateOr(hot.samplerStates[0], SAMP_MAX_MIP_LEVEL, 0u);
+  const auto sampler0MaxAnisotropy =
+      core::flatStateOr(hot.samplerStates[0], SAMP_MAX_ANISOTROPY, 0u);
+  const auto sampler1AddressU =
+      core::flatStateOr(hot.samplerStates[1], SAMP_ADDRESS_U, 1u);
+  const auto sampler1AddressV =
+      core::flatStateOr(hot.samplerStates[1], SAMP_ADDRESS_V, 1u);
+  const auto sampler1MagFilter =
+      core::flatStateOr(hot.samplerStates[1], SAMP_MAG_FILTER, 0u);
+  const auto sampler1MinFilter =
+      core::flatStateOr(hot.samplerStates[1], SAMP_MIN_FILTER, 0u);
+  const auto sampler1MipFilter =
+      core::flatStateOr(hot.samplerStates[1], SAMP_MIP_FILTER, 0u);
+  const auto sampler11AddressU =
+      core::flatStateOr(hot.samplerStates[11], SAMP_ADDRESS_U, 1u);
+  const auto sampler11AddressV =
+      core::flatStateOr(hot.samplerStates[11], SAMP_ADDRESS_V, 1u);
+  const auto sampler11AddressW =
+      core::flatStateOr(hot.samplerStates[11], SAMP_ADDRESS_W, 1u);
+  const auto sampler11MagFilter =
+      core::flatStateOr(hot.samplerStates[11], SAMP_MAG_FILTER, 0u);
+  const auto sampler11MinFilter =
+      core::flatStateOr(hot.samplerStates[11], SAMP_MIN_FILTER, 0u);
+  const auto sampler11MipFilter =
+      core::flatStateOr(hot.samplerStates[11], SAMP_MIP_FILTER, 0u);
+  const float sampler11LodBias = std::bit_cast<float>(
+      core::flatStateOr(hot.samplerStates[11], SAMP_MIPMAP_LOD_BIAS, 0u));
+  const auto sampler11MaxMipLevel =
+      core::flatStateOr(hot.samplerStates[11], SAMP_MAX_MIP_LEVEL, 0u);
+  const auto sampler11MaxAnisotropy =
+      core::flatStateOr(hot.samplerStates[11], SAMP_MAX_ANISOTROPY, 0u);
   std::array<const resources::TextureRecord*, core::kMaxTextures> textureRecords{};
   for (std::size_t i = 0; i < core::kMaxTextures; ++i) {
-    textureRecords[i] =
+      textureRecords[i] =
         hot.textures[i] ? pool.findTexture(hot.textures[i].value) : nullptr;
+  }
+  const auto* color0Record = hot.colorAttachments[0].handle
+      ? pool.findSurface(hot.colorAttachments[0].handle.value)
+      : nullptr;
+  const auto* depthRecord = hot.depthStencil.handle
+      ? pool.findSurface(hot.depthStencil.handle.value)
+      : nullptr;
+  if (const auto formatFilter = effectDrawTraceDepthAttachmentFormatFilter();
+      formatFilter.has_value() &&
+      (!depthRecord ||
+       static_cast<u64>(depthRecord->desc.format) != *formatFilter)) {
+    return;
   }
   if (const auto handleFilter = effectDrawTraceTexture0Filter();
       handleFilter.has_value() &&
@@ -2531,6 +2633,7 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " vs_hash=0x" << std::hex << vertexShaderHash
       << " ps_hash=0x" << pixelShaderHash
       << " texture_mask=0x" << std::hex << hot.textureMask
+      << " materialized_fragment_texture_mask=0x" << activeFragmentTextureMask
       << " texture0=0x" << hot.textures[0].value
       << " texture1=0x" << hot.textures[1].value
       << " texture2=0x" << hot.textures[2].value
@@ -2539,11 +2642,70 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " texture5=0x" << hot.textures[5].value
       << " texture6=0x" << hot.textures[6].value
       << " texture7=0x" << hot.textures[7].value
+      << " texture8=0x" << hot.textures[8].value
+      << " texture9=0x" << hot.textures[9].value
+      << " texture10=0x" << hot.textures[10].value
+      << " texture11=0x" << hot.textures[11].value
+      << " texture12=0x" << hot.textures[12].value
+      << " texture13=0x" << hot.textures[13].value
+      << " texture14=0x" << hot.textures[14].value
+      << " texture15=0x" << hot.textures[15].value
       << std::dec
       << " texture0_width=" << (textureRecords[0] ? textureRecords[0]->desc.width : 0u)
       << " texture0_height=" << (textureRecords[0] ? textureRecords[0]->desc.height : 0u)
+      << " texture0_depth=" << (textureRecords[0] ? textureRecords[0]->desc.depth : 0u)
+      << " texture0_levels=" << (textureRecords[0] ? textureRecords[0]->desc.levels : 0u)
+      << " texture0_type="
+      << (textureRecords[0] ? static_cast<u32>(textureRecords[0]->desc.type) : 0u)
       << " texture0_format="
       << (textureRecords[0] ? static_cast<u32>(textureRecords[0]->desc.format) : 0u)
+      << " texture0_lod=" << hot.textureLods[0]
+      << " sampler0_address_u=" << sampler0AddressU
+      << " sampler0_address_v=" << sampler0AddressV
+      << " sampler0_address_w=" << sampler0AddressW
+      << " sampler0_border=0x" << std::hex << sampler0BorderColor << std::dec
+      << " sampler0_mag_filter=" << sampler0MagFilter
+      << " sampler0_min_filter=" << sampler0MinFilter
+      << " sampler0_mip_filter=" << sampler0MipFilter
+      << " sampler0_lod_bias=" << sampler0LodBias
+      << " sampler0_max_mip_level=" << sampler0MaxMipLevel
+      << " sampler0_max_anisotropy=" << sampler0MaxAnisotropy
+      << " sampler1_address_u=" << sampler1AddressU
+      << " sampler1_address_v=" << sampler1AddressV
+      << " sampler1_mag_filter=" << sampler1MagFilter
+      << " sampler1_min_filter=" << sampler1MinFilter
+      << " sampler1_mip_filter=" << sampler1MipFilter;
+  for (u32 stage = 2u; stage < 11u; ++stage) {
+    out << " sampler" << stage << "_address_u="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_ADDRESS_U, 1u)
+        << " sampler" << stage << "_address_v="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_ADDRESS_V, 1u)
+        << " sampler" << stage << "_address_w="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_ADDRESS_W, 1u)
+        << " sampler" << stage << "_mag_filter="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_MAG_FILTER, 0u)
+        << " sampler" << stage << "_min_filter="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_MIN_FILTER, 0u)
+        << " sampler" << stage << "_mip_filter="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_MIP_FILTER, 0u)
+        << " sampler" << stage << "_lod_bias="
+        << std::bit_cast<float>(core::flatStateOr(
+               hot.samplerStates[stage], SAMP_MIPMAP_LOD_BIAS, 0u))
+        << " sampler" << stage << "_max_mip_level="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_MAX_MIP_LEVEL, 0u)
+        << " sampler" << stage << "_max_anisotropy="
+        << core::flatStateOr(hot.samplerStates[stage], SAMP_MAX_ANISOTROPY, 0u);
+  }
+  out
+      << " sampler11_address_u=" << sampler11AddressU
+      << " sampler11_address_v=" << sampler11AddressV
+      << " sampler11_address_w=" << sampler11AddressW
+      << " sampler11_mag_filter=" << sampler11MagFilter
+      << " sampler11_min_filter=" << sampler11MinFilter
+      << " sampler11_mip_filter=" << sampler11MipFilter
+      << " sampler11_lod_bias=" << sampler11LodBias
+      << " sampler11_max_mip_level=" << sampler11MaxMipLevel
+      << " sampler11_max_anisotropy=" << sampler11MaxAnisotropy
       << " texture1_width=" << (textureRecords[1] ? textureRecords[1]->desc.width : 0u)
       << " texture1_height=" << (textureRecords[1] ? textureRecords[1]->desc.height : 0u)
       << " texture1_format="
@@ -2572,6 +2734,22 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " texture7_height=" << (textureRecords[7] ? textureRecords[7]->desc.height : 0u)
       << " texture7_format="
       << (textureRecords[7] ? static_cast<u32>(textureRecords[7]->desc.format) : 0u)
+      << " texture8_width=" << (textureRecords[8] ? textureRecords[8]->desc.width : 0u)
+      << " texture8_height=" << (textureRecords[8] ? textureRecords[8]->desc.height : 0u)
+      << " texture8_format="
+      << (textureRecords[8] ? static_cast<u32>(textureRecords[8]->desc.format) : 0u)
+      << " texture9_width=" << (textureRecords[9] ? textureRecords[9]->desc.width : 0u)
+      << " texture9_height=" << (textureRecords[9] ? textureRecords[9]->desc.height : 0u)
+      << " texture9_format="
+      << (textureRecords[9] ? static_cast<u32>(textureRecords[9]->desc.format) : 0u)
+      << " texture10_width=" << (textureRecords[10] ? textureRecords[10]->desc.width : 0u)
+      << " texture10_height=" << (textureRecords[10] ? textureRecords[10]->desc.height : 0u)
+      << " texture10_format="
+      << (textureRecords[10] ? static_cast<u32>(textureRecords[10]->desc.format) : 0u)
+      << " texture11_width=" << (textureRecords[11] ? textureRecords[11]->desc.width : 0u)
+      << " texture11_height=" << (textureRecords[11] ? textureRecords[11]->desc.height : 0u)
+      << " texture11_format="
+      << (textureRecords[11] ? static_cast<u32>(textureRecords[11]->desc.format) : 0u)
       << " src_blend=" << srcBlend
       << " dst_blend=" << dstBlend
       << " blend_op=" << blendOp
@@ -2582,6 +2760,18 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " depth_func=" << depthFunc
       << " depth_bias=" << depthBias
       << " slope_scale_depth_bias=" << slopeScale
+      << " rt0=0x" << std::hex << hot.colorAttachments[0].handle.value << std::dec
+      << " rt0_alias_texture=0x" << std::hex
+      << (color0Record ? color0Record->aliasTexture.value : 0ull) << std::dec
+      << " rt0_level=" << hot.colorAttachments[0].level
+      << " rt0_format="
+      << (color0Record ? static_cast<u32>(color0Record->desc.format) : 0u)
+      << " depth_attachment=0x" << std::hex << hot.depthStencil.handle.value << std::dec
+      << " depth_attachment_alias_texture=0x" << std::hex
+      << (depthRecord ? depthRecord->aliasTexture.value : 0ull) << std::dec
+      << " depth_attachment_level=" << hot.depthStencil.level
+      << " depth_attachment_format="
+      << (depthRecord ? static_cast<u32>(depthRecord->desc.format) : 0u)
       << " color_write=0x" << std::hex << colorWrite << std::dec
       << " scissor=" << (hot.viewport.scissorEnabled ? 1u : 0u)
       << ']';
@@ -2905,6 +3095,15 @@ void traceEffectIndexedGeometry(const ActiveEncoderBreakdown* encoderBreakdown,
   if (const auto primitiveTypeFilter = effectDrawTracePrimitiveTypeFilter();
       primitiveTypeFilter.has_value() &&
       static_cast<u64>(primitiveType) != *primitiveTypeFilter) {
+    return;
+  }
+  if (const auto primitiveCountFilter = effectDrawTracePrimitiveCountFilter();
+      primitiveCountFilter.has_value() &&
+      static_cast<u64>(primitiveCount) != *primitiveCountFilter) {
+    return;
+  }
+  if (const auto pixelShaderFilter = effectDrawTracePixelShaderFilter();
+      pixelShaderFilter.has_value() && pixelShaderHash != *pixelShaderFilter) {
     return;
   }
 

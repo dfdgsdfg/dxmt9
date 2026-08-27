@@ -2418,7 +2418,8 @@ bool colorAttachmentDumpAfterDrawWantsSplit(
     const ActiveColorAttachmentDump& active,
     core::FlatDrawStateView drawState,
     u64 encoderDrawIndex,
-    u64 commandIndex);
+    u64 commandIndex,
+    u64 commandDrawIndex);
 
 bool drawTextureDumpPassMatches(u64 seq, u64 enc);
 
@@ -2589,6 +2590,7 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
                      bool indexedDraw,
                      bool fixedFunctionPath,
                      bool preTransformed,
+                     u32 activeFragmentTextureMask,
                      u64 vertexShaderHash,
                      u64 pixelShaderHash);
 

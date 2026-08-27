@@ -165,10 +165,19 @@ void test_factory_caps_edge_matrix(const struct d3d9_api *api)
                 D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP,
                 D3DRTYPE_TEXTURE, autogen_formats[i]);
         if (rt_hr == D3D_OK)
-            CHECK_TRUE(hr == D3D_OK || hr == D3DOK_NOAUTOGEN);
+            CHECK_HR(hr, D3D_OK);
         else
             CHECK_HR(hr, D3DERR_NOTAVAILABLE);
     }
+
+    CHECK_HR(IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8,
+            D3DUSAGE_DYNAMIC | D3DUSAGE_AUTOGENMIPMAP,
+            D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8), D3DERR_NOTAVAILABLE);
+    CHECK_HR(IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8,
+            D3DUSAGE_AUTOGENMIPMAP, D3DRTYPE_VOLUMETEXTURE,
+            D3DFMT_A8R8G8B8), D3DERR_NOTAVAILABLE);
 
     IDirect3D9_Release(d3d9);
 }

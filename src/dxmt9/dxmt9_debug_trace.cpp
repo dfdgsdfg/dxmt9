@@ -543,6 +543,63 @@ bool forceTextureWhite() {
   return v;
 }
 
+std::uint32_t forceTextureWhiteSamplerMask() {
+  static const std::uint32_t mask = static_cast<std::uint32_t>(
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_SAMPLER_MASK")
+          .value_or(0u));
+  return mask;
+}
+
+std::optional<u64> probeForceSamplerMipNonePixelShaderHash() {
+  static const auto value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_SAMPLER_MIP_NONE_PS");
+  return value;
+}
+
+std::optional<u64> probeForceSamplerMipNoneStage() {
+  static const auto value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_SAMPLER_MIP_NONE_STAGE");
+  return value;
+}
+
+std::uint32_t probeForceSamplerMipFilterValue() {
+  static const std::uint32_t value = static_cast<std::uint32_t>(
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_SAMPLER_MIP_NONE_VALUE")
+          .value_or(0u));
+  return value <= 2u ? value : 0u;
+}
+
+std::optional<std::uint32_t> probeForceSamplerFixedLod() {
+  static const auto raw =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_SAMPLER_FIXED_LOD");
+  if (!raw.has_value() || *raw > 31u) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint32_t>(*raw);
+}
+
+std::optional<std::int32_t> probeForceSamplerLodBias() {
+  static const std::optional<std::int32_t> value = [] {
+    const char* raw = std::getenv("DXMT9_PROBE_FORCE_SAMPLER_LOD_BIAS");
+    if (!raw || !*raw) {
+      return std::optional<std::int32_t>{};
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(raw, &end, 0);
+    if (!end || *end != '\0' || parsed < -16 || parsed > 16) {
+      return std::optional<std::int32_t>{};
+    }
+    return std::optional<std::int32_t>{static_cast<std::int32_t>(parsed)};
+  }();
+  return value;
+}
+
+bool forceSampledDepthWhite() {
+  static const bool v =
+      util::getenvFlag("DXMT_FORCE_SAMPLED_DEPTH_WHITE");
+  return v;
+}
+
 bool probeForceTextureWhite() {
   static const bool v =
       util::getenvFlag("DXMT9_PROBE_FORCE_TEXTURE_WHITE") ||
@@ -555,6 +612,7 @@ bool probeForceTextureWhite() {
       probeForceTextureWhiteTexture0Width().has_value() ||
       probeForceTextureWhiteTexture0Height().has_value() ||
       probeForceTextureWhiteTexture0Format().has_value() ||
+      probeForceTextureWhitePixelShaderHash().has_value() ||
       drawOrdinalRangeEnabled(probeForceTextureWhiteDrawOrdinalRange()) ||
       probeForceTextureWhiteDrawOrdinalList().enabled ||
       drawOrdinalRangeEnabled(probeForceTextureWhiteCommandIndexRange()) ||
@@ -612,6 +670,12 @@ std::optional<u64> probeForceTextureWhiteTexture0Height() {
 std::optional<u64> probeForceTextureWhiteTexture0Format() {
   static const std::optional<u64> value =
       util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_TEXTURE0_FORMAT");
+  return value;
+}
+
+std::optional<u64> probeForceTextureWhitePixelShaderHash() {
+  static const std::optional<u64> value =
+      util::getenvU64Auto("DXMT9_PROBE_FORCE_TEXTURE_WHITE_PS");
   return value;
 }
 

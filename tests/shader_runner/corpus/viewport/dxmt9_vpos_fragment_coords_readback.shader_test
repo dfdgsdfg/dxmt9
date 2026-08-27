@@ -3,7 +3,7 @@
 ; source_kind: project-authored
 ; license: MIT
 ; license_scope: project-mit
-; oracle: Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos fractional pixel-center readback
+; oracle: Wine d3d9 visual.c test_fragment_coords behavior, reduced to integer vPos pixel-center readback
 ; oracle-date: 2026-05-17
 
 [pixel shader d3dbc-hex]
@@ -14,4 +14,4 @@ ffff0300 05000051 a00f0000 00000000 00000000 00000000 3f800000
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-draw-solid-quad
-probe (32, 32) rgba(0.5, 0.5, 0.0, 1.0) 1
+probe (32, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

@@ -48,7 +48,8 @@ using ::dxmt9::shaders::kArgbufResourceArrayStageCount;
 namespace {
 
 std::string pixelPositionExpression(const std::string& pixelInputs) {
-  return pixelInputs + ".position";
+  return "float4(" + pixelInputs +
+         ".position.xy - float2(0.5f), " + pixelInputs + ".position.zw)";
 }
 
 std::string texcoordInputExpression(const std::string& pixelInputs, u32 index,
@@ -277,9 +278,11 @@ std::string applySourceModifier(std::string expr, u32 modifier) {
 }
 
 std::string applyDestModifier(std::string expr, u32 modifier) {
-  if ((modifier & 0x2u) != 0u) {
-    expr = "float4(half4(" + expr + "))";
-  }
+  // D3DSPDM_PARTIALPRECISION is permission to use reduced precision, not a
+  // requirement to quantize every destination write. Keep the decoded bit in
+  // the IR for a future proved precision plan, but use full precision unless
+  // that plan explicitly selects a half-typed value. Eager float->half->float
+  // conversion here amplified quantization in reflection-heavy shaders.
   if ((modifier & 0x1u) != 0u) {
     expr = "clamp(" + expr + ", float4(0.0f), float4(1.0f))";
   }
@@ -1363,6 +1366,17 @@ bool pixelResourceArrayEligible(const SpirvModule& module,
     if (!samplerUsage[stage]) {
       continue;
     }
+    if ((context.sampledDepthTextureMask & (1u << stage)) != 0u) {
+      // The argument-buffer texture array is a color texture2d ABI. Depth
+      // resources must stay on the direct depth2d binding lane.
+      return false;
+    }
+    if ((context.fetch4SamplerMask & (1u << stage)) != 0u) {
+      // FETCH4 depth formats retain their validated direct texture/gather
+      // compatibility path. The homogeneous color resource array cannot
+      // express that exception safely, so FETCH4 remains direct as a whole.
+      return false;
+    }
     if (stage >= shaders::kArgbufResourceArrayStageCount) {
       // Only s0..s7 ride the argbuf array; a higher stage keeps the shader
       // on the direct lane.
@@ -1376,7 +1390,10 @@ bool pixelResourceArrayEligible(const SpirvModule& module,
   return true;
 }
 
-std::string textureTypeName(TextureType type) {
+std::string textureTypeName(TextureType type, bool depth = false) {
+  if (depth && type == TextureType::TwoD) {
+    return "depth2d<float>";
+  }
   switch (type) {
     case TextureType::Cube:
       return "texturecube<float>";
@@ -1445,7 +1462,10 @@ void emitFragmentTextureArguments(std::ostringstream& out,
       out << ", ";
     }
     first = false;
-    out << textureTypeName(samplerTextureType(module, context, stage)) << " tex" << stage
+    const auto type = samplerTextureType(module, context, stage);
+    const bool depth = type == TextureType::TwoD &&
+                       (context.sampledDepthTextureMask & (1u << stage)) != 0u;
+    out << textureTypeName(type, depth) << " tex" << stage
         << " [[texture(" << stage << ")]], "
         << "sampler samp" << stage << " [[sampler(" << stage << ")]]";
   }
@@ -2392,10 +2412,15 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               break;
             }
             case kD3DSIO_RCP:
-              value = "float4(1.0f) / max(" + readSrc(1) + ", float4(1.0e-8f))";
+              // D3D9 RCP preserves the operand sign and maps zero to
+              // infinity. An epsilon clamp changes both contracts and makes
+              // values discontinuous as they cross zero.
+              value = "float4(1.0f) / " + readSrc(1);
               break;
             case kD3DSIO_RSQ:
-              value = "rsqrt(max(" + readSrc(1) + ", float4(1.0e-8f)))";
+              // D3D9 RSQ takes the absolute value before the reciprocal
+              // square root; zero likewise maps to infinity.
+              value = "rsqrt(abs(" + readSrc(1) + "))";
               break;
             case kD3DSIO_FRC:
               value = "fract(" + readSrc(1) + ")";
@@ -2424,7 +2449,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               value = "float4(dot((" + readSrc(1) + ").xy, (" + readSrc(2) + ").xy) + (" + readSrc(3) + ").x)";
               break;
             case kD3DSIO_POW:
-              value = "pow(" + readSrc(1) + ", " + readSrc(2) + ")";
+              // D3D9 POW is abs(src0)^src1. Passing a signed base directly
+              // to MSL pow produces NaNs for negative, non-integral powers;
+              // 3DMark06 HDR1's water VS uses precisely that shape.
+              value = "pow(abs(" + readSrc(1) + "), " + readSrc(2) + ")";
               break;
             case kD3DSIO_CRS:
               value = "float4(cross((" + readSrc(1) + ").xyz, (" + readSrc(2) + ").xyz), 0.0f)";
@@ -2874,7 +2902,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "// decoded d3d hash " << module.hash << "\n";
     return out.str();
   }
-  if (const char* mode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE"); mode && mode[0] != '\0') {
+  const char* fragmentDebugMode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
+  const bool sanitizeNonFiniteForDebug =
+      fragmentDebugMode && std::strcmp(fragmentDebugMode, "sanitize_nonfinite") == 0;
+  if (const char* mode = fragmentDebugMode;
+      mode && mode[0] != '\0' && !sanitizeNonFiniteForDebug) {
     if (std::strcmp(mode, "uv") == 0) {
       emitFragmentDebugReturn("float4(fract(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
     } else if (std::strcmp(mode, "uv_saturate") == 0) {
@@ -3048,14 +3080,35 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     auto sampleCoord = [&](u32 sampler, const std::string& coord) {
       return sampleCoordExpression(samplerTextureType(module, context, sampler), coord, forcePixelVFlip);
     };
+    auto widenDepthSample = [&](u32 sampler, std::string sample) {
+      if (sampler < kMaxSamplers &&
+          (context.sampledDepthTextureMask & (1u << sampler)) != 0u) {
+        return std::string("float4(") + sample + ", 0.0f, 0.0f, 1.0f)";
+      }
+      return sample;
+    };
     auto wrapTextureSample = [&](u32 sampler, std::string sample) {
       if ((context.x8AlphaOneTextureMask & (1u << sampler)) != 0u) {
         return "dxmt9_x8_alpha_one(" + sample + ")";
       }
       return sample;
     };
+    auto forceSampledDepthWhite = [&](u32 sampler) {
+      return context.forceSampledDepthWhiteForDebug &&
+          sampler < kMaxSamplers &&
+          (context.sampledDepthTextureMask & (1u << sampler)) != 0u;
+    };
+    auto forceTextureWhite = [&](u32 sampler) {
+      if (!context.forceTextureWhiteForDebug) {
+        return false;
+      }
+      const u32 mask = context.forceTextureWhiteSamplerMaskForDebug;
+      return mask == 0u ||
+          (sampler < kMaxSamplers && (mask & (1u << sampler)) != 0u);
+    };
     auto sampleTexture = [&](u32 sampler, const std::string& coord) {
-      if (context.forceTextureWhiteForDebug) {
+      if (forceTextureWhite(sampler) ||
+          forceSampledDepthWhite(sampler)) {
         return std::string("float4(1.0f)");
       }
       if (context.unboundTextureFallback &&
@@ -3080,8 +3133,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       return wrapTextureSample(
           sampler,
-          "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "
-          + sampleCoord(sampler, coord) + biasArg + ")");
+          widenDepthSample(
+              sampler,
+              "tex" + std::to_string(sampler) + ".sample(samp" +
+                  std::to_string(sampler) + ", " + sampleCoord(sampler, coord) +
+                  biasArg + ")"));
     };
     auto legacyStage = [&] {
       if (instruction.operands.empty()) {
@@ -3649,10 +3705,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             break;
           }
           case kD3DSIO_RCP:
-            value = "float4(1.0f) / max(" + readSrc(1) + ", float4(1.0e-8f))";
+            // Keep the SM1/pixel path identical to the vertex path above:
+            // preserve sign and the zero-to-infinity edge.
+            value = "float4(1.0f) / " + readSrc(1);
             break;
           case kD3DSIO_RSQ:
-            value = "rsqrt(max(" + readSrc(1) + ", float4(1.0e-8f)))";
+            value = "rsqrt(abs(" + readSrc(1) + "))";
             break;
           case kD3DSIO_FRC:
             value = "fract(" + readSrc(1) + ")";
@@ -3681,7 +3739,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             value = "float4(dot((" + readSrc(1) + ").xy, (" + readSrc(2) + ").xy) + (" + readSrc(3) + ").x)";
             break;
           case kD3DSIO_POW:
-            value = "pow(" + readSrc(1) + ", " + readSrc(2) + ")";
+            value = "pow(abs(" + readSrc(1) + "), " + readSrc(2) + ")";
             break;
           case kD3DSIO_CRS:
             value = "float4(cross((" + readSrc(1) + ").xyz, (" + readSrc(2) + ").xyz), 0.0f)";
@@ -3716,7 +3774,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               const auto coord = readSrc(1);
               const auto ddx = readSrc(3);
               const auto ddy = readSrc(4);
-              if (context.forceTextureWhiteForDebug) {
+              if (forceTextureWhite(sampler) ||
+                  forceSampledDepthWhite(sampler)) {
                 value = "float4(1.0f)";
               } else if (context.unboundTextureFallback &&
                   (sampler >= context.textures.size() || !context.textures[sampler])) {
@@ -3728,9 +3787,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               } else {
                 value = wrapTextureSample(
                     sampler,
-                    "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                    sampleCoord(sampler, coord) + ", " +
-                    textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")");
+                    widenDepthSample(
+                        sampler,
+                        "tex" + std::to_string(sampler) + ".sample(samp" +
+                            std::to_string(sampler) + ", " + sampleCoord(sampler, coord) +
+                            ", " + textureGradientExpression(
+                                      samplerTextureType(module, context, sampler), ddx,
+                                      ddy) + ")"));
               }
             }
             break;
@@ -3738,7 +3801,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	            {
 	              const auto sampler = textureSamplerIndex(instruction, module.stage);
 	              const auto coord = readSrc(1);
-	              if (context.forceTextureWhiteForDebug) {
+	              if (forceTextureWhite(sampler) ||
+	                  forceSampledDepthWhite(sampler)) {
 	                value = "float4(1.0f)";
 	              } else if (context.unboundTextureFallback &&
 	                  (sampler >= context.textures.size() || !context.textures[sampler])) {
@@ -3750,8 +3814,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	              } else {
 	                value = wrapTextureSample(
                       sampler,
-                      "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                      sampleCoord(sampler, coord) + ", level(" + coord + ".w))");
+                      widenDepthSample(
+                          sampler,
+                          "tex" + std::to_string(sampler) + ".sample(samp" +
+                              std::to_string(sampler) + ", " + sampleCoord(sampler, coord) +
+                              ", level(" + coord + ".w))"));
 	              }
 	            }
 	            break;
@@ -3953,6 +4020,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << stageInFloatRead(context, "in.fogFactor") << ");\n";
 		  out << "  }\n";
   }
+	  if (sanitizeNonFiniteForDebug) {
+	    out << "  if (!all(isfinite(color))) color = float4(1.0f, 0.0f, 1.0f, 1.0f);\n";
+	  }
 		  out << "  outColor[0] = color;\n";
 		  if (usesFragmentOutStruct) {
 		    out << "  FSOut result;\n";

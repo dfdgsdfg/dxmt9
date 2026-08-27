@@ -37,6 +37,18 @@ inline uint32_t peFullMipLevelCount(UINT maxDimension) {
     return S_OK;
 }
 
+// Wine d3d9 texture.c::texture_init AUTOGEN contract.  AUTOGEN exposes one
+// public level but accepts either Levels=0 (request automatic hidden chain) or
+// Levels=1.  SYSTEMMEM cannot own a generated GPU pyramid, and D3D9 volume
+// textures never support AUTOGENMIPMAP.
+[[nodiscard]] inline HRESULT peAutogenTextureCreationHResult(
+        DWORD usage, D3DPOOL pool, UINT levels, bool volumeTexture) {
+    if ((usage & D3DUSAGE_AUTOGENMIPMAP) == 0u) return S_OK;
+    if (volumeTexture || pool == D3DPOOL_SYSTEMMEM) return D3DERR_INVALIDCALL;
+    if (levels != 0u && levels != 1u) return D3DERR_INVALIDCALL;
+    return S_OK;
+}
+
 // ── D3D9 present-parameter / Ex-mode / query validation ──────────────────
 // Pure, PE-side validators that encode the Windows-runtime HRESULT
 // contract for the device's swap-chain-shaped entry points (Reset,

@@ -91,7 +91,8 @@ void traceDrawPipelineBuild(const char* stage,
   }
   util::logf(util::LogLevel::Info, "dxmt9-pipeline-cache",
              "draw-pso %s variant=0x%llx source=0x%llx tile=%u tile_base=%u "
-             "argbuf=%u argbuf_direct_cbuf=%u resource_array=%u fetch4=0x%x fragmentless=%u sample=%u "
+             "argbuf=%u argbuf_direct_cbuf=%u resource_array=%u fetch4=0x%x "
+             "sampled_depth=0x%x fragmentless=%u sample=%u "
              "color0=%u depth=%u stencil=%u vsout=0x%x alpha_to_coverage=%u",
              stage ? stage : "unknown",
              static_cast<unsigned long long>(key.hash),
@@ -102,6 +103,7 @@ void traceDrawPipelineBuild(const char* stage,
              key.argbufDirectCbufMode ? 1u : 0u,
              key.argbufResourceArray ? 1u : 0u,
              static_cast<unsigned>(key.fetch4SamplerMask),
+             static_cast<unsigned>(key.sampledDepthTextureMask),
              key.fragmentlessDepthOnly ? 1u : 0u,
              static_cast<unsigned>(std::max(1u, key.sampleCount)),
              static_cast<unsigned>(key.colorFormats[0]),
@@ -607,6 +609,81 @@ u32 fetch4SamplerMaskForDraw(const resources::Pool& pool,
   return mask;
 }
 
+u32 sampledDepthTextureMaskForDraw(const resources::Pool& pool,
+                                   core::FlatDrawStateView state,
+                                   u32 activeFragmentTextureMask) noexcept {
+  return sampledDepthTextureMaskForDraw(
+      pool, state, activeFragmentTextureMask,
+      fetch4SamplerMaskForDraw(pool, state, activeFragmentTextureMask));
+}
+
+u32 sampledDepthTextureMaskForDraw(const resources::Pool& pool,
+                                   core::FlatDrawStateView state,
+                                   u32 activeFragmentTextureMask,
+                                   u32 fetch4Mask) noexcept {
+  if (!state.hot) {
+    return 0;
+  }
+  // A depth2d sample returns one float rather than a float4.  Keep the
+  // conversion confined to actual shader-used fragment stages and to the
+  // ordinary 2D resource shape; arrays/cubes/volumes retain the existing
+  // conservative direct path until their coordinate/type contract is proven.
+  u32 mask = 0;
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    const u32 bit = 1u << stage;
+    if ((activeFragmentTextureMask & bit) == 0u || (fetch4Mask & bit) != 0u ||
+        !state.hot->textures[stage]) {
+      continue;
+    }
+    const auto* texture = pool.findTexture(state.hot->textures[stage].value);
+    if (!texture || texture->desc.type != core::TextureType::TwoD) {
+      continue;
+    }
+    switch (texture->desc.format) {
+      case core::Format::DF16:
+      case core::Format::DF24:
+      case core::Format::INTZ:
+        mask |= bit;
+        break;
+      default:
+        break;
+    }
+  }
+  return mask;
+}
+
+bool resourceArrayTextureBindingEligibleForDraw(
+    const resources::Pool& pool,
+    core::FlatDrawStateView state,
+    u32 activeFragmentTextureMask) noexcept {
+  if (!state.hot) {
+    return false;
+  }
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
+    const u32 bit = 1u << stage;
+    if ((activeFragmentTextureMask & bit) == 0u ||
+        !state.hot->textures[stage]) {
+      continue;
+    }
+    const auto* texture = pool.findTexture(state.hot->textures[stage].value);
+    if (!texture || texture->desc.type != core::TextureType::TwoD) {
+      return false;
+    }
+    switch (texture->desc.format) {
+      case core::Format::DF16:
+      case core::Format::DF24:
+      case core::Format::INTZ:
+        // The argument-buffer member is texture2d<float>, not depth2d. This
+        // rejection also covers FETCH4 depth stages, which deliberately stay
+        // on the existing direct gather compatibility lane.
+        return false;
+      default:
+        break;
+    }
+  }
+  return true;
+}
+
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
@@ -614,6 +691,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool disableAlphaTest,
                                 bool disableFog,
                                 bool forceTextureWhite,
+                                u32 forceTextureWhiteSamplerMask,
+                                bool forceSampledDepthWhite,
                                 std::string_view fragmentMode,
                                 bool forcePixelVFlip,
                                 bool debugFfpUv,
@@ -630,6 +709,8 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(disableAlphaTest));
   hash = mix(hash, static_cast<u64>(disableFog));
   hash = mix(hash, static_cast<u64>(forceTextureWhite));
+  hash = mix(hash, static_cast<u64>(forceTextureWhiteSamplerMask));
+  hash = mix(hash, static_cast<u64>(forceSampledDepthWhite));
   hash = mix(hash, core::hashString(fragmentMode));
   hash = mix(hash, static_cast<u64>(forcePixelVFlip));
   hash = mix(hash, static_cast<u64>(debugFfpUv));
@@ -655,6 +736,8 @@ u64 currentShaderSourceDebugEnvKey(
       envFlag("DXMT_DISABLE_ALPHA_TEST"),
       envFlag("DXMT_DISABLE_FOG"),
       forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE")),
+      debug::forceTextureWhiteSamplerMask(),
+      envFlag("DXMT_FORCE_SAMPLED_DEPTH_WHITE"),
       fragmentMode ? std::string_view(fragmentMode) : std::string_view{},
       envFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP"),
       envFlag("DXMT_DEBUG_FFP_UV"),
@@ -674,6 +757,8 @@ bool shaderSourceDebugEnvIsDefault() noexcept {
       /*forceFullscreenVertex=*/false, /*flipTranslatedVertexY=*/false,
       /*forceFragmentShaderColor=*/false, /*disableAlphaTest=*/false,
       /*disableFog=*/false, /*forceTextureWhite=*/false,
+      /*forceTextureWhiteSamplerMask=*/0u,
+      /*forceSampledDepthWhite=*/false,
       /*fragmentMode=*/std::string_view{}, /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false, /*debugFfpTexture=*/false,
       /*debugFfpAlpha=*/false, /*probeHalfVSOut=*/false,
@@ -879,6 +964,9 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   hash = mix(hash, key.textureMask);
   hash = mix(hash, static_cast<u64>(key.linear));
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
+  // Depth-as-texture stages use depth2d<float> declarations and scalar
+  // sample widening; keep them in a distinct PSO cache lane.
+  hash = mix(hash, key.sampledDepthTextureMask);
   // H228: alpha test deliberately does NOT participate in the key hash —
   // the alpha-test tail is a single variant reading per-draw FsVolatile
   // immediates, so alpha-test render-state toggles map to the same PSO.
@@ -1648,6 +1736,13 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     if (key.fetch4SamplerMask != 0u) {
       key.hash = mix(mix(key.hash, 0x666574636834ull), key.fetch4SamplerMask);
     }
+    key.sampledDepthTextureMask =
+        sampledDepthTextureMaskForDraw(pool, state, key.textureMask,
+                                       key.fetch4SamplerMask);
+    if (key.sampledDepthTextureMask != 0u) {
+      key.hash = mix(mix(key.hash, 0x64657074685f6d61ull),
+                     key.sampledDepthTextureMask);
+    }
     // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
     // tile-stage and fragment-stage variants share an FFPKeyPS but land in
     // distinct cache entries.
@@ -1658,7 +1753,10 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     // R-BACK-12.22..12.26 (resource-array sub-mode): stamp the sub-bit only
     // alongside argbufHybridMode so a stray true can never select the
     // resource-array prelude on a Stage 1 PSO.
-    key.argbufResourceArray = argbufHybridMode && argbufResourceArray;
+    key.argbufResourceArray =
+        argbufHybridMode && argbufResourceArray &&
+        key.sampledDepthTextureMask == 0u &&
+        resourceArrayTextureBindingEligibleForDraw(pool, state, key.textureMask);
     key.argbufDirectCbufMode =
         argbufHybridMode && !key.argbufResourceArray && argbufDirectCbufMode;
   }
@@ -1683,9 +1781,14 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     // computed key.samplerLodBias from the same predicate the encoder bind reads.
     shaderSource.samplerLodBias = key.samplerLodBias;
     shaderSource.fetch4SamplerMask = key.fetch4SamplerMask;
+    shaderSource.sampledDepthTextureMask = key.sampledDepthTextureMask;
     shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
     shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
     shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
+    shaderSource.forceTextureWhiteSamplerMaskForDebug =
+        debug::forceTextureWhiteSamplerMask();
+    shaderSource.forceSampledDepthWhiteForDebug =
+        envFlag("DXMT_FORCE_SAMPLED_DEPTH_WHITE");
   }
   {
     ScopedPerfCounter scope(
@@ -1835,6 +1938,16 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   if (key.fetch4SamplerMask != 0u) {
     key.hash = mix(mix(key.hash, 0x666574636834ull), key.fetch4SamplerMask);
   }
+  key.sampledDepthTextureMask =
+      sampledDepthTextureMaskForDraw(pool, state, key.textureMask,
+                                     key.fetch4SamplerMask);
+  if (key.sampledDepthTextureMask != 0u) {
+    key.hash = mix(mix(key.hash, 0x64657074685f6d61ull),
+                   key.sampledDepthTextureMask);
+  }
+  // The resource-array ABI is homogeneous texture2d<float>; depth resources
+  // must use the direct lane until a depth-array ABI is proven.
+  key.argbufResourceArray = false;
   key.tileFfpMode = false;
   key.tileFfpBaseColor = true;
   // A2C is applied by the tile pass (or, where the tile kernel cannot, the
@@ -1845,9 +1958,14 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   shaderSource.samplerLodBias = key.samplerLodBias;
   shaderSource.fetch4SamplerMask = key.fetch4SamplerMask;
+  shaderSource.sampledDepthTextureMask = key.sampledDepthTextureMask;
   shaderSource.stripAlphaTestForDebug = envFlag("DXMT_DISABLE_ALPHA_TEST");
   shaderSource.stripFogForDebug = envFlag("DXMT_DISABLE_FOG");
   shaderSource.forceTextureWhiteForDebug = forceTextureWhiteForDebug;
+  shaderSource.forceTextureWhiteSamplerMaskForDebug =
+      debug::forceTextureWhiteSamplerMask();
+  shaderSource.forceSampledDepthWhiteForDebug =
+      envFlag("DXMT_FORCE_SAMPLED_DEPTH_WHITE");
   stampX8AlphaOneTextureMask(
       key, shaderSource,
       x8AlphaOneTextureMask(pool, *state.hot, key.textureMask));

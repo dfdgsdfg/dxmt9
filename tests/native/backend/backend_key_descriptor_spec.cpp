@@ -568,6 +568,32 @@ void testSamplerInfoReflectsSamplerSnapshot() {
           "texture SetLOD keeps explicit LOD sampling upper clamp open");
 }
 
+void testSamplerInfoMapsAnisotropicMinMagToLinear() {
+  SamplerSnapshot snapshot{};
+  snapshot.states[SAMP_MIN_FILTER] = 3u;
+  snapshot.states[SAMP_MAG_FILTER] = 3u;
+  snapshot.states[SAMP_MAX_ANISOTROPY] = 16u;
+
+  const auto snapshotInfo = dxmt9::encoders::makeSamplerInfo(snapshot);
+  DrawDesc desc{};
+  desc.samplers[0] = snapshot;
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto flatInfo = dxmt9::encoders::makeSamplerInfo(hot.samplerStates[0]);
+
+  checkEq(snapshotInfo.min_filter, WMTSamplerMinMagFilterLinear,
+          "anisotropic min filter maps to Metal linear");
+  checkEq(snapshotInfo.mag_filter, WMTSamplerMinMagFilterLinear,
+          "anisotropic mag filter maps to Metal linear");
+  checkEq(snapshotInfo.max_anisotroy, 16u,
+          "anisotropic sample count remains available to Metal");
+  checkEq(flatInfo.min_filter, snapshotInfo.min_filter,
+          "flat anisotropic min filter matches snapshot mapping");
+  checkEq(flatInfo.mag_filter, snapshotInfo.mag_filter,
+          "flat anisotropic mag filter matches snapshot mapping");
+  checkEq(flatInfo.max_anisotroy, snapshotInfo.max_anisotroy,
+          "flat anisotropy count matches snapshot mapping");
+}
+
 void testSamplerInfoBorderColorFallbacks() {
   SamplerSnapshot transparent{};
   transparent.states[SAMP_ADDRESS_U] = 4u;
@@ -600,6 +626,7 @@ int main() {
     testPsoPrefetchKeysDoNotRequireUniformPayload();
     testSamplerInfoDefaultsAreDeterministic();
     testSamplerInfoReflectsSamplerSnapshot();
+    testSamplerInfoMapsAnisotropicMinMagToLinear();
     testSamplerInfoBorderColorFallbacks();
   } catch (const TestFailure& failure) {
     std::cerr << "backend_key_descriptor_spec failed: " << failure.what() << '\n';

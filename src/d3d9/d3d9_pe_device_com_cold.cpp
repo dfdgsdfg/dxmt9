@@ -1121,6 +1121,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateTexture(UINT w, UINT h, UINT lev
     if (!ppTex) return D3DERR_INVALIDCALL;
     *ppTex = nullptr;
     if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+    const HRESULT autogenHr =
+        peAutogenTextureCreationHResult(usage, pool, levels, false);
+    if (FAILED(autogenHr)) return autogenHr;
     const HRESULT levelHr = peTextureLevelCountHResult(std::min(w, h), std::max(w, h), levels);
     if (FAILED(levelHr)) return levelHr;
     // Wine D3D9Ex contract from dlls/d3d9/tests/d3d9ex.c
@@ -1194,6 +1197,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVolumeTexture(UINT w, UINT h, UI
     if (!ppTex) return D3DERR_INVALIDCALL;
     *ppTex = nullptr;
     if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+    const HRESULT autogenHr =
+        peAutogenTextureCreationHResult(usage, pool, levels, true);
+    if (FAILED(autogenHr)) return autogenHr;
     const HRESULT levelHr =
         peTextureLevelCountHResult(std::min({w, h, d}), std::max({w, h, d}), levels);
     if (FAILED(levelHr)) return levelHr;
@@ -1239,6 +1245,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateCubeTexture(UINT size, UINT leve
     if (!ppTex) return D3DERR_INVALIDCALL;
     *ppTex = nullptr;
     if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+    const HRESULT autogenHr =
+        peAutogenTextureCreationHResult(usage, pool, levels, false);
+    if (FAILED(autogenHr)) return autogenHr;
     const HRESULT levelHr = peTextureLevelCountHResult(size, size, levels);
     if (FAILED(levelHr)) return levelHr;
     // Wine D3D9Ex contract: see CreateTexture above — MANAGED pool
@@ -1543,7 +1552,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateSurface(IDirect3DSurface9* src,
         .srcRect = cs,
         .dstPoint = cd,
     };
-    return appendRecord(
+    const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_UPDATE_SURFACE,
         kLegacyUpdateSurfaceSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
@@ -1554,6 +1563,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateSurface(IDirect3DSurface9* src,
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
+    if (SUCCEEDED(appendHr)) {
+        D3D9PeMarkSurfaceAutogenDirty(dst);
+    }
+    return appendHr;
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateTexture(IDirect3DBaseTexture9* src,
@@ -1815,7 +1828,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::StretchRect(IDirect3DSurface9* src,
         .srcRect = srcRect ? cs : D9CRect{},
         .dstRect = dstRect ? cd : D9CRect{},
     };
-    return appendRecord(
+    const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_STRETCH_RECT,
         kLegacyStretchRectSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
@@ -1826,6 +1839,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::StretchRect(IDirect3DSurface9* src,
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
+    if (SUCCEEDED(appendHr)) {
+        D3D9PeMarkSurfaceAutogenDirty(dst);
+    }
+    return appendHr;
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
@@ -1864,7 +1881,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
         .reserved0 = 0u,
         .rect = pRect ? cr : D9CRect{},
     };
-    return appendRecord(
+    const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
@@ -1874,6 +1891,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
+    if (SUCCEEDED(appendHr)) {
+        D3D9PeMarkSurfaceAutogenDirty(pSurf);
+    }
+    return appendHr;
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateOffscreenPlainSurface(UINT w, UINT h,

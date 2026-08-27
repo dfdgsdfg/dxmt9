@@ -167,6 +167,33 @@ behaviour in R-FORMAT-11..14, R-CORE-3.9).
 | `RAWZ` | none | **Unsupported** | Legacy NVIDIA raw-depth read; no Metal path. |
 | `ATI1` / `ATI2` | BC4_RUnorm / BC5_RGUnorm | **Required** | Compressed; see Compressed Texture Formats table. |
 
+R-FORMAT-15 fixes the Metal shader ABI for the three depth-as-texture formats.
+For an active ordinary fragment sample, pipeline resolution classifies the
+bound resource from the pool, records the stage mask in `ShaderVariantKey`, and
+emits a direct `depth2d<float>` parameter. Metal's scalar depth result is
+widened to the D3D single-channel value `(depth, 0, 0, 1)`. The slot-30
+resource-array lane remains color-`texture2d` only and fails closed for all
+native depth resources. GET4 is deliberately orthogonal: it keeps the existing
+direct gather compatibility lowering and is also excluded from the resource
+array.
+
+R-FORMAT-16 separates the two mip topologies that D3D9 AUTOGEN requires.
+`TextureDesc::levels` remains the public topology (`1`), while
+`TextureRecord::physicalMipLevels` is the full base-extent pyramid used to
+create the Metal texture and its shader views. PE texture objects own the
+recorder-thread-confined `Clean`/`Dirty` semantic state. Successful level-0
+surface writes enter `Dirty` regardless of whether they came from CPU unlock,
+render-target clear/draw, `UpdateSurface`, `StretchRect`, or `ColorFill`; an
+ordered `UpdateTexture` generates its AUTOGEN destination within the copy
+operation. A sampling draw first publishes the preceding command chunk,
+crosses the replay drain fence, generates the hidden pyramid through the WMT
+blit encoder, settles `Clean`, and then records the draw. Generation failure
+preserves `Dirty` and fails the draw. `AutogenMipGeneration.tla` owns the
+bounded write/publish/generate/sample refinement. Native evidence consists of
+the model-bound dirty transition truth table and a real RGBA16Float 1024x1024,
+11-level Metal reduction oracle; Wine conformance pins the capability result
+and one-level public API.
+
 ### FETCH4 sampler control
 
 ATI FETCH4 is a sampler-state control rather than a creatable format. Writing

@@ -26,6 +26,7 @@
 //   - dlls/d3d9/texture.c::d3d9_texture_gen_auto_mipmap
 
 #include "core_spec_fixtures.hpp"
+#include "d3d9_pe_autogen_mipmap.hpp"
 
 #include <memory>
 
@@ -38,6 +39,27 @@ namespace {
 constexpr u32 kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr u32 kD3DPoolManaged = 1u;
 constexpr u32 kD3DFmtA8R8G8B8 = 21u;
+
+void testAutogenDirtyTransitionTruthTable() {
+  using dxmt9::d3d9::pe::AutogenMipmapEvent;
+  using dxmt9::d3d9::pe::AutogenMipmapState;
+  using dxmt9::d3d9::pe::transitionAutogenMipmap;
+
+  const auto disabled = transitionAutogenMipmap(
+      AutogenMipmapState{}, AutogenMipmapEvent::RenderTargetWrite);
+  check(!disabled.generationRequired(), "disabled AUTOGEN ignores writes");
+
+  const AutogenMipmapState clean{.enabled = true, .dirty = false};
+  const auto dirty = transitionAutogenMipmap(
+      clean, AutogenMipmapEvent::RenderTargetWrite);
+  check(dirty.generationRequired(), "RT write makes AUTOGEN dirty");
+  const auto failed = transitionAutogenMipmap(
+      dirty, AutogenMipmapEvent::GenerationFailed);
+  check(failed.generationRequired(), "failed generation preserves dirty");
+  const auto settled = transitionAutogenMipmap(
+      failed, AutogenMipmapEvent::GenerationSucceeded);
+  check(!settled.generationRequired(), "successful generation settles clean");
+}
 
 struct TextureDeleter {
   void operator()(D9CTexture* texture) const {
@@ -102,7 +124,10 @@ void testGenerateMipSubLevels2D() {
   // levels=0 with AUTOGENMIPMAP collapses to one declared level on the
   // public ABI; the backend keeps the full mip pyramid internally so
   // generate_mip_sublevels has something to fill.
-  check(texture->obj->levelCount() >= 1u, "2D AUTOGENMIPMAP level count");
+  checkEq(texture->obj->levelCount(), 1u,
+          "2D AUTOGENMIPMAP exposes only level 0");
+  checkEq(fixture.backend->createdTextures.back().levels, 1u,
+          "backend descriptor preserves the public AUTOGEN topology");
 
   // Round-trip the usage field; the PE wrapper relies on this to gate.
   D9CSurfaceDesc desc{};
@@ -194,6 +219,7 @@ void testGenerateMipSubLevelsBackendIsUngated() {
 
 int main() {
   try {
+    testAutogenDirtyTransitionTruthTable();
     testGenerateMipSubLevels2D();
     testGenerateMipSubLevelsCube();
     testGenerateMipSubLevelsVolume();

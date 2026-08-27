@@ -12,4 +12,4 @@ ffff0200 05000051 a00f0000 3f800000 40000000 40400000 40800000
 800f0000 a0e40000 a0e40001 02000001 800f0800 80e40000 0000ffff
 
 [test]
-expect-source pixel contains "pow(dxmt9_cdef0, dxmt9_cdef1)"
+expect-source pixel contains "pow(abs(dxmt9_cdef0), dxmt9_cdef1)"

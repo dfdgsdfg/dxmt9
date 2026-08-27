@@ -114,8 +114,10 @@ Properties:
 - `_pp` (partial precision) hint flag;
 - relative-address tokens parallel to operands (when present).
 
-The `_pp` flag is the load-bearing input to the precision pass (§4). It must
-survive decoding intact.
+The `_pp` flag is an opt-in input to the precision pass (§4). It must survive
+decoding intact, but it is permission to use reduced precision rather than a
+request to quantize the destination value. Until a proved precision plan
+classifies the complete value as `Half`, emission remains full precision.
 
 ### 2.3 Naming Cleanup
 
@@ -254,6 +256,29 @@ This is a translator obligation (a pure value transform per
 R-CORE-SHADER-4.1), not a render-state setting. There is no D3D9 render
 state to disable the clamp.
 
+### 3.6 Reciprocal Instructions
+
+`RCP` is emitted as a direct component-wise reciprocal. In particular, a
+negative denominator remains negative and zero produces infinity. `RSQ` is
+emitted as `rsqrt(abs(src))`, including the zero-to-infinity edge. An epsilon
+clamp is not a legal robustness substitution for either instruction because
+it changes observable D3D9 arithmetic near and below zero
+(R-CORE-SHADER-2.12..2.13).
+
+`POW` is emitted as `pow(abs(src0), src1)`. D3D9 defines the instruction over
+the absolute value of the scalar base; forwarding a negative base directly to
+MSL would produce NaN for non-integral exponents and can poison interpolated
+vertex outputs (R-CORE-SHADER-2.14).
+
+### 3.7 Pixel-Shader Position Input
+
+D3D9 shader-model 3 `vPos` uses integer pixel-center coordinates; the Wine
+`test_fragment_coords` oracle verifies this by requiring `frc(vPos.xy)` to be
+zero. Metal fragment `[[position]]` uses half-integer pixel centers. The input
+lowering therefore emits `float4(position.xy - 0.5, position.zw)` for the
+position `D3DSPR_MISCTYPE` input. The conversion is local to `xy`: depth and
+homogeneous components remain those supplied by Metal (R-CORE-SHADER-2.15).
+
 ---
 
 ## 4. Precision Inference Pass
@@ -298,7 +323,8 @@ The pass is a forward dataflow on a small register file:
 2. Seed remaining temps and outputs from their reaching writes. A register is
    eligible for `Half` only when every reaching write is either `_pp` or comes
    from an explicit pass-owned opt-in source, and no mandatory-Float ancestry
-   reaches it. Mixed `_pp` / non-`_pp` writes collapse to `Float` unless a
+   reaches it. `_pp` alone never inserts an eager `float -> half -> float`
+   conversion. Mixed `_pp` / non-`_pp` writes collapse to `Float` unless a
    future component-local analysis proves the written components independent.
 3. Propagate `Float` forward to a fixed point: any value written from a
    `Float` source, or consumed at a Float-only site, becomes `Float`.

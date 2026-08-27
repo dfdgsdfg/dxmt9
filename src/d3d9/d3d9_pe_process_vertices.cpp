@@ -2125,7 +2125,9 @@ static SimpleVsExecResult executeSimpleProcessVertexShaderRange(
                 break;
             }
             case D3DSIO_POW: {
-                const float value = std::pow(a[0], b[0]);
+                // D3D9 POW is scalar abs(src0)^src1, matching the Metal
+                // emitter used by the draw path.
+                const float value = std::pow(std::abs(a[0]), b[0]);
                 out[0] = out[1] = out[2] = out[3] = value;
                 break;
             }

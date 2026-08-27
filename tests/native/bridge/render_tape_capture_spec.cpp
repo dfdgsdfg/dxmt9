@@ -4166,6 +4166,10 @@ void testLinearLockCaptureLayouts() {
         "L16 pins the authoritative public D3DFORMAT value");
   check(render_tape_d3d_format::R32F == 114u,
         "R32F pins the authoritative public D3DFORMAT value");
+  check(render_tape_d3d_format::A16B16G16R16 == 36u,
+        "A16B16G16R16 pins the authoritative public D3DFORMAT value");
+  check(render_tape_d3d_format::Q8W8V8U8 == 63u,
+        "Q8W8V8U8 pins the authoritative public D3DFORMAT value");
   constexpr std::array supportedFormats{
       std::pair{render_tape_d3d_format::R8G8B8, 3u},
       std::pair{render_tape_d3d_format::A8R8G8B8, 4u},
@@ -4179,11 +4183,13 @@ void testLinearLockCaptureLayouts() {
       std::pair{render_tape_d3d_format::A8, 1u},
       std::pair{render_tape_d3d_format::A8B8G8R8, 4u},
       std::pair{render_tape_d3d_format::X8B8G8R8, 4u},
+      std::pair{render_tape_d3d_format::A16B16G16R16, 8u},
       std::pair{render_tape_d3d_format::A8P8, 2u},
       std::pair{render_tape_d3d_format::P8, 1u},
       std::pair{render_tape_d3d_format::L8, 1u},
       std::pair{render_tape_d3d_format::A8L8, 2u},
       std::pair{render_tape_d3d_format::V8U8, 2u},
+      std::pair{render_tape_d3d_format::Q8W8V8U8, 4u},
       std::pair{render_tape_d3d_format::L16, 2u},
   };
   for (const auto [format, bytesPerPixel] : supportedFormats) {

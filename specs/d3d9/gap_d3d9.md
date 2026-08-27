@@ -38,7 +38,7 @@ Severity legend (used uniformly across the file):
 | Area | Current status |
 |---|---|
 | Unclassified silent D3D9 coverage gaps | **None in the current silent-coverage track.** This means known silent fall-throughs have been implemented or classified; it does not mean the full D3D9 feature surface is complete. |
-| Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
+| Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` is decoded and conservatively executed at full precision while `_MSAMPCENTROID` is lowered/tested. |
 | Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops and initial getter values, sampler border color, mip LOD bias, and max mip level are closed. The complete non-dead render-state plus public TSS/sampler initial-value matrix is pinned by `dxmt9-state-draw-transform-spec`; the PE `test_texture_stage_states` scaffold now preserves the upstream initial-value checks instead of testing only Set/Get round-trips. |
 | Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the covered fixed-function and programmable subsets, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, AA line raster toggle, `ComposeRects`, and convolution kernel. |
 | Remaining no-op/default stub surface | `SetDialogBoxMode`, `Set/GetClipStatus` clip-accumulation, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetNPatchMode`, `DeletePatch`, GPU thread priority, resource residency, and swapchain present stats use Wine-compatible no-op/default contracts rather than a real backend feature. |
@@ -96,7 +96,7 @@ a `file:line` anchor checked against the live tree.
 | `AlphaCmpCaps` sourced from `alphaCmpCaps` | C.7 | `src/d3d9/device_c_format_utils.cpp:295`; `src/d3d9/d3d9_pe_factory.cpp:268` |
 | `AdapterIdentifier9` DeviceIdentifier GUID + WHQLLevel populated (stable FNV-1a) | C.9 | `src/d3d9/core_factory.cpp:276-299,303-327` |
 | `D3DRASTER_STATUS::ScanLine` synthesized (monotonic) | C.10/C.11 | `src/d3d9/d3d9_pe_device_com_cold.cpp` `GetRasterStatus` |
-| `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState`, with normalized constant bias scaled from the actual Metal depth format | B.10#1 | `src/dxmt9/dxmt9_format_convert.cpp` `toMetalDepthBiasConstant`; `src/dxmt9/dxmt9_render_pass_internal.hpp` `metalDepthBiasForDrawState`; positive and negative shader-corpus readbacks |
+| `D3DRS_DEPTHBIAS` + `SLOPESCALEDEPTHBIAS` → Metal `setRasterizerState`, with normalized constant bias scaled from the logical D3D9 depth precision (including DF24 on a Depth32Float backing) | B.10#1 | `src/dxmt9/dxmt9_format_convert.cpp` `toMetalDepthBiasConstant`; `src/dxmt9/dxmt9_render_pass_internal.hpp` `metalDepthBiasForDrawState`; native logical/physical conversion truth table plus positive and negative shader-corpus readbacks |
 | `D3DLIGHT_POINT` / `D3DLIGHT_SPOT` FFP lighting (Position/Range/Atten/Theta/Phi) | B.5/B.10#5 | `src/dxmt9/dxmt9_ffp_shaders.cpp:168-284` |
 | `D3DGAMMARAMP` real impl + PE shadow + unix bridge | B.9/D.* | `src/d3d9/d3d9_pe_device.cpp:578-612 (citation unresolved — could not verify against source history),2244-2261` |
 | `INTZ` vendor format accepted | C.5 | `src/d3d9/device_c_format_utils.cpp:85` |
@@ -118,7 +118,7 @@ a `file:line` anchor checked against the live tree.
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) per-face stencil ops (closed 2026-05-24) | B.10#7 | `19f4274`+`fc10a5b`; mode-on → back-face ops from CCW render states (`MTLDepthStencilDescriptor.backFaceStencil`); mode-off mirrors front (byte-identical default). Also fixed a latent CCW-state leak. Gate `dxmt9-stencil-ref-spec`. |
 | `D3DCLIPSTATUS9` Set/GetClipStatus — Wine-matching stub + defined default (closed 2026-05-24) | B.8/D.* | `6f190b9`+`fbfd917` (A'); reject null, accept-without-store, GetClipStatus returns the defined all-visible default. No HW clip-flag accumulation exists (matches wined3d). Gate `dxmt9-core-device-com-spec` (native) + `d3d9_device_misc.cpp` (conformance, compiles; Wine-run deferred). |
 | COM silent-`S_OK` stub gates — SetNPatchMode/GetNPatchMode, DeletePatch, Set/GetClipStatus (closed 2026-05-24) | D.* | `6f190b9`; conformance gates in `d3d9_device_misc.cpp` pin the documented no-op/INVALIDCALL contracts (compiles in the win32 PE build; Wine-run validation deferred). |
-| Shader dst modifiers `_SATURATE`, `_PARTIALPRECISION`, and `_MSAMPCENTROID` | A.6 | `_SATURATE` clamps destination values, `_PARTIALPRECISION` lowers through half precision, and `_MSAMPCENTROID` marks matching PS inputs as `[[centroid_perspective]]`; gate `shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering`, `testPs30CentroidInputModifierLowersToMslInterpolation`, and `test_visual_process_vertices_xyzhw_policy` |
+| Shader dst modifiers `_SATURATE`, `_PARTIALPRECISION`, and `_MSAMPCENTROID` | A.6 | `_SATURATE` clamps destination values, `_PARTIALPRECISION` remains decoded metadata but executes at full precision until a proved precision plan selects `Half`, and `_MSAMPCENTROID` marks matching PS inputs as `[[centroid_perspective]]`; gate `shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionUsesFullPrecision`, `testPs30CentroidInputModifierLowersToMslInterpolation`, and `test_visual_process_vertices_xyzhw_policy` |
 | `D3DRS_COLORVERTEX` FFP material-source gate | B.1 | `src/d3d9/core_draw.cpp:2169-2170`; gate `ffp_key_determinism_spec.cpp` |
 | D3D9 initial state defaults | B.1/B.2/B.3 | `DeviceState::reset()` now uses `FOGVERTEXMODE=NONE`, `FOGSTART=0.0f`, and full-width stencil masks; device construction/reset derives `ZENABLE` from `EnableAutoDepthStencil`; getter fallbacks expose FILLMODE, TEXTUREFACTOR, point/tessellation, and TSS ARG0 defaults without expanding hot draw snapshots. Full native matrix: `state_draw_transform_spec:testInitialD3D9StateMatrix`; PE TSS defaults: `test_texture_stage_states`. |
 | Missing NORMAL FFP lighting contract | B.1/B.5 | FFP MSL emits a zero lighting normal when the declaration has no NORMAL, including POSITIONT and no-layout fallback paths, so all light dot products are zero as required; gate `core_ffp_state_key_spec:testFixedFunctionDeclarationMissingInputsEmitD3DDefaults`. |
@@ -298,8 +298,8 @@ deferred.
 | SUB | 3 | ✅ | dxmt9_d3d9_bytecode.hpp:82; dxmt9_shader_metal_ir.cpp:1444, 2522 | opcode_audit_spec.cpp:65 | |
 | MAD | 4 | ✅ | dxmt9_d3d9_bytecode.hpp:83; dxmt9_shader_metal_ir.cpp:1446, 2524 | opcode_audit_spec.cpp:66 | |
 | MUL | 5 | ✅ | dxmt9_d3d9_bytecode.hpp:84; dxmt9_shader_metal_ir.cpp:1445, 2523 | opcode_audit_spec.cpp:67 | |
-| RCP | 6 | ✅ | dxmt9_d3d9_bytecode.hpp:85; dxmt9_shader_metal_ir.cpp:1463, 2541 | opcode_audit_spec.cpp:68 | |
-| RSQ | 7 | ✅ | dxmt9_d3d9_bytecode.hpp:86; dxmt9_shader_metal_ir.cpp:1464, 2542 | opcode_audit_spec.cpp:69 | |
+| RCP | 6 | ✅ | dxmt9_d3d9_bytecode.hpp:85; dxmt9_shader_metal_ir.cpp | opcode_audit_spec.cpp:68; shader_transform_spec.cpp:testReciprocalEdgeLoweringContracts | direct reciprocal preserves sign and zero-to-infinity semantics |
+| RSQ | 7 | ✅ | dxmt9_d3d9_bytecode.hpp:86; dxmt9_shader_metal_ir.cpp | opcode_audit_spec.cpp:69; shader_transform_spec.cpp:testReciprocalEdgeLoweringContracts | `rsqrt(abs(src))`; zero remains infinity |
 | DP3 | 8 | ✅ | dxmt9_d3d9_bytecode.hpp:87; dxmt9_shader_metal_ir.cpp:1467, 2545 | opcode_audit_spec.cpp:70 | |
 | DP4 | 9 | ✅ | dxmt9_d3d9_bytecode.hpp:88; dxmt9_shader_metal_ir.cpp:1468, 2546 | opcode_audit_spec.cpp:71 | |
 | MIN | 10 | ✅ | dxmt9_d3d9_bytecode.hpp:89; dxmt9_shader_metal_ir.cpp:1447, 2525 | opcode_audit_spec.cpp:72 | |
@@ -324,7 +324,7 @@ deferred.
 | ENDLOOP | 29 | ✅ | dxmt9_d3d9_bytecode.hpp:108; dxmt9_shader_metal_ir.cpp:1303, 2345 | opcode_audit_spec.cpp:89 | |
 | LABEL | 30 | 🔵 | dxmt9_d3d9_bytecode.hpp:109; dxmt9_shader_metal_ir.cpp:1188, 2234 | opcode_audit_spec.cpp:90; shader_bytecode_validation_spec.cpp:254 | label opcode is inlined, but `D3DSPR_LABEL` reg kind is rejected (DecoderRejectReason::LabelUnsupported) |
 | DCL | 31 | ✅ | dxmt9_d3d9_bytecode.hpp:110; dxmt9_shader_metal_ir.cpp:786, 832, 1775 | opcode_audit_spec.cpp:91; core_shader_translator_spec.cpp:250 | |
-| POW | 32 | ✅ | dxmt9_d3d9_bytecode.hpp:111; dxmt9_shader_metal_ir.cpp:1472, 2550 | opcode_audit_spec.cpp:92 | |
+| POW | 32 | ✅ | dxmt9_d3d9_bytecode.hpp:111; dxmt9_shader_metal_ir.cpp | opcode_audit_spec.cpp:92; shader_transform_spec.cpp:testPs30ArithmeticOpcodeLoweringContracts | `pow(abs(src0), src1)` in both GPU emitter paths; PE ProcessVertices interpreter matches |
 | CRS | 33 | ✅ | dxmt9_d3d9_bytecode.hpp:112; dxmt9_shader_metal_ir.cpp:1473, 2551 | opcode_audit_spec.cpp:93 | |
 | SGN | 34 | ✅ | dxmt9_d3d9_bytecode.hpp:113; dxmt9_shader_metal_ir.cpp:1474, 2552 | opcode_audit_spec.cpp:94 | |
 | ABS | 35 | ✅ | dxmt9_d3d9_bytecode.hpp:114; dxmt9_shader_metal_ir.cpp:1475, 2553 | opcode_audit_spec.cpp:95 | |
@@ -470,9 +470,9 @@ explicitly instead of being silently treated as direct vertex fetches.
 
 | Modifier | D3DSPDM | Mask | Status | Source anchor | Test anchor | Notes |
 |---|---|---|---|---|---|---|
-| NONE | _NONE | 0 | ✅ | dxmt9_shader_decoder.cpp:decodeDestModifier; dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | default; emitter leaves the value unchanged |
-| SATURATE | _SATURATE | 0x1 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering; `test_visual_process_vertices_xyzhw_policy` | applied as `clamp(..., 0, 1)` and bitmask-composable with `_pp`; ProcessVertices programmable VS readback covers saturated COLOR0 output |
-| PARTIAL_PRECISION | _PARTIALPRECISION | 0x2 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering | lowers the destination value through `float4(half4(...))`; the separate whole-fragment-source `DXMT9_FS_HALF_PRECISION` experiment has been removed (non-functional) |
+| NONE | _NONE | 0 | ✅ | dxmt9_shader_decoder.cpp:decodeDestModifier; dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionUsesFullPrecision | default; emitter leaves the value unchanged |
+| SATURATE | _SATURATE | 0x1 | ✅ | dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionUsesFullPrecision; `test_visual_process_vertices_xyzhw_policy` | applied as `clamp(..., 0, 1)` and bitmask-composable with `_pp`; ProcessVertices programmable VS readback covers saturated COLOR0 output |
+| PARTIAL_PRECISION | _PARTIALPRECISION | 0x2 | ✅ | dxmt9_shader_decoder.cpp:decodeDestModifier; dxmt9_shader_metal_ir.cpp:applyDestModifier | shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionUsesFullPrecision | modifier metadata is preserved, but execution remains full precision until a proved precision plan selects `Half`; the separate whole-fragment-source `DXMT9_FS_HALF_PRECISION` experiment has been removed (non-functional) |
 | CENTROID | _MSAMPCENTROID | 0x4 | ✅ | dxmt9_shader_decoder.cpp:collectPixelInputSemantics; dxmt9_shader_metal_ir.cpp:makePreludeOptions; dxmt9_shader_sources.cpp:makeShaderPrelude | shader_transform_spec.cpp:testPs30CentroidInputModifierLowersToMslInterpolation | pixel-input DCL modifier lowers to `[[centroid_perspective]]` on matching VSOut varyings |
 | PREDICATED-instr bit | n/a | bit 28 of instr token | ✅ | dxmt9_shader_decoder.cpp:1387; dxmt9_shader_metal_ir.cpp:1142, 2188 | shader_transform_spec.cpp:1289 (`predicated == true`) | per-instruction predicate guard |
 
@@ -688,7 +688,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | COLORWRITEENABLE3 | 192 | ✅ `core::RS_COLOR_WRITE_ENABLE3` | ✅ | ⚠️ | ✅ per-RT blend attachment mask | ✅ backend pipeline-key gate | Closed 2026-05-24 |
 | BLENDFACTOR | 193 | ✅ `core::RS_BLEND_FACTOR` (core_constants.hpp:387) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:62` (using-decl); fed into setBlendColor | ⚠️ no spec | RGBA u32 split to 4 floats |
 | SRGBWRITEENABLE | 194 | ✅ `core::RS_SRGB_WRITE_ENABLE` (core_constants.hpp:388) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:629`, `dxmt9_draw_encoder.mm:951` | ⚠️ implicit via pipeline key | |
-| DEPTHBIAS | 195 | ✅ `core::RS_DEPTH_BIAS` (`core_constants.hpp`) | ✅ | ⚠️ | ✅ `toMetalDepthBiasConstant` scales normalized bias by the active Metal depth format | ✅ native conversion truth table plus positive/negative GPU readbacks | Closed 2026-08-26; D24S8 fallback uses D32F units |
+| DEPTHBIAS | 195 | ✅ `core::RS_DEPTH_BIAS` (`core_constants.hpp`) | ✅ | ⚠️ | ✅ `toMetalDepthBiasConstant` scales normalized bias by the logical D3D9 precision where required and the active Metal format otherwise | ✅ native logical/physical conversion truth table plus positive/negative GPU readbacks | Closed 2026-08-26; corrected 2026-08-27 so DF24 retains 24-bit units on its Depth32Float backing; D24S8 fallback policy remains D32F units |
 | (196 dead) | 196 | n/a | n/a | n/a | n/a | n/a | |
 | (197 dead) | 197 | n/a | n/a | n/a | n/a | n/a | |
 | WRAP8 | 198 | ✅ `core::RS_WRAP8` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | Shadowed/readable; representative high-range wrap coverage |
@@ -1029,9 +1029,9 @@ closure list for behavioral gates.
 
 | Name | FOURCC | defined | mapped | runtime-use | test | Notes |
 |---|---|---|---|---|---|---|
-| INTZ | 'INTZ' (0x5a544e49) | OK | OK | OK | OK | depth-as-texture pseudo-format backed by Depth32Float; shader read + depth usage covered. |
-| DF16 | 'DF16' (0x36314644) | OK | OK | OK | OK | DF16 vendor depth-as-texture path mirrors INTZ policy with Depth16Unorm storage. |
-| DF24 | 'DF24' (0x34324644) | OK | OK | OK | OK | DF24 vendor depth-as-texture path mirrors INTZ/Depth32Float policy. |
+| INTZ | 'INTZ' (0x5a544e49) | OK | OK | OK | OK | Depth32Float storage; ordinary sampling uses the R-FORMAT-15 typed `depth2d` direct lane and GET4 retains its direct gather lane. |
+| DF16 | 'DF16' (0x36314644) | OK | OK | OK | OK | Depth16Unorm storage; typed ordinary sampling, PSO non-aliasing, resource-array rejection, and Metal depth readback are covered. |
+| DF24 | 'DF24' (0x34324644) | OK | OK | OK | OK | Depth32Float storage; same R-FORMAT-15 contract as INTZ, exercised by the HDR/shadow source path. |
 | RAWZ | 'RAWZ' (0x5a574152) | OK | OK | NO | OK | explicitly classified unsupported; CheckDeviceFormat returns NOTAVAILABLE. |
 | RESZ | 'RESZ' (0x5a534552) | OK | OK | OK | OK | write-only sentinel command; MSAA depth resolve into INTZ has shader-corpus readback coverage. |
 | NULL | 'NULL' (0x4c4c554e) | OK | OK | OK | OK | colorless render target with no color backing; NULL RT depth-only runtime probe covered. |
@@ -1042,6 +1042,12 @@ closure list for behavioral gates.
 | R2VB | 'R2VB' | NO | NO | NO | NO | absent. |
 | ATI1 | 'ATI1' (826889281) | OK | OK | OK | OK | -> `BC4_RUnorm` (single-channel BC4). `core_format_caps_spec.cpp:122`. |
 | ATI2 | 'ATI2' (843666497) | OK | OK | OK | OK | -> `BC5_RGUnorm` (two-channel BC5). `core_format_caps_spec.cpp:118-135`. |
+
+R-FORMAT-15 evidence is split by boundary: `dxmt9-backend-pipeline-key-spec`
+pins pool-format classification and PSO non-aliasing;
+`dxmt9-shader-transform-spec` pins translated and FFP MSL plus fail-closed
+argument-buffer routing; and `dxmt9-render-tape-d24x8-snapshot-metal-spec`
+executes a real `depth2d<float>` readback oracle on Metal.
 
 ### C.7 D3DCAPS9 fields
 
@@ -1310,7 +1316,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | EnumAdapterModes | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_factory.cpp:422` | `test_ex_adapter_mode_enum_bounds` |
 | GetAdapterDisplayMode | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_factory.cpp:442` | `test_device_display_mode_adapter_format` |
 | CheckDeviceType | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_factory.cpp:459` | `test_factory_validation_return_codes` |
-| CheckDeviceFormat | ⚠️ | ✅ | ✅ | ⚠️ | `d3d9_pe_factory.cpp:489` | T3 (2026-05-08, `9980d5c` lineage): rejects VB/IB rtype with INVALIDCALL, downgrades AUTOGENMIPMAP success to `D3DOK_NOAUTOGEN`; `test_factory_caps_edge_matrix` |
+| CheckDeviceFormat | ⚠️ | ✅ | ✅ | ⚠️ | `d3d9_pe_factory.cpp` | T3 rejects VB/IB rtype with INVALIDCALL. R-FORMAT-16 promotes supported AUTOGENMIPMAP formats to `D3D_OK`; public level count remains one and the backend owns the generated hidden chain. The 2026-08-27 builtin AUTOGEN conformance lane passes 4/4 tests (55 checks), the native RGBA16Float Metal reduction oracle passes, and the HDR1 `hdr1-autogen-fix-r115` wild artifact completes with no former water crop/checker pattern, GPU command-buffer error, chunk reject, or missing-pipeline draw. The broader factory row remains partial for the independent adapter/display/resource-type validation gaps. |
 | CheckDeviceMultiSampleType | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_factory.cpp:560` | `test_invalid_multisample_render_target_quality` |
 | CheckDepthStencilMatch | ⚠️ | ✅ | ✅ | ⚠️ | `d3d9_pe_factory.cpp:595` | T3: real bit-depth compatibility via `dxmt9FormatPair_isDepthStencilCompatible` (not unconditional S_OK) |
 | CheckDeviceFormatConversion | ⚠️ | ✅ | ✅ | ⚠️ | `d3d9_pe_factory.cpp:615` | T3: real pair check (identity + A8R8G8B8↔X8R8G8B8); `test_check_device_format_conversion_matrix` |

@@ -376,6 +376,47 @@ test('dxmt9-parallel-draw-binding-metal-spec',
      is_parallel: false,
      timeout: 30)
 
+# Concrete Metal oracle for analytically controlled implicit texture gradients.
+# This pins the native LOD convention separately from D3D9 sampler translation.
+sampler_implicit_lod_metal_spec = executable(
+  'dxmt9-sampler-implicit-lod-metal-spec',
+  'sampler_implicit_lod_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-sampler-implicit-lod-metal-spec',
+     sampler_implicit_lod_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
+# Concrete WMT/Metal oracle for complete RGBA16Float automatic mip generation.
+# The fixture fills a non-uniform 1024x1024 level 0, issues the production WMT
+# blit generateMipmaps command, and checks every adjacent level against a 2x2
+# box reduction (including the HDR1 mip-2 crop failure shape).
+wmt_generate_mipmaps_metal_spec = executable(
+  'dxmt9-wmt-generate-mipmaps-metal-spec',
+  'wmt_generate_mipmaps_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-wmt-generate-mipmaps-metal-spec',
+     wmt_generate_mipmaps_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 # Concrete Render Tape D24X8 capability fixture. The roundtrip deliberately
 # converts through shaders so no physical depth/stencil byte layout is assumed.
 render_tape_d24x8_snapshot_metal_spec = executable(

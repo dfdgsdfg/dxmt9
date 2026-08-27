@@ -468,6 +468,12 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
   hash ^= hot.pixelConstantsHash << 2;
   if (pool) {
     hash ^= static_cast<u64>(x8AlphaOneTextureMaskForDraw(drawState, *pool)) << 5;
+    const u32 activeFragmentTextureMask =
+        drawshader::activeFragmentTextureMaskForShader(
+            shader.pixelShader, hot.textureMask);
+    hash ^= static_cast<u64>(pipeline::sampledDepthTextureMaskForDraw(
+                                  *pool, drawState, activeFragmentTextureMask))
+            << 6;
   }
   if (fragmentlessDepthOnly) {
     hash ^= debug::probeFragmentlessDepthOnlyKeepVSOut()
@@ -479,6 +485,7 @@ u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
 
 u64 shaderSourceAttributionKeyForDraw(
     core::FlatDrawStateView drawState,
+    u32 sampledDepthTextureMask = 0,
     std::optional<bool> forceTextureWhiteOverride = std::nullopt,
     bool fragmentlessDepthOnly = false) {
   if (!drawState.hot || !drawState.hasShaderContext()) {
@@ -497,6 +504,7 @@ u64 shaderSourceAttributionKeyForDraw(
   hash = mix(hash, hot.key.renderStateHash);
   hash = mix(hash, hot.textureMask);
   hash = mix(hash, hot.renderTargetMask);
+  hash = mix(hash, sampledDepthTextureMask);
   hash = mix(hash, hot.clipPlaneMask);
   hash = mix(hash, hot.colorAttachments[0].sampleCount);
   for (const auto textureTypeHash : hot.key.textureStageStateHashes) {
@@ -536,6 +544,10 @@ u32 vsOutLayoutKeyForDraw(core::FlatDrawStateView drawState,
   context.stripFogForDebug = debug::disableFog();
   context.forceTextureWhiteForDebug =
       forceTextureWhiteOverride.value_or(debug::forceTextureWhite());
+  context.forceTextureWhiteSamplerMaskForDebug =
+      debug::forceTextureWhiteSamplerMask();
+  context.forceSampledDepthWhiteForDebug =
+      debug::forceSampledDepthWhite();
   try {
     context.vsOutLayout = drawshader::resolveVSOutLayoutForShaderPair(context);
     return shaders::vsoutLayoutKey(context.vsOutLayout);
@@ -565,6 +577,7 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
                                              bool samplerLodBias,
                                              u32 fetch4SamplerMask,
                                              u32 x8AlphaOneTextureMask,
+                                             u32 sampledDepthTextureMask,
                                              std::optional<bool> forceTextureWhiteOverride = std::nullopt,
                                              bool fragmentlessDepthOnly = false) {
   ShaderSourceHashes hashes{};
@@ -579,12 +592,18 @@ ShaderSourceHashes shaderSourceHashesForDraw(core::FlatDrawStateView drawState,
   context.stripFogForDebug = debug::disableFog();
   context.forceTextureWhiteForDebug =
       forceTextureWhiteOverride.value_or(debug::forceTextureWhite());
+  context.forceTextureWhiteSamplerMaskForDebug =
+      debug::forceTextureWhiteSamplerMask();
+  context.forceSampledDepthWhiteForDebug =
+      debug::forceSampledDepthWhite();
   context.argbufHybridMode = argbufHybridMode;
-  context.argbufResourceArray = argbufHybridMode && argbufResourceArray;
+  context.argbufResourceArray = argbufHybridMode && argbufResourceArray &&
+                                sampledDepthTextureMask == 0u;
   context.argbufDirectCbufMode =
       argbufHybridMode && !context.argbufResourceArray && argbufDirectCbufMode;
   context.samplerLodBias = samplerLodBias;
   context.fetch4SamplerMask = fetch4SamplerMask;
+  context.sampledDepthTextureMask = sampledDepthTextureMask;
   context.x8AlphaOneTextureMask = x8AlphaOneTextureMask;
   try {
     if (fragmentlessDepthOnly) {
@@ -622,8 +641,15 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
   }
   const auto variantHash =
       shaderVariantHashForDraw(drawState, &pool, fragmentlessDepthOnly);
+  const u32 activeFragmentTextureMask = drawState.hasShaderContext()
+      ? drawshader::activeFragmentTextureMaskForShader(
+            drawState.shaderContext().pixelShader, drawState.hot->textureMask)
+      : 0u;
+  const u32 sampledDepthTextureMask = pipeline::sampledDepthTextureMaskForDraw(
+      pool, drawState, activeFragmentTextureMask);
   const auto sourceKey =
-      shaderSourceAttributionKeyForDraw(drawState, forceTextureWhiteOverride,
+      shaderSourceAttributionKeyForDraw(drawState, sampledDepthTextureMask,
+                                        forceTextureWhiteOverride,
                                         fragmentlessDepthOnly);
   u64 vertexShaderHash = 0;
   u64 pixelShaderHash = 0;
@@ -642,10 +668,6 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
                                              vsOutLayoutKey);
   }
   const bool samplerLodBias = anySamplerLodBiasNonzero(drawState);
-  const u32 activeFragmentTextureMask = drawState.hasShaderContext()
-      ? drawshader::activeFragmentTextureMaskForShader(
-            drawState.shaderContext().pixelShader, drawState.hot->textureMask)
-      : 0u;
   const u32 fetch4SamplerMask =
       pipeline::fetch4SamplerMaskForDraw(pool, drawState, activeFragmentTextureMask);
   const u32 x8AlphaOneTextureMask = x8AlphaOneTextureMaskForDraw(drawState, pool);
@@ -662,7 +684,7 @@ void recordPsoAttributionForDraw(ActiveEncoderBreakdown* encoderBreakdown,
     const auto sourceHashes = shaderSourceHashesForDraw(
         drawState, tileFfpMode, argbufHybridMode, argbufResourceArray,
         argbufDirectCbufMode, samplerLodBias, fetch4SamplerMask,
-        x8AlphaOneTextureMask,
+        x8AlphaOneTextureMask, sampledDepthTextureMask,
         forceTextureWhiteOverride, fragmentlessDepthOnly);
     vertexShaderSourceHash = sourceHashes.vertex;
     pixelShaderSourceHash = sourceHashes.pixel;
@@ -1003,6 +1025,15 @@ bool forceTextureWhiteProbeTextureMatches(core::FlatDrawStateView drawState,
                                debug::probeForceTextureWhiteTexture0Format());
 }
 
+bool forceTextureWhiteProbePixelShaderMatches(core::FlatDrawStateView drawState) {
+  const auto filter = debug::probeForceTextureWhitePixelShaderHash();
+  if (!filter.has_value()) {
+    return true;
+  }
+  return drawState.hasShaderContext() &&
+         drawState.shaderContext().pixelShader.hash == *filter;
+}
+
 bool forceTextureWhiteProbeDrawOrdinalMatches(u64 drawOrdinal) {
   const auto range = debug::probeForceTextureWhiteDrawOrdinalRange();
   const auto list = debug::probeForceTextureWhiteDrawOrdinalList();
@@ -1070,7 +1101,7 @@ void appendIndexedGeometryTextureMetadata(std::ostringstream& meta,
   }
   const auto& hot = *drawState.hot;
   meta << "texture_mask=0x" << std::hex << hot.textureMask << std::dec << "\n";
-  for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
     const auto handle = hot.textures[stage];
     if (!handle) {
       continue;
@@ -2582,6 +2613,15 @@ WMTSamplerBorderColor resolveSamplerBorderColor(u32 value) {
   }
 }
 
+WMTSamplerMinMagFilter resolveSamplerMinMagFilter(u32 value) {
+  // D3DTEXF_POINT is 1, LINEAR is 2, and ANISOTROPIC is 3. Metal controls
+  // anisotropy separately through max_anisotroy, but still requires the
+  // min/mag filter to be linear. Treat every supported value above POINT as
+  // linear so D3DTEXF_ANISOTROPIC does not silently degrade to nearest.
+  return value > 1u ? WMTSamplerMinMagFilterLinear
+                    : WMTSamplerMinMagFilterNearest;
+}
+
 void appendSamplerTrace(std::ostringstream& out,
                         const core::FlatStateSet<core::kMaxSamplerStates>& states,
                         bool srgbTexture) {
@@ -2593,10 +2633,18 @@ void appendSamplerTrace(std::ostringstream& out,
   const auto addressW = samplerStateOr(states, SAMP_ADDRESS_W, 1u);
   const auto borderColor = samplerStateOr(states, SAMP_BORDER_COLOR, 0u);
   const auto maxMipLevel = samplerStateOr(states, SAMP_MAX_MIP_LEVEL, 0u);
+  const auto mipLodBiasBits = samplerStateOr(
+      states, core::SAMP_MIPMAP_LOD_BIAS, std::bit_cast<u32>(0.0f));
+  const auto mipLodBias =
+      mipLodBiasBits == core::kFourCcGet4 || mipLodBiasBits == core::kFourCcGet1
+          ? 0.0f
+          : std::bit_cast<f32>(mipLodBiasBits);
   out << " addr=(" << addressU << "," << addressV << "," << addressW << ")"
       << " filter=(" << minFilter << "," << magFilter << "," << mipFilter << ")"
       << " border=0x" << std::hex << borderColor << std::dec
       << " maxMip=" << maxMipLevel
+      << " mipBias=" << mipLodBias
+      << " mipBiasBits=0x" << std::hex << mipLodBiasBits << std::dec
       << " srgbTex=" << (srgbTexture ? 1 : 0);
 }
 
@@ -2632,8 +2680,8 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   const auto maxAnisotropy = samplerStateOr(snapshot, SAMP_MAX_ANISOTROPY, 0u);
   const auto maxMipLevel = samplerStateOr(snapshot, SAMP_MAX_MIP_LEVEL, 0u);
   WMTSamplerInfo info{};
-  info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
-  info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
+  info.min_filter = resolveSamplerMinMagFilter(minFilter);
+  info.mag_filter = resolveSamplerMinMagFilter(magFilter);
   switch (mipFilter) {
     case 2u: info.mip_filter = WMTSamplerMipFilterLinear; break;
     case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
@@ -2713,8 +2761,8 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
   const auto maxAnisotropy = samplerStateOr(states, SAMP_MAX_ANISOTROPY, 0u);
   const auto maxMipLevel = samplerStateOr(states, SAMP_MAX_MIP_LEVEL, 0u);
   WMTSamplerInfo info{};
-  info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
-  info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
+  info.min_filter = resolveSamplerMinMagFilter(minFilter);
+  info.mag_filter = resolveSamplerMinMagFilter(magFilter);
   switch (mipFilter) {
     case 2u: info.mip_filter = WMTSamplerMipFilterLinear; break;
     case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
@@ -2996,8 +3044,30 @@ bool encodeDraw(EncodeContext& ctx,
                   {}};
   const bool traceEncode = debug::shouldTraceEncode(hot, seqId) ||
                            colorAttachmentAliasesTracedTexture(ctx.pool, hot);
+  // This local classification is needed only to suppress the optional
+  // homogeneous resource-array lane. The pipeline resolver independently
+  // stamps sampled-depth source identity; do not add another pool walk to the
+  // default direct-binding hot path.
+  const u32 activeFragmentTextureMask =
+      argbufResourceArray && drawState.hasShaderContext()
+      ? drawshader::activeFragmentTextureMaskForShader(
+            drawState.shaderContext().pixelShader, hot.textureMask)
+      : 0u;
+  const u32 sampledDepthTextureMask = argbufResourceArray
+      ? pipeline::sampledDepthTextureMaskForDraw(
+            ctx.pool, drawState, activeFragmentTextureMask)
+      : 0u;
+  const bool resourceArrayTextureEligible = !argbufResourceArray ||
+      pipeline::resourceArrayTextureBindingEligibleForDraw(
+          ctx.pool, drawState, activeFragmentTextureMask);
+  // The resource-array ABI is texture2d<float>-only. Depth-as-texture stages
+  // must use direct depth2d bindings; keep this decision identical for PSO
+  // lookup and every subsequent argbuf population path.
+  const bool effectiveArgbufResourceArray =
+      argbufResourceArray && sampledDepthTextureMask == 0u &&
+      resourceArrayTextureEligible;
   const bool effectiveArgbufDirectCbufMode =
-      argbufHybridMode && !argbufResourceArray && argbufDirectCbufMode;
+      argbufHybridMode && !effectiveArgbufResourceArray && argbufDirectCbufMode;
   const bool argbufTableMode =
       argbufHybridMode && !effectiveArgbufDirectCbufMode;
   const bool directCbufBindings = !argbufTableMode;
@@ -3099,6 +3169,7 @@ bool encodeDraw(EncodeContext& ctx,
       forceTextureWhiteProbeRowMatches(encoderBreakdown) &&
       indexedTriangleEncoderDrawRangeMatches(encoderBreakdown) &&
       forceTextureWhiteProbeTextureMatches(drawState, ctx.pool) &&
+      forceTextureWhiteProbePixelShaderMatches(drawState) &&
       forceTextureWhiteProbeDrawOrdinalMatches(drawOrdinal) &&
       forceTextureWhiteProbeCommandIndexMatches(commandIndex) &&
       forceTextureWhiteProbeCommandDrawIndexMatches(commandDrawIndex) &&
@@ -3141,7 +3212,7 @@ bool encodeDraw(EncodeContext& ctx,
   if (effectiveSkipBaseStateBind) {
     recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                 tileFfpMode, argbufHybridMode,
-                                argbufResourceArray, argbufDirectCbufMode,
+                                effectiveArgbufResourceArray, argbufDirectCbufMode,
                                 std::nullopt,
                                 fragmentlessDepthOnlyProbeApplied);
   }
@@ -3263,7 +3334,7 @@ bool encodeDraw(EncodeContext& ctx,
             ctx.cache.getOrBuildDrawPipelineForState(
                 ctx.device, ctx.limits, ctx.pool, pipelineDrawState,
                 ctx.shaderArchive, ctx.shaderArchivePath, tileFfpMode,
-                argbufHybridMode, argbufResourceArray,
+                argbufHybridMode, effectiveArgbufResourceArray,
                 effectiveArgbufDirectCbufMode,
                 disableAlphaBlendProbeApplied,
                 forceTextureWhiteOverride,
@@ -3284,7 +3355,7 @@ bool encodeDraw(EncodeContext& ctx,
           hot.key.vertexShaderHash ^ (hot.key.pixelShaderHash << 1u) ^
           (static_cast<std::uint64_t>(tileFfpMode) << 2u) ^
           (static_cast<std::uint64_t>(argbufHybridMode) << 3u) ^
-          (static_cast<std::uint64_t>(argbufResourceArray) << 4u) ^
+          (static_cast<std::uint64_t>(effectiveArgbufResourceArray) << 4u) ^
           (static_cast<std::uint64_t>(effectiveArgbufDirectCbufMode) << 5u);
       bool shouldLog = false;
       {
@@ -3301,7 +3372,7 @@ bool encodeDraw(EncodeContext& ctx,
                    static_cast<unsigned long long>(hot.key.pixelShaderHash),
                    tileFfpMode ? 1u : 0u,
                    argbufHybridMode ? 1u : 0u,
-                   argbufResourceArray ? 1u : 0u,
+                   effectiveArgbufResourceArray ? 1u : 0u,
                    effectiveArgbufDirectCbufMode ? 1u : 0u,
                    static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
                    static_cast<unsigned long long>(hot.depthStencil.handle.value));
@@ -3389,7 +3460,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (recordPsoBreakdown) {
         recordPsoAttributionForDraw(encoderBreakdown, drawState, ctx.pool, renderPsoHandle,
                                     tileFfpMode, argbufHybridMode,
-                                    argbufResourceArray,
+                                    effectiveArgbufResourceArray,
                                     argbufDirectCbufMode,
                                     forceTextureWhiteOverride,
                                     fragmentlessDepthOnlyProbeApplied);
@@ -3564,7 +3635,7 @@ bool encodeDraw(EncodeContext& ctx,
   // the constants-only encoder is used, byte-identical to before. Resolved
   // once here so the constant + resource write paths can't diverge.
   const bool useResourceArrayArgbuf =
-      argbufResourceArray && argbufTableMode &&
+      effectiveArgbufResourceArray && argbufTableMode &&
       ctx.queue.resourceArrayEncoderResource().initialized();
   auto& argbufEncoderForDraw = useResourceArrayArgbuf
                                    ? ctx.queue.resourceArrayEncoderResource()
@@ -5195,6 +5266,33 @@ bool encodeDraw(EncodeContext& ctx,
           resolved.textureLod = binding.textureLod;
           resolved.samplerStateHash = binding.samplerStateHash;
           resolved.samplerStates = binding.samplerStates;
+          const auto forceMipNonePs =
+              debug::probeForceSamplerMipNonePixelShaderHash();
+          const auto forceMipNoneStage = debug::probeForceSamplerMipNoneStage();
+          if (forceMipNonePs.has_value() && forceMipNoneStage.has_value() &&
+              drawState.hasShaderContext() &&
+              drawState.shaderContext().pixelShader.hash == *forceMipNonePs &&
+              stage == *forceMipNoneStage) {
+            const auto fixedLod = debug::probeForceSamplerFixedLod();
+            const u32 forcedMipFilter = fixedLod.has_value()
+                ? 0u
+                : debug::probeForceSamplerMipFilterValue();
+            overrideFlatStateValue(
+                resolved.samplerStates, core::SAMP_MIP_FILTER,
+                forcedMipFilter);
+            if (fixedLod.has_value()) {
+              resolved.textureLod = *fixedLod;
+            }
+            resolved.samplerStateHash = drawBindingPacketHashMix(
+                resolved.samplerStateHash,
+                0x4d495046494c5400ull |
+                    (static_cast<u64>(forcedMipFilter) << 8u) | stage);
+            if (fixedLod.has_value()) {
+              resolved.samplerStateHash = drawBindingPacketHashMix(
+                  resolved.samplerStateHash,
+                  0x46495845444c4f44ull ^ *fixedLod);
+            }
+          }
           const bool srgbTexture =
               core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
           resolved.srgbTexture = srgbTexture;
@@ -5230,6 +5328,13 @@ bool encodeDraw(EncodeContext& ctx,
       if (fragmentResourceArrayEligible) {
         for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
           const auto& binding = resolvedFragmentBindings[i];
+          if ((sampledDepthTextureMask & (1u << binding.stage)) != 0u) {
+            // The resource-array descriptor is color-only; retain the direct
+            // binding lane for a depth-as-texture stage even if a caller
+            // accidentally requested the array lane.
+            fragmentResourceArrayEligible = false;
+            break;
+          }
           if (binding.stage >= dxmt9::shaders::kArgbufResourceArrayStageCount) {
             fragmentResourceArrayEligible = false;
             break;
@@ -5927,6 +6032,11 @@ bool encodeDraw(EncodeContext& ctx,
                     indexedDraw,
                     fixedFunctionPath,
                     preTransformed,
+                    effectDrawTraceEnabled() && drawState.hasShaderContext()
+                        ? drawshader::activeFragmentTextureMaskForShader(
+                              drawState.shaderContext().pixelShader,
+                              hot.textureMask)
+                        : 0u,
                     drawState.hasShaderContext()
                         ? drawState.shaderContext().vertexShader.hash
                         : 0u,

@@ -508,6 +508,24 @@ bool formatSupportsUsage(Format format, u32 usage,
     return false;
   }
 
+  if ((usage & UsageAutoGenMipmap) != 0u) {
+    // The promoted path is a real Metal blit mip generator, not an
+    // informational capability bit. Reject formats for which a generated,
+    // filterable color pyramid is not a valid backend representation.
+    if (info->backendFormat == BackendPixelFormat::Unknown ||
+        info->depthStencil || info->compressed) {
+      return false;
+    }
+    switch (format) {
+      case Format::R32F:
+      case Format::G32R32F:
+      case Format::A32B32G32R32F:
+        return false;
+      default:
+        break;
+    }
+  }
+
   if (format == Format::A2B10G10R10 && !limits.supportsBgr10A2) {
     return false;
   }

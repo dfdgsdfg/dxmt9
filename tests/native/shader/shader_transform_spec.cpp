@@ -247,12 +247,31 @@ std::string translatePixel(std::span<const u32> words, bool samplerLodBias) {
   return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
 }
 
-std::string translatePixelWithFetch4(std::span<const u32> words, u32 fetch4Mask) {
+std::string translatePixelWithFetch4(std::span<const u32> words,
+                                     u32 fetch4Mask,
+                                     bool requestResourceArray = false) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
   desc.pixelShader = shader;
   auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
   context.fetch4SamplerMask = fetch4Mask;
+  context.argbufHybridMode = requestResourceArray;
+  context.argbufResourceArray = requestResourceArray;
+  return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+}
+
+std::string translatePixelWithSampledDepth(std::span<const u32> words,
+                                           u32 sampledDepthMask,
+                                           bool requestResourceArray = false,
+                                           bool forceSampledDepthWhite = false) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.sampledDepthTextureMask = sampledDepthMask;
+  context.forceSampledDepthWhiteForDebug = forceSampledDepthWhite;
+  context.argbufHybridMode = requestResourceArray;
+  context.argbufResourceArray = requestResourceArray;
   return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
 }
 
@@ -360,6 +379,36 @@ std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs20TexturedPairBytecode(u32 firstSampler,
+                                              u32 secondSampler) {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 2, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclTextureCoordToken(0x3u),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x3u),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSamplerTypeToken(),
+      makeDstToken(kD3DSPR_SAMPLER, firstSampler),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSamplerTypeToken(),
+      makeDstToken(kD3DSPR_SAMPLER, secondSampler),
+      makeInstructionToken(kD3DSIO_TEX, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_SAMPLER, firstSampler),
+      makeInstructionToken(kD3DSIO_TEX, 3),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_SAMPLER, secondSampler),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
       kD3DSIO_END,
   };
 }
@@ -1239,6 +1288,42 @@ std::vector<u32> makePs30TranscendentalOpcodeBytecode() {
   };
 }
 
+std::vector<u32> makePs30ReciprocalEdgeBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_RCP, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0, makeSwizzle(1u, 1u, 1u, 1u)),
+      makeInstructionToken(kD3DSIO_RSQ, 2),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1, makeSwizzle(2u, 2u, 2u, 2u)),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs20ReciprocalEdgeBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      makeInstructionToken(kD3DSIO_RCP, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0, makeSwizzle(1u, 1u, 1u, 1u)),
+      makeInstructionToken(kD3DSIO_RSQ, 2),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1, makeSwizzle(2u, 2u, 2u, 2u)),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30MatrixOpcodeBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1951,6 +2036,74 @@ void testPs20Fetch4GatherReplacesImplicitSample() {
                    "FETCH4 TEX does not retain the ordinary sample operation");
 }
 
+void testFetch4GatherIsStageSpecific() {
+  const auto source = translatePixelWithFetch4(
+      makePs20TexturedPairBytecode(/*firstSampler=*/0u, /*secondSampler=*/7u),
+      1u << 7u);
+  checkContains(source, "tex0.sample(samp0",
+                "an ordinary colour sampler keeps the texture2d sample path");
+  checkContains(source, "tex7.gather(samp7",
+                "the selected sampled-depth stage uses the FETCH4 gather path");
+  checkNotContains(source, "tex0.gather(samp0",
+                   "FETCH4 does not leak from stage 7 into stage 0");
+}
+
+void testFetch4FailsClosedOutOfResourceArrayAbi() {
+  const auto source = translatePixelWithFetch4(
+      makePs20TexturedBytecode(/*samplerIndex=*/0u), 1u,
+      /*requestResourceArray=*/true);
+  checkContains(source, "tex0.gather(samp0",
+                "FETCH4 keeps its validated direct gather lowering");
+  checkContains(source, "texture2d<float> tex0 [[texture(0)]]",
+                "FETCH4 keeps a direct resource binding");
+  checkNotContains(source, "array<texture2d<float>",
+                   "FETCH4 never enters the homogeneous resource-array ABI");
+}
+
+void testSampledDepthUsesTypedDirectBindingAndD3DComponents() {
+  const auto source = translatePixelWithSampledDepth(
+      makePs20TexturedPairBytecode(/*firstSampler=*/0u, /*secondSampler=*/7u),
+      1u << 7u);
+  checkContains(source, "texture2d<float> tex0 [[texture(0)]]",
+                "an ordinary sampled stage keeps the color texture ABI");
+  checkContains(source, "depth2d<float> tex7 [[texture(7)]]",
+                "a DF16/DF24/INTZ stage uses Metal's typed depth ABI");
+  checkContains(source,
+                "float4(tex7.sample(samp7",
+                "a scalar Metal depth sample is widened for a D3D9 register");
+  checkContains(source, ", 0.0f, 0.0f, 1.0f)",
+                "sampled depth preserves the D3D single-channel component defaults");
+  checkNotContains(source, "float4(tex0.sample(samp0",
+                   "depth widening does not leak into ordinary color stages");
+}
+
+void testSampledDepthFailsClosedOutOfResourceArrayAbi() {
+  const auto source = translatePixelWithSampledDepth(
+      makePs20TexturedBytecode(/*samplerIndex=*/0u), 1u,
+      /*requestResourceArray=*/true);
+  checkContains(source, "depth2d<float> tex0 [[texture(0)]]",
+                "sampled depth falls back to a direct typed texture binding");
+  checkNotContains(source, "array<texture2d<float>",
+                   "sampled depth never aliases the homogeneous color resource array");
+  checkNotContains(source, "abuf.textures[0]",
+                   "sampled depth never reads a color-typed argument-buffer member");
+}
+
+void testSampledDepthWhiteProbePreservesColorStages() {
+  const auto source = translatePixelWithSampledDepth(
+      makePs20TexturedPairBytecode(/*firstSampler=*/0u, /*secondSampler=*/7u),
+      1u << 7u, /*requestResourceArray=*/false,
+      /*forceSampledDepthWhite=*/true);
+  checkContains(source, "tex0.sample(samp0",
+                "sampled-depth probe preserves ordinary color sampling");
+  checkContains(source, "depth2d<float> tex7 [[texture(7)]]",
+                "sampled-depth probe preserves the typed depth binding ABI");
+  checkNotContains(source, "tex7.sample(samp7",
+                   "sampled-depth probe replaces the selected depth sample");
+  checkContains(source, "float4(1.0f)",
+                "sampled-depth probe supplies the white depth value");
+}
+
 void testPs30Fetch4ExplicitLodIgnoresLodOperand() {
   const auto source = translatePixelWithFetch4(makePs30TextureLodOpcodeBytecode(),
                                                (1u << 3) | (1u << 4));
@@ -2023,6 +2176,8 @@ void testFfpFetch4GatherEmission() {
   desc.textures[0].handle = Handle{1u};
   auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
   context.fetch4SamplerMask = 1u;
+  context.argbufHybridMode = true;
+  context.argbufResourceArray = true;
   const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
   checkContains(source, "tex0.gather(samp0",
                 "FFP FETCH4 routes the active stage through gather");
@@ -2031,6 +2186,49 @@ void testFfpFetch4GatherEmission() {
                 "FFP FETCH4 applies the inward-biased half-texel offset");
   checkContains(source, "int2(0), component::x).zxyw",
                 "FFP FETCH4 gathers red and applies the D3D9 swizzle");
+  checkNotContains(source, "array<texture2d<float>",
+                   "FFP FETCH4 remains outside the homogeneous resource array ABI");
+}
+
+void testFfpSampledDepthUsesTypedDirectBinding() {
+  FfpPixelKey key{};
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;  // D3DTA_TEXTURE
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.sampledDepthTextureMask = 1u;
+  context.argbufHybridMode = true;
+  context.argbufResourceArray = true;
+  const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkContains(source, "depth2d<float> tex0 [[texture(0)]]",
+                "FFP sampled depth uses a direct typed Metal binding");
+  checkContains(source, "float4(tex0.sample(samp0",
+                "FFP widens a scalar sampled-depth value before texture combine");
+  checkNotContains(source, "array<texture2d<float>",
+                   "FFP sampled depth fails closed out of the color resource array ABI");
+}
+
+void testFfpSampledDepthWhiteProbePreservesBinding() {
+  FfpPixelKey key{};
+  key.stages[0].colorOp = static_cast<u32>(TextureOp::SelectArg1);
+  key.stages[0].colorArg1 = 2u;
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+  desc.textures[0].handle = Handle{1u};
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.sampledDepthTextureMask = 1u;
+  context.forceSampledDepthWhiteForDebug = true;
+  const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
+  checkContains(source, "depth2d<float> tex0 [[texture(0)]]",
+                "FFP depth probe preserves the typed depth binding ABI");
+  checkNotContains(source, "tex0.sample(samp0",
+                   "FFP depth probe replaces only the depth sample");
+  checkContains(source, "float4(1.0f)",
+                "FFP depth probe supplies the white depth value");
 }
 
 void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
@@ -2612,7 +2810,7 @@ void testPs30LoopRegisterConstIntLowering() {
                 "ps_3_0 LOOP body remains translated after the aL operand");
 }
 
-void testD3DBCDestModifierPartialPrecisionLowering() {
+void testD3DBCDestModifierPartialPrecisionUsesFullPrecision() {
   using namespace dxmt9::d3d9bc;
   namespace translator_test = dxmt9::translator::test;
 
@@ -2624,18 +2822,22 @@ void testD3DBCDestModifierPartialPrecisionLowering() {
              "D3DBC operand decode preserves combined destination modifier bits");
 
   const auto pixelSource = translatePixel(makePs30DestModifierCoverageBytecode());
-  checkContains(pixelSource, "r[0] = float4(half4(psConsts.psFloatConst[0]));",
-                "ps_3_0 _pp destination lowers through half precision");
+  checkContains(pixelSource, "r[0] = psConsts.psFloatConst[0];",
+                "ps_3_0 _pp remains full precision without a proved half plan");
   checkContains(pixelSource,
-                "r[1] = clamp(float4(half4((psConsts.psFloatConst[1] + psConsts.psFloatConst[2]))), float4(0.0f), float4(1.0f));",
-                "ps_3_0 combined _sat/_pp destination preserves both modifier bits");
+                "r[1] = clamp((psConsts.psFloatConst[1] + psConsts.psFloatConst[2]), float4(0.0f), float4(1.0f));",
+                "ps_3_0 combined _sat/_pp keeps saturation at full precision");
+  checkNotContains(pixelSource, "half4(",
+                   "ps_3_0 _pp does not eagerly quantize destination values");
 
   const auto vertexSource = translateVertex(makeVs20DestModifierCoverageBytecode());
-  checkContains(vertexSource, "r[0] = float4(half4(vsConsts.vsFloatConst[0]));",
-                "vs_2_0 _pp destination lowers through half precision");
+  checkContains(vertexSource, "r[0] = vsConsts.vsFloatConst[0];",
+                "vs_2_0 _pp remains full precision without a proved half plan");
   checkContains(vertexSource,
-                "r[1] = clamp(float4(half4((vsConsts.vsFloatConst[1] + vsConsts.vsFloatConst[2]))), float4(0.0f), float4(1.0f));",
-                "vs_2_0 combined _sat/_pp destination preserves both modifier bits");
+                "r[1] = clamp((vsConsts.vsFloatConst[1] + vsConsts.vsFloatConst[2]), float4(0.0f), float4(1.0f));",
+                "vs_2_0 combined _sat/_pp keeps saturation at full precision");
+  checkNotContains(vertexSource, "half4(",
+                   "vs_2_0 _pp does not eagerly quantize destination values");
 }
 
 void testPs30CentroidInputModifierLowersToMslInterpolation() {
@@ -2765,7 +2967,12 @@ void testPs30ArithmeticOpcodeLoweringContracts() {
                 "SLT lowers to boolean select mask");
   checkContains(source, "select(float4(0.0f), float4(1.0f), (psConsts.psFloatConst[10]) >= (psConsts.psFloatConst[11]))",
                 "SGE lowers to boolean select mask");
-  checkContains(source, "pow(psConsts.psFloatConst[12], psConsts.psFloatConst[13])", "POW lowers to pow source expression");
+  checkContains(source,
+                "pow(abs(psConsts.psFloatConst[12]), psConsts.psFloatConst[13])",
+                "POW takes the absolute value of its base before exponentiation");
+  checkNotContains(source,
+                   "pow(psConsts.psFloatConst[12], psConsts.psFloatConst[13])",
+                   "POW never forwards a signed base directly to MSL pow");
   checkContains(source, "outColor[0] = r[6];", "arithmetic opcode matrix result reaches color output");
 }
 
@@ -2785,6 +2992,28 @@ void testPs30TranscendentalOpcodeLoweringContracts() {
                 "LOG lowers to D3D9 abs log2 expression");
   checkContains(source, "float4(exp2(psConsts.psFloatConst[2]))", "EXP lowers to exp2 expression");
   checkContains(source, "outColor[0] = r[2];", "transcendental opcode result reaches color output");
+}
+
+void checkReciprocalEdgeLowering(std::string_view source, std::string_view constantPrefix) {
+  const auto rcpSource = std::string(constantPrefix) + "[0].y";
+  const auto rsqSource = std::string(constantPrefix) + "[1].z";
+  checkContains(source,
+                "float4(1.0f) / float4(" + rcpSource + ", " + rcpSource + ", " +
+                    rcpSource + ", " + rcpSource + ")",
+                "RCP preserves signed reciprocal and the zero-to-infinity edge");
+  checkContains(source,
+                "rsqrt(abs(float4(" + rsqSource + ", " + rsqSource + ", " +
+                    rsqSource + ", " + rsqSource + ")))",
+                "RSQ takes abs without changing the zero-to-infinity edge");
+  checkNotContains(source, "float4(1.0e-8f)",
+                   "reciprocal opcodes do not inject an epsilon clamp");
+}
+
+void testReciprocalEdgeLoweringContracts() {
+  checkReciprocalEdgeLowering(translatePixel(makePs30ReciprocalEdgeBytecode()),
+                              "psConsts.psFloatConst");
+  checkReciprocalEdgeLowering(translateVertex(makeVs20ReciprocalEdgeBytecode()),
+                              "vsConsts.vsFloatConst");
 }
 
 void testPs30MatrixOpcodeLoweringContracts() {
@@ -2964,8 +3193,9 @@ void testPs30IndexedConstDestinationLowersToClampedMutableConstWrite() {
 
 void testPs30FragmentPositionAndMissingInputContracts() {
   const auto positionSource = translatePixel(makePs30PositionInputBytecode());
-  checkContains(positionSource, "outColor[0] = in.position;",
-                "ps_3_0 POSITION input maps to the Metal fragment position");
+  checkContains(positionSource,
+                "outColor[0] = float4(in.position.xy - float2(0.5f), in.position.zw);",
+                "ps_3_0 POSITION input maps Metal half-integer centers to D3D9 integer vPos");
 
   const auto missingSource = translatePixel(makePs30MissingInputBytecode());
   checkContains(missingSource, "outColor[0] = float4(0.0f);",
@@ -3609,9 +3839,16 @@ int main() {
     testPs20MipLodBiasEmitsShaderSideBias();
     testPs20MipLodBiasClearOmitsShaderSideBias();
     testPs20Fetch4GatherReplacesImplicitSample();
+    testFetch4GatherIsStageSpecific();
+    testFetch4FailsClosedOutOfResourceArrayAbi();
+    testSampledDepthUsesTypedDirectBindingAndD3DComponents();
+    testSampledDepthFailsClosedOutOfResourceArrayAbi();
+    testSampledDepthWhiteProbePreservesColorStages();
     testPs30Fetch4ExplicitLodIgnoresLodOperand();
     testFfpMipLodBiasEmitsShaderSideBias();
     testFfpMipLodBiasClearOmitsShaderSideBias();
+    testFfpSampledDepthUsesTypedDirectBinding();
+    testFfpSampledDepthWhiteProbePreservesBinding();
     testFfpFetch4GatherEmission();
     testTranslatedAlphaTestDebugStripOmitsTailDiscard();
     testFfpAlphaTestDebugStripOmitsDiscard();
@@ -3637,7 +3874,7 @@ int main() {
     testPs30MissingSourceModifierCoverage();
     testPs30ConstIntSourceLowering();
     testPs30LoopRegisterConstIntLowering();
-    testD3DBCDestModifierPartialPrecisionLowering();
+    testD3DBCDestModifierPartialPrecisionUsesFullPrecision();
     testPs30CentroidInputModifierLowersToMslInterpolation();
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
@@ -3650,6 +3887,7 @@ int main() {
     testPs30PredicatedFlowControlTranslation();
     testPs30ArithmeticOpcodeLoweringContracts();
     testPs30TranscendentalOpcodeLoweringContracts();
+    testReciprocalEdgeLoweringContracts();
     testPs30MatrixOpcodeLoweringContracts();
     testPs30TextureLodOpcodeLoweringContracts();
     testPs30TextureSamplerDimensionalityContracts();

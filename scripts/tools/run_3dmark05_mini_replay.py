@@ -931,6 +931,52 @@ def force_fragment_primitive_id_source(source: str) -> str:
     return replace_function_body(source, "dxmt9_fs", body)
 
 
+def fragment_texture_signature(source: str, stage: int, diagnostic: str) -> None:
+    signature_start = source.find("dxmt9_fs")
+    signature_end = source.find("{", signature_start)
+    signature = source[signature_start:signature_end]
+    if not re.search(rf"texture2d<[^>]+>\s+tex{stage}\b", signature):
+        raise SystemExit(
+            f"mini replay {diagnostic} diagnostic requires texture2d tex{stage} "
+            "in dxmt9_fs"
+        )
+    if not re.search(rf"sampler\s+samp{stage}\b", signature):
+        raise SystemExit(
+            f"mini replay {diagnostic} diagnostic requires sampler samp{stage} "
+            "in dxmt9_fs"
+        )
+
+
+def force_fragment_texture_lod_source(
+        source: str, stage: int, coordinate: str) -> str:
+    fragment_texture_signature(source, stage, "LOD")
+    preamble = (
+        f"  float dxmt9Lod = tex{stage}.calculate_clamped_lod("
+        f"samp{stage}, in.texcoord0.{coordinate});\n"
+    )
+    body = fragment_output_body(
+        source,
+        "float4(dxmt9Lod / 16.0f, fract(dxmt9Lod), 0.0f, 1.0f)",
+        preamble,
+    )
+    return replace_function_body(source, "dxmt9_fs", body)
+
+
+def force_fragment_texture_alpha_source(
+        source: str, stage: int, coordinate: str) -> str:
+    fragment_texture_signature(source, stage, "alpha")
+    preamble = (
+        f"  float dxmt9Alpha = tex{stage}.sample("
+        f"samp{stage}, in.texcoord0.{coordinate}).a;\n"
+    )
+    body = fragment_output_body(
+        source,
+        "float4(dxmt9Alpha, dxmt9Alpha, dxmt9Alpha, 1.0f)",
+        preamble,
+    )
+    return replace_function_body(source, "dxmt9_fs", body)
+
+
 def cxx_string(value: str) -> str:
     return json.dumps(value)
 
@@ -971,6 +1017,8 @@ def color_pixel_format(format_value: int, width: int = 0, height: int = 0) -> st
         return "MTLPixelFormatBGRA8Unorm"
     if format_value in (3, 4):  # A8B8G8R8 / X8B8G8R8
         return "MTLPixelFormatRGBA8Unorm"
+    if format_value == 11:  # A16B16G16R16F
+        return "MTLPixelFormatRGBA16Float"
     raise SystemExit(
         f"mini replay: unsupported color render-target core::Format={format_value} "
         f"(RT {width}x{height}); no MTLPixelFormat mapping is declared for this "
@@ -1204,6 +1252,7 @@ def metal_pixel_format_name(value: int) -> str:
         11: "MTLPixelFormatR8Unorm_sRGB",
         20: "MTLPixelFormatR16Unorm",
         55: "MTLPixelFormatR32Float",
+        72: "MTLPixelFormatRGBA8Snorm",
         80: "MTLPixelFormatBGRA8Unorm",
         81: "MTLPixelFormatBGRA8Unorm_sRGB",
         130: "MTLPixelFormatBC1_RGBA",
@@ -1313,7 +1362,8 @@ def render_source(draws: list[dict[str, Any]],
                   depth_clear: float,
                   depth_input: Path | None,
                   texture_sidecars: list[dict[str, Any]],
-                  texture_sidecar_by_key: dict[tuple[str, bool], int]) -> str:
+                  texture_sidecar_by_key: dict[tuple[str, bool], int],
+                  sampler_mip_filter: str) -> str:
     # The same record `prepare()` writes to `mini-replay-summary.json`
     # (R-HARN-REPLAY-2.3), so the reported format is by construction the one
     # this generated program renders with. `resolve_attachment_formats()` also
@@ -1326,9 +1376,16 @@ def render_source(draws: list[dict[str, Any]],
     stencil_format = attachment_formats["stencil_metal_pixel_format"]
     pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
     pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
-    color_row_bytes = ((pass_width * 4 + 255) // 256) * 256
+    color_bytes_per_pixel = 8 if color_format == "MTLPixelFormatRGBA16Float" else 4
+    color_row_bytes = ((pass_width * color_bytes_per_pixel + 255) // 256) * 256
     color_byte_count = color_row_bytes * pass_height
     color_is_bgra = "true" if color_format == "MTLPixelFormatBGRA8Unorm" else "false"
+    color_is_float16 = "true" if color_format == "MTLPixelFormatRGBA16Float" else "false"
+    sampler_mip_filter_name = {
+        "none": "MTLSamplerMipFilterNotMipmapped",
+        "nearest": "MTLSamplerMipFilterNearest",
+        "linear": "MTLSamplerMipFilterLinear",
+    }[sampler_mip_filter]
     depth_bpp = attachment_formats["depth"]["bytes_per_pixel"]
     depth_row_bytes = pass_width * depth_bpp
     depth_byte_count = depth_row_bytes * pass_height
@@ -1570,6 +1627,7 @@ def render_source(draws: list[dict[str, Any]],
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -1641,6 +1699,7 @@ struct DrawVolatile {{
   unsigned vertexStreamOffset;
   unsigned vertexStreamStride;
   unsigned pad;
+  unsigned streamInstanceDivisors[16];
 }};
 
 struct FsVolatile {{
@@ -1665,12 +1724,55 @@ static NSString* readString(const char* path) {{
   return value;
 }}
 
+static float halfToFloat(unsigned short bits) {{
+  const unsigned sign = bits >> 15u;
+  const unsigned exponent = (bits >> 10u) & 0x1fu;
+  const unsigned mantissa = bits & 0x3ffu;
+  float value = 0.0f;
+  if (exponent == 0u) {{
+    value = std::ldexp(static_cast<float>(mantissa), -24);
+  }} else if (exponent == 0x1fu) {{
+    value = mantissa == 0u ? INFINITY : NAN;
+  }} else {{
+    value = std::ldexp(static_cast<float>(1024u + mantissa),
+                       static_cast<int>(exponent) - 25);
+  }}
+  return sign != 0u ? -value : value;
+}}
+
+static unsigned char floatToUnorm8(float value) {{
+  if (!std::isfinite(value)) value = 0.0f;
+  value = std::clamp(value, 0.0f, 1.0f);
+  return static_cast<unsigned char>(value * 255.0f + 0.5f);
+}}
+
+static void readRgb8(const unsigned char* pixel,
+                     bool bgra,
+                     bool rgba16Float,
+                     unsigned char rgb[3]) {{
+  if (rgba16Float) {{
+    for (unsigned channel = 0; channel < 3; ++channel) {{
+      const unsigned offset = channel * 2u;
+      const unsigned short bits = static_cast<unsigned short>(
+          static_cast<unsigned>(pixel[offset]) |
+          (static_cast<unsigned>(pixel[offset + 1u]) << 8u));
+      rgb[channel] = floatToUnorm8(halfToFloat(bits));
+    }}
+    return;
+  }}
+  rgb[0] = bgra ? pixel[2] : pixel[0];
+  rgb[1] = pixel[1];
+  rgb[2] = bgra ? pixel[0] : pixel[2];
+}}
+
 static bool writePpm(const char* path,
                      const unsigned char* pixels,
                      unsigned width,
                      unsigned height,
                      unsigned rowBytes,
-                     bool bgra) {{
+                     unsigned pixelBytes,
+                     bool bgra,
+                     bool rgba16Float) {{
   std::ofstream out(path, std::ios::binary);
   if (!out) {{
     std::cerr << "failed to open color output " << path << "\\n";
@@ -1680,12 +1782,9 @@ static bool writePpm(const char* path,
   for (unsigned y = 0; y < height; ++y) {{
     const unsigned char* row = pixels + static_cast<size_t>(y) * rowBytes;
     for (unsigned x = 0; x < width; ++x) {{
-      const unsigned char* p = row + static_cast<size_t>(x) * 4;
-      unsigned char rgb[3] = {{
-        bgra ? p[2] : p[0],
-        p[1],
-        bgra ? p[0] : p[2],
-      }};
+      const unsigned char* p = row + static_cast<size_t>(x) * pixelBytes;
+      unsigned char rgb[3];
+      readRgb8(p, bgra, rgba16Float, rgb);
       out.write(reinterpret_cast<const char*>(rgb), sizeof(rgb));
     }}
   }}
@@ -1701,7 +1800,9 @@ static unsigned countDistinctRgb(const unsigned char* pixels,
                                  unsigned width,
                                  unsigned height,
                                  unsigned rowBytes,
+                                 unsigned pixelBytes,
                                  bool bgra,
+                                 bool rgba16Float,
                                  unsigned long long* nonBackground) {{
   std::vector<unsigned> values;
   values.reserve(static_cast<size_t>(width) * static_cast<size_t>(height));
@@ -1709,10 +1810,12 @@ static unsigned countDistinctRgb(const unsigned char* pixels,
   for (unsigned y = 0; y < height; ++y) {{
     const unsigned char* row = pixels + static_cast<size_t>(y) * rowBytes;
     for (unsigned x = 0; x < width; ++x) {{
-      const unsigned char* p = row + static_cast<size_t>(x) * 4;
-      const unsigned r = bgra ? p[2] : p[0];
-      const unsigned g = p[1];
-      const unsigned b = bgra ? p[0] : p[2];
+      const unsigned char* p = row + static_cast<size_t>(x) * pixelBytes;
+      unsigned char rgb[3];
+      readRgb8(p, bgra, rgba16Float, rgb);
+      const unsigned r = rgb[0];
+      const unsigned g = rgb[1];
+      const unsigned b = rgb[2];
       values.push_back((r << 16) | (g << 8) | b);
       if (r != 0u || g != 0u || b != 0u) {{
         ++nonBackgroundCount;
@@ -1756,9 +1859,12 @@ static id<MTLBuffer> bufferFromFileOrDefault(id<MTLDevice> device,
     std::cerr << "failed to read cbuf " << path << "\\n";
     return nil;
   }}
-  return [device newBufferWithBytes:[data bytes]
-                              length:[data length]
-                             options:MTLResourceStorageModeShared];
+  const NSUInteger length = ([data length] + 15u) & ~static_cast<NSUInteger>(15u);
+  id<MTLBuffer> buffer =
+      [device newBufferWithLength:length options:MTLResourceStorageModeShared];
+  std::memset([buffer contents], 0, length);
+  std::memcpy([buffer contents], [data bytes], [data length]);
+  return buffer;
 }}
 
 static MTLTextureSwizzleChannels shaderReadSwizzle(unsigned format) {{
@@ -1916,9 +2022,9 @@ static MTLBlendOperation blendOperation(unsigned value) {{
 
 static MTLCullMode cullMode(unsigned value) {{
   switch (value) {{
-    case 1: return MTLCullModeNone;
-    case 2: return MTLCullModeFront;
-    case 3: return MTLCullModeBack;
+    case 0: return MTLCullModeNone;
+    case 1: return MTLCullModeFront;
+    case 2: return MTLCullModeBack;
     default: return MTLCullModeNone;
   }}
 }}
@@ -2066,6 +2172,7 @@ int main() {{
     MTLSamplerDescriptor* samplerDesc = [MTLSamplerDescriptor new];
     samplerDesc.minFilter = MTLSamplerMinMagFilterLinear;
     samplerDesc.magFilter = MTLSamplerMinMagFilterLinear;
+    samplerDesc.mipFilter = {sampler_mip_filter_name};
     id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:samplerDesc];
 
     DrawEntry draws[] = {{
@@ -2100,6 +2207,7 @@ int main() {{
     pass.depthAttachment.clearDepth = {depth_clear:.9g};
 {stencil_pass_attachment.rstrip()}
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+    [encoder setFrontFacingWinding:MTLWindingClockwise];
 {fragment_texture_binds}
 {fragment_sampler_binds}
 {vertex_texture_binds}
@@ -2140,7 +2248,10 @@ int main() {{
         if (draw.pipelineIndex >= psoComboCount) return 2;
         if (draw.depthStateIndex >= depthStateTableCount) return 2;
         const ShaderEntry& shader = shaders[draw.shaderIndex];
-        DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
+        DrawVolatile dv = {{}};
+        dv.vertexBaseIndex = draw.baseVertex;
+        dv.vertexStreamOffset = draw.streamOffset;
+        dv.vertexStreamStride = draw.streamStride;
         FsVolatile fsv = {{draw.alphaTest, draw.alphaRef, 0xFFFFFFFFu, 0}};
         [encoder setScissorRect:scissorRect(draw, {pass_width}, {pass_height})];
         [encoder setRenderPipelineState:psos[draw.pipelineIndex]];
@@ -2187,18 +2298,26 @@ int main() {{
     }}
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
+    if ([commandBuffer status] == MTLCommandBufferStatusError) {{
+      std::cerr << "mini replay command buffer failed: "
+                << [[[commandBuffer error] localizedDescription] UTF8String]
+                << "\\n";
+      return 2;
+    }}
     long long distinctRgb = -1;
     unsigned long long nonBackgroundPixels = 0;
     if (colorOutputPath && colorOutputPath[0] != '\\0' && colorReadback) {{
       const unsigned char* pixels =
           static_cast<const unsigned char*>([colorReadback contents]);
       if (!writePpm(colorOutputPath, pixels, {pass_width}, {pass_height},
-                    {color_row_bytes}, {color_is_bgra})) {{
+                    {color_row_bytes}, {color_bytes_per_pixel},
+                    {color_is_bgra}, {color_is_float16})) {{
         return 2;
       }}
       distinctRgb = static_cast<long long>(
           countDistinctRgb(pixels, {pass_width}, {pass_height},
-                           {color_row_bytes}, {color_is_bgra},
+                           {color_row_bytes}, {color_bytes_per_pixel},
+                           {color_is_bgra}, {color_is_float16},
                            &nonBackgroundPixels));
     }}
     if ([[MTLCaptureManager sharedCaptureManager] isCapturing]) {{
@@ -2593,6 +2712,14 @@ def prepare(args: argparse.Namespace,
         args.draw_order,
         args.vertex_order,
     )
+    for draw in replay_draws:
+        state = draw.setdefault("state", {})
+        if args.disable_cull:
+            state["cull"] = 0
+        if args.disable_depth:
+            state["depth_enabled"] = 0
+            state["depth_write"] = 0
+            state["depth_func"] = 8
     shader_variants: list[dict[str, Any]] = []
     shader_variant_by_key: dict[tuple[str, str], int] = {}
     all_vs_bindings: list[dict[str, list[int]]] = []
@@ -2630,6 +2757,18 @@ def prepare(args: argparse.Namespace,
                 fs_source = force_fragment_color_source(fs_source)
             if args.force_fragment_primitive_id:
                 fs_source = force_fragment_primitive_id_source(fs_source)
+            if args.force_fragment_texture_lod is not None:
+                fs_source = force_fragment_texture_lod_source(
+                    fs_source,
+                    args.force_fragment_texture_lod,
+                    args.texture_coordinate,
+                )
+            if args.force_fragment_texture_alpha is not None:
+                fs_source = force_fragment_texture_alpha_source(
+                    fs_source,
+                    args.force_fragment_texture_alpha,
+                    args.texture_coordinate,
+                )
             if shader_mutation is not None:
                 # Applied last, to the exact text that would otherwise have been
                 # compiled, so the mutated replay differs from the baseline by
@@ -2679,6 +2818,7 @@ def prepare(args: argparse.Namespace,
             depth_input,
             texture_sidecars,
             texture_sidecar_by_key,
+            args.sampler_mip_filter,
         ),
         encoding="utf-8",
     )
@@ -2693,9 +2833,15 @@ def prepare(args: argparse.Namespace,
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
+        "disable_cull": args.disable_cull,
+        "disable_depth": args.disable_depth,
         "vertex_order": args.vertex_order,
         "force_fragment_color": bool(args.force_fragment_color),
         "force_fragment_primitive_id": bool(args.force_fragment_primitive_id),
+        "force_fragment_texture_lod": args.force_fragment_texture_lod,
+        "force_fragment_texture_alpha": args.force_fragment_texture_alpha,
+        "texture_coordinate": args.texture_coordinate,
+        "sampler_mip_filter": args.sampler_mip_filter,
         # Present only on the mutated copy an execution proof generates; None
         # on the baseline, so the two trees are distinguishable from their own
         # artifacts.
@@ -2907,6 +3053,46 @@ def build_parser() -> argparse.ArgumentParser:
             "primitive_id color to identify which triangle owns changed pixels"
         ),
     )
+    parser.add_argument(
+        "--force-fragment-texture-lod",
+        type=int,
+        metavar="STAGE",
+        help=(
+            "diagnostic: replace the fragment body with texSTAGE implicit LOD "
+            "encoded as R=lod/16 and G=fract(lod)"
+        ),
+    )
+    parser.add_argument(
+        "--force-fragment-texture-alpha",
+        type=int,
+        metavar="STAGE",
+        help=(
+            "diagnostic: replace the fragment body with texSTAGE sampled alpha "
+            "as grayscale; useful when authored mip alpha is a level marker"
+        ),
+    )
+    parser.add_argument(
+        "--texture-coordinate",
+        choices=("xy", "zw"),
+        default="xy",
+        help="texcoord0 component pair used by texture diagnostics (default: xy)",
+    )
+    parser.add_argument(
+        "--sampler-mip-filter",
+        choices=("none", "nearest", "linear"),
+        default="none",
+        help="mip filter for the replay-owned sampler (default: none)",
+    )
+    parser.add_argument(
+        "--disable-cull",
+        action="store_true",
+        help="diagnostic: replay every draw with culling disabled",
+    )
+    parser.add_argument(
+        "--disable-depth",
+        action="store_true",
+        help="diagnostic: replay every draw with depth testing and writes disabled",
+    )
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--repeat", type=int, default=1)
@@ -3003,6 +3189,21 @@ def run_execution_proof(args: argparse.Namespace,
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    fragment_overrides = sum((
+        bool(args.force_fragment_color),
+        bool(args.force_fragment_primitive_id),
+        args.force_fragment_texture_lod is not None,
+        args.force_fragment_texture_alpha is not None,
+    ))
+    if fragment_overrides > 1:
+        raise SystemExit("fragment diagnostic overrides are mutually exclusive")
+    if (args.force_fragment_texture_lod is not None and
+            not 0 <= args.force_fragment_texture_lod < 16):
+        raise SystemExit("--force-fragment-texture-lod must be in [0, 15]")
+    if (args.force_fragment_texture_alpha is not None and
+            not 0 <= args.force_fragment_texture_alpha < 16):
+        raise SystemExit("--force-fragment-texture-alpha must be in [0, 15]")
 
     # Validated before any work: a malformed proof request should cost nothing.
     mutation: ShaderMutation | None = None

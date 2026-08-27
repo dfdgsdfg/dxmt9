@@ -108,6 +108,25 @@ documents — that reintroduces defect 1's exact failure mode (a
 dependency enforced only in source, undeclared anywhere else).
 Instantiates R-HARN-5.1/5.3.
 
+**R-HARN-REPLAY-5.4** Replay-owned constant and volatile bindings must
+satisfy the dumped MSL argument ABI before a draw is submitted. File-backed
+constant payloads are zero-padded to the next 16-byte boundary so a captured
+logical payload such as the 2632-byte `FfpVsConsts` is backed by the 2640-byte
+MSL struct extent. Replay `DrawVolatile` includes the production
+`streamInstanceDivisors[16]` tail even when every divisor is zero. A Metal
+argument-length validation failure is a harness failure and must not be
+reported as a valid all-black pixel oracle. Instantiates R-HARN-5.1/5.3.
+
+The replay rasterizer sets clockwise front-face winding before applying the
+captured D3D9 cull disposition. Relying on Metal's default winding changes the
+meaning of `D3DCULL_CW` and can cull the entire captured draw while leaving a
+valid command buffer.
+
+The manifest's `state.cull` is the encoder observer's already-converted
+`WMTCullMode` (`0=None`, `1=Front`, `2=Back`), not the D3D9 API ordinal. Replay
+must consume that encoding directly and must not reinterpret it as
+`D3DCULL_NONE/CW/CCW` (`1/2/3`).
+
 ---
 
 ## 3. Unsupported Attachment Formats Are Failures, Not Fallbacks
@@ -117,9 +136,12 @@ resolvers each declare the finite `core::Format` set they accept and
 fail, naming the unrecognized `format_value`, for any input outside
 that set — they must not return a plausible-looking Metal pixel format
 for a `core::Format` they do not recognize. Instantiates R-HARN-2.1/
-2.2. Rationale (defect 3): `color_pixel_format()` recognizes
-`core::Format` values 1-4 and returns `MTLPixelFormatRGBA8Unorm` for
-every other value, including R32F (`core::Format` 16), which row
+2.2. The current declared color set is `{1, 2, 3, 4, 11}`; value 11
+is A16B16G16R16F and resolves to `MTLPixelFormatRGBA16Float` for the
+3DMark06 HDR mini-replay lane. Rationale (defect 3): the old
+`color_pixel_format()` recognized only `core::Format` values 1-4 and
+returned `MTLPixelFormatRGBA8Unorm` for every other value, including
+R32F (`core::Format` 16), which row
 `60/0` actually uses; the replay rendered into a wrong-format
 attachment with no diagnostic that the format was unrecognized. This
 requirement covers `depth_pixel_format()` on the same terms:
@@ -150,6 +172,12 @@ from the legacy no-`attachments` default rather than from a declared
 `core::Format`. The generated program and the recorded value must
 come from one resolution, so the artifact can never name a format the
 replay did not render with. Instantiates R-HARN-2.4.
+
+The color readback layout must be derived from that same resolved
+format. In particular, A16B16G16R16F uses eight bytes per pixel and
+must be decoded from RGBA16Float before writing the 8-bit RGB oracle;
+using the legacy four-byte row pitch is a hard harness failure, not a
+valid all-black result.
 
 ---
 

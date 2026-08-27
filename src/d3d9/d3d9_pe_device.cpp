@@ -309,6 +309,47 @@ bool D3D9DeviceImpl::fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexc
     return vertexTextureSamplerSlot(stage, slot);
 }
 
+HRESULT D3D9DeviceImpl::generateBoundAutogenMipmaps() noexcept {
+    std::array<IDirect3DBaseTexture9*, D9C_DRAW_PACKET_MAX_TEXTURES> pending{};
+    std::array<D9CTexture*, D9C_DRAW_PACKET_MAX_TEXTURES> raw{};
+    std::size_t count = 0u;
+    for (auto* texture : textures_) {
+        D9CTexture* candidate = nullptr;
+        if (!D3D9PeGetDirtyAutogenTexture(texture, &candidate)) continue;
+        bool duplicate = false;
+        for (std::size_t index = 0u; index < count; ++index) {
+            if (raw[index] == candidate) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            pending[count] = texture;
+            raw[count] = candidate;
+            ++count;
+        }
+    }
+    if (count == 0u) return S_OK;
+
+    // The resource bridge drains the offload worker as well. Flushing the PE
+    // builder first publishes all preceding RT writes; the bridge drain then
+    // makes those writes happen-before the Metal blit mip generation.
+    const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Barrier);
+    if (FAILED(flushHr)) return flushHr;
+    for (std::size_t index = 0u; index < count; ++index) {
+        const HRESULT hr = hr32(dxmt9c_texture_generate_mip_sublevels(raw[index]));
+        if (FAILED(hr)) return hr;
+        D3D9PeSetAutogenTextureClean(pending[index]);
+    }
+    return S_OK;
+}
+
+void D3D9DeviceImpl::markBoundRenderTargetsAutogenDirty() noexcept {
+    for (auto* surface : rtSlots_) {
+        D3D9PeMarkSurfaceAutogenDirty(surface);
+    }
+}
+
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetTexture(DWORD stage,
                                       IDirect3DBaseTexture9* pTex) noexcept {
     return withPeHotStateSetter(
@@ -881,6 +922,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Clear(DWORD count, const D3DRECT* pRec
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
+    if (SUCCEEDED(hr) && (flags & D3DCLEAR_TARGET) != 0u)
+        markBoundRenderTargetsAutogenDirty();
     return finishPeCall(hr);
         });
 }
@@ -932,6 +975,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::DrawPrimitiveUP(D3DPRIMITIVETYPE type,
         }
         return candidateHr;
     });
+    if (SUCCEEDED(hr)) {
+        const HRESULT mipHr = generateBoundAutogenMipmaps();
+        if (FAILED(mipHr)) return finishPeCall(mipHr);
+    }
     bool appendedDraw = false;
     if (hr == S_OK) {
         dxmt9DeviceDebugLog("device_draw_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
@@ -952,6 +999,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::DrawPrimitiveUP(D3DPRIMITIVETYPE type,
         appendedDraw = SUCCEEDED(hr);
     }
     if (SUCCEEDED(hr) && appendedDraw) {
+        markBoundRenderTargetsAutogenDirty();
         if (!swvpDraw.vertices.empty()) {
             clearPendingHotState();
             recorderState_.peState.maintenance().pendingFvf() = true;
@@ -1030,6 +1078,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::DrawIndexedPrimitiveUP(D3DPRIMITIVETYP
         }
         return candidateHr;
     });
+    if (SUCCEEDED(hr)) {
+        const HRESULT mipHr = generateBoundAutogenMipmaps();
+        if (FAILED(mipHr)) return finishPeCall(mipHr);
+    }
     bool appendedDraw = false;
     if (hr == S_OK) {
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up swvp_fallback device=%p fvf=0x%x stride=%u bytes=%zu",
@@ -1062,6 +1114,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::DrawIndexedPrimitiveUP(D3DPRIMITIVETYP
         appendedDraw = SUCCEEDED(hr);
     }
     if (SUCCEEDED(hr) && appendedDraw) {
+        markBoundRenderTargetsAutogenDirty();
         if (!swvpDraw.vertices.empty()) {
             clearPendingHotState();
             recorderState_.peState.maintenance().pendingFvf() = true;

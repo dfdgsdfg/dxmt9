@@ -356,6 +356,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
                                           const core::TextureDesc& desc) {
   TextureRecord record;
   record.desc = desc;
+  record.physicalMipLevels = physicalTextureMipLevelCount(desc);
   // R-BACK-5.7 / R-BACK-5.10: every pool — including SYSTEMMEM and
   // SCRATCH — gets a Shared-mode Metal texture backing. SYSTEMMEM in
   // particular is the standard D3D9 staging path: app does
@@ -376,7 +377,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     info.width = std::max(1u, desc.width);
     info.height = std::max(1u, desc.height);
     info.depth = std::max(1u, desc.depth);
-    info.mipmap_level_count = std::max(1u, desc.levels);
+    info.mipmap_level_count = record.physicalMipLevels;
     info.sample_count = 1;
     info.array_length = 1;
     // R-BACK-5.7: select storage mode from the cached unified-memory
@@ -458,7 +459,7 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
         std::max(1u, desc.width),
         std::max(1u, desc.height),
         std::max(1u, desc.depth),
-        std::max(1u, desc.levels)));
+        stored->physicalMipLevels));
   }
   if (stored && stored->shaderReadTexture) {
     stored->shaderReadTexture.setLabel(labels::makeLabelStringFmt(
@@ -499,6 +500,7 @@ core::TextureHandle Pool::importSharedTexture(const core::TextureDesc& desc,
   }
   TextureRecord record;
   record.desc = desc;
+  record.physicalMipLevels = physicalTextureMipLevelCount(desc);
   record.texture = backing.texture;
   record.shaderReadTexture = backing.shaderReadTexture;
   record.srgbShaderReadTexture = backing.srgbShaderReadTexture;

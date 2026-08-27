@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 // Resource pool — per-backend storage for buffer/texture/surface records
 // keyed by opaque Handle. Lifted out of backend_metal.mm so the pool has a
 // named home matching dxmt's per-resource-type managers.
@@ -192,6 +194,27 @@ using u64 = std::uint64_t;
 
 bool dynamicBufferRenameEnabled() noexcept;
 
+inline u32 fullTextureMipLevelCount(
+    u32 width, u32 height, u32 depth) noexcept {
+  u32 dimension = std::max({std::max(1u, width), std::max(1u, height),
+                            std::max(1u, depth)});
+  u32 levels = 1u;
+  while (dimension > 1u) {
+    dimension >>= 1u;
+    ++levels;
+  }
+  return levels;
+}
+
+// Model-code binding for the D3D9 AUTOGEN split: TextureDesc::levels is the
+// public topology, while this value sizes the hidden Metal pyramid.
+inline u32 physicalTextureMipLevelCount(
+    const core::TextureDesc& desc) noexcept {
+  return (desc.usage & core::UsageAutoGenMipmap) != 0u
+             ? fullTextureMipLevelCount(desc.width, desc.height, desc.depth)
+             : std::max(1u, desc.levels);
+}
+
 enum class CapturedBufferSnapshotStatus : u8 {
   NotRequired,
   Valid,
@@ -303,6 +326,11 @@ struct BufferRecord {
 
 struct TextureRecord {
   core::TextureDesc desc{};
+  // D3D9 AUTOGEN textures expose only level 0 through GetLevelCount /
+  // GetSurfaceLevel, while the backend owns a complete hidden mip pyramid.
+  // Keep that physical allocation fact out of TextureDesc: desc.levels is the
+  // public subresource topology and is intentionally 1 for AUTOGEN.
+  u32 physicalMipLevels = 1;
   WMT::Reference<WMT::Texture> texture;
   // Some D3D9 formats store compact Metal R/RG data but sample with expanded
   // channels (luminance replication, float missing channels as one, XRGB alpha

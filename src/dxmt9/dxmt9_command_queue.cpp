@@ -1962,7 +1962,7 @@ core::HResult CommandQueue::generateTextureMipSublevels(core::TextureHandle hand
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(qmxBegin, "generate_texture_mip_sublevels");
     auto* record = pool_.findTexture(handle.value);
-    if (!record || !record->texture || record->desc.levels <= 1) {
+    if (!record || !record->texture || record->physicalMipLevels <= 1) {
       return record ? core::D3D_OK : core::D3DERR_INVALIDCALL;
     }
     texture = record->texture;

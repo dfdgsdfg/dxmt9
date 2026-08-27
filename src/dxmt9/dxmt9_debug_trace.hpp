@@ -190,6 +190,32 @@ bool disableFog();
 // Force fragment texture samples to white. Env: DXMT_FORCE_TEXTURE_WHITE.
 bool forceTextureWhite();
 
+// Optional sampler-stage mask for the white-texture classifier. A zero mask
+// preserves the historical all-sampler behavior. Env:
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE_SAMPLER_MASK.
+std::uint32_t forceTextureWhiteSamplerMask();
+
+// Diagnostic sampler A/B: force a named D3D mip-filter value for one fragment
+// sampler stage on draws using the selected original D3D pixel shader. VALUE
+// defaults to D3DTEXF_NONE (0) so the original two-variable probe remains a
+// convenient base-level classifier.
+// FIXED_LOD additionally pins the selected sampler to one integer mip level;
+// it is a diagnostic classifier for implicit-gradient LOD selection.
+// Env: DXMT9_PROBE_FORCE_SAMPLER_MIP_NONE_PS / _STAGE / _VALUE /
+// DXMT9_PROBE_FORCE_SAMPLER_FIXED_LOD.
+std::optional<u64> probeForceSamplerMipNonePixelShaderHash();
+std::optional<u64> probeForceSamplerMipNoneStage();
+std::uint32_t probeForceSamplerMipFilterValue();
+std::optional<std::uint32_t> probeForceSamplerFixedLod();
+
+// Optional signed integer bias paired with the selected sampler PS/stage.
+// Env: DXMT9_PROBE_FORCE_SAMPLER_LOD_BIAS.
+std::optional<std::int32_t> probeForceSamplerLodBias();
+
+// Force only fragment samples sourced from a typed depth texture to white.
+// Env: DXMT_FORCE_SAMPLED_DEPTH_WHITE.
+bool forceSampledDepthWhite();
+
 // Diagnostic shader-source A/B: force fragment texture samples to white only
 // for selected indexed triangle-list draws. Env:
 // DXMT9_PROBE_FORCE_TEXTURE_WHITE.
@@ -220,6 +246,12 @@ std::optional<u64> probeForceTextureWhiteTexture0Handle();
 std::optional<u64> probeForceTextureWhiteTexture0Width();
 std::optional<u64> probeForceTextureWhiteTexture0Height();
 std::optional<u64> probeForceTextureWhiteTexture0Format();
+
+// Optional pixel-shader identity filter for
+// DXMT9_PROBE_FORCE_TEXTURE_WHITE. The value is the original D3D shader hash,
+// not a derived PSO or Metal-source variant hash.
+// Env: DXMT9_PROBE_FORCE_TEXTURE_WHITE_PS.
+std::optional<u64> probeForceTextureWhitePixelShaderHash();
 
 // Optional per-process draw ordinal filters for DXMT9_PROBE_FORCE_TEXTURE_WHITE.
 // Unlike encoder_draw_index, draw ordinals are assigned before probe matching

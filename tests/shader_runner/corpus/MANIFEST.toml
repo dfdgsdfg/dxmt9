@@ -1747,7 +1747,7 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_3_0"]
 opcodes = ["DCL", "DEF", "FRC", "MOV"]
-oracle = "Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos fractional pixel-center readback"
+oracle = "Wine d3d9 visual.c test_fragment_coords behavior, reduced to integer vPos pixel-center readback"
 oracle-date = "2026-05-17"
 
 [[test]]

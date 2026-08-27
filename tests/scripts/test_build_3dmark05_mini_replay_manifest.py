@@ -152,6 +152,19 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                     "texture3_handle=0x3000",
                     "texture3_lod=0",
                     "texture3_missing_record=1",
+                    "texture11_handle=0xb000",
+                    "texture11_lod=1",
+                    "texture11_format=11",
+                    "texture11_type=0",
+                    "texture11_pool=0",
+                    "texture11_usage=0x1",
+                    "texture11_width=1024",
+                    "texture11_height=1024",
+                    "texture11_depth=1",
+                    "texture11_levels=1",
+                    "texture11_has_metal_texture=1",
+                    "texture11_has_shader_read_texture=1",
+                    "texture11_has_srgb_shader_read_texture=0",
                     "attachment_color0_handle=0x4000",
                     "attachment_color0_level=0",
                     "attachment_color0_sample_count=1",
@@ -223,16 +236,25 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(manifest["summary"]["draw_count"], 1)
             self.assertEqual(manifest["summary"]["missing_probe_rows"], 0)
             self.assertEqual(manifest["summary"]["missing_shader_rows"], 0)
-            self.assertEqual(manifest["summary"]["texture_handles"], ["0x1000", "0x3000"])
-            self.assertEqual(manifest["summary"]["texture_handle_count"], 2)
-            self.assertEqual(manifest["summary"]["texture_capture_handles"], ["0x1000"])
-            self.assertEqual(manifest["summary"]["texture_capture_handle_count"], 1)
-            self.assertEqual(manifest["summary"]["texture_capture_handles_arg"], "0x1000")
+            self.assertEqual(
+                manifest["summary"]["texture_handles"],
+                ["0x1000", "0x3000", "0xb000"],
+            )
+            self.assertEqual(manifest["summary"]["texture_handle_count"], 3)
+            self.assertEqual(
+                manifest["summary"]["texture_capture_handles"],
+                ["0x1000", "0xb000"],
+            )
+            self.assertEqual(manifest["summary"]["texture_capture_handle_count"], 2)
+            self.assertEqual(
+                manifest["summary"]["texture_capture_handles_arg"],
+                "0x1000,0xb000",
+            )
             self.assertEqual(
                 manifest["summary"]["texture_capture_flags"],
                 [
                     "--dump-draw-texture-handles",
-                    "0x1000",
+                    "0x1000,0xb000",
                     "--dump-draw-texture-seq",
                     "60",
                     "--dump-draw-texture-enc",
@@ -240,6 +262,10 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
                 ],
             )
             draw = manifest["draws"][0]
+            self.assertEqual(
+                [(texture["stage"], texture["handle"]) for texture in draw["textures"]],
+                [(0, "0x1000"), (3, "0x3000"), (11, "0xb000")],
+            )
             self.assertEqual(draw["encoder_draw_index"], 189)
             self.assertEqual(draw["draw_ordinal"], 42428)
             self.assertEqual(draw["state"]["primitive_count"], 7097)
@@ -284,7 +310,7 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertTrue(draw["uniforms"]["psconsts_file"].endswith(".psconsts.bin"))
             self.assertTrue(draw["uniforms"]["ffpvs_file"].endswith(".ffpvs.bin"))
             self.assertTrue(draw["uniforms"]["ffpps_file"].endswith(".ffpps.bin"))
-            self.assertEqual(len(draw["textures"]), 2)
+            self.assertEqual(len(draw["textures"]), 3)
             self.assertEqual(draw["textures"][0]["stage"], 0)
             self.assertEqual(draw["textures"][0]["handle"], "0x1000")
             self.assertEqual(draw["textures"][0]["lod"], 2)
@@ -301,6 +327,9 @@ class BuildMiniReplayManifestTests(unittest.TestCase):
             self.assertEqual(draw["textures"][1]["stage"], 3)
             self.assertEqual(draw["textures"][1]["handle"], "0x3000")
             self.assertEqual(draw["textures"][1]["missing_record"], 1)
+            self.assertEqual(draw["textures"][2]["stage"], 11)
+            self.assertEqual(draw["textures"][2]["handle"], "0xb000")
+            self.assertEqual(draw["textures"][2]["format"], 11)
             self.assertEqual(len(draw["attachments"]["colors"]), 1)
             color = draw["attachments"]["colors"][0]
             self.assertEqual(color["index"], 0)

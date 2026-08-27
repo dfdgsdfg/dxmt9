@@ -23,7 +23,7 @@ bool backendOwnsTextureContents(const TextureDesc &desc);
 bool canTrustGpuReadback(const std::shared_ptr<dxmt9::Device> &backend);
 
 bool renderTraceEnabled();
-std::optional<u32> textureDumpHandle();
+std::optional<u64> textureDumpHandle();
 std::string textureDumpDir();
 void emitRenderTrace(const char *fmt, ...);
 

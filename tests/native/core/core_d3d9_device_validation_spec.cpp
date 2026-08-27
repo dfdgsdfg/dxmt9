@@ -393,6 +393,44 @@ void testTextureMipLevelCountPolicy() {
           "edge 3 with 3 levels exceeds the 2-level cap");
 }
 
+constexpr uint32_t kD3DUsageAutogenMipmap = 0x00000400u;
+constexpr uint32_t kD3DPoolDefault = 0u;
+constexpr uint32_t kD3DPoolManaged = 1u;
+constexpr uint32_t kD3DPoolSystemMem = 2u;
+
+constexpr int32_t mirrorAutogenTextureCreationHResult(
+    uint32_t usage, uint32_t pool, uint32_t levels,
+    bool volumeTexture) {
+  if ((usage & kD3DUsageAutogenMipmap) == 0u) return kD3D_OK;
+  if (volumeTexture || pool == kD3DPoolSystemMem) {
+    return kD3DERR_INVALIDCALL;
+  }
+  if (levels != 0u && levels != 1u) return kD3DERR_INVALIDCALL;
+  return kD3D_OK;
+}
+
+void testAutogenTextureCreationPolicy() {
+  checkEq(mirrorAutogenTextureCreationHResult(
+              kD3DUsageAutogenMipmap, kD3DPoolDefault, 0u, false),
+          kD3D_OK, "AUTOGEN Levels=0 default texture is valid");
+  checkEq(mirrorAutogenTextureCreationHResult(
+              kD3DUsageAutogenMipmap, kD3DPoolManaged, 1u, false),
+          kD3D_OK, "AUTOGEN Levels=1 managed texture is valid");
+  checkEq(mirrorAutogenTextureCreationHResult(
+              kD3DUsageAutogenMipmap, kD3DPoolManaged, 2u, false),
+          kD3DERR_INVALIDCALL,
+          "AUTOGEN explicit multi-level texture is invalid");
+  checkEq(mirrorAutogenTextureCreationHResult(
+              kD3DUsageAutogenMipmap, kD3DPoolSystemMem, 0u, false),
+          kD3DERR_INVALIDCALL, "AUTOGEN SYSTEMMEM texture is invalid");
+  checkEq(mirrorAutogenTextureCreationHResult(
+              kD3DUsageAutogenMipmap, kD3DPoolDefault, 0u, true),
+          kD3DERR_INVALIDCALL, "AUTOGEN volume texture is invalid");
+  checkEq(mirrorAutogenTextureCreationHResult(
+              0u, kD3DPoolSystemMem, 4u, true),
+          kD3D_OK, "non-AUTOGEN creation is outside this validator");
+}
+
 }  // namespace
 
 int main() {
@@ -405,6 +443,7 @@ int main() {
     testBackBufferCountNormalization();
     testQueryDataSizePerType();
     testTextureMipLevelCountPolicy();
+    testAutogenTextureCreationPolicy();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

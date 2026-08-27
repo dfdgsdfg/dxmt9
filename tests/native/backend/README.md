@@ -21,6 +21,7 @@ NSObject release symbols link against winemetal.
 | `heap_pooling_spec.cpp` | MTLHeap small-resource pooling classify + lifetime (`R-BACK-5.9, 5.10, 14.*`) |
 | `argbuf_hybrid_spec.cpp` | Stage 2 argbuf capability gate + selector + variant key + descriptor (`R-BACK-12.22-12.26`) |
 | `argbuf_hybrid_msl_spec.cpp` | FFP/DXBC→MSL emitter routing through ArgbufLayout slot 30 |
+| `wmt_generate_mipmaps_metal_spec.mm` | WMT blit RGBA16Float 1024x1024 complete 11-level 2x2 mip-chain oracle (`R-BACK-5.*`) |
 | `dxmt9_argbuf_populator_spec.cpp` | Per-encoder argbuf populator (encoder-resource init, dirtyBytesEstimate) |
 | `tile_ffp_selector_spec.cpp` | Tile-shader FFP capability gate + per-pass selector (`R-BACK-13.*`) |
 | `tile_ffp_msl_spec.cpp` | Tile-FFP MSL emitter source contract |
