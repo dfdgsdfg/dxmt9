@@ -140,6 +140,12 @@ std::vector<QueueReplayObservation> observeQueueReplay(const ChunkSlot &slot) {
           command.depthResolve ? command.depthResolve->intzDest : Handle{};
       observation.orderingBoundary = true;
       break;
+    case MetalCommandKind::GenerateMipmaps:
+      observation.category = QueueReplayCategory::Blit;
+      observation.primaryHandle =
+          command.generateMipmaps ? command.generateMipmaps->texture : Handle{};
+      observation.orderingBoundary = true;
+      break;
     case MetalCommandKind::Present:
       observation.category = QueueReplayCategory::Present;
       observation.primaryHandle =

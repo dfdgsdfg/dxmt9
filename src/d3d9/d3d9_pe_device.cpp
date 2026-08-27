@@ -15,6 +15,10 @@ static_assert(sizeof(D3D9DeviceImpl) == 105752);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #endif
 
+namespace {
+constexpr std::size_t kLegacyGenerateMipmapsSizeHint = 24u;
+}
+
 // Performance-critical state/draw definitions remain in this original device
 // compiler unit. This preserves the baseline inlining and emission decisions
 // for the hot COM surface and appendRecord specializations.
@@ -312,8 +316,11 @@ bool D3D9DeviceImpl::fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexc
 HRESULT D3D9DeviceImpl::generateBoundAutogenMipmaps() noexcept {
     std::array<IDirect3DBaseTexture9*, D9C_DRAW_PACKET_MAX_TEXTURES> pending{};
     std::array<D9CTexture*, D9C_DRAW_PACKET_MAX_TEXTURES> raw{};
+    std::array<dxmt9::d3d9::pe::TextureRef,
+               D9C_DRAW_PACKET_MAX_TEXTURES> wire{};
     std::size_t count = 0u;
-    for (auto* texture : textures_) {
+    for (std::size_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+        auto* texture = textures_[slot];
         D9CTexture* candidate = nullptr;
         if (!D3D9PeGetDirtyAutogenTexture(texture, &candidate)) continue;
         bool duplicate = false;
@@ -326,19 +333,33 @@ HRESULT D3D9DeviceImpl::generateBoundAutogenMipmaps() noexcept {
         if (!duplicate) {
             pending[count] = texture;
             raw[count] = candidate;
+            wire[count] = recorderState_.peBindingView.textures[slot];
             ++count;
         }
     }
     if (count == 0u) return S_OK;
 
-    // The resource bridge drains the offload worker as well. Flushing the PE
-    // builder first publishes all preceding RT writes; the bridge drain then
-    // makes those writes happen-before the Metal blit mip generation.
-    const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Barrier);
-    if (FAILED(flushHr)) return flushHr;
     for (std::size_t index = 0u; index < count; ++index) {
-        const HRESULT hr = hr32(dxmt9c_texture_generate_mip_sublevels(raw[index]));
+        if (!raw[index] || !wire[index].valid()) return D3DERR_INVALIDCALL;
+    }
+    for (std::size_t index = 0u; index < count; ++index) {
+        const auto textureWire = wire[index];
+        const HRESULT hr = appendRecord(
+            D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+            kLegacyGenerateMipmapsSizeHint,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = phase.begin();
+                const bool ok = dxmt9::d3d9::pe::appendGenerateMipmaps(
+                    builder, textureWire);
+                phase.recordEncode(t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (FAILED(hr)) return hr;
+        // Accepted record identity is retained by the chunk and ordered before
+        // the draw. Any later replay/Metal failure poisons the containing
+        // submission; it cannot expose this optimistic Clean state to another
+        // successful sampling draw.
         D3D9PeSetAutogenTextureClean(pending[index]);
     }
     return S_OK;

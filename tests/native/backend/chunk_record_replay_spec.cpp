@@ -162,7 +162,7 @@ SparseRecordFixture makeSparseRecord(
 
 class RecordingSink final : public NonDrawReplaySink {
  public:
-  std::array<std::uint32_t, 30> calls{};
+  std::array<std::uint32_t, 31> calls{};
   std::uint32_t currentType = 0u;
   std::uint32_t start = 0u;
   std::uint32_t count = 0u;
@@ -247,6 +247,12 @@ class RecordingSink final : public NonDrawReplaySink {
     firstObject = msaaDepth;
     secondObject = intzDest;
     return result(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE);
+  }
+
+  std::int32_t generateMipmaps(
+      const D9CCommandChunkWireGenerateMipmaps&, void* texture) override {
+    firstObject = texture;
+    return result(D9C_COMMAND_RECORD_GENERATE_MIPMAPS);
   }
 
   std::int32_t applyState(
@@ -494,6 +500,15 @@ void testOrderingAndResourceReplayMatrix() {
   replayTwo(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
             D9CCommandChunkWireReszDepthResolve{firstHandle,
                                                    firstHandle + 1u});
+
+  const D9CCommandChunkWireGenerateMipmaps generate{firstHandle};
+  payload = bytesOf(generate);
+  check(replayNonDrawRecord(
+            makeRecord(D9C_COMMAND_RECORD_GENERATE_MIPMAPS, payload,
+                       std::span<void* const>(objects).first(1u), firstHandle),
+            sink) == 1000 + D9C_COMMAND_RECORD_GENERATE_MIPMAPS &&
+            sink.firstObject == &first,
+        "GenerateMipmaps resolves its texture in source order");
 
   const D9CCommandChunkWireQueryIssue issue{firstHandle, 1u};
   payload = bytesOf(issue);

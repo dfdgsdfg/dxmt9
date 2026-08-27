@@ -1250,7 +1250,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       if ((context.sampledDepthTextureMask & (1u << stage)) != 0u) {
         // Metal depth textures return a scalar; D3D9 texture operations expose
         // a float4 register value, so widen before the fixed-function combine.
-        sample = "float4(" + sample + ", 0.0f, 0.0f, 1.0f)";
+        sample = "float4(float3(" + sample + "), 1.0f)";
       }
     }
     if ((context.x8AlphaOneTextureMask & (1u << stage)) != 0u) {

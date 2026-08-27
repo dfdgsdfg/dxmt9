@@ -190,6 +190,17 @@ std::int32_t replayNonDrawRecord(
               &D9CCommandChunkWireReszDepthResolve::intzDestHandleIndex,
               fixed));
     }
+    case D9C_COMMAND_RECORD_GENERATE_MIPMAPS: {
+      D9CCommandChunkWireGenerateMipmaps fixed{};
+      if (!loadFixed(record.wire, fixed)) {
+        return kCommandChunkDecodeFailure;
+      }
+      return sink.generateMipmaps(
+          fixed, resolvedObject(
+                     record,
+                     &D9CCommandChunkWireGenerateMipmaps::textureHandleIndex,
+                     fixed));
+    }
     case D9C_COMMAND_RECORD_APPLY_STATE:
       return sink.applyState(record);
     default:

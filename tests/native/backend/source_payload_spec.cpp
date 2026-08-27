@@ -208,14 +208,15 @@ SourcePayloadCapacity everyRegionCapacity() {
   c.readbackRecords = 1;
   c.colorFillRecords = 1;
   c.depthResolveRecords = 1;
+  c.generateMipmapsRecords = 1;
   c.presentRecords = 1;
   return c;
 }
 
 void testTypedLayoutAlignmentNonOverlapAndPages() {
-  static_assert(kSourcePayloadRegionCount == 31);
+  static_assert(kSourcePayloadRegionCount == 32);
   const auto layout = makeSourcePayloadLayout(everyRegionCapacity(), 4096, 64);
-  check(layout.has_value(), "31-region payload layout must build");
+  check(layout.has_value(), "32-region payload layout must build");
   std::size_t priorEnd = 0;
   for (std::size_t i = 0; i < kSourcePayloadRegionCount; ++i) {
     const auto id = static_cast<SourcePayloadRegion>(i);
@@ -623,12 +624,13 @@ void testLegacyArenaSourcePayloadViewParity() {
 
 void testConsolidatedNondrawCommandParity() {
   SourcePayloadCapacity capacity{};
-  capacity.commandHeaders = 6;
+  capacity.commandHeaders = 7;
   capacity.surfaceCopyRecords = 1;
   capacity.stretchRectRecords = 1;
   capacity.readbackRecords = 1;
   capacity.colorFillRecords = 1;
   capacity.depthResolveRecords = 1;
+  capacity.generateMipmapsRecords = 1;
   capacity.presentRecords = 1;
   const auto layout = makeSourcePayloadLayout(capacity, 4096, 4);
   check(layout.has_value(), "consolidated nondraw layout must build");
@@ -659,6 +661,9 @@ void testConsolidatedNondrawCommandParity() {
       .msaaDepth = {.value = 51},
       .intzDest = {.value = 52},
   };
+  const dxmt9::core::GenerateMipmapsDesc generate{
+      .texture = {.value = 53},
+  };
   dxmt9::core::PresentCommandRecord present{
       .present = {.sourceSurface = {.value = 61}},
       .presentSource = {.value = 62},
@@ -670,6 +675,7 @@ void testConsolidatedNondrawCommandParity() {
   legacy.appendReadback(readback);
   legacy.appendColorFill(fill);
   legacy.appendDepthResolve(resolve);
+  legacy.appendGenerateMipmaps(generate);
   legacy.appendPresent(present.present, present.presentSource);
 
   ArenaSourcePayloadBlock arena;
@@ -679,13 +685,14 @@ void testConsolidatedNondrawCommandParity() {
             builder.tryAppendReadbackCommand(readback) &&
             builder.tryAppendColorFillCommand(fill) &&
             builder.tryAppendDepthResolveCommand(resolve) &&
+            builder.tryAppendGenerateMipmapsCommand(generate) &&
             builder.tryAppendPresentCommand(std::move(present)) &&
             builder.publish(),
         "all nondraw command records must append and publish together");
 
   const SourcePayloadView legacyView(legacy);
   const SourcePayloadView arenaView(arena);
-  check(legacyView.commandCount() == 6 && arenaView.commandCount() == 6,
+  check(legacyView.commandCount() == 7 && arenaView.commandCount() == 7,
         "consolidated nondraw views must expose all commands");
   const std::array kinds{
       MetalCommandKind::SurfaceCopy,
@@ -693,6 +700,7 @@ void testConsolidatedNondrawCommandParity() {
       MetalCommandKind::Readback,
       MetalCommandKind::ColorFill,
       MetalCommandKind::DepthResolve,
+      MetalCommandKind::GenerateMipmaps,
       MetalCommandKind::Present,
   };
   for (std::size_t i = 0; i < kinds.size(); ++i) {
@@ -710,8 +718,10 @@ void testConsolidatedNondrawCommandParity() {
   const auto arenaFill = arenaView.commandAt(3).command.colorFill;
   const auto legacyResolve = legacyView.commandAt(4).command.depthResolve;
   const auto arenaResolve = arenaView.commandAt(4).command.depthResolve;
-  const auto legacyPresent = legacyView.commandAt(5).command.present;
-  const auto arenaPresent = arenaView.commandAt(5).command.present;
+  const auto legacyGenerate = legacyView.commandAt(5).command.generateMipmaps;
+  const auto arenaGenerate = arenaView.commandAt(5).command.generateMipmaps;
+  const auto legacyPresent = legacyView.commandAt(6).command.present;
+  const auto arenaPresent = arenaView.commandAt(6).command.present;
   check(legacyCopy && arenaCopy &&
             legacyCopy->source == arenaCopy->source &&
             legacyCopy->destination == arenaCopy->destination &&
@@ -727,6 +737,8 @@ void testConsolidatedNondrawCommandParity() {
             legacyResolve && arenaResolve &&
             legacyResolve->msaaDepth == arenaResolve->msaaDepth &&
             legacyResolve->intzDest == arenaResolve->intzDest &&
+            legacyGenerate && arenaGenerate &&
+            legacyGenerate->texture == arenaGenerate->texture &&
             legacyPresent && arenaPresent &&
             legacyPresent->presentSource == arenaPresent->presentSource &&
             legacyPresent->present.sourceSurface ==

@@ -1277,6 +1277,7 @@ bool generalRecordTypeSupported(std::uint32_t type) noexcept {
   case D9C_COMMAND_RECORD_CLEAR:
   case D9C_COMMAND_RECORD_PRESENT:
   case D9C_COMMAND_RECORD_APPLY_STATE:
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
     return true;
   default:
     return false;

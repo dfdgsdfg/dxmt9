@@ -232,6 +232,7 @@ class Device {
   virtual void submitReadback(const core::ReadbackDesc&) {}
   virtual void submitColorFill(const core::ColorFillDesc&) {}
   virtual void submitDepthResolve(const core::DepthResolveDesc&) {}
+  virtual void submitGenerateMipmaps(const core::GenerateMipmapsDesc&) {}
   virtual void present(const core::SwapDesc&) {}
   // Commit-replay offload present-ordinal boundary. `ordinal` counts
   // present-bearing commits 1,2,3... from the caller's own tracking (not a

@@ -388,6 +388,22 @@ void testBidirectionalHandleRejects() {
   orphanPayload.dstHandleIndex = 0u;
   expectStatus(orphan, CommandChunkValidationStatus::HandleSliceMismatch,
                "unreferenced handle-table entry rejects");
+
+  const D9CCommandChunkWireGenerateMipmaps generate{0u};
+  const RecordSpec generateSpec{
+      .type = D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+      .payload = bytesOf(generate),
+      .handles = {
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x400000003ull),
+      },
+  };
+  check(makeChunk(generateSpec).validate().valid(),
+        "GenerateMipmaps accepts one exact texture identity");
+  auto generateWrongKind = makeChunk(generateSpec);
+  generateWrongKind.handle(0u).kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+  expectStatus(generateWrongKind,
+               CommandChunkValidationStatus::InvalidHandleReference,
+               "GenerateMipmaps rejects a surface-qualified identity");
 }
 
 void testSparseSectionRejects() {

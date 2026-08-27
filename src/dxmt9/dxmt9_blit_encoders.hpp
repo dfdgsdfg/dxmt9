@@ -100,6 +100,10 @@ void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
                         core::Handle intzDestination,
                         std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
+bool encodeGenerateMipmaps(WMT::CommandBuffer& commandBuffer,
+                           resources::Pool& pool,
+                           const core::GenerateMipmapsDesc& generate);
+
 }  // namespace dxmt9::encoders
 
 // Forward decl for readbackSurface.

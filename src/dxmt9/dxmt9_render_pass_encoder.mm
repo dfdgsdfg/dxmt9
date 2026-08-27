@@ -227,6 +227,11 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
           return finish(Proof::BlockDepthResolve, logicalDistance);
         }
         break;
+      case Kind::GenerateMipmaps:
+        // Mipmap generation is an ordered blit boundary. The texture may
+        // alias an attachment through a resource-owned surface handle, which
+        // this surface-only lookahead cannot prove disjoint.
+        return finish(Proof::BlockSurfaceCopy, logicalDistance);
       case Kind::Present:
         // R-BACK-15.13: a Present in the selected logical suffix implies the
         // frame may persist depth state across that boundary. Don't return
@@ -455,6 +460,10 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
         break;
       case Kind::DepthResolve:
         break;
+      case Kind::GenerateMipmaps:
+        // As above, fail closed when the texture/surface alias relation is
+        // unavailable to this local lookahead.
+        return finish(Proof::BlockSurfaceCopy, logicalDistance);
       }
     }
   }

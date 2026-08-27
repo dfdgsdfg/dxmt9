@@ -233,4 +233,19 @@ bool appendReszDepthResolve(CommandChunkBuilder& builder,
       &D9CCommandChunkWireReszDepthResolve::intzDestHandleIndex);
 }
 
+bool appendGenerateMipmaps(CommandChunkBuilder& builder,
+                           const TextureRef& texture) noexcept {
+  D9CCommandChunkWireGenerateMipmaps fixed{};
+  if (!builder.beginRecord(D9C_COMMAND_RECORD_GENERATE_MIPMAPS)) {
+    return false;
+  }
+  if (!builder.appendHandle(texture, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                            fixed.textureHandleIndex) ||
+      !builder.appendPayloadValue(fixed) || !builder.commitRecord()) {
+    builder.rollbackRecord();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace dxmt9::d3d9::pe

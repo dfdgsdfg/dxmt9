@@ -1158,6 +1158,11 @@ void Pool::markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seq
   markSurfaceUse(desc.intzDest, seqId);
 }
 
+void Pool::markGenerateMipmapsResources(
+    const core::GenerateMipmapsDesc& desc, u64 seqId) {
+  markTextureUse(desc.texture, seqId);
+}
+
 ReorderedIndexBufferLookup Pool::findReorderedIndexBuffer(
     u64 sourceHandle,
     ReorderedIndexBufferCacheKey key,

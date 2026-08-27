@@ -1814,6 +1814,9 @@ class BackendDevice {
   virtual void submitReadback(const ReadbackDesc& desc) { (void)desc; }
   virtual void submitColorFill(const ColorFillDesc& desc) { (void)desc; }
   virtual void submitDepthResolve(const DepthResolveDesc& desc) { (void)desc; }
+  virtual void submitGenerateMipmaps(const GenerateMipmapsDesc& desc) {
+    (void)desc;
+  }
   virtual void present(const SwapDesc& desc) { (void)desc; }
   virtual void setDeviceLostObserver(DeviceLostObserver observer) { (void)observer; }
   virtual void setPresentationStatusObserver(PresentationStatusObserver observer) { (void)observer; }
@@ -2003,6 +2006,7 @@ class Texture : public std::enable_shared_from_this<Texture> {
   void fillColor(const Rect* rect, ColorRGBA color);
   void copyFrom(const Texture& src);
   HResult generateMipSubLevels();
+  HResult enqueueGenerateMipSubLevels();
   void invalidate();
 
  private:

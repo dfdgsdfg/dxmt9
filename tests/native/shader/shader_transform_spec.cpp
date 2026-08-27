@@ -2069,10 +2069,10 @@ void testSampledDepthUsesTypedDirectBindingAndD3DComponents() {
   checkContains(source, "depth2d<float> tex7 [[texture(7)]]",
                 "a DF16/DF24/INTZ stage uses Metal's typed depth ABI");
   checkContains(source,
-                "float4(tex7.sample(samp7",
+                "float4(float3(tex7.sample(samp7",
                 "a scalar Metal depth sample is widened for a D3D9 register");
-  checkContains(source, ", 0.0f, 0.0f, 1.0f)",
-                "sampled depth preserves the D3D single-channel component defaults");
+  checkContains(source, "), 1.0f)",
+                "sampled depth replicates into RGB and supplies opaque alpha");
   checkNotContains(source, "float4(tex0.sample(samp0",
                    "depth widening does not leak into ordinary color stages");
 }
@@ -2205,7 +2205,7 @@ void testFfpSampledDepthUsesTypedDirectBinding() {
   const auto source = dxmt9::ffp::makeFfpPixelSource(key, context);
   checkContains(source, "depth2d<float> tex0 [[texture(0)]]",
                 "FFP sampled depth uses a direct typed Metal binding");
-  checkContains(source, "float4(tex0.sample(samp0",
+  checkContains(source, "float4(float3(tex0.sample(samp0",
                 "FFP widens a scalar sampled-depth value before texture combine");
   checkNotContains(source, "array<texture2d<float>",
                    "FFP sampled depth fails closed out of the color resource array ABI");

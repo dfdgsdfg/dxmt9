@@ -403,6 +403,16 @@ RenderTapeFirstAccessObservation observeFixedRecord(
         ledger, chunk, record, recordIndex, value.intzDestHandleIndex,
         RenderTapeFirstAccessClass::CopyDestinationPartial);
   }
+  if (record.header.type == D9C_COMMAND_RECORD_GENERATE_MIPMAPS) {
+    D9CCommandChunkWireGenerateMipmaps value{};
+    if (!load(record.payload, 0u, value))
+      return malformed(ledger);
+    // The base level is read before lower levels are written, so a capture
+    // that begins here needs the exact incoming texture contents.
+    return candidateForHandle(
+        ledger, chunk, record, recordIndex, value.textureHandleIndex,
+        RenderTapeFirstAccessClass::CopySource);
+  }
   return {};
 }
 

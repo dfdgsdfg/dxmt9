@@ -121,6 +121,9 @@ public:
       case core::MetalCommandKind::DepthResolve:
         handleDepthResolve(i);
         break;
+      case core::MetalCommandKind::GenerateMipmaps:
+        handleGenerateMipmaps(i);
+        break;
       case core::MetalCommandKind::Readback:
         handleReadback(i);
         break;
@@ -448,6 +451,19 @@ private:
     emitBlit(commandIndex,
              ResourceHandle{command.depthResolve->msaaDepth.value},
              ResourceHandle{command.depthResolve->intzDest.value});
+  }
+
+  void handleGenerateMipmaps(std::size_t commandIndex) {
+    const auto command = payload_.commandAt(commandIndex).command;
+    if (!command.generateMipmaps) {
+      return;
+    }
+    const u32 pass_index =
+        emitStandalonePass(PassKind::Blit, commandIndex);
+    currentPass_ = pass_index;
+    noteAccess(ResourceHandle{command.generateMipmaps->texture.value},
+               pass_index, AccessKind::ReadWrite, AccessStage::Copy,
+               /*resolve_alias=*/false);
   }
 
   void handleReadback(std::size_t commandIndex) {

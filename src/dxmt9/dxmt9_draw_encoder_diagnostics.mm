@@ -410,6 +410,8 @@ const char* metalCommandKindName(core::MetalCommandKind kind) {
     return "ColorFill";
   case core::MetalCommandKind::DepthResolve:
     return "DepthResolve";
+  case core::MetalCommandKind::GenerateMipmaps:
+    return "GenerateMipmaps";
   case core::MetalCommandKind::Present:
     return "Present";
   }

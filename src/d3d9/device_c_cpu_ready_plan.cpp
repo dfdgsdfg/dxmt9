@@ -233,6 +233,11 @@ DirectRecordResult addDirectRecordCapacity(
                    addCount(capacity.depthResolveRecords, 1)
                ? DirectRecordResult::GpuProducing
                : DirectRecordResult::Overflow;
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.generateMipmapsRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
   case D9C_COMMAND_RECORD_PRESENT: {
     D9CCommandChunkWirePresent present{};
     if (!loadFixed(record, present)) {

@@ -599,6 +599,7 @@ inline constexpr ParallelPassCommandRole classifyParallelPassCommandRole(
   case core::MetalCommandKind::Readback:
   case core::MetalCommandKind::ColorFill:
   case core::MetalCommandKind::DepthResolve:
+  case core::MetalCommandKind::GenerateMipmaps:
     return ParallelPassCommandRole::CoordinatorBoundary;
   }
   return ParallelPassCommandRole::Unsupported;

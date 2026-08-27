@@ -3204,7 +3204,7 @@ area = "resource-wrappers"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["GetDC/ReleaseDC, LOD, filter, and D3DFMT_UNKNOWN failures match Wine oracle. Supported AUTOGENMIPMAP formats return D3D_OK, expose one public level, and drive a complete hidden mip pyramid."]
-status = "implemented"
+status = "partial"
 
 [[case.evidence]]
 lane = "builtin"

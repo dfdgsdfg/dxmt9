@@ -205,6 +205,14 @@ bool nonDrawBinding(const ImportedRecordView& record,
     }
     return true;
   }
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS: {
+    D9CCommandChunkWireGenerateMipmaps value{};
+    if (!load(record.payload, 0u, value))
+      return false;
+    if (value.textureHandleIndex == handleIndex)
+      role = RenderTapeCommandRole::CopySource;
+    return true;
+  }
   default:
     return true;
   }

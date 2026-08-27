@@ -3083,7 +3083,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     auto widenDepthSample = [&](u32 sampler, std::string sample) {
       if (sampler < kMaxSamplers &&
           (context.sampledDepthTextureMask & (1u << sampler)) != 0u) {
-        return std::string("float4(") + sample + ", 0.0f, 0.0f, 1.0f)";
+        return std::string("float4(float3(") + sample + "), 1.0f)";
       }
       return sample;
     };

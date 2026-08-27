@@ -1360,6 +1360,12 @@ struct DepthResolveDesc {
   Handle intzDest{};
 };
 
+// Ordered automatic-mipmap generation for a texture whose public D3D9
+// topology exposes only level 0 while the backend owns a hidden pyramid.
+struct GenerateMipmapsDesc {
+  TextureHandle texture{};
+};
+
 const std::vector<FormatInfo>& formatTable();
 const FormatInfo* findFormatInfo(Format format);
 FormatClass classifyFormat(Format format);

@@ -135,9 +135,20 @@ level-0 write marks that pyramid dirty, including CPU unlock, clear,
 render-target draw, `UpdateSurface`, `StretchRect`, and `ColorFill` paths;
 `UpdateTexture` may instead generate the destination pyramid as part of the
 ordered copy operation. Before the next draw samples a dirty texture, all
-earlier replay effects shall complete, the full pyramid shall be regenerated,
-and only then may the sampling draw execute. The dirty-to-clean transition
-occurs only after successful generation.
+earlier replay effects shall precede generation, the full pyramid shall be
+regenerated, and only then may the sampling draw execute. The physical
+dirty-to-clean transition occurs only after successful generation. PE may
+optimistically settle its recorder-local dirty bit once the exact retained
+generation command is accepted, provided every post-accept failure is
+fail-stop and therefore cannot expose stale mips to a successful draw.
+
+Automatic generation required by a sampling draw shall be represented as an
+ordered, texture-qualified command in the canonical chunk and backend command
+streams. Production replay must encode it into the current Metal command
+buffer after closing any writer render encoder and before the sampling draw;
+it must not force a PE replay drain, a standalone command buffer, or a CPU
+wait. Malformed or unresolved texture identity fails the containing chunk
+before Metal side effects.
 
 AUTOGEN creation accepts only `Levels=0` or `Levels=1`, rejects SYSTEMMEM, and
 rejects volume textures. These are creation-time semantic errors and shall be

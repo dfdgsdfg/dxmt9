@@ -496,7 +496,7 @@ void testCubeTextureSubresourceFlow() {
   check(invalid == nullptr, "cube invalid subresource rejected");
 }
 
-void testAutogenUpdateTextureRegeneratesMipShadow() {
+void testAutogenUpdateTextureRegeneratesPhysicalMipPyramid() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory(BackendLimits{}, backend);
   PresentParameters params{};
@@ -518,13 +518,16 @@ void testAutogenUpdateTextureRegeneratesMipShadow() {
 
   src->fillColor(0, nullptr, {1.0f, 0.0f, 0.0f, 1.0f});
   dst->fillColor(0, nullptr, {0.0f, 0.0f, 1.0f, 1.0f});
-  dst->fillColor(1, nullptr, {0.0f, 0.0f, 0.0f, 1.0f});
 
   checkEq(device->updateTexture(src, dst), D3D_OK, "autogen UpdateTexture");
-  const std::array<u8, 4> redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  const std::array<u8, 4> untouchedPixel{};
   checkBytes(std::span<const u8>(dst->levelBytes(1).data(), 4),
-             std::span<const u8>(redPixel.data(), redPixel.size()),
-             "autogen UpdateTexture regenerates mip shadow from copied base");
+             std::span<const u8>(untouchedPixel.data(), untouchedPixel.size()),
+             "autogen UpdateTexture does not synthesize a CPU mip shadow");
+  checkEq(backend->generatedMipmaps.size(), std::size_t{1},
+          "autogen UpdateTexture requests one physical mip generation");
+  checkEq(backend->generatedMipmaps.front().texture, dst->handle(),
+          "autogen UpdateTexture generates the destination physical pyramid");
 }
 
 void testMetalSamplerBorderColorCoverage() {
@@ -981,7 +984,7 @@ int main() {
     testBatchLaneShaderLayoutSurvivesInterleavedFullLaneRebuild();
     testMetalSamplerBorderColorCoverage();
     testCubeTextureSubresourceFlow();
-    testAutogenUpdateTextureRegeneratesMipShadow();
+    testAutogenUpdateTextureRegeneratesPhysicalMipPyramid();
     testProgrammableTextureOrientationSmoke();
     testProgrammablePalettizedTextureDrawSmoke();
   } catch (const TestFailure& error) {

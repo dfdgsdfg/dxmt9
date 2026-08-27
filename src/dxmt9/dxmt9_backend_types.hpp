@@ -27,6 +27,7 @@ enum class MetalCommandKind : std::uint8_t {
   Readback,
   ColorFill,
   DepthResolve,
+  GenerateMipmaps,
   Present,
 };
 
@@ -59,6 +60,7 @@ struct StretchRectRecordIndexTag;
 struct ReadbackRecordIndexTag;
 struct ColorFillRecordIndexTag;
 struct DepthResolveRecordIndexTag;
+struct GenerateMipmapsRecordIndexTag;
 struct PresentRecordIndexTag;
 
 using CommandPayloadIndex = detail::ChunkSoaIndex<CommandPayloadIndexTag>;
@@ -69,6 +71,8 @@ using StretchRectRecordIndex = detail::ChunkSoaIndex<StretchRectRecordIndexTag>;
 using ReadbackRecordIndex = detail::ChunkSoaIndex<ReadbackRecordIndexTag>;
 using ColorFillRecordIndex = detail::ChunkSoaIndex<ColorFillRecordIndexTag>;
 using DepthResolveRecordIndex = detail::ChunkSoaIndex<DepthResolveRecordIndexTag>;
+using GenerateMipmapsRecordIndex =
+    detail::ChunkSoaIndex<GenerateMipmapsRecordIndexTag>;
 using PresentRecordIndex = detail::ChunkSoaIndex<PresentRecordIndexTag>;
 static_assert(sizeof(CommandPayloadIndex) == sizeof(std::uint32_t));
 static_assert(sizeof(DrawRunRecordIndex) == sizeof(std::uint32_t));
@@ -227,6 +231,7 @@ struct MetalCommandView {
   const ReadbackDesc* readback = nullptr;
   const ColorFillDesc* colorFill = nullptr;
   const DepthResolveDesc* depthResolve = nullptr;
+  const GenerateMipmapsDesc* generateMipmaps = nullptr;
   const PresentCommandRecord* present = nullptr;
 };
 
@@ -862,6 +867,7 @@ struct ChunkSlot {
   std::vector<ReadbackDesc> readbackRecords;
   std::vector<ColorFillDesc> colorFillRecords;
   std::vector<DepthResolveDesc> depthResolveRecords;
+  std::vector<GenerateMipmapsDesc> generateMipmapsRecords;
   std::vector<PresentCommandRecord> presentRecords;
 
   bool commandsEmpty() const noexcept {
@@ -928,6 +934,7 @@ struct ChunkSlot {
     readbackRecords.clear();
     colorFillRecords.clear();
     depthResolveRecords.clear();
+    generateMipmapsRecords.clear();
     presentRecords.clear();
   }
 
@@ -2209,6 +2216,11 @@ struct ChunkSlot {
     appendCommandRecord(MetalCommandKind::DepthResolve, depthResolveRecords, depthResolve);
   }
 
+  void appendGenerateMipmaps(const GenerateMipmapsDesc& generateMipmaps) {
+    appendCommandRecord(MetalCommandKind::GenerateMipmaps,
+                        generateMipmapsRecords, generateMipmaps);
+  }
+
   void appendPresent(const SwapDesc& present, Handle presentSource) {
     appendCommandRecord(MetalCommandKind::Present, presentRecords, PresentCommandRecord{
         .present = present,
@@ -2259,6 +2271,8 @@ struct ChunkSlot {
                                               source.colorFillRecords.size()) &&
            detail::chunkSlotCanAppendU32Range(depthResolveRecords.size(),
                                               source.depthResolveRecords.size()) &&
+           detail::chunkSlotCanAppendU32Range(generateMipmapsRecords.size(),
+                                              source.generateMipmapsRecords.size()) &&
            detail::chunkSlotCanAppendU32Range(presentRecords.size(),
                                               source.presentRecords.size());
   }
@@ -2291,6 +2305,7 @@ struct ChunkSlot {
       std::uint32_t readback = 0;
       std::uint32_t colorFill = 0;
       std::uint32_t depthResolve = 0;
+      std::uint32_t generateMipmaps = 0;
       std::uint32_t present = 0;
     };
     const Bases base{
@@ -2315,6 +2330,8 @@ struct ChunkSlot {
         .readback = static_cast<std::uint32_t>(readbackRecords.size()),
         .colorFill = static_cast<std::uint32_t>(colorFillRecords.size()),
         .depthResolve = static_cast<std::uint32_t>(depthResolveRecords.size()),
+        .generateMipmaps =
+            static_cast<std::uint32_t>(generateMipmapsRecords.size()),
         .present = static_cast<std::uint32_t>(presentRecords.size()),
     };
 
@@ -2366,6 +2383,9 @@ struct ChunkSlot {
     detail::chunkSlotReserveAtLeast(
         depthResolveRecords,
         depthResolveRecords.size() + source.depthResolveRecords.size());
+    detail::chunkSlotReserveAtLeast(
+        generateMipmapsRecords,
+        generateMipmapsRecords.size() + source.generateMipmapsRecords.size());
     detail::chunkSlotReserveAtLeast(
         presentRecords, presentRecords.size() + source.presentRecords.size());
 
@@ -2479,6 +2499,9 @@ struct ChunkSlot {
     depthResolveRecords.insert(depthResolveRecords.end(),
                                source.depthResolveRecords.begin(),
                                source.depthResolveRecords.end());
+    generateMipmapsRecords.insert(generateMipmapsRecords.end(),
+                                  source.generateMipmapsRecords.begin(),
+                                  source.generateMipmapsRecords.end());
     presentRecords.insert(presentRecords.end(),
                           source.presentRecords.begin(), source.presentRecords.end());
 
@@ -2505,6 +2528,9 @@ struct ChunkSlot {
         break;
       case MetalCommandKind::DepthResolve:
         remappedIndex.value += base.depthResolve;
+        break;
+      case MetalCommandKind::GenerateMipmaps:
+        remappedIndex.value += base.generateMipmaps;
         break;
       case MetalCommandKind::Present:
         remappedIndex.value += base.present;
@@ -2581,6 +2607,15 @@ struct ChunkSlot {
       const auto payloadIndex =
           detail::chunkSlotPayloadIndex<DepthResolveRecordIndex>(header.payloadIndex);
       if (detail::chunkSlotIndexInRange(payloadIndex, depthResolveRecords)) view.depthResolve = &depthResolveRecords[payloadIndex.value];
+      break;
+    }
+    case MetalCommandKind::GenerateMipmaps: {
+      const auto payloadIndex = detail::chunkSlotPayloadIndex<
+          GenerateMipmapsRecordIndex>(header.payloadIndex);
+      if (detail::chunkSlotIndexInRange(payloadIndex,
+                                       generateMipmapsRecords)) {
+        view.generateMipmaps = &generateMipmapsRecords[payloadIndex.value];
+      }
       break;
     }
     case MetalCommandKind::Present: {
@@ -2748,6 +2783,15 @@ struct ChunkSlot {
         const auto payloadIndex =
             detail::chunkSlotPayloadIndex<DepthResolveRecordIndex>(header.payloadIndex);
         if (!detail::chunkSlotIndexInRange(payloadIndex, depthResolveRecords)) {
+          return false;
+        }
+        break;
+      }
+      case MetalCommandKind::GenerateMipmaps: {
+        const auto payloadIndex = detail::chunkSlotPayloadIndex<
+            GenerateMipmapsRecordIndex>(header.payloadIndex);
+        if (!detail::chunkSlotIndexInRange(payloadIndex,
+                                          generateMipmapsRecords)) {
           return false;
         }
         break;

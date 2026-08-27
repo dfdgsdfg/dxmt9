@@ -183,6 +183,7 @@ core::metalqueue::ReplayCategory replayCategoryFor(
   case Kind::StretchRect:
   case Kind::Readback:
   case Kind::DepthResolve:
+  case Kind::GenerateMipmaps:
     return core::metalqueue::ReplayCategory::Copy;
   }
   return core::metalqueue::ReplayCategory::Draw;
@@ -1351,6 +1352,7 @@ perf::EncoderSplitReason parallelPassCloseReason(
     return perf::EncoderSplitReason::SurfaceCopy;
   case core::MetalCommandKind::StretchRect:
   case core::MetalCommandKind::DepthResolve:
+  case core::MetalCommandKind::GenerateMipmaps:
     return perf::EncoderSplitReason::StretchRect;
   case core::MetalCommandKind::Readback:
     return perf::EncoderSplitReason::Readback;
@@ -3711,6 +3713,23 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         recordRenderEncoderGpuAttachment(sampleAttachment);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
+        break;
+      }
+      case Kind::GenerateMipmaps: {
+        if (!command.generateMipmaps) break;
+        flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Copy);
+        flushRender(perf::EncoderSplitReason::SurfaceCopy);
+        flushBlit();
+        assertHelperEncoderPrecondition();
+        if (!dxmt9::encoders::encodeGenerateMipmaps(
+                commandBuffer, ctx.pool, *command.generateMipmaps)) {
+          abortEncodePartitionInvariant(
+              "ordered mipmap generation failed after record acceptance");
+        }
+        commandBufferHasWork = true;
+        assertNoActiveEncoder();
         break;
       }
       case Kind::ColorFill: {

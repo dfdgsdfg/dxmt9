@@ -156,6 +156,12 @@ class ArenaPayloadFixture {
             !builder.tryAppendDepthResolveCommand(*command.depthResolve))
           return;
         break;
+      case core::MetalCommandKind::GenerateMipmaps:
+        if (!command.generateMipmaps ||
+            !builder.tryAppendGenerateMipmapsCommand(
+                *command.generateMipmaps))
+          return;
+        break;
       case core::MetalCommandKind::Present: {
         if (!command.present) return;
         auto present = *command.present;

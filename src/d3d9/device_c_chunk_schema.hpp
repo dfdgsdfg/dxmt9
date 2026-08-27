@@ -31,7 +31,7 @@ struct RecordRule {
   std::uint32_t ruleFlags;
 };
 
-inline constexpr std::array<RecordRule, 20> kRecordRules = {{
+inline constexpr std::array<RecordRule, 21> kRecordRules = {{
     {D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
      sizeof(D9CCommandChunkWireDrawHeader), 4u,
      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
@@ -109,6 +109,10 @@ inline constexpr std::array<RecordRule, 20> kRecordRules = {{
      sizeof(D9CCommandChunkWireReszDepthResolve), 4u,
      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
      RecordRuleOrderingBoundary | RecordRuleHandleRefs},
+    {D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+     sizeof(D9CCommandChunkWireGenerateMipmaps), 4u,
+     D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+     RecordRuleOrderingBoundary | RecordRuleHandleRefs},
 }};
 
 enum SectionRuleFlags : std::uint32_t {
@@ -139,7 +143,7 @@ struct RecordHandleFieldRule {
   bool nullable;
 };
 
-inline constexpr std::array<RecordHandleFieldRule, 13>
+inline constexpr std::array<RecordHandleFieldRule, 14>
     kRecordHandleFieldRules = {{
         {D9C_COMMAND_RECORD_PRESENT,
          offsetof(D9CCommandChunkWirePresent, sourceHandleIndex),
@@ -181,6 +185,9 @@ inline constexpr std::array<RecordHandleFieldRule, 13>
         {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
          offsetof(D9CCommandChunkWireReszDepthResolve,
                   intzDestHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+        {D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+         offsetof(D9CCommandChunkWireGenerateMipmaps, textureHandleIndex),
          D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
     }};
 
@@ -331,7 +338,7 @@ constexpr const SectionHandleFieldRule* sectionHandleFieldRule(
 }
 
 constexpr bool recordSchemaComplete() {
-  constexpr std::array<std::uint32_t, 20> expected = {{
+  constexpr std::array<std::uint32_t, 21> expected = {{
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
@@ -352,6 +359,7 @@ constexpr bool recordSchemaComplete() {
       D9C_COMMAND_RECORD_READBACK,
       D9C_COMMAND_RECORD_APPLY_STATE,
       D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+      D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
   }};
 
   for (std::size_t i = 0; i < expected.size(); ++i) {

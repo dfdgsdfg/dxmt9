@@ -192,13 +192,14 @@ enum class SourcePayloadRegion : std::uint8_t {
   ReadbackRecords,
   ColorFillRecords,
   DepthResolveRecords,
+  GenerateMipmapsRecords,
   PresentRecords,
   Count,
 };
 
 inline constexpr std::size_t kSourcePayloadRegionCount =
     static_cast<std::size_t>(SourcePayloadRegion::Count);
-static_assert(kSourcePayloadRegionCount == 31);
+static_assert(kSourcePayloadRegionCount == 32);
 
 struct SourcePayloadCapacity {
   std::size_t commandHeaders = 0;
@@ -231,6 +232,7 @@ struct SourcePayloadCapacity {
   std::size_t readbackRecords = 0;
   std::size_t colorFillRecords = 0;
   std::size_t depthResolveRecords = 0;
+  std::size_t generateMipmapsRecords = 0;
   std::size_t presentRecords = 0;
 };
 
@@ -394,6 +396,7 @@ class ArenaSourcePayloadBlock {
   ArenaSoA<ReadbackDesc> readbackRecords_{};
   ArenaSoA<ColorFillDesc> colorFillRecords_{};
   ArenaSoA<DepthResolveDesc> depthResolveRecords_{};
+  ArenaSoA<GenerateMipmapsDesc> generateMipmapsRecords_{};
   ArenaSoA<PresentCommandRecord> presentRecords_{};
   std::array<std::size_t, kSourcePayloadRegionCount> actualCounts_{};
   const std::byte* boundBase_ = nullptr;
@@ -482,6 +485,8 @@ class ArenaSourcePayloadBuilder {
   bool tryAppendReadbackCommand(const ReadbackDesc& value) noexcept;
   bool tryAppendColorFillCommand(const ColorFillDesc& value) noexcept;
   bool tryAppendDepthResolveCommand(const DepthResolveDesc& value) noexcept;
+  bool tryAppendGenerateMipmapsCommand(
+      const GenerateMipmapsDesc& value) noexcept;
   bool tryAppendPresentCommand(PresentCommandRecord&& value) noexcept;
 
  private:
@@ -539,6 +544,7 @@ class ArenaSourcePayloadAssembler {
   bool tryAppendStretchRect(const StretchRectDesc& value) noexcept;
   bool tryAppendColorFill(const ColorFillDesc& value) noexcept;
   bool tryAppendDepthResolve(const DepthResolveDesc& value) noexcept;
+  bool tryAppendGenerateMipmaps(const GenerateMipmapsDesc& value) noexcept;
 
  private:
   bool tryAppendUniform(const DrawUniformPayload& payload,
@@ -716,6 +722,12 @@ void visitSourceCommandResources(const SourceCommandView& source,
     if (source.command.depthResolve) {
       emit(ChunkHandleKind::Surface, source.command.depthResolve->msaaDepth);
       emit(ChunkHandleKind::Surface, source.command.depthResolve->intzDest);
+    }
+    break;
+  case MetalCommandKind::GenerateMipmaps:
+    if (source.command.generateMipmaps) {
+      emit(ChunkHandleKind::Texture,
+           source.command.generateMipmaps->texture);
     }
     break;
   case MetalCommandKind::Present:

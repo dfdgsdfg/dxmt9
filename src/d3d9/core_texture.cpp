@@ -299,6 +299,17 @@ HResult Texture::generateMipSubLevels() {
   return D3D_OK;
 }
 
+HResult Texture::enqueueGenerateMipSubLevels() {
+  if (!valid_ || (desc_.usage & UsageAutoGenMipmap) == 0u) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (!backend_ || !handle_) {
+    return D3D_OK;
+  }
+  backend_->submitGenerateMipmaps(GenerateMipmapsDesc{.texture = handle_});
+  return D3D_OK;
+}
+
 void Texture::syncLevelToBackend(u32 subresource) {
   if (!valid_ || !backend_ || !handle_ || subresource >= levels_.size()) {
     return;

@@ -604,6 +604,14 @@ public:
                : dxmt9::core::D3D_OK;
   }
 
+  std::int32_t generateMipmaps(
+      const D9CCommandChunkWireGenerateMipmaps&, void* texture) override {
+    auto* resolved = static_cast<D9CTexture*>(texture);
+    return resolved && resolved->obj
+               ? resolved->obj->enqueueGenerateMipSubLevels()
+               : dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
   std::int32_t applyState(
       const dxmt9::d3d9::ResolvedRecordView& record) override {
     return dxmt9::d3d9::replaySparseRecord(record, *this);

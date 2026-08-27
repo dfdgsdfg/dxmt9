@@ -174,6 +174,7 @@ postEncodeRetirementIneligibility(
     case core::MetalCommandKind::StretchRect:
     case core::MetalCommandKind::ColorFill:
     case core::MetalCommandKind::DepthResolve:
+    case core::MetalCommandKind::GenerateMipmaps:
       return Reason::UpdateOrSurfaceOperation;
     }
   }

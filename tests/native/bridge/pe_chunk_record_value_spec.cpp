@@ -420,11 +420,13 @@ void testNonDrawProducerMatrix() {
             dxmt9::d3d9::pe::appendReadback(
                 builder, srcSurfaceRef, dstSurfaceRef) &&
             dxmt9::d3d9::pe::appendReszDepthResolve(
-                builder, srcSurfaceRef, dstTextureRef),
+                builder, srcSurfaceRef, dstTextureRef) &&
+            dxmt9::d3d9::pe::appendGenerateMipmaps(
+                builder, srcTextureRef),
         "remaining fixed non-draw canonical producers append");
 
   const auto sealed = builder.seal();
-  check(sealed.valid() && sealed.recordCount == 15u,
+  check(sealed.valid() && sealed.recordCount == 16u,
         "non-draw producer matrix seals all fixed opcodes");
   ImportedChunkView imported;
   const auto validation = dxmt9::d3d9::validateCommandChunk(
@@ -437,7 +439,7 @@ void testNonDrawProducerMatrix() {
       &imported);
   check(validation.valid() &&
             imported.records.back().type ==
-                D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+                D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
         "complete fixed non-draw producer output passes unix preflight");
   const auto presentRecord = std::find_if(
       imported.records.begin(), imported.records.end(), [](const auto& record) {

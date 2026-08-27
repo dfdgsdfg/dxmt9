@@ -602,6 +602,10 @@ struct RecordingBackend final : BackendDevice {
     depthResolves.push_back(desc);
   }
 
+  void submitGenerateMipmaps(const GenerateMipmapsDesc& desc) override {
+    generatedMipmaps.push_back(desc);
+  }
+
   void present(const SwapDesc& desc) override {
     presents.push_back(desc);
   }
@@ -643,6 +647,7 @@ struct RecordingBackend final : BackendDevice {
   bool readbackSurfaceResult = false;
   std::vector<ColorFillDesc> colorFills;
   std::vector<DepthResolveDesc> depthResolves;
+  std::vector<GenerateMipmapsDesc> generatedMipmaps;
   std::vector<SwapDesc> presents;
   u32 flushCount = 0;
   DeviceLostObserver deviceLostObserver;

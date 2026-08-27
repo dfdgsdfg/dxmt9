@@ -167,6 +167,15 @@ public:
     if (backend_)
       backend_->submitDepthResolve(desc);
   }
+  HResult generateTextureMipSublevels(TextureHandle handle) override {
+    if (backend_)
+      backend_->submitGenerateMipmaps(GenerateMipmapsDesc{.texture = handle});
+    return D3D_OK;
+  }
+  void submitGenerateMipmaps(const GenerateMipmapsDesc &desc) override {
+    if (backend_)
+      backend_->submitGenerateMipmaps(desc);
+  }
   void present(const SwapDesc &desc) override {
     if (backend_)
       backend_->present(desc);

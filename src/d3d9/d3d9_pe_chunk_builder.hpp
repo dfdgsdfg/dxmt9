@@ -37,6 +37,7 @@ DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireUpdateSurface);
 DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireQueryIssue);
 DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireReadback);
 DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireReszDepthResolve);
+DXMT9_PE_APPROVED_WIRE_PAYLOAD(D9CCommandChunkWireGenerateMipmaps);
 DXMT9_PE_APPROVED_WIRE_PAYLOAD(std::uint32_t);
 
 #undef DXMT9_PE_APPROVED_WIRE_PAYLOAD
@@ -1040,8 +1041,10 @@ bool appendReadback(CommandChunkBuilder& builder,
                       const SurfaceRef& src,
                       const SurfaceRef& dst) noexcept;
 bool appendReszDepthResolve(CommandChunkBuilder& builder,
-                              const SurfaceRef& msaaDepth,
-                              const TextureRef& intzDest) noexcept;
+                            const SurfaceRef& msaaDepth,
+                            const TextureRef& intzDest) noexcept;
+bool appendGenerateMipmaps(CommandChunkBuilder& builder,
+                           const TextureRef& texture) noexcept;
 
 
 }  // namespace dxmt9::d3d9::pe

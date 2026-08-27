@@ -12,5 +12,5 @@ ffff0300 05000051 a00f0000 3f060a92 00000000 00000000
 80e40000 0000ffff
 
 [test]
-expect-source pixel contains "float4(sin("
-expect-source pixel contains "cos("
+expect-source pixel contains "float4(cos(("
+expect-source pixel contains "sin(("

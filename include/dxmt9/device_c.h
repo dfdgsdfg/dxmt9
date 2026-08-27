@@ -660,6 +660,10 @@ typedef struct D9CCommandChunkWireReszDepthResolve {
     uint32_t intzDestHandleIndex;
 } D9CCommandChunkWireReszDepthResolve;
 
+typedef struct D9CCommandChunkWireGenerateMipmaps {
+    uint32_t textureHandleIndex;
+} D9CCommandChunkWireGenerateMipmaps;
+
 enum {
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE = 1,
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE = 2,
@@ -735,6 +739,11 @@ enum {
      * GPU correctness (MSAA depth + INTZ readback) is deferred runtime
      * validation; this record only carries the (source, destination) pair. */
     D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE = 29,
+    /* R-FORMAT-16: ordered automatic-mipmap generation. The texture handle
+     * identifies the one-public-level AUTOGEN object whose backend record owns
+     * the complete hidden pyramid. Replay lowers this to a Metal blit command
+     * in the current command buffer before the following sampling draw. */
+    D9C_COMMAND_RECORD_GENERATE_MIPMAPS = 30,
 };
 
 /* Const-array upload semantics. `kind` selects which dxmt9c_device_set_*_const_*
@@ -834,6 +843,11 @@ static inline int d9c_draw_packet_const_delta_section_range_valid(
  * texture. Fire-and-forget: like
  * StretchRect/ColorFill it is a surface-op ordering barrier, NOT a
  * synchronous read boundary, so the PE caller does not block on a result. */
+
+/* Ordered automatic-mipmap generation record. textureHandleIndex selects a
+ * texture entry from the canonical handle table. Replay enqueues generation
+ * in source order on the active Metal command buffer; it is a coordinator
+ * blit boundary, not a PE-visible synchronous completion point. */
 
 /* Standalone state-delta record. The packet's draw fields are unused
  * (set to zero by chunkBarrierFlush); only state-delta fields apply.

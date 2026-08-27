@@ -237,6 +237,20 @@ void testReadWriteConflictAndClear() {
   auto read = renderTapeFirstAccessObserve(readLedger, readDraw.view());
   check(read.classification == RenderTapeFirstAccessClass::ShaderReadCandidate,
         "texture use before any write is a read candidate");
+
+  RenderTapeFirstAccessLedger generateLedger{};
+  arm(generateLedger, target, target);
+  const D9CCommandChunkWireGenerateMipmaps generate{
+      .textureHandleIndex = 0u,
+  };
+  const auto generateFixture = fixed(
+      D9C_COMMAND_RECORD_GENERATE_MIPMAPS, &generate, sizeof(generate), target);
+  const auto generateObservation =
+      renderTapeFirstAccessObserve(generateLedger, generateFixture.view());
+  check(generateObservation.status == RenderTapeFirstAccessStatus::Terminal &&
+            generateObservation.classification ==
+                RenderTapeFirstAccessClass::CopySource,
+        "GenerateMipmaps requires the exact incoming base-level contents");
 }
 
 void testMismatchMalformedAndPresentHandle() {

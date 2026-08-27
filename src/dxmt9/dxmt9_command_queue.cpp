@@ -3040,6 +3040,10 @@ perf::ChunkPublishTailCommandKind chunkPublishTailCommandKind(
     return perf::ChunkPublishTailCommandKind::ColorFill;
   case core::MetalCommandKind::DepthResolve:
     return perf::ChunkPublishTailCommandKind::DepthResolve;
+  case core::MetalCommandKind::GenerateMipmaps:
+    // This counter predates the dedicated ordered generation command; both
+    // are coordinator-owned blit tails for the opportunity classifier.
+    return perf::ChunkPublishTailCommandKind::SurfaceCopy;
   case core::MetalCommandKind::Present:
     return perf::ChunkPublishTailCommandKind::Present;
   }
@@ -4662,6 +4666,16 @@ CommandQueue::appendActiveArenaDepthResolve(
   });
 }
 
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaGenerateMipmaps(
+    const core::GenerateMipmapsDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    auto* assembler = context.activeAssembler();
+    return assembler && assembler->tryAppendGenerateMipmaps(value) &&
+           context.captureSingleCommand();
+  });
+}
+
 CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
     core::SwapDesc value, BoundaryPolicy boundaryPolicy,
     bool tokenStashed) noexcept {
@@ -5714,6 +5728,22 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendDepthResolve(desc);
   pool_.markDepthResolveResources(desc, seqIdForMark(*this, 0));
+}
+
+void CommandQueue::submitGenerateMipmaps(
+    const core::GenerateMipmapsDesc& desc) {
+  if (appendActiveArenaGenerateMipmaps(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(qmxBegin, "submit_generate_mipmaps",
+                                /*skipHold=*/true);
+  ensureWritingSlotUnlocked(*this, lock);
+  noteCurrentSlotCommandAppendStartedUnlocked(*this);
+  currentSlotUnlocked(*this).appendGenerateMipmaps(desc);
+  pool_.markGenerateMipmapsResources(desc, seqIdForMark(*this, 0));
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {

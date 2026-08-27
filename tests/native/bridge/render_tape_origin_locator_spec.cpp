@@ -243,6 +243,14 @@ void testCopyAndReadbackRoles() {
             renderTapeLocateOrigin(fixture.view(), 1u, destination).role ==
                 RenderTapeCommandRole::CopyDestination,
         "Readback source and destination roles");
+
+  const D9CCommandChunkWireGenerateMipmaps generate{
+      .textureHandleIndex = 0u,
+  };
+  fixture = nonDrawFixture(D9C_COMMAND_RECORD_GENERATE_MIPMAPS, generate, 1u);
+  check(renderTapeLocateOrigin(fixture.view(), 0u, source).role ==
+            RenderTapeCommandRole::CopySource,
+        "GenerateMipmaps retains the base-level source identity");
 }
 
 void testMalformedAndAliasPreservation() {

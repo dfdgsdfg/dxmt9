@@ -310,6 +310,32 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
                     archivePath, stretch, sampleBufferAttachments);
 }
 
+bool encodeGenerateMipmaps(WMT::CommandBuffer& commandBuffer,
+                           resources::Pool& pool,
+                           const core::GenerateMipmapsDesc& generate) {
+  auto* record = pool.findTexture(generate.texture.value);
+  if (!record || !record->texture) {
+    return false;
+  }
+  if (record->physicalMipLevels <= 1u) {
+    return true;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return false;
+  }
+  blit.setLabel(labels::makeLabelStringFmt(
+      "Blit[GenerateMipmaps texture=0x%llx]",
+      static_cast<unsigned long long>(generate.texture.value)));
+  if (record->isHeapBacked && record->heap.handle != 0) {
+    blit.useHeap(record->heap);
+    perf::countUseHeap();
+  }
+  blit.generateMipmaps(WMT::Texture{record->texture.handle});
+  blit.endEncoding();
+  return true;
+}
+
 void encodeColorFill(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
                       pipeline::Cache& pipelineCache,

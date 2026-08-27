@@ -185,10 +185,17 @@ recorder-thread-confined `Clean`/`Dirty` semantic state. Successful level-0
 surface writes enter `Dirty` regardless of whether they came from CPU unlock,
 render-target clear/draw, `UpdateSurface`, `StretchRect`, or `ColorFill`; an
 ordered `UpdateTexture` generates its AUTOGEN destination within the copy
-operation. A sampling draw first publishes the preceding command chunk,
-crosses the replay drain fence, generates the hidden pyramid through the WMT
-blit encoder, settles `Clean`, and then records the draw. Generation failure
-preserves `Dirty` and fails the draw. `AutogenMipGeneration.tla` owns the
+operation. A sampling draw appends a texture-qualified `GenerateMipmaps`
+ordering record after all preceding writes and before the draw record. Replay
+lowers that record to a backend `GenerateMipmaps` command; encode closes an
+active writer render encoder, emits WMT blit mip generation into the current
+command buffer, and only then encodes the sampling draw. No PE drain,
+standalone command buffer, or CPU completion wait belongs to this production
+path. Failure to append the retained ordering record preserves `Dirty` and
+fails the draw. Once accepted, PE may optimistically mark the recorder state
+clean because any later replay, encode, or Metal failure is fail-stop for the
+containing submission/device; no successful draw may sample through that
+state. `AutogenMipGeneration.tla` owns the
 bounded write/publish/generate/sample refinement. Native evidence consists of
 the model-bound dirty transition truth table and a real RGBA16Float 1024x1024,
 11-level Metal reduction oracle; Wine conformance pins the capability result

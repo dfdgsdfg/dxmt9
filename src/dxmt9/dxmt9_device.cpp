@@ -382,6 +382,9 @@ class DeviceImpl final : public Device {
   void submitDepthResolve(const core::DepthResolveDesc& desc) override {
     queue_.submitDepthResolve(desc);
   }
+  void submitGenerateMipmaps(const core::GenerateMipmapsDesc& desc) override {
+    queue_.submitGenerateMipmaps(desc);
+  }
   void present(const core::SwapDesc& desc) override {
     // Inject the per-present back-channels the queue's encode thread
     // would otherwise need a Device* to reach. Lifetime is safe: queue_

@@ -22,6 +22,7 @@ SourceSemanticBoundaryKind boundaryForCommand(
   case MetalCommandKind::StretchRect:
   case MetalCommandKind::ColorFill:
   case MetalCommandKind::DepthResolve:
+  case MetalCommandKind::GenerateMipmaps:
     return SourceSemanticBoundaryKind::Blit;
   }
   return SourceSemanticBoundaryKind::Invalid;
@@ -37,6 +38,7 @@ SourceEntryEncoderKind entryKindForCommand(MetalCommandKind kind) noexcept {
   case MetalCommandKind::Readback:
   case MetalCommandKind::ColorFill:
   case MetalCommandKind::DepthResolve:
+  case MetalCommandKind::GenerateMipmaps:
     return SourceEntryEncoderKind::Blit;
   case MetalCommandKind::Present:
     return SourceEntryEncoderKind::Present;
@@ -161,6 +163,11 @@ std::size_t measureSourcePayloadLogicalExtent(
     case MetalCommandKind::DepthResolve:
       if (command.depthResolve) {
         addLogicalExtent(bytes, 1, sizeof(DepthResolveDesc));
+      }
+      break;
+    case MetalCommandKind::GenerateMipmaps:
+      if (command.generateMipmaps) {
+        addLogicalExtent(bytes, 1, sizeof(GenerateMipmapsDesc));
       }
       break;
     case MetalCommandKind::Present:

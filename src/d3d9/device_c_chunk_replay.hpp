@@ -59,6 +59,8 @@ class NonDrawReplaySink {
   virtual std::int32_t reszDepthResolve(
       const D9CCommandChunkWireReszDepthResolve& fixed, void* msaaDepth,
       void* intzDest) = 0;
+  virtual std::int32_t generateMipmaps(
+      const D9CCommandChunkWireGenerateMipmaps& fixed, void* texture) = 0;
   virtual std::int32_t applyState(
       const ResolvedRecordView& record) = 0;
 };

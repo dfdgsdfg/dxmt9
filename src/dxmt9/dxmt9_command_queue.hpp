@@ -713,6 +713,7 @@ class CommandQueue {
   void submitReadback(const core::ReadbackDesc& desc);
   void submitColorFill(const core::ColorFillDesc& desc);
   void submitDepthResolve(const core::DepthResolveDesc& desc);
+  void submitGenerateMipmaps(const core::GenerateMipmapsDesc& desc);
   // submitPresent / presentBoundary are the present surface today; any
   // future PresenterSlot registry (CommandQueue-owned table mapping a
   // PresentId → Presenter* with slot reuse + per-slot generation counter,
@@ -1548,6 +1549,8 @@ class CommandQueue {
       const core::ColorFillDesc& value) noexcept;
   ActiveArenaAppendResult appendActiveArenaDepthResolve(
       const core::DepthResolveDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaGenerateMipmaps(
+      const core::GenerateMipmapsDesc& value) noexcept;
   ActiveArenaAppendResult appendActiveArenaPresent(
       core::SwapDesc value, BoundaryPolicy boundaryPolicy,
       bool tokenStashed) noexcept;

@@ -175,6 +175,7 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
     // encoder with no draws — classify it as a Blit observation like the
     // other helper-encoder surface ops.
     case MetalCommandKind::DepthResolve:
+    case MetalCommandKind::GenerateMipmaps:
       return ChunkObservation{
           .kind = ChunkObservationKind::Blit,
           .compatFlags = 0,
@@ -891,6 +892,7 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     case MetalCommandKind::Readback:
     case MetalCommandKind::ColorFill:
     case MetalCommandKind::DepthResolve:
+    case MetalCommandKind::GenerateMipmaps:
       result.hasBlit = true;
       break;
     }

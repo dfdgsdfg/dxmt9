@@ -168,6 +168,10 @@ std::optional<SourcePayloadLayout> makeSourcePayloadLayout(
                   typeSize<ColorFillDesc>(), typeAlignment<ColorFillDesc>()},
       RegionShape{SourcePayloadRegion::DepthResolveRecords, c.depthResolveRecords,
                   typeSize<DepthResolveDesc>(), typeAlignment<DepthResolveDesc>()},
+      RegionShape{SourcePayloadRegion::GenerateMipmapsRecords,
+                  c.generateMipmapsRecords,
+                  typeSize<GenerateMipmapsDesc>(),
+                  typeAlignment<GenerateMipmapsDesc>()},
       RegionShape{SourcePayloadRegion::PresentRecords, c.presentRecords,
                   typeSize<PresentCommandRecord>(), typeAlignment<PresentCommandRecord>()},
   };
@@ -524,6 +528,8 @@ bool ArenaSourcePayloadBlock::bind(
                  SourcePayloadRegion::ColorFillRecords) &&
       bindRegion(depthResolveRecords_, memory, layout,
                  SourcePayloadRegion::DepthResolveRecords) &&
+      bindRegion(generateMipmapsRecords_, memory, layout,
+                 SourcePayloadRegion::GenerateMipmapsRecords) &&
       bindRegion(presentRecords_, memory, layout,
                  SourcePayloadRegion::PresentRecords);
   bound_ = ok;
@@ -566,6 +572,7 @@ void ArenaSourcePayloadBlock::publishCounts() noexcept {
       readbackRecords_.size(),
       colorFillRecords_.size(),
       depthResolveRecords_.size(),
+      generateMipmapsRecords_.size(),
       presentRecords_.size(),
   };
 
@@ -599,6 +606,7 @@ void ArenaSourcePayloadBlock::publishCounts() noexcept {
   readbackRecords_.seal();
   colorFillRecords_.seal();
   depthResolveRecords_.seal();
+  generateMipmapsRecords_.seal();
   presentRecords_.seal();
   published_ = true;
 }
@@ -695,6 +703,7 @@ bool ArenaSourcePayloadBlock::validateForPublish() const noexcept {
   std::size_t expectedReadback = 0;
   std::size_t expectedColorFill = 0;
   std::size_t expectedDepthResolve = 0;
+  std::size_t expectedGenerateMipmaps = 0;
   std::size_t expectedPresent = 0;
   std::size_t clearRectCursor = 0;
   for (const auto& header : commandHeaders_.span()) {
@@ -773,6 +782,11 @@ bool ArenaSourcePayloadBlock::validateForPublish() const noexcept {
           payloadIndex >= depthResolveRecords_.size()) return false;
       ++expectedDepthResolve;
       break;
+    case MetalCommandKind::GenerateMipmaps:
+      if (payloadIndex != expectedGenerateMipmaps ||
+          payloadIndex >= generateMipmapsRecords_.size()) return false;
+      ++expectedGenerateMipmaps;
+      break;
     case MetalCommandKind::Present:
       if (payloadIndex != expectedPresent ||
           payloadIndex >= presentRecords_.size()) return false;
@@ -791,11 +805,13 @@ bool ArenaSourcePayloadBlock::validateForPublish() const noexcept {
          expectedReadback == readbackRecords_.size() &&
          expectedColorFill == colorFillRecords_.size() &&
          expectedDepthResolve == depthResolveRecords_.size() &&
+         expectedGenerateMipmaps == generateMipmapsRecords_.size() &&
          expectedPresent == presentRecords_.size();
 }
 
 void ArenaSourcePayloadBlock::destroyConstructed() noexcept {
   presentRecords_.destroyConstructed();
+  generateMipmapsRecords_.destroyConstructed();
   depthResolveRecords_.destroyConstructed();
   colorFillRecords_.destroyConstructed();
   readbackRecords_.destroyConstructed();
@@ -1065,6 +1081,12 @@ bool ArenaSourcePayloadBuilder::tryAppendDepthResolveCommand(
     const DepthResolveDesc& value) noexcept {
   return appendCommandRecord(MetalCommandKind::DepthResolve,
                              block_->depthResolveRecords_, value);
+}
+
+bool ArenaSourcePayloadBuilder::tryAppendGenerateMipmapsCommand(
+    const GenerateMipmapsDesc& value) noexcept {
+  return appendCommandRecord(MetalCommandKind::GenerateMipmaps,
+                             block_->generateMipmapsRecords_, value);
 }
 
 bool ArenaSourcePayloadBuilder::tryAppendPresentCommand(
@@ -1346,6 +1368,15 @@ bool ArenaSourcePayloadAssembler::tryAppendDepthResolve(
   return true;
 }
 
+bool ArenaSourcePayloadAssembler::tryAppendGenerateMipmaps(
+    const GenerateMipmapsDesc& value) noexcept {
+  if (!good() || !builder_->tryAppendGenerateMipmapsCommand(value)) {
+    return builder_->reject();
+  }
+  ++commandCount_;
+  return true;
+}
+
 bool ArenaSourcePayloadChain::initialize(
     std::span<const ArenaSourcePayloadBlock* const> segments) noexcept {
   if (readable_ || segments.empty() ||
@@ -1580,6 +1611,12 @@ SourceCommandView SourcePayloadView::commandAt(std::size_t index) const noexcept
   case MetalCommandKind::DepthResolve:
     if (payloadIndex < arena_->depthResolveRecords_.size()) {
       result.command.depthResolve = &arena_->depthResolveRecords_[payloadIndex];
+    }
+    break;
+  case MetalCommandKind::GenerateMipmaps:
+    if (payloadIndex < arena_->generateMipmapsRecords_.size()) {
+      result.command.generateMipmaps =
+          &arena_->generateMipmapsRecords_[payloadIndex];
     }
     break;
   case MetalCommandKind::Present:

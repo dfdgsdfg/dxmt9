@@ -62,6 +62,7 @@ ImportedRecordReplayInfo replayInfoForCommandRecordType(std::uint32_t type) noex
   // letting it fall through to the empty Unknown info) keeps chunk replay
   // from misreading it as a draw.
   case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
     return ImportedRecordReplayInfo{
         .category = ImportedRecordReplayCategory::SurfaceOp,
         .ordered = true,
