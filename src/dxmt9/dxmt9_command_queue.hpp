@@ -1187,6 +1187,7 @@ class CommandQueue {
   std::uint64_t testOnlyArenaAdmissionWaitEntries_ = 0;
   std::uint64_t testOnlyArenaAdmissionPredicateEvaluations_ = 0;
   std::uint64_t testOnlyFirstLeaseWaitEntries_ = 0;
+  std::uint64_t testOnlyIdleSessionWaitEntries_ = 0;
   bool testOnlyPauseAfterFirstLeaseRetry_ = false;
   bool testOnlyPausedAfterFirstLeaseRetry_ = false;
   bool stop_ = true;

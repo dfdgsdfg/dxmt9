@@ -601,6 +601,17 @@ attempt; archive misses fall through to compile and write back. The archive
 identity (file path, version) must be cross-process consistent so multiple
 dxmt9 instances can warm each other's caches.
 
+**R-BACK-4.9** Shader-source generation must be independent of the Wine guest's
+locale and inherited floating-point control environment. D3DBC float payloads
+must be classified from their IEEE-754 bits before conversion, including
+signaling NaN, infinity, and signed zero. Finite MSL literals must use one
+locale-independent round-trip conversion whose result is invariant when
+first-use generation moves between producer, replay, and encode threads. The
+formatter must not route through locale-backed iostream or `printf` floating
+conversion. Native evidence must pin representative finite and special-value
+bit patterns, and any scheduling lane that changes first-use placement must
+retain a wild shader-compilation progress check.
+
 ---
 
 ## 5. Resource Allocation

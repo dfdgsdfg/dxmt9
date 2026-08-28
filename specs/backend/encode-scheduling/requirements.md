@@ -1081,12 +1081,19 @@ requires every Ready source through that fence to be represented and any open
 session to be submitted. Final quiescence may complete only after the terminal
 sequence, its Present ordinal, and Tape residency through the fence have
 completed and reclaimed. Admission pressure must not synthesize this release.
+An idle coordinator with no Ready source and no open session still owns this
+acknowledgement: its condition-variable predicate must wake when the next
+terminal release fence is already covered. An uncovered release must continue
+waiting for its represented source rather than acknowledging early or spinning.
 The compatibility worker retains its existing writer-publish/sequence-wait
 contract. Until DCE lookahead and session release are explicitly composed, a
 simultaneous Tape+DCE request must fail closed to the session coordinator so no
 unowned terminal latch or Direct-Arena DCE path is reachable. A native
 production-loop fixture must pin an open session, a later
 Ready suffix, and a final Present without polling Metal or relying on sleeps.
+The native evidence must also pin the empty/idle coordinator after it has
+entered the production wait, because an open-session-only fixture does not bind
+the model's empty `AckTerminalFence` transition to the C++ wake predicate.
 
 **R-BACK-2.84** Opt-in supply-latency observation must distinguish Legacy and
 Arena sources and the two ordered stages `replay entry -> Ready publication`

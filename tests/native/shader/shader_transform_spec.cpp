@@ -3846,6 +3846,29 @@ void testRelativeIntAndBoolConstReadsSelectDefLiterals() {
                    "ps_3_0 relative bool read plus DEFB must not materialize the bool file");
 }
 
+void testShaderFloatLiteralFormattingIsBitClassifiedAndDeterministic() {
+  using dxmt9::translator::test::formatFloatLiteralBitsForTest;
+  checkEqual(formatFloatLiteralBitsForTest(0x00000000u), std::string("0.0f"),
+             "positive zero has one canonical MSL spelling");
+  checkEqual(formatFloatLiteralBitsForTest(0x80000000u), std::string("0.0f"),
+             "negative zero has one canonical MSL spelling");
+  checkEqual(formatFloatLiteralBitsForTest(0x3f800000u), std::string("1.0f"),
+             "finite integer-valued float retains an MSL decimal suffix");
+  checkEqual(formatFloatLiteralBitsForTest(0x3f800001u),
+             std::string("1.00000012f"),
+             "finite float uses max-digits round-trip formatting");
+  checkEqual(formatFloatLiteralBitsForTest(0x7f800000u),
+             std::string("INFINITY"),
+             "positive infinity is classified without floating arithmetic");
+  checkEqual(formatFloatLiteralBitsForTest(0xff800000u),
+             std::string("-INFINITY"),
+             "negative infinity is classified without floating arithmetic");
+  checkEqual(formatFloatLiteralBitsForTest(0x7fc00000u), std::string("NAN"),
+             "quiet NaN is classified from its payload bits");
+  checkEqual(formatFloatLiteralBitsForTest(0x7f800001u), std::string("NAN"),
+             "signaling NaN is classified without evaluating it");
+}
+
 }  // namespace
 
 int main() {
@@ -3958,6 +3981,7 @@ int main() {
     testRelativeConstReadDefSelectRespectsBoundedCap();
     testRuntimeConstWriteWithRelativeReadKeepsRegisterFileArray();
     testRelativeIntAndBoolConstReadsSelectDefLiterals();
+    testShaderFloatLiteralFormattingIsBitClassifiedAndDeterministic();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

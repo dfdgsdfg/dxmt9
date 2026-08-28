@@ -146,6 +146,7 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.testOnlySchedulingWaitObservationEnabled_ = true;
     queue.testOnlyArenaAdmissionWaitEntries_ = 0;
     queue.testOnlyFirstLeaseWaitEntries_ = 0;
+    queue.testOnlyIdleSessionWaitEntries_ = 0;
   }
 
   static bool waitForArenaAdmissionWaitEntries(
@@ -162,6 +163,15 @@ struct CommandQueueArenaLeaseTestAccess {
     std::unique_lock lock(queue.mutex_);
     queue.sessionReleaseCv_.wait(lock, [&] {
       return queue.testOnlyFirstLeaseWaitEntries_ >= expected;
+    });
+    return true;
+  }
+
+  static bool waitForIdleSessionWaitEntries(
+      CommandQueue& queue, std::uint64_t expected) {
+    std::unique_lock lock(queue.mutex_);
+    queue.sessionReleaseCv_.wait(lock, [&] {
+      return queue.testOnlyIdleSessionWaitEntries_ >= expected;
     });
     return true;
   }
@@ -6379,6 +6389,70 @@ void unownedArenaSupplyAttemptCannotCreateCancelableExactEntry() {
         "the publication miss");
 }
 
+void productionFinalWsiQuiescenceWakesIdleCoordinator() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadySessionReleaseLane(
+      queue);
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableSchedulingWaitObservation(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  dxmt9::CommandQueueArenaLeaseTestAccess::waitForIdleSessionWaitEntries(
+      queue, 1u);
+
+  std::mutex finalMutex;
+  std::condition_variable finalCv;
+  bool finalReturned = false;
+  dxmt9::wsi::QuiescenceDisposition finalDisposition =
+      dxmt9::wsi::QuiescenceDisposition::QueueStopped;
+  std::thread finalizer([&] {
+    const auto disposition = queue.beginFinalWsiQuiescence();
+    {
+      std::lock_guard lock(finalMutex);
+      finalDisposition = disposition;
+      finalReturned = true;
+    }
+    finalCv.notify_all();
+  });
+
+  bool completedWhileRunning = false;
+  {
+    std::unique_lock lock(finalMutex);
+    completedWhileRunning = finalCv.wait_for(
+        lock, std::chrono::seconds(2), [&] { return finalReturned; });
+  }
+  if (!completedWhileRunning) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestTerminalStop(queue);
+  }
+  finalizer.join();
+
+  check(completedWhileRunning &&
+            finalDisposition ==
+                dxmt9::wsi::QuiescenceDisposition::Complete,
+        "an idle coordinator must acknowledge final WSI terminal release");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            terminalSessionReleaseRequested(queue) &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::
+                terminalSessionReleasePending(queue),
+        "idle terminal acknowledgement must consume the exact latch");
+  const auto stats =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(stats.residentSources == 0u && stats.residentPages == 0u &&
+            stats.readyFifoEntries == 0u,
+        "idle terminal acknowledgement must preserve empty Tape ownership");
+
+  queue.endWsiQuiescence();
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+}
+
 void productionFinalWsiQuiescenceDrainsOpenSessionAndPresent() {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
@@ -6629,6 +6703,7 @@ int main() {
     supplyLatencyKeepsLegacyAndArenaIdentitySeparated();
     failedArenaSupplyEntryCannotContaminateNextSource();
     unownedArenaSupplyAttemptCannotCreateCancelableExactEntry();
+    productionFinalWsiQuiescenceWakesIdleCoordinator();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
     productionLoopPlansSeparateBThenASourcesIntoOneCarrier();

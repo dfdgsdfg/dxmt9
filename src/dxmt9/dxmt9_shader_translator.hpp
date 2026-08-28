@@ -51,6 +51,7 @@ std::uint32_t decodeSourceModifierForTest(std::uint32_t token);
 std::uint32_t decodeDestModifierForTest(std::uint32_t token);
 std::uint32_t decodeWriteMaskForTest(std::uint32_t token);
 bool tokenHasRelativeAddressingForTest(std::uint32_t token);
+std::string formatFloatLiteralBitsForTest(std::uint32_t bits);
 
 }  // namespace test
 

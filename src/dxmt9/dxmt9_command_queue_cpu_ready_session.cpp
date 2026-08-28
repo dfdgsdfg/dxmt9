@@ -638,6 +638,32 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       continue;
     }
 
+    if (!pendingRecord.has_value() && cpuReadyTape_.readyEmpty()) {
+      // An idle coordinator still owns release acknowledgement. In
+      // particular, final WSI teardown can post a terminal fence after the
+      // last source has already submitted and reclaimed. The generic Ready
+      // dequeue wait observes only Ready/stop, so waiting there would lose
+      // this wake and leave the posting thread blocked forever. Wake only for
+      // a covered release: an uncovered fence still needs its Ready source to
+      // publish before the coordinator may acknowledge it.
+      if (testOnlySchedulingWaitObservationEnabled_) {
+        ++testOnlyIdleSessionWaitEntries_;
+        sessionReleaseCv_.notify_all();
+      }
+      encodeCv_.wait(lock, [this] {
+        const auto release = sessionReleaseState_.peekNext();
+        const bool coveredRelease = release &&
+            core::metalqueue::sessionReleaseFenceCovered(
+                release->event, sessionReleaseCoveredRawOrdinal_,
+                sessionReleaseCoveredSeqId_);
+        return stop_ || !cpuReadyTape_.readyEmpty() || coveredRelease;
+      });
+      if (stop_) {
+        return;
+      }
+      continue;
+    }
+
     // A fresh one-source Ready frontier cannot expose an A|B + A replay
     // window to the bounded planner. When that exact frontier has one already-
     // reserved ordered-tail Writing successor, retain the whole Ready source

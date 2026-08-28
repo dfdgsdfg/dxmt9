@@ -11,12 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -80,15 +81,36 @@ std::string formatFloatLiteral(f32 value) {
   // C-literal suffix; appending ".0f" produces invalid MSL like
   // `nan.0f`. Emit them as the canonical math.h macros instead so
   // Metal's compiler accepts the constant unchanged.
-  if (std::isnan(value)) {
+  const u32 bits = std::bit_cast<u32>(value);
+  const u32 magnitude = bits & 0x7fffffffu;
+  const u32 exponent = magnitude & 0x7f800000u;
+  const u32 mantissa = magnitude & 0x007fffffu;
+  if (exponent == 0x7f800000u && mantissa != 0u) {
     return std::string("NAN");
   }
-  if (std::isinf(value)) {
-    return value < 0.0f ? std::string("-INFINITY") : std::string("INFINITY");
+  if (exponent == 0x7f800000u) {
+    return (bits & 0x80000000u) != 0u
+        ? std::string("-INFINITY")
+        : std::string("INFINITY");
   }
-  std::ostringstream out;
-  out << std::setprecision(9) << value;
-  std::string text = out.str();
+  if (magnitude == 0u) {
+    value = 0.0f;
+  }
+
+  // Do not route shader literals through locale-backed iostream/printf
+  // conversion. Wine applications may enter D3D with a non-default floating
+  // point control word; when Direct/Tape moves first-use PSO generation onto
+  // the encode worker, libc's printf conversion can repeatedly fault on that
+  // inherited environment. `to_chars` is locale-independent and keeps this
+  // translator boundary deterministic across producer/replay placement.
+  std::array<char, 64> buffer{};
+  const auto converted = std::to_chars(
+      buffer.data(), buffer.data() + buffer.size(), value,
+      std::chars_format::general, std::numeric_limits<f32>::max_digits10);
+  if (converted.ec != std::errc{}) {
+    throw std::runtime_error("failed to format finite shader float literal");
+  }
+  std::string text(buffer.data(), converted.ptr);
   if (text.find_first_of(".eE") == std::string::npos) {
     text += ".0";
   }
@@ -4107,6 +4129,10 @@ std::uint32_t decodeWriteMaskForTest(std::uint32_t token) {
 
 bool tokenHasRelativeAddressingForTest(std::uint32_t token) {
   return detail_::tokenHasRelativeAddressing(token);
+}
+
+std::string formatFloatLiteralBitsForTest(std::uint32_t bits) {
+  return detail_::formatFloatLiteral(std::bit_cast<float>(bits));
 }
 
 }  // namespace test
