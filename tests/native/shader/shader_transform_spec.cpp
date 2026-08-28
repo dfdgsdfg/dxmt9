@@ -2740,6 +2740,40 @@ void testVs30MultiStreamVertexDeclarationLoads() {
                 "argbuf-hybrid VS loads stream1 attributes from stream1");
 }
 
+void testVs30StreamOffsetsAreSourceIndependent() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const auto shader = makeShader(makeVs30InputSemanticBytecode());
+  DrawDesc first{};
+  first.vertexShader = shader;
+  first.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault,
+                    kD3DDeclUsagePosition, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault,
+                    kD3DDeclUsageTexcoord, 0},
+  };
+  first.vertexDecl.streams[0].stride = 12u;
+  first.vertexDecl.streams[1].stride = 20u;
+  const auto firstSource = dxmt9::translator::makeTranslatedVertexSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(first));
+
+  auto second = first;
+  second.vertexDecl.streams[0].offset = 256u;
+  second.vertexDecl.streams[1].offset = 8192u;
+  const auto secondSource = dxmt9::translator::makeTranslatedVertexSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(second));
+
+  checkEqual(firstSource, secondSource,
+             "runtime stream offsets produce byte-identical programmable VS MSL");
+  checkEqual(dxmt9::ffp::hashVertexDeclaration(first.vertexDecl),
+             dxmt9::ffp::hashVertexDeclaration(second.vertexDecl),
+             "runtime stream offsets produce one vertex source identity");
+}
+
 void testDefaultNoPixelVFlipAndNoVertexYFlip() {
   const auto pixelSource = translatePixel(makePs20TexturedBytecode(0));
   const auto vertexSource = translateVertex(makeVs30OutputSemanticBytecode());
@@ -3869,6 +3903,7 @@ int main() {
     testVs30MaterializesOnlyReadInputs();
     testVs30InputLayoutPreservesStreamBoundaries();
     testVs30MultiStreamVertexDeclarationLoads();
+    testVs30StreamOffsetsAreSourceIndependent();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30MissingSourceModifierCoverage();

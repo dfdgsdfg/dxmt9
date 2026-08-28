@@ -5,16 +5,17 @@ title: "3DMark06 HDR1 Performance — Current Bottleneck"
 type: root-overview
 status: current
 updated: 2026-08-28
-source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-hdr1-ui-r4-20260826; experiments/output/app-d3d9-3dmark06-hdr1-autogen-fix-r115-20260827; experiments/output/app-d3d9-3dmark06-hdr1-pso-diag-r4-20260828; experiments/output/app-d3d9-3dmark06-hdr1-pso-optimized-perf-r1-20260828; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/analysis/frame1200-counters-xcode.csv
+source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-hdr1-ui-r4-20260826; experiments/output/app-d3d9-3dmark06-hdr1-autogen-fix-r115-20260827; experiments/output/app-d3d9-3dmark06-hdr1-pso-diag-r4-20260828; experiments/output/app-d3d9-3dmark06-hdr1-pso-identity-components-r5-20260828; experiments/output/app-d3d9-3dmark06-hdr1-pso-layout-components-r6-20260828; experiments/output/app-d3d9-3dmark06-hdr1-pso-optimized-perf-r1-20260828; experiments/output/app-d3d9-3dmark06-hdr1-stream-offset-canonical-observer-off-r7-20260828; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/hdr1/analysis/frame1200-counters-xcode.csv
 related: docs/perfomance/overview-3dmark06-hdr2.md; docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dmark06-gt2.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md
 ---
 
 # 3DMark06 HDR1 Performance — Current Bottleneck
 
-> **Current verdict (2026-08-28): the quadratic PSO handle-publication cost is
-> removed, but HDR1 still sits on a narrow CPU encode/PSO versus GPU boundary.**
-> Floating-point render-target transitions and attachment traffic remain real
-> secondary costs, but the observer-off run does not establish a GPU-only
+> **Current verdict (2026-08-28): quadratic handle publication and runtime
+> stream-offset PSO fanout are removed. HDR1 now sits on a narrow CPU encode
+> versus GPU boundary rather than a PSO-build wall.** Floating-point
+> render-target transitions and attachment traffic remain real secondary
+> costs, but the observer-off run still does not establish a GPU-only
 > bottleneck and therefore does not authorize a render-pass semantic change.
 
 > **Correctness addendum (2026-08-27):** the former angle-dependent water
@@ -150,15 +151,45 @@ bound rather than the exact cardinality; the diagnostic reported 76,091
 saturated observations. This localizes the large fanout before generated MSL
 source identity rather than in Metal attachment/sampler descriptor shape.
 
+A follow-up GUI-qualified HDR1 diagnostic run isolated that opaque backend
+identity into its construction components. It completed 3,480 Presents with
+80,442 final insertions and observed 27 vertex-shader identities, 35 canonical
+pixel-shader identities, two clip masks, five FVFs, three depth formats, and
+two stencil formats. Only the vertex-layout component saturated its bounded
+4,096-entry set, exactly matching the composite backend-identity lower bound.
+The aggregate overflow counter cannot attribute each saturated observation to
+one component, but every other component stayed far below the bound.
+
+The subsequent layout-decomposition run completed 3,480 Presents with 80,512
+final insertions. Stream-zero offset alone saturated at 4,096 distinct values;
+declaration elements had 12 shapes, stream-zero stride five, extra-stream
+offsets 23, and extra-stream strides three. This proves that the high-cardinality
+input is a runtime binding value rather than declaration or source layout. The
+production vertex-declaration identity now excludes stream offsets while
+retaining all strides, and native tests pin both key equality and byte-identical
+programmable vertex MSL under offset-only changes.
+
+The observer-off r7 run then completed 3,900 Presents in the same 250-second
+harness window. Draw PSO builds fell from 36,033 in the earlier 1,680-Present
+observer-off run to 262, or from 21.45 to 0.067 per Present. PSO-prefetch p50
+fell from 14.503ms to 1.451ms; encode-chunk p50 fell from 13.685ms to 12.343ms.
+Completion-wait and GPU-command-buffer p50 were 12.086ms and 11.577ms,
+respectively, preserving the CPU/GPU near tie after the PSO wall disappeared.
+The run reported zero GPU command-buffer errors, pipeline-build failures,
+missing-pipeline draws, and slot exhaustion. It produced no official `.3dr`
+FPS result, so the Present-count increase and phase values are mechanism
+evidence rather than a published benchmark score.
+
 The observer-off GUI-qualified HDR1 run selected exactly one HDR test and
 completed 1,680 Presents with zero GPU errors, chunk rejects, or skipped draws.
 It did not emit a `.3dr`, so it is mechanism evidence rather than an official
 FPS result. The decisive p50 values are encode chunk 13.685ms, PSO-prefetch
 14.503ms (nested/overlapping), GPU command buffer 12.797ms, and completion wait
 13.325ms. That near tie keeps FP pass coalescing behind its GPU-bottleneck gate.
-The observer-off run still built 36,033 draw PSOs (21.45 per Present) without
-reaching the slot limit. The longer diagnostic run did reach the 16-bit
+The earlier observer-off run built 36,033 draw PSOs (21.45 per Present) without
+reaching the slot limit. The longer diagnostic run reached the 16-bit
 65,535-slot handle domain and recorded 67,026 subsequent exhaustion attempts,
-but neither run recorded a missing-pipeline draw. Remaining work is
-identity/build reuse and bounded-handle saturation, not a blind
+but neither run recorded a missing-pipeline draw. The stream-offset
+canonicalization removes that production saturation mechanism. Remaining work
+must remeasure the post-fix CPU/GPU boundary; it is not a blind
 attachment-store relaxation.

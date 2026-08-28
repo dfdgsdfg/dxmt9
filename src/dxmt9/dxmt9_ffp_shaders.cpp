@@ -1632,8 +1632,6 @@ u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
   hash ^= decl.fvf;
   hash *= 1099511628211ull;
   for (const auto& stream : decl.streams) {
-    hash ^= stream.offset;
-    hash *= 1099511628211ull;
     hash ^= stream.stride;
     hash *= 1099511628211ull;
   }

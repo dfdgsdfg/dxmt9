@@ -2329,8 +2329,59 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
           ? ffp::decodeFixedFunctionVertexLayout(vertexDecl)
           : std::optional<ffp::FixedFunctionVertexLayout>{};
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
+  const u64 pixelBackendIdentity =
+      detail::makeBackendShaderIdentityHash(pixelShader, tileFfpMode);
+  if (perf::psoCacheDiagnosticsEnabled()) {
+    constexpr u64 kDiagnosticFnvOffset = 1469598103934665603ull;
+    constexpr u64 kDiagnosticFnvPrime = 1099511628211ull;
+    const auto mixDiagnosticAxis = [](u64 hash, u64 value) noexcept {
+      hash ^= value;
+      return hash * kDiagnosticFnvPrime;
+    };
+    u64 vertexElementLayoutHash =
+        mixDiagnosticAxis(kDiagnosticFnvOffset, vertexDecl.elements.size());
+    for (const auto& element : vertexDecl.elements) {
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.stream);
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.offset);
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.type);
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.method);
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.usage);
+      vertexElementLayoutHash =
+          mixDiagnosticAxis(vertexElementLayoutHash, element.usageIndex);
+    }
+    u64 extraStreamOffsetsHash = kDiagnosticFnvOffset;
+    u64 extraStreamStridesHash = kDiagnosticFnvOffset;
+    for (std::size_t stream = 1; stream < vertexDecl.streams.size(); ++stream) {
+      extraStreamOffsetsHash =
+          mixDiagnosticAxis(extraStreamOffsetsHash,
+                            vertexDecl.streams[stream].offset);
+      extraStreamStridesHash =
+          mixDiagnosticAxis(extraStreamStridesHash,
+                            vertexDecl.streams[stream].stride);
+    }
+    diagnostics::observePsoBackendIdentityAxes(
+        diagnostics::PsoBackendIdentityAxes{
+            .vertexShaderIdentityHash = vertexShader.hash,
+            .pixelShaderIdentityHash = pixelBackendIdentity,
+            .clipPlaneMask = hot.clipPlaneMask,
+            .vertexLayoutHash = layoutHash,
+            .vertexElementLayoutHash = vertexElementLayoutHash,
+            .stream0Offset = vertexDecl.streams[0].offset,
+            .extraStreamOffsetsHash = extraStreamOffsetsHash,
+            .stream0Stride = vertexDecl.streams[0].stride,
+            .extraStreamStridesHash = extraStreamStridesHash,
+            .fvf = vertexDecl.fvf,
+            .depthFormat = depthFormat,
+            .stencilFormat = stencilFormat,
+        });
+  }
   key.hash = vertexShader.hash ^
-             (detail::makeBackendShaderIdentityHash(pixelShader, tileFfpMode) << 1) ^
+             (pixelBackendIdentity << 1) ^
              hot.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ vertexDecl.fvf;
   key.textureMask =

@@ -50,6 +50,24 @@ std::array<std::uint64_t, PsoCacheKeyCardinality::kAxisCount> axisValues(
   };
 }
 
+std::array<std::uint64_t, PsoCacheKeyCardinality::kBackendAxisCount>
+backendAxisValues(const PsoBackendIdentityAxes& axes) noexcept {
+  return {
+      axes.vertexShaderIdentityHash,
+      axes.pixelShaderIdentityHash,
+      axes.clipPlaneMask,
+      axes.vertexLayoutHash,
+      axes.vertexElementLayoutHash,
+      axes.stream0Offset,
+      axes.extraStreamOffsetsHash,
+      axes.stream0Stride,
+      axes.extraStreamStridesHash,
+      axes.fvf,
+      axes.depthFormat,
+      axes.stencilFormat,
+  };
+}
+
 std::mutex gMutex;
 std::unique_ptr<PsoCacheKeyCardinality> gState;
 
@@ -137,6 +155,13 @@ PsoCacheKeyCardinality::PsoCacheKeyCardinality(
             BoundedSet(capacity), BoundedSet(capacity), BoundedSet(capacity),
             BoundedSet(capacity), BoundedSet(capacity), BoundedSet(capacity),
             BoundedSet(capacity)},
+      backendAxes_{BoundedSet(capacity), BoundedSet(capacity),
+                   BoundedSet(capacity), BoundedSet(capacity),
+                   BoundedSet(capacity), BoundedSet(capacity),
+                   BoundedSet(capacity), BoundedSet(capacity),
+                   BoundedSet(capacity), BoundedSet(capacity),
+                   BoundedSet(capacity),
+                   BoundedSet(capacity)},
       fanout_(capacity) {}
 
 PsoCacheKeyCardinality::Observation PsoCacheKeyCardinality::observe(
@@ -145,6 +170,21 @@ PsoCacheKeyCardinality::Observation PsoCacheKeyCardinality::observe(
   const auto values = axisValues(axes);
   for (std::size_t i = 0; i < values.size(); ++i) {
     const auto result = axes_[i].insert(values[i]);
+    observation.newAxes[i] =
+        result == BoundedSet::InsertResult::Inserted;
+    observation.overflowedAxes[i] =
+        result == BoundedSet::InsertResult::Full;
+  }
+  return observation;
+}
+
+PsoCacheKeyCardinality::BackendObservation
+PsoCacheKeyCardinality::observeBackendIdentity(
+    const PsoBackendIdentityAxes& axes) noexcept {
+  BackendObservation observation;
+  const auto values = backendAxisValues(axes);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const auto result = backendAxes_[i].insert(values[i]);
     observation.newAxes[i] =
         result == BoundedSet::InsertResult::Inserted;
     observation.overflowedAxes[i] =
@@ -176,6 +216,28 @@ void observePsoCacheKeyAxes(const PsoCacheKeyAxes& axes) noexcept {
     if (observation.newAxes[i]) {
       perf::recordPsoCacheDistinctKeyAxis(
           static_cast<perf::PsoCacheKeyAxis>(i));
+    }
+  }
+}
+
+void observePsoBackendIdentityAxes(
+    const PsoBackendIdentityAxes& axes) noexcept {
+  if (!perf::psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  std::lock_guard lock(gMutex);
+  auto* cardinality = state();
+  if (!cardinality) {
+    return;
+  }
+  const auto observation = cardinality->observeBackendIdentity(axes);
+  for (std::size_t i = 0; i < observation.newAxes.size(); ++i) {
+    if (observation.overflowedAxes[i]) {
+      perf::recordPsoCacheDiagnosticTrackerOverflow();
+    }
+    if (observation.newAxes[i]) {
+      perf::recordPsoBackendDistinctIdentityAxis(
+          static_cast<perf::PsoBackendIdentityAxis>(i));
     }
   }
 }

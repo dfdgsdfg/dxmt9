@@ -988,8 +988,7 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot, bool seal) {
       return false;
     }
     for (std::size_t i = 0; i < core::kMaxStreams; ++i) {
-      if (lhs.streams[i].offset != rhs.streams[i].offset ||
-          lhs.streams[i].stride != rhs.streams[i].stride) {
+      if (lhs.streams[i].stride != rhs.streams[i].stride) {
         return false;
       }
     }

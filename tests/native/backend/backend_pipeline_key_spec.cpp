@@ -822,6 +822,17 @@ void testProgrammableShaderVariantKeyUsesFullVertexDeclHash() {
 
   const auto base = makeVariantKey(makeFlatDrawFixture(desc));
 
+  auto changedStreamOffsets = desc;
+  changedStreamOffsets.vertexDecl.streams[0].offset = 64u;
+  changedStreamOffsets.vertexDecl.streams[1].offset = 4096u;
+  const auto streamOffsetKey =
+      makeVariantKey(makeFlatDrawFixture(changedStreamOffsets));
+  check(streamOffsetKey == base,
+        "programmable VS variant key excludes runtime stream offsets");
+  check(dxmt9::ffp::hashVertexDeclaration(changedStreamOffsets.vertexDecl) ==
+            dxmt9::ffp::hashVertexDeclaration(desc.vertexDecl),
+        "vertex declaration PSO-shape hash excludes runtime stream offsets");
+
   auto changedStreamStride = desc;
   changedStreamStride.vertexDecl.streams[1].stride = 24u;
   const auto streamStrideKey = makeVariantKey(makeFlatDrawFixture(changedStreamStride));

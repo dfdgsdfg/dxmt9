@@ -2628,6 +2628,54 @@ void recordPsoCacheDistinctKeyAxis(PsoCacheKeyAxis axis) noexcept {
   counter->fetch_add(1, std::memory_order_relaxed);
 }
 
+void recordPsoBackendDistinctIdentityAxis(
+    PsoBackendIdentityAxis axis) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* counter = nullptr;
+  switch (axis) {
+    case PsoBackendIdentityAxis::VertexShader:
+      counter = &c.psoBackendDistinctVertexShaderIdentities;
+      break;
+    case PsoBackendIdentityAxis::PixelShader:
+      counter = &c.psoBackendDistinctPixelShaderIdentities;
+      break;
+    case PsoBackendIdentityAxis::ClipPlaneMask:
+      counter = &c.psoBackendDistinctClipPlaneMasks;
+      break;
+    case PsoBackendIdentityAxis::VertexLayout:
+      counter = &c.psoBackendDistinctVertexLayouts;
+      break;
+    case PsoBackendIdentityAxis::VertexElementLayout:
+      counter = &c.psoBackendDistinctVertexElementLayouts;
+      break;
+    case PsoBackendIdentityAxis::Stream0Offset:
+      counter = &c.psoBackendDistinctStream0Offsets;
+      break;
+    case PsoBackendIdentityAxis::ExtraStreamOffsets:
+      counter = &c.psoBackendDistinctExtraStreamOffsetShapes;
+      break;
+    case PsoBackendIdentityAxis::Stream0Stride:
+      counter = &c.psoBackendDistinctStream0Strides;
+      break;
+    case PsoBackendIdentityAxis::ExtraStreamStrides:
+      counter = &c.psoBackendDistinctExtraStreamStrideShapes;
+      break;
+    case PsoBackendIdentityAxis::Fvf:
+      counter = &c.psoBackendDistinctFvfs;
+      break;
+    case PsoBackendIdentityAxis::DepthFormat:
+      counter = &c.psoBackendDistinctDepthFormats;
+      break;
+    case PsoBackendIdentityAxis::StencilFormat:
+      counter = &c.psoBackendDistinctStencilFormats;
+      break;
+  }
+  counter->fetch_add(1, std::memory_order_relaxed);
+}
+
 void recordPsoCacheFinalFanout(std::uint64_t fanout) noexcept {
   if (!psoCacheDiagnosticsEnabled()) {
     return;

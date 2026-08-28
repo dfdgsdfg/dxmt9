@@ -541,10 +541,21 @@ explicit opt-in observer whose disabled path performs no clock read, key-payload
 read, allocation, or lock acquisition after its cached gate. The observer must
 separate probe lookup, source generation, source-library lookup, final lookup,
 final insertion, and handle publication. Key cardinality must include source
-tuple, pre-source backend identity, and every retained final-key axis; storage
-must be bounded and report saturation rather than allocate without limit.
+tuple, pre-source backend identity, its vertex-shader, canonical pixel-shader,
+clip-mask, vertex-layout, declaration-element, stream-zero offset/stride,
+extra-stream offset/stride-shape, FVF, depth-format, and stencil-format
+components, and every retained final-key axis; storage must be bounded and
+report saturation rather than allocate without limit.
 Observer-enabled timing is attribution evidence only and cannot promote a
 performance change without a separate observer-off run.
+
+**R-BACK-3.17** *(Vertex-binding identity boundary.)* Runtime vertex-stream
+buffer offsets must not participate in shader-source or PSO identity. They
+must remain in the per-draw binding/volatile payload consumed by the encoder.
+Declaration element layout and stream strides remain identity inputs because
+they can affect generated vertex-fetch MSL. The offset normalization must be a
+production-called pure transform with native key and generated-source
+equivalence coverage; promotion still requires the observer-off GPU oracle.
 
 ---
 

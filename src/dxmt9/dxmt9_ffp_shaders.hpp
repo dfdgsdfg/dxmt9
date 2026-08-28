@@ -144,7 +144,9 @@ struct VertexShaderInputLayout {
 
 u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout);
 
-// Hash a D3D9 vertex declaration for variant-keying.
+// Hash the source/PSO shape of a D3D9 vertex declaration. Runtime stream
+// buffer offsets are deliberately excluded; strides remain because
+// multi-stream strides are emitted into programmable vertex-fetch MSL.
 u64 hashVertexDeclaration(const core::VertexDeclSnapshot& decl);
 
 // Decode a vertex declaration into a FixedFunctionVertexLayout.

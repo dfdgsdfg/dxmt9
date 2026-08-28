@@ -788,6 +788,20 @@ enum class PsoCacheKeyAxis : std::uint8_t {
   DepthStencilShape,
   ModeBits,
 };
+enum class PsoBackendIdentityAxis : std::uint8_t {
+  VertexShader,
+  PixelShader,
+  ClipPlaneMask,
+  VertexLayout,
+  VertexElementLayout,
+  Stream0Offset,
+  ExtraStreamOffsets,
+  Stream0Stride,
+  ExtraStreamStrides,
+  Fvf,
+  DepthFormat,
+  StencilFormat,
+};
 // These APIs are observation-only and are intended for the pipeline-cache
 // implementation and the standalone key-cardinality observer. Every call is
 // a cached gate plus relaxed atomics when diagnostics are enabled; the normal
@@ -805,6 +819,8 @@ void recordPsoCacheSlotPublication(std::uint64_t publishNanoseconds,
                                    std::uint64_t segmentBytes) noexcept;
 void recordPsoCacheDiagnosticTrackerOverflow() noexcept;
 void recordPsoCacheDistinctKeyAxis(PsoCacheKeyAxis axis) noexcept;
+void recordPsoBackendDistinctIdentityAxis(
+    PsoBackendIdentityAxis axis) noexcept;
 void recordPsoCacheFinalFanout(std::uint64_t fanout) noexcept;
 void countPipelineBuildFailDraw();
 void countPipelineBuildFailLibrary();

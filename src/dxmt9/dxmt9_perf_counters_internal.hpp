@@ -719,6 +719,18 @@ struct Counters {
   std::atomic<std::uint64_t> psoCacheDistinctSourceTuples{0};
   std::atomic<std::uint64_t> psoCacheMaxFinalFanoutPerSourceTuple{0};
   std::atomic<std::uint64_t> psoCacheDistinctBackendIdentities{0};
+  std::atomic<std::uint64_t> psoBackendDistinctVertexShaderIdentities{0};
+  std::atomic<std::uint64_t> psoBackendDistinctPixelShaderIdentities{0};
+  std::atomic<std::uint64_t> psoBackendDistinctClipPlaneMasks{0};
+  std::atomic<std::uint64_t> psoBackendDistinctVertexLayouts{0};
+  std::atomic<std::uint64_t> psoBackendDistinctVertexElementLayouts{0};
+  std::atomic<std::uint64_t> psoBackendDistinctStream0Offsets{0};
+  std::atomic<std::uint64_t> psoBackendDistinctExtraStreamOffsetShapes{0};
+  std::atomic<std::uint64_t> psoBackendDistinctStream0Strides{0};
+  std::atomic<std::uint64_t> psoBackendDistinctExtraStreamStrideShapes{0};
+  std::atomic<std::uint64_t> psoBackendDistinctFvfs{0};
+  std::atomic<std::uint64_t> psoBackendDistinctDepthFormats{0};
+  std::atomic<std::uint64_t> psoBackendDistinctStencilFormats{0};
   std::atomic<std::uint64_t> psoCacheDistinctVertexSources{0};
   std::atomic<std::uint64_t> psoCacheDistinctFragmentSources{0};
   std::atomic<std::uint64_t> psoCacheDistinctTileSources{0};

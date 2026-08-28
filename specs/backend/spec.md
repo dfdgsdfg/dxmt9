@@ -1125,15 +1125,30 @@ or stale handles fail closed. The native identity truth tables and the bounded
 publication stress spec are the binding evidence for these value and lifetime
 rules; they do not replace the GPU readback gate for shader or pixel behavior.
 
+Vertex stream bindings cross a second identity boundary. Declaration elements
+and strides define vertex-fetch source shape, while buffer offsets are supplied
+at draw time through `DrawVolatile` and encoder buffer bindings. The canonical
+vertex-declaration hash therefore excludes every stream offset but retains
+every stride. The slot-local semantic equivalence check uses the same boundary,
+so changing only a bound offset can reuse the resolved PSO without reusing the
+draw's binding payload.
+
 PSO diagnostics are a separate cold boundary. When explicitly enabled, the
 observer records lookup/source/publication dispositions and bounded distinct
 counts for the source tuple, the pre-source backend identity, and the retained
 final-key axes. The backend-identity axis is intentionally separate from the
-source tuple: a large fanout there identifies semantic variants hidden before
-generated MSL source identity, while the later axes attribute Metal descriptor
-specialization. Saturation is visible and cardinality becomes a conservative
-under-count. With the diagnostic gate disabled, the pipeline path does not
-construct this payload or read a clock.
+source tuple and is decomposed at key construction into vertex-shader identity,
+canonical pixel-shader identity, clip mask, vertex layout, FVF, depth format,
+and stencil format. Vertex layout is further decomposed into declaration
+elements, stream-zero offset and stride, and aggregate extra-stream offset and
+stride shapes. This split distinguishes runtime bindings from source-affecting
+layout without changing either class. A large fanout there identifies semantic
+variants hidden before generated MSL source identity, while the later axes
+attribute Metal descriptor specialization. These component observations are
+diagnostic sidecars and never participate in `ShaderVariantKey` equality.
+Saturation is visible and cardinality becomes a conservative under-count. With
+the diagnostic gate disabled, the pipeline path does not construct this
+payload or read a clock.
 
 ### 5.1 Cache Prewarm From `MTLBinaryArchive`
 
