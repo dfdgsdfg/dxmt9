@@ -100,6 +100,26 @@ schedule_3dmark06_autorun() {
       echo "[3dmark06-autorun] main window did not appear; leaving GUI untouched" >&2
       exit 0
     fi
+    local tree_y=""
+    case "$DXMT_3DMARK_RESOLVED_LANE" in
+      gt1) tree_y=21 ;;
+      gt2) tree_y=34 ;;
+      hdr1) tree_y=112 ;;
+      hdr2) tree_y=130 ;;
+    esac
+    if [[ -n "$tree_y" ]]; then
+      sleep "$settle"
+      echo "[3dmark06-autorun] selecting only lane=$DXMT_3DMARK_RESOLVED_LANE"
+      "$wine_bin" "$winctl" click --window "3DMark06 - " --control-id 35 >/dev/null
+      if ! "$wine_bin" "$winctl" wait --window "Select Tests" --timeout-ms 10000 >/dev/null 2>&1; then
+        echo "[3dmark06-autorun] Select Tests did not appear; leaving GUI untouched" >&2
+        exit 0
+      fi
+      "$wine_bin" "$winctl" click --window "Select Tests" --control-id 22 >/dev/null
+      "$wine_bin" "$winctl" click-controlxy --window "Select Tests" --control-id 20 \
+        --x 50 --y "$tree_y"
+      "$wine_bin" "$winctl" click --window "Select Tests" --control-id 1 >/dev/null
+    fi
     # The main window's title appears before its child buttons are created,
     # and a started benchmark disables the main window. So: click, then treat
     # "main window disabled or gone" as the ground-truth success signal and

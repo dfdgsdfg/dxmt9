@@ -89,12 +89,12 @@ unattended runs use `DXMT_3DMARK06_AUTORUN=1` (the CATALOGUE default for
 `app-d3d9-3dmark06` via `launcher_env`; export `0` for a manual-GUI run):
 the launcher waits for the
 `3DMark06 - <edition>` main window inside the prefix via
-`experiments/apps/tool-winctl` and clicks the Run 3DMark button (control
-id 1, a real owner-drawn Win32 Button) — focus-free, works with the window
+`experiments/apps/tool-winctl`. For `gt1`, `gt2`, `hdr1`, and `hdr2`, it clears
+the Select Tests tree, checks exactly the requested row, accepts the dialog,
+and clicks the Run 3DMark button (control id 1). Other suite lanes retain the
+GUI-persisted selection. The path is focus-free and works with the window
 hidden behind macOS windows (`DXMT_3DMARK06_AUTORUN_SETTLE_SEC` tunes the
-post-window-ready delay, default 3). The benchmark then runs whatever the
-GUI-persisted test selection holds, so set the selection once in the UI and
-treat `benchmark_lane` as informational for 06. Build the helper with
+post-window-ready delay, default 3). Build the helper with
 `scripts/build_apps/build_tool-winctl.sh` if the exe is missing.
 
 CPU, feature, and batch lanes are diagnostic workloads. They do not establish

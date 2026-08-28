@@ -16,6 +16,9 @@
 //                                            BM_CLICK on a standard control
 //   clickxy --window SUBSTR --x N --y N      WM_LBUTTONDOWN/UP at client
 //                                            coords (custom-drawn UIs)
+//   click-controlxy --window SUBSTR --control-id N --x N --y N
+//                                            WM_LBUTTONDOWN/UP at child-client
+//                                            coords (tree/list controls)
 //   settext --window SUBSTR --control-id N --text S
 //   command --window SUBSTR --id N           WM_COMMAND (menu/accelerator id)
 //   close  --window SUBSTR                   WM_CLOSE
@@ -210,11 +213,12 @@ bool hasArg(int argc, char **argv, const char *name) {
 
 int usage() {
   std::fprintf(stderr,
-               "usage: tool-winctl <dump|wait|click|clickxy|settext|command|close> [options]\n"
+               "usage: tool-winctl <dump|wait|click|clickxy|click-controlxy|settext|command|close> [options]\n"
                "  dump    [--window SUBSTR]\n"
                "  wait    --window SUBSTR [--timeout-ms N]\n"
                "  click   --window SUBSTR (--button TEXT | --control-id N)\n"
                "  clickxy --window SUBSTR --x N --y N\n"
+               "  click-controlxy --window SUBSTR --control-id N --x N --y N\n"
                "  settext --window SUBSTR --control-id N --text S\n"
                "  command --window SUBSTR --id N\n"
                "  close   --window SUBSTR\n");
@@ -326,6 +330,27 @@ int main(int argc, char **argv) {
     // this tool for the whole benchmark run.
     PostMessageW(top, WM_LBUTTONDOWN, MK_LBUTTON, point);
     PostMessageW(top, WM_LBUTTONUP, 0, point);
+    return 0;
+  }
+
+  if (cmd == "click-controlxy") {
+    const char *idArg = argValue(argc, argv, "--control-id");
+    const char *xArg = argValue(argc, argv, "--x");
+    const char *yArg = argValue(argc, argv, "--y");
+    if (!idArg || !xArg || !yArg) {
+      return usage();
+    }
+    ChildSearch search;
+    search.byId = true;
+    search.controlId = std::atoi(idArg);
+    EnumChildWindows(top, matchChild, reinterpret_cast<LPARAM>(&search));
+    if (!search.found) {
+      std::fprintf(stderr, "error: no child control with id %s\n", idArg);
+      return 1;
+    }
+    LPARAM point = MAKELPARAM(std::atoi(xArg), std::atoi(yArg));
+    PostMessageW(search.found, WM_LBUTTONDOWN, MK_LBUTTON, point);
+    PostMessageW(search.found, WM_LBUTTONUP, 0, point);
     return 0;
   }
 
