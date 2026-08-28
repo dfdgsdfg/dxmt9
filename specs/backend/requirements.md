@@ -510,6 +510,42 @@ debug-env key must skip archive save (load may proceed). Rationale: probe
 campaigns grew the shared archive `68KB -> 125MB`, which is what armed the
 R-BACK-3.9 failure.
 
+**R-BACK-3.12** *(Backend identity canonicalization.)* The backend PSO identity
+must be a canonical representation of Metal-visible pipeline state, without
+mutating the D3D9 semantic shadow. Portable fixed-function pixel identity must
+exclude `alphaTestEnable` and `alphaTestFunc`, because the portable fragment
+source evaluates those values from per-draw state. Tile-FFP identity must retain
+both fields because its tile source consumes them. General draw PSO identity
+must not vary with sampler min/mag filtering; the independent stretch/blit PSO
+may retain its linear-filter bit.
+
+**R-BACK-3.13** *(Inactive blend normalization.)* For an attached color
+format, a blend-disabled attachment must canonicalize operations and factors to
+`Add`, `One`, and `Zero` while preserving its color-write mask and pixel format.
+An invalid or zero color format must canonicalize the complete attachment entry
+to the no-attachment identity. An attached blend-enabled entry must preserve
+all active blend fields.
+
+**R-BACK-3.14** *(Bounded handle publication.)* Draw PSO handles must be
+published through a bounded, append-only table with stable numeric slots and
+release/acquire visibility. Publication must not clone the complete slot prefix
+per new PSO, and stale generation/invalid handles must fail closed.
+
+**R-BACK-3.15** *(Identity evidence.)* The canonicalization transforms in
+R-BACK-3.12/3.13 must be pure, production-called functions covered by native
+truth tables. Their model binding is value-level; Metal shader ABI and pixel
+behavior remain subject to the separate shader-corpus and GPU-oracle gates.
+
+**R-BACK-3.16** *(Cold PSO diagnostics.)* PSO fanout diagnosis must be an
+explicit opt-in observer whose disabled path performs no clock read, key-payload
+read, allocation, or lock acquisition after its cached gate. The observer must
+separate probe lookup, source generation, source-library lookup, final lookup,
+final insertion, and handle publication. Key cardinality must include source
+tuple, pre-source backend identity, and every retained final-key axis; storage
+must be bounded and report saturation rather than allocate without limit.
+Observer-enabled timing is attribution evidence only and cannot promote a
+performance change without a separate observer-off run.
+
 ---
 
 ## 4. Shader Translation

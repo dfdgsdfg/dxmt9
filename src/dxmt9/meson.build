@@ -42,6 +42,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_format_convert.cpp',
   'dxmt9_heap_manager.cpp',
   'dxmt9_pipeline_cache.cpp',
+  'dxmt9_pso_cache_diagnostics.cpp',
   'dxmt9_resource_initializer.mm',
   'dxmt9_resource_pool.cpp',
   'dxmt9_shader_archive.cpp',

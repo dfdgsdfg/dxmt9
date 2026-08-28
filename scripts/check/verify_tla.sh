@@ -157,6 +157,9 @@ counterexample_models=(
   # Retained Initializer ownership removed: arena reclamation deallocates the
   # destination while the pending upload still names it.
   "ResourceLifetime|.counterexample|Invariant NoUseAfterFree is violated"
+  # Reading the staged slot before its release publication breaks the
+  # segmented table's fail-closed lookup contract.
+  "PsoSlotPublication|.counterexample|Invariant LookupFailClosed is violated"
 )
 
 for row in "${counterexample_models[@]}"; do

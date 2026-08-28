@@ -1086,7 +1086,7 @@ path stays constants-only with direct texture/sampler binding.
 
 ```mermaid
 graph TD
-    DD["FlatDrawStateView"] --> KEY["PSO key extraction:\n• VS function (shader hash + variant)\n• FS function (shader hash + variant)\n• Vertex descriptor layout\n• RT pixel formats × 4\n• Blend state per attachment\n• Sample count\n• Alpha-to-coverage flag"]
+    DD["FlatDrawStateView"] --> KEY["PSO key extraction:\n• VS function (shader hash + variant)\n• FS function (shader hash + variant)\n• Vertex descriptor layout\n• RT pixel formats × 4\n• Canonical blend state per attachment\n• Sample count\n• Alpha-to-coverage flag"]
     KEY --> LOOKUP{In PSO\ncache?}
     LOOKUP -->|Hit| USE["Use cached MTLRenderPipelineState"]
     LOOKUP -->|Miss| COMPILE["Compile async on thread pool\nMTLRenderPipelineDescriptor\n→ newRenderPipelineStateWithDescriptor"]
@@ -1102,6 +1102,38 @@ is bounded by the state space of real D3D9 applications).
 The `MTLDepthStencilState` cache is separate and keyed by the DSS key (depth +
 stencil compare/write state). DSS creation is cheap; the cache prevents redundant
 object allocation.
+
+### 5.0 Backend identity canonicalization
+
+The backend constructs a pure identity view at the final
+`makeShaderVariantKey` boundary. This view does not rewrite `FlatDrawStateView`
+or the core `FfpPixelKey`:
+
+* Portable FFP has one alpha-test-capable fragment source and reads the
+  per-draw predicate, so its identity omits `alphaTestEnable` and
+  `alphaTestFunc`. The tile-FFP source consumes those fields and retains them.
+* Sampler minification/magnification filtering is not a general draw PSO input;
+  only the separate stretch/blit pipeline retains its linear-filter key bit.
+* An attached blend-disabled color entry folds inactive operations/factors to
+  `Add`/`One`/`Zero`, preserving write mask and pixel format. A zero/invalid
+  format folds the entire entry to the no-attachment identity. Active blending
+  remains untouched.
+
+Draw PSO handles are published into stable append-only blocks with
+release/acquire visibility. Readers do not clone a growing prefix, and invalid
+or stale handles fail closed. The native identity truth tables and the bounded
+publication stress spec are the binding evidence for these value and lifetime
+rules; they do not replace the GPU readback gate for shader or pixel behavior.
+
+PSO diagnostics are a separate cold boundary. When explicitly enabled, the
+observer records lookup/source/publication dispositions and bounded distinct
+counts for the source tuple, the pre-source backend identity, and the retained
+final-key axes. The backend-identity axis is intentionally separate from the
+source tuple: a large fanout there identifies semantic variants hidden before
+generated MSL source identity, while the later axes attribute Metal descriptor
+specialization. Saturation is visible and cardinality becomes a conservative
+under-count. With the diagnostic gate disabled, the pipeline path does not
+construct this payload or read a clock.
 
 ### 5.1 Cache Prewarm From `MTLBinaryArchive`
 

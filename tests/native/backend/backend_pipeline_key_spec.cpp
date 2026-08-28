@@ -72,6 +72,7 @@ auto makeVariantKey(const FlatDrawFixture& fixture) {
   auto blend = makeBlendKeys(fixture.hot);
   for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
     blend[i].pixelFormat = colorFormats[i];
+    blend[i] = dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(blend[i]);
   }
   return dxmt9::pipeline::makeShaderVariantKey(
       fixture.view(),
@@ -222,6 +223,126 @@ void testLegacyBothSrcAlphaBlendFixup() {
           "BOTHINVSRCALPHA destination is normalized to SRCALPHA");
 }
 
+void testBackendBlendIdentityCanonicalization() {
+  // Metal ignores blend operations/factors while blending is disabled. They
+  // must not create redundant draw PSOs, but write masks and real formats are
+  // still descriptor identity.
+  dxmt9::pipeline::BlendAttachmentKey disabled{
+      .blendingEnabled = false,
+      .rgbBlendOperation = static_cast<u32>(BlendOp::Subtract),
+      .alphaBlendOperation = static_cast<u32>(BlendOp::Max),
+      .sourceRGBBlendFactor = static_cast<u32>(BlendFactor::SrcAlpha),
+      .destinationRGBBlendFactor = static_cast<u32>(BlendFactor::InvDestAlpha),
+      .sourceAlphaBlendFactor = static_cast<u32>(BlendFactor::DestAlpha),
+      .destinationAlphaBlendFactor = static_cast<u32>(BlendFactor::InvSrcAlpha),
+      .colorWriteMask = 0x5u,
+      .pixelFormat = WMTPixelFormatBGRA8Unorm,
+  };
+  auto canonical = dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(disabled);
+  check(!canonical.blendingEnabled, "disabled blend remains disabled");
+  checkEq(canonical.rgbBlendOperation, static_cast<u32>(BlendOp::Add),
+          "disabled RGB operation uses the Metal descriptor default");
+  checkEq(canonical.alphaBlendOperation, static_cast<u32>(BlendOp::Add),
+          "disabled alpha operation uses the Metal descriptor default");
+  checkEq(canonical.sourceRGBBlendFactor, static_cast<u32>(BlendFactor::One),
+          "disabled RGB source factor uses the descriptor default");
+  checkEq(canonical.destinationRGBBlendFactor, static_cast<u32>(BlendFactor::Zero),
+          "disabled RGB destination factor uses the descriptor default");
+  checkEq(canonical.sourceAlphaBlendFactor, static_cast<u32>(BlendFactor::One),
+          "disabled alpha source factor uses the descriptor default");
+  checkEq(canonical.destinationAlphaBlendFactor, static_cast<u32>(BlendFactor::Zero),
+          "disabled alpha destination factor uses the descriptor default");
+  checkEq(canonical.colorWriteMask, 0x5u,
+          "disabled blend preserves the color write mask");
+  checkEq(canonical.pixelFormat, static_cast<u32>(WMTPixelFormatBGRA8Unorm),
+          "disabled blend preserves the attached pixel format");
+
+  auto active = disabled;
+  active.blendingEnabled = true;
+  const auto activeCanonical =
+      dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(active);
+  check(activeCanonical == active,
+        "attached active blend keeps all blend descriptor fields");
+  check(activeCanonical != canonical,
+        "attached active blend remains distinct from disabled blend");
+
+  auto unattached = active;
+  unattached.pixelFormat = 0u;
+  const auto noAttachment =
+      dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(unattached);
+  check(noAttachment == dxmt9::pipeline::BlendAttachmentKey{},
+        "invalid format canonicalizes the complete entry to no attachment");
+}
+
+ShaderRef makeFfpPixelIdentityRef(bool alphaTestEnabled, u32 alphaTestFunc) {
+  dxmt9::core::FfpPixelKey pixelKey{};
+  pixelKey.stages[0].colorOp = 1u;
+  pixelKey.alphaTestEnable = alphaTestEnabled;
+  pixelKey.alphaTestFunc = alphaTestFunc;
+  // Leave hash zero so the backend helper must derive both the portable and
+  // tile identities from the semantic key rather than trusting a stale hash.
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  shader.pixelKey = pixelKey;
+  return shader;
+}
+
+void testFfpBackendIdentitySeparatesPortableAndTileAlpha() {
+  const auto alphaOff = makeFfpPixelIdentityRef(false, 0u);
+  const auto alphaGreater = makeFfpPixelIdentityRef(true, 5u);
+  const auto alphaLess = makeFfpPixelIdentityRef(true, 2u);
+
+  const auto portableOff =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaOff, false);
+  const auto portableGreater =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaGreater, false);
+  const auto portableLess =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaLess, false);
+  checkEq(portableOff, portableGreater,
+          "portable FFP identity excludes alpha-test enable/function");
+  checkEq(portableGreater, portableLess,
+          "portable FFP identity excludes alpha-test function changes");
+
+  const auto tileOff =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaOff, true);
+  const auto tileGreater =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaGreater, true);
+  const auto tileLess =
+      dxmt9::pipeline::detail::makeBackendShaderIdentityHash(alphaLess, true);
+  check(tileOff != tileGreater,
+        "tile FFP identity retains alpha-test enable");
+  check(tileGreater != tileLess,
+        "tile FFP identity retains alpha-test function");
+
+  DrawDesc desc{};
+  auto offFixture = makeFlatDrawFixture(desc);
+  offFixture.shaderLayout.pixelShader = alphaOff;
+  auto greaterFixture = makeFlatDrawFixture(desc);
+  greaterFixture.shaderLayout.pixelShader = alphaGreater;
+  const auto portableKeyOff = makeVariantKey(offFixture);
+  const auto portableKeyGreater = makeVariantKey(greaterFixture);
+  check(portableKeyOff == portableKeyGreater,
+        "production draw-key builder applies portable FFP identity canonicalization");
+
+  std::array<u32, kMaxRenderTargets> formats{};
+  formats[0] = WMTPixelFormatBGRA8Unorm;
+  auto blendOff = makeBlendKeys(offFixture.hot);
+  auto blendGreater = makeBlendKeys(greaterFixture.hot);
+  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
+    blendOff[i].pixelFormat = formats[i];
+    blendGreater[i].pixelFormat = formats[i];
+    blendOff[i] = dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(blendOff[i]);
+    blendGreater[i] =
+        dxmt9::pipeline::detail::canonicalizeBlendAttachmentKey(blendGreater[i]);
+  }
+  const auto tileKeyOff = dxmt9::pipeline::makeShaderVariantKey(
+      offFixture.view(), formats, blendOff, 0u, 0u, std::nullopt, true);
+  const auto tileKeyGreater = dxmt9::pipeline::makeShaderVariantKey(
+      greaterFixture.view(), formats, blendGreater, 0u, 0u, std::nullopt, true);
+  check(tileKeyOff != tileKeyGreater,
+        "production tile draw-key builder retains FFP alpha identity");
+}
+
 void testBlendFactorWmtLaneMapping() {
   checkEq(static_cast<int>(dxmt9::convert::toBlendFactor(
               static_cast<u32>(BlendFactor::BlendFactor), false)),
@@ -363,15 +484,32 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
   desc.textures[1].handle = Handle{};
   desc.samplers[0].states[SAMP_MIN_FILTER] = 2u;
   const auto linearMin = makeVariantKey(makeFlatDrawFixture(desc));
-  check(linearMin.linear, "linear min filter marks variant linear");
-  check(dxmt9::pipeline::ShaderVariantKeyHash{}(linearMin) !=
+  check(!linearMin.linear, "general draw PSO does not carry sampler filtering");
+  check(linearMin == nearest,
+        "general draw minification filtering does not split the PSO key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(linearMin) ==
             dxmt9::pipeline::ShaderVariantKeyHash{}(nearest),
-        "linear min filter changes the PSO hash");
+        "general draw minification filtering does not split the PSO hash");
 
   desc.samplers[0].states[SAMP_MIN_FILTER] = 1u;
   desc.samplers[0].states[SAMP_MAG_FILTER] = 2u;
   const auto linearMag = makeVariantKey(makeFlatDrawFixture(desc));
-  check(linearMag.linear, "linear mag filter marks variant linear");
+  check(!linearMag.linear, "general draw PSO ignores magnification filtering");
+  check(linearMag == nearest,
+        "general draw magnification filtering does not split the PSO key");
+
+  StretchRectDesc stretch{};
+  const auto stretchNearest =
+      dxmt9::pipeline::detail::makeStretchPipelineKey(stretch,
+                                                       WMTPixelFormatBGRA8Unorm);
+  stretch.linear = true;
+  const auto stretchLinear =
+      dxmt9::pipeline::detail::makeStretchPipelineKey(stretch,
+                                                       WMTPixelFormatBGRA8Unorm);
+  check(!stretchNearest.linear && stretchLinear.linear,
+        "stretch pipeline retains its filtering mode");
+  check(stretchNearest != stretchLinear,
+        "stretch nearest and linear pipelines remain distinct");
 }
 
 void testFvfLayoutHashIsDeterministicAndResponsive() {
@@ -731,7 +869,7 @@ void testPipelineHelpersUseExplicitFlatInputs() {
           "flat blend helper reads destination blend factor");
   checkEq(blend[0].colorWriteMask, 0x7u, "flat blend helper reads color write mask");
   check(variant.textured, "flat variant helper reads texture bindings");
-  check(variant.linear, "flat variant helper reads sampler filtering");
+  check(!variant.linear, "flat draw variant excludes sampler filtering");
   check(variant.clipPlanes, "flat variant helper reads clip plane mask");
   checkEq(variant.sampleCount, 4u, "flat variant helper reads render target sample count");
 }
@@ -1162,6 +1300,8 @@ int main() {
     testBlendOperationFallbacks();
     testBlendFactorFallbacks();
     testLegacyBothSrcAlphaBlendFixup();
+    testBackendBlendIdentityCanonicalization();
+    testFfpBackendIdentitySeparatesPortableAndTileAlpha();
     testBlendFactorWmtLaneMapping();
     testMrtColorWriteMaskDefaultAndOverride();
     testMrtPerRenderTargetColorWriteMask();

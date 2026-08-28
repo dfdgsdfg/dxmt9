@@ -11,6 +11,7 @@
 // the depth/stencil state builder.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_segmented_slot_table.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -267,10 +268,30 @@ makeBlendAttachmentKeys(core::FlatDrawStateView state,
                         bool forceVisibleDraw = false,
                         bool disableAlphaBlend = false);
 
+// Canonicalize the backend descriptor identity after attachment formats have
+// been resolved.  An invalid format is not a Metal color attachment at all;
+// its complete blend entry must therefore be the no-attachment value.  For a
+// real attachment, inactive blend factors/operations are descriptor-ignored
+// and are folded to their defaults.  The semantic render-state shadow remains
+// untouched.
+BlendAttachmentKey canonicalizeBlendAttachmentKey(BlendAttachmentKey key) noexcept;
+
+// Return the shader identity used by the backend PSO key.  Portable FFP emits
+// one alpha-test-capable source and evaluates the predicate from per-draw
+// state, so alpha-test fields are intentionally omitted from that identity.
+// The tile FFP source still consumes those fields and must retain them.
+u64 makeBackendShaderIdentityHash(const core::ShaderRef& shader,
+                                  bool tileFfpMode) noexcept;
+
 // Fill PSOs embed the fill colour directly into the generated fragment source,
 // so every RGBA channel must participate in the immutable pipeline key.
 ShaderVariantKey makeFillPipelineKey(const core::ColorRGBA& color,
                                      u32 pixelFormat) noexcept;
+
+// Stretch/blit filtering is a separate pipeline concern: unlike general draw
+// PSOs, its linear-vs-nearest choice is part of the generated shader behavior.
+ShaderVariantKey makeStretchPipelineKey(const core::StretchRectDesc& stretch,
+                                        u32 pixelFormat) noexcept;
 
 }  // namespace detail
 
@@ -523,9 +544,10 @@ class Cache {
   DrawProbeMap drawProbe{};
   DrawHandleMap drawHandles{};
   SourceLibraryMap sourceLibraries{};
-  std::vector<PsoSlot> drawSlots{};
-  std::shared_ptr<const std::vector<PsoSlot>> drawSlotSnapshot =
-      std::make_shared<const std::vector<PsoSlot>>();
+  // Handles are published in stable 64-slot blocks.  Cache::mutex serializes
+  // append(), while readers use the table's acquire-published slots without
+  // cloning the complete prefix on every new PSO.
+  ::dxmt9::detail::SegmentedImmutableSlotTable<PsoSlot> drawSlotTable{};
   PipelineMap fill{};
   PipelineMap stretch{};
   DepthMap depth{};
@@ -564,7 +586,8 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
                                        u32 stencilFormat,
-                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt);
+                                       std::optional<bool> forceTextureWhiteOverride = std::nullopt,
+                                       bool tileFfpMode = false);
 
 // Resolve the bounded ATI FETCH4 selector from active sampler state and the
 // pool's concrete texture formats. The pipeline cache stamps this result on

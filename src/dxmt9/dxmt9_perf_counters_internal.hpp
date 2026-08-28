@@ -689,6 +689,50 @@ struct Counters {
   std::atomic<std::uint64_t> psoVariantTileFfp{0};
   std::atomic<std::uint64_t> sourceLibraryEntries{0};
   std::atomic<std::uint64_t> sourceLibraryEntriesMax{0};
+  // Opt-in PSO-cache diagnostics. These counters are deliberately separate
+  // from the long-standing pipeline counters: the producer records lookup
+  // disposition, source generation, and publication work only when both
+  // `DXMT_PERF_COUNTERS` and `DXMT9_PERF_PSO_CACHE_DIAGNOSTICS` are set.
+  std::atomic<std::uint64_t> psoCacheProbeLookups{0};
+  std::atomic<std::uint64_t> psoCacheProbeHits{0};
+  std::atomic<std::uint64_t> psoCacheProbeMisses{0};
+  std::atomic<std::uint64_t> psoCacheProbeStale{0};
+  std::atomic<std::uint64_t> psoCacheFinalLookups{0};
+  std::atomic<std::uint64_t> psoCacheFinalHits{0};
+  std::atomic<std::uint64_t> psoCacheFinalMisses{0};
+  std::atomic<std::uint64_t> psoCacheFinalInsertions{0};
+  std::atomic<std::uint64_t> psoCacheFinalHitsAfterSource{0};
+  std::atomic<std::uint64_t> psoCacheSourceGenerationAttempts{0};
+  std::atomic<std::uint64_t> psoCacheSourceGenerationSuccess{0};
+  std::atomic<std::uint64_t> psoCacheSourceGenerationFailure{0};
+  std::atomic<std::uint64_t> psoCacheSourceGenerationBytes{0};
+  std::atomic<std::uint64_t> psoCacheSourceLibraryLookups{0};
+  std::atomic<std::uint64_t> psoCacheSourceLibraryHits{0};
+  std::atomic<std::uint64_t> psoCacheSourceLibraryMisses{0};
+  std::atomic<std::uint64_t> psoCacheSourceLibraryInsertions{0};
+  std::atomic<std::uint64_t> psoCacheSlotPublications{0};
+  std::atomic<std::uint64_t> psoCacheSegmentAllocations{0};
+  std::atomic<std::uint64_t> psoCacheSegmentAllocatedBytes{0};
+  std::atomic<std::uint64_t> psoCacheSlotPublishCpuNs{0};
+  std::atomic<std::uint64_t> psoCacheSlotPublishCpuMaxNs{0};
+  std::atomic<std::uint64_t> psoCacheDiagnosticTrackerOverflow{0};
+  std::atomic<std::uint64_t> psoCacheDistinctSourceTuples{0};
+  std::atomic<std::uint64_t> psoCacheMaxFinalFanoutPerSourceTuple{0};
+  std::atomic<std::uint64_t> psoCacheDistinctBackendIdentities{0};
+  std::atomic<std::uint64_t> psoCacheDistinctVertexSources{0};
+  std::atomic<std::uint64_t> psoCacheDistinctFragmentSources{0};
+  std::atomic<std::uint64_t> psoCacheDistinctTileSources{0};
+  std::atomic<std::uint64_t> psoCacheDistinctVsoutShapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctTextureMasks{0};
+  std::atomic<std::uint64_t> psoCacheDistinctTextureTypes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctSampledDepthShapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctFetch4Shapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctX8Shapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctSampleCounts{0};
+  std::atomic<std::uint64_t> psoCacheDistinctColorFormatShapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctBlendShapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctDepthStencilShapes{0};
+  std::atomic<std::uint64_t> psoCacheDistinctModeBits{0};
   std::atomic<std::uint64_t> pipelineBuildFailDraw{0};
   std::atomic<std::uint64_t> pipelineBuildFailLibrary{0};
   std::atomic<std::uint64_t> pipelineBuildFailFunction{0};

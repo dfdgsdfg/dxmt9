@@ -52,6 +52,14 @@ bool enabledFlag() {
   return value;
 }
 
+bool psoCacheDiagnosticsFlag() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_PERF_PSO_CACHE_DIAGNOSTICS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
 std::uint64_t periodicPresentInterval() {
   static const std::uint64_t value = [] {
     const char* env = std::getenv("DXMT_PERF_COUNTERS_PERIODIC_PRESENTS");
@@ -2413,6 +2421,9 @@ void countPipelineBuild(PipelineKind kind) {
 }
 
 void recordDrawPsoSlotCount(std::uint64_t count) {
+  if (!enabled()) {
+    return;
+  }
   counters().psoSlotsDraw.store(count, std::memory_order_relaxed);
   updateMax(counters().psoSlotsDrawMax, count);
 }
@@ -2430,8 +2441,198 @@ void countDrawPsoVariantTileFfp() {
 }
 
 void recordSourceLibraryEntryCount(std::uint64_t count) {
+  if (!enabled()) {
+    return;
+  }
   counters().sourceLibraryEntries.store(count, std::memory_order_relaxed);
   updateMax(counters().sourceLibraryEntriesMax, count);
+}
+
+bool psoCacheDiagnosticsEnabled() {
+  return enabled() && psoCacheDiagnosticsFlag();
+}
+
+void recordPsoCacheProbeLookup(PsoCacheLookupDisposition disposition) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.psoCacheProbeLookups.fetch_add(1, std::memory_order_relaxed);
+  switch (disposition) {
+    case PsoCacheLookupDisposition::Hit:
+      c.psoCacheProbeHits.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case PsoCacheLookupDisposition::Miss:
+      c.psoCacheProbeMisses.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case PsoCacheLookupDisposition::Stale:
+      c.psoCacheProbeStale.fetch_add(1, std::memory_order_relaxed);
+      break;
+  }
+}
+
+void recordPsoCacheFinalLookup(PsoCacheLookupDisposition disposition,
+                               bool hitAfterSource) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.psoCacheFinalLookups.fetch_add(1, std::memory_order_relaxed);
+  switch (disposition) {
+    case PsoCacheLookupDisposition::Hit:
+      c.psoCacheFinalHits.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case PsoCacheLookupDisposition::Miss:
+      c.psoCacheFinalMisses.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case PsoCacheLookupDisposition::Stale:
+      // A final-key stale entry is conservatively classified as a miss. The
+      // stale spelling is reserved for the probe table, whose generation
+      // check is independently observable.
+      c.psoCacheFinalMisses.fetch_add(1, std::memory_order_relaxed);
+      break;
+  }
+  if (hitAfterSource) {
+    c.psoCacheFinalHitsAfterSource.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void recordPsoCacheFinalInsertion() noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  counters().psoCacheFinalInsertions.fetch_add(1, std::memory_order_relaxed);
+}
+
+void recordPsoCacheSourceGeneration(bool success,
+                                    std::uint64_t sourceBytes) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.psoCacheSourceGenerationAttempts.fetch_add(1, std::memory_order_relaxed);
+  if (success) {
+    c.psoCacheSourceGenerationSuccess.fetch_add(1,
+                                                std::memory_order_relaxed);
+  } else {
+    c.psoCacheSourceGenerationFailure.fetch_add(1,
+                                                std::memory_order_relaxed);
+  }
+  if (sourceBytes != 0) {
+    c.psoCacheSourceGenerationBytes.fetch_add(sourceBytes,
+                                              std::memory_order_relaxed);
+  }
+}
+
+void recordPsoCacheSourceLibraryLookup(bool hit, bool insertion) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.psoCacheSourceLibraryLookups.fetch_add(1, std::memory_order_relaxed);
+  if (hit) {
+    c.psoCacheSourceLibraryHits.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    c.psoCacheSourceLibraryMisses.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (insertion) {
+    c.psoCacheSourceLibraryInsertions.fetch_add(1,
+                                                std::memory_order_relaxed);
+  }
+}
+
+void recordPsoCacheSlotPublication(std::uint64_t publishNanoseconds,
+                                   bool segmentAllocated,
+                                   std::uint64_t segmentBytes) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  c.psoCacheSlotPublications.fetch_add(1, std::memory_order_relaxed);
+  if (segmentAllocated) {
+    c.psoCacheSegmentAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (segmentBytes != 0) {
+      c.psoCacheSegmentAllocatedBytes.fetch_add(segmentBytes,
+                                                std::memory_order_relaxed);
+    }
+  }
+  c.psoCacheSlotPublishCpuNs.fetch_add(publishNanoseconds,
+                                       std::memory_order_relaxed);
+  updateMax(c.psoCacheSlotPublishCpuMaxNs, publishNanoseconds);
+}
+
+void recordPsoCacheDiagnosticTrackerOverflow() noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  counters().psoCacheDiagnosticTrackerOverflow.fetch_add(
+      1, std::memory_order_relaxed);
+}
+
+void recordPsoCacheDistinctKeyAxis(PsoCacheKeyAxis axis) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* counter = nullptr;
+  switch (axis) {
+    case PsoCacheKeyAxis::SourceTuple:
+      counter = &c.psoCacheDistinctSourceTuples;
+      break;
+    case PsoCacheKeyAxis::BackendIdentity:
+      counter = &c.psoCacheDistinctBackendIdentities;
+      break;
+    case PsoCacheKeyAxis::VertexSource:
+      counter = &c.psoCacheDistinctVertexSources;
+      break;
+    case PsoCacheKeyAxis::FragmentSource:
+      counter = &c.psoCacheDistinctFragmentSources;
+      break;
+    case PsoCacheKeyAxis::TileSource:
+      counter = &c.psoCacheDistinctTileSources;
+      break;
+    case PsoCacheKeyAxis::VsoutShape:
+      counter = &c.psoCacheDistinctVsoutShapes;
+      break;
+    case PsoCacheKeyAxis::TextureMask:
+      counter = &c.psoCacheDistinctTextureMasks;
+      break;
+    case PsoCacheKeyAxis::TextureTypes:
+      counter = &c.psoCacheDistinctTextureTypes;
+      break;
+    case PsoCacheKeyAxis::SampledDepthShape:
+      counter = &c.psoCacheDistinctSampledDepthShapes;
+      break;
+    case PsoCacheKeyAxis::Fetch4Shape:
+      counter = &c.psoCacheDistinctFetch4Shapes;
+      break;
+    case PsoCacheKeyAxis::X8Shape:
+      counter = &c.psoCacheDistinctX8Shapes;
+      break;
+    case PsoCacheKeyAxis::SampleCount:
+      counter = &c.psoCacheDistinctSampleCounts;
+      break;
+    case PsoCacheKeyAxis::ColorFormatShape:
+      counter = &c.psoCacheDistinctColorFormatShapes;
+      break;
+    case PsoCacheKeyAxis::BlendShape:
+      counter = &c.psoCacheDistinctBlendShapes;
+      break;
+    case PsoCacheKeyAxis::DepthStencilShape:
+      counter = &c.psoCacheDistinctDepthStencilShapes;
+      break;
+    case PsoCacheKeyAxis::ModeBits:
+      counter = &c.psoCacheDistinctModeBits;
+      break;
+  }
+  counter->fetch_add(1, std::memory_order_relaxed);
+}
+
+void recordPsoCacheFinalFanout(std::uint64_t fanout) noexcept {
+  if (!psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  updateMax(counters().psoCacheMaxFinalFanoutPerSourceTuple, fanout);
 }
 
 void countPipelineBuildFailDraw() {

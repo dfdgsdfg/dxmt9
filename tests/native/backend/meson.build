@@ -126,6 +126,27 @@ backend_pipeline_key_spec = executable(
 
 test('dxmt9-backend-pipeline-key-spec', backend_pipeline_key_spec)
 
+# Append-only segmented PSO-handle publication: fixed ABI capacity, block
+# boundaries, generation fail-closed lookup, and release/acquire readers.
+pso_slot_publication_spec = executable(
+  'dxmt9-pso-slot-publication-spec',
+  'pso_slot_publication_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-pso-slot-publication-spec', pso_slot_publication_spec)
+
+pso_cache_diagnostics_spec = executable(
+  'dxmt9-pso-cache-diagnostics-spec',
+  'pso_cache_diagnostics_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pso-cache-diagnostics-spec', pso_cache_diagnostics_spec,
+     env: dxmt9_native_test_env)
+
 # P1-1 regression guard for D3DRS_BLENDOP / D3DRS_BLENDOPALPHA /
 # D3DRS_SEPARATEALPHABLENDENABLE / D3DRS_SRCBLENDALPHA /
 # D3DRS_DESTBLENDALPHA → MTLBlendOperation + separate-alpha lane wiring.

@@ -24,7 +24,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 | Clear-as-load-action folding | ✅ | metal |
 | Render-target change → encoder split | ✅ | metal |
 | Encoder merging with exact hazard tracking | ✅ | metal; Bloom overlap remains diagnostic only for false-positive measurement |
-| PSO cache: `ShaderVariantKey`, async compile, `MTLBinaryArchive` disk cache | ✅ | metal |
+| PSO cache: `ShaderVariantKey`, async compile, `MTLBinaryArchive` disk cache (`R-BACK-3.1`–`3.16`) | ✅ | `ShaderVariantKey` now applies the production-called pure backend identity rules: portable FFP omits alpha-test enable/function while tile FFP retains them; general draw keys omit sampler min/mag linear filtering (stretch retains it); attached inactive blend fields fold to `Add`/`One`/`Zero` while write mask/format remain, and invalid formats fold to no-attachment. Draw handles use append-only release/acquire segmented blocks rather than cloning the full slot prefix. Native truth tables cover all canonicalization cases and `dxmt9-pso-slot-publication-spec` covers boundaries, generation rejection, exhaustion, and concurrent readers. Opt-in bounded diagnostics separate source tuples, pre-source backend identity, retained descriptor axes, and lookup/source/publication stages; observer-off performance evidence remains mandatory. The identity proof is value-level only; shader ABI/pixel correctness still requires the separate GPU oracle and shader corpus. |
 | DSS cache: `DepthStencilKey` + `StencilFaceKey` | ✅ | metal |
 | FFP shader generator: `makeFfpVertexSource()` + `makeFfpPixelSource()` | ✅ | metal |
 | Half-pixel offset in VS | ✅ | metal |

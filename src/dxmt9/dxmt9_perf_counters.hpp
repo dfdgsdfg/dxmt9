@@ -765,6 +765,47 @@ void countDrawPsoSlotExhausted();
 void countDrawPsoVariantArgbufStage2();
 void countDrawPsoVariantTileFfp();
 void recordSourceLibraryEntryCount(std::uint64_t count);
+enum class PsoCacheLookupDisposition : std::uint8_t {
+  Hit,
+  Miss,
+  Stale,
+};
+enum class PsoCacheKeyAxis : std::uint8_t {
+  SourceTuple,
+  BackendIdentity,
+  VertexSource,
+  FragmentSource,
+  TileSource,
+  VsoutShape,
+  TextureMask,
+  TextureTypes,
+  SampledDepthShape,
+  Fetch4Shape,
+  X8Shape,
+  SampleCount,
+  ColorFormatShape,
+  BlendShape,
+  DepthStencilShape,
+  ModeBits,
+};
+// These APIs are observation-only and are intended for the pipeline-cache
+// implementation and the standalone key-cardinality observer. Every call is
+// a cached gate plus relaxed atomics when diagnostics are enabled; the normal
+// path does not allocate or construct a diagnostic payload.
+bool psoCacheDiagnosticsEnabled();
+void recordPsoCacheProbeLookup(PsoCacheLookupDisposition disposition) noexcept;
+void recordPsoCacheFinalLookup(PsoCacheLookupDisposition disposition,
+                               bool hitAfterSource) noexcept;
+void recordPsoCacheFinalInsertion() noexcept;
+void recordPsoCacheSourceGeneration(bool success,
+                                     std::uint64_t sourceBytes) noexcept;
+void recordPsoCacheSourceLibraryLookup(bool hit, bool insertion) noexcept;
+void recordPsoCacheSlotPublication(std::uint64_t publishNanoseconds,
+                                   bool segmentAllocated,
+                                   std::uint64_t segmentBytes) noexcept;
+void recordPsoCacheDiagnosticTrackerOverflow() noexcept;
+void recordPsoCacheDistinctKeyAxis(PsoCacheKeyAxis axis) noexcept;
+void recordPsoCacheFinalFanout(std::uint64_t fanout) noexcept;
 void countPipelineBuildFailDraw();
 void countPipelineBuildFailLibrary();
 void countPipelineBuildFailFunction();

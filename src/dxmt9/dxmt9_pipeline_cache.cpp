@@ -8,6 +8,7 @@
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_pso_cache_diagnostics.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "util/log/log.hpp"
@@ -48,6 +49,80 @@ inline u64 mix(u64 hash, u64 value) {
   hash ^= value;
   hash *= kFnvPrime;
   return hash;
+}
+
+diagnostics::PsoCacheKeyAxes makePsoCacheKeyAxes(
+    const ShaderVariantKey& key) noexcept {
+  auto hashValues = [](auto&& values) {
+    u64 hash = kFnvOffset;
+    for (const auto& value : values) {
+      hash = mix(hash, static_cast<u64>(value));
+    }
+    return hash;
+  };
+
+  u64 sourceTupleHash = kFnvOffset;
+  sourceTupleHash = mix(sourceTupleHash, key.vertexSourceHash);
+  sourceTupleHash = mix(sourceTupleHash, key.fragmentSourceHash);
+  sourceTupleHash = mix(sourceTupleHash, key.tileSourceHash);
+
+  u64 blendShapeHash = kFnvOffset;
+  for (const auto& blend : key.blend) {
+    blendShapeHash = mix(
+        blendShapeHash,
+        static_cast<u64>(BlendAttachmentKeyHash{}(blend)));
+  }
+
+  u64 depthStencilShapeHash = kFnvOffset;
+  depthStencilShapeHash = mix(depthStencilShapeHash, key.depthFormat);
+  depthStencilShapeHash = mix(depthStencilShapeHash, key.stencilFormat);
+
+  u64 modeBits = kFnvOffset;
+  modeBits = mix(modeBits, key.emitterVersion);
+  modeBits = mix(modeBits, key.sourceLayoutVersion);
+  modeBits = mix(modeBits, key.debugEnvSchemaVersion);
+  modeBits = mix(modeBits, key.debugEnvKey);
+  modeBits = mix(modeBits, static_cast<u64>(key.textured));
+  modeBits = mix(modeBits, static_cast<u64>(key.linear));
+  modeBits = mix(modeBits, static_cast<u64>(key.clipPlanes));
+  modeBits = mix(modeBits, static_cast<u64>(key.fogActive));
+  modeBits = mix(modeBits, static_cast<u64>(key.alphaToCoverage));
+  modeBits = mix(modeBits, static_cast<u64>(key.tileFfpMode));
+  modeBits = mix(modeBits, static_cast<u64>(key.tileFfpBaseColor));
+  modeBits = mix(modeBits, static_cast<u64>(key.argbufHybridMode));
+  modeBits = mix(modeBits, static_cast<u64>(key.argbufDirectCbufMode));
+  modeBits = mix(modeBits, static_cast<u64>(key.argbufResourceArray));
+  modeBits = mix(modeBits, static_cast<u64>(key.samplerLodBias));
+  modeBits = mix(modeBits, static_cast<u64>(key.fragmentlessDepthOnly));
+
+  return diagnostics::PsoCacheKeyAxes{
+      .sourceTupleHash = sourceTupleHash,
+      .backendIdentityHash = key.hash,
+      .vertexSourceHash = key.vertexSourceHash,
+      .fragmentSourceHash = key.fragmentSourceHash,
+      .tileSourceHash = key.tileSourceHash,
+      .vsoutShapeHash = key.vsOutLayoutKey,
+      .textureMask = key.textureMask,
+      .textureTypesHash = hashValues(key.textureTypes),
+      .sampledDepthShapeHash = key.sampledDepthTextureMask,
+      .fetch4ShapeHash = key.fetch4SamplerMask,
+      .x8ShapeHash = key.x8AlphaOneTextureMask,
+      .sampleCount = key.sampleCount,
+      .colorFormatShapeHash = hashValues(key.colorFormats),
+      .blendShapeHash = blendShapeHash,
+      .depthStencilShapeHash = depthStencilShapeHash,
+      .modeBits = modeBits,
+  };
+}
+
+void observeFinalPsoInsertion(const ShaderVariantKey& key) noexcept {
+  if (!perf::psoCacheDiagnosticsEnabled()) {
+    return;
+  }
+  const auto axes = makePsoCacheKeyAxes(key);
+  perf::recordPsoCacheFinalInsertion();
+  diagnostics::observePsoCacheKeyAxes(axes);
+  diagnostics::observePsoCacheFinalFanout(axes.sourceTupleHash);
 }
 
 // Mirror of backend_metal.mm's file-local debugForceVisibleDraw. Keeps this
@@ -302,25 +377,49 @@ core::PsoHandle internDrawHandleLocked(Cache& cache,
   if (auto it = cache.drawHandles.find(key); it != cache.drawHandles.end()) {
     return it->second;
   }
-  if (cache.drawSlots.size() >= core::PsoHandle::kInvalidSlot) {
+  if (cache.drawSlotTable.size() >= core::PsoHandle::kInvalidSlot) {
     perf::countDrawPsoSlotExhausted();
     util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
                "draw PSO handle table exhausted slots=%llu variant=0x%llx",
-               static_cast<unsigned long long>(cache.drawSlots.size()),
+               static_cast<unsigned long long>(cache.drawSlotTable.size()),
                static_cast<unsigned long long>(key.hash));
     return {};
   }
-  const core::PsoHandle handle{
-      .slot = static_cast<std::uint16_t>(cache.drawSlots.size()),
+  const bool diagnose = perf::psoCacheDiagnosticsEnabled();
+  const auto oldSize = cache.drawSlotTable.size();
+  const bool segmentAllocated =
+      oldSize % decltype(cache.drawSlotTable)::kSegmentSize == 0u;
+  const auto started = diagnose ? std::chrono::steady_clock::now()
+                                : std::chrono::steady_clock::time_point{};
+  auto slot = cache.drawSlotTable.append(PsoSlot{
       .generation = static_cast<std::uint16_t>(1u),
-  };
-  cache.drawSlots.push_back(PsoSlot{
-      .generation = handle.generation,
       .key = key,
       .entry = entry,
       .occupied = true,
   });
-  perf::recordDrawPsoSlotCount(cache.drawSlots.size());
+  if (!slot) {
+    perf::countDrawPsoSlotExhausted();
+    util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+               "draw PSO handle table exhausted while publishing variant=0x%llx",
+               static_cast<unsigned long long>(key.hash));
+    return {};
+  }
+  if (diagnose) {
+    const auto elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    perf::recordPsoCacheSlotPublication(
+        elapsed,
+        segmentAllocated,
+        segmentAllocated
+            ? decltype(cache.drawSlotTable)::segmentStorageBytes()
+            : 0u);
+  }
+  const core::PsoHandle handle{
+      .slot = *slot,
+      .generation = static_cast<std::uint16_t>(1u),
+  };
+  perf::recordDrawPsoSlotCount(cache.drawSlotTable.size());
   if (key.argbufHybridMode) {
     perf::countDrawPsoVariantArgbufStage2();
   }
@@ -328,11 +427,6 @@ core::PsoHandle internDrawHandleLocked(Cache& cache,
     perf::countDrawPsoVariantTileFfp();
   }
   cache.drawHandles.emplace(key, handle);
-  std::atomic_store_explicit(
-      &cache.drawSlotSnapshot,
-      std::shared_ptr<const std::vector<PsoSlot>>(
-          std::make_shared<std::vector<PsoSlot>>(cache.drawSlots)),
-      std::memory_order_release);
   return handle;
 }
 
@@ -514,6 +608,8 @@ getOrSubmitSourceLibraryLocked(Cache& cache,
                                const std::string& source) {
   if (auto it = cache.sourceLibraries.find(sourceHash);
       it != cache.sourceLibraries.end()) {
+    perf::recordPsoCacheSourceLibraryLookup(/*hit=*/true,
+                                            /*insertion=*/false);
     return it->second.future;
   }
 
@@ -522,6 +618,8 @@ getOrSubmitSourceLibraryLocked(Cache& cache,
         return shaders::makeLibrary(device, source);
       });
   cache.sourceLibraries.emplace(sourceHash, SourceLibraryEntry{future});
+  perf::recordPsoCacheSourceLibraryLookup(/*hit=*/false,
+                                          /*insertion=*/true);
   perf::recordSourceLibraryEntryCount(cache.sourceLibraries.size());
   return future;
 }
@@ -840,6 +938,46 @@ detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& sh
   return std::nullopt;
 }
 
+namespace {
+
+u64 hashFfpPixelBackendIdentity(const core::FfpPixelKey& key,
+                                bool includeAlphaTest) noexcept {
+  u64 hash = kFnvOffset;
+  for (const auto& stage : key.stages) {
+    hash = mix(hash, stage.colorOp);
+    hash = mix(hash, stage.colorArg1);
+    hash = mix(hash, stage.colorArg2);
+    hash = mix(hash, stage.colorArg0);
+    hash = mix(hash, stage.alphaOp);
+    hash = mix(hash, stage.alphaArg1);
+    hash = mix(hash, stage.alphaArg2);
+    hash = mix(hash, stage.alphaArg0);
+    hash = mix(hash, stage.resultArg);
+    hash = mix(hash, stage.texType);
+    hash = mix(hash, stage.texCoordIndex);
+  }
+  hash = mix(hash, static_cast<u64>(key.fogMode));
+  hash = mix(hash, includeAlphaTest ? static_cast<u64>(key.alphaTestEnable) : 0u);
+  hash = mix(hash, includeAlphaTest ? key.alphaTestFunc : 0u);
+  hash = mix(hash, static_cast<u64>(key.pointSpriteEnable));
+  return hash;
+}
+
+}  // namespace
+
+u64 detail::makeBackendShaderIdentityHash(const core::ShaderRef& shader,
+                                          bool tileFfpMode) noexcept {
+  if (shader.kind != core::ShaderRef::Kind::FixedFunctionPixel ||
+      !shader.pixelKey.has_value()) {
+    return shader.hash;
+  }
+  // Portable FFP emits one alpha-test-capable source and reads the predicate
+  // from per-draw state (H228). Tile FFP still consumes the key fields. The
+  // helper is pure so both the production resolver and native truth table use
+  // exactly the same identity rule.
+  return hashFfpPixelBackendIdentity(*shader.pixelKey, tileFfpMode);
+}
+
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 detail::makeBlendAttachmentKeys(core::FlatDrawStateView state,
                                 bool forceVisibleDraw,
@@ -907,6 +1045,22 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state,
   return blendAttachments;
 }
 
+BlendAttachmentKey detail::canonicalizeBlendAttachmentKey(
+    BlendAttachmentKey key) noexcept {
+  if (key.pixelFormat == 0u) {
+    return BlendAttachmentKey{};
+  }
+  if (!key.blendingEnabled) {
+    key.rgbBlendOperation = static_cast<u32>(core::BlendOp::Add);
+    key.alphaBlendOperation = static_cast<u32>(core::BlendOp::Add);
+    key.sourceRGBBlendFactor = static_cast<u32>(core::BlendFactor::One);
+    key.destinationRGBBlendFactor = static_cast<u32>(core::BlendFactor::Zero);
+    key.sourceAlphaBlendFactor = static_cast<u32>(core::BlendFactor::One);
+    key.destinationAlphaBlendFactor = static_cast<u32>(core::BlendFactor::Zero);
+  }
+  return key;
+}
+
 ShaderVariantKey detail::makeFillPipelineKey(const core::ColorRGBA& color,
                                              u32 pixelFormat) noexcept {
   ShaderVariantKey key{};
@@ -917,6 +1071,18 @@ ShaderVariantKey detail::makeFillPipelineKey(const core::ColorRGBA& color,
   key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.b)));
   key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.a)));
   key.hash = mix(key.hash, pixelFormat);
+  key.colorFormats[0] = pixelFormat;
+  key.blend[0].pixelFormat = pixelFormat;
+  return key;
+}
+
+ShaderVariantKey detail::makeStretchPipelineKey(
+    const core::StretchRectDesc& stretch, u32 pixelFormat) noexcept {
+  ShaderVariantKey key{};
+  key.hash = stretch.linear ? 1u : 0u;
+  key.textured = true;
+  key.linear = stretch.linear;
+  key.sampleCount = std::max(1u, stretch.destinationSampleCount);
   key.colorFormats[0] = pixelFormat;
   key.blend[0].pixelFormat = pixelFormat;
   return key;
@@ -1237,13 +1403,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
                                    WMT::Reference<WMT::BinaryArchive>* archive,
                                    const std::string* archivePath) {
   (void)archivePath;
-  ShaderVariantKey key{};
-  key.hash = stretch.linear ? 1u : 0u;
-  key.textured = true;
-  key.linear = stretch.linear;
-  key.sampleCount = std::max(1u, stretch.destinationSampleCount);
-  key.colorFormats[0] = pixelFormat;
-  key.blend[0].pixelFormat = pixelFormat;
+  const ShaderVariantKey key = detail::makeStretchPipelineKey(stretch, pixelFormat);
   std::lock_guard lock(mutex);
   if (auto it = this->stretch.find(key); it != this->stretch.end()) {
     perf::countPipelineCacheHit(perf::PipelineKind::Stretch);
@@ -1298,17 +1458,29 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
                                     WMT::Reference<WMT::BinaryArchive>* archive,
                                     const std::string* archivePath) {
   (void)archivePath;
+  const bool diagnose = perf::psoCacheDiagnosticsEnabled();
   const ShaderVariantKey probeKey = makeShaderVariantProbeKey(key);
   {
     std::lock_guard lock(mutex);
     if (auto probe = this->drawProbe.find(probeKey); probe != this->drawProbe.end()) {
       if (auto it = this->draw.find(probe->second); it != this->draw.end()) {
+        if (diagnose) {
+          perf::recordPsoCacheProbeLookup(
+              perf::PsoCacheLookupDisposition::Hit);
+        }
         perf::countPipelineCacheHit(perf::PipelineKind::Draw);
         return DrawPipelineLookup{
             .future = it->second.future,
             .handle = internDrawHandleLocked(*this, probe->second, it->second),
         };
       }
+      if (diagnose) {
+        perf::recordPsoCacheProbeLookup(
+            perf::PsoCacheLookupDisposition::Stale);
+      }
+    } else if (diagnose) {
+      perf::recordPsoCacheProbeLookup(
+          perf::PsoCacheLookupDisposition::Miss);
     }
   }
 
@@ -1328,7 +1500,14 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
     std::string tileSource;
     try {
       tileSource = ffp::makeFfpTilePixelSource(psKey, shaderSource, key.colorFormats[0]);
+      if (diagnose) {
+        perf::recordPsoCacheSourceGeneration(/*success=*/true,
+                                             tileSource.size());
+      }
     } catch (const std::exception& ex) {
+      if (diagnose) {
+        perf::recordPsoCacheSourceGeneration(/*success=*/false, 0u);
+      }
       util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
                  "tile shader source generation failed: %s variant=0x%llx",
                  ex.what(),
@@ -1336,6 +1515,9 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
       perf::countPipelineBuildFailDraw();
       return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
     } catch (...) {
+      if (diagnose) {
+        perf::recordPsoCacheSourceGeneration(/*success=*/false, 0u);
+      }
       util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
                  "tile shader source generation failed: unknown exception variant=0x%llx",
                  static_cast<unsigned long long>(key.hash));
@@ -1346,12 +1528,22 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
 
     std::lock_guard lock(mutex);
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      if (diagnose) {
+        perf::recordPsoCacheFinalLookup(
+            perf::PsoCacheLookupDisposition::Hit,
+            /*hitAfterSource=*/true);
+      }
       this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
       return DrawPipelineLookup{
           .future = it->second.future,
           .handle = internDrawHandleLocked(*this, sourceKey, it->second),
       };
+    }
+    if (diagnose) {
+      perf::recordPsoCacheFinalLookup(
+          perf::PsoCacheLookupDisposition::Miss,
+          /*hitAfterSource=*/false);
     }
     auto tileLibrary =
         getOrSubmitSourceLibraryLocked(*this, device, sourceKey.tileSourceHash, tileSource);
@@ -1411,7 +1603,9 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           return pso;
         });
     auto [it, inserted] = this->draw.emplace(sourceKey, Entry{shared});
-    (void)inserted;
+    if (inserted) {
+      observeFinalPsoInsertion(sourceKey);
+    }
     this->drawProbe[probeKey] = sourceKey;
     return DrawPipelineLookup{
         .future = shared,
@@ -1419,6 +1613,11 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
     };
   }
   auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
+  if (diagnose) {
+    perf::recordPsoCacheSourceGeneration(
+        /*success=*/sources.has_value(),
+        sources ? sources->vertex.size() + sources->fragment.size() : 0u);
+  }
   if (!sources) {
     perf::countPipelineBuildFailDraw();
     return DrawPipelineLookup{.future = makeReadyPipelineFuture(), .handle = {}};
@@ -1428,12 +1627,22 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
   {
     std::lock_guard lock(mutex);
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      if (diagnose) {
+        perf::recordPsoCacheFinalLookup(
+            perf::PsoCacheLookupDisposition::Hit,
+            /*hitAfterSource=*/true);
+      }
       this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
       return DrawPipelineLookup{
           .future = it->second.future,
           .handle = internDrawHandleLocked(*this, sourceKey, it->second),
       };
+    }
+    if (diagnose) {
+      perf::recordPsoCacheFinalLookup(
+          perf::PsoCacheLookupDisposition::Miss,
+          /*hitAfterSource=*/false);
     }
     auto vertexLibrary =
         getOrSubmitSourceLibraryLocked(*this, device, sources->vertexHash, sources->vertex);
@@ -1536,7 +1745,9 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
           return pso;
         });
     auto [it, inserted] = this->draw.emplace(sourceKey, Entry{shared});
-    (void)inserted;
+    if (inserted) {
+      observeFinalPsoInsertion(sourceKey);
+    }
     this->drawProbe[probeKey] = sourceKey;
     return DrawPipelineLookup{
         .future = shared,
@@ -1548,42 +1759,36 @@ Cache::getOrBuildDrawPipelineHandle(WMT::Reference<WMT::Device> device,
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 Cache::drawPipelineForHandle(core::PsoHandle handle,
                              HandleLookupContext context) {
-  auto snapshot = std::atomic_load_explicit(&drawSlotSnapshot,
-                                            std::memory_order_acquire);
   if (!handle.valid()) {
     return makeReadyPipelineFuture();
   }
-  if (!snapshot) {
-    logStaleDrawHandle(handle, context, "no-snapshot", 0u);
+  const std::size_t tableSize = drawSlotTable.size();
+  if (handle.slot >= tableSize) {
+    logStaleDrawHandle(handle, context, "slot-out-of-range", tableSize);
     return makeReadyPipelineFuture();
   }
-  if (handle.slot >= snapshot->size()) {
-    logStaleDrawHandle(handle, context, "slot-out-of-range", snapshot->size());
-    return makeReadyPipelineFuture();
-  }
-  const auto& slot = (*snapshot)[handle.slot];
-  if (!slot.occupied || slot.generation != handle.generation) {
+  const PsoSlot* slot = drawSlotTable.lookup(handle.slot);
+  if (!slot || !slot->occupied || slot->generation != handle.generation) {
     logStaleDrawHandle(handle, context,
-                       slot.occupied ? "generation-mismatch" : "empty-slot",
-                       snapshot->size(), &slot);
+                       slot ? (slot->occupied ? "generation-mismatch" : "empty-slot")
+                            : "unpublished-slot",
+                       tableSize, slot);
     return makeReadyPipelineFuture();
   }
   perf::countPipelineCacheHit(perf::PipelineKind::Draw);
-  return slot.entry.future;
+  return slot->entry.future;
 }
 
 std::optional<ShaderVariantKey>
 Cache::drawPipelineKeyForHandle(core::PsoHandle handle) const noexcept {
-  const auto snapshot = std::atomic_load_explicit(
-      &drawSlotSnapshot, std::memory_order_acquire);
-  if (!handle.valid() || !snapshot || handle.slot >= snapshot->size()) {
+  if (!handle.valid()) {
     return std::nullopt;
   }
-  const auto& slot = (*snapshot)[handle.slot];
-  if (!slot.occupied || slot.generation != handle.generation) {
+  const PsoSlot* slot = drawSlotTable.lookup(handle.slot);
+  if (!slot || !slot->occupied || slot->generation != handle.generation) {
     return std::nullopt;
   }
-  return slot.key;
+  return slot->key;
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -1709,6 +1914,8 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
       colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
       blendAttachments[i].pixelFormat = colorFormats[i];
+      blendAttachments[i] =
+          detail::canonicalizeBlendAttachmentKey(blendAttachments[i]);
     }
     if (state.hot->depthStencil.handle) {
       if (auto* surface = pool.findSurface(state.hot->depthStencil.handle.value);
@@ -1731,7 +1938,7 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
         forceTextureWhiteOverride.value_or(envFlag("DXMT_FORCE_TEXTURE_WHITE"));
     key = makeShaderVariantKey(
         state, colorFormats, blendAttachments, depthFormat, stencilFormat,
-        forceTextureWhiteOverride);
+        forceTextureWhiteOverride, tileFfpMode);
     key.fetch4SamplerMask = fetch4SamplerMaskForDraw(pool, state, key.textureMask);
     if (key.fetch4SamplerMask != 0u) {
       key.hash = mix(mix(key.hash, 0x666574636834ull), key.fetch4SamplerMask);
@@ -1916,6 +2123,8 @@ Cache::getOrBuildTileFfpBaseColorPipelineHandleForState(
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
     blendAttachments[i].pixelFormat = colorFormats[i];
+    blendAttachments[i] =
+        detail::canonicalizeBlendAttachmentKey(blendAttachments[i]);
   }
   u32 depthFormat = 0;
   u32 stencilFormat = 0;
@@ -2103,7 +2312,8 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
                                        u32 stencilFormat,
-                                       std::optional<bool> forceTextureWhiteOverride) {
+                                       std::optional<bool> forceTextureWhiteOverride,
+                                       bool tileFfpMode) {
   const auto& hot = *state.hot;
   const auto& shader = state.shaderContext();
   const auto& vertexDecl = shader.vertexDecl;
@@ -2119,14 +2329,17 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
           ? ffp::decodeFixedFunctionVertexLayout(vertexDecl)
           : std::optional<ffp::FixedFunctionVertexLayout>{};
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
-  key.hash = vertexShader.hash ^ (pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
+  key.hash = vertexShader.hash ^
+             (detail::makeBackendShaderIdentityHash(pixelShader, tileFfpMode) << 1) ^
+             hot.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ vertexDecl.fvf;
   key.textureMask =
       drawshader::activeFragmentTextureMaskForShader(pixelShader, hot.textureMask);
   key.textured = key.textureMask != 0;
-  key.linear =
-      core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||
-      core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;
+  // Sampler filtering is a sampler-state property, not a draw PSO property.
+  // The stretch path has its own key and retains its linear bit; general draw
+  // PSOs must not fan out for min/mag filter changes.
+  key.linear = false;
   key.clipPlanes = hot.clipPlaneMask != 0;
   // H224 — compile-time fragment fog tail gate. Reads the same single-source
   // predicate as makeShaderSourceContext and the FfpPsConsts upload
@@ -2160,7 +2373,10 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     key.colorFormats[i] = i < colorFormats.size() ? colorFormats[i] : 0u;
     if (i < blendAttachments.size()) {
-      key.blend[i] = blendAttachments[i];
+      // Keep backend descriptor identity canonical at the final key boundary,
+      // so callers that assemble a key directly cannot accidentally re-open
+      // inactive blend or unattached-RT fanout.
+      key.blend[i] = detail::canonicalizeBlendAttachmentKey(blendAttachments[i]);
     }
   }
   key.depthFormat = depthFormat;
