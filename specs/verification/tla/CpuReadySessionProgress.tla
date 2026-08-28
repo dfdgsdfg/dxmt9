@@ -9,9 +9,9 @@
  * deferred terminal suffix with an exact Writing successor. Park, Join,
  * StaleFailOpen, and semantic drain preserve queue/latch fences, session
  * effects and acknowledgement, ordered completion/reclaim, and a terminal
- * shutdown fence. The terminal action is a forward-looking model
- * obligation: production still drains shutdown directly and does not yet call
- * SessionReleaseState::requestTerminal.
+ * shutdown fence. Production binds that terminal action to final WSI
+ * quiescence through SessionReleaseState::requestTerminal; GPU settlement
+ * remains an explicit environment action.
  *
  * Environment actions (Publish, PostOrdinaryRelease, and RequestShutdown) are
  * not fair. Pressure latches remain in the state type only as a refinement

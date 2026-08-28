@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iterator>
+#include <new>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -30,6 +31,21 @@ void recordCpuReadyTapeStats(const CpuReadyTape& tape) {
   perf::recordCpuReadyTapeStats(
       stats.residentSources, stats.residentPages, stats.readyFifoEntries,
       stats.admissionCloses, stats.admissionReopens, stats.wrapPaddingPages);
+}
+
+bool cpuReadySupplyTimingEnabled() {
+  // Keep the disabled path to one cached boolean.  In particular, do not
+  // construct the fixed attribution ledger or read a clock for production
+  // runs that do not request perf telemetry.
+  static const bool enabled = perf::enabled();
+  return enabled;
+}
+
+perf::CpuReadySupplyClass cpuReadySupplyClass(
+    CpuReadyTape::PayloadKind kind) noexcept {
+  return kind == CpuReadyTape::PayloadKind::Arena
+             ? perf::CpuReadySupplyClass::Arena
+             : perf::CpuReadySupplyClass::Legacy;
 }
 
 u32 compatFlagsForSurface(const std::function<u32(Handle)>& resolveSurfaceFlags, Handle handle) {
@@ -1134,6 +1150,323 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkEntry() {
   noEnqueueGapCommitChunkEntryRecorded_ = true;
 }
 
+CpuReadySupplyObservationToken
+QueueLifecycleController::recordCpuReadySupplyReplayEntry(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId,
+    CpuReadySupplyObservationToken attemptToken) {
+  if (!cpuReadySupplyTimingEnabled()) {
+    return {};
+  }
+  std::lock_guard lock(pendingCompletionMutex_);
+  return recordCpuReadySupplyReplayEntryIdentityLocked(
+      sourceClass, sourceId, storage, controlIndex, seqId, attemptToken);
+}
+
+void QueueLifecycleController::cancelCpuReadySupplyReplayEntry(
+    CpuReadyTape::PayloadKind sourceClass,
+    CpuReadySupplyObservationToken attemptToken) {
+  if (!attemptToken.valid()) {
+    return;
+  }
+  if (!cpuReadySupplyTimingEnabled()) {
+    return;
+  }
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (!cpuReadySupplyObservations_) {
+    return;
+  }
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    auto& observation = cpuReadySupplyObservations_[i];
+    if (observation.sourceClass == sourceClass &&
+        observation.attemptToken == attemptToken &&
+        observation.replayEntryTime !=
+            std::chrono::steady_clock::time_point{} &&
+        observation.publishTime == std::chrono::steady_clock::time_point{}) {
+      // A failed pre-publication attempt owns no immutable Tape identity.
+      // Retaining either its unbound entry or identities bound by a failed
+      // Arena admission would let an unrelated later source inherit its
+      // replay-entry timestamp. The attempt token prevents this cancellation
+      // from touching another producer or SegmentSerial batch. Published
+      // observations remain intact until exact dequeue attribution consumes
+      // them.
+      observation = {};
+    }
+  }
+}
+
+bool QueueLifecycleController::cpuReadySupplyReplayEntryPendingForTest(
+    CpuReadyTape::PayloadKind sourceClass,
+    CpuReadySupplyObservationToken attemptToken) {
+  if (!attemptToken.valid() || !cpuReadySupplyTimingEnabled()) {
+    return false;
+  }
+  std::lock_guard lock(pendingCompletionMutex_);
+  if (!cpuReadySupplyObservations_) {
+    return false;
+  }
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    const auto& observation = cpuReadySupplyObservations_[i];
+    if (observation.sourceClass == sourceClass &&
+        observation.attemptToken == attemptToken &&
+        observation.replayEntryTime !=
+            std::chrono::steady_clock::time_point{} &&
+        observation.publishTime == std::chrono::steady_clock::time_point{}) {
+      return true;
+    }
+  }
+  return false;
+}
+
+CpuReadySupplyObservationToken
+QueueLifecycleController::recordCpuReadySupplyReplayEntryIdentityLocked(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId,
+    CpuReadySupplyObservationToken attemptToken) {
+  if (!cpuReadySupplyObservations_) {
+    cpuReadySupplyObservations_.reset(
+        new (std::nothrow) CpuReadySupplyObservation[
+            kCpuReadySupplyObservationCapacity]());
+    if (!cpuReadySupplyObservations_) {
+      perf::countCpuReadySupplyLedgerOverflow();
+      return {};
+    }
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (!sourceId.valid() &&
+      sourceClass == CpuReadyTape::PayloadKind::Legacy) {
+    for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+      const auto& observation = cpuReadySupplyObservations_[i];
+      if (observation.sourceClass == sourceClass &&
+          !observation.sourceId.valid() &&
+          observation.replayEntryTime !=
+              std::chrono::steady_clock::time_point{} &&
+          observation.publishTime == std::chrono::steady_clock::time_point{}) {
+        // Several raw chunks may contribute to one Legacy source. Preserve
+        // the earliest unbound edge instead of leaving younger tokens that a
+        // later, unrelated publication could consume.
+        return observation.attemptToken;
+      }
+    }
+  }
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    auto& observation = cpuReadySupplyObservations_[i];
+    if (!sourceId.valid() || !observation.sourceId.valid() ||
+        !observation.matchesExact(sourceClass, sourceId, storage, controlIndex,
+                                  seqId)) {
+      continue;
+    }
+    // A duplicate entry is still the same logical source.  Preserve the
+    // earliest edge so the measurement cannot be shortened by a retry.
+    if (observation.replayEntryTime ==
+        std::chrono::steady_clock::time_point{}) {
+      observation.replayEntryTime = now;
+    }
+    return observation.attemptToken;
+  }
+  if (sourceId.valid()) {
+    for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+      auto& observation = cpuReadySupplyObservations_[i];
+      if (observation.sourceClass != sourceClass ||
+          observation.sourceId.valid() ||
+          (attemptToken.valid() &&
+           observation.attemptToken != attemptToken) ||
+          observation.replayEntryTime ==
+              std::chrono::steady_clock::time_point{} ||
+          observation.publishTime != std::chrono::steady_clock::time_point{}) {
+        continue;
+      }
+      // The replay entry is observed before Arena admission chooses its
+      // source/storage generation. Bind that earliest unqualified edge to the
+      // exact immutable identity as soon as admission succeeds.
+      observation.sourceClass = sourceClass;
+      observation.sourceId = sourceId;
+      observation.storage = storage;
+      observation.controlIndex = controlIndex;
+      observation.seqId = seqId;
+      return observation.attemptToken;
+    }
+  }
+  if (!attemptToken.valid()) {
+    attemptToken.value = nextCpuReadySupplyObservationToken_++;
+    if (nextCpuReadySupplyObservationToken_ == 0u) {
+      nextCpuReadySupplyObservationToken_ = 1u;
+    }
+  }
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    auto& observation = cpuReadySupplyObservations_[i];
+    if (observation.sourceId.valid() ||
+        observation.replayEntryTime !=
+            std::chrono::steady_clock::time_point{} ||
+        observation.publishTime != std::chrono::steady_clock::time_point{}) {
+      continue;
+    }
+    observation = CpuReadySupplyObservation{
+        .sourceClass = sourceClass,
+        .sourceId = sourceId,
+        .storage = storage,
+        .controlIndex = controlIndex,
+        .seqId = seqId,
+        .attemptToken = attemptToken,
+        .replayEntryTime = now,
+    };
+    return attemptToken;
+  }
+  perf::countCpuReadySupplyLedgerOverflow();
+  return {};
+}
+
+void QueueLifecycleController::recordCpuReadySupplyPublished(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId) {
+  if (!cpuReadySupplyTimingEnabled()) {
+    return;
+  }
+  std::lock_guard lock(pendingCompletionMutex_);
+  recordCpuReadySupplyPublishedLocked(sourceClass, sourceId, storage,
+                                      controlIndex, seqId);
+}
+
+void QueueLifecycleController::recordCpuReadySupplyDequeued(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId) {
+  if (!cpuReadySupplyTimingEnabled()) {
+    return;
+  }
+  std::lock_guard lock(pendingCompletionMutex_);
+  recordCpuReadySupplyDequeuedLocked(sourceClass, sourceId, storage,
+                                     controlIndex, seqId);
+}
+
+void QueueLifecycleController::recordCpuReadySupplyPublishedLocked(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId) {
+  if (!cpuReadySupplyTimingEnabled()) {
+    return;
+  }
+  if (!cpuReadySupplyObservations_) {
+    cpuReadySupplyObservations_.reset(
+        new (std::nothrow) CpuReadySupplyObservation[
+            kCpuReadySupplyObservationCapacity]());
+    if (!cpuReadySupplyObservations_) {
+      perf::countCpuReadySupplyLedgerOverflow();
+      return;
+    }
+  }
+  const auto now = std::chrono::steady_clock::now();
+  CpuReadySupplyObservation* freeObservation = nullptr;
+  CpuReadySupplyObservation* unboundObservation = nullptr;
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    auto& observation = cpuReadySupplyObservations_[i];
+    if (observation.matchesSource(sourceClass, sourceId, storage,
+                                  controlIndex) &&
+        (observation.seqId == 0u || observation.seqId == seqId)) {
+      if (observation.replayEntryTime !=
+          std::chrono::steady_clock::time_point{}) {
+        perf::recordCpuReadySupplyLatency(
+            cpuReadySupplyClass(sourceClass),
+            perf::CpuReadySupplyStage::ReplayEntryToPublish,
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::nanoseconds>(now - observation.replayEntryTime)
+                                            .count()));
+      } else {
+        perf::countCpuReadySupplyAttributionMiss(
+            cpuReadySupplyClass(sourceClass),
+            perf::CpuReadySupplyStage::ReplayEntryToPublish);
+      }
+      observation.seqId = seqId;
+      observation.publishTime = now;
+      return;
+    }
+    if (observation.sourceClass == sourceClass &&
+        !observation.sourceId.valid() &&
+        observation.replayEntryTime !=
+            std::chrono::steady_clock::time_point{} &&
+        observation.publishTime == std::chrono::steady_clock::time_point{}) {
+      if (!unboundObservation) {
+        unboundObservation = &observation;
+      }
+    }
+    if (!freeObservation && !observation.sourceId.valid() &&
+        observation.replayEntryTime ==
+            std::chrono::steady_clock::time_point{} &&
+        observation.publishTime == std::chrono::steady_clock::time_point{}) {
+      freeObservation = &observation;
+    }
+  }
+  if (unboundObservation) {
+    auto& observation = *unboundObservation;
+    perf::recordCpuReadySupplyLatency(
+        cpuReadySupplyClass(sourceClass),
+        perf::CpuReadySupplyStage::ReplayEntryToPublish,
+        static_cast<std::uint64_t>(std::chrono::duration_cast<
+            std::chrono::nanoseconds>(now - observation.replayEntryTime)
+                                        .count()));
+    observation.sourceId = sourceId;
+    observation.sourceClass = sourceClass;
+    observation.storage = storage;
+    observation.controlIndex = controlIndex;
+    observation.seqId = seqId;
+    observation.publishTime = now;
+    return;
+  }
+  if (!freeObservation) {
+    perf::countCpuReadySupplyLedgerOverflow();
+    return;
+  }
+  perf::countCpuReadySupplyAttributionMiss(
+      cpuReadySupplyClass(sourceClass),
+      perf::CpuReadySupplyStage::ReplayEntryToPublish);
+  *freeObservation = CpuReadySupplyObservation{
+      .sourceClass = sourceClass,
+      .sourceId = sourceId,
+      .storage = storage,
+      .controlIndex = controlIndex,
+      .seqId = seqId,
+      .publishTime = now,
+  };
+}
+
+void QueueLifecycleController::recordCpuReadySupplyDequeuedLocked(
+    CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+    CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId) {
+  if (!cpuReadySupplyTimingEnabled()) {
+    return;
+  }
+  if (!cpuReadySupplyObservations_) {
+    perf::countCpuReadySupplyAttributionMiss(
+        cpuReadySupplyClass(sourceClass),
+        perf::CpuReadySupplyStage::PublishToEncodeDequeue);
+    return;
+  }
+  for (std::size_t i = 0; i < kCpuReadySupplyObservationCapacity; ++i) {
+    auto& observation = cpuReadySupplyObservations_[i];
+    if (!observation.matchesExact(sourceClass, sourceId, storage, controlIndex,
+                                  seqId)) {
+      continue;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (observation.publishTime ==
+        std::chrono::steady_clock::time_point{}) {
+      perf::countCpuReadySupplyAttributionMiss(
+          cpuReadySupplyClass(sourceClass),
+          perf::CpuReadySupplyStage::PublishToEncodeDequeue);
+    } else {
+      perf::recordCpuReadySupplyLatency(
+          cpuReadySupplyClass(sourceClass),
+          perf::CpuReadySupplyStage::PublishToEncodeDequeue,
+          static_cast<std::uint64_t>(std::chrono::duration_cast<
+              std::chrono::nanoseconds>(now - observation.publishTime)
+                                          .count()));
+    }
+    observation = {};
+    return;
+  }
+  perf::countCpuReadySupplyAttributionMiss(
+      cpuReadySupplyClass(sourceClass),
+      perf::CpuReadySupplyStage::PublishToEncodeDequeue);
+}
+
 void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayStart() {
   std::lock_guard lock(pendingCompletionMutex_);
   if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
@@ -1764,6 +2097,9 @@ bool QueueLifecycleController::commitCurrentChunk(
       poisonTapeFailureLocked();
       return;
     }
+    recordCpuReadySupplyPublished(
+        CpuReadyTape::PayloadKind::Legacy, slot.sourceId, slot.storage,
+        static_cast<std::uint32_t>(publishedSlotIndex), slot.seqId);
     // Release: the publish increment is what a lock-free `markTicketAcquire()`
     // reader synchronizes with. TLA+: ProducerMarkReclaim!SlotAdvance.
     nextSeqId->store(nextSeqId->load(std::memory_order_relaxed) + 1,
@@ -2087,6 +2423,14 @@ bool QueueLifecycleController::commitReservedReadySlotBatch(
     return false;
   }
   for (size_t i = 0; i < tentativeReadyPrefixCount_; ++i) {
+    const auto& source = sources[i];
+    const auto kind = cpuReadyTape->payloadKind(
+        source.sourceId, source.storage, CpuReadyTape::State::Represented);
+    if (kind) {
+      recordCpuReadySupplyDequeued(
+          *kind, source.sourceId, source.storage,
+          static_cast<std::uint32_t>(source.slotIndex), source.seqId);
+    }
     tentativeReadyPrefix_[i] = {};
   }
   tentativeReadyPrefixCount_ = 0;

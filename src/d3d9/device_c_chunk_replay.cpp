@@ -1466,6 +1466,48 @@ void markLegacyResources(D9CDevice* device,
   }
 }
 
+class ScopedCpuReadySupplyReplayEntry {
+public:
+  ScopedCpuReadySupplyReplayEntry(
+      dxmt9::CommandQueue& queue,
+      dxmt9::core::CpuReadyTape::PayloadKind sourceClass) noexcept
+      : queue_(&queue), sourceClass_(sourceClass) {
+    attemptToken_ = queue_->noteCpuReadySupplyReplayEntry(sourceClass_);
+  }
+
+  ~ScopedCpuReadySupplyReplayEntry() {
+    cancel();
+  }
+
+  ScopedCpuReadySupplyReplayEntry(const ScopedCpuReadySupplyReplayEntry&) =
+      delete;
+  ScopedCpuReadySupplyReplayEntry& operator=(
+      const ScopedCpuReadySupplyReplayEntry&) = delete;
+
+  void cancel() noexcept {
+    if (!queue_) {
+      return;
+    }
+    queue_->cancelCpuReadySupplyReplayEntry(sourceClass_, attemptToken_);
+    queue_ = nullptr;
+  }
+
+  void releaseAfterPublish() noexcept {
+    queue_ = nullptr;
+  }
+
+  dxmt9::core::metalqueue::CpuReadySupplyObservationToken attemptToken()
+      const noexcept {
+    return attemptToken_;
+  }
+
+private:
+  dxmt9::CommandQueue* queue_ = nullptr;
+  dxmt9::core::CpuReadyTape::PayloadKind sourceClass_ =
+      dxmt9::core::CpuReadyTape::PayloadKind::Legacy;
+  dxmt9::core::metalqueue::CpuReadySupplyObservationToken attemptToken_{};
+};
+
 int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
@@ -1512,6 +1554,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
     if (reportOffloadReplayStage) {
       dxmt9::perf::recordOffloadReplayStage(
           dxmt9::perf::OffloadReplayStage::Encode);
+    }
+    if (auto upper = device->dev().upperDevice()) {
+      upper->queue().noteCpuReadySupplyReplayEntry(
+          dxmt9::core::CpuReadyTape::PayloadKind::Legacy);
     }
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
@@ -1603,6 +1649,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
       dxmt9::perf::countCpuReadySessionDisposition(
           dxmt9::perf::CpuReadySessionDisposition::LegacyRollback);
     }
+    if (queue) {
+      queue->noteCpuReadySupplyReplayEntry(
+          dxmt9::core::CpuReadyTape::PayloadKind::Legacy);
+    }
     [[fallthrough]];
   case dxmt9::d3d9::ReplayLane::Inline:
     if (captureIdentityRequested) failCaptureIdentity("legacy-or-inline");
@@ -1657,12 +1707,17 @@ int32_t replayPlannedChunk(D9CDevice* device,
   } else {
     sourceLayouts[0] = *plan.arenaLayout;
   }
+  ScopedCpuReadySupplyReplayEntry supplyReplayEntry(
+      *queue, dxmt9::core::CpuReadyTape::PayloadKind::Arena);
   dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
   while (true) {
     begin = segmentSerial
         ? queue->beginCpuReadyArenaSources(
-              plan.rawOrdinal, std::span(sourceLayouts).first(sourceCount))
-        : queue->beginCpuReadyArenaSource(plan.rawOrdinal, sourceLayouts[0]);
+              plan.rawOrdinal, std::span(sourceLayouts).first(sourceCount),
+              supplyReplayEntry.attemptToken())
+        : queue->beginCpuReadyArenaSource(
+              plan.rawOrdinal, sourceLayouts[0],
+              supplyReplayEntry.attemptToken());
     if (begin.status !=
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
@@ -1681,6 +1736,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
       // Admission and builder construction happen before replay invokes any
       // semantic sink.  The recoverable batch abort restored all Tape and
       // queue cursors, so EventSerial v2 may own this raw event exactly once.
+      supplyReplayEntry.cancel();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
@@ -1708,6 +1764,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
         queue->failStopCpuReadyArena();
         return commitChunkFail("chunk-capture-ranges-rollback");
       }
+      supplyReplayEntry.cancel();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
@@ -1725,6 +1782,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
         queue->failStopCpuReadyArena();
         return commitChunkFail("chunk-capture-identity-rollback");
       }
+      supplyReplayEntry.cancel();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
@@ -1772,6 +1830,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
   }
+  supplyReplayEntry.releaseAfterPublish();
   if (captureIdentityRequested && segmentSerial) {
     if (captureBatch.segments.empty()) {
       failCaptureIdentity("event-settlement-metadata");

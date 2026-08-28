@@ -302,4 +302,24 @@ RenderPassStoreAccountingSnapshot snapshotRenderPassStoreAccounting() {
       load(c.renderPassTilePreservationBytes),
   };
 }
+
+std::uint64_t cpuReadySessionLeaseCurrent() {
+  return load(counters().cpuReadySessionLeaseCurrent);
+}
+
+CpuReadySupplySnapshot snapshotCpuReadySupply() {
+  const Counters& c = counters();
+  return CpuReadySupplySnapshot{
+      .legacyReplayEntryToPublish =
+          load(c.cpuReadySupplyLegacyReplayEntryToPublish),
+      .legacyPublishToDequeue =
+          load(c.cpuReadySupplyLegacyPublishToDequeue),
+      .arenaReplayEntryToPublish =
+          load(c.cpuReadySupplyArenaReplayEntryToPublish),
+      .arenaPublishToDequeue =
+          load(c.cpuReadySupplyArenaPublishToDequeue),
+      .attributionMisses = load(c.cpuReadySupplyAttributionMisses),
+      .ledgerOverflows = load(c.cpuReadySupplyLedgerOverflows),
+  };
+}
 }  // namespace dxmt9::perf::test

@@ -743,13 +743,13 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                                  slot);
               return submission;
             };
-        if (backend_->wantsNextChunkLookahead()) {
-          runDceChunkLookaheadEncodeLoop(
+        if (cpuReadySessionCoordinatorSelected()) {
+          runCpuReadySessionEncodeLoop(
               [this](std::uint64_t) { allocators_.reclaim(completedSeqIdLocked()); });
           return;
         }
-        if (cpuReadySessionLaneEnabled_) {
-          runCpuReadySessionEncodeLoop(
+        if (backend_->wantsNextChunkLookahead()) {
+          runDceChunkLookaheadEncodeLoop(
               [this](std::uint64_t) { allocators_.reclaim(completedSeqIdLocked()); });
           return;
         }
@@ -3180,6 +3180,19 @@ void CommandQueue::noteCommitChunkEntryForCompletionGap() {
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkEntry();
 }
 
+core::metalqueue::CpuReadySupplyObservationToken
+CommandQueue::noteCpuReadySupplyReplayEntry(
+    core::CpuReadyTape::PayloadKind sourceClass) {
+  return queueLifecycle_.recordCpuReadySupplyReplayEntry(
+      sourceClass, {}, {}, std::numeric_limits<std::uint32_t>::max(), 0u);
+}
+
+void CommandQueue::cancelCpuReadySupplyReplayEntry(
+    core::CpuReadyTape::PayloadKind sourceClass,
+    core::metalqueue::CpuReadySupplyObservationToken attemptToken) {
+  queueLifecycle_.cancelCpuReadySupplyReplayEntry(sourceClass, attemptToken);
+}
+
 void CommandQueue::noteCommitChunkReplayStartForCompletionGap() {
   queueLifecycle_.recordCompletionWaitCommitChunkReplayStart();
   queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayStart();
@@ -3885,7 +3898,9 @@ void CommandQueue::CpuReadyArenaBuildLease::abort(bool failStop) noexcept {
 CommandQueue::CpuReadyArenaBeginResult
 CommandQueue::beginCpuReadyArenaSource(
     std::uint64_t rawOrdinal,
-    const core::ArenaSourcePayloadLayout& layout) noexcept {
+    const core::ArenaSourcePayloadLayout& layout,
+    std::optional<core::metalqueue::CpuReadySupplyObservationToken>
+        supplyAttempt) noexcept {
   if (rawOrdinal == 0 || !layout.valid()) {
     return {.status = CpuReadyArenaBeginStatus::Invalid};
   }
@@ -4008,6 +4023,13 @@ CommandQueue::beginCpuReadyArenaSource(
     abortCpuReadyArenaSource(reservation->ticket, controlIndex);
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
+  if (!supplyAttempt.has_value() || supplyAttempt->valid()) {
+    queueLifecycle_.recordCpuReadySupplyReplayEntry(
+        core::CpuReadyTape::PayloadKind::Arena, reservation->id,
+        reservation->storage, static_cast<std::uint32_t>(controlIndex), seqId,
+        supplyAttempt.value_or(
+            core::metalqueue::CpuReadySupplyObservationToken{}));
+  }
   activeArenaBuild_.store(context, std::memory_order_release);
   lock.unlock();
   return {
@@ -4020,7 +4042,9 @@ CommandQueue::beginCpuReadyArenaSource(
 CommandQueue::CpuReadyArenaBeginResult
 CommandQueue::beginCpuReadyArenaSources(
     std::uint64_t rawOrdinal,
-    std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept {
+    std::span<const core::ArenaSourcePayloadLayout> layouts,
+    std::optional<core::metalqueue::CpuReadySupplyObservationToken>
+        supplyAttempt) noexcept {
   if (rawOrdinal == 0 || layouts.empty() ||
       layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
     return {.status = CpuReadyArenaBeginStatus::Invalid};
@@ -4174,6 +4198,16 @@ CommandQueue::beginCpuReadyArenaSources(
   for (std::size_t i = 0; i < context->sourceCount; ++i) {
     schedulingProgressWatchdog_.noteAccepted(
         context->batchReservations[i].ticket.seqId, false);
+    if (!supplyAttempt.has_value() || supplyAttempt->valid()) {
+      queueLifecycle_.recordCpuReadySupplyReplayEntry(
+          core::CpuReadyTape::PayloadKind::Arena,
+          context->batchReservations[i].id,
+          context->batchReservations[i].storage,
+          static_cast<std::uint32_t>(context->batchControlIndices[i]),
+          context->batchReservations[i].ticket.seqId,
+          supplyAttempt.value_or(
+              core::metalqueue::CpuReadySupplyObservationToken{}));
+    }
   }
   activeArenaBuild_.store(context, std::memory_order_release);
   lock.unlock();
@@ -4936,6 +4970,9 @@ bool CommandQueue::publishCpuReadyArenaSource(
     abortCpuReadyArenaSource(ticket, controlIndex);
     return false;
   }
+  queueLifecycle_.recordCpuReadySupplyPublished(
+      core::CpuReadyTape::PayloadKind::Arena, ticket.id, ticket.storage,
+      static_cast<std::uint32_t>(controlIndex), ticket.seqId);
   control.seqId = ticket.seqId;
   control.state = core::ChunkSlot::State::Pending;
   lastCommittedSeqId_ = ticket.seqId;
@@ -5347,6 +5384,12 @@ CommandQueue::publishCpuReadyArenaBatch(
     auto& control = slots_[controlIndices[i]];
     control.seqId = context->batchReservations[i].ticket.seqId;
     control.state = core::ChunkSlot::State::Pending;
+    queueLifecycle_.recordCpuReadySupplyPublished(
+        core::CpuReadyTape::PayloadKind::Arena,
+        context->batchReservations[i].id,
+        context->batchReservations[i].storage,
+        static_cast<std::uint32_t>(controlIndices[i]),
+        context->batchReservations[i].ticket.seqId);
   }
   lastCommittedSeqId_ = context->batchReservations[last].ticket.seqId;
   inflightCount_ += context->sourceCount;
@@ -6291,7 +6334,48 @@ wsi::QuiescenceDisposition CommandQueue::beginFinalWsiQuiescence() noexcept {
       });
     }
     lock.lock();
-    if (!stop_) {
+    if (!stop_ && cpuReadySessionCoordinatorSelected()) {
+      // Fix the final producer fence before posting the terminal release.
+      // flushAndWait() alone cannot drain an already-published Ready suffix or
+      // a parked EncodeSession: neither is represented by writingSlot_.  The
+      // terminal event wakes the session coordinator, makes it consume every
+      // source through this fixed sequence, and requires the carried session
+      // to be submitted before acknowledgement.
+      (void)queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+            prepareSlotForPublish(*this, pool_, slot,
+                                  perf::ChunkPublishReason::Flush);
+          });
+      const std::uint64_t terminalSeqId = lastCommittedSeqId_;
+      const auto terminal = sessionReleaseState_.requestTerminal(
+          core::metalqueue::SessionReleaseReason::Shutdown,
+          /*fenceRawOrdinal=*/0u, terminalSeqId);
+      if (!terminal.accepted()) {
+        lock.unlock();
+        endWsiQuiescence();
+        return wsi::QuiescenceDisposition::QueueStopped;
+      }
+      encodeCv_.notify_all();
+      sessionReleaseCv_.notify_all();
+      sessionReleaseCv_.wait(lock, [this] {
+        return stop_ || !sessionReleaseState_.terminalPending();
+      });
+      if (!stop_ && terminalSeqId != 0u) {
+        queueLifecycle_.waitForSequence(lock, terminalSeqId);
+      }
+      if (!stop_) {
+        // Sequence completion precedes finish-side Tape destruction.  WSI
+        // teardown may release Presenter-owned resources only after both
+        // timelines have retired the terminal prefix.
+        writeCv_.wait(lock, [this] {
+          return stop_ ||
+              (cpuReadyTape_.readyEmpty() &&
+               cpuReadyTape_.residentCount() == 0u);
+        });
+      }
+    } else if (!stop_) {
+      // Compatibility/identity delivery has no parked session owner.  Preserve
+      // its historical writer-publish and sequence-wait contract exactly.
       queueLifecycle_.flushAndWait(
           lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(*this, pool_, slot,
@@ -6564,6 +6648,14 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
 
 bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
   return encoders::readbackSurface(*this, pool_, device_, limits_, desc, pixels);
+}
+
+bool CommandQueue::cpuReadySessionCoordinatorSelected() const noexcept {
+  // Direct/Arena sources require the session coordinator's release protocol.
+  // DCE lookahead is a compatibility-source worker and has no terminal-latch
+  // consumer, so a Tape request takes priority over DCE until those protocols
+  // are explicitly composed.
+  return cpuReadySessionLaneEnabled_ && backend_;
 }
 
 void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted) {

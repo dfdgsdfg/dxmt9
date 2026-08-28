@@ -1782,6 +1782,21 @@ struct RenderPassStoreAccountingSnapshot {
   std::uint64_t tilePreservationBytes = 0;
 };
 RenderPassStoreAccountingSnapshot snapshotRenderPassStoreAccounting();
+
+// Test-only seam for the queue-owned CPU-ready session lease.  The production
+// counter remains private; this exposes only the live count needed by the
+// terminal-drain proof, not the mutable counter storage.
+std::uint64_t cpuReadySessionLeaseCurrent();
+
+struct CpuReadySupplySnapshot {
+  std::uint64_t legacyReplayEntryToPublish = 0;
+  std::uint64_t legacyPublishToDequeue = 0;
+  std::uint64_t arenaReplayEntryToPublish = 0;
+  std::uint64_t arenaPublishToDequeue = 0;
+  std::uint64_t attributionMisses = 0;
+  std::uint64_t ledgerOverflows = 0;
+};
+CpuReadySupplySnapshot snapshotCpuReadySupply();
 }  // namespace test
 
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
@@ -2017,6 +2032,28 @@ void recordCpuReadyTapeStats(std::uint64_t residentSources,
 void countCpuReadyTapeAdmissionWait(std::uint64_t nanoseconds);
 void countCpuReadyTapeLegacyOversizeBypass();
 void countCpuReadyTapeReclaimWakeup();
+
+// Source-qualified supply timing for the CPU-ready tape.  These are
+// observation-only counters: the queue pairs a bounded SourceRef/control
+// identity and reports a sample only after both edges are present.  Arena
+// publication is intentionally exposed as an API so its owner can use the
+// same ledger without adding timing fields to the source payload.
+enum class CpuReadySupplyClass : std::uint8_t {
+  Legacy,
+  Arena,
+};
+
+enum class CpuReadySupplyStage : std::uint8_t {
+  ReplayEntryToPublish,
+  PublishToEncodeDequeue,
+};
+
+void recordCpuReadySupplyLatency(CpuReadySupplyClass sourceClass,
+                                 CpuReadySupplyStage stage,
+                                 std::uint64_t nanoseconds);
+void countCpuReadySupplyAttributionMiss(CpuReadySupplyClass sourceClass,
+                                        CpuReadySupplyStage stage);
+void countCpuReadySupplyLedgerOverflow();
 void countMapBufferWait(std::uint64_t totalNanoseconds,
                         std::uint64_t mutexNanoseconds,
                         std::uint64_t sequenceNanoseconds,

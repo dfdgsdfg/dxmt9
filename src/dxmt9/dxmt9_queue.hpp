@@ -38,6 +38,15 @@ namespace dxmt9::core::metalqueue {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+struct CpuReadySupplyObservationToken {
+  u64 value = 0;
+
+  constexpr bool valid() const noexcept { return value != 0; }
+  friend constexpr bool operator==(
+      CpuReadySupplyObservationToken,
+      CpuReadySupplyObservationToken) noexcept = default;
+};
+
 constexpr u64 committedSequenceWaitTarget(u64 requestedSeqId,
                                           u64 lastCommittedSeqId) noexcept {
   return requestedSeqId <= lastCommittedSeqId ? requestedSeqId
@@ -1022,6 +1031,22 @@ class QueueLifecycleController {
   void recordCompletionWaitCommitChunkReplayStart();
   void recordCompletionWaitCommitChunkReplayEnd(std::uint64_t replayNanoseconds);
   void recordNoEnqueueWaitGapToCommitChunkEntry();
+  CpuReadySupplyObservationToken recordCpuReadySupplyReplayEntry(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId,
+      CpuReadySupplyObservationToken attemptToken = {});
+  void cancelCpuReadySupplyReplayEntry(
+      CpuReadyTape::PayloadKind sourceClass,
+      CpuReadySupplyObservationToken attemptToken);
+  bool cpuReadySupplyReplayEntryPendingForTest(
+      CpuReadyTape::PayloadKind sourceClass,
+      CpuReadySupplyObservationToken attemptToken);
+  void recordCpuReadySupplyPublished(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId);
+  void recordCpuReadySupplyDequeued(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId);
   void recordNoEnqueueWaitGapToCommitChunkReplayStart();
   void recordNoEnqueueWaitGapToCommitChunkReplayEnd();
   void recordNoEnqueueCommitChunkReplayCpuBeforePublish(
@@ -1237,6 +1262,50 @@ class QueueLifecycleController {
   }
 
  private:
+  struct CpuReadySupplyObservation {
+    CpuReadyTape::PayloadKind sourceClass =
+        CpuReadyTape::PayloadKind::Legacy;
+    CpuReadySourceId sourceId{};
+    CpuReadyStorageRef storage{};
+    std::uint32_t controlIndex = std::numeric_limits<std::uint32_t>::max();
+    u64 seqId = 0;
+    CpuReadySupplyObservationToken attemptToken{};
+    std::chrono::steady_clock::time_point replayEntryTime{};
+    std::chrono::steady_clock::time_point publishTime{};
+
+    bool matchesSource(CpuReadyTape::PayloadKind kind, CpuReadySourceId id,
+                       CpuReadyStorageRef storageRef,
+                       std::uint32_t control) const noexcept {
+      return sourceClass == kind && sourceId == id && storage == storageRef &&
+             controlIndex == control;
+    }
+
+    bool matchesExact(CpuReadyTape::PayloadKind kind, CpuReadySourceId id,
+                      CpuReadyStorageRef storageRef,
+                      std::uint32_t control, u64 sequence) const noexcept {
+      return matchesSource(kind, id, storageRef, control) &&
+             seqId == sequence;
+    }
+  };
+
+  static constexpr std::size_t kCpuReadySupplyObservationCapacity = 64;
+
+  // These helpers are called while pendingCompletionMutex_ is held.  The
+  // identity includes both Tape generations and the control-slot index so a
+  // recycled source can never consume an old sample.  The array is fixed and
+  // intentionally diagnostic-only; dropping an unmatched observation is
+  // reported as coverage loss instead of affecting scheduling.
+  CpuReadySupplyObservationToken recordCpuReadySupplyReplayEntryIdentityLocked(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId,
+      CpuReadySupplyObservationToken attemptToken);
+  void recordCpuReadySupplyPublishedLocked(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId);
+  void recordCpuReadySupplyDequeuedLocked(
+      CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
+      CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId);
+
   void resetNoEnqueueGapProgressLocked();
 
   std::mutex pendingCompletionMutex_{};
@@ -1271,6 +1340,9 @@ class QueueLifecycleController {
   std::uint64_t noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ = 0;
   std::uint64_t noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ = 0;
   std::uint64_t noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ = 0;
+  std::unique_ptr<CpuReadySupplyObservation[]>
+      cpuReadySupplyObservations_{};
+  u64 nextCpuReadySupplyObservationToken_ = 1u;
 };
 
 class CompletionTracker {

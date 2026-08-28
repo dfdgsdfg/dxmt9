@@ -7421,6 +7421,71 @@ void countCpuReadyTapeReclaimWakeup() {
   add(counters().cpuReadyTapeReclaimWakeups);
 }
 
+void recordCpuReadySupplyLatency(CpuReadySupplyClass sourceClass,
+                                 CpuReadySupplyStage stage,
+                                 std::uint64_t nanoseconds) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* samples = nullptr;
+  std::atomic<std::uint64_t>* total = nullptr;
+  std::atomic<std::uint64_t>* maximum = nullptr;
+  PercentileRing* ring = nullptr;
+  if (sourceClass == CpuReadySupplyClass::Legacy &&
+      stage == CpuReadySupplyStage::ReplayEntryToPublish) {
+    samples = &c.cpuReadySupplyLegacyReplayEntryToPublish;
+    total = &c.cpuReadySupplyLegacyReplayEntryToPublishNs;
+    maximum = &c.cpuReadySupplyLegacyReplayEntryToPublishMaxNs;
+    ring = &c.cpuReadySupplyLegacyReplayEntryToPublishRing;
+  } else if (sourceClass == CpuReadySupplyClass::Legacy) {
+    samples = &c.cpuReadySupplyLegacyPublishToDequeue;
+    total = &c.cpuReadySupplyLegacyPublishToDequeueNs;
+    maximum = &c.cpuReadySupplyLegacyPublishToDequeueMaxNs;
+    ring = &c.cpuReadySupplyLegacyPublishToDequeueRing;
+  } else if (stage == CpuReadySupplyStage::ReplayEntryToPublish) {
+    samples = &c.cpuReadySupplyArenaReplayEntryToPublish;
+    total = &c.cpuReadySupplyArenaReplayEntryToPublishNs;
+    maximum = &c.cpuReadySupplyArenaReplayEntryToPublishMaxNs;
+    ring = &c.cpuReadySupplyArenaReplayEntryToPublishRing;
+  } else {
+    samples = &c.cpuReadySupplyArenaPublishToDequeue;
+    total = &c.cpuReadySupplyArenaPublishToDequeueNs;
+    maximum = &c.cpuReadySupplyArenaPublishToDequeueMaxNs;
+    ring = &c.cpuReadySupplyArenaPublishToDequeueRing;
+  }
+  samples->fetch_add(1, std::memory_order_relaxed);
+  total->fetch_add(nanoseconds, std::memory_order_relaxed);
+  updateMax(*maximum, nanoseconds);
+  recordRing(*ring, nanoseconds);
+}
+
+void countCpuReadySupplyAttributionMiss(CpuReadySupplyClass sourceClass,
+                                        CpuReadySupplyStage stage) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  if (sourceClass == CpuReadySupplyClass::Legacy &&
+      stage == CpuReadySupplyStage::ReplayEntryToPublish) {
+    add(c.cpuReadySupplyLegacyReplayEntryMisses);
+  } else if (sourceClass == CpuReadySupplyClass::Legacy) {
+    add(c.cpuReadySupplyLegacyPublishToDequeueMisses);
+  } else if (stage == CpuReadySupplyStage::ReplayEntryToPublish) {
+    add(c.cpuReadySupplyArenaReplayEntryMisses);
+  } else {
+    add(c.cpuReadySupplyArenaPublishToDequeueMisses);
+  }
+  add(counters().cpuReadySupplyAttributionMisses);
+}
+
+void countCpuReadySupplyLedgerOverflow() {
+  if (!enabled()) {
+    return;
+  }
+  add(counters().cpuReadySupplyLedgerOverflows);
+}
+
 void countMapBufferWait(std::uint64_t totalNanoseconds,
                         std::uint64_t mutexNanoseconds,
                         std::uint64_t sequenceNanoseconds,

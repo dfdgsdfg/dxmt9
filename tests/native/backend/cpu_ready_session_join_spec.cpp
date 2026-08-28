@@ -122,6 +122,16 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.completedSeqIdLocked();
   }
 
+  static std::uint64_t completedPresentOrdinal(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.presentOrdinalGate_.completedOrdinal;
+  }
+
+  static std::size_t completedPresentQueueCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.completedPresentSeqQueue_.size();
+  }
+
   static std::size_t capacityWaiterCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyCapacityWaiterCount_;
@@ -318,6 +328,13 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.cpuReadySessionLaneEnabled_ = true;
   }
 
+  static bool supplyReplayEntryPending(
+      CommandQueue& queue, core::CpuReadyTape::PayloadKind sourceClass,
+      core::metalqueue::CpuReadySupplyObservationToken attemptToken) {
+    return queue.queueLifecycle_.cpuReadySupplyReplayEntryPendingForTest(
+        sourceClass, attemptToken);
+  }
+
   static void restoreNextTentativePreflightAndReturn(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyRestoreNextCpuReadySessionPreflight_ = true;
@@ -381,10 +398,39 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.sessionReleaseState_.acknowledgedOrdinal();
   }
 
+  static bool terminalSessionReleasePending(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.sessionReleaseState_.terminalPending();
+  }
+
+  static bool waitForTerminalSessionReleasePending(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.sessionReleaseCv_.wait_for(
+        lock, std::chrono::seconds(2), [&] {
+          return queue.stop_ || queue.sessionReleaseState_.terminalPending();
+        }) && queue.sessionReleaseState_.terminalPending();
+  }
+
+  static bool terminalSessionReleaseRequested(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.sessionReleaseState_.terminalRequested();
+  }
+
   static void requestStop(CommandQueue& queue) {
     {
       std::lock_guard lock(queue.mutex_);
       queue.stop_ = true;
+    }
+    queue.encodeCv_.notify_all();
+    queue.writeCv_.notify_all();
+    queue.finishCv_.notify_all();
+    queue.sessionReleaseCv_.notify_all();
+  }
+
+  static void requestTerminalStop(CommandQueue& queue) {
+    {
+      std::lock_guard lock(queue.mutex_);
+      queue.requestSchedulingStopLocked();
     }
     queue.encodeCv_.notify_all();
     queue.writeCv_.notify_all();
@@ -941,7 +987,10 @@ struct RuntimeFixture {
   }
 
   void publishArenaClearPages(std::uint64_t rawOrdinal,
-                              std::size_t pageCount) {
+                              std::size_t pageCount,
+                              std::optional<dxmt9::core::metalqueue::
+                                  CpuReadySupplyObservationToken>
+                                      supplyAttempt = std::nullopt) {
     check(pageCount != 0u && pageCount <= 512u &&
               (pageCount <= 64u || pageCount % 64u == 0u),
           "sized Arena clear source must use bounded 64-page segments");
@@ -966,7 +1015,8 @@ struct RuntimeFixture {
         std::span(segments).first(segmentCount), 4096, pageCount);
     check(layout.has_value() && layout->pageCount == pageCount,
           "sized arena clear source must match its exact page claim");
-    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    auto begin = routing->queue_.beginCpuReadyArenaSource(
+        rawOrdinal, *layout, supplyAttempt);
     check(begin.has_value(), "sized arena clear admission must succeed");
     auto lease = std::move(*begin.lease);
     for (std::size_t i = 0; i < segmentCount; ++i) {
@@ -1370,6 +1420,12 @@ struct ProductionLoopBackendState {
   std::vector<ProductionLoopBackendCall> calls;
   std::mutex postCommitMutex;
   std::condition_variable postCommitCv;
+  std::mutex backendPauseMutex;
+  std::condition_variable backendPauseCv;
+  std::atomic<std::size_t> pauseAfterBackendCall{0};
+  std::atomic<bool> backendCallPaused{false};
+  std::atomic<bool> releaseBackendCall{false};
+  bool wantsDceLookahead = false;
   std::size_t postCommitCount = 0;
   std::atomic<std::size_t> observedBackendCalls{0};
   std::atomic<bool> firstRecordPostCommitRan{false};
@@ -1405,6 +1461,10 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
     return dxmt9::render::BackendMode::Traditional;
   }
 
+  bool wantsNextChunkLookahead() const override {
+    return state_->wantsDceLookahead;
+  }
+
  private:
   std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> record(
       std::size_t slotIndex,
@@ -1436,6 +1496,15 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
     });
     state_->observedBackendCalls.store(state_->calls.size(),
                                        std::memory_order_release);
+    if (state_->pauseAfterBackendCall.load(std::memory_order_acquire) ==
+            state_->calls.size()) {
+      state_->backendCallPaused.store(true, std::memory_order_release);
+      state_->backendPauseCv.notify_all();
+      std::unique_lock lock(state_->backendPauseMutex);
+      state_->backendPauseCv.wait(lock, [&] {
+        return state_->releaseBackendCall.load(std::memory_order_acquire);
+      });
+    }
 
     dxmt9::core::metalqueue::QueueSubmissionRecord submission{};
     submission.testOnlyAllowNullCommandBuffer = true;
@@ -6174,6 +6243,354 @@ void mixedLegacyAndArenaSourcesShareOneSubmission() {
         "mixed ordered reclaim must release every source");
 }
 
+void supplyLatencyKeepsLegacyAndArenaIdentitySeparated() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  const auto before = dxmt9::perf::test::snapshotCpuReadySupply();
+
+  queue.noteCpuReadySupplyReplayEntry(
+      dxmt9::core::CpuReadyTape::PayloadKind::Legacy);
+  fixture.publishLegacyClear();
+  const auto legacy = dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(
+      queue, 1u);
+  check(legacy.dequeued == 1u && legacy.submitted && legacy.completed,
+        "Legacy supply timing fixture must consume one complete source");
+
+  queue.noteCpuReadySupplyReplayEntry(
+      dxmt9::core::CpuReadyTape::PayloadKind::Arena);
+  fixture.publishArenaClear(91u);
+  const auto arena = dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(
+      queue, 1u);
+  check(arena.dequeued == 1u && arena.submitted && arena.completed,
+        "Arena supply timing fixture must consume one complete source");
+
+  const auto after = dxmt9::perf::test::snapshotCpuReadySupply();
+  check(after.legacyReplayEntryToPublish ==
+                before.legacyReplayEntryToPublish + 1u &&
+            after.legacyPublishToDequeue ==
+                before.legacyPublishToDequeue + 1u,
+        "Legacy source identity must own both supply-latency stages");
+  check(after.arenaReplayEntryToPublish ==
+                before.arenaReplayEntryToPublish + 1u &&
+            after.arenaPublishToDequeue ==
+                before.arenaPublishToDequeue + 1u,
+        "Arena source identity must own both supply-latency stages");
+  check(after.attributionMisses == before.attributionMisses &&
+            after.ledgerOverflows == before.ledgerOverflows,
+        "exact source/storage/control/seq attribution must not lose samples");
+
+  fixture.publishArenaClearGroup(92u, 3u);
+  const auto group = dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(
+      queue, 3u);
+  check(group.dequeued == 3u && group.submitted && group.completed,
+        "SegmentSerial supply timing fixture must consume all siblings");
+  const auto afterGroup = dxmt9::perf::test::snapshotCpuReadySupply();
+  check(afterGroup.arenaReplayEntryToPublish ==
+                after.arenaReplayEntryToPublish + 3u &&
+            afterGroup.arenaPublishToDequeue ==
+                after.arenaPublishToDequeue + 3u &&
+            afterGroup.attributionMisses == after.attributionMisses &&
+            afterGroup.ledgerOverflows == after.ledgerOverflows,
+        "SegmentSerial siblings must retain source-local Arena attribution");
+}
+
+void failedArenaSupplyEntryCannotContaminateNextSource() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  const auto before = dxmt9::perf::test::snapshotCpuReadySupply();
+
+  // Model a Direct-Arena attempt that exits before publication. Cancellation
+  // must discard only its unpublished token; the following source receives a
+  // fresh exact identity and both stages remain attributable.
+  const auto failedAttempt = queue.noteCpuReadySupplyReplayEntry(
+      dxmt9::core::CpuReadyTape::PayloadKind::Arena);
+  SourcePayloadCapacity failedCapacity{};
+  failedCapacity.commandHeaders = 1u;
+  failedCapacity.clearRecords = 1u;
+  const auto failedSegment = maximal64PageSegment(failedCapacity);
+  const std::array failedSegments{failedSegment};
+  const auto failedLayout = makeArenaSourcePayloadLayout(
+      failedSegments, 4096u, failedSegment.pageCount);
+  check(failedLayout.has_value(),
+        "failed supply attempt requires one valid source layout");
+  const std::array failedLayouts{*failedLayout, *failedLayout, *failedLayout};
+  auto failedBegin = queue.beginCpuReadyArenaSources(
+      92u, failedLayouts, failedAttempt);
+  check(failedBegin.has_value() && failedBegin->abortForFallback(),
+        "failed supply attempt must bind and roll back three exact siblings");
+
+  const auto survivingAttempt = queue.noteCpuReadySupplyReplayEntry(
+      dxmt9::core::CpuReadyTape::PayloadKind::Arena);
+  check(failedAttempt.valid() && survivingAttempt.valid() &&
+            failedAttempt != survivingAttempt,
+        "concurrent Arena supply attempts require distinct owner tokens");
+  queue.cancelCpuReadySupplyReplayEntry(
+      dxmt9::core::CpuReadyTape::PayloadKind::Arena, failedAttempt);
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::supplyReplayEntryPending(
+            queue, dxmt9::core::CpuReadyTape::PayloadKind::Arena,
+            failedAttempt) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::supplyReplayEntryPending(
+                queue, dxmt9::core::CpuReadyTape::PayloadKind::Arena,
+                survivingAttempt),
+        "Arena cancellation must remove only its owner attempt");
+  fixture.publishArenaClearPages(93u, 1u, survivingAttempt);
+  const auto source = dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(
+      queue, 1u);
+  check(source.dequeued == 1u && source.submitted && source.completed,
+        "successful source after a failed Arena attempt must complete");
+
+  const auto after = dxmt9::perf::test::snapshotCpuReadySupply();
+  check(after.arenaReplayEntryToPublish ==
+                before.arenaReplayEntryToPublish + 1u &&
+            after.arenaPublishToDequeue ==
+                before.arenaPublishToDequeue + 1u &&
+            after.attributionMisses == before.attributionMisses &&
+            after.ledgerOverflows == before.ledgerOverflows,
+        "failed Arena replay entry must not leak into the next source");
+}
+
+void unownedArenaSupplyAttemptCannotCreateCancelableExactEntry() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  const auto before = dxmt9::perf::test::snapshotCpuReadySupply();
+
+  // An engaged invalid token is the production result when the bounded
+  // replay-entry ledger cannot reserve ownership. Admission must not create
+  // exact children that the scope could never cancel. Publication remains
+  // observable as an explicit replay-stage attribution miss.
+  fixture.publishArenaClearPages(
+      94u, 1u,
+      std::optional<dxmt9::core::metalqueue::
+          CpuReadySupplyObservationToken>{
+          dxmt9::core::metalqueue::CpuReadySupplyObservationToken{}});
+  const auto source = dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(
+      queue, 1u);
+  check(source.dequeued == 1u && source.submitted && source.completed,
+        "unowned supply observation must not affect source execution");
+
+  const auto after = dxmt9::perf::test::snapshotCpuReadySupply();
+  check(after.arenaReplayEntryToPublish ==
+                before.arenaReplayEntryToPublish &&
+            after.arenaPublishToDequeue ==
+                before.arenaPublishToDequeue + 1u &&
+            after.attributionMisses == before.attributionMisses + 1u &&
+            after.ledgerOverflows == before.ledgerOverflows,
+        "invalid attempt token must skip exact replay observation and report "
+        "the publication miss");
+}
+
+void productionFinalWsiQuiescenceDrainsOpenSessionAndPresent() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadySessionReleaseLane(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  check(queue.cpuReadySessionCoordinatorSelected(),
+        "terminal fixture must select the session coordinator worker");
+
+  // Start with a source that opens the queue-owned session.  Publishing a
+  // second source after that callback has run makes it a genuine Ready
+  // suffix, rather than merely a pre-batched list handed to the coordinator.
+  fixture.publishArenaClear(1u);
+  backendState->pauseAfterBackendCall.store(1u, std::memory_order_release);
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  struct JoinOnFailure {
+    dxmt9::CommandQueue& queue;
+    ProductionLoopBackendState& backend;
+    std::thread* encode = nullptr;
+    std::thread* finalizer = nullptr;
+    bool armed = true;
+    ~JoinOnFailure() {
+      if (!armed) {
+        return;
+      }
+      backend.releaseBackendCall.store(true, std::memory_order_release);
+      backend.backendPauseCv.notify_all();
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestTerminalStop(queue);
+      if (finalizer && finalizer->joinable()) {
+        finalizer->join();
+      }
+      if (encode && encode->joinable()) {
+        encode->join();
+      }
+    }
+  } cleanup{queue, *backendState, &encodeThread};
+  if (!waitUntil([&] {
+        return backendState->backendCallPaused.load(std::memory_order_acquire);
+      })) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false, "terminal-drain fixture must open its EncodeSession");
+  }
+
+  fixture.publishArenaClear(2u);
+  fixture.publishArenaClearPresentPages(3u, 64u);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
+        "terminal-drain fixture must retain a Ready suffix and final Present");
+
+  std::atomic<bool> finalReturned{false};
+  std::atomic<dxmt9::wsi::QuiescenceDisposition> finalDisposition{
+      dxmt9::wsi::QuiescenceDisposition::QueueStopped};
+  std::thread finalizer([&] {
+    finalDisposition.store(queue.beginFinalWsiQuiescence(),
+                           std::memory_order_release);
+    finalReturned.store(true, std::memory_order_release);
+  });
+  cleanup.finalizer = &finalizer;
+
+  if (!dxmt9::CommandQueueArenaLeaseTestAccess::
+          waitForTerminalSessionReleasePending(queue)) {
+    check(false,
+          "final WSI quiescence must publish a terminal session fence");
+  }
+  check(!finalReturned.load(std::memory_order_acquire),
+        "terminal WSI quiescence must wait while the open session is held");
+  backendState->releaseBackendCall.store(true, std::memory_order_release);
+  backendState->backendPauseCv.notify_all();
+
+  // The finalizer fences the last Present-bearing submission.  Completion is
+  // supplied explicitly by this native fixture, so the test proves both the
+  // wait edge and the post-completion reclamation without Metal or sleeps.
+  if (!waitUntil([&] {
+        return backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire);
+      })) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    finalizer.join();
+    encodeThread.join();
+    check(false,
+          "terminal final-quiescence must submit the open session with Present");
+  }
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> sources;
+  for (const auto& call : backendState->calls) {
+    check(call.sessionSource.has_value(),
+          "terminal-drain submission must preserve source attribution");
+    sources.push_back(*call.sessionSource);
+  }
+  check(sources.size() == 3u && sources.back().hasPresent,
+        "terminal-drain submission must cover both suffix sources and Present");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "terminal Present completion must release every retained source");
+  finalizer.join();
+
+  check(finalReturned.load(std::memory_order_acquire) &&
+            finalDisposition.load(std::memory_order_acquire) ==
+                dxmt9::wsi::QuiescenceDisposition::Complete,
+        "final WSI quiescence must complete after the Present fence");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            terminalSessionReleaseRequested(queue) &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::
+                terminalSessionReleasePending(queue),
+        "terminal release must remain sticky after exact acknowledgement");
+  const auto stats =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(stats.residentSources == 0u && stats.residentPages == 0u &&
+            stats.readyFifoEntries == 0u &&
+            dxmt9::perf::test::cpuReadySessionLeaseCurrent() == 0u,
+        "terminal drain must leave no Ready/resident tape state or lease");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
+                sources.back().seqId &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedPresentOrdinal(
+                queue) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedPresentQueueCount(
+                queue) == 0u,
+        "terminal drain must retire the final Present ordinal and watermarks");
+
+  queue.endWsiQuiescence();
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  cleanup.armed = false;
+}
+
+void tapeDceRequestSelectsSessionTerminalCoordinator() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadySessionReleaseLane(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  backendState->wantsDceLookahead = true;
+  backendState->pauseAfterBackendCall.store(1u, std::memory_order_release);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  check(queue.cpuReadySessionCoordinatorSelected(),
+        "Tape+DCE must fail closed to the session coordinator until their "
+        "release protocols are composed");
+
+  fixture.publishArenaClearPresentPages(41u, 64u);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 1u && sources.front().hasPresent,
+        "Tape+DCE terminal fixture must begin with one Present source");
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  struct JoinOnFailure {
+    dxmt9::CommandQueue& queue;
+    ProductionLoopBackendState& backend;
+    std::thread& encode;
+    std::thread* finalizer = nullptr;
+    bool armed = true;
+    ~JoinOnFailure() {
+      if (!armed) {
+        return;
+      }
+      backend.releaseBackendCall.store(true, std::memory_order_release);
+      backend.backendPauseCv.notify_all();
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestTerminalStop(queue);
+      if (finalizer && finalizer->joinable()) {
+        finalizer->join();
+      }
+      if (encode.joinable()) {
+        encode.join();
+      }
+    }
+  } cleanup{queue, *backendState, encodeThread};
+  check(waitUntil([&] {
+          return backendState->backendCallPaused.load(
+              std::memory_order_acquire);
+        }),
+        "Tape+DCE terminal fixture must hold one session-owned source");
+
+  std::atomic<bool> finalReturned{false};
+  std::thread finalizer([&] {
+    (void)queue.beginFinalWsiQuiescence();
+    finalReturned.store(true, std::memory_order_release);
+  });
+  cleanup.finalizer = &finalizer;
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            waitForTerminalSessionReleasePending(queue) &&
+            !finalReturned.load(std::memory_order_acquire),
+        "Tape+DCE final quiescence must route its latch to the selected "
+        "session coordinator");
+
+  backendState->releaseBackendCall.store(true, std::memory_order_release);
+  backendState->backendPauseCv.notify_all();
+  check(waitUntil([&] {
+          return backendState->firstRecordPostCommitRan.load(
+              std::memory_order_acquire);
+        }),
+        "selected session coordinator must submit its held Present source");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "Tape+DCE terminal drain must accept exact completion");
+  finalizer.join();
+  check(finalReturned.load(std::memory_order_acquire),
+        "Tape+DCE final quiescence must finish after sequence completion");
+
+  queue.endWsiQuiescence();
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  cleanup.armed = false;
+}
+
 }  // namespace
 
 int main() {
@@ -6207,6 +6624,11 @@ int main() {
     arenaSessionCarryAcrossSourcesSharesOneCommandBuffer();
     multipleArenaSourcesCompleteFifoThroughOneSubmission();
     mixedLegacyAndArenaSourcesShareOneSubmission();
+    productionFinalWsiQuiescenceDrainsOpenSessionAndPresent();
+    tapeDceRequestSelectsSessionTerminalCoordinator();
+    supplyLatencyKeepsLegacyAndArenaIdentitySeparated();
+    failedArenaSupplyEntryCannotContaminateNextSource();
+    unownedArenaSupplyAttemptCannotCreateCancelableExactEntry();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
     productionLoopPlansSeparateBThenASourcesIntoOneCarrier();

@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.82` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.84` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1071,3 +1071,39 @@ waiting for a later Present or creating a second watchdog. Every new hot-path
 operation must remain behind the existing perf or capture gate, and native
 tests must use the production predicates and condition variables without
 sleeping or polling.
+
+**R-BACK-2.83** Final WSI quiescence when the CPU-ready session coordinator is
+the selected encode worker must be a terminal session drain, not only a
+compatibility-writer flush. It must first
+publish any final Legacy writer and fix one terminal `seqId` fence, then post a
+typed terminal release and wake the session coordinator. Acknowledgement
+requires every Ready source through that fence to be represented and any open
+session to be submitted. Final quiescence may complete only after the terminal
+sequence, its Present ordinal, and Tape residency through the fence have
+completed and reclaimed. Admission pressure must not synthesize this release.
+The compatibility worker retains its existing writer-publish/sequence-wait
+contract. Until DCE lookahead and session release are explicitly composed, a
+simultaneous Tape+DCE request must fail closed to the session coordinator so no
+unowned terminal latch or Direct-Arena DCE path is reachable. A native
+production-loop fixture must pin an open session, a later
+Ready suffix, and a final Present without polling Metal or relying on sleeps.
+
+**R-BACK-2.84** Opt-in supply-latency observation must distinguish Legacy and
+Arena sources and the two ordered stages `replay entry -> Ready publication`
+and `Ready publication -> encode dequeue`. An observation is consumed only by
+the same payload kind and exact `(source id, storage generation, control index,
+seqId)` identity; a same-kind replay entry that precedes identity assignment
+may bind once
+to the next admitted source, and SegmentSerial siblings receive source-local
+admission entries. Missing attribution and bounded-ledger overflow must be
+reported explicitly rather than folded into latency. With performance counters
+disabled, this observer must allocate no ledger, read no clock, and perform no
+counter atomic operation. Every pre-publication Arena attempt owns a bounded
+queue-local token that follows its unbound entry into every exact
+SegmentSerial sibling. Failure must cancel only unpublished observations with
+that token before retrying or admitting another source; it must not erase an
+unrelated attempt, and published exact identities remain live until dequeue.
+If token reservation fails, admission must not create unowned exact children;
+the later publication reports attribution loss instead.
+It is diagnostic evidence only and cannot change admission, publication,
+dequeue, release, or completion policy.

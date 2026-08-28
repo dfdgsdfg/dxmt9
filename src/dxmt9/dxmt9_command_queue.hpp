@@ -622,10 +622,14 @@ class CommandQueue {
 
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
-      const core::ArenaSourcePayloadLayout& layout) noexcept;
+      const core::ArenaSourcePayloadLayout& layout,
+      std::optional<core::metalqueue::CpuReadySupplyObservationToken>
+          supplyAttempt = std::nullopt) noexcept;
   CpuReadyArenaBeginResult beginCpuReadyArenaSources(
       std::uint64_t rawOrdinal,
-      std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
+      std::span<const core::ArenaSourcePayloadLayout> layouts,
+      std::optional<core::metalqueue::CpuReadySupplyObservationToken>
+          supplyAttempt = std::nullopt) noexcept;
   CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
     const auto& values = cpuReadyTape_.config().values();
     return {
@@ -700,6 +704,11 @@ class CommandQueue {
     replayObserver_ = sink;
   }
   void noteCommitChunkEntryForCompletionGap();
+  core::metalqueue::CpuReadySupplyObservationToken noteCpuReadySupplyReplayEntry(
+      core::CpuReadyTape::PayloadKind sourceClass);
+  void cancelCpuReadySupplyReplayEntry(
+      core::CpuReadyTape::PayloadKind sourceClass,
+      core::metalqueue::CpuReadySupplyObservationToken attemptToken);
   void noteCommitChunkReplayStartForCompletionGap();
   void noteCommitChunkReplayEndForCompletionGap(std::uint64_t replayNanoseconds);
   void noteCommitChunkReplayCpuBeforePublish(std::uint64_t nanoseconds);
@@ -947,6 +956,7 @@ class CommandQueue {
           const core::metalqueue::ReadySlotSnapshot& source,
           const core::SourcePayloadView& payload)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
+  bool cpuReadySessionCoordinatorSelected() const noexcept;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
   // Opt-in one-next-source proof window used by FrameGraph DCE. Holds at most
   // one dequeued source, never moves commands across chunks, and immediately
