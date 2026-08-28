@@ -8,6 +8,7 @@ source "$script_dir/3dmark_lane_presets.sh"
 dxmt_resolve_3dmark_lane \
   06 "${DXMT_3DMARK06_LANE:-gt1}" "${DXMT_3DMARK06_ARGS:-}"
 dxmt_3dmark06_auto_enter_pid=""
+dxmt_3dmark06_autorun_pid=""
 
 append_result_file_3dmark06() {
   if [[ -n "${DXMT_3DMARK06_RESULT_FILE:-}" ]]; then
@@ -76,9 +77,41 @@ schedule_3dmark06_enter() {
   dxmt_3dmark06_auto_enter_pid=$!
 }
 
+# Win32-side unattended start (DXMT_3DMARK06_AUTORUN=1): wait for the main
+# GUI window inside the prefix via tool-winctl, then click the Run 3DMark
+# button (control id 1, IDOK). Unlike the osascript auto-enter path above,
+# this needs no focus, no Accessibility permission, and works while the
+# window is hidden behind macOS windows. Requires an edition whose GUI shows
+# the "3DMark06 - <edition>" main window (the UL-published legacy key
+# registers Advanced Edition; per-test CLI selectors stay Professional-only).
+schedule_3dmark06_autorun() {
+  local winctl="$exp_repo_root/experiments/apps/tool-winctl/tool-winctl-x64.exe"
+  if [[ ! -f "$winctl" ]]; then
+    echo "[3dmark06-autorun] missing $winctl; build it with scripts/build_apps/build_tool-winctl.sh" >&2
+    return 0
+  fi
+  (
+    local wine_bin=${DXMT_EXPERIMENT_WINE_BIN:-wine}
+    local settle=${DXMT_3DMARK06_AUTORUN_SETTLE_SEC:-3}
+    export WINEPREFIX="$DXMT_EXPERIMENT_PREFIX"
+    echo "[3dmark06-autorun] waiting for main window"
+    if ! "$wine_bin" "$winctl" wait --window "3DMark06 - " --timeout-ms 120000 >/dev/null 2>&1; then
+      echo "[3dmark06-autorun] main window did not appear; leaving GUI untouched" >&2
+      exit 0
+    fi
+    sleep "$settle"
+    echo "[3dmark06-autorun] clicking Run 3DMark (control id 1)"
+    "$wine_bin" "$winctl" click --window "3DMark06 - " --control-id 1 >/dev/null 2>&1 || true
+  ) &
+  dxmt_3dmark06_autorun_pid=$!
+}
+
 cleanup_3dmark06() {
   if [[ -n "$dxmt_3dmark06_auto_enter_pid" ]]; then
     kill "$dxmt_3dmark06_auto_enter_pid" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$dxmt_3dmark06_autorun_pid" ]]; then
+    kill "$dxmt_3dmark06_autorun_pid" >/dev/null 2>&1 || true
   fi
 }
 
@@ -109,6 +142,9 @@ trap 'cleanup_3dmark06; exit 130' INT
 trap 'cleanup_3dmark06; exit 143' TERM
 if [[ "${DXMT_3DMARK06_AUTO_ENTER:-0}" != "0" ]]; then
   schedule_3dmark06_enter
+fi
+if [[ "${DXMT_3DMARK06_AUTORUN:-0}" != "0" ]]; then
+  schedule_3dmark06_autorun
 fi
 
 dxmt_print_3dmark_lane_identity 06

@@ -78,6 +78,23 @@ record this explicitly and do not call the result a CLI-selected lane. Use
 `DXMT_3DMARK06_DRY_RUN=1 bash experiments/launchers/app-d3d9-3dmark06.sh` to
 inspect the resolved command without staging or launching.
 
+Verified 2026-08-29 on this install: the UL-published legacy key
+(`3DM06-YKL9-C7R6-73WW-AAPA-VHKW` from
+https://benchmarks.ul.com/legacy-benchmarks) registers **Advanced Edition**
+by writing the 3DMark05-style registry value
+`HKLM\Software\Wow6432Node\Futuremark\3DMark06\KeyCode` — no UI entry needed;
+the main window title flips to "3DMark06 - Advanced Edition". Per-test CLI
+selectors remain ignored even when registered (Professional-only), so
+unattended runs use `DXMT_3DMARK06_AUTORUN=1`: the launcher waits for the
+`3DMark06 - <edition>` main window inside the prefix via
+`experiments/apps/tool-winctl` and clicks the Run 3DMark button (control
+id 1, a real owner-drawn Win32 Button) — focus-free, works with the window
+hidden behind macOS windows (`DXMT_3DMARK06_AUTORUN_SETTLE_SEC` tunes the
+post-window-ready delay, default 3). The benchmark then runs whatever the
+GUI-persisted test selection holds, so set the selection once in the UI and
+treat `benchmark_lane` as informational for 06. Build the helper with
+`scripts/build_apps/build_tool-winctl.sh` if the exe is missing.
+
 CPU, feature, and batch lanes are diagnostic workloads. They do not establish
 graphics-scene promotion or GPU-performance claims.
 

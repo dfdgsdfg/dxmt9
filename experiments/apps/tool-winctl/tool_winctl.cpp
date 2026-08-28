@@ -304,9 +304,11 @@ int main(int argc, char **argv) {
       return 1;
     }
     printWindowLine(search.found, 0);
-    DWORD_PTR result = 0;
-    if (!SendMessageTimeoutW(search.found, BM_CLICK, 0, 0, SMTO_ABORTIFHUNG, 5000, &result)) {
-      std::fprintf(stderr, "error: BM_CLICK timed out\n");
+    // Post instead of send: a click that opens a modal flow (e.g. 3DMark06's
+    // Run button) would block a synchronous send until the modal finishes,
+    // making success indistinguishable from a hang.
+    if (!PostMessageW(search.found, BM_CLICK, 0, 0)) {
+      std::fprintf(stderr, "error: BM_CLICK post failed\n");
       return 1;
     }
     return 0;
