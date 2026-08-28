@@ -139,6 +139,14 @@ class ExperimentApp:
     # backend factory (src/dxmt9/render/backend_factory.cpp) reads it once.
     # Valid: "traditional" / "framegraph" (default). Absent => "framegraph".
     render_mode: str = "framegraph"
+    # Catalogue-default launcher environment. Keys are exported into the
+    # launcher process only when the caller's environment does not already
+    # define them, so an explicit process value stays a diagnostic-run
+    # override (same precedence rule as render_mode). Harness-owned
+    # DXMT_EXPERIMENT_* / WSI-identity keys are applied after this and can
+    # never be overridden from here. The effective values are recorded in
+    # result.json:launcher_env.
+    launcher_env: dict[str, str] = field(default_factory=dict)
     # Optional probe-level expected-range gate. Each entry maps a counter
     # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
     # an inclusive {min, max} range. Either bound may be omitted. Absent
@@ -190,7 +198,24 @@ class ExperimentApp:
             wine_alternatives=list(data.get("wine_alternatives") or []),
             install_drive_letter=data.get("install_drive_letter", "d"),
             render_mode=str(data.get("render_mode", "framegraph")),
+            launcher_env={
+                str(key): str(value)
+                for key, value in dict(data.get("launcher_env") or {}).items()
+            },
         )
+        for key in app.launcher_env:
+            if not key or key != key.strip():
+                raise ValueError(
+                    f"{app.name}: launcher_env key {key!r} must be a non-empty "
+                    "name without surrounding whitespace"
+                )
+            if key.startswith("DXMT_EXPERIMENT_") or key in (
+                "DXMT9_WINE_METAL_SURFACE_PROTOCOL",
+                "DXMT9_WINE_MANIFEST_ID",
+            ):
+                raise ValueError(
+                    f"{app.name}: launcher_env may not set harness-owned key {key}"
+                )
         if app.render_mode not in ("traditional", "framegraph"):
             raise ValueError(
                 f"{app.name}: render_mode must be 'traditional' or 'framegraph', "
@@ -1078,6 +1103,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         staged_build["skipped"] = bool(skip_stage)
 
         env = os.environ.copy()
+        # Catalogue-default launcher env: an explicit caller value wins, and
+        # the harness-owned keys set below win over both (launcher_env cannot
+        # name them — enforced at parse time).
+        effective_launcher_env: dict[str, str] = {}
+        for launcher_env_key, launcher_env_value in app.launcher_env.items():
+            env.setdefault(launcher_env_key, launcher_env_value)
+            effective_launcher_env[launcher_env_key] = env[launcher_env_key]
         env.update(
             {
                 "DXMT_EXPERIMENT_NAME": app.name,
@@ -1266,6 +1298,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             ),
             "layer_acquisition": extract_wsi_layer_acquisition(log_path),
         }
+        if effective_launcher_env:
+            result["launcher_env"] = effective_launcher_env
 
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)

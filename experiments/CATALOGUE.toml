@@ -593,6 +593,10 @@ require_positive_timeout = true
 wine_id = "sikarugir-cx-24.0.7"
 wine_alternatives = []
 install_drive_letter = "d"
+# Advanced Edition ignores per-test CLI selectors (Professional-only), so the
+# canonical unattended run clicks the GUI Run button via tool-winctl. Set
+# DXMT_3DMARK06_AUTORUN=0 in the process environment for a manual-GUI run.
+launcher_env = { DXMT_3DMARK06_AUTORUN = "1" }
 
 [[app]]
 name = "app-d3d9-sfiv-benchmark"

@@ -85,7 +85,9 @@ by writing the 3DMark05-style registry value
 `HKLM\Software\Wow6432Node\Futuremark\3DMark06\KeyCode` — no UI entry needed;
 the main window title flips to "3DMark06 - Advanced Edition". Per-test CLI
 selectors remain ignored even when registered (Professional-only), so
-unattended runs use `DXMT_3DMARK06_AUTORUN=1`: the launcher waits for the
+unattended runs use `DXMT_3DMARK06_AUTORUN=1` (the CATALOGUE default for
+`app-d3d9-3dmark06` via `launcher_env`; export `0` for a manual-GUI run):
+the launcher waits for the
 `3DMark06 - <edition>` main window inside the prefix via
 `experiments/apps/tool-winctl` and clicks the Run 3DMark button (control
 id 1, a real owner-drawn Win32 Button) — focus-free, works with the window

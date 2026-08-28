@@ -93,15 +93,33 @@ schedule_3dmark06_autorun() {
   (
     local wine_bin=${DXMT_EXPERIMENT_WINE_BIN:-wine}
     local settle=${DXMT_3DMARK06_AUTORUN_SETTLE_SEC:-3}
+    local attempts=${DXMT_3DMARK06_AUTORUN_ATTEMPTS:-12}
     export WINEPREFIX="$DXMT_EXPERIMENT_PREFIX"
     echo "[3dmark06-autorun] waiting for main window"
     if ! "$wine_bin" "$winctl" wait --window "3DMark06 - " --timeout-ms 120000 >/dev/null 2>&1; then
       echo "[3dmark06-autorun] main window did not appear; leaving GUI untouched" >&2
       exit 0
     fi
-    sleep "$settle"
-    echo "[3dmark06-autorun] clicking Run 3DMark (control id 1)"
-    "$wine_bin" "$winctl" click --window "3DMark06 - " --control-id 1 >/dev/null 2>&1 || true
+    # The main window's title appears before its child buttons are created,
+    # and a started benchmark disables the main window. So: click, then treat
+    # "main window disabled or gone" as the ground-truth success signal and
+    # retry otherwise.
+    local i=0
+    while (( i < attempts )); do
+      sleep "$settle"
+      echo "[3dmark06-autorun] click attempt $((i + 1))/$attempts (Run 3DMark, control id 1)"
+      "$wine_bin" "$winctl" click --window "3DMark06 - " --control-id 1 2>&1 \
+        | sed 's/^/[3dmark06-autorun] /' || true
+      sleep 3
+      local head_line=""
+      head_line=$({ "$wine_bin" "$winctl" dump --window "3DMark06 - " 2>/dev/null || true; } | head -1)
+      if [[ -z "$head_line" || "$head_line" == *"enabled=0"* ]]; then
+        echo "[3dmark06-autorun] benchmark started (main window ${head_line:+disabled}${head_line:-gone})"
+        exit 0
+      fi
+      i=$((i + 1))
+    done
+    echo "[3dmark06-autorun] gave up after $attempts click attempts" >&2
   ) &
   dxmt_3dmark06_autorun_pid=$!
 }
