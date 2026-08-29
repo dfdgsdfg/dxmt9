@@ -162,6 +162,17 @@ def summarize_run(label: str, encoders_csv: Path, probe_csv: Path | None) -> dic
         "candidate_miss_delta32_pct": pct(candidate_delta32, candidate_original32),
         "candidate_gate_pass": int(sum_field(rows, "indexed_cache_opt_candidate_gate_pass")),
         "candidate_gate_fail": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail")),
+        "candidate_gate_fail_bucket_1_63": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail_primitive_bucket_1_63")),
+        "candidate_gate_fail_bucket_64_255": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail_primitive_bucket_64_255")),
+        "candidate_gate_fail_bucket_256_1023": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail_primitive_bucket_256_1023")),
+        "candidate_gate_fail_bucket_1024_4095": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail_primitive_bucket_1024_4095")),
+        "candidate_gate_fail_bucket_4096_plus": int(sum_field(rows, "indexed_cache_opt_candidate_gate_fail_primitive_bucket_4096_plus")),
+        "candidate_preeligible": int(sum_field(rows, "indexed_cache_opt_candidate_preeligible")),
+        "candidate_preeligibility_reject": int(sum_field(rows, "indexed_cache_opt_candidate_preeligibility_reject")),
+        "candidate_budget_abort": int(sum_field(rows, "indexed_cache_opt_candidate_budget_abort")),
+        "candidate_budget_frontier_abort": int(sum_field(rows, "indexed_cache_opt_candidate_budget_frontier_abort")),
+        "candidate_budget_selection_work_abort": int(sum_field(rows, "indexed_cache_opt_candidate_budget_selection_work_abort")),
+        "candidate_budget_score_work_abort": int(sum_field(rows, "indexed_cache_opt_candidate_budget_score_work_abort")),
         "candidate_opaque_depth_draws": int(sum_field(rows, "indexed_cache_opt_candidate_opaque_depth_draws")),
         "candidate_screen_blend_draws": int(sum_field(rows, "indexed_cache_opt_candidate_screen_blend_draws")),
         "candidate_primitive_bucket_1_63": int(sum_field(rows, "indexed_cache_opt_candidate_primitive_bucket_1_63")),
@@ -212,6 +223,17 @@ CSV_FIELDS = [
     "candidate_miss_delta32_pct",
     "candidate_gate_pass",
     "candidate_gate_fail",
+    "candidate_gate_fail_bucket_1_63",
+    "candidate_gate_fail_bucket_64_255",
+    "candidate_gate_fail_bucket_256_1023",
+    "candidate_gate_fail_bucket_1024_4095",
+    "candidate_gate_fail_bucket_4096_plus",
+    "candidate_preeligible",
+    "candidate_preeligibility_reject",
+    "candidate_budget_abort",
+    "candidate_budget_frontier_abort",
+    "candidate_budget_selection_work_abort",
+    "candidate_budget_score_work_abort",
     "candidate_opaque_depth_draws",
     "candidate_screen_blend_draws",
     "candidate_primitive_bucket_1_63",
@@ -296,8 +318,8 @@ def write_markdown(path: Path, summaries: list[dict[str, Any]]) -> None:
         "",
         "## Candidate Measurement",
         "",
-        "| Run | Candidate draws | Candidate bytes | Original LRU32 | Effective LRU32 | Delta |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Run | Candidate draws | Candidate bytes | Original LRU32 | Effective LRU32 | Delta | Pre-reject | Budget abort |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ])
     for row in summaries:
         lines.append(
@@ -307,7 +329,9 @@ def write_markdown(path: Path, summaries: list[dict[str, Any]]) -> None:
             f"`{row['candidate_bytes']}` | "
             f"`{row['candidate_original_miss32']}` | "
             f"`{row['candidate_effective_miss32']}` | "
-            f"`{row['candidate_miss_delta32']} ({row['candidate_miss_delta32_pct']:.2f}%)` |"
+            f"`{row['candidate_miss_delta32']} ({row['candidate_miss_delta32_pct']:.2f}%)` | "
+            f"`{row['candidate_preeligibility_reject']}` | "
+            f"`{row['candidate_budget_abort']}` |"
         )
     lines.extend([
         "",

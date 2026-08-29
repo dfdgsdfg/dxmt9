@@ -101,6 +101,7 @@ struct ReplayDrainFailure {
 
 struct RawCommandChunk;
 struct BufferMutationTask;
+struct StateBlockApplyTask;
 
 class ReplayDrainLedger {
  public:
@@ -112,6 +113,7 @@ class ReplayDrainLedger {
   // resource-scoped fence (R-BACK-2.51(d)(i)) covers pending mutations with no
   // change at all on the reader side.
   void publishMutationReplayed(const BufferMutationTask& task) noexcept;
+  void publishStateBlockApplyAcceptedLocked(StateBlockApplyTask& task) noexcept;
   ReplayDrainResult wait(ReplayDrainTarget& target) noexcept;
   bool pending(const ReplayDrainTarget& target) const noexcept;
   void stop() noexcept;
@@ -212,9 +214,15 @@ struct BufferMutationTask {
   ReplaySeq replaySeq = 0;
 };
 
-// The FIFO element. Exactly one of three states:
+struct StateBlockApplyTask {
+  std::shared_ptr<dxmt9::core::StateBlock> stateBlock;
+  ReplaySeq replaySeq = 0;
+};
+
+// The FIFO element. Exactly one of four states:
 //   * placeholder (`reservationId != 0`)      — reserved, not yet committed;
 //   * mutation    (`mutation != nullptr`)     — a committed BufferMutationTask;
+//   * state block (`stateBlockApply != nullptr`) — a StateBlockApplyTask;
 //   * chunk       (everything else)           — a RawCommandChunk.
 // The mutation payload is behind a `unique_ptr` so a chunk-only queue keeps its
 // element size, and so `commitMutation` is a pointer move — i.e. noexcept,
@@ -222,11 +230,13 @@ struct BufferMutationTask {
 struct ReplayQueueItem {
   RawCommandChunk chunk;
   std::unique_ptr<BufferMutationTask> mutation;
+  std::unique_ptr<StateBlockApplyTask> stateBlockApply;
   std::uint64_t reservationId = 0;
   std::size_t chargedBytes = 0;
 
   bool placeholder() const noexcept { return reservationId != 0u; }
   bool isMutation() const noexcept { return mutation != nullptr; }
+  bool isStateBlockApply() const noexcept { return stateBlockApply != nullptr; }
 };
 
 // Handle returned by `ReplayOffloadQueue::reserveMutation`. `replaySeq` is the
@@ -536,6 +546,71 @@ class ReplayOffloadQueue {
             ReplayDrainLedger* ledger = nullptr) noexcept {
     return pushWithDisposition(std::move(chunk), ledger) ==
            ReplayQueuePushDisposition::Accepted;
+  }
+
+  // Appends one immutable StateBlock apply after all items currently in the
+  // FIFO. The caller retains ownership on pre-effect rejection.
+  ReplayQueuePushDisposition pushStateBlockApply(
+      std::unique_ptr<StateBlockApplyTask>& task,
+      ReplayDrainLedger* ledger = nullptr) noexcept try {
+    if (!task) {
+      return ReplayQueuePushDisposition::RejectedPreEffect;
+    }
+    std::unique_lock lock(mutex_);
+    const auto admissible = [&] {
+      return stop_ || queue_.size() < maxChunks_;
+    };
+    if (!admissible()) {
+      const auto waitStart = std::chrono::steady_clock::now();
+      if (observabilityEnabled_) {
+        notePushWaitEnter();
+      }
+      spaceCv_.wait(lock, admissible);
+      if (observabilityEnabled_) {
+        notePushWaitExit();
+      }
+      notePushBackpressureWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - waitStart).count()));
+    }
+    if (stop_) return ReplayQueuePushDisposition::RejectedPreEffect;
+    if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::BeforeAdoption) {
+      testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;
+      return ReplayQueuePushDisposition::RejectedPreEffect;
+    }
+    if (ledger) {
+      std::unique_lock ledgerLock(ledger->mutex_);
+      if (!ledger->accepting_ || ledger->terminal()) {
+        return ReplayQueuePushDisposition::RejectedPreEffect;
+      }
+      try {
+        queue_.emplace_back();
+      } catch (...) {
+        return ReplayQueuePushDisposition::RejectedPreEffect;
+      }
+      queue_.back().stateBlockApply = std::move(task);
+      ledger->publishStateBlockApplyAcceptedLocked(
+          *queue_.back().stateBlockApply);
+    } else {
+      try {
+        queue_.emplace_back();
+      } catch (...) {
+        return ReplayQueuePushDisposition::RejectedPreEffect;
+      }
+      queue_.back().stateBlockApply = std::move(task);
+    }
+    if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::AfterAdoption) {
+      testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;
+      stop_ = true;
+      workCv_.notify_all();
+      spaceCv_.notify_all();
+      drainCv_.notify_all();
+      return ReplayQueuePushDisposition::EffectUnknown;
+    }
+    workCv_.notify_one();
+    return ReplayQueuePushDisposition::Accepted;
+  } catch (...) {
+    return ReplayQueuePushDisposition::RejectedPreEffect;
   }
 
   // R-BACK-44.2's reservation, half one: fix the FIFO ordinal and charge the
@@ -899,6 +974,7 @@ class ReplayOffloadWorker {
  public:
   using ReplayFn = int32_t (*)(D9CDevice*, RawCommandChunk&);
   using ApplyMutationFn = int32_t (*)(D9CDevice*, BufferMutationTask&);
+  using ApplyStateBlockFn = int32_t (*)(D9CDevice*, StateBlockApplyTask&);
   using FailurePublishedHook = void (*)(void*);
 
   // Queue bound: 64 chunks / 8 MiB ~= 2+ frames of GT1 chunks (about
@@ -906,10 +982,12 @@ class ReplayOffloadWorker {
   explicit ReplayOffloadWorker(ReplayFn replay = nullptr,
                                FailurePublishedHook failureHook = nullptr,
                                void* failureHookContext = nullptr,
-                               ApplyMutationFn applyMutation = nullptr)
+                               ApplyMutationFn applyMutation = nullptr,
+                               ApplyStateBlockFn applyStateBlock = nullptr)
       : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()),
         replay_(replay),
         applyMutation_(applyMutation),
+        applyStateBlock_(applyStateBlock),
         failureHook_(failureHook),
         failureHookContext_(failureHookContext) {}
   ~ReplayOffloadWorker() { stop(); }
@@ -934,6 +1012,7 @@ class ReplayOffloadWorker {
   D9CDevice* owner_ = nullptr;
   ReplayFn replay_ = nullptr;
   ApplyMutationFn applyMutation_ = nullptr;
+  ApplyStateBlockFn applyStateBlock_ = nullptr;
   FailurePublishedHook failureHook_ = nullptr;
   void* failureHookContext_ = nullptr;
   bool testOnlyFailStart_ = false;
@@ -949,6 +1028,16 @@ int32_t replayRawChunk(D9CDevice* d, RawCommandChunk& chunk);
 // discipline; there is no "skip" disposition, because a skipped mutation is a
 // silently wrong buffer.
 int32_t applyBufferMutationTask(D9CDevice* d, BufferMutationTask& task);
+
+int32_t applyStateBlockObject(
+    D9CDevice* d,
+    const std::shared_ptr<dxmt9::core::StateBlock>& stateBlock);
+int32_t applyStateBlockApplyTask(D9CDevice* d, StateBlockApplyTask& task);
+
+// Ordered StateBlock apply bridge. Accepted calls return after the task is
+// appended to the single replay FIFO; pre-effect admission failures fall back
+// to the synchronous provider after draining prior FIFO work.
+int32_t enqueueStateBlockApply(D9CStateBlock* stateBlock) noexcept;
 
 // getenv("DXMT9_MANAGED_MUTATION_OFFLOAD"), read once. Unset, empty, and "0"
 // select the byte-identical synchronous upload path (R-BACK-44.1).

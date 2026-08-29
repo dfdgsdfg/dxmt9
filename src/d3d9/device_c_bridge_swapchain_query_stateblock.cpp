@@ -161,8 +161,7 @@ extern "C" int32_t dxmt9c_stateblock_capture(D9CStateBlock* arg0) {
 }
 
 extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* arg0) {
-  DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_stateblock_apply");
-  return dxmt9p_stateblock_apply(arg0);
+  return dxmt9::d3d9::enqueueStateBlockApply(arg0);
 }
 
 #undef DXMT9_TERMINAL_OR_RETURN

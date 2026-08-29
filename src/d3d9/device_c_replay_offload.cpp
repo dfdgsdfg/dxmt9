@@ -161,6 +161,12 @@ void ReplayDrainLedger::publishMutationAcceptedLocked(
   cv_.notify_all();
 }
 
+void ReplayDrainLedger::publishStateBlockApplyAcceptedLocked(
+    StateBlockApplyTask& task) noexcept {
+  task.replaySeq = nextSeq_++;
+  cv_.notify_all();
+}
+
 void ReplayDrainLedger::publishMutationReplayed(
     const BufferMutationTask& task) noexcept {
   std::lock_guard lock(mutex_);
@@ -354,6 +360,10 @@ void releaseDrainedQueueItems(std::vector<ReplayQueueItem>& items) {
       item.mutation.reset();
       continue;
     }
+    if (item.isStateBlockApply()) {
+      item.stateBlockApply.reset();
+      continue;
+    }
     item.chunk.bufferSnapshots.clear();
     releaseRetainedWrappers(item.chunk);
   }
@@ -383,6 +393,45 @@ void ReplayOffloadWorker::stop() {
 void ReplayOffloadWorker::run(D9CDevice* device) {
   ReplayQueueItem item;
   while (queue_.pop(item)) {
+    if (item.isStateBlockApply()) {
+      auto& task = *item.stateBlockApply;
+      int32_t hr = dxmt9::core::D3D_OK;
+      try {
+        hr = applyStateBlock_ ? applyStateBlock_(device, task)
+                              : applyStateBlockApplyTask(device, task);
+      } catch (const std::bad_alloc&) {
+        hr = dxmt9::core::E_OUTOFMEMORY;
+      } catch (...) {
+        hr = dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      if (hr < 0) {
+        device->replayDrainLedger.publishFailure();
+        failed_.store(true, std::memory_order_release);
+        device->replayDrainLedger.poison();
+        queue_.stop();
+        if (!applyStateBlock_) {
+          DXMT_ASSERT(false && "deferred state block apply failed");
+        }
+        if (failureHook_) {
+          try {
+            failureHook_(failureHookContext_);
+          } catch (...) {
+            // Test/diagnostic hooks cannot interrupt terminal settlement.
+          }
+        }
+        if (device->iface) {
+          if (auto upper = device->dev().upperDevice()) {
+            upper->abortPresentOrdinalWaits();
+          }
+        }
+        item.stateBlockApply.reset();
+        queue_.markReplayDone();
+        break;
+      }
+      item.stateBlockApply.reset();
+      queue_.markReplayDone();
+      continue;
+    }
     if (item.isMutation()) {
       // R-BACK-44.3 — the mutation alternative of the same FIFO position. No
       // coalescing, reordering, or elision: one task, applied here, between
@@ -915,6 +964,100 @@ bool admitsManagedMutationOffload(D9CBuffer* b) noexcept {
   return dxmt9::resources::mutation_offload::admitsManagedMutationOffload(
       managedMutationOffloadEnabled(), offloadReplayActive, b->desc.pool,
       b->lastLockFlags, upper->bufferHasVersionedBacking(b->obj->handle()));
+}
+
+int32_t applyStateBlockObject(
+    D9CDevice* d,
+    const std::shared_ptr<dxmt9::core::StateBlock>& stateBlock) {
+  if (!d || !stateBlock) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  stateBlock->apply(d->dev());
+  if (auto upper = d->dev().upperDevice()) {
+    upper->queue().markPendingDirtyAll();
+  }
+  return dxmt9::core::D3D_OK;
+}
+
+int32_t applyStateBlockApplyTask(D9CDevice* d, StateBlockApplyTask& task) {
+  return applyStateBlockObject(d, task.stateBlock);
+}
+
+int32_t enqueueStateBlockApply(D9CStateBlock* stateBlock) noexcept {
+  if (!stateBlock || !stateBlock->device ||
+      !stateBlock->obj || stateBlock->device->stateBlockRecording) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  D9CDevice* device = stateBlock->device;
+  const auto directApply = [&]() noexcept {
+    try {
+      return applyStateBlockObject(device, stateBlock->obj);
+    } catch (...) {
+      // An entered direct apply with unknown effect must poison the same way
+      // as an asynchronous worker failure; never let the noexcept bridge
+      // terminate the process.
+      device->replayDrainLedger.poison();
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+  };
+  if (!offloadCommitReplayEnabled()) {
+    return directApply();
+  }
+  if (device->replayDrainLedger.terminal()) {
+    return dxmt9::core::D3DERR_DEVICELOST;
+  }
+  const auto synchronousFallback = [&]() noexcept {
+    try {
+      if (!drainDeferredReplay(device, "dxmt9c_stateblock_apply_fallback")) {
+        return dxmt9::core::D3DERR_DEVICELOST;
+      }
+      return directApply();
+    } catch (...) {
+      // StateBlock::apply may allocate while materializing a large snapshot.
+      // An entered but throwing apply has unknown effect, so preserve the
+      // fail-stop contract rather than allowing a noexcept bridge to terminate.
+      device->replayDrainLedger.poison();
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+  };
+  try {
+    if (!device->replayOffload) {
+      auto worker = std::make_unique<ReplayOffloadWorker>();
+      if (!worker->start(device)) {
+        return synchronousFallback();
+      }
+      device->replayOffload = std::move(worker);
+    }
+    if (device->replayOffload->failed() ||
+        device->replayOffload->queue().stopped()) {
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+    auto task = std::make_unique<StateBlockApplyTask>();
+    task->stateBlock = stateBlock->obj;
+    const auto disposition = device->replayOffload->queue().pushStateBlockApply(
+        task, &device->replayDrainLedger);
+    if (disposition == ReplayQueuePushDisposition::Accepted) {
+      return dxmt9::core::D3D_OK;
+    }
+    if (disposition == ReplayQueuePushDisposition::EffectUnknown) {
+      device->replayDrainLedger.poison();
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+    // No queue item was adopted. A bounded allocation/admission failure can
+    // preserve the old synchronous semantics after prior FIFO work catches
+    // up; a terminal queue cannot safely execute against a missing prefix.
+    if (device->replayDrainLedger.terminal() ||
+        device->replayOffload->failed() ||
+        device->replayOffload->queue().stopped()) {
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+    return synchronousFallback();
+  } catch (const std::bad_alloc&) {
+    return synchronousFallback();
+  } catch (...) {
+    device->replayDrainLedger.poison();
+    return dxmt9::core::D3DERR_DEVICELOST;
+  }
 }
 
 int32_t applyBufferMutationTask(D9CDevice* d, BufferMutationTask& task) {

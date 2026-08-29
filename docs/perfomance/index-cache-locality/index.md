@@ -11,12 +11,19 @@ related: docs/perfomance/index-cache-locality/overview.md; docs/perfomance/index
 
 # Index-Cache Locality — workload-gated GPU provider
 
-Latest tracked row: `H29` - GT2 merge-rejection telemetry finds `575,523` adjacent indexed-triangle boundaries but no single-condition frontier. The dominant exact class is binding payload + non-contiguous IB (`361,143`, `62.75%`), so a joined-index buffer alone cannot provide a semantic merge.
+Latest tracked row: `H31` - the STALKER production pre-gate and bounded builder
+reject cold small work before construction and fail open at deterministic work
+bounds. The first bounded run used a different log level from the prior
+baseline, and the clean follow-up timed out before producing a benchmark
+result; bounded work is proven, performance promotion is not.
 
 Current status: explicit default-off. The GT1 GPU mechanism remains valid, but
 the former offload coupling was retired on 2026-08-29 after STALKER Day exposed
 `97.53 ms/present` of candidate CPU and `90.2%` post-build rejection. The probe
-wrapper pins `0`; `--optimize-opaque-depth-index-cache` remains the opt-in.
+wrapper pins `0`; `--optimize-opaque-depth-index-cache` remains the opt-in. The
+bounded follow-up rejects draws below 256 primitives before construction and
+caps complete-candidate work. Its first STALKER run proves counter attribution
+and termination, but matched-condition FPS and visual evidence remain open.
 
 ## Start Here
 

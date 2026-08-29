@@ -407,7 +407,18 @@ std::int32_t recordingApply(D9CDevice*,
   return dxmt9::core::D3D_OK;
 }
 
+std::int32_t recordingStateBlock(
+    D9CDevice*, dxmt9::d3d9::StateBlockApplyTask& task) {
+  gWorkerOrderLog->note("stateblock:" + std::to_string(task.replaySeq));
+  return dxmt9::core::D3D_OK;
+}
+
 std::int32_t failingApply(D9CDevice*, dxmt9::d3d9::BufferMutationTask&) {
+  return dxmt9::core::D3DERR_INVALIDCALL;
+}
+
+std::int32_t failingStateBlock(
+    D9CDevice*, dxmt9::d3d9::StateBlockApplyTask&) {
   return dxmt9::core::D3DERR_INVALIDCALL;
 }
 
@@ -447,6 +458,69 @@ void testWorkerInterleavesMutationsAndChunksInOneFifoOrder() {
         "mutation completion publishes against the same per-buffer target");
 }
 
+void testWorkerInterleavesStateBlockAndChunksInOneFifoOrder() {
+  using namespace dxmt9::d3d9;
+  WorkerOrderLog log;
+  gWorkerOrderLog = &log;
+  D9CDevice device(nullptr);
+  device.replayOffload = std::make_unique<ReplayOffloadWorker>(
+      recordingReplay, nullptr, nullptr, nullptr, recordingStateBlock);
+  auto& queue = device.replayOffload->queue();
+  auto& ledger = device.replayDrainLedger;
+
+  auto first = makeChunk(8);
+  check(queue.push(std::move(first), &ledger), "chunk before state block queued");
+  auto stateBlock = std::make_unique<StateBlockApplyTask>();
+  stateBlock->stateBlock = std::make_shared<dxmt9::core::StateBlock>();
+  check(queue.pushStateBlockApply(stateBlock, &ledger) ==
+            ReplayQueuePushDisposition::Accepted && !stateBlock,
+        "state block task is adopted after the preceding chunk");
+  auto second = makeChunk(8);
+  check(queue.push(std::move(second), &ledger), "chunk after state block queued");
+
+  check(device.replayOffload->start(&device), "state block worker starts");
+  queue.waitDrained();
+  device.replayOffload->stop();
+  gWorkerOrderLog = nullptr;
+
+  const auto order = log.snapshot();
+  check(order.size() == 3u, "state block FIFO runs every item exactly once");
+  check(order[0] == "chunk:1" && order[1] == "stateblock:2" &&
+            order[2] == "chunk:3",
+        "state block apply runs strictly between its neighboring chunks");
+}
+
+void testStateBlockTaskRetainsExactlyUntilApplyOrTeardown() {
+  using namespace dxmt9::d3d9;
+  ReplayOffloadQueue rejectedQueue(4u, 1u << 20);
+  auto rejectedTask = std::make_unique<StateBlockApplyTask>();
+  rejectedTask->stateBlock = std::make_shared<dxmt9::core::StateBlock>();
+  rejectedQueue.failNextPushForTest(ReplayQueueFailurePoint::BeforeAdoption);
+  check(rejectedQueue.pushStateBlockApply(rejectedTask) ==
+            ReplayQueuePushDisposition::RejectedPreEffect && rejectedTask,
+        "pre-effect state block rejection preserves caller ownership");
+
+  bool released = false;
+  std::shared_ptr<dxmt9::core::StateBlock> retention(
+      static_cast<dxmt9::core::StateBlock*>(nullptr),
+      [&](dxmt9::core::StateBlock*) { released = true; });
+  ReplayOffloadQueue queue(4u, 1u << 20);
+  auto task = std::make_unique<StateBlockApplyTask>();
+  task->stateBlock = retention;
+  check(queue.pushStateBlockApply(task) == ReplayQueuePushDisposition::Accepted,
+        "state block task is accepted for teardown retention test");
+  retention.reset();
+  check(!released, "queued state block owns the core snapshot");
+
+  queue.stop();
+  std::vector<ReplayQueueItem> drained;
+  queue.drainRemaining(drained);
+  check(drained.size() == 1u && drained.front().isStateBlockApply(),
+        "teardown drains the unexecuted state block task");
+  drained.clear();
+  check(released, "teardown releases the state block snapshot exactly once");
+}
+
 void testWorkerApplyFailureFailStopsRatherThanSkipping() {
   using namespace dxmt9::d3d9;
   D9CDevice device(nullptr);
@@ -469,6 +543,29 @@ void testWorkerApplyFailureFailStopsRatherThanSkipping() {
   check(ledger.poisoned(), "a failed apply poisons the device ledger");
   check(target->lastReplayedSeq == 0u,
         "a failed apply never acknowledges its ordinal");
+}
+
+void testWorkerStateBlockFailureFailStopsRatherThanSkipping() {
+  using namespace dxmt9::d3d9;
+  D9CDevice device(nullptr);
+  device.replayOffload = std::make_unique<ReplayOffloadWorker>(
+      recordingReplay, nullptr, nullptr, nullptr, failingStateBlock);
+  auto& queue = device.replayOffload->queue();
+  auto& ledger = device.replayDrainLedger;
+
+  auto task = std::make_unique<StateBlockApplyTask>();
+  task->stateBlock = std::make_shared<dxmt9::core::StateBlock>();
+  check(queue.pushStateBlockApply(task, &ledger) ==
+            ReplayQueuePushDisposition::Accepted,
+        "state block failure fixture is admitted");
+  check(device.replayOffload->start(&device), "state block worker starts");
+  queue.waitDrained();
+  device.replayOffload->stop();
+
+  check(device.replayOffload->failed(),
+        "a failed state block apply fail-stops the worker");
+  check(ledger.poisoned(),
+        "a failed state block apply poisons the device ledger");
 }
 
 void testTeardownDiscardsPendingMutationsReleasingBudgetAndRetention() {
@@ -764,7 +861,10 @@ int main() {
     testReservationBudgetBoundsBlockAndAdmitOversize();
     testStoppedQueueRejectsReservationPreEffect();
     testWorkerInterleavesMutationsAndChunksInOneFifoOrder();
+    testWorkerInterleavesStateBlockAndChunksInOneFifoOrder();
+    testStateBlockTaskRetainsExactlyUntilApplyOrTeardown();
     testWorkerApplyFailureFailStopsRatherThanSkipping();
+    testWorkerStateBlockFailureFailStopsRatherThanSkipping();
     testTeardownDiscardsPendingMutationsReleasingBudgetAndRetention();
     if (dxmt9::d3d9::managedMutationOffloadEnabled()) {
       testUnlockTransactionUnderModeOn();

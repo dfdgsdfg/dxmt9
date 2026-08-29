@@ -1361,6 +1361,9 @@ void countIndexedCacheOptCandidateGate(bool passed,
                                        std::uint64_t primitiveCount,
                                        bool opaqueDepth,
                                        bool screenBlend);
+void countIndexedCacheOptCandidatePreEligibility(bool eligible);
+void countIndexedCacheOptCandidateBudgetAbort(
+    std::uint8_t reason);
 void countReorderedIndexCacheLookup(bool hit,
                                     bool rejected,
                                     bool created,

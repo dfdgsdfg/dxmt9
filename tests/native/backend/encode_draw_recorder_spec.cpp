@@ -2402,6 +2402,111 @@ void testVersionedIndexSnapshotIsStableCacheSource() {
         "versioned snapshot without revision cannot key derived bytes");
 }
 
+void testIndexCacheCandidatePreEligibilityAndBudgetTransitions() {
+  using dxmt9::encoders::IndexCacheCandidateBudget;
+  using dxmt9::encoders::IndexCacheCandidateBudgetReason;
+  using dxmt9::encoders::IndexCacheCandidateBudgetState;
+  using dxmt9::encoders::indexCacheCandidatePrimitiveBucket;
+  using dxmt9::encoders::productionIndexCacheCandidateBudget;
+  using dxmt9::encoders::productionIndexCacheCandidatePreEligible;
+  using dxmt9::encoders::consumeIndexCacheCandidateWork;
+
+  check(!productionIndexCacheCandidatePreEligible(255u),
+        "production candidate pre-gate rejects 255 primitives");
+  check(productionIndexCacheCandidatePreEligible(256u),
+        "production candidate pre-gate accepts 256 primitives");
+  checkEq(static_cast<u32>(indexCacheCandidatePrimitiveBucket(255u)), 1u,
+          "primitive bucket edge keeps 255 in 64-255");
+  checkEq(static_cast<u32>(indexCacheCandidatePrimitiveBucket(256u)), 2u,
+          "primitive bucket edge keeps 256 in 256-1023");
+
+  const auto budget = productionIndexCacheCandidateBudget(10u);
+  checkEq(budget.maxSelectionSlots, std::uint64_t{640u},
+          "small candidate work budget is deterministic and linear");
+  IndexCacheCandidateBudgetState state{};
+  checkEq(static_cast<u32>(consumeIndexCacheCandidateWork(
+                state, budget, 640u, 640u)), 0u,
+          "budget accepts work exactly at the edge");
+  checkEq(static_cast<u32>(consumeIndexCacheCandidateWork(
+                state, budget, 1u, 0u)), 3u,
+          "budget rejects selection work beyond the edge");
+  check(dxmt9::encoders::indexCacheCandidateFrontierWithinBudget(
+            256u, budget),
+        "frontier accepts its exact bound");
+  check(!dxmt9::encoders::indexCacheCandidateFrontierWithinBudget(
+             257u, budget),
+        "frontier rejects one entry beyond its bound");
+
+  IndexCacheCandidateBudgetState overflowed{
+      .selectionSlots = budget.maxSelectionSlots + 1u};
+  checkEq(static_cast<u32>(consumeIndexCacheCandidateWork(
+                overflowed, budget, 0u, 0u)), 3u,
+          "already-over-budget state fails closed");
+  (void)IndexCacheCandidateBudget::unbounded();
+}
+
+void testIndexCacheCandidateBudgetFallbackAndDeterminism() {
+  const std::array<std::uint16_t, 9> indices{
+      {0u, 1u, 2u, 10u, 11u, 12u, 0u, 2u, 3u}};
+  const std::span<const std::uint8_t> bytes{
+      reinterpret_cast<const std::uint8_t*>(indices.data()),
+      indices.size() * sizeof(indices[0])};
+  std::vector<std::uint8_t> sentinel{0xa5u, 0x5au};
+  auto aborted = sentinel;
+  dxmt9::encoders::IndexCacheCandidateBudget tinyBudget{
+      .maxTriangles = 3u,
+      .maxFrontier = 0u,
+      .maxSelectionSlots = 64u,
+      .maxScoreVisits = 64u};
+  dxmt9::encoders::IndexCacheCandidateBudgetReason reason =
+      dxmt9::encoders::IndexCacheCandidateBudgetReason::None;
+  check(!dxmt9::encoders::buildVertexCacheOptimizedTriangleOrderIndexBytes(
+            bytes, IndexType::UInt16, 0u, indices.size(), aborted, 32u,
+            tinyBudget, &reason),
+        "frontier exhaustion falls back without publishing a candidate");
+  check(aborted == sentinel,
+        "budget abort preserves the caller's original output bytes");
+  checkEq(static_cast<u32>(reason), 2u,
+          "frontier exhaustion reports a typed reason");
+
+  auto scoreAborted = sentinel;
+  auto scoreBudget = tinyBudget;
+  scoreBudget.maxFrontier = 256u;
+  scoreBudget.maxScoreVisits = 0u;
+  reason = dxmt9::encoders::IndexCacheCandidateBudgetReason::None;
+  check(!dxmt9::encoders::buildVertexCacheOptimizedTriangleOrderIndexBytes(
+            bytes, IndexType::UInt16, 0u, indices.size(), scoreAborted, 32u,
+            scoreBudget, &reason),
+        "score-work exhaustion falls back without publishing a candidate");
+  check(scoreAborted == sentinel,
+        "score-work abort preserves the caller's original output bytes");
+  checkEq(static_cast<u32>(reason), 4u,
+          "score-work exhaustion reports a typed reason");
+
+  auto triangleAborted = sentinel;
+  auto triangleBudget = tinyBudget;
+  triangleBudget.maxTriangles = 2u;
+  reason = dxmt9::encoders::IndexCacheCandidateBudgetReason::None;
+  check(!dxmt9::encoders::buildVertexCacheOptimizedTriangleOrderIndexBytes(
+            bytes, IndexType::UInt16, 0u, indices.size(), triangleAborted, 32u,
+            triangleBudget, &reason),
+        "triangle-count exhaustion rejects before candidate construction");
+  checkEq(static_cast<u32>(reason), 1u,
+          "triangle-count exhaustion reports a typed reason");
+
+  std::vector<std::uint8_t> first;
+  std::vector<std::uint8_t> second;
+  check(dxmt9::encoders::buildVertexCacheOptimizedTriangleOrderIndexBytes(
+            bytes, IndexType::UInt16, 0u, indices.size(), first),
+        "unbounded diagnostic builder remains explicitly exercisable");
+  check(dxmt9::encoders::buildVertexCacheOptimizedTriangleOrderIndexBytes(
+            bytes, IndexType::UInt16, 0u, indices.size(), second),
+        "accepted candidate can be rebuilt");
+  check(first == second, "accepted candidate bytes are deterministic");
+  check(first != std::vector<std::uint8_t>(bytes.begin(), bytes.end()),
+        "accepted candidate changes the selected triangle order");
+}
+
 void testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes() {
   constexpr std::size_t kStream0Base = 24u;
   constexpr std::size_t kStream0Stride = 12u;
@@ -3438,6 +3543,8 @@ int main() {
     testCompatibleIndexedDrawMergeRejectsObservableDifferences();
     testCompatibleIndexedDrawMergeTelemetryClassifiesRelaxationSets();
     testVersionedIndexSnapshotIsStableCacheSource();
+    testIndexCacheCandidatePreEligibilityAndBudgetTransitions();
+    testIndexCacheCandidateBudgetFallbackAndDeterminism();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();

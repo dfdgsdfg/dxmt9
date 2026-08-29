@@ -44,7 +44,7 @@ complete.
 | Semantic features | `passcoalesce`, `dce`, `memoryless`, `objectschedule`, `mesh`, `gpudriven`, `bindless` | Stable names; passcoalesce/dce implemented, remaining modes planned | passcoalesce default; dce opt-in; remaining unavailable | `R-BACK-31.3`–`31.4` |
 | Renderer fallback | `allow`, `strict` | Stable / planned | allow specified default, selector not implemented | `R-BACK-31.5`, `R-BACK-31.8` |
 | Producer replay | `inline`, `offloaded` | Stable / implemented | offloaded default; inline rollback | `R-BACK-2.51` |
-| Opaque-depth index locality | original order, conservative LRU32 reorder | Stable / implemented | follows offloaded replay by the explicit `R-BACK-2.51` coupling; opt-out reachable | `R-BACK-2.51` |
+| Opaque-depth index locality | original order, conservative LRU32 reorder | Stable fallback; reorder is bounded opt-in | original order default; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` enables the reorder only for stable sources at ≥256 primitives, with whole-candidate frontier/work budgets and fail-open fallback | `R-BACK-2.51`, `R-BACK-42.8`–`42.11` |
 | Source delivery | `compatibility`, `streaming` | Stable; compatibility implemented, streaming partial | compatibility default; streaming available through migration alias | `R-BACK-2.66` |
 | Partition execution | `identity`, `serial`, `parallel` | Stable; identity implemented, explicit serial partial, parallel planned | identity default | `R-BACK-2.66` |
 | CB segmentation | `off`, `metal4` | Stable; off implemented, Metal 4 planned | off default | `R-BACK-2.66` |

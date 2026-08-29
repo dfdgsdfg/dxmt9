@@ -1876,6 +1876,120 @@ inline bool isStableIndexCacheSource(
          snapshot->byteSize != 0u && snapshot->contentRevision != 0u;
 }
 
+// The production candidate builder is intentionally bounded before it can
+// mutate the submitted index binding.  These value-only transitions are also
+// used by native specs so the fail-open contract does not depend on the
+// implementation's vector state.
+enum class IndexCacheCandidatePrimitiveBucket : u8 {
+  OneTo63,
+  SixtyFourTo255,
+  TwoFiftySixTo1023,
+  OneThousandTwentyFourTo4095,
+  FourThousandNinetySixPlus,
+};
+
+inline constexpr IndexCacheCandidatePrimitiveBucket
+indexCacheCandidatePrimitiveBucket(u64 primitiveCount) noexcept {
+  if (primitiveCount < 64u) {
+    return IndexCacheCandidatePrimitiveBucket::OneTo63;
+  }
+  if (primitiveCount < 256u) {
+    return IndexCacheCandidatePrimitiveBucket::SixtyFourTo255;
+  }
+  if (primitiveCount < 1024u) {
+    return IndexCacheCandidatePrimitiveBucket::TwoFiftySixTo1023;
+  }
+  if (primitiveCount < 4096u) {
+    return IndexCacheCandidatePrimitiveBucket::OneThousandTwentyFourTo4095;
+  }
+  return IndexCacheCandidatePrimitiveBucket::FourThousandNinetySixPlus;
+}
+
+inline constexpr u64 kProductionIndexCacheCandidateMinPrimitives = 256u;
+
+inline constexpr bool productionIndexCacheCandidatePreEligible(
+    u64 primitiveCount) noexcept {
+  return primitiveCount >= kProductionIndexCacheCandidateMinPrimitives;
+}
+
+struct IndexCacheCandidateBudget {
+  u64 maxTriangles = 65'536u;
+  u64 maxFrontier = 256u;
+  u64 maxSelectionSlots = 2'000'000u;
+  u64 maxScoreVisits = 2'000'000u;
+
+  static constexpr IndexCacheCandidateBudget unbounded() noexcept {
+    const auto max = std::numeric_limits<u64>::max();
+    return {.maxTriangles = max,
+            .maxFrontier = max,
+            .maxSelectionSlots = max,
+            .maxScoreVisits = max};
+  }
+};
+
+inline constexpr IndexCacheCandidateBudget productionIndexCacheCandidateBudget(
+    u64 triangleCount) noexcept {
+  constexpr u64 kMaxWork = 2'000'000u;
+  const u64 linearWork = triangleCount > kMaxWork / 64u
+                             ? kMaxWork
+                             : triangleCount * 64u;
+  return {.maxTriangles = 65'536u,
+          .maxFrontier = 256u,
+          .maxSelectionSlots = linearWork,
+          .maxScoreVisits = linearWork};
+}
+
+struct IndexCacheCandidateBudgetState {
+  u64 selectionSlots = 0;
+  u64 scoreVisits = 0;
+};
+
+enum class IndexCacheCandidateBudgetReason : u8 {
+  None,
+  TriangleCount,
+  Frontier,
+  SelectionWork,
+  ScoreWork,
+};
+
+inline constexpr IndexCacheCandidateBudgetReason consumeIndexCacheCandidateWork(
+    IndexCacheCandidateBudgetState& state,
+    const IndexCacheCandidateBudget& budget,
+    u64 selectionSlots,
+    u64 scoreVisits) noexcept {
+  if (state.selectionSlots > budget.maxSelectionSlots ||
+      state.scoreVisits > budget.maxScoreVisits) {
+    return state.selectionSlots > budget.maxSelectionSlots
+               ? IndexCacheCandidateBudgetReason::SelectionWork
+               : IndexCacheCandidateBudgetReason::ScoreWork;
+  }
+  if (selectionSlots > budget.maxSelectionSlots - state.selectionSlots) {
+    return IndexCacheCandidateBudgetReason::SelectionWork;
+  }
+  if (scoreVisits > budget.maxScoreVisits - state.scoreVisits) {
+    return IndexCacheCandidateBudgetReason::ScoreWork;
+  }
+  state.selectionSlots += selectionSlots;
+  state.scoreVisits += scoreVisits;
+  return IndexCacheCandidateBudgetReason::None;
+}
+
+inline constexpr bool indexCacheCandidateFrontierWithinBudget(
+    u64 frontierSize,
+    const IndexCacheCandidateBudget& budget) noexcept {
+  return frontierSize <= budget.maxFrontier;
+}
+
+bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
+    std::span<const u8> indexBytes,
+    core::IndexType indexType,
+    u32 startIndex,
+    u64 indexCount,
+    std::vector<u8>& out,
+    std::size_t probeCacheSize = 64u,
+    IndexCacheCandidateBudget budget = IndexCacheCandidateBudget::unbounded(),
+    IndexCacheCandidateBudgetReason* budgetReason = nullptr);
+
 template <std::size_t MaxEntries>
 inline bool shouldOptimizeScreenBlendIndexOrder(
     const core::FlatStateSet<MaxEntries>& renderStates) {

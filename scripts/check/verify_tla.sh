@@ -160,6 +160,8 @@ counterexample_models=(
   # Reading the staged slot before its release publication breaks the
   # segmented table's fail-closed lookup contract.
   "PsoSlotPublication|.counterexample|Invariant LookupFailClosed is violated"
+  # A worker that skips the FIFO head can complete ChunkB before StateBlock.
+  "StateBlockOrderedReplay|.non-fifo.counterexample|Invariant CompletedIsAcceptedPrefix is violated"
 )
 
 for row in "${counterexample_models[@]}"; do

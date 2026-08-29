@@ -33,6 +33,12 @@ STALKER Day built `696,039` candidates, rejected `90.2%` only after construction
 and spent `97.53 ms/present` in the path. Disabling it raised average FPS from
 `4.779` to `9.939` while GPU time stayed neutral (`11.13 -> 10.69 ms/present`).
 The 3DMark05 probe pins `0` by default and retains its explicit opt-in flag.
+The first bounded opt-in STALKER Day run observed `34.86 ms/present` of
+candidate CPU after rejecting `1,467,228` cold candidates before construction.
+It used `info` logging while the earlier `97.53 ms/present` and original-order
+references used `warn`, so neither the apparent CPU reduction nor its `5.005`
+FPS is a qualified A/B result. The bounded mechanism is useful evidence, not a
+promotion result.
 
 ## Latest Conclusions
 
@@ -47,6 +53,7 @@ The 3DMark05 probe pins `0` by default and retains its explicit opt-in flag.
 | H28 | The heavier GT2 workload exercises the extended reorder scope or strict adjacent merge | rejected-current; four verified `-gt2` runs leave candidate/miss/create population exactly `61/61/37` and eliminate `0` draws. FPS moves only `-0.20%` to `+0.12%`, GPU-CB p50/p95 stays stable, captures at frames `500-502` are visually coherent, and all error gates pass. GT1 and GT2 therefore agree that both experimental paths have no current coverage | [index-cache-locality-scope-merge-gt2.22](index-cache-locality-scope-merge-gt2.22.md) |
 | H29 | One strict compatible-merge predicate hides a useful GT2 volume frontier | rejected as a single-predicate expansion; all `575,523` adjacent boundaries have multiple raw causes. The exact logical population is binding payload + non-contiguous IB `361,143` (`62.75%`), all three including uniform `128,617` (`22.35%`), uniform + non-contiguous `74,586` (`12.96%`), and binding payload only `11,177` (`1.94%`). Joined-index-only volume is zero, so the next viable design must preserve subdraw state rather than collapse it blindly | [index-cache-locality-merge-rejection.23](index-cache-locality-merge-rejection.23.md) |
 | H30 | Offload makes index-reorder candidate cost safe across workloads | rejected; STALKER Day spends `97.53 ms/present` constructing candidates and rejects `90.2%` after construction. Explicit OFF changes average FPS `4.779 -> 9.939` with GPU time neutral (`11.13 -> 10.69 ms/present`). Default returned to OFF pending pre-build economy and bounded-work gates | `experiments/output/app-d3d9-stkcop-bench-perf-{baseline,no-opaque-index-cache}-day-20260829` |
+| H31 | A production pre-gate plus hard builder budget makes the opt-in broadly economical | mechanism accepted / promotion unresolved; `1,467,228` cold candidates were rejected before construction and `5,421` more aborted at the selection-work budget. The run observed `34.86 ms/present` candidate CPU, completed `1,320` presents with zero GPU command-buffer errors, and attributed all `14,807` locality-gate failures to primitive buckets. It used `info` logging while H30 used `warn`, so its `5.005` FPS and apparent CPU reduction are not a qualified A/B. A clean original-order follow-up reached `1,259` presents without GPU errors but timed out before producing a benchmark result under a concurrently busy host. The reorder remains opt-in pending matched-condition A/B and a valid visual oracle; both automatic screenshots captured the desktop | `experiments/output/app-d3d9-stkcop-bench-{bounded-index-stateblock-fifo,stateblock-fifo-original-index-clean}-day-20260829` |
 
 ## Current Navigation
 

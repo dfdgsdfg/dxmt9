@@ -413,6 +413,24 @@ review obligation, not a resolved fact):
 
 ## 5. Verification mapping
 
+### Ordered StateBlock apply
+
+`StateBlock::Apply` is a fourth alternative of `ReplayOffloadQueue`, alongside
+raw chunks, managed-buffer mutations, and reservation placeholders. The PE
+recorder is flushed before the bridge call, so an accepted
+`StateBlockApplyTask` is appended after all preceding chunks and the worker
+applies it before any following chunk. The task owns the immutable core
+`StateBlock` through a `shared_ptr`; teardown/fail-stop drains release that
+ownership without applying it. A pre-effect queue failure drains the prior
+FIFO and uses the shared synchronous apply helper, while post-adoption failure
+poisons the ledger. The accepted path performs no producer-side global drain.
+
+The bounded refinement is `StateBlockOrderedReplay.tla` and its native binding
+is `managed_mutation_offload_transaction_spec`'s
+`Chunk -> StateBlock -> Chunk` worker trace. The deliberate
+`StateBlockOrderedReplay.non-fifo.counterexample.cfg` keeps the FIFO-head skip
+regression executable as an expected failure.
+
 | Contract | Evidence |
 |---|---|
 | R-BACK-43.4/43.6 mark/reclaim ordering | `ProducerMarkReclaim.tla` (+ 3 counterexample cfgs: `.counterexample` → `NoUseAfterFree`, `.restamp.counterexample` → `NoUseAfterFree`, `.capture.counterexample` → `NoCaptureAfterFree`; all three executed as expected failures by `scripts/check/verify_tla.sh`), shared predicates `canReclaimRecord`/`markStampUpper`, `dxmt9-producer-mark-reclaim-spec` |

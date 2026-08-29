@@ -4500,6 +4500,19 @@ void countIndexedCacheOptCandidateGate(bool passed,
   auto& c = counters();
   add(passed ? c.indexedCacheOptCandidateGatePass
              : c.indexedCacheOptCandidateGateFail);
+  if (!passed) {
+    if (primitiveCount < 64u) {
+      add(c.indexedCacheOptCandidateGateFailPrimitiveBucket1_63);
+    } else if (primitiveCount < 256u) {
+      add(c.indexedCacheOptCandidateGateFailPrimitiveBucket64_255);
+    } else if (primitiveCount < 1024u) {
+      add(c.indexedCacheOptCandidateGateFailPrimitiveBucket256_1023);
+    } else if (primitiveCount < 4096u) {
+      add(c.indexedCacheOptCandidateGateFailPrimitiveBucket1024_4095);
+    } else {
+      add(c.indexedCacheOptCandidateGateFailPrimitiveBucket4096Plus);
+    }
+  }
   if (opaqueDepth) {
     add(c.indexedCacheOptCandidateOpaqueDepthDraws);
   }
@@ -4516,6 +4529,32 @@ void countIndexedCacheOptCandidateGate(bool passed,
     add(c.indexedCacheOptCandidatePrimitiveBucket1024_4095);
   } else {
     add(c.indexedCacheOptCandidatePrimitiveBucket4096Plus);
+  }
+}
+
+void countIndexedCacheOptCandidatePreEligibility(bool eligible) {
+  add(eligible ? counters().indexedCacheOptCandidatePreeligible
+               : counters().indexedCacheOptCandidatePreeligibilityReject);
+}
+
+void countIndexedCacheOptCandidateBudgetAbort(std::uint8_t reason) {
+  auto& c = counters();
+  add(c.indexedCacheOptCandidateBudgetAbort);
+  switch (reason) {
+  case 1u:
+    add(c.indexedCacheOptCandidateBudgetTriangleAbort);
+    break;
+  case 2u:
+    add(c.indexedCacheOptCandidateBudgetFrontierAbort);
+    break;
+  case 3u:
+    add(c.indexedCacheOptCandidateBudgetSelectionWorkAbort);
+    break;
+  case 4u:
+    add(c.indexedCacheOptCandidateBudgetScoreWorkAbort);
+    break;
+  default:
+    break;
   }
 }
 

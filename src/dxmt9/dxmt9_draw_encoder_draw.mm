@@ -1723,6 +1723,8 @@ void writeIndexValue(std::vector<u8>& out,
   }
 }
 
+}  // namespace
+
 // The uncapped vector-rescan selector and its cache warm-up order define the
 // accepted LRU candidate bytes; keep this ordering stable.
 bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
@@ -1731,7 +1733,12 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     u32 startIndex,
     u64 indexCount,
     std::vector<u8>& out,
-    std::size_t probeCacheSize = 64u) {
+    std::size_t probeCacheSize,
+    IndexCacheCandidateBudget budget,
+    IndexCacheCandidateBudgetReason* budgetReason) {
+  if (budgetReason) {
+    *budgetReason = IndexCacheCandidateBudgetReason::None;
+  }
   if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u ||
       probeCacheSize == 0u) {
     return false;
@@ -1755,6 +1762,12 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   };
 
   const std::size_t triangleCount = static_cast<std::size_t>(indexCount / 3u);
+  if (static_cast<u64>(triangleCount) > budget.maxTriangles) {
+    if (budgetReason) {
+      *budgetReason = IndexCacheCandidateBudgetReason::TriangleCount;
+    }
+    return false;
+  }
   std::vector<Triangle> triangles;
   triangles.reserve(triangleCount);
   u32 minReferencedIndex = std::numeric_limits<u32>::max();
@@ -1835,6 +1848,14 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   std::vector<u8> inCandidates(triangleCount, 0u);
   std::vector<u32> order;
   order.reserve(triangleCount);
+  IndexCacheCandidateBudgetState budgetState{};
+  bool budgetExceeded = false;
+  auto abortForBudget = [&](IndexCacheCandidateBudgetReason reason) {
+    budgetExceeded = true;
+    if (budgetReason && *budgetReason == IndexCacheCandidateBudgetReason::None) {
+      *budgetReason = reason;
+    }
+  };
   std::size_t nextOriginal = 0;
   {
     PerfScope scope(perf::countEncodeDrawIndexCacheCandidateSelectCpuTime);
@@ -1945,6 +1966,11 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       if (t >= triangleCount || emitted[t] || inCandidates[t]) {
         return;
       }
+      if (!indexCacheCandidateFrontierWithinBudget(
+              static_cast<u64>(candidates.size()) + 1u, budget)) {
+        abortForBudget(IndexCacheCandidateBudgetReason::Frontier);
+        return;
+      }
       candidates.push_back(triangle);
       inCandidates[t] = 1u;
     };
@@ -1988,7 +2014,14 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       std::optional<std::size_t> bestSlot;
       std::int64_t bestScore = std::numeric_limits<std::int64_t>::min();
       ++selectCalls;
-      selectSlots += static_cast<std::uint64_t>(candidates.size());
+      const u64 candidateSlots = static_cast<u64>(candidates.size());
+      if (consumeIndexCacheCandidateWork(
+              budgetState, budget, candidateSlots, 0u) !=
+          IndexCacheCandidateBudgetReason::None) {
+        abortForBudget(IndexCacheCandidateBudgetReason::SelectionWork);
+        return std::nullopt;
+      }
+      selectSlots += candidateSlots;
       selectCandidatesMax = std::max<std::uint64_t>(
           selectCandidatesMax, static_cast<std::uint64_t>(candidates.size()));
       for (std::size_t slot = 0; slot < candidates.size(); ++slot) {
@@ -1999,6 +2032,12 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
           continue;
         }
         const auto& tri = triangles[triangleIndex];
+        if (consumeIndexCacheCandidateWork(
+                budgetState, budget, 0u, 1u) !=
+            IndexCacheCandidateBudgetReason::None) {
+          abortForBudget(IndexCacheCandidateBudgetReason::ScoreWork);
+          return std::nullopt;
+        }
         const std::int64_t score = scoreTriangle(tri);
         if (score > bestScore ||
             (score == bestScore &&
@@ -2051,6 +2090,9 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     };
 
     while (order.size() < triangleCount) {
+      if (budgetExceeded) {
+        break;
+      }
       const std::optional<u32> candidate = chooseBestCandidate();
       const std::optional<u32> fallback =
           candidate.has_value() ? candidate : chooseNextOriginal();
@@ -2082,7 +2124,7 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
         selectCandidatesMax);
   }
 
-  if (order.size() != triangleCount) {
+  if (budgetExceeded || order.size() != triangleCount) {
     return false;
   }
   bool changed = false;
@@ -2109,6 +2151,8 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   }
   return true;
 }
+
+namespace {
 
 bool renderEncoderSelectionMatches(const ActiveEncoderBreakdown* encoderBreakdown,
                                    debug::RenderEncoderSelector rowSelector,
@@ -6383,11 +6427,25 @@ bool encodeDraw(EncodeContext& ctx,
           cacheOptPrelookupPositive &&
           encoderBreakdownActive &&
           perf::encoderBreakdownSeqFilterActive();
+      const bool productionCandidatePreGatePass =
+          !((optimizeOpaqueDepthIndexCacheScopeMatches ||
+             optimizeScreenBlendIndexCacheScopeMatches) &&
+            !cacheOptPrelookupPositive) ||
+          explicitMeasureCacheOptCandidate ||
+          productionIndexCacheCandidatePreEligible(primitiveCount);
+      if ((optimizeOpaqueDepthIndexCacheScopeMatches ||
+           optimizeScreenBlendIndexCacheScopeMatches) &&
+          !cacheOptPrelookupPositive && !cacheOptPrelookupRejected &&
+          !explicitMeasureCacheOptCandidate) {
+        perf::countIndexedCacheOptCandidatePreEligibility(
+            productionIndexCacheCandidatePreEligible(primitiveCount));
+      }
       const bool measureCacheOptCandidate =
           triangleList &&
           (explicitMeasureCacheOptCandidate ||
            measureProductionCacheOptPrelookup ||
            (applyCacheOptCandidatePreEligible &&
+            productionCandidatePreGatePass &&
             !cacheOptPrelookupPositive &&
             !cacheOptPrelookupRejected));
       const bool cacheOptFullReuseMeasureRequired =
@@ -6477,6 +6535,8 @@ bool encodeDraw(EncodeContext& ctx,
       IndexReuseMeasure cacheOptCandidateReuse{.references = vertexCount};
       bool cacheOptCandidateBuilt = false;
       bool cacheOptCandidateGatePassed = false;
+      IndexCacheCandidateBudgetReason cacheOptCandidateBudgetReason =
+          IndexCacheCandidateBudgetReason::None;
       if (measureCacheOptCandidate) {
         PerfScope indexCacheCandidateScope(
             perf::countEncodeDrawIndexCacheCandidateCpuTime);
@@ -6490,7 +6550,18 @@ bool encodeDraw(EncodeContext& ctx,
                   originalIndexReuseStartIndex,
                   vertexCount,
                   cacheOptCandidateIndexBytes,
-                  32u);
+                  32u,
+                  (optimizeOpaqueDepthIndexCacheScopeMatches ||
+                   optimizeScreenBlendIndexCacheScopeMatches) &&
+                          !explicitMeasureCacheOptCandidate
+                      ? productionIndexCacheCandidateBudget(primitiveCount)
+                      : IndexCacheCandidateBudget::unbounded(),
+                  &cacheOptCandidateBudgetReason);
+          if (cacheOptCandidateBudgetReason !=
+              IndexCacheCandidateBudgetReason::None) {
+            perf::countIndexedCacheOptCandidateBudgetAbort(
+                static_cast<std::uint8_t>(cacheOptCandidateBudgetReason));
+          }
         }
         if (cacheOptCandidateBuilt) {
           PerfScope indexCacheCandidateMeasureScope(
@@ -6549,6 +6620,8 @@ bool encodeDraw(EncodeContext& ctx,
              optimizeScreenBlendIndexCacheScopeMatches) &&
             applyCacheOptCandidatePreEligible &&
             !explicitMeasureCacheOptCandidate &&
+            cacheOptCandidateBudgetReason ==
+                IndexCacheCandidateBudgetReason::None &&
             !cacheOptCandidateGatePassed) {
           ctx.queue.rememberRejectedReorderedIndexBuffer(
               hot.indexBuffer,

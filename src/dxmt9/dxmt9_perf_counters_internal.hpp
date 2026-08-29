@@ -1229,6 +1229,18 @@ struct Counters {
   std::atomic<std::uint64_t> indexedCacheOptCandidateMiss64{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateGatePass{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateGateFail{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateGateFailPrimitiveBucket1_63{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateGateFailPrimitiveBucket64_255{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateGateFailPrimitiveBucket256_1023{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateGateFailPrimitiveBucket1024_4095{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateGateFailPrimitiveBucket4096Plus{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidatePreeligible{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidatePreeligibilityReject{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBudgetAbort{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBudgetTriangleAbort{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBudgetFrontierAbort{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBudgetSelectionWorkAbort{0};
+  std::atomic<std::uint64_t> indexedCacheOptCandidateBudgetScoreWorkAbort{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateOpaqueDepthDraws{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateScreenBlendDraws{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidatePrimitiveBucket1_63{0};
