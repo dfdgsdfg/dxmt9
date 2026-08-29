@@ -549,15 +549,15 @@ D9CCommandChunkWireDrawHeader planDrawHeader(
   return header;
 }
 
-bool appendSparsePlanRecord(CommandChunkBuilder& builder,
-                            std::uint32_t type,
-                            std::uint32_t flags,
-                            const SparseStatePlan& plan) noexcept {
+bool appendSparsePlanRecordWithSources(
+    CommandChunkBuilder& builder, std::uint32_t type,
+    std::uint32_t flags, const SparseStatePlan& plan,
+    const PeHotStateShadow& shadow,
+    const PeBindingView& bindings) noexcept {
   const auto* record = recordRule(type);
   const auto count = planSectionCount(plan);
   if (!record || (record->ruleFlags & RecordRuleSparseState) == 0u ||
       !plan.prepared || !plan.chunkContextFinalized ||
-      !plan.sourceShadow || !plan.sourceBindings ||
       plan.draw.recordType != type ||
       count > D9C_COMMAND_CHUNK_SECTION_COUNT ||
       std::popcount(plan.textureMask) > D9C_DRAW_PACKET_MAX_TEXTURES ||
@@ -599,8 +599,6 @@ bool appendSparsePlanRecord(CommandChunkBuilder& builder,
     return false;
   }
 
-  const auto& shadow = *plan.sourceShadow;
-  const auto& bindings = *plan.sourceBindings;
   std::uint32_t sectionIndex = 0u;
   const auto renderStates = plan.fullSnapshot
       ? shadow.renderStateShadowTyped()
@@ -905,6 +903,19 @@ bool appendSparsePlanRecord(CommandChunkBuilder& builder,
     return false;
   }
   return true;
+}
+
+bool appendSparsePlanRecord(CommandChunkBuilder& builder,
+                            std::uint32_t type,
+                            std::uint32_t flags,
+                            const SparseStatePlan& plan) noexcept {
+  bool appended = false;
+  return plan.withEmitSources(
+      [&](const PeHotStateShadow& shadow,
+          const PeBindingView& bindings) noexcept {
+        appended = appendSparsePlanRecordWithSources(
+            builder, type, flags, plan, shadow, bindings);
+      }) && appended;
 }
 
 }  // namespace

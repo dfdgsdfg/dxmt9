@@ -65,7 +65,81 @@ each synchronous `encodeChunk()` call borrows it. Finalization moves that same
 ownership into submitted queue storage, so neither the source nor a transient
 encode stack frame can drop an open command buffer.
 
-### 2.1 Render Scheduling Provider Configuration
+### 2.1 Direct replay construction transaction
+
+This section specializes the architecture lifecycle and owns the proposed
+`TransactionalChunkSlotAssembler`. PE final-blob construction remains owned by
+the recorder spec.
+
+The planner validates the immutable `RawOwned` blob and computes bounded
+counts, alignments, page runs, source segments, and retained-resource capacity.
+It may retain compact masks and source-qualified offsets, but no
+encoder-visible record bytes. Queue admission then reserves the final control
+shell and Arena regions. The reservation returns one move-only transaction
+owner; typed sinks issued from it are non-copyable, non-movable, thread-bound,
+and call-local.
+
+```text
+RawOwned --begin replay--> ReplayBorrowed
+  --reserve final regions--> TransactionalChunkSlotAssembler::Reserved
+  --typed build--> Building
+  --validate exact prefixes/resources--> Built
+  --infallible commit--> FinalOwned / immutable Ready source
+
+Reserved | Building | Built --pre-effect failure--> rollback --> RawOwned
+Building | Built --semantic/Metal effect--> fail-stop (no legacy retry)
+```
+
+The assembler owns destruction state for each constructed SoA element and
+re-entrant owner. Rollback walks that state in reverse, releases retains, and
+returns pages/control/sequence reservation as one transaction. Commit transfers
+the same regions to the immutable source and invalidates every builder sink.
+`ChunkSlot` is the queue control shell; the Arena chain is its payload
+destination, not a separately published source. The encoder later reacquires a
+fresh generation-checked borrow through `SourcePayloadView`.
+
+Direct draw construction replaces the current shape
+`DrawRunSubmission -> submitDrawSubmissionBatch -> ChunkSlot::appendDrawRunBatch`.
+The destination sink accepts the surviving canonical state once per compatible
+run, per-draw compact params and payload locators, and direct final byte ranges.
+Binding snapshots and resource summaries are resolved before commit but stored
+once. A conservative reservation may leave unused tail capacity; no used prefix
+may be moved or recopied.
+
+The differential harness compares semantic command records and exact payload
+bytes after both paths have completed their own representation-specific build.
+It also compares the effective queue observer stream, retain/release counts,
+pre-effect rollback, and post-effect fail-stop. Process-local addresses,
+container capacity, and padding are excluded. Only the architecture copy ledger
+may claim removal of `copy.replay-submission-carrier`.
+
+The stage observer is driven by the actual transition owners and produces one
+bounded event per state change:
+
+| Abstract stage | Queue event source |
+|---|---|
+| `ProducerOwned -> RawOwned` | authenticated bridge adoption and wrapper ownership |
+| `RawOwned -> ReplayBorrowed` | replay capability acquisition |
+| `ReplayBorrowed -> FinalOwned` | assembler commit / source Ready publication |
+| `FinalOwned -> Encoding` | exact source borrow by serial or selected partition execution |
+| `Encoding -> GPUInFlight` | receipt activation or submitted completion authority |
+| `GPUInFlight -> Reclaimed` | ordered completion/device-loss settlement and final resource/page release |
+
+Early payload retirement stutters within `GPUInFlight`: it may release payload
+pages only after a receipt owns completion, and it must not claim that resource
+waterlines or GPU work were reclaimed. State-only and pre-effect rejected work
+use explicit terminal dispositions. The observer cannot influence scheduling,
+retain spans, or invent a missing milestone.
+
+Dependencies and gates are strict: planner bounds and heterogeneous replay
+projection precede the assembler; transactional rollback precedes direct build;
+legacy/direct native equivalence and the formal ownership/progress refinement
+precede GPU validation/readback; those precede wild counters and any default
+change. Non-goals are command fusion, state or mutation merging, changed
+logical-pass/CB shape, a pointer-bearing locator, unbounded reservation, and
+deleting compatibility replay during this workstream.
+
+### 2.2 Render Scheduling Provider Configuration
 
 Scheduling policy resolves into one queue-immutable value rather than a set of
 hot-path environment checks:

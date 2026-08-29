@@ -172,6 +172,18 @@ dod_replay_observer_spec = executable(
 
 test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
 
+# R-BACK-2.88 / R-VERIF-2.23 bounded source-to-reclaim lifecycle observer.
+# Uses production pure predicates plus a deterministic condition-variable fake
+# backend; no Metal device, sleep, or polling.
+pipeline_lifecycle_observer_spec = executable(
+  'dxmt9-pipeline-lifecycle-observer-spec',
+  'pipeline_lifecycle_observer_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-pipeline-lifecycle-observer-spec',
+     pipeline_lifecycle_observer_spec)
+
 resource_lifetime_spec = executable(
   'dxmt9-resource-lifetime-spec',
   'resource_lifetime_spec.cpp',
@@ -824,6 +836,22 @@ buffer_mutation_offload_spec = executable(
 )
 
 test('dxmt9-buffer-mutation-offload-spec', buffer_mutation_offload_spec,
+     env: dxmt9_native_test_env)
+
+# R-BACK-44.9..44.11 observation-only composition ledger. This test exercises
+# source-qualified A->B->A generations, first-use/CPU-observer barriers,
+# conservative NOOVERWRITE range accounting, dead DISCARD chains, and failure
+# conservation. The observer is header-only and remains default-disabled.
+mutation_composition_observer_spec = executable(
+  'dxmt9-mutation-composition-observer-spec',
+  'mutation_composition_observer_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-mutation-composition-observer-spec',
+     mutation_composition_observer_spec,
      env: dxmt9_native_test_env)
 
 # R-BACK-44.x production half: the pool rotate/apply split, the offload queue's

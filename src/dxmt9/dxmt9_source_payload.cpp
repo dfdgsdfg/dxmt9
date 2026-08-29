@@ -1,5 +1,7 @@
 #include "dxmt9_source_payload.hpp"
 
+#include "dxmt9/copy_materialization_ledger.hpp"
+
 #include <algorithm>
 
 namespace dxmt9::core {
@@ -861,6 +863,17 @@ bool ArenaSourcePayloadBuilder::publish() noexcept {
   return true;
 }
 
+bool ArenaSourcePayloadBuilder::publishValidationReady() const noexcept {
+  return good_ && block_ && block_->validateForPublish();
+}
+
+void ArenaSourcePayloadBuilder::rollback() noexcept {
+  if (block_) {
+    block_->destroyConstructed();
+  }
+  good_ = false;
+}
+
 bool ArenaSourcePayloadBuilder::tryAppendCommand(
     MetalCommandKind kind,
     std::uint32_t payloadIndex) noexcept {
@@ -882,6 +895,36 @@ bool ArenaSourcePayloadBuilder::tryAppendDrawShaderLayout(
     return false;
   }
   return true;
+}
+
+bool ArenaSourcePayloadBuilder::tryAppendDrawShaderLayout(
+    const DrawShaderLayoutContext& value) noexcept {
+  if (!good_ || !block_->drawShaderLayouts_.try_copy_back(value)) {
+    good_ = false;
+    return false;
+  }
+  return true;
+}
+
+const FlatDrawStateRecord* ArenaSourcePayloadBuilder::drawHotState(
+    std::size_t index) const noexcept {
+  return good_ && block_ && index < block_->drawHotStates_.size()
+      ? &block_->drawHotStates_[index]
+      : nullptr;
+}
+
+const DrawShaderLayoutContext* ArenaSourcePayloadBuilder::drawShaderLayout(
+    std::size_t index) const noexcept {
+  return good_ && block_ && index < block_->drawShaderLayouts_.size()
+      ? &block_->drawShaderLayouts_[index]
+      : nullptr;
+}
+
+DrawRunCommandRecord* ArenaSourcePayloadBuilder::drawRun(
+    std::size_t index) noexcept {
+  return good_ && block_ && index < block_->drawRunRecords_.size()
+      ? &block_->drawRunRecords_[index]
+      : nullptr;
 }
 
 bool ArenaSourcePayloadBuilder::tryAppendDrawDebugSnapshot(
@@ -1111,7 +1154,48 @@ bool ArenaSourcePayloadBuilder::tryAppendPresentCommand(
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendUniform(
+bool TransactionalChunkSlotAssembler::reserve() noexcept {
+  if (state_ != State::Empty || !builder_ || !builder_->good()) {
+    state_ = State::Failed;
+    return false;
+  }
+  state_ = State::Reserved;
+  return true;
+}
+
+bool TransactionalChunkSlotAssembler::beginBuild() noexcept {
+  if (state_ == State::Reserved) {
+    state_ = State::Building;
+  }
+  return state_ == State::Building && builder_ && builder_->good();
+}
+
+bool TransactionalChunkSlotAssembler::fail() noexcept {
+  state_ = State::Failed;
+  return builder_ ? builder_->reject() : false;
+}
+
+bool TransactionalChunkSlotAssembler::commit() noexcept {
+  if ((state_ != State::Reserved && state_ != State::Building) ||
+      !builder_ || !builder_->publish()) {
+    state_ = State::Failed;
+    return false;
+  }
+  state_ = State::Committed;
+  return true;
+}
+
+void TransactionalChunkSlotAssembler::rollback() noexcept {
+  if (state_ == State::Committed || state_ == State::RolledBack) {
+    return;
+  }
+  if (builder_) {
+    builder_->rollback();
+  }
+  state_ = State::RolledBack;
+}
+
+bool TransactionalChunkSlotAssembler::tryAppendUniform(
     const DrawUniformPayload& payload,
     DrawUniformHandle& uniformHandle) noexcept {
   if (!good() || uniformCount_ > std::numeric_limits<std::uint32_t>::max()) {
@@ -1199,7 +1283,7 @@ bool ArenaSourcePayloadAssembler::tryAppendUniform(
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendPayloadBytes(
+bool TransactionalChunkSlotAssembler::tryAppendPayloadBytes(
     std::span<const u8> bytes,
     DrawPayloadRange& range,
     std::size_t runPayloadOffset) noexcept {
@@ -1227,9 +1311,16 @@ bool ArenaSourcePayloadAssembler::tryAppendPayloadBytes(
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendDrawRunBatch(
+bool TransactionalChunkSlotAssembler::tryAppendDrawRunBatch(
     std::span<DrawRunSubmission> submissions) noexcept {
-  if (!good() || submissions.empty() || !submissions.front().stateMaterialized ||
+  const auto carrierBytes = submissions.size() * sizeof(DrawRunSubmission);
+  dxmt9::core::CopyMaterializationEvent carrierEvent(
+      dxmt9::core::activeCopyMaterializationLedger(),
+      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy,
+      carrierBytes);
+  directRunOpen_ = false;
+  if (!beginBuild() || submissions.empty() ||
+      !submissions.front().stateMaterialized ||
       stateCount_ > std::numeric_limits<std::uint32_t>::max() ||
       paramCount_ > std::numeric_limits<std::uint32_t>::max() ||
       drawRunCount_ > std::numeric_limits<std::uint32_t>::max() ||
@@ -1320,57 +1411,189 @@ bool ArenaSourcePayloadAssembler::tryAppendDrawRunBatch(
   }
   ++drawRunCount_;
   ++commandCount_;
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    ledger->record(
+        dxmt9::core::CopyMaterializationClass::
+            ReplaySubmissionCarrierMaterialization,
+        sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext) +
+            submissions.size() * sizeof(DrawUniformPayload));
+    ledger->record(
+        dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
+        sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext) +
+            sizeof(DrawDebugSnapshot) +
+            submissions.size() *
+                (sizeof(DrawParam) + sizeof(DrawUniformPayload)) +
+            (drawPayloadBytes_ - runPayloadOffset));
+  }
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendClear(
+bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
+    const DirectReplayDrawInput& input) noexcept {
+  if (!beginBuild() || !input.valid() ||
+      stateCount_ > std::numeric_limits<std::uint32_t>::max() ||
+      uniformCount_ > std::numeric_limits<std::uint32_t>::max() ||
+      paramCount_ > std::numeric_limits<std::uint32_t>::max() ||
+      drawRunCount_ > std::numeric_limits<std::uint32_t>::max() ||
+      drawPayloadBytes_ > std::numeric_limits<std::uint32_t>::max()) {
+    return fail();
+  }
+
+  bool extendRun = false;
+  if (directRunOpen_) {
+    const auto* baseHot = builder_->drawHotState(directRunStateIndex_);
+    const auto* baseLayout =
+        builder_->drawShaderLayout(directRunStateIndex_);
+    extendRun = baseHot && baseLayout &&
+        drawStatesCompatibleForDrawRunBatch(*baseHot, *input.hot) &&
+        shaderLayoutsCompatibleForDrawRunBatch(*baseLayout,
+                                               *input.shaderLayout);
+  }
+  const auto finalBaseBytes = sizeof(DrawParam) + sizeof(DrawUniformPayload) +
+      (extendRun ? 0u : sizeof(FlatDrawStateRecord) +
+          sizeof(DrawShaderLayoutContext) + sizeof(DrawDebugSnapshot));
+  const auto drawPayloadBytesBefore = drawPayloadBytes_;
+  dxmt9::core::CopyMaterializationEvent finalAppendEvent(
+      dxmt9::core::activeCopyMaterializationLedger(),
+      dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
+      finalBaseBytes);
+
+  std::uint32_t stateIndex = 0;
+  DrawPsoSubview psoSubview{};
+  DrawRunInvariant invariant{};
+  const std::size_t runPayloadOffset = extendRun
+      ? directRunPayloadOffset_
+      : drawPayloadBytes_;
+  if (!extendRun) {
+    stateIndex = static_cast<std::uint32_t>(stateCount_);
+    psoSubview = ChunkSlot::makeDrawPsoSubview(
+        *input.hot, *input.shaderLayout);
+    invariant = ChunkSlot::makeDrawRunInvariant(*input.hot);
+    if (!builder_->tryAppendDrawHotState(*input.hot) ||
+        !builder_->tryAppendDrawShaderLayout(*input.shaderLayout) ||
+        !builder_->tryAppendDrawDebugSnapshot(input.debug)) {
+      return fail();
+    }
+    ++stateCount_;
+  }
+
+  DrawUniformHandle uniformHandle{};
+  if (!tryAppendUniform(*input.uniforms, uniformHandle)) {
+    return fail();
+  }
+  DrawParam draw = input.draw;
+  draw.uniformHandle = uniformHandle;
+  if (!tryAppendPayloadBytes(input.payload.userVertexData,
+                             draw.userVertexRange, runPayloadOffset) ||
+      !tryAppendPayloadBytes(input.payload.userIndexData,
+                             draw.userIndexRange, runPayloadOffset) ||
+      !tryAppendPayloadBytes(input.payload.bindingOverrideData,
+                             draw.bindingOverrideRange, runPayloadOffset) ||
+      !tryAppendPayloadBytes(input.payload.bindingSnapshotData,
+                             draw.bindingSnapshotRange, runPayloadOffset) ||
+      !builder_->tryAppendDrawParam(draw)) {
+    return fail();
+  }
+  ++paramCount_;
+  finalAppendEvent.setBytes(
+      finalBaseBytes + (drawPayloadBytes_ - drawPayloadBytesBefore));
+
+  if (extendRun) {
+    auto* run = builder_->drawRun(directRunRecordIndex_);
+    if (!run || run->paramCount == std::numeric_limits<std::uint32_t>::max() ||
+        drawPayloadBytes_ < runPayloadOffset ||
+        drawPayloadBytes_ - runPayloadOffset >
+            std::numeric_limits<std::uint32_t>::max()) {
+      return fail();
+    }
+    ++run->paramCount;
+    run->payloadSize = static_cast<std::uint32_t>(
+        drawPayloadBytes_ - runPayloadOffset);
+    return true;
+  }
+
+  if (drawPayloadBytes_ < runPayloadOffset ||
+      drawPayloadBytes_ - runPayloadOffset >
+          std::numeric_limits<std::uint32_t>::max() ||
+      !builder_->tryAppendDrawPsoSubview(psoSubview) ||
+      !builder_->tryAppendDrawRun(DrawRunCommandRecord{
+          .stateIndex = stateIndex,
+          .firstParam = static_cast<std::uint32_t>(paramCount_ - 1u),
+          .paramCount = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(runPayloadOffset),
+          .payloadSize = static_cast<std::uint32_t>(
+              drawPayloadBytes_ - runPayloadOffset),
+          .uniformHandle = uniformHandle,
+          .invariant = invariant,
+      }) ||
+      !builder_->tryAppendCommand(
+          MetalCommandKind::DrawRun,
+          static_cast<std::uint32_t>(drawRunCount_))) {
+    return fail();
+  }
+  directRunStateIndex_ = stateIndex;
+  directRunRecordIndex_ = drawRunCount_;
+  directRunPayloadOffset_ = runPayloadOffset;
+  directRunOpen_ = true;
+  ++drawRunCount_;
+  ++commandCount_;
+  return true;
+}
+
+bool TransactionalChunkSlotAssembler::tryAppendClear(
     const ClearDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendClearCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendClearCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendSurfaceCopy(
+bool TransactionalChunkSlotAssembler::tryAppendSurfaceCopy(
     const SurfaceCopyDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendSurfaceCopyCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendSurfaceCopyCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendStretchRect(
+bool TransactionalChunkSlotAssembler::tryAppendStretchRect(
     const StretchRectDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendStretchRectCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendStretchRectCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendColorFill(
+bool TransactionalChunkSlotAssembler::tryAppendColorFill(
     const ColorFillDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendColorFillCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendColorFillCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendDepthResolve(
+bool TransactionalChunkSlotAssembler::tryAppendDepthResolve(
     const DepthResolveDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendDepthResolveCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendDepthResolveCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;
   return true;
 }
 
-bool ArenaSourcePayloadAssembler::tryAppendGenerateMipmaps(
+bool TransactionalChunkSlotAssembler::tryAppendGenerateMipmaps(
     const GenerateMipmapsDesc& value) noexcept {
-  if (!good() || !builder_->tryAppendGenerateMipmapsCommand(value)) {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendGenerateMipmapsCommand(value)) {
     return builder_->reject();
   }
   ++commandCount_;

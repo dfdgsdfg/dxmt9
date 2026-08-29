@@ -242,6 +242,20 @@ serial modes reachable, until the complete layered evidence bundle in
 non-vacuous Render Tape or Metal result must not be described as a default-on
 or performance-promotion claim by itself.
 
+**R-VERIF-2.23** A composed ownership/progress specification must refine the
+runtime stages `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned ->
+Encoding -> GPUInFlight -> Reclaimed` and the
+`TransactionalChunkSlotAssembler` sub-transaction. It must prove unique owner
+or synchronous borrow at every stage; no borrow escape; reserve/build/commit or
+exact reverse rollback; no publication before complete construction; no legacy
+retry after a semantic/Metal effect; strict source/completion order; and
+eventual reclaim under explicit worker, encoder, and GPU fairness assumptions.
+It must model state-only, pre-effect reject, oversize compatibility fallback,
+early payload retirement under a receipt, device loss, Reset/teardown, and
+bounded pressure. Expected-failure configurations must independently remove
+the borrow-return, rollback, publish-after-build, no-post-effect-retry, and
+completion-before-reclaim premises.
+
 ---
 
 ## 3. Resource Lifetime
@@ -460,3 +474,26 @@ collapse into ad-hoc cross-boundary state.
 to verification results. A regression from chunked submission to per-state or
 per-draw bridge calls is a DXMT merge-readiness failure even if rendering output
 remains correct.
+
+**R-VERIF-7.6** The production queue must expose a deterministic lifecycle
+observer for R-BACK-2.88. A native fake-backend fixture must conserve one exact
+identity and generation from Raw adoption through replay borrow, final
+publication, serial and selected-parallel encode borrow, receipt/submission,
+ordered completion, and reclaim. It must cover pre-effect rollback, state-only,
+early payload retirement, device loss, stale/duplicate events, and reclaim with
+an outstanding borrow, without sleeps, polling, real Metal timing, or a
+test-only transition owner. The observer is separate from the effective-command
+observer in R-VERIF-7.3 but may share its cold nullable-sink infrastructure.
+
+**R-VERIF-7.7** Direct construction acceptance has four non-substitutable
+layers. Native differential fixtures own PE blob byte identity and backend
+effective command/payload/resource/failure equivalence. The R-VERIF-2.23 model
+owns transaction and temporal refinement. Metal validation plus deterministic
+readback owns concrete encoder-visible equivalence. Bounded x64/x86 Wine faults
+own PE COM/bridge HRESULT, poison, retry, and retain behavior. The recorder's
+heterogeneous semantic projection must bind exact category/key/value-or-
+identity/source-ordinal/record-ordinal/range tokens across all record families;
+record kind, byte count, or timing cannot substitute. Wild evidence is last and
+must show the named copy-class reduction, bounded peak retention, conserved
+commands/resources/completions, normal visual anchors, zero new GPU errors, and
+no displaced wait or copy class before a default change.

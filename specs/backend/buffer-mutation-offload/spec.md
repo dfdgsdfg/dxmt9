@@ -7,12 +7,15 @@ tags: [backend, buffers, producer-concurrency, offload]
 
 # Managed Buffer Mutation Offload — Design
 
-Design for R-BACK-44.1..44.8 (`requirements.md`). Status: designed, not
-implemented — see `gap.md`.
+Design for R-BACK-44.1..44.11 (`requirements.md`). The V1 transport is
+implemented and default on; mutation composition is observer-first. The bounded
+observer core and one successful-Unlock producer hook are implemented, while
+production use/barrier emission, runtime reporting, the decision gate, and
+composition remain open — see `gap.md`.
 
 ## 1. Problem shape
 
-Today a Managed-pool writable unlock runs entirely on the producer thread
+Before V1, a Managed-pool writable unlock ran entirely on the producer thread
 inside the `dxmt9c_buffer_unlock` bridge crossing: drain the replay ledger
 (R-BACK-2.51(d)), rotate the rename ring, and copy the full buffer twice
 (`Pool::uploadBufferData` → `record.shadow` + `record.contents`). Measured
@@ -51,10 +54,11 @@ Three existing invariants carry the proof:
    *later* mutation applies, so R-BACK-44.4a requires every encode-side
    byte consumer of a versioned record to be snapshot-sourced (or keyed by
    captured backing + `contentRevision`) as a prerequisite. The encode
-   index staging path violates this today (missing `!indexSnapshot` guard;
-   a pre-existing latent race against the synchronous unlock as well,
-   since the R-BACK-2.51(d) drain waits on `lastReplayedSeq` only) and is
-   fixed as an independent correctness change before this mode.
+   index staging path violated this at design time (missing
+   `!indexSnapshot` guard; a pre-existing latent race against the synchronous
+   unlock as well, since the R-BACK-2.51(d) drain waits on
+   `lastReplayedSeq` only). The snapshot-presence prerequisite is implemented
+   and tracked in `gap.md`.
 
 The one consumer class outside that order is direct unix calls that read
 live record bytes (shared-buffer export today; any future readback). They
@@ -99,20 +103,16 @@ sequenceDiagram
     E->>E: encode A then B (bytes materialized before each)
 ```
 
-FIFO transport: `ReplayOffloadQueue` today carries only `RawCommandChunk`.
-The queue element becomes a two-alternative task (chunk | buffer
-mutation); the worker loop dispatches per alternative. No second queue —
-one queue is what makes the ordering argument one sentence.
+FIFO transport is one `ReplayOffloadQueue` carrying `ReplayQueueItem` values
+for chunks, buffer mutations, and reservation placeholders. The worker loop
+dispatches each committed alternative in queue order. There is no second queue;
+that one queue is the ordering authority.
 
-Admission is a reserve/commit transaction (R-BACK-44.2): today's
-`pushWithDisposition` assigns `replaySeq` only at adoption under the queue
-mutex and may wait, reject, or stop — rotating first and enqueuing after
-would let a concurrent producer's chunk overtake the mutation, or leave a
-visible rotation with no task on a rejected push. The queue therefore
-gains a reservation API: reserve fixes the FIFO ordinal and charges the
-byte budget with no visible effect; commit is infallible; release covers
-every reject/stop path. Rotation runs strictly between reserve and
-commit.
+Admission is the reserve/commit transaction from R-BACK-44.2. Reserve fixes the
+FIFO ordinal and charges the byte budget with no visible effect; commit is
+infallible; release covers every reject/stop path. Rotation runs strictly
+between reserve and commit. This prevents a concurrent producer's chunk from
+overtaking the mutation and prevents a visible rotation with no committed task.
 
 ## 5. Failure behavior
 
@@ -153,3 +153,38 @@ commit.
 - Reducing rotation frequency or backing count for Managed buffers.
 - Any change to read locks, `storage_` ownership, or PE-side hazard
   flushes.
+
+## 8. Observer-first composition decision
+
+The V1 task is the semantic baseline: one accepted Unlock, one ordered task,
+one exact backing generation, one application. The completed observer must
+shadow that stream without changing it, key events by the same resource
+identity, backing generation, revision, FIFO ordinal, and captured-use identity
+used by production, then classify only adjacent candidates for which every
+known barrier is absent. The current producer-only scaffold does not yet have
+the use/barrier observations needed to make that classification.
+
+Observer output is a decision record, not a composition plan:
+
+```text
+(workload, mutation class,
+ candidate calls, candidate bytes, candidate CPU time per Present,
+ zero-use generations, mergeable union/overlap bytes,
+ rejection counts by barrier, disabled-path audit result)
+```
+
+The decision is fixed by R-BACK-44.10: `>=0.5ms/Present` opens a separate
+design; `<0.2ms/Present` closes the lane; the middle band gathers evidence but
+authorizes no code. The source experiment is
+`docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.38.md`.
+The observer must not count time already attributed to bridge residence,
+queueing, or a non-composable mutation class.
+
+If the lane opens, the new design must explicitly model the mutation algebra
+and barriers from R-BACK-44.11. In particular, chunk adjacency alone is not an
+observer boundary proof, and last-writer-wins bytes do not prove that an older
+generation was unused. Render Tape `ResourceMutation` events provide the
+effective replay oracle; formal and native evidence must bind the exact
+latest-preceding generation and failure disposition before GPU/Wine/wild
+promotion. No speculative merge, upload elision, delayed success, default
+change, or modification of the current V1 queue is part of this observer wave.

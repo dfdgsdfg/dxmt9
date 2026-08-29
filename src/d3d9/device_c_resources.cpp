@@ -1355,7 +1355,8 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   }
   if (offloadPlanned) {
     const auto coreStart = std::chrono::steady_clock::now();
-    const auto offloaded = dxmt9::d3d9::offloadManagedBufferMutation(b);
+    const auto offloaded = dxmt9::d3d9::offloadManagedBufferMutation(
+        b, writebackNs);
     if (offloaded == dxmt9::d3d9::BufferMutationOffloadResult::
                          RejectedPreEffect) {
       // Step-1 failure. Nothing rotated, nothing enqueued, and NO lock state

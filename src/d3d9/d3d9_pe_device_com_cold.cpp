@@ -2294,6 +2294,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::EndStateBlock(IDirect3DStateBlock9** p
     }
     dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
     D9CStateBlock* sb = nullptr;
+    if (dxmt9PeConsumeStateBlockFault(
+            PeStateBlockFaultPoint::BridgePre, injectedHr)) {
+        if (diagnosticObserverForChild())
+            diagnosticObserverForChild()->notifyStateBlockFault(false,
+                                                                injectedHr);
+        recorderState_.stateBlockTransaction.endPreEffectFailed();
+        return hr32(injectedHr);
+    }
     HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
     if (SUCCEEDED(hr) &&
         dxmt9PeConsumeStateBlockEnteredFault(

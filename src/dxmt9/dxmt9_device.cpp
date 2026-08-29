@@ -339,6 +339,10 @@ class DeviceImpl final : public Device {
                      std::span<const core::DrawParamPayloadView> payloads) override {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
+  bool submitDirectReplayDraw(
+      const core::DirectReplayDrawInput& input) noexcept override {
+    return queue_.submitDirectReplayDraw(input);
+  }
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) override {
     queue_.submitDrawRunBatch(submissions);
   }

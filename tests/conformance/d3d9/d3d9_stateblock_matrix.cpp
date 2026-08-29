@@ -579,7 +579,7 @@ void stateblock_fault_pre(const char *fault) {
   CHECK_HR(fixture.device->CreateStateBlock(D3DSBT_ALL, &stateblock), D3D_OK);
   CHECK(stateblock != nullptr);
   if (!stateblock) return;
-  if (fault_is(fault, "capture_pre")) {
+  if (fault_is(fault, "capture_pre") || fault_is(fault, "bridge_pre")) {
     CHECK_HR(stateblock->Capture(), expected);
     CHECK_HR(stateblock->Capture(), D3D_OK);
   } else {
@@ -666,7 +666,8 @@ int main() {
   const char *fault = std::getenv("DXMT9_PE_STATEBLOCK_FAULT");
   if (fault && *fault) {
     if (fault_is(fault, "capture_pre") || fault_is(fault, "apply_pre") ||
-        fault_is(fault, "end_pre") || fault_is(fault, "alloc_pre")) {
+        fault_is(fault, "end_pre") || fault_is(fault, "alloc_pre") ||
+        fault_is(fault, "bridge_pre")) {
       stateblock_fault_pre(fault);
     } else {
       stateblock_fault_entered(fault);

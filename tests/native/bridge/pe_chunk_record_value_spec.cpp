@@ -2,6 +2,7 @@
 #include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_validate.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1553,6 +1554,105 @@ void testTypedTailAndSectionAdmission() {
         "ignored draw-header/table-count mismatch cannot commit");
 }
 
+void testLargeHandleSealByteIdentityAndLedger() {
+  constexpr std::size_t kHandleCount = 160u;
+  std::vector<std::unique_ptr<D9CTexture>> textures;
+  textures.reserve(kHandleCount);
+  for (std::size_t i = 0; i < kHandleCount; ++i) {
+    textures.push_back(std::make_unique<D9CTexture>());
+  }
+
+  CommandChunkBuilder builder(CommandChunkBuilderCapacities{
+      .records = kHandleCount,
+      .handles = kHandleCount,
+      .payloadBytes = kHandleCount *
+          sizeof(D9CCommandChunkWireUpdateTexture),
+  });
+  dxmt9::core::CopyMaterializationLedger ledger;
+  dxmt9::core::ScopedCopyMaterializationLedger observe(ledger);
+  const auto build = [&] {
+    for (std::size_t i = 0; i < kHandleCount; ++i) {
+      const auto ref = wireRef(textures[i].get(),
+                               D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                               0x90000u + i);
+      std::uint32_t first = 0u;
+      std::uint32_t duplicate = 0u;
+      check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+                builder.appendHandle(ref, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                     first) &&
+                builder.appendHandle(ref, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                     duplicate) &&
+                first == duplicate &&
+                builder.appendPayloadValue(
+                    D9CCommandChunkWireUpdateTexture{
+                        .srcHandleIndex = first,
+                        .dstHandleIndex = duplicate,
+                    }) &&
+                builder.commitRecord(),
+            "160-handle fixture appends one deduplicated handle per record");
+    }
+    return builder.seal();
+  };
+
+  const auto first = build();
+  check(first.valid() && first.recordCount == kHandleCount &&
+            first.handleCount == kHandleCount,
+        "160-handle final blob seals with exact table counts");
+  const std::vector<std::byte> reference(first.blob.begin(), first.blob.end());
+  const auto recordsBeforeRetry = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSealRecords);
+  const auto retry = builder.seal();
+  check(retry.valid() && retry.blob.size() == reference.size() &&
+            std::equal(retry.blob.begin(), retry.blob.end(),
+                       reference.begin()) &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealRecords).calls ==
+                recordsBeforeRetry.calls,
+        "repeated seal is byte-stable and does not repeat construction copies");
+
+  builder.reset();
+  const auto second = build();
+  check(second.valid() && second.blob.size() == reference.size() &&
+            std::equal(second.blob.begin(), second.blob.end(),
+                       reference.begin()),
+        "warm-retained construction reproduces exact wire bytes");
+  const auto recordCopies = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSealRecords);
+  const auto builderTemporary = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeBuilderTemporary);
+  const auto handleCopies = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSealHandles);
+  const auto payloadMoves = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSealPayload);
+  const auto finalBlob = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  check(builderTemporary.calls == 2u * kHandleCount &&
+            builderTemporary.bytes == 2u * kHandleCount *
+                sizeof(D9CCommandChunkWireUpdateTexture) &&
+            recordCopies.calls == 2u &&
+            recordCopies.bytes == 2u * kHandleCount *
+                sizeof(D9CCommandChunkWireRecordHeader) &&
+            recordCopies.retainedBytesPeak == kHandleCount *
+                sizeof(D9CCommandChunkWireRecordHeader) &&
+            handleCopies.calls == 2u &&
+            handleCopies.bytes == 2u * kHandleCount *
+                sizeof(D9CCommandChunkWireHandleEntry) &&
+            handleCopies.retainedBytesPeak == kHandleCount *
+                sizeof(D9CCommandChunkWireHandleEntry) &&
+            payloadMoves.calls == 2u &&
+            payloadMoves.bytes == 2u * kHandleCount *
+                sizeof(D9CCommandChunkWireUpdateTexture) &&
+            finalBlob.calls == 2u &&
+            finalBlob.bytes == 2u * reference.size() &&
+            finalBlob.retainedBytesPeak == reference.size(),
+        "copy ledger conserves final tables, in-place payload moves, and peak");
+  builder.resetAndReleaseRetained();
+  check(ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::PeWireFinal).retainedBytes ==
+            0u,
+        "reset reclaims ledger-retained final blob bytes");
+}
+
 }  // namespace
 
 int main() {
@@ -1570,6 +1670,7 @@ int main() {
     testCommittedPendingChunkLeaseQualification();
     testOversizedPendingBatchAppendFailure();
     testTypedTailAndSectionAdmission();
+    testLargeHandleSealByteIdentityAndLedger();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

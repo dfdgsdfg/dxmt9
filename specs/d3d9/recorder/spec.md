@@ -570,6 +570,56 @@ The commit model includes seal/bridge/capture-journal settlement, and the
 native witness exercises bridge pre-effect retry, effect-unknown poison, and
 capture rejection through the same pure helpers.
 
+### 6.1 Direct final-wire transaction and semantic projection
+
+The direct-wire workstream specializes R-ARCH-7.7–7.10 and does not own the
+backend `ChunkSlot` transaction. Its proposed destination owner is a
+transactional final-blob layout with four regions known before producer
+execution:
+
+```text
+reserve(total bytes, record capacity, handle capacity, payload capacity)
+  -> build header/table/arena through typed call-local sinks
+  -> validate exact used prefixes and settlement witnesses
+  -> commit one immutable pointer-free blob
+  |  rollback lengths, retains, tokens, and capture state
+```
+
+No producer receives the base pointer or an unbounded mutable span. The sink
+accepts one checked element or exact typed range, advances monotonically within
+its reserved region, and records every newly acquired retain in the transaction
+checkpoint. Header counts and offsets are finalized only after all regions
+validate; commit is then infallible. Repeated seal returns the same committed
+bytes. Reset or rollback destroys the transaction before releasing recorder
+ownership, so no callback can observe a half-built wire identity.
+
+`RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
+not new owners. They carry the recorder epoch and transaction identity, have no
+copy/move operations, and exist only as callback parameters. A typed sink may
+derive a shorter element reference whose lifetime ends before the callback
+returns. Code that needs asynchronous work must copy a pointer-free value into
+an already-owned destination; it cannot retain the borrow or lock witness.
+
+The heterogeneous semantic projection is a cold oracle over accepted append
+transactions. It records category-qualified semantic tokens before build and
+matches them to exact committed record ordinals and byte ranges after build.
+The projection covers every family in R-CORE-REC-7.4 and composes with the
+existing scalar and StateBlock projections; it does not infer semantics from a
+wire type or payload size. The default path need not retain the token ledger.
+When disabled, one cached-null branch is the full hot-path cost.
+
+The legacy/direct harness runs both builders from one immutable canonical
+fixture. It compares complete wire bytes and owner/settlement outcomes before
+import, then imports both blobs and compares the effective command sequence.
+Failure cases stop at the same injected fallible boundary and compare rollback,
+retry, poison, and capture results. Cross-target PE builds plus the bounded Wine
+matrix in R-CORE-REC-7.5 are required because host-only value tests cannot
+exercise the PE COM and bridge failure boundary.
+
+Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
+callbacks, record fusion, changed chunk cadence, semantic state merging, or
+removal of the compatibility builder before all promotion gates pass.
+
 ## 7. Acceptance matrix
 
 ### 7.0 PE ABI and codegen audit

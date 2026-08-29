@@ -15,6 +15,7 @@ enum class PeStateBlockFaultPoint : std::uint8_t {
   ApplyPre,
   EndPre,
   AllocPre,
+  BridgePre,
   CaptureEntered,
   ApplyEntered,
   EndEntered,
@@ -46,13 +47,14 @@ inline bool peStateBlockFaultName(const char* begin, const char* end,
       PeStateBlockFaultPoint::ApplyPre,
       PeStateBlockFaultPoint::EndPre,
       PeStateBlockFaultPoint::AllocPre,
+      PeStateBlockFaultPoint::BridgePre,
       PeStateBlockFaultPoint::CaptureEntered,
       PeStateBlockFaultPoint::ApplyEntered,
       PeStateBlockFaultPoint::EndEntered,
       PeStateBlockFaultPoint::BridgeEntered,
   };
   constexpr const char* names[] = {
-      "capture_pre", "apply_pre", "end_pre", "alloc_pre",
+      "capture_pre", "apply_pre", "end_pre", "alloc_pre", "bridge_pre",
       "capture_entered", "apply_entered", "end_entered", "bridge_entered",
   };
   for (unsigned i = 0; i < sizeof(points) / sizeof(points[0]); ++i) {

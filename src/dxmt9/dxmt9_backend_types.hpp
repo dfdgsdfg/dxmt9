@@ -1767,13 +1767,14 @@ struct ChunkSlot {
            detail::chunkSlotCanAppendU32Range(drawPayloadArena.size(), payloadBytes);
   }
 
-  static DrawPsoSubview makeDrawPsoSubview(const CanonicalDrawState& state) noexcept {
+  static DrawPsoSubview makeDrawPsoSubview(
+      const FlatDrawStateRecord& hot,
+      const DrawShaderLayoutContext& shaderLayout) noexcept {
     DrawPsoSubview view{};
-    const auto& hot = state.hot;
     const auto& key = hot.key;
     view.hasShaderContext =
-        state.shaderLayout.vertexShader.kind != ShaderRef::Kind::None ||
-        state.shaderLayout.pixelShader.kind != ShaderRef::Kind::None;
+        shaderLayout.vertexShader.kind != ShaderRef::Kind::None ||
+        shaderLayout.pixelShader.kind != ShaderRef::Kind::None;
     view.vertexShaderHash = key.vertexShaderHash;
     view.pixelShaderHash = key.pixelShaderHash;
     view.vertexDeclHash = key.vertexDeclHash;
@@ -1795,6 +1796,25 @@ struct ChunkSlot {
       }
     }
     return view;
+  }
+
+  static DrawPsoSubview makeDrawPsoSubview(
+      const CanonicalDrawState& state) noexcept {
+    return makeDrawPsoSubview(state.hot, state.shaderLayout);
+  }
+
+  static DrawRunInvariant makeDrawRunInvariant(
+      const FlatDrawStateRecord& hot) noexcept {
+    return DrawRunInvariant{
+        .viewportScissorHash = hot.key.viewportHash,
+        .runStableBindingHash =
+            hot.key.renderStateHash ^ (hot.key.vertexDeclHash << 1) ^
+            (static_cast<u64>(hot.textureMask) << 2) ^
+            (static_cast<u64>(hot.key.samplerStateMask) << 3),
+        .streamMask = hot.streamMask,
+        .textureMask = hot.textureMask,
+        .samplerStateMask = hot.key.samplerStateMask,
+    };
   }
 
   void appendDrawRun(CanonicalDrawState state,

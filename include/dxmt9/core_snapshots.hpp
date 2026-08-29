@@ -1121,6 +1121,25 @@ struct DrawRunSubmission {
   }
 };
 
+// Synchronous direct-replay input.  The state and uniform pointers borrow the
+// core Device cache only for the duration of submitDirectReplayDraw(); final
+// Arena/ChunkSlot storage must copy their values before returning.  Keeping
+// the large state/uniform values behind synchronous borrowed pointers prevents
+// the compatibility DrawRunSubmission carrier from riding the eligible path.
+struct DirectReplayDrawInput {
+  const FlatDrawStateRecord* hot = nullptr;
+  const DrawShaderLayoutContext* shaderLayout = nullptr;
+  const DrawUniformPayload* uniforms = nullptr;
+  DrawDebugSnapshot debug{};
+  DrawParam draw{};
+  DrawParamPayloadView payload{};
+
+  bool valid() const noexcept {
+    return hot && shaderLayout && uniforms &&
+           draw.primitiveType != PrimitiveType::TriangleFan;
+  }
+};
+
 inline std::span<const u8> drawBindingOverrideBytes(
     const DrawBindingOverride& binding) noexcept {
   return std::span<const u8>(reinterpret_cast<const u8*>(&binding),
@@ -2389,6 +2408,8 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
       const DrawRunSubmission* previousSubmission = nullptr);
+  HResult submitDirectReplayDrawFromCurrentState(
+      DrawParam draw, DrawParamPayloadView payload = {});
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);

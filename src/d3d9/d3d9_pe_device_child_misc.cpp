@@ -428,6 +428,12 @@ public:
         return captureHr;
       }
     }
+    if (dxmt9PeConsumeStateBlockFault(
+            PeStateBlockFaultPoint::BridgePre, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(false, injectedHr);
+      return hr32(injectedHr);
+    }
     const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
     if (context_ && SUCCEEDED(hr) &&
         dxmt9PeConsumeStateBlockEnteredFault(
@@ -478,6 +484,12 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
+    if (dxmt9PeConsumeStateBlockFault(
+            PeStateBlockFaultPoint::BridgePre, injectedHr)) {
+      if (diagnostics_)
+        diagnostics_->notifyStateBlockFault(false, injectedHr);
+      return hr32(injectedHr);
+    }
     if (context_) {
       const HRESULT prepareHr =
           context_->PrepareStateBlockApplyForChild(saved_);

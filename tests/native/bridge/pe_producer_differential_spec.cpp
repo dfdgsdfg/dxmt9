@@ -80,6 +80,15 @@ namespace {
 
 namespace pe = dxmt9::d3d9::pe;
 
+const pe::RecorderLockCapability& recorderAccess() {
+  static std::recursive_mutex mutex;
+  static dxmt9::core::ThreadOwnershipToken owner;
+  static std::uint64_t epoch = 1u;
+  static pe::RecorderLockGuard guard(mutex, false);
+  static const auto access = guard.capability(owner, epoch);
+  return access;
+}
+
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
@@ -288,7 +297,8 @@ LaneResult runPlanLane(const Fixture& fixture) {
   }
   pe::SparseStatePlan plan{};
   if (!pe::buildSparseStatePlan(
-          fixture.shadow, constants, fixture.bindings, fixture.payloads,
+          recorderAccess(), fixture.shadow, constants, fixture.bindings,
+          fixture.payloads,
           params, fixture.forceFullSnapshot, fixture.inlineConstDelta,
           plan)) {
     return LaneResult{};
@@ -1080,11 +1090,18 @@ void sparsePlanFailureRetryAndSourceWitness() {
   shadow.writer().pendingTextureMask() = 1u << 2u;
   PeConstShadowBlock constants{};
   pe::SparseStatePlan plan{};
-  check(pe::buildSparseStatePlan(shadow, constants, f.bindings, {}, f.params,
-                                 false, false, plan),
+  check(pe::buildSparseStatePlan(recorderAccess(), shadow, constants,
+                                 f.bindings, {}, f.params, false, false, plan),
         "compact plan preparation succeeds");
-  check(plan.sourceShadow == &shadow && plan.sourceConstants == &constants &&
-            plan.sourceBindings == &f.bindings &&
+  bool sourceIdentityMatches = false;
+  check(plan.withSettlementSources(
+            [&](const PeHotStateShadow& borrowedShadow,
+                PeConstShadowBlock& borrowedConstants,
+                const pe::PeBindingView& borrowedBindings) noexcept {
+              sourceIdentityMatches = &borrowedShadow == &shadow &&
+                  &borrowedConstants == &constants &&
+                  &borrowedBindings == &f.bindings;
+            }) && sourceIdentityMatches &&
             sizeof(pe::SparseStatePlan) < 512u,
         "compact plan carries bounded borrowed source witnesses only");
 

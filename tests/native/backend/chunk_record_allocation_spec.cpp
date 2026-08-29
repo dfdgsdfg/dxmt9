@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -366,11 +367,18 @@ void testWarmSparseStatePlanAllocations() {
       .recordType = D9C_COMMAND_RECORD_APPLY_STATE,
   };
   CommandChunkBuilder builder;
+  std::recursive_mutex recorderMutex;
+  dxmt9::core::ThreadOwnershipToken recorderOwner;
+  std::uint64_t recorderEpoch = 1u;
+  dxmt9::d3d9::pe::RecorderLockGuard recorderGuard(recorderMutex, false);
+  const auto recorderAccess =
+      recorderGuard.capability(recorderOwner, recorderEpoch);
 
   const auto appendOne = [&]() {
     dxmt9::d3d9::pe::SparseStatePlan plan{};
     if (!dxmt9::d3d9::pe::buildSparseStatePlan(
-            shadow, constants, bindings, {}, params, false, false, plan) ||
+            recorderAccess, shadow, constants, bindings, {}, params, false,
+            false, plan) ||
         !dxmt9::d3d9::pe::appendApplyStatePlan(
             builder, plan.drawFlags, plan)) {
       return false;

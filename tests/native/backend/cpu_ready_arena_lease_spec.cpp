@@ -962,6 +962,42 @@ void testCaptureIdentityUsesExactRawRangesAndPreReorderPasses() {
         "Clear and Present retain distinct pre-reorder DAG pass identities");
 }
 
+void testDirectDrawCaptureConsumesEveryRawAnchor() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity(2));
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(14, layout);
+  check(begin.has_value() && begin->beginCaptureIdentity(2u),
+        "direct-draw capture fixture admission succeeds");
+
+  FlatDrawStateRecord hot{};
+  DrawShaderLayoutContext shaderLayout{};
+  DrawUniformPayload uniforms{};
+  DirectReplayDrawInput input{
+      .hot = &hot,
+      .shaderLayout = &shaderLayout,
+      .uniforms = &uniforms,
+      .draw = DrawParam{.primitiveCount = 1u},
+  };
+  check(begin->captureNextCommandRecord(0u) &&
+            queue.submitDirectReplayDraw(input),
+        "the first direct draw consumes its raw capture anchor");
+  check(begin->captureNextCommandRecord(1u) &&
+            queue.submitDirectReplayDraw(input),
+        "a merged direct draw can arm and consume the next raw anchor");
+
+  CommandQueue::CpuReadyCaptureIdentity identity{};
+  check(begin->publish({}, &identity),
+        "two captured direct draws publish one merged destination command");
+  check(identity.valid() && identity.recordCount == 2u &&
+            identity.ranges.size() == 1u &&
+            identity.ranges.front().firstRecord == 0u &&
+            identity.ranges.front().recordCount == 2u,
+        "the merged direct command owns both consecutive raw records");
+}
+
 void testIncompleteCaptureIdentityDoesNotRejectArenaPublication() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -1505,6 +1541,7 @@ int main() {
     testArenaPublishToReclaimLifecycle();
     testActivePresentPublishesFinalSourceAndDefersFlush();
     testCaptureIdentityUsesExactRawRangesAndPreReorderPasses();
+    testDirectDrawCaptureConsumesEveryRawAnchor();
     testIncompleteCaptureIdentityDoesNotRejectArenaPublication();
     testPresentAppendAbortRemovesStashedTokenOnce();
     testBatchLeaseUsesSourceLocalSegmentCoordinates();

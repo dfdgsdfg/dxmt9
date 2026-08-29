@@ -1,15 +1,17 @@
 ---
 type: gap
 title: Managed Buffer Mutation Offload — Gap
-description: Implementation and evidence status for R-BACK-44.x (designed, not implemented).
+description: Implementation and evidence status for the default-on R-BACK-44.x transport and planned composition observer.
 tags: [backend, buffers, producer-concurrency, offload]
 ---
 
 # Managed Buffer Mutation Offload — Gap
 
-Status of R-BACK-44.1..44.8. The formal stack and the production
-implementation landed 2026-08-25 (default off); wild promotion evidence
-remains open. Sizing evidence:
+Status of R-BACK-44.1..44.11. The formal stack, production implementation, and
+wild promotion evidence landed 2026-08-25; V1 is default on with an explicit
+mode-off rollback lane. The observation-only composition ledger is now present,
+but composition remains forbidden until representative runtime evidence and
+the decision gate pass. Sizing evidence:
 `docs/perfomance/present-pacing/present-pacing-bridge-crossing-decomposition.237.md`
 (Managed re-uploads `1.19ms/present` on the saturated GT2 producer thread;
 `.38`'s `>=0.5ms/Present` mutation-stream design gate is met).
@@ -24,6 +26,7 @@ design.
 
 | Area | Status | Evidence / missing |
 |---|---|---|
+| **Mutation composition observer and decision gate (R-BACK-44.9–44.11)** | producer-only scaffold implemented; R-BACK-44.9 and decision gate open; composition forbidden | `include/dxmt9/mutation_composition_observer.hpp` supplies a bounded ledger core and native truth-table fixture. The successful V1 managed-unlock publication is the only production hook, and it records only plain admitted mutations. No production owner installs/publishes the observer or emits first GPU/CPU uses, barriers, non-plain dispositions, failure/completion dispositions, or window finalization, so current runtime output cannot satisfy R-BACK-44.9 or classify candidates safely. The hook is behavior-neutral when the nullable observer is absent and performs no composition. A representative runtime bundle, the fixed `>=0.5ms/Present` open / `<0.2ms/Present` close decision, and any later formal/native/Render Tape/GPU/Wine/wild composition gates remain open. |
 | **PREREQUISITE: encode-side versioned byte readers snapshot-sourced (R-BACK-44.4a)** | implemented (2026-08-25, `8f6d7d4e` + `d5cccd40`); runtime debt closed | A same-day external implementation review (codex `gpt-5.6-sol`/high, verdict "unsound", claims re-verified) found the guard idiom insufficient: `snapshotBufferBytes()` returns an empty span for a valid snapshot with `contentsAddress == 0` (reachable via shared-buffer import), and every snapshot-first site branched on span emptiness, falling through to live reads — including five pre-`8f6d7d4e` sites. Follow-up rewrites every site to branch on snapshot presence (bytes-unavailable skips the byte-dependent path), converts racy live-field trace logging to snapshot fields, and adds regression tests for the zero-contents snapshot and staging suppression. |
 | PREREQUISITE landed base (`8f6d7d4e`) | context for the row above | `8f6d7d4e` added the `!indexSnapshot` staging guard mirroring the vertex path, snapshot-first sourcing for the two trace-gated diagnostic index readers, and the `StreamIbStagingCache::findOrStage` no-versioned-record assert (`dxmt9_draw_encoder_draw.mm`, `dxmt9_encode_session_storage_internal.hpp`); 19 encoder/hazard/session native specs pass. The pre-existing-race framing stands: the R-BACK-2.51(d) drain waits on `lastReplayedSeq` only and never covered encode-time reads. Runtime evidence: the first GT2 smoke ran concurrently with an unrelated heavy host workload and was discarded; a separate clean-machine run (2026-08-25, user-supervised) behaved normally with the FPS delta inside noise, closing the runtime debt for the prerequisite. |
 | Queue reservation API (reserve/commit/release) in `ReplayOffloadQueue` | implemented (2026-08-25) | Placeholder-at-tail reservation: `reserveMutation` appends the queue slot and takes the ledger ordinal in one queue-then-ledger critical section, `commitMutation` is an infallible pointer move, `releaseMutation`/`drainRemaining` refund budget on every reject/stop/teardown path; `pop()` blocks while the head is an unfilled placeholder so the worker cannot bypass an uncommitted reservation. Staged bytes charge the `DXMT9_OFFLOAD_QUEUE_BYTES` bounds. Pinned by `dxmt9-managed-mutation-offload-transaction-spec` (reservation ordering vs interleaved chunk push, release refund, budget block/admit, stop/poison pre-effect rejection). |

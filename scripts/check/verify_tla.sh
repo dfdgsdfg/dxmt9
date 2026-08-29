@@ -62,6 +62,14 @@ done
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  # End-to-end CPU pipeline mutations are independent: reclaim must wake a
+  # parked admission, publication requires the complete assembler prefix,
+  # completion authority follows the child join, and owner reclaim follows
+  # ordered completion.
+  "CpuPipelineOwnership|.missing-wake.counterexample|Invariant AdmissionReleaseNotifies is violated"
+  "CpuPipelineOwnership|.premature-reclaim.counterexample|Invariant NoPrematureReclaim is violated"
+  "CpuPipelineOwnership|.partial-publication.counterexample|Invariant PublicationIsComplete is violated"
+  "CpuPipelineOwnership|.completion-before-join.counterexample|Invariant CompletionAuthorityAfterJoin is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
   "NoOverwriteByteRange|.counterexample|Invariant NoOverwriteReadPreserved is violated"
   # Pin-ordering premise removed: a reclaim frees a record the producer's

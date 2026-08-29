@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <array>
 #include <algorithm>
@@ -19,6 +20,13 @@ struct ArenaSourcePayloadBlockTestAccess {
     block.clearRects_.try_emplace_back(Rect{});
     block.clearRecords_[0].firstRect = 1;
   }
+
+  static bool drawStorageEmpty(const ArenaSourcePayloadBlock& block) {
+    return block.drawHotStates_.empty() && block.drawShaderLayouts_.empty() &&
+           block.drawDebugSnapshots_.empty() && block.drawParams_.empty() &&
+           block.drawPayloadBytes_.size() == 0u &&
+           block.drawRunRecords_.empty();
+  }
 };
 
 }  // namespace dxmt9::core
@@ -34,6 +42,7 @@ using dxmt9::core::ArenaSoA;
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::ClearDesc;
 using dxmt9::core::DrawDebugSnapshot;
+using dxmt9::core::DirectReplayDrawInput;
 using dxmt9::core::DrawParam;
 using dxmt9::core::DrawPsoSubview;
 using dxmt9::core::DrawRunCommandRecord;
@@ -50,9 +59,23 @@ using dxmt9::core::Rect;
 using dxmt9::core::SourcePayloadView;
 using dxmt9::core::SourcePayloadCapacity;
 using dxmt9::core::SourcePayloadRegion;
+using dxmt9::core::TransactionalChunkSlotAssembler;
 using dxmt9::core::kSourcePayloadRegionCount;
 using dxmt9::core::makeSourcePayloadLayout;
 using dxmt9::core::makeArenaSourcePayloadLayout;
+
+static_assert(std::string_view(dxmt9::core::copyMaterializationClassName(
+                  dxmt9::core::CopyMaterializationClass::
+                      ReplaySubmissionCarrierMaterialization)) ==
+              "materialize.replay-submission-carrier");
+static_assert(dxmt9::core::copyMaterializationClassification(
+                  dxmt9::core::CopyMaterializationClass::
+                      ReplaySubmissionCarrierCopy) ==
+              dxmt9::core::CopyMaterializationClassification::Removable);
+static_assert(dxmt9::core::copyMaterializationClassification(
+                  dxmt9::core::CopyMaterializationClass::
+                      QueueFinalSlotAppend) ==
+              dxmt9::core::CopyMaterializationClassification::Necessary);
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -801,7 +824,7 @@ void testReplayAssemblerConsumesScratchIntoFinalArena() {
             assembler.tryAppendStretchRect({}) &&
             assembler.tryAppendColorFill({}) &&
             assembler.tryAppendDepthResolve({}) &&
-            assembler.commandCount() == 6 && builder.publish(),
+            assembler.commandCount() == 6 && assembler.commit(),
         "replay assembler moves draw and eligible nondraw work into final SoAs");
 
   const SourcePayloadView view(block);
@@ -825,6 +848,257 @@ void testReplayAssemblerConsumesScratchIntoFinalArena() {
             view.commandAt(1).clear->rects[0] == clear.rects[0],
         "assembler routes flattened Clear rects through the arena view");
   block.destroyConstructed();
+}
+
+void testDirectAssemblerDifferentialAndConservation() {
+  static_assert(!std::is_copy_constructible_v<
+                TransactionalChunkSlotAssembler>);
+  static_assert(!std::is_move_constructible_v<
+                TransactionalChunkSlotAssembler>);
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.drawHotStates = 1;
+  capacity.drawShaderLayouts = 1;
+  capacity.drawDebugSnapshots = 1;
+  capacity.drawPsoSubviews = 1;
+  capacity.drawUniformFixedPayloads = 3;
+  capacity.drawUniformVertexConstants = 3;
+  capacity.drawUniformPixelConstants = 3;
+  capacity.drawUniformPayloads = 3;
+  capacity.drawParams = 3;
+  capacity.drawPayloadBytes = 2048;
+  capacity.drawRunRecords = 1;
+  const auto layout = makeSourcePayloadLayout(capacity, 4096, 8);
+  check(layout.has_value(), "differential fixture layout must build");
+
+  FlatDrawStateRecord hot{};
+  hot.key.renderStateHash = 0xa1u;
+  hot.key.viewportHash = 0xb2u;
+  hot.streamMask = 1u;
+  hot.streamBuffers[0] = dxmt9::core::Handle{17u};
+  hot.indexBuffer = dxmt9::core::Handle{23u};
+  DrawShaderLayoutContext shaderLayout{};
+  shaderLayout.vertexShader.kind = dxmt9::core::ShaderRef::Kind::Bytecode;
+  shaderLayout.vertexShader.hash = 31u;
+  shaderLayout.pixelShader.kind = dxmt9::core::ShaderRef::Kind::Bytecode;
+  shaderLayout.pixelShader.hash = 37u;
+  DrawDebugSnapshot debug{};
+  std::array<dxmt9::core::DrawUniformPayload, 3> uniforms{};
+  uniforms[0].hash = uniforms[2].hash = 0xa0u;
+  uniforms[1].hash = 0xb0u;
+  uniforms[0].fixedPayloadHash = uniforms[2].fixedPayloadHash = 0xa1u;
+  uniforms[1].fixedPayloadHash = 0xb1u;
+  std::array<dxmt9::core::u8, 5> vertexBytes{1, 2, 3, 4, 5};
+  std::array<dxmt9::core::u8, 4> indexBytes{6, 7, 8, 9};
+  dxmt9::core::DrawBindingOverride bindingOverride{};
+  bindingOverride.streamMask = 1u;
+  bindingOverride.streams[0] = {
+      .buffer = dxmt9::core::Handle{17u},
+      .offset = 12u,
+      .stride = 24u,
+  };
+  bindingOverride.indexBuffer = dxmt9::core::Handle{23u};
+  bindingOverride.indexBufferValid = true;
+  dxmt9::core::DrawBindingSnapshot bindingSnapshot{};
+  bindingSnapshot.streamMask = 1u;
+  bindingSnapshot.streams[0].buffer = dxmt9::core::Handle{17u};
+  bindingSnapshot.streams[0].snapshot = {
+      .metalHandle = 0xcafeu,
+      .contentsAddress = 0x1000u,
+      .byteSize = 4096u,
+      .contentRevision = 7u,
+  };
+  bindingSnapshot.indexBuffer = dxmt9::core::Handle{23u};
+  bindingSnapshot.indexSnapshot = {
+      .metalHandle = 0xbeefu,
+      .contentsAddress = 0x2000u,
+      .byteSize = 1024u,
+      .contentRevision = 9u,
+  };
+  bindingSnapshot.indexSnapshotValid = true;
+  const auto objectBytes = [](const auto& value) {
+    return std::span<const dxmt9::core::u8>(
+        reinterpret_cast<const dxmt9::core::u8*>(&value), sizeof(value));
+  };
+  std::array<DrawRunSubmission, 3> legacySubmissions{};
+  for (std::size_t i = 0; i < legacySubmissions.size(); ++i) {
+    legacySubmissions[i].state = dxmt9::core::CanonicalDrawState{
+        hot, shaderLayout, debug};
+    legacySubmissions[i].uniforms = uniforms[i];
+    legacySubmissions[i].uniformGeneration = i + 1u;
+    legacySubmissions[i].draw = DrawParam{
+        .primitiveCount = static_cast<std::uint32_t>(i + 1u),
+        .startIndex = static_cast<std::uint32_t>(i * 3u),
+        .indexType = dxmt9::core::IndexType::UInt16,
+        .indexed = true,
+    };
+  }
+  legacySubmissions[1].payload = {
+      .userVertexData = vertexBytes,
+      .userIndexData = indexBytes,
+      .bindingOverrideData = objectBytes(bindingOverride),
+      .bindingSnapshotData = objectBytes(bindingSnapshot),
+  };
+
+  std::vector<std::max_align_t> legacyBacking;
+  std::vector<std::max_align_t> directBacking;
+  ArenaSourcePayloadBlock legacyBlock;
+  ArenaSourcePayloadBlock directBlock;
+  ArenaSourcePayloadBuilder legacyBuilder(
+      legacyBlock, *layout,
+      alignedBacking(legacyBacking, layout->usedBytes));
+  ArenaSourcePayloadBuilder directBuilder(
+      directBlock, *layout,
+      alignedBacking(directBacking, layout->usedBytes));
+  TransactionalChunkSlotAssembler legacy(legacyBuilder);
+  TransactionalChunkSlotAssembler direct(directBuilder);
+  dxmt9::core::CopyMaterializationLedger ledger;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(ledger);
+    check(legacy.tryAppendDrawRunBatch(legacySubmissions) && legacy.commit(),
+          "legacy differential fixture must commit");
+    for (std::size_t i = 0; i < uniforms.size(); ++i) {
+      const DirectReplayDrawInput input{
+          .hot = &hot,
+          .shaderLayout = &shaderLayout,
+          .uniforms = &uniforms[i],
+          .debug = debug,
+          .draw = DrawParam{
+              .primitiveCount = static_cast<std::uint32_t>(i + 1u),
+              .startIndex = static_cast<std::uint32_t>(i * 3u),
+              .indexType = dxmt9::core::IndexType::UInt16,
+              .indexed = true,
+          },
+          .payload = i == 1u
+              ? dxmt9::core::DrawParamPayloadView{
+                    .userVertexData = vertexBytes,
+                    .userIndexData = indexBytes,
+                    .bindingOverrideData = objectBytes(bindingOverride),
+                    .bindingSnapshotData = objectBytes(bindingSnapshot),
+                }
+              : dxmt9::core::DrawParamPayloadView{},
+      };
+      check(direct.tryAppendDirectDraw(input),
+            "direct A-B-A indexed/UP append must succeed");
+    }
+    check(direct.commit(), "direct differential fixture must commit");
+  }
+
+  const SourcePayloadView legacyView(legacyBlock);
+  const SourcePayloadView directView(directBlock);
+  check(legacyView.valid() && directView.valid() &&
+            legacyView.commandCount() == directView.commandCount() &&
+            legacyView.commandCount() == 1u,
+        "legacy and direct paths publish one equivalent A-B-A draw run");
+  const auto legacyDraw = legacyView.commandAt(0).command;
+  const auto directDraw = directView.commandAt(0).command;
+  const auto recordsEqual = [](const DrawRunCommandRecord& lhs,
+                               const DrawRunCommandRecord& rhs) {
+    return lhs.stateIndex == rhs.stateIndex &&
+           lhs.firstParam == rhs.firstParam &&
+           lhs.paramCount == rhs.paramCount &&
+           lhs.payloadOffset == rhs.payloadOffset &&
+           lhs.payloadSize == rhs.payloadSize &&
+           lhs.uniformHandle == rhs.uniformHandle &&
+           lhs.invariant.viewportScissorHash ==
+               rhs.invariant.viewportScissorHash &&
+           lhs.invariant.runStableBindingHash ==
+               rhs.invariant.runStableBindingHash &&
+           lhs.invariant.streamMask == rhs.invariant.streamMask &&
+           lhs.invariant.textureMask == rhs.invariant.textureMask &&
+           lhs.invariant.samplerStateMask == rhs.invariant.samplerStateMask;
+  };
+  const auto paramsEqual = [](const DrawParam& lhs, const DrawParam& rhs) {
+    return lhs.primitiveType == rhs.primitiveType &&
+           lhs.primitiveCount == rhs.primitiveCount &&
+           lhs.startVertex == rhs.startVertex &&
+           lhs.baseVertexIndex == rhs.baseVertexIndex &&
+           lhs.startIndex == rhs.startIndex &&
+           lhs.indexType == rhs.indexType && lhs.indexed == rhs.indexed &&
+           lhs.instanceCount == rhs.instanceCount &&
+           lhs.userVertexRange.offset == rhs.userVertexRange.offset &&
+           lhs.userVertexRange.size == rhs.userVertexRange.size &&
+           lhs.userIndexRange.offset == rhs.userIndexRange.offset &&
+           lhs.userIndexRange.size == rhs.userIndexRange.size &&
+           lhs.bindingOverrideRange.offset == rhs.bindingOverrideRange.offset &&
+           lhs.bindingOverrideRange.size == rhs.bindingOverrideRange.size &&
+           lhs.bindingSnapshotRange.offset == rhs.bindingSnapshotRange.offset &&
+           lhs.bindingSnapshotRange.size == rhs.bindingSnapshotRange.size &&
+           lhs.uniformHandle == rhs.uniformHandle;
+  };
+  check(legacyDraw.drawRunRecord && directDraw.drawRunRecord &&
+            recordsEqual(*legacyDraw.drawRunRecord,
+                         *directDraw.drawRunRecord) &&
+            legacyDraw.drawState.hot && directDraw.drawState.hot &&
+            *legacyDraw.drawState.hot == *directDraw.drawState.hot &&
+            legacyDraw.drawState.shaderLayout &&
+            directDraw.drawState.shaderLayout &&
+            *legacyDraw.drawState.shaderLayout ==
+                *directDraw.drawState.shaderLayout &&
+            legacyDraw.drawParams.size() == directDraw.drawParams.size() &&
+            std::equal(legacyDraw.drawParams.begin(), legacyDraw.drawParams.end(),
+                       directDraw.drawParams.begin(), paramsEqual) &&
+            legacyView.drawPayloadBytes().size() ==
+                directView.drawPayloadBytes().size() &&
+            std::equal(legacyView.drawPayloadBytes().begin(),
+                       legacyView.drawPayloadBytes().end(),
+                       directView.drawPayloadBytes().begin()),
+        "direct final SoA bytes and indexed/UP locators match legacy");
+  const auto carrier = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy);
+  const auto queueFinal = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend);
+  const auto expectedFinalBytes = sizeof(FlatDrawStateRecord) +
+      sizeof(DrawShaderLayoutContext) + sizeof(DrawDebugSnapshot) +
+      3u * (sizeof(DrawParam) + sizeof(dxmt9::core::DrawUniformPayload)) +
+      legacyView.drawPayloadBytes().size();
+  check(carrier.calls == 1u &&
+            carrier.bytes == 3u * sizeof(DrawRunSubmission) &&
+            queueFinal.calls == 4u &&
+            queueFinal.bytes == 2u * expectedFinalBytes,
+        "ledger distinguishes legacy carrier copying while conserving equal "
+        "legacy/direct final destination bytes");
+  legacyBlock.destroyConstructed();
+  directBlock.destroyConstructed();
+}
+
+void testTransactionalAssemblerRollbackReclaimsDestination() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.drawHotStates = 1;
+  capacity.drawShaderLayouts = 1;
+  capacity.drawDebugSnapshots = 1;
+  capacity.drawPsoSubviews = 1;
+  capacity.drawRunRecords = 1;
+  capacity.drawParams = 1;
+  // Deliberately no uniform capacity: failure occurs after destination-owned
+  // state/layout/debug construction and rollback must reclaim all three.
+  const auto layout = makeSourcePayloadLayout(capacity, 4096, 16);
+  check(layout.has_value(), "rollback fixture layout must build");
+  std::vector<std::max_align_t> backing;
+  ArenaSourcePayloadBlock block;
+  ArenaSourcePayloadBuilder builder(
+      block, *layout, alignedBacking(backing, layout->usedBytes));
+  TransactionalChunkSlotAssembler assembler(builder);
+  FlatDrawStateRecord hot{};
+  DrawShaderLayoutContext shaderLayout{};
+  dxmt9::core::DrawUniformPayload uniforms{};
+  const DirectReplayDrawInput input{
+      .hot = &hot,
+      .shaderLayout = &shaderLayout,
+      .uniforms = &uniforms,
+  };
+  check(!assembler.tryAppendDirectDraw(input) &&
+            assembler.state() == TransactionalChunkSlotAssembler::State::Failed,
+        "capacity failure marks transaction failed");
+  assembler.rollback();
+  check(assembler.state() ==
+            TransactionalChunkSlotAssembler::State::RolledBack &&
+            !block.published() &&
+            dxmt9::core::ArenaSourcePayloadBlockTestAccess::
+                drawStorageEmpty(block),
+        "rollback reclaims partial final destination and publishes nothing");
 }
 
 void testArenaChainMapsOneLogicalCommandSpaceWithoutGather() {
@@ -917,6 +1191,8 @@ int main() {
     testLegacyArenaSourcePayloadViewParity();
     testConsolidatedNondrawCommandParity();
     testReplayAssemblerConsumesScratchIntoFinalArena();
+    testDirectAssemblerDifferentialAndConservation();
+    testTransactionalAssemblerRollbackReclaimsDestination();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();
   } catch (const std::exception& error) {

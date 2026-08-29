@@ -1,5 +1,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 
+#include "dxmt9/copy_materialization_ledger.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -80,10 +82,16 @@ CommandChunkBuilder::CommandChunkBuilder(
   records_.reserve(capacities.records);
   handles_.reserve(capacities.handles);
   handleObjects_.reserve(capacities.handles);
-  payload_.reserve(capacities.payloadBytes);
-  sealedBlob_.reserve(capacities.sealedBytes);
+  // The payload vector becomes the sealed vector in-place. Reserve the larger
+  // warm hint once so seal never allocates a second payload representation.
+  payload_.reserve(std::max(capacities.payloadBytes,
+                            capacities.sealedBytes));
   handlePresence_.init(capacities.handles);
   recordLocalDedup_.init(capacities.handles);
+}
+
+CommandChunkBuilder::~CommandChunkBuilder() {
+  resetAndReleaseRetained();
 }
 
 bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
@@ -139,6 +147,10 @@ bool CommandChunkBuilder::appendPayload(
     const auto oldSize = payload_.size();
     payload_.resize(oldSize + bytes.size());
     if (!bytes.empty()) {
+      dxmt9::core::CopyMaterializationEvent event(
+          dxmt9::core::activeCopyMaterializationLedger(),
+          dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
+          bytes.size());
       std::memcpy(payload_.data() + oldSize, bytes.data(), bytes.size());
     }
   } catch (...) {
@@ -579,11 +591,25 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
     return {};
   }
 
+  const auto payloadBytes = payload_.size();
   try {
-    sealedBlob_.assign(totalBytes, std::byte{0});
+    // Reserve is the final fallible step. It preserves the unsealed payload
+    // verbatim on failure, so seal may be retried without rebuilding records,
+    // handles, retained owners, or settlement state.
+    payload_.reserve(totalBytes);
   } catch (...) {
     return {};
   }
+  payload_.resize(totalBytes, std::byte{0});
+  if (payloadBytes != 0u) {
+    dxmt9::core::CopyMaterializationEvent event(
+        dxmt9::core::activeCopyMaterializationLedger(),
+        dxmt9::core::CopyMaterializationClass::PeSealPayload, payloadBytes);
+    std::memmove(payload_.data() + payloadArenaOffset, payload_.data(),
+                 payloadBytes);
+  }
+  std::fill(payload_.begin(), payload_.begin() + payloadArenaOffset,
+            std::byte{0});
   const D9CCommandChunkWireHeader header{
       .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
       .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
@@ -594,23 +620,38 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
       .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
       .handleCount = static_cast<std::uint32_t>(handles_.size()),
       .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
-      .payloadArenaSize = static_cast<std::uint32_t>(payload_.size()),
+      .payloadArenaSize = static_cast<std::uint32_t>(payloadBytes),
       .reserved0 = 0u,
       .reserved1 = 0u,
   };
-  std::memcpy(sealedBlob_.data(), &header, sizeof(header));
+  std::memcpy(payload_.data(), &header, sizeof(header));
   if (!records_.empty()) {
-    std::memcpy(sealedBlob_.data() + recordTableOffset, records_.data(),
+    dxmt9::core::CopyMaterializationEvent event(
+        dxmt9::core::activeCopyMaterializationLedger(),
+        dxmt9::core::CopyMaterializationClass::PeSealRecords,
+        records_.size() * sizeof(records_[0]));
+    std::memcpy(payload_.data() + recordTableOffset, records_.data(),
                 records_.size() * sizeof(records_[0]));
   }
   if (!handles_.empty()) {
-    std::memcpy(sealedBlob_.data() + handleTableOffset, handles_.data(),
+    dxmt9::core::CopyMaterializationEvent event(
+        dxmt9::core::activeCopyMaterializationLedger(),
+        dxmt9::core::CopyMaterializationClass::PeSealHandles,
+        handles_.size() * sizeof(handles_[0]));
+    std::memcpy(payload_.data() + handleTableOffset, handles_.data(),
                 handles_.size() * sizeof(handles_[0]));
   }
-  if (!payload_.empty()) {
-    std::memcpy(sealedBlob_.data() + payloadArenaOffset, payload_.data(),
-                payload_.size());
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    ledger->record(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                   totalBytes);
+    ledger->retain(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                   totalBytes);
+    ledger->retain(dxmt9::core::CopyMaterializationClass::PeSealRecords,
+                   records_.size() * sizeof(records_[0]));
+    ledger->retain(dxmt9::core::CopyMaterializationClass::PeSealHandles,
+                   handles_.size() * sizeof(handles_[0]));
   }
+  sealedBlob_.swap(payload_);
   sealed_ = true;
   return SealedCommandChunk{
       .blob = sealedBlob_,
@@ -621,6 +662,16 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
 
 void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
+  if (sealed_ && !sealedBlob_.empty()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                      sealedBlob_.size());
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
+                      records_.size() * sizeof(records_[0]));
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
+                      handles_.size() * sizeof(handles_[0]));
+    }
+  }
   // Chunk boundary, not a discard: the committed chunk's handles are now the
   // unix side's problem, but the objects this chunk named are overwhelmingly
   // the objects the next one will name, so their pins stay warm for a bounded
@@ -638,6 +689,11 @@ void CommandChunkBuilder::reset() noexcept {
   // (nextRecordOrdinal_ itself intentionally keeps counting across resets).
   handlePresence_.clear();
   recordLocalDedup_.clear();
+  if (sealed_) {
+    // Return the final allocation to the construction vector. The next chunk
+    // retains the warm capacity without retaining the previous wire bytes.
+    payload_.swap(sealedBlob_);
+  }
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
@@ -645,6 +701,16 @@ void CommandChunkBuilder::reset() noexcept {
 
 void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   rollbackRecord();
+  if (sealed_ && !sealedBlob_.empty()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                      sealedBlob_.size());
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
+                      records_.size() * sizeof(records_[0]));
+      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
+                      handles_.size() * sizeof(handles_[0]));
+    }
+  }
   // Discard, not a chunk boundary: drop every pin including the warm ones the
   // previous epochs are still holding. This is what device teardown, Reset and
   // ResetEx run, so no retainer pin can survive into a dxmt9c_device_reset*
@@ -655,9 +721,24 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   handleObjects_.clear();
   handlePresence_.clear();
   recordLocalDedup_.clear();
+  if (sealed_) {
+    payload_.swap(sealedBlob_);
+  }
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
+}
+
+std::size_t CommandChunkBuilder::payloadBytes() const noexcept {
+  if (!sealed_) {
+    return payload_.size();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  return header.payloadArenaSize;
 }
 
 bool CommandChunkBuilder::referencesObject(

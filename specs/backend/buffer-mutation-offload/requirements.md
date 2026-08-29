@@ -108,15 +108,11 @@ mutation is applied. Therefore, before offload mode can be enabled, every
 encode-side byte consumer of a versioned buffer record must source bytes
 from the captured snapshot (or be keyed by the captured backing and
 `contentRevision`), never from the live `record.shadow` / `record.contents`
-(review finding 2). The known violator is the encode index staging path:
-`StreamIbStagingCache::findOrStage` is called for index buffers without
-the `!indexSnapshot` guard the vertex-stream path has
-(`dxmt9_draw_encoder_draw.mm`), and diagnostic index readers read
-`indexRecord->shadow` directly. This is a **pre-existing latent race** in
-the synchronous path as well — the R-BACK-2.51(d) unlock drain waits on
-`lastReplayedSeq`, which does not cover encode-time reads — and must be
-fixed as an independent correctness change before this mode, not as part
-of it.
+(review finding 2). At design time the encode index staging path and diagnostic
+index readers violated this rule. The prerequisite is now implemented; its
+exact snapshot-presence fix and evidence are recorded in `gap.md`. The
+underlying rule remains normative because R-BACK-2.51(d)'s unlock drain waits
+on `lastReplayedSeq`, which does not cover encode-time reads.
 
 ## R-BACK-44.5 (Direct-call reader fence)
 
@@ -179,3 +175,42 @@ matched A/B showing the producer-wall reduction (harmonic
 task conservation) with zero GPU errors and conserved CB/render-pass/
 sub-CB locality shape. The engine default flipped on with that evidence;
 rollback (`0`) must stay byte-identical to the pre-mode path.
+
+## R-BACK-44.9 (Composition observer)
+
+Any mutation-composition work must begin with a cold observation-only ledger;
+the current one-task-per-Unlock FIFO behavior remains authoritative. For every
+successful writable Unlock, the observer must bind the production resource
+identity, backing generation, disposition, exact range and bytes, source
+ordinal, failure/completion disposition, and first following GPU use or CPU
+observer. It must report zero-use generations, `DISCARD -> DISCARD` chains,
+conservatively mergeable `NOOVERWRITE` ranges and union/overlap bytes, a typed
+rejection reason for every adjacent non-candidate, and the measured CPU-time
+split named in the `.38` experiment. Totals must include candidate calls,
+candidate bytes, and attributable time, not call counts alone. The observer
+must share the production generation and barrier classifiers, retain no
+payload, and obey the disabled-path contract in R-ARCH-7.7.
+
+## R-BACK-44.10 (Decision gate)
+
+No mutation stream, merge, elision, delayed Unlock, or changed acknowledgement
+may be designed from aggregate Lock/Unlock counts or byte totals. A matched wild
+observer run must show at least `0.5ms/Present` of conservatively composable
+Unlock time before a composition design may open. Below `0.2ms/Present`, the
+lane closes. Between those thresholds, evidence is inconclusive and the
+transport remains unchanged. The gate must be evaluated separately for each
+workload and mutation class; unrelated bridge residence cannot be added to it.
+
+## R-BACK-44.11 (Composition proof and promotion)
+
+If R-BACK-44.10 opens the lane, composition requires a separate requirements
+and design change. It must define the byte algebra and every barrier for exact
+resource/backing generation, latest-preceding-generation draw visibility,
+read-Lock and ordered-control visibility, `DISCARD` freshness,
+`NOOVERWRITE` in-flight safety, HRESULT/Unlock acknowledgement, failure order,
+capture identity, Reset/destroy/device-lost, and cross-thread observation.
+Promotion then requires a counterexample-backed formal refinement, native
+legacy/composed byte and observer equivalence, Render Tape replay equivalence,
+GPU readback/visual/validation evidence, bounded Wine faults, and matched wild
+performance/locality evidence. Until all of those pass, speculative merging is
+forbidden and R-BACK-44.3's V1 FIFO task-per-Unlock rule is unchanged.

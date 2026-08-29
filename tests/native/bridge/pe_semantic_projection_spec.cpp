@@ -1,5 +1,7 @@
 #include "d3d9_pe_semantic_tokens.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -128,6 +130,136 @@ void everyDistinctScalarSlotIsRepresentable() {
         "the exhaustive domain remains closed");
 }
 
+void exhaustiveHeterogeneousSettlementPredicate() {
+  using namespace dxmt9::d3d9::pe;
+  for (unsigned kindValue = 0u;
+       kindValue < static_cast<unsigned>(PeSemanticEnvelopeKind::Count);
+       ++kindValue) {
+    const auto kind = static_cast<PeSemanticEnvelopeKind>(kindValue);
+    for (unsigned accepted = 0u; accepted < 2u; ++accepted) {
+      for (unsigned source = 0u; source < 2u; ++source) {
+        for (unsigned record = 0u; record < 2u; ++record) {
+          for (unsigned range = 0u; range < 2u; ++range) {
+            for (unsigned exact = 0u; exact < 2u; ++exact) {
+              const auto action = planPeSemanticProjection({
+                  .kind = kind,
+                  .appendAccepted = accepted != 0u,
+                  .sourceOrdinalValid = source != 0u,
+                  .recordOrdinalValid = record != 0u,
+                  .byteRangeValid = range != 0u,
+                  .exactSemanticMatch = exact != 0u,
+              });
+              const auto expected = accepted == 0u
+                  ? PeSemanticProjectionAction::PreserveForRetry
+                  : (source && record && range && exact
+                         ? PeSemanticProjectionAction::Accept
+                         : PeSemanticProjectionAction::FailStop);
+              check(action == expected,
+                    "every typed semantic settlement row is exhaustive");
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+void typedEnvelopesRejectSameSizeSurrogates() {
+  using namespace dxmt9::d3d9::pe;
+  PeMatrixSemanticEnvelope matrix{};
+  matrix.transformState = 7u;
+  matrix.valueBits[0] = 0x3f800000u;
+  matrix.sourceOrdinal = 1u;
+  matrix.recordOrdinal = 9u;
+  matrix.wireRange = {64u, 68u};
+  auto otherMatrix = matrix;
+  check(planTypedPeSemanticProjection(matrix, otherMatrix, true) ==
+            PeSemanticProjectionAction::Accept,
+        "matrix identity accepts exact state and IEEE-754 bits");
+  otherMatrix.wireRange.offset++;
+  check(planTypedPeSemanticProjection(matrix, otherMatrix, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "semantic identity cannot substitute for its committed byte range");
+  otherMatrix = matrix;
+  otherMatrix.recordOrdinal++;
+  check(planTypedPeSemanticProjection(matrix, otherMatrix, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "semantic identity cannot substitute for its wire record ordinal");
+  otherMatrix = matrix;
+  otherMatrix.wireRange = {0xffffffffu, 1u};
+  check(planTypedPeSemanticProjection(matrix, otherMatrix, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "overflowing committed byte range fails closed");
+  otherMatrix = matrix;
+  otherMatrix.valueBits[0] ^= 1u;
+  check(planTypedPeSemanticProjection(matrix, otherMatrix, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "same-size matrix with different bits is not a semantic match");
+
+  const std::array constantBytes = {
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  const std::array otherConstantBytes = {
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x05},
+  };
+  PeConstantSemanticEnvelope constant{
+      .stage = PeConstantStage::Vertex,
+      .kind = PeConstantKind::Float,
+      .startRegister = 3u,
+      .registerCount = 1u,
+      .exactBytes = constantBytes,
+      .sourceOrdinal = 2u,
+      .recordOrdinal = 10u,
+      .wireRange = {132u, 4u},
+  };
+  auto otherConstant = constant;
+  otherConstant.exactBytes = otherConstantBytes;
+  check(planTypedPeSemanticProjection(constant, otherConstant, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "same-family same-size constant bytes remain exact values");
+
+  PeComBindingSemanticEnvelope binding{
+      .category = PeComBindingCategory::Texture,
+      .slot = 4u,
+      .kind = 2u,
+      .generation = 11u,
+      .objectId = 0x1234u,
+      .sourceOrdinal = 3u,
+      .recordOrdinal = 11u,
+      .wireRange = {200u, 12u},
+  };
+  auto otherBinding = binding;
+  otherBinding.generation++;
+  check(planTypedPeSemanticProjection(binding, otherBinding, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "COM binding identity includes category, slot, kind, generation and id");
+
+  const std::array drawValue = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+  };
+  const std::array presentValue = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x41},
+  };
+  PeHeterogeneousRecordSemanticEnvelope record{
+      .category = PeHeterogeneousRecordCategory::Draw,
+      .semanticKey = 4u,
+      .semanticAux = 17u,
+      .exactValue = drawValue,
+      .sourceOrdinal = 4u,
+      .recordOrdinal = 12u,
+      .wireRange = {256u, 4u},
+  };
+  auto otherRecord = record;
+  otherRecord.category = PeHeterogeneousRecordCategory::Present;
+  otherRecord.exactValue = presentValue;
+  check(planTypedPeSemanticProjection(record, otherRecord, true) ==
+            PeSemanticProjectionAction::FailStop,
+        "heterogeneous record category/key/value beats type-size surrogates");
+  check(planTypedPeSemanticProjection(record, otherRecord, false) ==
+            PeSemanticProjectionAction::PreserveForRetry,
+        "pre-effect rejection preserves the exact heterogeneous source token");
+}
+
 }  // namespace
 
 int main() {
@@ -135,6 +267,8 @@ int main() {
     exactProjectionAndRetry();
     replacementAndDomainCapacity();
     everyDistinctScalarSlotIsRepresentable();
+    exhaustiveHeterogeneousSettlementPredicate();
+    typedEnvelopesRejectSameSizeSurrogates();
     std::cout << "pe semantic projection spec: PASS\n";
   } catch (const Failure& failure) {
     std::cerr << "pe semantic projection spec: FAIL: " << failure.what()

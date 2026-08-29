@@ -295,3 +295,41 @@ uniform intern hit/miss, transient and argument-buffer upload bytes, and
 warm-path heap-allocation count — not by frame timing alone (R-ARCH-2.6).
 Per-draw materialization that exceeds one surviving record per draw-run group, or
 a second copy of a payload whose hash is unchanged, is a regression signal.
+
+**R-ARCH-7.7** Every CPU-side copy or materialization on the PE-record,
+PE/unix import, replay, queue, encode, or GPU-handoff path must have one stable
+copy-class identity from `spec.md` §2.3. An enabled ledger must report, per
+class, calls, bytes, inclusive CPU time, and peak simultaneously retained
+bytes, and must classify the class as `necessary` or `removable` with a named
+ownership or ABI reason. Cumulative bytes must not be presented as retained
+memory, and aggregate bridge or replay time must not be attributed to byte
+copying. A new class or a reclassification is a specification change. With the
+ledger disabled, the path must read no clock, allocate no observer storage,
+and perform no counter update beyond one cached-null branch.
+
+**R-ARCH-7.8** Encoder-visible work follows the abstract ownership refinement
+`ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->
+GPUInFlight -> Reclaimed`. Every accepted GPU-bearing identity must advance in
+that order, at most once per stage, or take a specified pre-effect rollback or
+zero-GPU-work terminal disposition. `ReplayBorrowed` and `Encoding` are
+synchronous capability states, not owners: neither may be retained by an
+asynchronous task, callback, queue node, or command-buffer completion. A
+representation change may stutter within one abstract stage, but must not
+create two independently reclaimable owners for the same identity.
+
+**R-ARCH-7.9** A direct-construction change may remove only a class marked
+`removable`. It must preserve the pointer-free PE ABI, exact wire bytes where
+the wire is externally compared, effective command order and fields, resource
+identity and retention, failure disposition, replay boundaries, and completion
+waterlines. The subsystem owner must supply transactional rollback and a
+legacy-versus-direct equivalence harness before the direct path can replace the
+legacy path.
+
+**R-ARCH-7.10** Promotion of a copy-removal path requires, in order: bounded
+formal refinement for ownership, rollback, and progress; native byte/command
+equivalence and deterministic queue-observer evidence; GPU visual/readback and
+validation evidence for encoder-visible changes; bounded Wine evidence for a
+PE or bridge change; then matched wild counters proving the named removable
+class fell without displacement into retention, waits, or another copy class.
+Timing alone, a lower call count, or a speculative merge is not promotion
+evidence.

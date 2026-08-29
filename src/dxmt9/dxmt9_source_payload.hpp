@@ -100,6 +100,25 @@ class ArenaSoA {
     return true;
   }
 
+  // Some final owners (notably DrawShaderLayoutContext) are copyable but do
+  // not advertise a nothrow copy constructor.  Direct replay must copy the
+  // cache-owned value into final storage synchronously; catch the only
+  // fallible construction seam before advancing the constructed prefix.
+  bool try_copy_back(const T& value) noexcept
+    requires std::is_copy_constructible_v<T>
+  {
+    if (!bound_ || sealed_ || size_ == capacity_) {
+      return false;
+    }
+    try {
+      std::construct_at(data_ + size_, value);
+    } catch (...) {
+      return false;
+    }
+    ++size_;
+    return true;
+  }
+
   void destroyConstructed() noexcept {
     while (size_ != 0) {
       --size_;
@@ -437,6 +456,8 @@ class ArenaSourcePayloadChain {
   bool readable_ = false;
 };
 
+class TransactionalChunkSlotAssembler;
+
 class ArenaSourcePayloadBuilder {
  public:
   ArenaSourcePayloadBuilder(ArenaSourcePayloadBlock& block,
@@ -456,6 +477,8 @@ class ArenaSourcePayloadBuilder {
                         std::uint32_t payloadIndex) noexcept;
   bool tryAppendDrawHotState(const FlatDrawStateRecord& value) noexcept;
   bool tryAppendDrawShaderLayout(DrawShaderLayoutContext&& value) noexcept;
+  bool tryAppendDrawShaderLayout(
+      const DrawShaderLayoutContext& value) noexcept;
   bool tryAppendDrawDebugSnapshot(const DrawDebugSnapshot& value) noexcept;
   bool tryAppendDrawPsoSubview(const DrawPsoSubview& value) noexcept;
   bool tryAppendDrawUniformFixedPayload(
@@ -488,9 +511,15 @@ class ArenaSourcePayloadBuilder {
   bool tryAppendGenerateMipmapsCommand(
       const GenerateMipmapsDesc& value) noexcept;
   bool tryAppendPresentCommand(PresentCommandRecord&& value) noexcept;
+  bool publishValidationReady() const noexcept;
+  void rollback() noexcept;
+  const FlatDrawStateRecord* drawHotState(std::size_t index) const noexcept;
+  const DrawShaderLayoutContext* drawShaderLayout(
+      std::size_t index) const noexcept;
+  DrawRunCommandRecord* drawRun(std::size_t index) noexcept;
 
  private:
-  friend class ArenaSourcePayloadAssembler;
+  friend class TransactionalChunkSlotAssembler;
 
   bool reject() noexcept {
     good_ = false;
@@ -523,22 +552,66 @@ class ArenaSourcePayloadBuilder {
 // carrier to the final fixed-capacity arena regions. It owns no storage and
 // performs no fallback allocation; any partial append makes the underlying
 // builder sticky-failed and the enclosing publication ticket must abort.
-class ArenaSourcePayloadAssembler {
+class TransactionalChunkSlotAssembler {
  public:
-  explicit ArenaSourcePayloadAssembler(
+  enum class State : std::uint8_t {
+    Empty,
+    Reserved,
+    Building,
+    Committed,
+    RolledBack,
+    Failed,
+  };
+
+  explicit TransactionalChunkSlotAssembler(
       ArenaSourcePayloadBuilder& builder) noexcept
-      : builder_(&builder) {}
+      : builder_(&builder) {
+    reserve();
+  }
 
-  ArenaSourcePayloadAssembler(const ArenaSourcePayloadAssembler&) = delete;
-  ArenaSourcePayloadAssembler& operator=(
-      const ArenaSourcePayloadAssembler&) = delete;
+  ~TransactionalChunkSlotAssembler() {
+    if (state_ == State::Reserved || state_ == State::Building ||
+        state_ == State::Failed) {
+      rollback();
+    }
+  }
 
-  bool good() const noexcept { return builder_ && builder_->good(); }
+  TransactionalChunkSlotAssembler(
+      const TransactionalChunkSlotAssembler&) = delete;
+  TransactionalChunkSlotAssembler& operator=(
+      const TransactionalChunkSlotAssembler&) = delete;
+  TransactionalChunkSlotAssembler(
+      TransactionalChunkSlotAssembler&&) = delete;
+  TransactionalChunkSlotAssembler& operator=(
+      TransactionalChunkSlotAssembler&&) = delete;
+
+  bool reserve() noexcept;
+  bool commit() noexcept;
+  void rollback() noexcept;
+
+  template <typename Build>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Build&, TransactionalChunkSlotAssembler&>
+  bool build(Build&& buildFn) noexcept {
+    if (!beginBuild() || !buildFn(*this)) {
+      fail();
+      return false;
+    }
+    return true;
+  }
+
+  State state() const noexcept { return state_; }
+  bool good() const noexcept {
+    return builder_ && builder_->good() &&
+           (state_ == State::Reserved || state_ == State::Building);
+  }
   bool failed() const noexcept { return !good(); }
   std::size_t commandCount() const noexcept { return commandCount_; }
 
   bool tryAppendDrawRunBatch(
       std::span<DrawRunSubmission> submissions) noexcept;
+  bool tryAppendDirectDraw(
+      const DirectReplayDrawInput& input) noexcept;
   bool tryAppendClear(const ClearDesc& value) noexcept;
   bool tryAppendSurfaceCopy(const SurfaceCopyDesc& value) noexcept;
   bool tryAppendStretchRect(const StretchRectDesc& value) noexcept;
@@ -547,6 +620,8 @@ class ArenaSourcePayloadAssembler {
   bool tryAppendGenerateMipmaps(const GenerateMipmapsDesc& value) noexcept;
 
  private:
+  bool beginBuild() noexcept;
+  bool fail() noexcept;
   bool tryAppendUniform(const DrawUniformPayload& payload,
                         DrawUniformHandle& handle) noexcept;
   bool tryAppendPayloadBytes(std::span<const u8> bytes,
@@ -562,7 +637,16 @@ class ArenaSourcePayloadAssembler {
   std::size_t drawPayloadBytes_ = 0;
   std::size_t vertexConstantBytes_ = 0;
   std::size_t pixelConstantBytes_ = 0;
+  std::size_t directRunStateIndex_ = 0;
+  std::size_t directRunRecordIndex_ = 0;
+  std::size_t directRunPayloadOffset_ = 0;
+  bool directRunOpen_ = false;
+  State state_ = State::Empty;
 };
+
+// Compatibility spelling for existing callers while the production owner is
+// migrated to the explicit transaction name.
+using ArenaSourcePayloadAssembler = TransactionalChunkSlotAssembler;
 
 struct ClearCommandView {
   std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};

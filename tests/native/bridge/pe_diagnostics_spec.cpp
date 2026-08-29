@@ -164,7 +164,8 @@ void testNullableDiagnosticDispatchAndClock() {
 
 void testStateBlockFaultSelector() {
   const auto config = peStateBlockFaultConfigFromString(
-      "capture_pre=0x80070057,apply_entered=0x8876086c,bridge_entered");
+      "capture_pre=0x80070057,bridge_pre=0x80004003,"
+      "apply_entered=0x8876086c,bridge_entered");
   check((config.mask & peStateBlockFaultBit(
                          PeStateBlockFaultPoint::CapturePre)) != 0u,
         "fault selector parses pre-effect point");
@@ -176,6 +177,10 @@ void testStateBlockFaultSelector() {
             PeStateBlockFaultPoint::ApplyEntered)] ==
             static_cast<std::int32_t>(0x8876086cu),
         "fault selector preserves entered HRESULT");
+  check(config.hresult[static_cast<std::size_t>(
+            PeStateBlockFaultPoint::BridgePre)] ==
+            static_cast<std::int32_t>(0x80004003u),
+        "fault selector preserves generic pre-entry bridge HRESULT");
   check((config.mask & peStateBlockFaultBit(
                          PeStateBlockFaultPoint::BridgeEntered)) != 0u,
         "fault selector parses generic bridge point");
@@ -580,6 +585,9 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkBefore(captureBody, "PeStateBlockFaultPoint::CapturePre",
               "dxmt9c_stateblock_capture(sb_)",
               "CapturePre precedes the sole backend call");
+  checkBefore(captureBody, "PeStateBlockFaultPoint::BridgePre",
+              "dxmt9c_stateblock_capture(sb_)",
+              "generic bridge pre-effect fault precedes Capture entry");
   check(countOccurrences(misc, "dxmt9c_stateblock_capture(sb_)") == 1u,
         "Capture has one backend call site");
   checkBefore(misc, "const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));",
@@ -594,6 +602,12 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkBefore(applyBody, "PeStateBlockFaultPoint::ApplyPre",
               "dxmt9c_stateblock_apply(sb_)",
               "ApplyPre precedes the sole backend call");
+  checkBefore(applyBody, "PeStateBlockFaultPoint::BridgePre",
+              "context_->PrepareStateBlockApplyForChild(saved_)",
+              "generic bridge pre-effect fault precedes Apply ref staging");
+  checkBefore(applyBody, "PeStateBlockFaultPoint::BridgePre",
+              "dxmt9c_stateblock_apply(sb_)",
+              "generic bridge pre-effect fault precedes Apply entry");
   check(countOccurrences(misc, "dxmt9c_stateblock_apply(sb_)") == 1u,
         "Apply has one backend call site");
   checkBefore(deviceCold,
@@ -612,6 +626,9 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkBefore(endBody, "PeStateBlockFaultPoint::EndPre",
               "dxmt9c_device_end_state_block(dev_, &sb)",
               "EndPre precedes the sole backend call");
+  checkBefore(endBody, "PeStateBlockFaultPoint::BridgePre",
+              "dxmt9c_device_end_state_block(dev_, &sb)",
+              "generic bridge pre-effect fault precedes End entry");
   check(countOccurrences(deviceCold,
                          "dxmt9c_device_end_state_block(dev_, &sb)") == 1u,
         "End has one backend call site");

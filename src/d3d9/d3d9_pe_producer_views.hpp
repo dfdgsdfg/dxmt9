@@ -23,12 +23,16 @@
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_schema.hpp"
 #include "dxmt9/device_c.h"
+#include "dxmt9/pe_recorder_lock.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 
 namespace dxmt9::d3d9::pe {
 
@@ -123,9 +127,67 @@ struct PeDrawParams {
 // PeSparseScratch remains below as an isolated compatibility/oversized-batch
 // owner.  It must not be embedded here or moved to a draw-call stack frame.
 struct SparseStatePlan {
-  const PeHotStateShadow* sourceShadow = nullptr;
-  PeConstShadowBlock* sourceConstants = nullptr;
-  const PeBindingView* sourceBindings = nullptr;
+  SparseStatePlan() noexcept = default;
+  SparseStatePlan(const SparseStatePlan&) = delete;
+  SparseStatePlan& operator=(const SparseStatePlan&) = delete;
+  SparseStatePlan(SparseStatePlan&&) = delete;
+  SparseStatePlan& operator=(SparseStatePlan&&) = delete;
+
+  void reset() noexcept {
+    std::destroy_at(this);
+    std::construct_at(this);
+  }
+
+  bool bindSources(const RecorderLockCapability& access,
+                   const PeHotStateShadow& shadow,
+                   PeConstShadowBlock& constants,
+                   const PeBindingView& bindings) noexcept {
+    return access.bind(sourceShadow_, shadow) &&
+           access.bind(sourceConstants_, constants) &&
+           access.bind(sourceBindings_, bindings);
+  }
+
+  template <typename Fn>
+    requires std::is_nothrow_invocable_v<Fn&&, const PeBindingView&>
+  bool withBindingSource(Fn&& fn) const noexcept {
+    return sourceBindings_.with(std::forward<Fn>(fn));
+  }
+
+  template <typename Fn>
+    requires std::is_nothrow_invocable_v<
+        Fn&&, const PeHotStateShadow&, const PeBindingView&>
+  bool withEmitSources(Fn&& fn) const noexcept {
+    bool invoked = false;
+    const bool shadowValid = sourceShadow_.with(
+        [&](const PeHotStateShadow& shadow) noexcept {
+          (void)sourceBindings_.with(
+              [&](const PeBindingView& bindings) noexcept {
+                std::forward<Fn>(fn)(shadow, bindings);
+                invoked = true;
+              });
+        });
+    return shadowValid && invoked;
+  }
+
+  template <typename Fn>
+    requires std::is_nothrow_invocable_v<
+        Fn&&, const PeHotStateShadow&, PeConstShadowBlock&,
+        const PeBindingView&>
+  bool withSettlementSources(Fn&& fn) const noexcept {
+    bool invoked = false;
+    const bool shadowValid = sourceShadow_.with(
+        [&](const PeHotStateShadow& shadow) noexcept {
+          (void)sourceConstants_.with(
+              [&](PeConstShadowBlock& constants) noexcept {
+                (void)sourceBindings_.with(
+                    [&](const PeBindingView& bindings) noexcept {
+                      std::forward<Fn>(fn)(shadow, constants, bindings);
+                      invoked = true;
+                    });
+              });
+        });
+    return shadowValid && invoked;
+  }
 
   PeDrawParams draw{};
   bool prepared = false;
@@ -162,7 +224,18 @@ struct SparseStatePlan {
   SparseConstantRangeInput psIntConstants{};
   SparseConstantRangeInput psBoolConstants{};
   PeDrawPayloads payloads{};
+
+ private:
+  RecorderBorrow<const PeHotStateShadow> sourceShadow_{};
+  RecorderBorrow<PeConstShadowBlock> sourceConstants_{};
+  RecorderBorrow<const PeBindingView> sourceBindings_{};
 };
+
+static_assert(!std::is_copy_constructible_v<SparseStatePlan> &&
+              !std::is_move_constructible_v<SparseStatePlan> &&
+              !std::is_copy_assignable_v<SparseStatePlan> &&
+              !std::is_move_assignable_v<SparseStatePlan>,
+              "SparseStatePlan borrows must remain call-scope only");
 
 // Device-owned, reused compatibility/oversized storage. SparseStateInput spans
 // point into this owner for Render Tape full snapshots, SWVP override packets,

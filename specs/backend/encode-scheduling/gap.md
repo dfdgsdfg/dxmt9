@@ -8,9 +8,24 @@ tags: [specs, backend, encode-scheduling, gap]
 # Encode Scheduling Gap
 
 This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
-`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.84`. The parent
+`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.89`. The parent
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
+
+## Direct replay construction and ownership progress
+
+| Area | Current implementation truth | Required closure |
+|---|---|---|
+| `TransactionalChunkSlotAssembler` (`R-BACK-2.85`) | A bounded Arena payload transaction now wraps `ArenaSourcePayloadBuilder`: failed construction is sticky, rollback destroys constructed prefixes, and publication occurs only through `commit`. The outer `CpuReadyArenaBuildLease` still owns page/control/sequence/resource obligations, so this is not the general `ChunkSlot` transaction described by the requirement. | Bind the outer lease and resource retains to the same transaction/evidence, prove commit infallibility after successful build, inject every capacity/validation/publication failure, and compare pre-effect rollback versus post-effect fail-stop. |
+| Arena direct replay to `ChunkSlot` (`R-BACK-2.86`–`2.87`) | Eligible Arena draw records now call `submitDirectReplayDrawFromCurrentState` and construct final payload SoAs without `DrawRunSubmission`; compatibility, inactive, and trace-capture lanes retain the carrier. A native A-B-A draw fixture compares final draw state/layout/params/payload bytes with the carrier path and tests partial-construction rollback. | The differential does not start from the same validated raw chunk and does not yet cover mixed non-draw commands, original ordinals, resource retention, barriers/readback/Present, injected failure disposition, or completion identity. GPU readback, bounded Wine faults, and wild promotion are also open; the ordinary Direct gate remains default off. |
+| Pipeline ownership/progress observer (`R-BACK-2.88`) | `CpuPipelineOwnership.tla` and `dxmt9_pipeline_lifecycle.hpp` implement the bounded abstract model and reducer, but `FakePipelineQueue` is the only event emitter. There are zero live production `PipelineLifecycleEvent` call sites. | Wire the nullable sink into every live producer/import/replay/assembler/serial-or-selected-parallel/receipt/completion owner and drive those owners in the native fixture. Until then the test does not satisfy R-VERIF-7.6's actual-observer/no-test-only-owner clause. |
+| Typed replay/encode borrows (`R-BACK-2.89`) | PE sparse-state borrows gained non-copyable/non-movable epoch-qualified capabilities. Unix replay/source payload views and encode borrows remain synchronous by convention, and partition locators are generation-qualified, but no uniform capability prevents an asynchronous closure or observer from retaining a resolved span. | Inventory every replay, serial, parallel-child, observer, and completion callback; extend the capability boundary; add compile-time and native stale-generation/async-retention negatives before claiming end-to-end type-level closure. |
+
+The direct draw construction and PE capability pieces now change production
+code behind existing default-off/cold selection. They do not change the default
+provider or authorize copy-removal promotion. Full transaction ownership,
+production lifecycle observation, and the equivalence layers above remain the
+required closure.
 
 ## Current status correction (2026-08-21)
 

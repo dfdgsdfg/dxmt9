@@ -463,3 +463,58 @@ The finite state/append transition rows are maintained in one canonical table
 shared by the production C++ algebra and generated TLA module. The verifier
 must reject a stale generated module before invoking TLC; symbol-name
 similarity is not model/code binding evidence.
+
+---
+
+## 7. Direct wire construction and typed capabilities
+
+**R-CORE-REC-7.1** The target PE builder must reserve one final contiguous wire
+blob and construct the header, record table, handle table, and payload arena in
+their final offset-addressed locations. Its build transaction must checkpoint
+every visible length, handle retain, pending-delta settlement witness, and
+capture identity; `commit` publishes the complete pointer-free blob, while
+`rollback` restores the exact checkpoint and releases newly acquired owners.
+All fallible reserve and validation work must precede an infallible publish.
+The C ABI version, alignment, record ordinals, handle ordinals, padding bytes,
+and offset/length validation rules must not change merely to enable direct
+construction.
+
+**R-CORE-REC-7.2** The direct builder must run beside the legacy
+`CommandChunkBuilder` seal path until a differential harness proves, for the
+same canonical input and injected failure, exact sealed-blob byte identity,
+record/command order and count, handle-table identity, retained-owner
+multiplicity, pending-delta settlement, retry result, and capture disposition.
+The harness must include zero/maximum-alignment tails, duplicate handles, all
+record families, CapacityPre/CapacityPost boundaries, rollback after each
+fallible step, repeated seal, Reset, and full-snapshot cases. Equivalence is a
+test oracle, not permission to keep both materializations in production after
+promotion.
+
+**R-CORE-REC-7.3** Recorder reads and writes that depend on the recorder mutex
+must use typed, epoch-qualified, non-copyable and non-movable call-scope
+capabilities: `RecorderBorrow<T>` for immutable source access and
+`RecorderLockCapability` for destination mutation and settlement. A producer
+callback receives only the minimum capability it needs, must be synchronously
+and nothrow invocable, and must not return, store, capture, enqueue, or otherwise
+retain the capability or a span/reference derived from it. Reset, poison,
+rollback, or recorder-epoch advance invalidates every prior capability. Raw
+mutable builder spans and an unqualified `recorderLockRequired_` boolean are
+not substitutes for the typed witness.
+
+**R-CORE-REC-7.4** The recorder's semantic projection must cover the complete
+heterogeneous append envelope with exact qualified tokens: render, texture
+stage, sampler, transform, texture/buffer/shader/declaration bindings, all six
+constant families, stream/index/frequency, viewport/scissor/material/light,
+draw/UP payload, StateBlock, query/readback/update/copy, Present, and capture
+settlement. A token binds source category/key/value-or-identity, source ordinal,
+wire record ordinal, and represented byte range. Record type, byte size, count,
+or a hash without collision proof must not stand in for semantic identity.
+
+**R-CORE-REC-7.5** PE promotion requires bounded x64 and x86 Wine fault
+evidence in addition to native projection tests. At minimum, the fixture must
+exercise reserve failure, producer failure after partial construction,
+handle-retain failure, pre-entry bridge rejection, entered/effect-unknown bridge
+failure, capture reject/throw, Reset recovery, and retry. It must assert exact
+HRESULT/poison disposition, no leaked retain, no partial blob publication, and
+no duplicate accepted command. An unavailable fault seam remains an explicit
+gap; ordinary successful Wine execution cannot replace it.

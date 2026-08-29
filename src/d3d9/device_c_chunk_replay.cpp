@@ -13,6 +13,7 @@
 #include "util/unixcall_marshal.hpp"
 
 #include "../dxmt9/dxmt9_perf_counters.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 // Need the full dxmt9::Device type to call markChunkResources on the
 // upperDevice shared_ptr that the chunk importer's Phase 4-B path
 // hands the per-chunk retention list to.
@@ -437,6 +438,13 @@ const char* cpuReadyArenaBeginStopReasonName(
 // canonical admission retains every resolved wrapper before inline or offloaded
 // replay. Both replay completion and queue teardown release the same list.
 void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
+  if (!chunk.recordBlob.empty()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+      ledger->release(
+          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+          chunk.recordBlob.size());
+    }
+  }
   for (const auto& entry : chunk.retainedWrappers) {
     switch (entry.kind) {
     case D9C_CHUNK_HANDLE_KIND_TEXTURE:
@@ -500,14 +508,15 @@ public:
       std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
       std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
-      bool capturedBuffersRequired)
+      bool capturedBuffersRequired, bool directArenaDraws)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
         pendingDrawSubmissions_(pendingDrawSubmissions),
         bindingSnapshots_(bindingSnapshots),
         snapshotResolver_(capturedBuffers),
         capturedBuffersRequired_(capturedBuffersRequired &&
-                                 snapshotResolver_.hasCapturedBackings()) {
+                                 snapshotResolver_.hasCapturedBackings()),
+        directArenaDraws_(directArenaDraws) {
     if (capturedBuffersRequired_) {
       const auto& state = device_->dev().state();
       for (dxmt9::core::u32 stream = 0;
@@ -845,6 +854,14 @@ public:
       draw.indexType = device_->dev().state().indexType;
     }
     if (batchCurrentDraw_ && pendingDrawSubmissions_) {
+      if (directArenaDraws_) {
+        auto payload = call.payload;
+        if (!attachCapturedBindingSnapshot(draw, payload)) {
+          return dxmt9::core::D3DERR_INVALIDCALL;
+        }
+        return device_->dev().submitDirectReplayDrawFromCurrentState(
+            draw, payload);
+      }
       const std::size_t previousIndex = pendingDrawSubmissions_->size();
       auto& submission = pendingDrawSubmissions_->emplace_back();
       const auto* previous =
@@ -982,6 +999,7 @@ private:
   bool capturedIndexBinding_ = false;
   bool unresolvedIndexBinding_ = false;
   bool batchCurrentDraw_ = false;
+  bool directArenaDraws_ = false;
 };
 
 bool recordCanBatchDraw(
@@ -1135,7 +1153,7 @@ int32_t replayResolvedChunk(
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
-      raw.bufferSnapshotsCaptured);
+      raw.bufferSnapshotsCaptured, arenaLease != nullptr);
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1217,7 +1235,14 @@ int32_t replayResolvedChunk(
     const bool batchableDraw = recordCanBatchDraw(device, record.wire);
     sink.setBatchCurrentDraw(batchableDraw);
     if (captureIdentity && batchableDraw) {
-      pendingDrawRecordIndices.push_back(static_cast<std::uint32_t>(index));
+      if (arenaLease) {
+        const std::array recordIndex{static_cast<std::uint32_t>(index)};
+        if (!arenaLease->captureNextDrawRecords(recordIndex)) {
+          captureIdentity = false;
+        }
+      } else {
+        pendingDrawRecordIndices.push_back(static_cast<std::uint32_t>(index));
+      }
     }
     if (!batchableDraw &&
         !commitChunkRecordAllowsPendingDrawBatchThrough(
@@ -1971,9 +1996,18 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
   ScopedRetainedWrapperRelease retainedRelease(raw);
   bool ledgerPublished = false;
   try {
+    dxmt9::core::CopyMaterializationEvent rawOwnershipCopy(
+        dxmt9::core::activeCopyMaterializationLedger(),
+        dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+        bytes.size());
     raw.recordBlob.assign(
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+      ledger->retain(
+          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+          raw.recordBlob.size());
+    }
     raw.wireVersion = envelope.version;
     raw.recordCount = envelope.recordCount;
     raw.recordBytes = static_cast<std::uint32_t>(bytes.size());

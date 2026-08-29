@@ -1067,7 +1067,8 @@ enum class BufferMutationOffloadResult : std::uint8_t {
 // bridge fence evaluated it and skipped the pre-mutation drain on the strength
 // of it), so it never re-derives admission — re-deriving it would open a window
 // where the fence was skipped and the synchronous path ran anyway.
-BufferMutationOffloadResult offloadManagedBufferMutation(D9CBuffer* b) noexcept;
+BufferMutationOffloadResult offloadManagedBufferMutation(
+    D9CBuffer* b, std::uint64_t wow64WritebackNs = 0u) noexcept;
 
 // Releases every wrapper retained during canonical admission and clears the list.
 // Namespace linkage allows both the commit push-failure path and the offload

@@ -4064,6 +4064,82 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   return D3D_OK;
 }
 
+HResult Device::submitDirectReplayDrawFromCurrentState(
+    DrawParam draw, DrawParamPayloadView payload) {
+  if (draw.primitiveType == PrimitiveType::TriangleFan) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
+  const auto& cached = cachedBaseDrawStateForSubmissionBatch();
+  DrawBindingOverride bindingOverride{};
+  for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+    if (!state_.streamBuffers[stream]) {
+      continue;
+    }
+    bindingOverride.streamMask |= 1u << stream;
+    bindingOverride.streams[stream] = DrawStreamBindingOverride{
+        .buffer = state_.streamBuffers[stream]->handle(),
+        .offset = state_.streamOffsets[stream],
+        .stride = state_.streamStrides[stream],
+    };
+  }
+  if (draw.indexed) {
+    bindingOverride.indexBuffer =
+        state_.indexBuffer ? state_.indexBuffer->handle() : Handle{};
+    bindingOverride.indexType = draw.indexType;
+    bindingOverride.indexBufferValid = true;
+  }
+  bindingOverride.alphaTestEnable =
+      flatStateOr(cached.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u);
+  bindingOverride.alphaTestFunc = flatStateOr(
+      cached.hot.renderStates, RS_ALPHA_FUNC,
+      static_cast<u32>(CompareFunc::Always));
+  bindingOverride.alphaTestRef =
+      flatStateOr(cached.hot.renderStates, RS_ALPHA_REF, 0u);
+  bindingOverride.alphaTestStateValid = true;
+  payload.bindingOverrideData = drawBindingOverrideBytes(bindingOverride);
+
+  if (renderTraceEnabled()) {
+    CanonicalDrawState state{cached.hot, cached.shaderLayout,
+                             DrawDebugSnapshot{}};
+    const std::span<const DrawParam> draws(&draw, 1u);
+    const std::span<const DrawParamPayloadView> payloads(&payload, 1u);
+    submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
+    return D3D_OK;
+  }
+
+  const DirectReplayDrawInput input{
+      .hot = &cached.hot,
+      .shaderLayout = &cached.shaderLayout,
+      .uniforms = &cached.uniforms,
+      .debug = makeDrawDebugSnapshot(
+          DrawCallArgs{draw.primitiveType, draw.primitiveCount,
+                       draw.startVertex, draw.baseVertexIndex,
+                       draw.startIndex, draw.indexType},
+          cached.hot),
+      .draw = draw,
+      .payload = payload,
+  };
+  DXMT_ASSERT(cached.fullUniformsValid);
+  if (!upperDevice_->submitDirectReplayDraw(input)) {
+    // The virtual false disposition is pre-effect. Test/stub devices and any
+    // backend that cannot adopt the destination transaction retain the
+    // existing serial submission path without making borrowed spans escape.
+    CanonicalDrawState state{cached.hot, cached.shaderLayout, input.debug};
+    const std::span<const DrawParam> draws(&draw, 1u);
+    const std::span<const DrawParamPayloadView> payloads(&payload, 1u);
+    upperDevice_->submitDrawRun(std::move(state), cached.uniforms, draws,
+                                payloads);
+  }
+  if (activeOcclusionQuery_) {
+    activeOcclusionCount_ += draw.primitiveCount;
+  }
+  ++submittedSequenceId_;
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
+}
+
 void Device::submitDrawRunInternal(
     CanonicalDrawState state, const DrawUniformPayload &uniforms,
     std::span<const DrawParam> draws,

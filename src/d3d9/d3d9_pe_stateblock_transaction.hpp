@@ -326,6 +326,20 @@ public:
         return peStateBlockRecorderWriteAllowed(phase_);
     }
 
+    // Shared epoch for StateBlock writers and call-scope PE recorder borrows.
+    // It lives in the existing transaction owner so the capability closure
+    // does not enlarge D3D9DeviceImpl or PeRecorderState.
+    const std::uint64_t& capabilityEpoch() const noexcept {
+        return recordingEpoch_;
+    }
+
+    bool invalidateRecorderCapabilities() noexcept {
+        const auto epoch = peStateBlockNextRecordingEpoch(recordingEpoch_);
+        if (!epoch.valid) return false;
+        recordingEpoch_ = epoch.value;
+        return true;
+    }
+
     template<typename Release>
         requires PeStateBlockNothrowRelease<Release>
     bool beginAccepted(Release&& release) noexcept {
@@ -396,6 +410,7 @@ public:
     void poison(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::PoisonRequested);
         if (!plan.valid()) return;
+        (void)invalidateRecorderCapabilities();
         if (plan.candidateEffect() == PeStateBlockCandidateEffect::Discard)
             discardRecorded(release);
         if (plan.stagedRefEffect() == PeStateBlockStagedRefEffect::Release)
@@ -434,6 +449,7 @@ public:
     void resetSucceeded(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::ResetAccepted);
         if (!plan.valid()) return;
+        (void)invalidateRecorderCapabilities();
         if (plan.stagedRefEffect() == PeStateBlockStagedRefEffect::Release)
             discardPrepared(std::forward<Release>(release));
         phase_ = plan.next();
@@ -448,6 +464,7 @@ public:
     void discardAll(Release&& release) noexcept {
         const auto plan = transition(PeStateBlockEvent::Teardown);
         if (!plan.valid()) return;
+        (void)invalidateRecorderCapabilities();
         if (plan.candidateEffect() == PeStateBlockCandidateEffect::Discard)
             discardRecorded(release);
         if (plan.stagedRefEffect() == PeStateBlockStagedRefEffect::Release)

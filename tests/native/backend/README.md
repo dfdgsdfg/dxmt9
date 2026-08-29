@@ -10,6 +10,7 @@ NSObject release symbols link against winemetal.
 | `backend_key_descriptor_spec.cpp` | `buildDrawUniforms()`, depth/stencil + sampler key value-transform (`R-BACK-3.*`) |
 | `backend_pipeline_key_spec.cpp` | PSO key (blend, MRT color-write, FVF hash, sRGB format, sampler texture/filter flags) (`R-BACK-3.*`) |
 | `dod_replay_observer_spec.cpp` | Warmed ChunkSlot capacity reuse + uniform interning |
+| `pipeline_lifecycle_observer_spec.cpp` | Bounded source-to-reclaim lifecycle, completion/Present/occupancy, admission/reclaim wake, and Present-only wedge (`R-BACK-2.88`, `R-VERIF-2.23`) |
 | `encode_session_lifecycle_spec.cpp` | Real Legacy/Arena `encodeChunk` session lifecycle and selected-serial effective per-command observer, including selection/fragments/resources; selected-parallel observer binding remains open (`R-VERIF-7.3`) |
 | `drawable_token_spec.cpp` | Production stash/take/complete/fail predicates and deterministic wait handoff (`R-VERIF-3.6`) |
 | `resource_lifetime_spec.cpp` | Initializer/reference lifetime truth tables plus direct HandleArena ABA reuse (`R-VERIF-3.1`–`3.4`) |

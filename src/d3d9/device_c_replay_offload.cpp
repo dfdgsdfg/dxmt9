@@ -12,6 +12,8 @@
 // the upperDevice shared_ptr from the fail-stop path below (mirrors the
 // same include-for-the-same-reason comment in device_c_chunk_replay.cpp).
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
+#include "dxmt9/mutation_composition_observer.hpp"
 #include "dxmt9/dxmt9_mutation_offload_predicates.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
 
@@ -290,6 +292,10 @@ bool prepareOffloadChunk(
   try {
     candidate.recordBlob.resize(blob.size());
     if (!blob.empty()) {
+      dxmt9::core::CopyMaterializationEvent event(
+          dxmt9::core::activeCopyMaterializationLedger(),
+          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+          blob.size());
       std::memcpy(candidate.recordBlob.data(), blob.data(), blob.size());
     }
     candidate.resolvedObjects.resize(envelope.handleCount);
@@ -325,6 +331,10 @@ bool prepareOffloadChunk(
       view.records.begin(), view.records.end(), [](const auto& record) {
         return record.type == D9C_COMMAND_RECORD_PRESENT;
       });
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+                   candidate.recordBlob.size());
+  }
   out = std::move(candidate);
   return true;
 }
@@ -1088,7 +1098,7 @@ int32_t applyBufferMutationTask(D9CDevice* d, BufferMutationTask& task) {
 }
 
 BufferMutationOffloadResult offloadManagedBufferMutation(
-    D9CBuffer* b) noexcept {
+    D9CBuffer* b, std::uint64_t wow64WritebackNs) noexcept {
   if (!b || !b->obj || !b->device || !b->device->replayOffload) {
     return BufferMutationOffloadResult::NotAdmitted;
   }
@@ -1161,11 +1171,42 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
   // Step 3: infallible commit at the reserved position + ledger publication.
   const auto stagedBytes =
       static_cast<std::uint64_t>(task->stagedBytes.size());
-  if (!queue.commitMutation(reservation, std::move(task), ledger)) {
+  auto* observer = dxmt9::resources::mutation_observer::
+      activeMutationCompositionObserver();
+  std::uint64_t observerResource = 0u;
+  std::uint64_t observerGeneration = 0u;
+  std::uint64_t observerOrdinal = 0u;
+  std::uint64_t observerOffset = 0u;
+  if (observer) {
+    observerResource = task->bufferHandle;
+    observerGeneration = task->lease.contentRevision;
+    observerOrdinal = reservation.replaySeq;
+    observerOffset = task->lockedOffset;
+  }
+  const bool committed = queue.commitMutation(reservation, std::move(task), ledger);
+  if (!committed) {
     // Only reachable when a teardown drain cleared the queue after this
     // reservation was taken; the task is dropped on the same terms every other
     // pending task on that path is (R-BACK-44.7).
     dxmt9::perf::countOffloadBufferMutationDiscarded();
+  } else if (observer) {
+    // Observation is deliberately after the infallible publish. A rejected
+    // reservation or teardown discard is not a successful Unlock mutation.
+    (void)observer->recordMutation({
+        .identity =
+            dxmt9::resources::mutation_observer::ResourceMutationIdentity{
+                .resource = observerResource,
+                .backingGeneration = observerGeneration,
+                .sourceOrdinal = observerOrdinal},
+        .disposition = dxmt9::resources::mutation_observer::Disposition::Plain,
+        .byteOffset = observerOffset,
+        .byteSize = stagedBytes,
+        .timing = dxmt9::resources::mutation_observer::MutationTiming{
+            .wow64WritebackNs = wow64WritebackNs,
+            .backingRotationNs = rotateNs,
+            .shadowCopyNs = stageNs},
+        .successful = true,
+    });
   }
   dxmt9::perf::countD3D9BufferUnlockDeferred(stagedBytes, stageNs, rotateNs);
   return BufferMutationOffloadResult::Committed;

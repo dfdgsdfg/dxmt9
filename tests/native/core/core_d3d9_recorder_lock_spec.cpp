@@ -27,6 +27,7 @@
 #include "dxmt9/pe_recorder_lock.hpp"
 
 #include <cstdint>
+#include <type_traits>
 
 using namespace dxmt9::core::spec;
 
@@ -38,18 +39,14 @@ constexpr std::uint32_t kD3DCreateMultithreaded = 0x00000004u;
 constexpr std::uint32_t kD3DCreateSoftwareVertexProcessing = 0x00000020u;
 constexpr std::uint32_t kD3DCreateHardwareVertexProcessing = 0x00000040u;
 
-// Mirrors dxmt9PeRecorderLockRequired() in src/d3d9/d3d9_pe_device.cpp.
-bool peRecorderLockRequired(std::uint32_t behaviorFlags,
-                            bool forceLockEnv) {
-  return (behaviorFlags & kD3DCreateMultithreaded) != 0 || forceLockEnv;
-}
-
 void testFlagSetLocksRegardlessOfEnv() {
-  check(peRecorderLockRequired(kD3DCreateMultithreaded, false),
+  check(dxmt9::d3d9::pe::recorderLockRequired(
+            kD3DCreateMultithreaded, false),
         "D3DCREATE_MULTITHREADED alone requires the lock");
-  check(peRecorderLockRequired(kD3DCreateMultithreaded, true),
+  check(dxmt9::d3d9::pe::recorderLockRequired(
+            kD3DCreateMultithreaded, true),
         "D3DCREATE_MULTITHREADED plus the force env still requires the lock");
-  check(peRecorderLockRequired(
+  check(dxmt9::d3d9::pe::recorderLockRequired(
             kD3DCreateMultithreaded | kD3DCreateHardwareVertexProcessing,
             false),
         "D3DCREATE_MULTITHREADED combined with unrelated flags still locks");
@@ -59,21 +56,90 @@ void testFlagClearEnvSetLocks() {
   // The rollback/insurance lane: DXMT9_PE_FORCE_RECORDER_LOCK forces the
   // lock on for apps that violate the D3DCREATE_MULTITHREADED contract
   // (e.g. release resources from a loader thread) without passing the flag.
-  check(peRecorderLockRequired(0u, true),
+  check(dxmt9::d3d9::pe::recorderLockRequired(0u, true),
         "no behavior flags but the force env is set -> locked");
-  check(peRecorderLockRequired(kD3DCreateHardwareVertexProcessing, true),
+  check(dxmt9::d3d9::pe::recorderLockRequired(
+            kD3DCreateHardwareVertexProcessing, true),
         "unrelated behavior flags plus the force env -> locked");
 }
 
 void testFlagClearEnvClearUnlocked() {
   // The common case for 3DMark05 (behavior=0x40,
   // D3DCREATE_HARDWARE_VERTEXPROCESSING only): no lock is paid.
-  check(!peRecorderLockRequired(kD3DCreateHardwareVertexProcessing, false),
+  check(!dxmt9::d3d9::pe::recorderLockRequired(
+            kD3DCreateHardwareVertexProcessing, false),
         "hardware vertex processing only, no force env -> unlocked");
-  check(!peRecorderLockRequired(0u, false),
+  check(!dxmt9::d3d9::pe::recorderLockRequired(0u, false),
         "no behavior flags, no force env -> unlocked");
-  check(!peRecorderLockRequired(kD3DCreateSoftwareVertexProcessing, false),
+  check(!dxmt9::d3d9::pe::recorderLockRequired(
+            kD3DCreateSoftwareVertexProcessing, false),
         "software vertex processing only, no force env -> unlocked");
+}
+
+void testRecorderAccessPredicateExhaustive() {
+  using dxmt9::d3d9::pe::RecorderAccessFacts;
+  using dxmt9::d3d9::pe::RecorderAccessLane;
+  using dxmt9::d3d9::pe::planRecorderAccess;
+  for (unsigned required = 0u; required < 2u; ++required) {
+    for (unsigned held = 0u; held < 2u; ++held) {
+      for (unsigned owner = 0u; owner < 2u; ++owner) {
+        const auto lane = planRecorderAccess(RecorderAccessFacts{
+            .lockRequired = required != 0u,
+            .lockHeld = held != 0u,
+            .ownerThread = owner != 0u,
+        });
+        const auto expected = required != 0u
+            ? (held != 0u ? RecorderAccessLane::Locked
+                          : RecorderAccessLane::Denied)
+            : (owner != 0u ? RecorderAccessLane::Owner
+                           : RecorderAccessLane::Denied);
+        check(lane == expected,
+              "all owner/conditional-lock witness rows use one predicate");
+      }
+    }
+  }
+}
+
+void testScopedBorrowEpochAndTypeClosure() {
+  using Capability = dxmt9::d3d9::pe::RecorderLockCapability;
+  using Borrow = dxmt9::d3d9::pe::RecorderBorrow<const std::uint32_t>;
+  static_assert(!std::is_copy_constructible_v<Capability> &&
+                !std::is_move_constructible_v<Capability> &&
+                !std::is_copy_assignable_v<Capability> &&
+                !std::is_move_assignable_v<Capability>);
+  static_assert(!std::is_copy_constructible_v<Borrow> &&
+                !std::is_move_constructible_v<Borrow> &&
+                !std::is_copy_assignable_v<Borrow> &&
+                !std::is_move_assignable_v<Borrow>);
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 7u;
+  dxmt9::d3d9::pe::RecorderLockGuard guard(mutex, false);
+  const auto access = guard.capability(owner, epoch);
+  check(access.valid() &&
+            access.lane() == dxmt9::d3d9::pe::RecorderAccessLane::Owner,
+        "no-MT producer ownership issues the scoped production capability");
+  {
+    dxmt9::d3d9::pe::RecorderLockGuard lockedGuard(mutex, true);
+    const auto lockedAccess = lockedGuard.capability(owner, epoch);
+    check(lockedAccess.valid() &&
+              lockedAccess.lane() ==
+                  dxmt9::d3d9::pe::RecorderAccessLane::Locked,
+          "the multithreaded lane issues the same capability under its lock");
+  }
+  const std::uint32_t value = 0x12345678u;
+  Borrow borrow;
+  check(access.bind(borrow, value), "valid access binds an immutable borrow");
+  std::uint32_t observed = 0u;
+  check(borrow.with([&](const std::uint32_t& current) noexcept {
+          observed = current;
+        }) && observed == value,
+        "current-epoch borrow visits synchronously");
+  ++epoch;
+  check(!access.valid() && !borrow.valid() &&
+            !borrow.with([&](const std::uint32_t&) noexcept {}),
+        "epoch advance invalidates both mutation and source capabilities");
 }
 
 void testProductionGuardSerializesRecorderIntervals() {
@@ -171,6 +237,8 @@ int main() {
     testFlagSetLocksRegardlessOfEnv();
     testFlagClearEnvSetLocks();
     testFlagClearEnvClearUnlocked();
+    testRecorderAccessPredicateExhaustive();
+    testScopedBorrowEpochAndTypeClosure();
     testProductionGuardSerializesRecorderIntervals();
     testDefaultPoolResetLegalityInterval();
   } catch (const TestFailure& error) {

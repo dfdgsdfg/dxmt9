@@ -293,7 +293,8 @@ struct SealedCommandChunk {
 };
 
 // R-BACK-43.4 `producer-owned` (PE game thread). Every member below —
-// `records_`, `handles_`, `handleObjects_`, `payload_`, `sealedBlob_`,
+// `records_`, `handles_`, `handleObjects_`, the mutually-exclusive
+// `payload_`/`sealedBlob_` allocation,
 // `retainer_`, `active_`, `sealed_` — is written and read only on the thread
 // driving the D3D9 recorder, and none of it is reachable from the replay
 // worker, encode thread, or completion path: the builder's output crosses to
@@ -308,7 +309,7 @@ class CommandChunkBuilder {
  public:
   explicit CommandChunkBuilder(
       const CommandChunkBuilderCapacities& capacities = {});
-  ~CommandChunkBuilder() = default;
+  ~CommandChunkBuilder();
 
   CommandChunkBuilder(const CommandChunkBuilder&) = delete;
   CommandChunkBuilder& operator=(const CommandChunkBuilder&) = delete;
@@ -486,7 +487,7 @@ class CommandChunkBuilder {
   bool sealed() const noexcept { return sealed_; }
   std::size_t recordCount() const noexcept { return records_.size(); }
   std::size_t handleCount() const noexcept { return handles_.size(); }
-  std::size_t payloadBytes() const noexcept { return payload_.size(); }
+  std::size_t payloadBytes() const noexcept;
   std::size_t retainedObjectCount() const noexcept { return retainer_.size(); }
   // Unique local ordinal of the most recently committed record. This is PE
   // bookkeeping only; it never enters the D9C wire ABI.

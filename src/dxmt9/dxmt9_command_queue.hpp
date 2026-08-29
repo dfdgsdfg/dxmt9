@@ -418,6 +418,8 @@ class CommandQueue {
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
+  bool submitDirectReplayDraw(
+      const core::DirectReplayDrawInput& input) noexcept;
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
 
   // Cold, capture-only ownership copied from the exact Direct-Arena source
@@ -1494,6 +1496,7 @@ class CommandQueue {
     bool captureSingleCommand() noexcept;
     bool captureDrawCommand(std::size_t first,
                             std::size_t count) noexcept;
+    bool captureDirectDraw(bool appendedCommand) noexcept;
   };
 
   enum class ActiveArenaAppendResult {
@@ -1550,6 +1553,8 @@ class CommandQueue {
       const core::DrawUniformPayload& uniforms,
       std::span<const core::DrawParam> draws,
       std::span<const core::DrawParamPayloadView> payloads) noexcept;
+  ActiveArenaAppendResult appendActiveArenaDirectReplayDraw(
+      const core::DirectReplayDrawInput& input) noexcept;
   ActiveArenaAppendResult appendActiveArenaClear(
       const core::ClearDesc& value) noexcept;
   ActiveArenaAppendResult appendActiveArenaSurfaceCopy(

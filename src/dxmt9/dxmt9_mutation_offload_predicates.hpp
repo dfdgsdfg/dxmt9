@@ -25,6 +25,8 @@
 
 #include <cstdint>
 
+#include "dxmt9/mutation_identity.hpp"
+
 namespace dxmt9::resources::mutation_offload {
 
 // `D3DLOCK_*` bits, mirrored from `src/d3d9/d3d9_pe_buffer_hazard.hpp` rather

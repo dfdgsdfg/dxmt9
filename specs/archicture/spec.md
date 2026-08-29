@@ -192,6 +192,64 @@ flowchart TD
   class View,Bind free
 ```
 
+### 2.3 Copy and materialization ledger
+
+R-ARCH-7.7 gives these identities normative meaning. `copy` means bytes are
+duplicated between two live representations; `materialize` means bytes are
+created in their first owned destination and is not to be counted again as a
+copy. Subsystem counters may add a suffix for a bounded subtype, but must roll
+up to exactly one identity below.
+
+| Identity | Operation | Classification | Reason / target |
+|---|---|---|---|
+| `materialize.pe.state-shadow` | store the D3D9 value and ownership needed for later recording | necessary | preserves producer-visible D3D9 state semantics |
+| `materialize.pe.wire-final` | create a record, handle entry, or payload directly in the final PE wire blob | necessary | establishes pointer-free PE ownership |
+| `materialize.pe.builder-temporary` | create a record, handle entry, or payload in a temporary builder region later copied by seal | removable | the final wire layout is the target owner |
+| `copy.pe.seal-records` | copy the temporary record table into `sealedBlob_` | removable | final offsets are knowable before construction |
+| `copy.pe.seal-handles` | copy the temporary handle table into `sealedBlob_` | removable | final handle capacity is reservable transactionally |
+| `copy.pe.seal-payload` | copy the temporary payload arena into `sealedBlob_` | removable | typed producers can write the final payload range |
+| `copy.bridge.raw-owned` | import the authenticated wire blob into unix-owned `RawCommandChunk` storage | necessary | establishes process/ABI ownership; removal would require a separately specified shared-ownership ABI |
+| `materialize.replay-submission-carrier` | create canonical draw state, uniform, param, or payload-view values in replay scratch | removable | bounded planning can target final queue storage |
+| `copy.replay-submission-carrier` | copy canonical draw state, uniforms, params, or payload views through a replay submission carrier | removable | final queue destination is known after bounded planning |
+| `materialize.queue-final` | construct the surviving SoA record, owner, or byte range in `ChunkSlot` / `SourcePayloadBlockChain` | necessary | establishes immutable queue ownership |
+| `copy.gpu-upload` | copy final CPU bytes to a distinct GPU-readable allocation | necessary | this class exists only when the final CPU allocation is not GPU-readable; unified-memory in-place construction uses the next class instead |
+| `materialize.gpu-shared` | construct dirty GPU input directly in shared Metal storage | necessary | first and only GPU-readable owned representation |
+
+The classification is about the required architecture, not current cost.
+`gap.md` records which removable classes still exist. Each enabled ledger row
+reports `{identity, classification, calls, bytes, inclusive_cpu_time,
+peak_retained_bytes}`. Peak retention increases when a class creates or keeps a
+second live byte representation and decreases when that representation is
+released; it is not the maximum single call size. Cross-class totals may be
+shown only after every contributing row remains available. Inclusive timing
+starts immediately before the class's source read/destination construction and
+ends when the destination representation is live; it excludes validation,
+resource resolution, queue waits, and semantic replay. Inclusive rows may
+overlap and must be marked non-additive unless the observer proves disjoint
+windows.
+
+### 2.4 Ownership refinement
+
+The architecture-wide stages from R-ARCH-7.8 specialize as follows:
+
+| Stage | Concrete authority | Exit condition |
+|---|---|---|
+| `ProducerOwned` | PE state, application input, and active recorder transaction | final pointer-free wire identity committed or pre-effect rollback |
+| `RawOwned` | unix-owned authenticated wire blob plus retained resolved wrappers | replay transaction begins or terminal discard |
+| `ReplayBorrowed` | call-local validated record/payload/handle views under a typed replay capability | direct build commits, rolls back, or fail-stops after an effect |
+| `FinalOwned` | immutable `ChunkSlot` / Arena payload chain and queue-owned re-entrant owners | synchronous encode borrow begins |
+| `Encoding` | call-local views held by the serial coordinator or bounded child | queue receipt or submitted work becomes completion authority |
+| `GPUInFlight` | command buffer, resource waterlines, receipt, query/frame token, and completion identity | ordered GPU/device-loss settlement |
+| `Reclaimed` | no payload view, resource owner, receipt, or callback remains reachable | terminal |
+
+The stage names describe refinement, not seven mandatory allocations. Direct
+construction may combine representation changes within a stage, and state-only
+or rejected work may take an explicit no-GPU terminal path. The encode
+scheduling spec owns the concrete transaction, queue observer, and early
+payload-retirement rules; the recorder spec owns the PE wire transaction and
+recorder capabilities; the verification spec owns formal and executable
+evidence.
+
 ---
 
 ## 3. CPU-Bound Submission Sequence
@@ -723,6 +781,7 @@ The license policy is conservative by design:
 | `R-ARCH-4.*` provenance | specs review, conformance manifest provenance, license review before imports |
 | `R-ARCH-5.*` verification | `specs/verification/`, `specs/tests/`, `specs/benchmarks/`, `specs/archicture/gap.md` |
 | `R-ARCH-6.*` concurrency | `CommandQueue.tla`, `QueueLifecycleRefinement.tla`, `PresentFrameLatency.tla`, `ResourceLifetime.tla`, `EncoderLifecycle.tla` (exact handle sets + Bloom-as-diagnostic-only invariants), `QuerySeqId.tla`, `ConcurrentProgressSignals.tla` (three-axis pacing independence), planned CPU-ready/session admission and parallel-join refinements, queue observer tests, wait/perf counters |
+| `R-ARCH-7.*` minimal-copy and ownership refinement | copy/materialization ledger, PE wire and queue destination transactions, legacy/direct differential fixtures, pipeline-stage queue observer, `specs/verification/` formal refinements, GPU/Wine/wild promotion evidence |
 
 Current known partial evidence remains tracked in `specs/archicture/gap.md`, especially the
 DOD / DXMT ownership acceptance row.

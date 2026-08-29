@@ -1192,6 +1192,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         bool inlineConstDelta = false);
 
     bool buildSparseStatePlanForRecord(
+        const dxmt9::d3d9::pe::RecorderLockCapability& access,
         const dxmt9::d3d9::pe::PeDrawParams& params,
         const dxmt9::d3d9::pe::PeDrawPayloads& payloads,
         dxmt9::d3d9::pe::SparseStatePlan& plan,
@@ -2596,7 +2597,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     template <typename Fill, typename Accept>
     HRESULT appendSingleCategoryApplyState(Fill fill, Accept accept);
 
-    HRESULT drainOversizedPendingStateAsApplyStateRecords();
+    HRESULT drainOversizedPendingStateAsApplyStateRecords(
+        const dxmt9::d3d9::pe::RecorderLockCapability& access);
 
 public:
     // KEY FUNCTION. QueryInterface is deliberately declaration-only and its

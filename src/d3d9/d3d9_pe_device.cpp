@@ -1406,6 +1406,7 @@ D3D9DeviceImpl::scalarSemanticObserver() noexcept {
 }
 
 void D3D9DeviceImpl::clearPeStateTracking() {
+    (void)recorderState_.stateBlockTransaction.invalidateRecorderCapabilities();
     recorderState_.peState.maintenance().clearServerShadowTables();
     recorderState_.peState.consume().clearPendingHotState();
     recorderState_.peConsts.reset();
@@ -1540,6 +1541,7 @@ bool D3D9DeviceImpl::buildSparseStateForRecord(
 }
 
 bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
+    const dxmt9::d3d9::pe::RecorderLockCapability& access,
     const dxmt9::d3d9::pe::PeDrawParams& params,
     const dxmt9::d3d9::pe::PeDrawPayloads& payloads,
     dxmt9::d3d9::pe::SparseStatePlan& plan,
@@ -1570,7 +1572,7 @@ bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
         params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
     populateBindingView(recorderState_.peBindingView, needAllSlots, isDraw);
     return dxmt9::d3d9::pe::buildSparseStatePlan(
-        recorderState_.peState, recorderState_.peConsts,
+        access, recorderState_.peState, recorderState_.peConsts,
         recorderState_.peBindingView, payloads, params, forceFullSnapshot,
         inlineConstDelta, plan);
 }
@@ -1787,6 +1789,9 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
     // cold lock/unlock cycles on this hot path.
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    auto recorderAccess = recorderLock.capability(
+        recorderState_.recorderOwnership,
+        recorderState_.stateBlockTransaction.capabilityEpoch());
     const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
     if (!inlineConstDelta) {
         // Drain any accumulated const dirty ranges into chunk records
@@ -1804,7 +1809,7 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
     // them only after appendSparseRecord accepts the record.
     dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
     if (!buildSparseStatePlanForRecord(
-            params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
+            recorderAccess, params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
             /*forceFullSnapshot=*/false, inlineConstDelta)) {
         return D3DERR_INVALIDCALL;
     }
@@ -1862,6 +1867,9 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
     // acquisitions the nested const-flush + draw appends would do.
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    auto recorderAccess = recorderLock.capability(
+        recorderState_.recorderOwnership,
+        recorderState_.stateBlockTransaction.capabilityEpoch());
     const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
     if (!inlineConstDelta) {
         const HRESULT constHr = flushPendingConsts();
@@ -1877,7 +1885,7 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
     params.primitiveCount = count;
     dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
     if (!buildSparseStatePlanForRecord(
-            params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
+            recorderAccess, params, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan,
             /*forceFullSnapshot=*/false, inlineConstDelta)) {
         return D3DERR_INVALIDCALL;
     }
@@ -1961,6 +1969,9 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
     // acquisitions the nested const-flush + draw appends would do.
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    auto recorderAccess = recorderLock.capability(
+        recorderState_.recorderOwnership,
+        recorderState_.stateBlockTransaction.capabilityEpoch());
     const HRESULT constHr = flushPendingConsts();
     if (FAILED(constHr)) return constHr;
     // Payload sizing moved AHEAD of the state build, because the producer
@@ -2029,7 +2040,7 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
     const bool built = compatibilityOverride
         ? buildSparseStateForRecord(params, forceFullSnapshot)
         : buildSparseStatePlanForRecord(
-              params, payloads, sparsePlan, forceFullSnapshot);
+              recorderAccess, params, payloads, sparsePlan, forceFullSnapshot);
     if (overrideFvf) {
         fvf_ = savedFvf;
         vdecl_ = savedVdecl;
@@ -2133,6 +2144,9 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
     // acquisitions the nested const-flush + draw appends would do.
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    auto recorderAccess = recorderLock.capability(
+        recorderState_.recorderOwnership,
+        recorderState_.stateBlockTransaction.capabilityEpoch());
     const HRESULT constHr = flushPendingConsts();
     if (FAILED(constHr)) return constHr;
     // Payload sizing moved AHEAD of the state build; see the non-indexed UP
@@ -2205,7 +2219,7 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
     const bool built = compatibilityOverride
         ? buildSparseStateForRecord(params, forceFullSnapshot)
         : buildSparseStatePlanForRecord(
-              params, payloads, sparsePlan, forceFullSnapshot);
+              recorderAccess, params, payloads, sparsePlan, forceFullSnapshot);
     if (overrideFvf) {
         fvf_ = savedFvf;
         vdecl_ = savedVdecl;

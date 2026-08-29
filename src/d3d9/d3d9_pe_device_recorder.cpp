@@ -588,6 +588,9 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
     Dxmt9PeAppendFamilyScope appendFamily(diagnostics_.get(), PeInterAppendCallFamily::Barrier);
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    auto recorderAccess = recorderLock.capability(
+        recorderState_.recorderOwnership,
+        recorderState_.stateBlockTransaction.capabilityEpoch());
     const std::int64_t constEntryNs = dxmt9PeRecorderStatsEnabled()
         ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
         : 0;
@@ -607,7 +610,8 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
     applyParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
     dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
     if (buildSparseStatePlanForRecord(
-            applyParams, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
+            recorderAccess, applyParams,
+            dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
         recordPeApplyStateBuildCpu(buildEntryNs);
         // sizeHint stays kLegacyApplyStateSizeHint: it is what the
         // capacity precheck saw before, so seal cadence is unchanged.
@@ -648,7 +652,7 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
     // state bit MUST be represented in the chunk before the caller
     // appends a barrier record. Sealing-and-deferring (the prior
     // behavior) lets the barrier observe stale server state.
-    return drainOversizedPendingStateAsApplyStateRecords();
+    return drainOversizedPendingStateAsApplyStateRecords(recorderAccess);
 }
 
 template <typename Fill, typename Accept>
@@ -679,7 +683,8 @@ HRESULT D3D9DeviceImpl::appendSingleCategoryApplyState(Fill fill, Accept accept)
         });
 }
 
-HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
+HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
+    const dxmt9::d3d9::pe::RecorderLockCapability& recorderAccess) {
     // Drain the four cappable collections (renderStates, tss,
     // samplerStates, transforms) in batches of cap-size. Each batch becomes
     // one APPLY_STATE record carrying ONLY that collection's batch; the
@@ -778,7 +783,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
     tailParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
     dxmt9::d3d9::pe::SparseStatePlan sparsePlan{};
     if (!buildSparseStatePlanForRecord(
-            tailParams, dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
+            recorderAccess, tailParams,
+            dxmt9::d3d9::pe::PeDrawPayloads{}, sparsePlan)) {
         // Truly should never happen -- the four cappable collections are now
         // empty. Defensive: log + return failure rather than silently leaving
         // pending state dirty (which would let the upcoming barrier observe

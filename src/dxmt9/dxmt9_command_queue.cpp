@@ -4507,6 +4507,31 @@ bool CommandQueue::ArenaBuildContext::captureDrawCommand(
   return true;
 }
 
+bool CommandQueue::ArenaBuildContext::captureDirectDraw(
+    bool appendedCommand) noexcept {
+  if (!captureEnabled()) {
+    return true;
+  }
+  if (captureNextRawRecords.size() != 1u) {
+    return false;
+  }
+  if (appendedCommand) {
+    if (!captureDrawCommand(0u, 1u)) {
+      return false;
+    }
+    captureNextRawRecords.clear();
+    return true;
+  }
+  const auto record = captureNextRawRecords.front();
+  if (captureCommandAnchors.empty() ||
+      record <= captureCommandAnchors.back().lastRecord) {
+    return false;
+  }
+  captureCommandAnchors.back().lastRecord = record;
+  captureNextRawRecords.clear();
+  return true;
+}
+
 CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
     noexcept {
   if (!arenaAdmissionActive_.load(std::memory_order_acquire)) {
@@ -4588,34 +4613,41 @@ CommandQueue::appendActiveArenaDrawRun(
     if (draws.empty()) {
       return true;
     }
-    auto& scratch = drawSubmitScratch();
-    ScopedDrawSubmitScratchUse scratchUse(scratch);
-    scratch.arenaSubmissions.clear();
-    scratch.arenaSubmissions.reserve(draws.size());
     const auto backBuffer = state.hot.colorAttachments[0].handle;
     for (std::size_t i = 0; i < draws.size(); ++i) {
-      auto& submission = scratch.arenaSubmissions.emplace_back();
-      submission.draw = draws[i];
-      submission.payload = drawPayloadAt(payloads, i);
-      submission.stateGeneration = 1;
-      submission.uniformGeneration = 1;
-      submission.stateLane = core::DrawRunSubmissionStateLane::BindingAgnostic;
-      if (i == 0) {
-        submission.state.emplace(std::move(state));
-        submission.uniforms.emplace(uniforms);
-        submission.stateMaterialized = true;
-      } else {
-        submission.stateMaterialized = false;
+      const core::DirectReplayDrawInput input{
+          .hot = &state.hot,
+          .shaderLayout = &state.shaderLayout,
+          .uniforms = &uniforms,
+          .debug = state.debug,
+          .draw = draws[i],
+          .payload = drawPayloadAt(payloads, i),
+      };
+      if (!assembler || !assembler->tryAppendDirectDraw(input)) {
+        return false;
       }
-    }
-    if (!assembler || !assembler->tryAppendDrawRunBatch(
-            scratch.arenaSubmissions)) {
-      return false;
     }
     if (!context.captureSingleCommand()) {
       return false;
     }
     context.pendingBackBuffer = backBuffer;
+    context.updatesBackBuffer = true;
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaDirectReplayDraw(
+    const core::DirectReplayDrawInput& input) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    auto* assembler = context.activeAssembler();
+    const auto commandCount = assembler ? assembler->commandCount() : 0u;
+    if (!assembler || !assembler->tryAppendDirectDraw(input) ||
+        !context.captureDirectDraw(
+            assembler->commandCount() != commandCount)) {
+      return false;
+    }
+    context.pendingBackBuffer = input.hot->colorAttachments[0].handle;
     context.updatesBackBuffer = true;
     return true;
   });
@@ -4770,7 +4802,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
     *captureIdentity = {};
   }
   for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
-    if (!context->builders[i] || !context->builders[i]->publish()) {
+    if (!context->assemblers[i] || !context->assemblers[i]->commit()) {
       arenaBuildPoisoned_.store(true, std::memory_order_release);
       abortCpuReadyArenaSource(ticket, controlIndex);
       return false;
@@ -5116,8 +5148,8 @@ CommandQueue::publishCpuReadyArenaBatch(
       const auto& layout = context->batchLayouts[source];
       for (std::size_t segment = 0; segment < layout.segmentCount;
            ++segment) {
-        if (!context->batchBuilders[source][segment] ||
-            !context->batchBuilders[source][segment]->publish()) {
+        if (!context->batchAssemblers[source][segment] ||
+            !context->batchAssemblers[source][segment]->commit()) {
           context->noteFailure(CpuReadyArenaFailureClass::PayloadSeal,
                                source, segment,
                                context->plannedActivePages(),
@@ -5643,6 +5675,13 @@ void CommandQueue::submitDrawRunBatch(
                          skipDrawResourceMarking_,
                          forceDrawResourceMarkingAfterSplit_,
                          submissions);
+}
+
+bool CommandQueue::submitDirectReplayDraw(
+    const core::DirectReplayDrawInput& input) noexcept {
+  perf::countSubmitDraw();
+  return appendActiveArenaDirectReplayDraw(input) !=
+         ActiveArenaAppendResult::Inactive;
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {

@@ -72,7 +72,8 @@ bool buildSparseState(const PeHotStateShadow& shadow,
 // Pass 1 for ordinary APPLY_STATE and draw production. Selects canonical
 // rows/ranges without constructing wire rows, retaining handles, consuming
 // PendingDelta, or touching the builder.
-bool buildSparseStatePlan(const PeHotStateShadow& shadow,
+bool buildSparseStatePlan(const RecorderLockCapability& access,
+                          const PeHotStateShadow& shadow,
                           PeConstShadowBlock& constants,
                           const PeBindingView& bindings,
                           const PeDrawPayloads& payloads,

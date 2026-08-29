@@ -77,7 +77,8 @@ bool constantRangeStillDirty(const ConstShadow& shadow,
 
 }  // namespace
 
-bool buildSparseStatePlan(const PeHotStateShadow& shadow,
+bool buildSparseStatePlan(const RecorderLockCapability& access,
+                          const PeHotStateShadow& shadow,
                           PeConstShadowBlock& constants,
                           const PeBindingView& bindings,
                           const PeDrawPayloads& payloads,
@@ -88,10 +89,10 @@ bool buildSparseStatePlan(const PeHotStateShadow& shadow,
   if (params.recordType == 0u) {
     return false;
   }
-  plan = SparseStatePlan{};
-  plan.sourceShadow = &shadow;
-  plan.sourceConstants = &constants;
-  plan.sourceBindings = &bindings;
+  plan.reset();
+  if (!plan.bindSources(access, shadow, constants, bindings)) {
+    return false;
+  }
   plan.draw = params;
   plan.fullSnapshot =
       forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
@@ -237,33 +238,39 @@ bool buildSparseStatePlan(const PeHotStateShadow& shadow,
 
 bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
                                          SparseStatePlan& plan) noexcept {
-  if (!plan.prepared || !plan.sourceShadow || !plan.sourceBindings ||
-      plan.draw.recordType == 0u) {
+  if (!plan.prepared || plan.draw.recordType == 0u) {
     return false;
   }
-  const auto& bindings = *plan.sourceBindings;
-  if (!plan.fullSnapshot) {
-    for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-      const bool bound = bindings.streams[slot].buffer.object != nullptr;
-      const bool retained = (chunk.retainedStreamMask & (1u << slot)) != 0u;
-      if (bound && !retained) {
-        plan.streamMask |= 1u << slot;
-      }
-    }
-  }
-  if (plan.draw.recordType ==
-      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
-    const std::uint64_t wire =
-        d9cWireHandleValue(toWireHandle(bindings.indexBuffer.object));
-    const bool bound = bindings.indexBuffer.object != nullptr;
-    plan.indexBuffer = plan.selectedIndexBuffer ||
-        !chunk.indexBufferKnown || chunk.submittedIndexBufferWire != wire ||
-        (!chunk.indexBufferRetained && bound);
-  } else {
-    plan.indexBuffer = false;
-  }
-  plan.chunkContextFinalized = true;
-  return true;
+  bool finalized = false;
+  return plan.withBindingSource(
+      [&](const PeBindingView& bindings) noexcept {
+        if (!plan.fullSnapshot) {
+          for (std::uint32_t slot = 0u;
+               slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            const bool bound =
+                bindings.streams[slot].buffer.object != nullptr;
+            const bool retained =
+                (chunk.retainedStreamMask & (1u << slot)) != 0u;
+            if (bound && !retained) {
+              plan.streamMask |= 1u << slot;
+            }
+          }
+        }
+        if (plan.draw.recordType ==
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+          const std::uint64_t wire = d9cWireHandleValue(
+              toWireHandle(bindings.indexBuffer.object));
+          const bool bound = bindings.indexBuffer.object != nullptr;
+          plan.indexBuffer = plan.selectedIndexBuffer ||
+              !chunk.indexBufferKnown ||
+              chunk.submittedIndexBufferWire != wire ||
+              (!chunk.indexBufferRetained && bound);
+        } else {
+          plan.indexBuffer = false;
+        }
+        plan.chunkContextFinalized = true;
+        finalized = true;
+      }) && finalized;
 }
 
 std::size_t sparseStatePlanConstantPayloadBytes(
@@ -276,20 +283,17 @@ std::size_t sparseStatePlanConstantPayloadBytes(
          plan.psBoolConstants.registerBytes.size();
 }
 
-bool acceptSparseStatePlan(PeHotStateShadow& shadow,
-                           PeConstShadowBlock& constants,
-                           const SparseStatePlan& state,
-                           const AppendPlan& plan,
-                           PeScalarSemanticTokenLedger* tokens,
-                           std::uint64_t recordOrdinal) noexcept {
+static bool acceptSparseStatePlanWithSources(
+    PeHotStateShadow& shadow, PeConstShadowBlock& constants,
+    const PeBindingView& bindings, const SparseStatePlan& state,
+    const AppendPlan& plan, PeScalarSemanticTokenLedger* tokens,
+    std::uint64_t recordOrdinal) noexcept {
   if (!plan.valid() || !plan.consumeRepresentedPending() ||
       !plan.recordDurable() || !state.prepared ||
-      !state.chunkContextFinalized || state.sourceShadow != &shadow ||
-      state.sourceConstants != &constants || !state.sourceBindings) {
+      !state.chunkContextFinalized) {
     return false;
   }
 
-  const auto& bindings = *state.sourceBindings;
   const auto renderStates = state.fullSnapshot
       ? shadow.renderStateShadowTyped()
       : shadow.pendingRenderStatesTyped();
@@ -525,6 +529,26 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
     }
   }
   return true;
+}
+
+bool acceptSparseStatePlan(PeHotStateShadow& shadow,
+                           PeConstShadowBlock& constants,
+                           const SparseStatePlan& state,
+                           const AppendPlan& plan,
+                           PeScalarSemanticTokenLedger* tokens,
+                           std::uint64_t recordOrdinal) noexcept {
+  bool accepted = false;
+  return state.withSettlementSources(
+      [&](const PeHotStateShadow& borrowedShadow,
+          PeConstShadowBlock& borrowedConstants,
+          const PeBindingView& bindings) noexcept {
+        if (&borrowedShadow != &shadow || &borrowedConstants != &constants) {
+          return;
+        }
+        accepted = acceptSparseStatePlanWithSources(
+            shadow, constants, bindings, state, plan, tokens,
+            recordOrdinal);
+      }) && accepted;
 }
 
 // Fills SparseStateInput straight from the shadows and the binding view.

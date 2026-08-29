@@ -195,6 +195,11 @@ class Device {
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,
                              std::span<const core::DrawParamPayloadView>) {}
+  // Direct-Arena replay borrows Device cache values synchronously and
+  // materializes them once in the final source payload before returning.
+  // False is a strict pre-effect rejection and permits serial fallback.
+  virtual bool submitDirectReplayDraw(
+      const core::DirectReplayDrawInput&) noexcept { return false; }
   virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) {
     if (submissions.empty()) {
       return;
