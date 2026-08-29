@@ -81,14 +81,14 @@ stacks on the same machine:
 | Stack | Why |
 |---|---|
 | wined3d (Wine default D3D9 on macOS) | Baseline — what users have today |
-| DXVK + MoltenVK | Best alternative direct translation |
+| D9VK + MoltenVK | Alternative D3D9-to-Vulkan-to-Metal translation |
 
 **R-BENCH-3.2** Reference stack measurements are stored in
 `benchmarks/baselines/<stack-name>.json` and committed. They are updated
 deliberately, not automatically.
 
 **R-BENCH-3.3** The benchmark report must show dxmt9 results alongside
-reference stack results as a ratio: `dxmt9 / wined3d` and `dxmt9 / dxvk_mvk`.
+reference stack results as a ratio: `dxmt9 / wined3d` and `dxmt9 / d9vk_mvk`.
 A ratio > 1.0 means dxmt9 is faster.
 
 ---

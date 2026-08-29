@@ -4,16 +4,18 @@ workload: 3DMark05 + 3DMark06 + SFIV
 title: "Baselines — the reference captures every other experiment compares against"
 type: domain-index
 status: current
-updated: 2026-08-26
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md
+updated: 2026-08-29
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md; docs/perfomance/baselines/baselines-d9vk-moltenvk.06.md; docs/perfomance/baselines/baselines-sfiv-wined3d.07.md
 related: docs/perfomance/baselines/overview.md; docs/perfomance/baselines/log.md
 ---
 
 # Baselines — the reference captures every other experiment compares against
 
-Latest tracked result: the 2026-08-26 3DMark06 WineD3D graphics baselines record
-Sikarugir GT1/GT2/HDR1/HDR2 at `15.976 / 18.897 / 37.620 / 15.577` and Heroic
-11.16 at `14.945 / 16.542 / 29.688 / 13.636` official FPS at 1280x800.
+Latest tracked result: the 2026-08-29 Sikarugir D9VK/MoltenVK baseline records
+3DMark05 GT1/GT2/GT3 at `28.769 / 27.041 / 46.576`, 3DMark06
+GT1/GT2/HDR1/HDR2 at `16.062 / 19.161 / 46.536 / 17.071`, and SFIV's
+240-second overlay average at `46.78` FPS. The matching Sikarugir WineD3D SFIV
+reference records `43.80` FPS at 1280x720.
 
 ## Start Here
 
@@ -23,6 +25,13 @@ Sikarugir GT1/GT2/HDR1/HDR2 at `15.976 / 18.897 / 37.620 / 15.577` and Heroic
 
 ## Recent Leaf Documents
 
+- [baselines-sfiv-wined3d.07](baselines-sfiv-wined3d.07.md) — 2026-08-29
+  Sikarugir WineD3D SFIV reference at 1280x720: `43.80 FPS` from the
+  240-second benchmark overlay.
+- [baselines-d9vk-moltenvk.06](baselines-d9vk-moltenvk.06.md) — 2026-08-29
+  Sikarugir D9VK async plus patched MoltenVK D3D9 reference across 3DMark05,
+  3DMark06, and SFIV; stack identity, observer, resolution, and cache policy are
+  explicit.
 - [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) —
   2026-08-26 pristine Sikarugir and Heroic 11.16 WineD3D graphics-only
   baselines; builtin OpenGL identity proven, with 1280x800 and result-source

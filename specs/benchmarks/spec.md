@@ -115,7 +115,7 @@ benchmarks/
 ├── baselines/
 │   ├── dxmt9.json          dxmt9 stored baseline (committed)
 │   ├── wined3d.json        wined3d reference (committed)
-│   └── dxvk_mvk.json       DXVK+MoltenVK reference (committed)
+│   └── d9vk_mvk.json       D9VK+MoltenVK D3D9 reference (committed)
 └── results/                Run output (gitignored)
     └── .gitkeep
 scripts/
