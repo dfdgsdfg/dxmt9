@@ -48,7 +48,7 @@ current whole-run reference in [overview-3dmark05-gt1](../overview-3dmark05-gt1.
 | H16 | The PE/DOD refactor series changed the current wild-workload ceiling | rejected as a measurable single-run shift | [baselines-wild-fps-refresh.04](baselines-wild-fps-refresh.04.md) records GT1 `30.646`, GT2 `28.311`, GT3 `64.875`, and SFIV `43.252` at `e32da591`. Every delta from the 2026-08-23 sweep is inside the approximately `+/-3%` ambient band, with normal captures and zero GPU errors. |
 | H17 | One WineD3D result can stand in for the current 3DMark06 renderer comparison | rejected as an aggregate; accepted as per-runtime, per-scene baselines | [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) records Sikarugir at GT1 `15.976`, GT2 `18.897`, HDR1 `37.620`, HDR2 `15.577`, and Heroic 11.16 at `14.945`, `16.542`, `29.688`, `13.636` official FPS. Both WineD3D runs use 1280x800 and the same official observer; Heroic is `6.5-21.1%` lower. Their mode and observer still differ from dxmt9's 1280x720 frame sampling, so no strict dxmt9 percentage is assigned. |
 | H18 | A D3D9 Vulkan-to-Metal reference can be represented by generic Sikarugir DXVK | rejected; accepted as a D9VK-specific reference lane | [baselines-d9vk-moltenvk.06](baselines-d9vk-moltenvk.06.md) identifies Sikarugir D9VK `v1.10.3-20250511` plus patched MoltenVK `v1.2.10`, proves the x86 path with a pixel oracle, and records 3DMark05, 3DMark06, and SFIV. D9VK trails on all three 3DMark05 scenes but leads the Sikarugir WineD3D 3DMark06 scenes by `0.5-23.7%`; observer and mode differences keep this a per-workload reference rather than one aggregate ordering. |
-| H19 | SFIV lacks a Sikarugir WineD3D reference | rejected | [baselines-sfiv-wined3d.07](baselines-sfiv-wined3d.07.md) records `43.80 FPS` from the 240-second SFIV overlay at 1280x720. D9VK records `46.78` at 1280x800, so its numerical lead is not promoted as a matched A/B. |
+| H19 | SFIV lacks runtime-qualified WineD3D references | rejected | [baselines-sfiv-wined3d.07](baselines-sfiv-wined3d.07.md) records `43.80 FPS` under Sikarugir at 1280x720 and `63.34 FPS` under Heroic 11.16 at 1280x800 from the 240-second SFIV overlay. D9VK records `46.78` at 1280x800 under Sikarugir; runtime, mode, and observer differences prevent one aggregate renderer ordering. |
 
 ## Current Navigation
 
@@ -59,7 +59,8 @@ current whole-run reference in [overview-3dmark05-gt1](../overview-3dmark05-gt1.
 ## Recent Leaf Documents
 
 - [baselines-sfiv-wined3d.07](baselines-sfiv-wined3d.07.md) — current
-  Sikarugir WineD3D SFIV reference at 1280x720.
+  Sikarugir and Heroic 11.16 WineD3D SFIV references, including the Heroic
+  GStreamer plugin-view stability condition.
 - [baselines-d9vk-moltenvk.06](baselines-d9vk-moltenvk.06.md) — current
   Sikarugir D9VK/MoltenVK D3D9 reference across 3DMark05, 3DMark06, and SFIV.
 - [baselines-3dmark06-wined3d.05](baselines-3dmark06-wined3d.05.md) —

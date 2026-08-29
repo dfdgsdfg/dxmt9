@@ -14,8 +14,9 @@ related: docs/perfomance/baselines/overview.md; docs/perfomance/baselines/log.md
 Latest tracked result: the 2026-08-29 Sikarugir D9VK/MoltenVK baseline records
 3DMark05 GT1/GT2/GT3 at `28.769 / 27.041 / 46.576`, 3DMark06
 GT1/GT2/HDR1/HDR2 at `16.062 / 19.161 / 46.536 / 17.071`, and SFIV's
-240-second overlay average at `46.78` FPS. The matching Sikarugir WineD3D SFIV
-reference records `43.80` FPS at 1280x720.
+240-second overlay average at `46.78` FPS. The Sikarugir and Heroic 11.16
+WineD3D SFIV references record `43.80` FPS at 1280x720 and `63.34` FPS at
+1280x800, respectively.
 
 ## Start Here
 
@@ -26,8 +27,8 @@ reference records `43.80` FPS at 1280x720.
 ## Recent Leaf Documents
 
 - [baselines-sfiv-wined3d.07](baselines-sfiv-wined3d.07.md) — 2026-08-29
-  Sikarugir WineD3D SFIV reference at 1280x720: `43.80 FPS` from the
-  240-second benchmark overlay.
+  WineD3D SFIV 240-second overlay references: Sikarugir at 1280x720 records
+  `43.80 FPS`, while Heroic 11.16 at 1280x800 records `63.34 FPS`.
 - [baselines-d9vk-moltenvk.06](baselines-d9vk-moltenvk.06.md) — 2026-08-29
   Sikarugir D9VK async plus patched MoltenVK D3D9 reference across 3DMark05,
   3DMark06, and SFIV; stack identity, observer, resolution, and cache policy are

@@ -37,10 +37,10 @@ three binaries.
 
 ## Performance
 
-Measured on a 16 GB MacBook Air with an Apple M1 8-core GPU. The dxmt9 and
-Sikarugir D9VK/MoltenVK columns and the Sikarugir WineD3D SFIV row were
-refreshed 2026-08-29; the remaining WineD3D rows retain the 2026-08-25/26
-Sikarugir and Heroic Wine Staging 11.16 baselines:
+Measured on a 16 GB MacBook Air with an Apple M1 8-core GPU. The dxmt9,
+Sikarugir D9VK/MoltenVK, and both WineD3D SFIV columns were refreshed
+2026-08-29; the remaining WineD3D rows retain the 2026-08-25/26 Sikarugir and
+Heroic Wine Staging 11.16 baselines:
 
 
 | Workload                    | dxmt9 / Metal (Sikarugir) | D9VK / MoltenVK (Sikarugir) | WineD3D / OpenGL (Sikarugir) | WineD3D / OpenGL (Heroic 11.16) |
@@ -52,13 +52,14 @@ Sikarugir and Heroic Wine Staging 11.16 baselines:
 | 3DMark06 GT2                | `18.1`                     | `19.2`                       | `18.9`                        | `16.5`                           |
 | 3DMark06 HDR1               | `37.0`                     | `46.5`                       | `37.6`                        | `29.7`                           |
 | 3DMark06 HDR2               | `16.0`                     | `17.1`                       | `15.6`                        | `13.6`                           |
-| Street Fighter IV Benchmark | `44.3`                     | `46.8`                       | `43.8`                        | —                                |
+| Street Fighter IV Benchmark | `44.3`                     | `46.8`                       | `43.8`                        | `63.3`                           |
 
 dxmt9 uses one `perf` run per workload: 1024x768 for 3DMark05 and 1280x720 for
 3DMark06 and SFIV. The WineD3D runs use 1024x768 for 3DMark05 and 1280x800 for
 3DMark06. D9VK/MoltenVK uses 1024x768 for 3DMark05 and 1280x800 for 3DMark06
-and SFIV. Sikarugir WineD3D SFIV uses 1280x720. Both SFIV reference values are
-240-second benchmark-overlay averages.
+and SFIV. Sikarugir WineD3D SFIV uses 1280x720; Heroic 11.16 WineD3D SFIV uses
+1280x800. All three non-dxmt9 SFIV reference values are 240-second
+benchmark-overlay averages.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
