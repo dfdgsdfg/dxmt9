@@ -107,7 +107,7 @@ class ProfileResolutionTests(unittest.TestCase):
         )
         self.assertEqual(values["EXP_DEFAULT_DXMT9_OFFLOAD_COMMIT_REPLAY"], "1")
         self.assertEqual(
-            values["EXP_DEFAULT_DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE"], "1"
+            values["EXP_DEFAULT_DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE"], "0"
         )
 
     def test_explicit_debug_still_selects_debug_defaults(self):

@@ -345,12 +345,14 @@ silently becoming compatibility promises.
 #### Commit-Replay Offload (engine default ON)
 
 The commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON
-since 2026-07-10**, `d45af067` — explicit `0` opts out;
-`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` unset follows the offload state
-because the pair is coupled) moves the record-replay phase of
+since 2026-07-10**, `d45af067` — explicit `0` opts out) moves the record-replay phase of
 `dxmt9c_device_commit_chunk` off the app thread onto a device-owned replay
 worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
 The observable contract is `R-BACK-2.51`. The mechanics:
+
+Opaque-depth index reorder is an independent default-off provider. It no
+longer inherits the offload state: callers must explicitly set
+`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1`.
 
 - The synchronous phase always keeps wire header/range validation, handle
   generation checks, canonical resource identities, backing snapshots, raw

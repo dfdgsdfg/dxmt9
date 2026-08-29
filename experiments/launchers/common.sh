@@ -97,10 +97,10 @@ exp_resolve_profile_defaults() {
       EXP_DEFAULT_DXMT_PERF_COUNTERS=1
       EXP_DEFAULT_DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=60
       EXP_DEFAULT_WINEDEBUG=-all
-      # Promoted pair (H195 / index-cache-locality idx-20 promotion proof):
-      # offload absorbs the index-cache CPU tax; set either to 0 to opt out.
+      # Offload remains promoted. Index reorder is a separate opt-in because
+      # dynamic-index workloads can pay its candidate-build cost repeatedly.
       EXP_DEFAULT_DXMT9_OFFLOAD_COMMIT_REPLAY=1
-      EXP_DEFAULT_DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1
+      EXP_DEFAULT_DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=0
       ;;
     *)
       exp_log "invalid DXMT_EXPERIMENT_PROFILE: $EXP_PROFILE_NAME (expected debug or perf)"

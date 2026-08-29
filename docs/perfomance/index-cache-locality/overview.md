@@ -1,23 +1,23 @@
 ---
 domain: index-cache-locality
 workload: 3DMark05 GT1
-title: "Index-Cache Locality — the only accepted production GPU win - Current Overview"
+title: "Index-Cache Locality — workload-gated GPU provider - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-21
+updated: 2026-08-29
 source: docs/perfomance/index-cache-locality/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md
 related: docs/perfomance/index-cache-locality/index.md; docs/perfomance/index-cache-locality/log.md
 ---
 
-# Index-Cache Locality — the only accepted production GPU win - Current Overview
+# Index-Cache Locality — workload-gated GPU provider - Current Overview
 
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `index-cache-locality.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
 ## Scope
 
-This domain owns the **one accepted production optimization** of the whole GT1
-investigation: a cached, semantic-safe post-transform index-cache reorder that
+This domain owns a workload-gated optimization proven on GT1: a cached,
+semantic-safe post-transform index-cache reorder that
 lowers VS invocations — and therefore the hidden TVB / parameter-buffer write
 bucket — for **opaque depth-writing triangle lists**. It covers the production
 flag `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` (+ `_MIN_GAIN_PCT`), the
@@ -27,13 +27,12 @@ selection, the CPU-cost optimization of the cache path, and the remaining `50/2`
 bottleneck triage. The mechanism behind why this works is proven separately by
 [tvb-mechanism-proof](../tvb-mechanism-proof/index.md): TVB write ≈ `VS invocations × per-vertex VSOut bytes`.
 
-**Current default state:** since `d45af067` (2026-07-10, H216 in
-[present-pacing](../present-pacing/index.md)) the flag's unset default follows
-`DXMT9_OFFLOAD_COMMIT_REPLAY` — itself engine-default ON — so the coupled pair
-is on by default everywhere; explicit `0` opts out. The offload absorbs the
-candidate/lookup CPU tax (H25), which is why the coupling is one-way. The
-3DMark05 probe wrapper pins the pair to the same defaults since 2026-07-12
-(`e5129346`, H221): probe baselines after that date are trio-on by default.
+**Current default state:** explicit default-off. The former offload coupling
+proved useful on GT1 but did not bound candidate construction across workloads.
+STALKER Day built `696,039` candidates, rejected `90.2%` only after construction,
+and spent `97.53 ms/present` in the path. Disabling it raised average FPS from
+`4.779` to `9.939` while GPU time stayed neutral (`11.13 -> 10.69 ms/present`).
+The 3DMark05 probe pins `0` by default and retains its explicit opt-in flag.
 
 ## Latest Conclusions
 
@@ -47,6 +46,7 @@ candidate/lookup CPU tax (H25), which is why the coupling is one-way. The
 | H27 | Extending the safe reorder scope or strictly merging adjacent compatible indexed draws reduces additional GT1 work | rejected-current; all four mislabeled `gt2` artifacts actually ran explicit `-gt1`. Extended scope leaves the unique candidate/miss/create population exactly `125/143/67`; merge and both eliminate `0` draws. The apparent `+0.96%` to `+1.49%` FPS deltas have no mechanism coverage and stay inside the current GT1 reference range, so both flags remain default OFF | [index-cache-locality-scope-merge.21](index-cache-locality-scope-merge.21.md) |
 | H28 | The heavier GT2 workload exercises the extended reorder scope or strict adjacent merge | rejected-current; four verified `-gt2` runs leave candidate/miss/create population exactly `61/61/37` and eliminate `0` draws. FPS moves only `-0.20%` to `+0.12%`, GPU-CB p50/p95 stays stable, captures at frames `500-502` are visually coherent, and all error gates pass. GT1 and GT2 therefore agree that both experimental paths have no current coverage | [index-cache-locality-scope-merge-gt2.22](index-cache-locality-scope-merge-gt2.22.md) |
 | H29 | One strict compatible-merge predicate hides a useful GT2 volume frontier | rejected as a single-predicate expansion; all `575,523` adjacent boundaries have multiple raw causes. The exact logical population is binding payload + non-contiguous IB `361,143` (`62.75%`), all three including uniform `128,617` (`22.35%`), uniform + non-contiguous `74,586` (`12.96%`), and binding payload only `11,177` (`1.94%`). Joined-index-only volume is zero, so the next viable design must preserve subdraw state rather than collapse it blindly | [index-cache-locality-merge-rejection.23](index-cache-locality-merge-rejection.23.md) |
+| H30 | Offload makes index-reorder candidate cost safe across workloads | rejected; STALKER Day spends `97.53 ms/present` constructing candidates and rejects `90.2%` after construction. Explicit OFF changes average FPS `4.779 -> 9.939` with GPU time neutral (`11.13 -> 10.69 ms/present`). Default returned to OFF pending pre-build economy and bounded-work gates | `experiments/output/app-d3d9-stkcop-bench-perf-{baseline,no-opaque-index-cache}-day-20260829` |
 
 ## Current Navigation
 

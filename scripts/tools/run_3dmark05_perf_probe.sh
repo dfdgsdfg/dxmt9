@@ -4343,9 +4343,9 @@ if (( optimize_opaque_depth_index_cache )); then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1")
 else
   # Pin an explicit value for recipe determinism (see the env_args comment
-  # above): the pinned default matches the engine default (on); export
-  # DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=0 to opt out.
-  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-1}")
+  # above): the pinned default matches the engine default (off); use the
+  # dedicated flag or export 1 to opt in.
+  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-0}")
 fi
 
 # Keep the experimental scope/merge lanes explicit in the recorded recipe.

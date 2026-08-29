@@ -565,14 +565,15 @@ This default is a compromise:
 - Still workload-dependent. Heavy render targets, MSAA, many attachments, or
   high store/load pressure can erase the pipelining win.
 
-Beyond the sub-CB grain, the current engine-default policy set also includes
-the promoted trio (2026-07-10, `d45af067`): the commit-replay offload
-(`DXMT9_OFFLOAD_COMMIT_REPLAY`, explicit `0` opts out), the opaque-depth
-index-cache locality opt-in whose unset default follows the offload
-(`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`), and the ungated PE-side readonly
-managed-buffer lock cache. The 3DMark05 probe wrapper pins the pair to the
-same defaults since 2026-07-12 (`e5129346`); probe baselines after that date
-are trio-on unless `0` is exported explicitly.
+Beyond the sub-CB grain, the current engine-default policy keeps commit-replay
+offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`, explicit `0` opts out) and the ungated
+PE-side readonly managed-buffer lock cache. Opaque-depth index-cache locality
+(`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`) is again explicit default-off:
+STALKER Day exposed `97.53 ms/present` of candidate CPU with `90.2%` rejected
+after construction, while disabling it changed GPU time only from `11.13` to
+`10.69 ms/present` and raised average FPS from `4.779` to `9.939`. The 3DMark05
+probe pins `0` for deterministic default recipes and retains its explicit
+`--optimize-opaque-depth-index-cache` opt-in.
 
 The engine also applies a stricter effective present boundary when an Immediate
 present still carries the default maximum frame latency of four: the boundary

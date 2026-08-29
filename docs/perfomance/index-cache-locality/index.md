@@ -1,19 +1,22 @@
 ---
 domain: index-cache-locality
 workload: 3DMark05 GT1
-title: "Index-Cache Locality — the only accepted production GPU win"
+title: "Index-Cache Locality — workload-gated GPU provider"
 type: domain-index
 status: current
-updated: 2026-07-21
+updated: 2026-08-29
 source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 related: docs/perfomance/index-cache-locality/overview.md; docs/perfomance/index-cache-locality/log.md
 ---
 
-# Index-Cache Locality — the only accepted production GPU win
+# Index-Cache Locality — workload-gated GPU provider
 
 Latest tracked row: `H29` - GT2 merge-rejection telemetry finds `575,523` adjacent indexed-triangle boundaries but no single-condition frontier. The dominant exact class is binding payload + non-contiguous IB (`361,143`, `62.75%`), so a joined-index buffer alone cannot provide a semantic merge.
 
-Current status: the coupled pair is engine-default ON since `d45af067` (2026-07-10, H216 in [present-pacing](../present-pacing/index.md)) — unset follows the offload, explicit `0` opts out — and the probe wrapper pins match the engine defaults since `e5129346` (2026-07-12, H221).
+Current status: explicit default-off. The GT1 GPU mechanism remains valid, but
+the former offload coupling was retired on 2026-08-29 after STALKER Day exposed
+`97.53 ms/present` of candidate CPU and `90.2%` post-build rejection. The probe
+wrapper pins `0`; `--optimize-opaque-depth-index-cache` remains the opt-in.
 
 ## Start Here
 

@@ -262,8 +262,7 @@ logical render-pass, and submission boundaries, and define overlap,
 
 **R-BACK-2.51** *(Commit-replay offload contract.)* The commit-replay
 offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON since
-2026-07-10** — explicit `0` opts out; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`
-unset follows the offload state because the pair is coupled) must (a) keep wire
+2026-07-10** — explicit `0` opts out) must (a) keep wire
 header/range validation and import synchronous on the app thread before any
 record is handed off. The default and Legacy lanes also keep the historical
 combined resource-mark/backing-capture step synchronous before handoff. An
