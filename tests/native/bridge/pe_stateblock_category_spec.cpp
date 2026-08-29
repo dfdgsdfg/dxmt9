@@ -324,6 +324,18 @@ void testCandidateAbaAndDomains() {
             stateBlockCaptureDispositionFromType(3u) ==
                 StateBlockCaptureDisposition::VertexState,
         "state-block type disposition mapping");
+  check(stateBlockApplyPublication(StateBlockCaptureDisposition::All) ==
+                StateBlockApplyPublication::BackendAuthoritative &&
+            stateBlockApplyPublication(
+                StateBlockCaptureDisposition::PixelState) ==
+                StateBlockApplyPublication::BackendAuthoritative &&
+            stateBlockApplyPublication(
+                StateBlockCaptureDisposition::VertexState) ==
+                StateBlockApplyPublication::BackendAuthoritative &&
+            stateBlockApplyPublication(
+                StateBlockCaptureDisposition::Explicit) ==
+                StateBlockApplyPublication::PeReplayRequired,
+        "recorded state blocks require PE replay publication");
   check(stateBlockCaptureCategorySelected(
             StateBlockCaptureDisposition::All,
             StateBlockCaptureCategory::Texture) &&
@@ -363,6 +375,39 @@ void testCandidateAbaAndDomains() {
             !stateBlockSamplerStateSelected(
                 StateBlockCaptureDisposition::PixelState, 13u),
         "vertex/pixel key filtering");
+
+  StateBlockRecorded vertexInput{};
+  std::uint32_t releasedDeclarations = 0u;
+  bool releasedExpectedDeclaration = false;
+  auto vertexInputWriter = vertexInput.writer();
+  vertexInputWriter.selectFvf(0x112u, [&](auto) noexcept {
+    ++releasedDeclarations;
+  });
+  std::uint32_t recordedFvf = 0u;
+  check(vertexInput.snapshot().fvf().get(0u, recordedFvf) &&
+            recordedFvf == 0x112u &&
+            vertexInput.snapshot().vertexDeclaration().empty() &&
+            !vertexInput.snapshot().vertexDeclarationWasRecorded(),
+        "recorded FVF exclusively selects the implicit declaration domain");
+  vertexInputWriter.selectVertexDeclaration();
+  vertexInputWriter.vertexDeclaration().set(
+      fixedKey<StateBlockApplyPhysicalStore::vertexDeclaration>(0u),
+      stateBlockRef<StateBlockVertexDeclarationRef>(0x1234u));
+  check(vertexInput.snapshot().fvf().empty() &&
+            vertexInput.snapshot().vertexDeclaration().contains(0u) &&
+            vertexInput.snapshot().vertexDeclarationWasRecorded(),
+        "recorded declaration supersedes an earlier FVF");
+  vertexInputWriter.selectFvf(0x334u, [&](auto declaration) noexcept {
+    releasedExpectedDeclaration = declaration.raw() ==
+        reinterpret_cast<IDirect3DVertexDeclaration9*>(0x1234u);
+    ++releasedDeclarations;
+  });
+  check(vertexInput.snapshot().fvf().get(0u, recordedFvf) &&
+            recordedFvf == 0x334u &&
+            vertexInput.snapshot().vertexDeclaration().empty() &&
+            !vertexInput.snapshot().vertexDeclarationWasRecorded() &&
+            releasedDeclarations == 1u && releasedExpectedDeclaration,
+        "recorded FVF supersedes and releases an earlier declaration");
 
   StateBlockRecorded capture = candidate;
   capture.writer().renderStates().set(render, 99u);

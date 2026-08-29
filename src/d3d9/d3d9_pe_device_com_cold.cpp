@@ -3352,9 +3352,12 @@ HRESULT D3D9DeviceImpl::PrepareStateBlockApplyForChild(
     }
 
 void D3D9DeviceImpl::CommitStateBlockApplyForChild(
-        const D3D9StateBlockShadow& shadow) noexcept {
+        const D3D9StateBlockShadow& shadow,
+        StateBlockCaptureDisposition disposition) noexcept {
         if (recorderState_.stateBlockTransaction.isPoisoned()) return;
         const auto snapshot = shadow.snapshot();
+        const bool replayThroughPe = stateBlockApplyPublication(disposition) ==
+            StateBlockApplyPublication::PeReplayRequired;
         auto copyConst = [](ConstShadow& live,
                             const StateBlockConstShadow& recorded,
                             std::size_t elemSize) noexcept {
@@ -3374,18 +3377,53 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                             static_cast<std::size_t>(start) + count);
                     }
                     std::memcpy(live.values.data() + begin, bytes, end - begin);
-                    std::fill(live.dirtyElems.begin(), live.dirtyElems.end(),
-                              std::uint8_t{0});
                     return true;
                 });
-            live.dirtyStart = live.dirtyEnd = 0u;
+        };
+
+        auto publishConst = [replayThroughPe, &copyConst](
+                                ConstShadow& live,
+                                const StateBlockConstShadow& recorded,
+                                std::size_t elemSize) noexcept {
+            copyConst(live, recorded, elemSize);
+            if (!replayThroughPe) {
+                live.clear();
+                return;
+            }
+            (void)recorded.forEachRange(
+                elemSize, [&](std::uint32_t start, std::uint32_t count,
+                              const std::uint8_t*) {
+                    const std::uint32_t end = start + count;
+                    std::fill(live.dirtyElems.begin() + start,
+                              live.dirtyElems.begin() + end,
+                              std::uint8_t{1});
+                    if (!live.dirty()) {
+                        live.dirtyStart = start;
+                        live.dirtyEnd = end;
+                    } else {
+                        live.dirtyStart = std::min(live.dirtyStart, start);
+                        live.dirtyEnd = std::max(live.dirtyEnd, end);
+                    }
+                    return true;
+                });
         };
 
         auto* const semanticTokens = scalarSemanticObserver();
         snapshot.renderStates().forEach([&](RenderStateSlot key, DWORD value) {
             recorderState_.peState.maintenance().renderStateShadowTyped().set(key, value);
-            recorderState_.peState.maintenance().pendingRenderStatesTyped().erase(key);
-            if (semanticTokens) {
+            if (replayThroughPe) {
+                recorderState_.peState.maintenance().pendingRenderStatesTyped().set(key, value);
+                if (semanticTokens) {
+                    const bool tokenRecorded = semanticTokens->record(
+                        dxmt9::d3d9::pe::ScalarSemanticCategory::RenderState,
+                        rawSlot(key));
+                    DXMT_ASSERT(tokenRecorded);
+                    (void)tokenRecorded;
+                }
+            } else {
+                recorderState_.peState.maintenance().pendingRenderStatesTyped().erase(key);
+            }
+            if (!replayThroughPe && semanticTokens) {
                 (void)semanticTokens->eraseSuperseded(
                     dxmt9::d3d9::pe::ScalarSemanticCategory::RenderState,
                     rawSlot(key));
@@ -3395,8 +3433,20 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
             [&](TextureStageIndex stage, TextureStageStateType type,
                 DWORD value) {
                 recorderState_.peState.maintenance().tssShadowTyped().set(stage, type, value);
-                recorderState_.peState.maintenance().pendingTssTyped().erase(stage, type);
-                if (semanticTokens) {
+                if (replayThroughPe) {
+                    recorderState_.peState.maintenance().pendingTssTyped().set(stage, type, value);
+                    if (semanticTokens) {
+                        const bool tokenRecorded = semanticTokens->record(
+                            dxmt9::d3d9::pe::ScalarSemanticCategory::
+                                TextureStageState,
+                            rawSlot(stage), rawSlot(type));
+                        DXMT_ASSERT(tokenRecorded);
+                        (void)tokenRecorded;
+                    }
+                } else {
+                    recorderState_.peState.maintenance().pendingTssTyped().erase(stage, type);
+                }
+                if (!replayThroughPe && semanticTokens) {
                     (void)semanticTokens->eraseSuperseded(
                         dxmt9::d3d9::pe::ScalarSemanticCategory::
                             TextureStageState,
@@ -3406,8 +3456,19 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
         snapshot.samplerStates().forEach(
             [&](SamplerIndex sampler, SamplerStateType type, DWORD value) {
                 recorderState_.peState.maintenance().samplerStateShadowTyped().set(sampler, type, value);
-                recorderState_.peState.maintenance().pendingSamplerStatesTyped().erase(sampler, type);
-                if (semanticTokens) {
+                if (replayThroughPe) {
+                    recorderState_.peState.maintenance().pendingSamplerStatesTyped().set(sampler, type, value);
+                    if (semanticTokens) {
+                        const bool tokenRecorded = semanticTokens->record(
+                            dxmt9::d3d9::pe::ScalarSemanticCategory::SamplerState,
+                            rawSlot(sampler), rawSlot(type));
+                        DXMT_ASSERT(tokenRecorded);
+                        (void)tokenRecorded;
+                    }
+                } else {
+                    recorderState_.peState.maintenance().pendingSamplerStatesTyped().erase(sampler, type);
+                }
+                if (!replayThroughPe && semanticTokens) {
                     (void)semanticTokens->eraseSuperseded(
                         dxmt9::d3d9::pe::ScalarSemanticCategory::SamplerState,
                         rawSlot(sampler), rawSlot(type));
@@ -3415,7 +3476,11 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
             });
         snapshot.transforms().forEach([&](TransformState key, const D9CMatrix& value) {
             recorderState_.peState.maintenance().transformShadowTyped().set(key, value);
-            recorderState_.peState.maintenance().pendingTransformsTyped().erase(key);
+            if (replayThroughPe) {
+                recorderState_.peState.maintenance().pendingTransformsTyped().set(key, value);
+            } else {
+                recorderState_.peState.maintenance().pendingTransformsTyped().erase(key);
+            }
         });
 
         // This visitor is deliberately compile-time-only binding for the
@@ -3457,6 +3522,14 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
             });
 
         using Category = StateBlockRecorded::Category;
+        bool commitPublicationValid = true;
+        const auto validateForCommit =
+            [&commitPublicationValid](auto&& validate) noexcept {
+                const HRESULT hr = validate();
+                DXMT_ASSERT(SUCCEEDED(hr));
+                if (FAILED(hr)) commitPublicationValid = false;
+                return SUCCEEDED(hr);
+            };
         snapshot.categories().forEachTypedCategory(
             [&]<Category category>(const auto& values) {
                 if constexpr (category == Category::textures) {
@@ -3466,12 +3539,21 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                             recorderState_.stateBlockTransaction.takeTexture(
                                 stateBlockTextureSlotKey(slot)).raw();
                         D3D9PeValidatedTexture validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateTexture(
-                            textures_[slot], static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateTexture(
+                                    textures_[slot],
+                                    static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.textures[slot] =
                             validated.wire();
-                        recorderState_.peState.maintenance().pendingTextureMask() &= ~(1u << slot);
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingTextureMask() |=
+                                1u << slot;
+                        } else {
+                            recorderState_.peState.maintenance().pendingTextureMask() &=
+                                ~(1u << slot);
+                        }
                     });
                 } else if constexpr (category == Category::streamSources) {
                     values.forEach([&](std::size_t slot, const auto&) {
@@ -3483,20 +3565,33 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         streamOff_[slot] = staged.offset;
                         streamStr_[slot] = staged.stride;
                         D3D9PeValidatedVertexBuffer validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateVertexBuffer(
-                            streamSrc_[slot],
-                            static_cast<IDirect3DDevice9*>(this), &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateVertexBuffer(
+                                    streamSrc_[slot],
+                                    static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.streams[slot] = {
                             .buffer = validated.wire(),
                             .offset = staged.offset,
                             .stride = staged.stride,
                         };
-                        recorderState_.peState.maintenance().pendingStreamMask() &= ~(1u << slot);
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingStreamMask() |=
+                                1u << slot;
+                        } else {
+                            recorderState_.peState.maintenance().pendingStreamMask() &=
+                                ~(1u << slot);
+                        }
                     });
                 } else if constexpr (category ==
                                      Category::streamFrequencies) {
                     values.forEach([&](std::size_t slot, std::uint32_t value) {
                         streamFreq_[slot] = value;
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingStreamMask() |=
+                                1u << slot;
+                        }
                     });
                 } else if constexpr (category == Category::vertexShader) {
                     values.forEach([&](std::size_t, auto) {
@@ -3504,11 +3599,14 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         vs_ = recorderState_.stateBlockTransaction
                                   .takeVertexShader().raw();
                         D3D9PeValidatedVertexShader validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateVertexShader(
-                            vs_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateVertexShader(
+                                    vs_, static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.vs = validated.wire();
-                        recorderState_.peState.maintenance().pendingVs() = false;
+                        recorderState_.peState.maintenance().pendingVs() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::pixelShader) {
                     values.forEach([&](std::size_t, auto) {
@@ -3516,29 +3614,38 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         ps_ = recorderState_.stateBlockTransaction
                                   .takePixelShader().raw();
                         D3D9PeValidatedPixelShader validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidatePixelShader(
-                            ps_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidatePixelShader(
+                                    ps_, static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.ps = validated.wire();
-                        recorderState_.peState.maintenance().pendingPs() = false;
+                        recorderState_.peState.maintenance().pendingPs() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::fvf) {
                     values.forEach([&](std::size_t, DWORD value) {
                         fvf_ = value;
-                        recorderState_.peState.maintenance().pendingFvf() = false;
+                        recorderState_.peState.maintenance().pendingFvf() =
+                            replayThroughPe;
                         recorderState_.peState.maintenance().pendingVdecl() = false;
                         if (value == 0u) {
                             vdecl_ = nullptr;
                         } else {
                             const auto it = fvfDeclCache_.find(value);
                             DXMT_ASSERT(it != fvfDeclCache_.end());
+                            if (it == fvfDeclCache_.end()) {
+                                commitPublicationValid = false;
+                            }
                             vdecl_ = it == fvfDeclCache_.end()
                                 ? nullptr : it->second;
                         }
                         D3D9PeValidatedDeclaration validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateVertexDecl(
-                            vdecl_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateVertexDecl(
+                                    vdecl_, static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.fvf = value;
                         recorderState_.peBindingView.vdecl = validated.wire();
                     });
@@ -3547,11 +3654,15 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                     values.forEach([&](std::size_t, auto value) {
                         vdecl_ = value.raw();
                         D3D9PeValidatedDeclaration validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateVertexDecl(
-                            vdecl_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateVertexDecl(
+                                    vdecl_, static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.vdecl = validated.wire();
-                        recorderState_.peState.maintenance().pendingVdecl() = false;
+                        recorderState_.peState.maintenance().pendingVdecl() =
+                            replayThroughPe;
+                        recorderState_.peState.maintenance().pendingFvf() = false;
                     });
                 } else if constexpr (category == Category::indexBuffer) {
                     values.forEach([&](std::size_t, auto) {
@@ -3559,12 +3670,16 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         indexBuf_ = recorderState_.stateBlockTransaction
                                         .takeIndexBuffer().raw();
                         D3D9PeValidatedIndexBuffer validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateIndexBuffer(
-                            indexBuf_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateIndexBuffer(
+                                    indexBuf_,
+                                    static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.indexBuffer =
                             validated.wire();
-                        recorderState_.peState.maintenance().pendingIb() = false;
+                        recorderState_.peState.maintenance().pendingIb() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::renderTargets) {
                     values.forEach([&](std::size_t slot, auto) {
@@ -3573,15 +3688,24 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                             .takeRenderTarget(
                                 stateBlockRenderTargetSlotKey(slot)).raw();
                         D3D9PeValidatedSurface validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateSurface(
-                            rtSlots_[slot], static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateSurface(
+                                    rtSlots_[slot],
+                                    static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.renderTargets[slot] =
                             validated.wire();
                         rtSlotExplicit_[slot] = true;
                         recorderState_.peBindingView.rtExplicitMask =
                             currentRtExplicitMask();
-                        recorderState_.peState.maintenance().pendingRtMask() &= ~(1u << slot);
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingRtMask() |=
+                                1u << slot;
+                        } else {
+                            recorderState_.peState.maintenance().pendingRtMask() &=
+                                ~(1u << slot);
+                        }
                     });
                 } else if constexpr (category == Category::depthStencil) {
                     values.forEach([&](std::size_t, auto) {
@@ -3589,40 +3713,59 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         dsSurface_ = recorderState_.stateBlockTransaction
                                          .takeDepthStencil().raw();
                         D3D9PeValidatedSurface validated{};
-                        DXMT_ASSERT(SUCCEEDED(D3D9PeValidateSurface(
-                            dsSurface_, static_cast<IDirect3DDevice9*>(this),
-                            &validated)));
+                        if (!validateForCommit([&] {
+                                return D3D9PeValidateSurface(
+                                    dsSurface_,
+                                    static_cast<IDirect3DDevice9*>(this),
+                                    &validated);
+                            })) return;
                         recorderState_.peBindingView.depthStencil =
                             validated.wire();
                         dsSurfaceExplicit_ = true;
-                        recorderState_.peState.maintenance().pendingDs() = false;
+                        recorderState_.peState.maintenance().pendingDs() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::viewport) {
                     values.forEach([&](std::size_t, const D9CViewport& value) {
                         recorderState_.peState.maintenance().viewportShadow() = value;
-                        recorderState_.peState.maintenance().pendingViewport() = false;
+                        recorderState_.peState.maintenance().pendingViewport() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::scissor) {
                     values.forEach([&](std::size_t, const D9CRect& value) {
                         recorderState_.peState.maintenance().scissorShadow() = value;
-                        recorderState_.peState.maintenance().pendingScissor() = false;
+                        recorderState_.peState.maintenance().pendingScissor() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::material) {
                     values.forEach([&](std::size_t, const D9CMaterial& value) {
                         recorderState_.peState.maintenance().materialShadow() = value;
-                        recorderState_.peState.maintenance().pendingMaterial() = false;
+                        recorderState_.peState.maintenance().pendingMaterial() =
+                            replayThroughPe;
                     });
                 } else if constexpr (category == Category::clipPlanes) {
                     values.forEach([&](std::size_t idx, const auto& value) {
                         std::memcpy(recorderState_.peState.maintenance().clipPlaneShadow() + idx * 4u,
                                     value.data(), sizeof(value));
-                        recorderState_.peState.maintenance().pendingClipPlaneMask() &= ~(1u << idx);
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingClipPlaneMask() |=
+                                1u << idx;
+                        } else {
+                            recorderState_.peState.maintenance().pendingClipPlaneMask() &=
+                                ~(1u << idx);
+                        }
                     });
                 } else if constexpr (category == Category::lights) {
                     values.forEach([&](std::size_t idx,
                                        const D9CLight& value) {
                         recorderState_.peState.maintenance().lightShadow()[idx] = value;
-                        recorderState_.peState.maintenance().pendingLightSlotMask() &= ~(1u << idx);
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingLightSlotMask() |=
+                                1u << idx;
+                        } else {
+                            recorderState_.peState.maintenance().pendingLightSlotMask() &=
+                                ~(1u << idx);
+                        }
                     });
                 } else if constexpr (category == Category::lightEnables) {
                     values.forEach([&](std::size_t idx,
@@ -3630,8 +3773,17 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                         const std::uint32_t bit = 1u << idx;
                         if (value) recorderState_.peState.maintenance().lightEnableShadow() |= bit;
                         else recorderState_.peState.maintenance().lightEnableShadow() &= ~bit;
-                        recorderState_.peState.maintenance().pendingLightEnableValidMask() &= ~bit;
-                        recorderState_.peState.maintenance().pendingLightEnableMask() &= ~bit;
+                        if (replayThroughPe) {
+                            recorderState_.peState.maintenance().pendingLightEnableValidMask() |= bit;
+                            if (value) {
+                                recorderState_.peState.maintenance().pendingLightEnableMask() |= bit;
+                            } else {
+                                recorderState_.peState.maintenance().pendingLightEnableMask() &= ~bit;
+                            }
+                        } else {
+                            recorderState_.peState.maintenance().pendingLightEnableValidMask() &= ~bit;
+                            recorderState_.peState.maintenance().pendingLightEnableMask() &= ~bit;
+                        }
                     });
                 } else {
                     []<bool handled = false>() {
@@ -3640,26 +3792,40 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                     }();
                 }
             });
+        if (!commitPublicationValid) {
+            poisonStateBlockTransaction();
+            return;
+        }
         if (snapshot.hasVdecl() && !snapshot.categories().vertexDeclaration().contains(0u)) {
             vdecl_ = snapshot.vdecl();
             D3D9PeValidatedDeclaration validated{};
-            DXMT_ASSERT(SUCCEEDED(D3D9PeValidateVertexDecl(
-                vdecl_, static_cast<IDirect3DDevice9*>(this), &validated)));
+            if (!validateForCommit([&] {
+                    return D3D9PeValidateVertexDecl(
+                        vdecl_, static_cast<IDirect3DDevice9*>(this),
+                        &validated);
+                })) {
+                poisonStateBlockTransaction();
+                return;
+            }
             recorderState_.peBindingView.vdecl = validated.wire();
-            recorderState_.peState.maintenance().pendingVdecl() = false;
+            recorderState_.peState.maintenance().pendingVdecl() =
+                replayThroughPe;
+            recorderState_.peState.maintenance().pendingFvf() = false;
         }
-        copyConst(recorderState_.peConsts.vsConstF, snapshot.constants().vsConstF,
-                  sizeof(float) * 4u);
-        copyConst(recorderState_.peConsts.vsConstI, snapshot.constants().vsConstI,
-                  sizeof(std::int32_t) * 4u);
-        copyConst(recorderState_.peConsts.vsConstB, snapshot.constants().vsConstB,
-                  sizeof(std::uint32_t));
-        copyConst(recorderState_.peConsts.psConstF, snapshot.constants().psConstF,
-                  sizeof(float) * 4u);
-        copyConst(recorderState_.peConsts.psConstI, snapshot.constants().psConstI,
-                  sizeof(std::int32_t) * 4u);
-        copyConst(recorderState_.peConsts.psConstB, snapshot.constants().psConstB,
-                  sizeof(std::uint32_t));
+        publishConst(recorderState_.peConsts.vsConstF,
+                     snapshot.constants().vsConstF, sizeof(float) * 4u);
+        publishConst(recorderState_.peConsts.vsConstI,
+                     snapshot.constants().vsConstI,
+                     sizeof(std::int32_t) * 4u);
+        publishConst(recorderState_.peConsts.vsConstB,
+                     snapshot.constants().vsConstB, sizeof(std::uint32_t));
+        publishConst(recorderState_.peConsts.psConstF,
+                     snapshot.constants().psConstF, sizeof(float) * 4u);
+        publishConst(recorderState_.peConsts.psConstI,
+                     snapshot.constants().psConstI,
+                     sizeof(std::int32_t) * 4u);
+        publishConst(recorderState_.peConsts.psConstB,
+                     snapshot.constants().psConstB, sizeof(std::uint32_t));
         DXMT_ASSERT(!recorderState_.stateBlockTransaction.hasPreparedApply());
         recorderState_.stateBlockTransaction.finishPreparedApply();
     }

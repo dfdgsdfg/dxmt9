@@ -362,7 +362,9 @@ dxmt9::ffp::VertexShaderInputLayout decodeVertexInputLayout(
   return *layout;
 }
 
-std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {
+std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex,
+                                          u32 textureControls = 0u,
+                                          u32 samplerType = 2u) {
   using namespace dxmt9::d3d9bc;
   return {
       makeVersionToken(false, 2, 0),
@@ -370,9 +372,9 @@ std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {
       makeDclTextureCoordToken(0x3u),
       makeDstToken(kD3DSPR_ADDR, 0, 0x3u),
       makeInstructionToken(kD3DSIO_DCL, 2),
-      makeDclSamplerTypeToken(),
+      makeDclSamplerTypeToken(samplerType),
       makeDstToken(kD3DSPR_SAMPLER, samplerIndex),
-      makeInstructionToken(kD3DSIO_TEX, 3),
+      makeControlledInstructionToken(kD3DSIO_TEX, 3, textureControls),
       makeDstToken(kD3DSPR_TEMP, 0),
       makeSrcToken(kD3DSPR_ADDR, 0),
       makeSrcToken(kD3DSPR_SAMPLER, samplerIndex),
@@ -1986,6 +1988,69 @@ void testPs20SamplerRegisterSlotMapping() {
   checkContains(source, "texture2d<float> tex7 [[texture(7)]]", "ps_2_0 declares texture at sampler register slot");
   checkContains(source, "sampler samp7 [[sampler(7)]]", "ps_2_0 declares sampler state at sampler register slot");
   checkContains(source, "tex7.sample(samp7", "ps_2_0 texture sample uses the declared sampler register slot");
+}
+
+void testPs20TexldpProjectsCoordinatesBeforeSampling() {
+  using namespace dxmt9::d3d9bc;
+  const auto source = translatePixel(
+      makePs20TexturedBytecode(7, kD3DSI_TEXLD_PROJECT));
+  checkContains(source, "/ float4(",
+                "ps_2_0 TEXLDP divides the coordinate vector before sampling");
+  checkContains(source, ").w))",
+                "ps_2_0 TEXLDP uses the coordinate w component as divisor");
+  checkNotContains(source, "bias(",
+                   "ps_2_0 TEXLDP does not acquire TEXLDB bias semantics");
+}
+
+void testPs20TexldpSamplerDimensionality() {
+  using namespace dxmt9::d3d9bc;
+  const auto cubeSource = translatePixel(
+      makePs20TexturedBytecode(7, kD3DSI_TEXLD_PROJECT, 3u));
+  checkNotContains(cubeSource, "/ float4(",
+                   "ps_2_0 cube TEXLDP keeps its direction unprojected");
+
+  const auto volumeSource = translatePixel(
+      makePs20TexturedBytecode(7, kD3DSI_TEXLD_PROJECT, 4u));
+  checkContains(volumeSource, "/ float4(",
+                "ps_2_0 volume TEXLDP projects its coordinate");
+  checkContains(volumeSource, ").xyz",
+                "ps_2_0 volume TEXLDP samples the projected xyz coordinate");
+}
+
+void testPs20TexldbUsesCoordinateWAsBias() {
+  using namespace dxmt9::d3d9bc;
+  const auto source = translatePixel(
+      makePs20TexturedBytecode(7, kD3DSI_TEXLD_BIAS));
+  checkContains(source, "bias(",
+                "ps_2_0 TEXLDB emits a Metal bias sample");
+  checkContains(source, ").w)",
+                "ps_2_0 TEXLDB takes its bias from coordinate w");
+  checkNotContains(source, "/ float4(",
+                   "ps_2_0 TEXLDB does not acquire TEXLDP projection semantics");
+}
+
+void testPs20TexldbAddsSamplerAndInstructionBias() {
+  using namespace dxmt9::d3d9bc;
+  const auto source = translatePixel(
+      makePs20TexturedBytecode(7, kD3DSI_TEXLD_BIAS),
+      /*samplerLodBias=*/true);
+  checkContains(source, "+ samplerLodBias.bias[7]",
+                "TEXLDB and D3DSAMP_MIPMAPLODBIAS compose additively");
+}
+
+void testPs20TexControlCombinationFailsClosed() {
+  checkThrowsContains(
+      [] {
+        (void)translatePixel(makePs20TexturedBytecode(7, 3u));
+      },
+      "unsupported TEX instruction controls",
+      "combined ps_2_0 TEX instruction controls fail closed");
+  checkThrowsContains(
+      [] {
+        (void)translatePixel(makePs20TexturedBytecode(7, 0xffu));
+      },
+      "unsupported TEX instruction controls",
+      "unknown ps_2_0 TEX instruction controls fail closed");
 }
 
 void testPs20MipLodBiasEmitsShaderSideBias() {
@@ -3893,6 +3958,11 @@ int main() {
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
+    testPs20TexldpProjectsCoordinatesBeforeSampling();
+    testPs20TexldpSamplerDimensionality();
+    testPs20TexldbUsesCoordinateWAsBias();
+    testPs20TexldbAddsSamplerAndInstructionBias();
+    testPs20TexControlCombinationFailsClosed();
     testPs20MipLodBiasEmitsShaderSideBias();
     testPs20MipLodBiasClearOmitsShaderSideBias();
     testPs20Fetch4GatherReplacesImplicitSample();

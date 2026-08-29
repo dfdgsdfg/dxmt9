@@ -20,8 +20,9 @@ HRESULT D3D9PeStateBlockContext::PrepareStateBlockApplyForChild(
   return device ? device->PrepareStateBlockApplyForChild(shadow) : E_FAIL;
 }
 void D3D9PeStateBlockContext::CommitStateBlockApplyForChild(
-    const D3D9StateBlockShadow &shadow) noexcept {
-  if (device) device->CommitStateBlockApplyForChild(shadow);
+    const D3D9StateBlockShadow &shadow,
+    StateBlockCaptureDisposition disposition) noexcept {
+  if (device) device->CommitStateBlockApplyForChild(shadow, disposition);
 }
 void D3D9PeStateBlockContext::DiscardPreparedStateBlockApplyForChild() noexcept {
   if (device) device->DiscardPreparedStateBlockApplyForChild();

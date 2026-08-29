@@ -204,8 +204,8 @@ mask:
 | Type | Captured state |
 |---|---|
 | `D3DSBT_ALL` | render, texture/sampler, transforms, lights/material, shaders, constants, stream/index bindings, viewport/scissor, render targets |
-| `D3DSBT_PIXELSTATE` | pixel-shader state, pixel constants, textures, sampler/TSS state, render states that affect raster/output/pixel processing |
-| `D3DSBT_VERTEXSTATE` | vertex-shader state, vertex constants, transforms, lights/material, FVF/declaration, stream/index bindings, render states that affect vertex processing |
+| `D3DSBT_PIXELSTATE` | the D3D9 pixel render-state subset, pixel TSS/sampler subsets, pixel shader, and pixel constants; texture bindings are not captured |
+| `D3DSBT_VERTEXSTATE` | the D3D9 vertex render-state subset, `TEXCOORDINDEX`/`TEXTURETRANSFORMFLAGS`, `DMAPOFFSET`, vertex shader, FVF/declaration, vertex constants, and light state; transforms, material, texture/stream/index bindings, and output attachments are not captured |
 
 `BeginStateBlock()` records the delta between the base state and subsequent
 state-setting calls. While recording is active, nested `BeginStateBlock()` and
@@ -213,6 +213,16 @@ existing state block `Capture()` / `Apply()` calls fail. The implementation must
 preserve the D3D9 quirks covered by Wine's `stateblock.c`, including the
 difference between `CreateStateBlock(D3DSBT_ALL)` snapshots and explicitly
 recorded state blocks.
+
+The explicit `BeginStateBlock()` / `EndStateBlock()` representation is PE
+authoritative. State-setting calls made while recording update the typed
+`StateBlockRecorded` candidate and intentionally do not publish a normal live
+`PendingDelta`. A successful explicit-block `Apply()` must therefore copy the
+recorded values into both `LiveShadow` and `PendingDelta`; the canonical
+`APPLY_STATE` recorder path must publish every tracked category before the next
+ordered consumer or draw. Success from an empty compatibility backend block is
+not authority to clear those pending values. Predefined `CreateStateBlock()`
+blocks keep their complete backend snapshot and remain backend-authoritative.
 
 After `Apply()`, every derived cache that depends on stream bindings, index
 buffers, textures, autogen-mipmap bits, render targets, shaders, or FVF-derived

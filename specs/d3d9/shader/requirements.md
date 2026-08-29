@@ -199,6 +199,15 @@ The Wine `d3d9/visual.c:test_fragment_coords` fractional-position oracle and
 absolute-coordinate probes under viewport, scissor, and MRT state gate this
 conversion.
 
+**R-CORE-SHADER-2.16** Shader-model 2 and 3 `TEX` lowering MUST preserve the
+instruction-control field. `TEXLDP` MUST divide a non-cube sampling coordinate
+by its fourth component before selecting the texture-dimensional coordinate.
+Outside the FETCH4 compatibility route, `TEXLDB` MUST use the fourth component
+as an instruction LOD bias, added to the bound sampler's
+`D3DSAMP_MIPMAPLODBIAS`. FETCH4's gather operation suppresses both bias sources,
+matching its D3D9 compatibility behavior. Unsupported or combined control
+encodings MUST fail closed instead of silently sampling as ordinary `TEX`.
+
 ---
 
 ## 3. Precision and VSOut Layout
@@ -544,8 +553,9 @@ fixed-grid comparison is insufficient. The oracle MUST cover:
 - **vkd3d-shader `.shader_test` corpus** as the SM 1.x / 2.x / 3.x
   decoder oracle for D3DBC edge cases (relative addressing, predicate
   registers, ps_1_x texture instructions, partial precision hints,
-  TEXKILL, vPos / vFace). Imported fixtures MUST record upstream source,
-  URL, commit, model, opcode coverage, and license scope per
+  TEXKILL, TEXLDP / TEXLDB instruction controls, vPos / vFace). Imported
+  fixtures MUST record upstream source, URL, commit, model, opcode coverage,
+  and license scope per
   `agents/rules/codebase_conventions.rules.md` License And Reference
   Policy. Refreshes MUST include a drift check against a local vkd3d checkout
   or explicitly document why the fixture is frozen. The corpus is a behaviour

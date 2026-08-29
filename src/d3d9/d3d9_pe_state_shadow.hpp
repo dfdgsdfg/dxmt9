@@ -12,6 +12,7 @@
 #include <cstring>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 class D3D9DeviceImpl;
@@ -733,6 +734,25 @@ enum class StateBlockCaptureDisposition : std::uint8_t {
     PixelState,
     Explicit,
 };
+
+enum class StateBlockApplyPublication : std::uint8_t {
+    BackendAuthoritative,
+    PeReplayRequired,
+};
+
+// CreateStateBlock blocks have a complete unix-side snapshot.  Recorded
+// Begin/End blocks, however, are represented authoritatively by the typed PE
+// snapshot: setters made while Recording never enter PendingDelta and the
+// legacy unix recorder only owns an empty compatibility shell.  Applying an
+// Explicit block must therefore republish its tracked values through the PE
+// recorder so the next ordered chunk observes the same state as the PE live
+// shadow.
+constexpr StateBlockApplyPublication stateBlockApplyPublication(
+    StateBlockCaptureDisposition disposition) noexcept {
+    return disposition == StateBlockCaptureDisposition::Explicit
+        ? StateBlockApplyPublication::PeReplayRequired
+        : StateBlockApplyPublication::BackendAuthoritative;
+}
 
 enum class StateBlockCaptureCategory : std::uint8_t {
     RenderState,
@@ -1671,6 +1691,26 @@ public:
 #undef DXMT9_STATEBLOCK_WRITER_ACCESSOR
         PeStateBlockConstRecorded& constants() noexcept {
             return state_.constants;
+        }
+        template<typename Release>
+        void selectFvf(std::uint32_t value, Release&& release) noexcept {
+            auto declarations = vertexDeclaration();
+            const auto declarationKey = stateBlockFixedSlotKey<
+                StateBlockApplyPhysicalStore::vertexDeclaration>(0u);
+            StateBlockVertexDeclarationRef prior{};
+            if (declarations.get(declarationKey, prior)) {
+                release(prior);
+                declarations.erase(declarationKey);
+            }
+            state_.vertexDeclarationRecorded = false;
+            fvf().set(
+                stateBlockFixedSlotKey<StateBlockApplyPhysicalStore::fvf>(0u),
+                value);
+        }
+        void selectVertexDeclaration() noexcept {
+            fvf().erase(
+                stateBlockFixedSlotKey<StateBlockApplyPhysicalStore::fvf>(0u));
+            state_.vertexDeclarationRecorded = true;
         }
         void setVertexDeclarationRecorded(bool value) noexcept {
             state_.vertexDeclarationRecorded = value;

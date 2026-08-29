@@ -279,6 +279,27 @@ lowering therefore emits `float4(position.xy - 0.5, position.zw)` for the
 position `D3DSPR_MISCTYPE` input. The conversion is local to `xy`: depth and
 homogeneous components remain those supplied by Metal (R-CORE-SHADER-2.15).
 
+### 3.8 Texture Instruction Controls
+
+The decoder carries shader-model 2 and 3 instruction controls separately from
+the `TEX` opcode. The emitter consumes that field rather than treating every
+decoded `TEX` as an ordinary sample (R-CORE-SHADER-2.16):
+
+- ordinary `TEX` samples with the supplied coordinate;
+- `TEXLDP` divides a non-cube coordinate vector by its fourth component before
+  selecting `xy` or `xyz` for the Metal sample;
+- `TEXLDB` passes the coordinate's fourth component as a Metal LOD bias;
+- when `D3DSAMP_MIPMAPLODBIAS` is also non-zero, its value is added to the
+  instruction bias so neither D3D9 bias source is lost.
+
+Cube projection follows D3D9's cube-sampler behavior and does not divide the
+direction vector. FETCH4/gather selection consumes the same effective
+coordinate as the ordinary sampling branch, but deliberately suppresses both
+TEXLDB and sampler LOD bias because gather has no mip-bias form and D3D9 FETCH4
+compatibility treats `texldb` like ordinary `texld`. Any unsupported or
+combined instruction-control value is rejected before MSL can be compiled;
+silently falling back to ordinary `TEX` is not a compatible recovery path.
+
 ---
 
 ## 4. Precision Inference Pass
@@ -850,7 +871,7 @@ refactoring; pinning it as a property forecloses that drift.
 | Requirement | Evidence |
 |---|---|
 | R-CORE-SHADER-1.1..1.6 | `dxmt9-shader-bytecode-validation-spec` (decode), `dxmt9-shader-transform-spec` (IR shape), hash determinism asserted in those targets |
-| R-CORE-SHADER-2.1..2.11 | `dxmt9-shader-transform-spec` semantic snapshots (including SM 1.x clamp 2.11); runtime alpha-test, half-pixel, NDC, and SM 1.x output-range probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
+| R-CORE-SHADER-2.1..2.16 | `dxmt9-shader-transform-spec` semantic snapshots (including SM 1.x clamp, reciprocal edges, vPos, and TEX instruction controls); runtime alpha-test, half-pixel, NDC, SM 1.x output-range, projective-TEX, and TEXLDB-plus-sampler-bias Metal readback probes in the `shader_runner_dxmt9` corpus under `tests/shader_runner/corpus/` |
 | R-CORE-SHADER-3.1..3.10 | precision-pass golden test (per §9.1), half-precision correctness oracle (§9.3); both gated on the gap.md row until the IR-level pass exists |
 | R-CORE-SHADER-4.1..4.11 | per-pass purity + determinism tests under `dxmt9-shader-transform-spec`; emitter precondition assert covered by emit-side cases in the same target |
 | R-CORE-SHADER-5.1..5.6 | `dxmt9-shader-source-determinism-spec` (emitter determinism); MSL snapshot tests (§9.4); archive build at conformance run; variant-classification audit (R-CORE-SHADER-5.6) proving every spec axis is in exactly one of the function-constant / library-variant buckets defined in §6.6 |

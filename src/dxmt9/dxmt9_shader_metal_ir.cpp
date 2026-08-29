@@ -3128,7 +3128,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       return mask == 0u ||
           (sampler < kMaxSamplers && (mask & (1u << sampler)) != 0u);
     };
-    auto sampleTexture = [&](u32 sampler, const std::string& coord) {
+    auto sampleTexture = [&](u32 sampler, const std::string& coord, u32 controls = 0u) {
+      const auto textureType = samplerTextureType(module, context, sampler);
+      const u32 textureControls = controls & 0x3u;
+      if (controls != textureControls || textureControls == 0x3u) {
+        throw std::runtime_error("unsupported TEX instruction controls");
+      }
+      const bool projected = textureControls == kD3DSI_TEXLD_PROJECT &&
+          textureType != TextureType::Cube;
+      const std::string effectiveCoord = projected
+          ? "((" + coord + ") / float4((" + coord + ").w))"
+          : coord;
       if (forceTextureWhite(sampler) ||
           forceSampledDepthWhite(sampler)) {
         return std::string("float4(1.0f)");
@@ -3140,7 +3150,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (sampler < kMaxSamplers &&
           (context.fetch4SamplerMask & (1u << sampler)) != 0u) {
         return wrapTextureSample(
-            sampler, fetch4SampleExpression(sampler, coord, forcePixelVFlip));
+            sampler, fetch4SampleExpression(sampler, effectiveCoord, forcePixelVFlip));
       }
       // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): thread the per-sampler mip LOD
       // bias into the implicit-gradient sample. The bias rides the slot-4
@@ -3149,16 +3159,26 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       // pre-feature plain-sample form with no bias() argument. Explicit-LOD /
       // gradient opcodes (TEXLDL/TEXLDD) supply their own level and are handled
       // at their own sites without bias().
-      std::string biasArg;
-      if (emitLodBias && sampler < kMaxTextureStages) {
-        biasArg = ", bias(samplerLodBias.bias[" + std::to_string(sampler) + "])";
+      std::string biasExpression;
+      if (textureControls == kD3DSI_TEXLD_BIAS) {
+        biasExpression = "(" + coord + ").w";
       }
+      if (emitLodBias && sampler < kMaxTextureStages) {
+        const std::string samplerBias =
+            "samplerLodBias.bias[" + std::to_string(sampler) + "]";
+        biasExpression = biasExpression.empty()
+            ? samplerBias
+            : "(" + biasExpression + " + " + samplerBias + ")";
+      }
+      const std::string biasArg = biasExpression.empty()
+          ? std::string{}
+          : ", bias(" + biasExpression + ")";
       return wrapTextureSample(
           sampler,
           widenDepthSample(
               sampler,
               "tex" + std::to_string(sampler) + ".sample(samp" +
-                  std::to_string(sampler) + ", " + sampleCoord(sampler, coord) +
+                  std::to_string(sampler) + ", " + sampleCoord(sampler, effectiveCoord) +
                   biasArg + ")"));
     };
     auto legacyStage = [&] {
@@ -3781,7 +3801,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   module.major == 1u ? legacyStage() : textureSamplerIndex(instruction, module.stage);
               const auto coord =
                   module.major == 1u && module.minor < 4u ? texcoordTarget(sampler) : readSrc(1);
-              value = sampleTexture(sampler, coord);
+              value = sampleTexture(sampler, coord,
+                                    module.major >= 2u ? instruction.controls : 0u);
             }
             break;
           case kD3DSIO_DSX:

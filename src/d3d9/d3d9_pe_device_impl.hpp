@@ -3190,7 +3190,8 @@ public:
         const D3D9StateBlockShadow& shadow) noexcept;
 
     void CommitStateBlockApplyForChild(
-        const D3D9StateBlockShadow& shadow) noexcept;
+        const D3D9StateBlockShadow& shadow,
+        StateBlockCaptureDisposition disposition) noexcept;
 
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override;
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override;

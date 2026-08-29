@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -151,6 +152,39 @@ bool same_matrix(const D3DMATRIX &a, const D3DMATRIX &b) {
   return true;
 }
 
+struct TexturedVertex {
+  float x, y, z, rhw;
+  float u, v;
+};
+
+constexpr DWORD kTexturedVertexFvf = D3DFVF_XYZRHW | D3DFVF_TEX1;
+
+bool color_near(D3DCOLOR actual, D3DCOLOR expected, unsigned tolerance) {
+  for (unsigned shift : {0u, 8u, 16u}) {
+    const int a = static_cast<int>((actual >> shift) & 0xffu);
+    const int e = static_cast<int>((expected >> shift) & 0xffu);
+    if (std::abs(a - e) > static_cast<int>(tolerance)) return false;
+  }
+  return true;
+}
+
+bool fill_texture(IDirect3DTexture9 *texture, D3DCOLOR color) {
+  D3DLOCKED_RECT locked = {};
+  if (FAILED(texture->LockRect(0, &locked, nullptr, 0))) return false;
+  *static_cast<D3DCOLOR *>(locked.pBits) = color;
+  texture->UnlockRect(0);
+  return true;
+}
+
+bool fill_vertices(IDirect3DVertexBuffer9 *buffer,
+                   const TexturedVertex (&vertices)[3]) {
+  void *data = nullptr;
+  if (FAILED(buffer->Lock(0, sizeof(vertices), &data, 0))) return false;
+  std::memcpy(data, vertices, sizeof(vertices));
+  buffer->Unlock();
+  return true;
+}
+
 void stateblock_type_create_matrix() {
   Fixture fixture;
   if (!fixture.init("stateblock_type_create_matrix")) return;
@@ -228,6 +262,195 @@ void stateblock_capture_apply_transform_matrix() {
   CHECK(same_matrix(actual, changed));
 
   stateblock->Release();
+}
+
+void stateblock_explicit_apply_reaches_next_draw() {
+  Fixture fixture;
+  if (!fixture.init("stateblock_explicit_apply_reaches_next_draw")) return;
+
+  IDirect3DTexture9 *captured_texture = nullptr;
+  IDirect3DTexture9 *changed_texture = nullptr;
+  IDirect3DVertexBuffer9 *captured_vertices = nullptr;
+  IDirect3DVertexBuffer9 *changed_vertices = nullptr;
+  IDirect3DSurface9 *render_target = nullptr;
+  IDirect3DSurface9 *readback = nullptr;
+  IDirect3DStateBlock9 *stateblock = nullptr;
+
+  CHECK_HR(fixture.device->CreateTexture(
+      1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+      &captured_texture, nullptr), D3D_OK);
+  CHECK_HR(fixture.device->CreateTexture(
+      1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+      &changed_texture, nullptr), D3D_OK);
+  CHECK(captured_texture && changed_texture);
+  if (!captured_texture || !changed_texture) goto cleanup;
+  CHECK(fill_texture(captured_texture, D3DCOLOR_ARGB(128, 255, 0, 0)));
+  CHECK(fill_texture(changed_texture, D3DCOLOR_ARGB(255, 0, 255, 0)));
+
+  CHECK_HR(fixture.device->CreateVertexBuffer(
+      sizeof(TexturedVertex) * 3u, 0, kTexturedVertexFvf, D3DPOOL_MANAGED,
+      &captured_vertices, nullptr), D3D_OK);
+  CHECK_HR(fixture.device->CreateVertexBuffer(
+      sizeof(TexturedVertex) * 3u, 0, kTexturedVertexFvf, D3DPOOL_MANAGED,
+      &changed_vertices, nullptr), D3D_OK);
+  CHECK(captured_vertices && changed_vertices);
+  if (!captured_vertices || !changed_vertices) goto cleanup;
+  {
+    const TexturedVertex captured[] = {
+        {-0.5f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 7.5f, -0.5f, 0.0f, 1.0f, 1.0f, 0.0f},
+        {-0.5f,  7.5f, 0.0f, 1.0f, 0.0f, 1.0f},
+    };
+    const TexturedVertex changed[] = {
+        {-8.0f, -8.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        {-7.0f, -8.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+        {-8.0f, -7.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+    };
+    CHECK(fill_vertices(captured_vertices, captured));
+    CHECK(fill_vertices(changed_vertices, changed));
+  }
+
+  CHECK_HR(fixture.device->CreateRenderTarget(
+      4, 4, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE,
+      &render_target, nullptr), D3D_OK);
+  CHECK_HR(fixture.device->CreateOffscreenPlainSurface(
+      4, 4, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, nullptr),
+      D3D_OK);
+  CHECK(render_target && readback);
+  if (!render_target || !readback) goto cleanup;
+
+  CHECK_HR(fixture.device->SetRenderTarget(0, render_target), D3D_OK);
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  {
+    const D3DVIEWPORT9 viewport = {0, 0, 4, 4, 0.0f, 1.0f};
+    CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
+  }
+
+  // Prove the small fixed-function draw itself before using it as the
+  // explicit-StateBlock publication oracle.
+  CHECK_HR(fixture.device->SetTexture(0, captured_texture), D3D_OK);
+  CHECK_HR(fixture.device->SetStreamSource(
+      0, captured_vertices, 0, sizeof(TexturedVertex)), D3D_OK);
+  CHECK_HR(fixture.device->SetFVF(kTexturedVertexFvf), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(
+      D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(
+      0, D3DSAMP_MINFILTER, D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(
+      0, D3DSAMP_MAGFILTER, D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->Clear(
+      0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, 0, 0, 255),
+      1.0f, 0), D3D_OK);
+  CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+  CHECK_HR(fixture.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1), D3D_OK);
+  CHECK_HR(fixture.device->EndScene(), D3D_OK);
+  CHECK_HR(fixture.device->GetRenderTargetData(render_target, readback),
+      D3D_OK);
+  {
+    D3DLOCKED_RECT locked = {};
+    const HRESULT lock_hr = readback->LockRect(
+        &locked, nullptr, D3DLOCK_READONLY);
+    CHECK_HR(lock_hr, D3D_OK);
+    if (SUCCEEDED(lock_hr)) {
+      const auto *row = static_cast<const std::uint8_t *>(locked.pBits) +
+          locked.Pitch;
+      const D3DCOLOR actual = reinterpret_cast<const D3DCOLOR *>(row)[1];
+      CHECK(color_near(actual, D3DCOLOR_ARGB(255, 128, 0, 127), 8u));
+      readback->UnlockRect();
+    }
+  }
+
+  CHECK_HR(fixture.device->BeginStateBlock(), D3D_OK);
+  CHECK_HR(fixture.device->SetTexture(0, captured_texture), D3D_OK);
+  CHECK_HR(fixture.device->SetStreamSource(
+      0, captured_vertices, 0, sizeof(TexturedVertex)), D3D_OK);
+  CHECK_HR(fixture.device->SetFVF(kTexturedVertexFvf), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(
+      D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(
+      0, D3DSAMP_MINFILTER, D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(
+      0, D3DSAMP_MAGFILTER, D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->EndStateBlock(&stateblock), D3D_OK);
+  CHECK(stateblock != nullptr);
+  if (!stateblock) goto cleanup;
+
+  CHECK_HR(fixture.device->SetTexture(0, changed_texture), D3D_OK);
+  CHECK_HR(fixture.device->SetStreamSource(
+      0, changed_vertices, 0, sizeof(TexturedVertex)), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW),
+      D3D_OK);
+  CHECK_HR(stateblock->Apply(), D3D_OK);
+
+  CHECK_HR(fixture.device->Clear(
+      0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, 0, 0, 255),
+      1.0f, 0), D3D_OK);
+  CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+  CHECK_HR(fixture.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1), D3D_OK);
+  CHECK_HR(fixture.device->EndScene(), D3D_OK);
+  CHECK_HR(fixture.device->GetRenderTargetData(render_target, readback),
+      D3D_OK);
+  {
+    D3DLOCKED_RECT locked = {};
+    const HRESULT lock_hr = readback->LockRect(
+        &locked, nullptr, D3DLOCK_READONLY);
+    CHECK_HR(lock_hr, D3D_OK);
+    if (SUCCEEDED(lock_hr)) {
+      const auto *row = static_cast<const std::uint8_t *>(locked.pBits) +
+          locked.Pitch;
+      const D3DCOLOR actual = reinterpret_cast<const D3DCOLOR *>(row)[1];
+      if (!color_near(actual, D3DCOLOR_ARGB(255, 128, 0, 127), 8u)) {
+        std::printf("explicit Apply draw pixel: actual=0x%08lx expected~=0x%08lx\n",
+            static_cast<unsigned long>(actual),
+            static_cast<unsigned long>(D3DCOLOR_ARGB(255, 128, 0, 127)));
+      }
+      CHECK(color_near(actual, D3DCOLOR_ARGB(255, 128, 0, 127), 8u));
+      readback->UnlockRect();
+    }
+  }
+
+cleanup:
+  if (stateblock) stateblock->Release();
+  if (readback) readback->Release();
+  if (render_target) render_target->Release();
+  if (changed_vertices) changed_vertices->Release();
+  if (captured_vertices) captured_vertices->Release();
+  if (changed_texture) changed_texture->Release();
+  if (captured_texture) captured_texture->Release();
 }
 
 void stateblock_reset_recovery() {
@@ -432,6 +655,7 @@ void stateblock_state_management_matrix() {
   stateblock_type_create_matrix();
   stateblock_capture_apply_render_state();
   stateblock_capture_apply_transform_matrix();
+  stateblock_explicit_apply_reaches_next_draw();
   stateblock_reset_recovery();
   stateblock_reject_foreign_wrapper();
 }

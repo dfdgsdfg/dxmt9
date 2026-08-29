@@ -344,7 +344,7 @@ deferred.
 | (49..63) | — | — | — | — | unused in D3D9 spec |
 | TEXCOORD | 64 | ✅ | dxmt9_d3d9_bytecode.hpp:128; dxmt9_shader_metal_ir.cpp:1778, 2813 | opcode_audit_spec.cpp:109 | SM1 legacy lowering |
 | TEXKILL | 65 | ✅ | dxmt9_d3d9_bytecode.hpp:129; dxmt9_shader_metal_ir.cpp:1441, 2499 | opcode_audit_spec.cpp:110 | |
-| TEX | 66 | ✅ | dxmt9_d3d9_bytecode.hpp:130; dxmt9_shader_metal_ir.cpp:1477, 2555 | opcode_audit_spec.cpp:111 | |
+| TEX | 66 | ✅ | `src/dxmt9/dxmt9_d3d9_bytecode.hpp` texture-control constants; `src/dxmt9/dxmt9_shader_metal_ir.cpp` `sampleTexture` and `emitInstruction` | `dxmt9-opcode-audit-spec`, `dxmt9-shader-transform-spec`, `dxmt9-shader-corpus-texture-dxmt9_ps20_texldp_readback`, `dxmt9-shader-corpus-texture-dxmt9_ps20_texldb_readback` | SM2/3 ordinary TEX, TEXLDP projection, and TEXLDB instruction bias are preserved; instruction bias composes with sampler MIPMAPLODBIAS, FETCH4 suppresses bias by compatibility contract, and unsupported controls fail closed. STALKER CoP Day/Sunshafts, Night, and Rain wild runs visually preserve geometry and post-processing with zero command-chunk, shader-decoder, and GPU command-buffer errors. |
 | TEXBEM | 67 | ✅ | dxmt9_d3d9_bytecode.hpp:131; dxmt9_shader_metal_ir.cpp:1779, 2825 | opcode_audit_spec.cpp:112 | |
 | TEXBEML | 68 | ✅ | dxmt9_d3d9_bytecode.hpp:132; dxmt9_shader_metal_ir.cpp:1780, 2826 | opcode_audit_spec.cpp:113 | |
 | TEXREG2AR | 69 | ✅ | dxmt9_d3d9_bytecode.hpp:133; dxmt9_shader_metal_ir.cpp:1781, 2837 | opcode_audit_spec.cpp:114 | |
@@ -1606,7 +1606,7 @@ Every IDirect3DResource9-derived implementation (surface, texture variants, buff
 |---|---|---|---|---|---|---|
 | GetDevice | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device_child_misc.cpp:361` | |
 | Capture | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device_child_misc.cpp:372` | T1 (2026-05-08) per-stage TSS slice; `test_stateblock_transform_capture_apply`, `test_state_management_*`, `core_stateblock_restore_spec`, `core_device_com_spec` |
-| Apply | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device_child_misc.cpp:391` | C5 (2026-05-10 `a4252db`): `markPendingDirtyAll()` invalidation; `test_state_management_*`, `test_shader_constant_apply`, `core_stateblock_restore_spec` |
+| Apply | ✅ | ✅ | ✅ | ✅ | `src/d3d9/d3d9_pe_device_child_misc.cpp` `D3D9StateBlockImpl::Apply`; `src/d3d9/d3d9_pe_device_com_cold.cpp` `CommitStateBlockApplyForChild` | Predefined blocks remain backend-authoritative; explicit Begin/End blocks republish their typed snapshot through canonical `APPLY_STATE`. `stateblock_explicit_apply_reaches_next_draw` proves texture, stream, FVF, alpha blend, TSS, and sampler state in an actual draw/readback; `pe_stateblock_category_spec` pins publication disposition and FVF/declaration last-writer-wins. |
 
 ### D.19 IDirect3DVertexDeclaration9 (2 methods beyond IUnknown)
 

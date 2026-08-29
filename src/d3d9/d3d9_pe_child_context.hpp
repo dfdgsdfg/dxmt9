@@ -26,7 +26,8 @@ struct D3D9PeStateBlockContext {
   void UnlockStateBlockOperationForChild() noexcept;
   bool IsStateBlockRecorderPoisonedForChild() const noexcept;
   HRESULT PrepareStateBlockApplyForChild(const D3D9StateBlockShadow &) noexcept;
-  void CommitStateBlockApplyForChild(const D3D9StateBlockShadow &) noexcept;
+  void CommitStateBlockApplyForChild(
+      const D3D9StateBlockShadow &, StateBlockCaptureDisposition) noexcept;
   void DiscardPreparedStateBlockApplyForChild() noexcept;
   void PoisonStateBlockRecorderForChild() noexcept;
   HRESULT CaptureStateBlockShadowForChild(

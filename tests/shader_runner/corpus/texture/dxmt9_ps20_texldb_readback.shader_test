@@ -1,0 +1,26 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: D3D9 ps_2_0 TEXLDB uses coordinate w as an implicit-sample LOD bias
+; oracle-date: 2026-08-29
+
+; A 4x4 texture mapped over a 64x64 quad starts near implicit LOD -4. The
+; sampler contributes +4 and v0.w contributes the TEXLDB instruction bias +1,
+; selecting green mip 1. Treating TEXLDB as ordinary TEX selects red mip 0.
+[pixel shader d3dbc-hex]
+ffff0200 0200001f 80000000 b0030000 0200001f 90000000 a00f0800
+03020042 800f0000 b0e40000 a0e40800 02000001 800f0800 80e40000
+0000ffff
+
+[test]
+expect-source pixel contains "bias("
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 0 4 4 A8R8G8B8 red red red red red red red red red red red red red red red red
+dxmt9-texture-mip 0 1 2 2 A8R8G8B8 green green green green
+dxmt9-texture-mip 0 2 1 1 A8R8G8B8 blue
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point lod_bias=4.0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

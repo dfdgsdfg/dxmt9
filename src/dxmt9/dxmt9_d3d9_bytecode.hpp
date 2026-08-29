@@ -158,6 +158,12 @@ inline constexpr u32 kD3DSIO_TEXLDD = 93;
 inline constexpr u32 kD3DSIO_SETP = 94;
 inline constexpr u32 kD3DSIO_TEXLDL = 95;
 inline constexpr u32 kD3DSIO_BREAKP = 96;
+
+// D3DSIO_TEX instruction controls after token bits 16..23 have been
+// normalized into D3DDecodedInstruction::controls.
+inline constexpr u32 kD3DSI_TEXLD_PROJECT = 1u;
+inline constexpr u32 kD3DSI_TEXLD_BIAS = 2u;
+
 inline constexpr u32 kD3DSIO_PHASE = 0xfffdu;
 inline constexpr u32 kD3DSIO_COMMENT = 0xfffeu;
 inline constexpr u32 kD3DSIO_END = 0xffffu;

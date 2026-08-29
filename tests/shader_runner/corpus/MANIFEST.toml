@@ -1,4 +1,28 @@
 [[test]]
+file = "texture/dxmt9_ps20_texldp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV", "TEXLDP"]
+oracle = "D3D9 ps_2_0 TEXLDP projective-coordinate semantics, reduced from STALKER CoP accum_sun_cascade"
+oracle-date = "2026-08-29"
+
+[[test]]
+file = "texture/dxmt9_ps20_texldb_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEXLDB"]
+oracle = "D3D9 ps_2_0 TEXLDB instruction bias composes with sampler bias to select a coarser mip level"
+oracle-date = "2026-08-29"
+
+[[test]]
 file = "arithmetic/add.shader_test"
 status = "passing"
 source = "dxmt9"

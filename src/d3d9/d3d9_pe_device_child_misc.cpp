@@ -515,7 +515,7 @@ public:
       return hr;
     }
     if (context_ && valuePlan.publishLive())
-      context_->CommitStateBlockApplyForChild(saved_);
+      context_->CommitStateBlockApplyForChild(saved_, captureDisposition_);
     dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
     return hr;
   }

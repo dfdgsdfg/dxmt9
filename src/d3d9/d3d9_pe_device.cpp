@@ -426,9 +426,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetFVF(DWORD fvf) noexcept {
     if (recorderState_.stateBlockTransaction.isRecording()) {
         recorderState_.stateBlockTransaction.withRecordingWriter(
             [&](auto& writer) noexcept {
-                writer.fvf().set(
-                    stateBlockFixedSlotKey<StateBlockApplyPhysicalStore::fvf>(0u),
-                    fvf);
+                writer.selectFvf(fvf, d3d9PeReleaseStateBlockRef);
             });
         hotSetter.markDirty();
         return S_OK;
@@ -485,15 +483,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexDeclaration(
     if (recorderState_.stateBlockTransaction.isRecording()) {
         recorderState_.stateBlockTransaction.withRecordingWriter(
             [&](auto& writer) noexcept {
-                writer.setVertexDeclarationRecorded(true);
+                writer.selectVertexDeclaration();
                 setRecordedRef(
                     writer.vertexDeclaration(),
                     stateBlockFixedSlotKey<
                         StateBlockApplyPhysicalStore::vertexDeclaration>(0u),
                     validatedDeclaration);
-                writer.fvf().set(
-                    stateBlockFixedSlotKey<StateBlockApplyPhysicalStore::fvf>(0u),
-                    0u);
             });
         hotSetter.markDirty();
         return finishPeCall(S_OK);
