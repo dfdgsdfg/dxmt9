@@ -3,6 +3,7 @@
 #include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "d3d9_pe_const_shadow.hpp"
+#include "d3d9_pe_shader_bytecode_scan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2010,6 +2011,53 @@ void testPeBufferReadonlyCacheRangeAndGeneration() {
 // PeDecimatedScopeTimer::shouldSample/recordSample. This header is
 // deliberately clock-free / Windows-free so it can be driven directly here
 // without any PE/D3D9 device machinery.
+
+// Regression pin for the S.T.A.L.K.E.R. CoP renderer-clamp incident
+// (2026-08-29): the PE-side bounded END scan must treat comment blocks
+// (opcode 0xFFFE) as opaque payload. d3dx9 debug-info comments can contain
+// 0xFFFFFFFF (misread as the runaway sentinel -> valid vs_3_0 rejected,
+// engine clamped to its r1 renderer) and 0x0000FFFF (misread as END ->
+// hash range truncated, disagreeing with the unix token walk).
+void testShaderBytecodeScanSkipsCommentBlocks() {
+  using dxmt9::d3d9::ShaderBytecodeScanResult;
+  using dxmt9::d3d9::scanShaderBytecodeForEnd;
+
+  // vs_3_0 header, comment of 2 words whose payload holds 0xFFFFFFFF,
+  // one real instruction, END.
+  const std::uint32_t sentinelInComment[] = {
+      0xFFFE0300u, 0x0002FFFEu, 0xFFFFFFFFu, 0x44424547u, 0x0200001Fu,
+      0x80000000u, 0x900F0000u, 0x0000FFFFu};
+  std::size_t words = 0;
+  check(scanShaderBytecodeForEnd(sentinelInComment, 64, &words) ==
+                 ShaderBytecodeScanResult::EndFound,
+             "comment payload 0xFFFFFFFF must not reject the shader");
+  check(words == 8, "END word count spans the whole token stream");
+
+  // Comment payload containing 0x0000FFFF must not terminate the scan
+  // early: the real END is the final token.
+  const std::uint32_t endInComment[] = {
+      0xFFFE0300u, 0x0002FFFEu, 0x0000FFFFu, 0x44424547u, 0x0200001Fu,
+      0x80000000u, 0x900F0000u, 0x0000FFFFu};
+  words = 0;
+  check(scanShaderBytecodeForEnd(endInComment, 64, &words) ==
+                 ShaderBytecodeScanResult::EndFound,
+             "comment payload 0x0000FFFF is not the END token");
+  check(words == 8, "hash range must cover past in-comment 0x0000FFFF");
+
+  // 0xFFFFFFFF outside a comment stays the runaway-sentinel rejection.
+  const std::uint32_t runaway[] = {0xFFFE0300u, 0xFFFFFFFFu, 0x0000FFFFu};
+  check(scanShaderBytecodeForEnd(runaway, 64) ==
+                 ShaderBytecodeScanResult::RunawaySentinel,
+             "bare 0xFFFFFFFF outside comments still rejects");
+
+  // Truncated stream (no END inside the bound) still reports MissingEnd.
+  const std::uint32_t truncated[] = {0xFFFE0300u, 0x0200001Fu, 0x80000000u,
+                                     0x900F0000u};
+  check(scanShaderBytecodeForEnd(truncated, 4) ==
+                 ShaderBytecodeScanResult::MissingEnd,
+             "missing END within the bound is still rejected");
+}
+
 void testPeDecimatedScopeStats() {
   PeDecimatedScopeStats stats;
   int sampledCount = 0;
@@ -2147,6 +2195,7 @@ int main() {
     testManagedPartialBufferLockUploadsFullCpuShadow();
     testDynamicNoOverwriteBufferLockUploadsExactRange();
     testPeBufferReadonlyCacheRangeAndGeneration();
+    testShaderBytecodeScanSkipsCommentBlocks();
     testPeDecimatedScopeStats();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

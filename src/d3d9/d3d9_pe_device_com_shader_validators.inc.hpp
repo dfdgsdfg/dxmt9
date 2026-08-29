@@ -12,32 +12,24 @@
      * full token walker lives in computeShaderBytecodeWordCount on the C
      * side; we only need to reject truncated bytecode where the END
      * marker is absent in the first few words the test harness can
-     * supply. */
-    bool seenEnd = false;
-    for (size_t i = 1; i < kShaderBoundedScan; ++i) {
-        const uint32_t t = static_cast<uint32_t>(code[i]);
-        if (t == kShaderEndToken) {
-            seenEnd = true;
-            break;
-        }
-        /* Treat any 0xFFFFFFFF (NULL bytecode runaway sentinel some
-         * fuzzers use) as truncated. */
-        if (t == 0xFFFFFFFFu) {
-            return D3DERR_INVALIDCALL;
-        }
+     * supply. The comment-skipping scan itself lives in
+     * d3d9_pe_shader_bytecode_scan.hpp (host-testable; see its header
+     * comment for the S.T.A.L.K.E.R. CoP debug-info incident). */
+    if (dxmt9::d3d9::scanShaderBytecodeForEnd(
+            reinterpret_cast<const uint32_t*>(code), kShaderBoundedScan) !=
+        dxmt9::d3d9::ShaderBytecodeScanResult::EndFound) {
+        return D3DERR_INVALIDCALL;
     }
-    if (!seenEnd) return D3DERR_INVALIDCALL;
     return S_OK;
 }
 
 [[nodiscard]] inline std::uint64_t hashValidatedShaderBytecode(const DWORD* code) {
+    /* Comment blocks are skipped exactly as in validateShaderBytecodeForStage:
+     * their payload may contain 0x0000FFFF, and a raw scan would truncate the
+     * hashed range there, disagreeing with the unix-side full token walk. */
     size_t wordCount = 0;
-    for (size_t i = 0; i < kShaderBoundedScan; ++i) {
-        if (static_cast<uint32_t>(code[i]) == kShaderEndToken) {
-            wordCount = i + 1u;
-            break;
-        }
-    }
+    (void)dxmt9::d3d9::scanShaderBytecodeForEnd(
+        reinterpret_cast<const uint32_t*>(code), kShaderBoundedScan, &wordCount);
     // Match dxmt9::core::hashBytes. This is intentionally not
     // dxmt9::util::fnv1a64; the core shader hash uses the historical
     // truncated FNV offset basis.

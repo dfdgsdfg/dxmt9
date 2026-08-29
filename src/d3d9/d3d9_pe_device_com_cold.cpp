@@ -20,6 +20,7 @@
  * unchanged. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_shader_bytecode_scan.hpp"
 #include "d3d9_pe_stateblock_fault.hpp"
 
 #include <new>
@@ -2605,6 +2606,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreateVertexShader(const DWORD* pFn,
     const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
                                                                 /*vertexStage=*/true);
     if (FAILED(validationHr)) {
+        dxmt9DeviceDebugLog("device_create_vertex_shader rejected token0=0x%08x hr=0x%08x",
+                            pFn ? static_cast<uint32_t>(pFn[0]) : 0u,
+                            static_cast<uint32_t>(validationHr));
         *ppVS = nullptr;
         return validationHr;
     }
@@ -2697,6 +2701,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::CreatePixelShader(const DWORD* pFn,
     const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
                                                                 /*vertexStage=*/false);
     if (FAILED(validationHr)) {
+        dxmt9DeviceDebugLog("device_create_pixel_shader rejected token0=0x%08x hr=0x%08x",
+                            pFn ? static_cast<uint32_t>(pFn[0]) : 0u,
+                            static_cast<uint32_t>(validationHr));
         *ppPS = nullptr;
         return validationHr;
     }
