@@ -54,12 +54,17 @@ Heroic Wine Staging 11.16 baselines:
 | 3DMark06 HDR2               | `16.0`                     | `17.1`                       | `15.6`                        | `13.6`                           |
 | Street Fighter IV Benchmark | `44.3`                     | `46.8`                       | `43.8`                        | `63.3`                           |
 
-dxmt9 uses one `perf` run per workload: 1024x768 for 3DMark05 and 1280x720 for
-3DMark06 and SFIV. The WineD3D runs use 1024x768 for 3DMark05 and 1280x800 for
-3DMark06. D9VK/MoltenVK uses 1024x768 for 3DMark05 and 1280x800 for 3DMark06
-and SFIV. Sikarugir WineD3D SFIV uses 1280x720; Heroic 11.16 WineD3D SFIV uses
-1280x800. All three non-dxmt9 SFIV reference values are 240-second
-benchmark-overlay averages.
+Each dxmt9 value is one `perf` run. Measurement modes:
+
+- 3DMark05
+  - All renderers: 1024x768
+- 3DMark06
+  - dxmt9: 1280x720
+  - D9VK/MoltenVK and WineD3D: 1280x800
+- Street Fighter IV
+  - dxmt9 and Sikarugir WineD3D: 1280x720
+  - D9VK/MoltenVK and Heroic 11.16 WineD3D: 1280x800
+  - Non-dxmt9 values use the 240-second benchmark-overlay average
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
