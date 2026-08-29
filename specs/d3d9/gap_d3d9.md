@@ -1538,7 +1538,7 @@ Every IDirect3DResource9-derived implementation (surface, texture variants, buff
 
 | Method | PE-side | unix-side | conformance | native | Source | Notes |
 |---|---|---|---|---|---|---|
-| Lock | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:188` | `test_vb_lock_flags`, `test_writeonly_vertex_buffer_readback_policy`, `test_pinned_buffers_d3dusage_policy` |
+| Lock | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device_child_buffer.cpp` | `test_vb_lock_flags`, `test_writeonly_vertex_buffer_readback_policy`, `test_pinned_buffers_d3dusage_policy`; `dxmt9-core-device-com-spec` pins the complete-generation managed READONLY cache required by R-CORE-4.5.1. S.T.A.L.K.E.R. CoP R2 day wild proof `app-d3d9-stkcop-bench-readonly-whole-buffer-fix-r1`: 1,469 presents, result produced, return 0. |
 | Unlock | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:218` | |
 | GetDesc | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:229` | `test_vertex_buffer_desc_binding_policy` |
 
@@ -1546,7 +1546,7 @@ Every IDirect3DResource9-derived implementation (surface, texture variants, buff
 
 | Method | PE-side | unix-side | conformance | native | Source | Notes |
 |---|---|---|---|---|---|---|
-| Lock | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:339` | shared with VB suite |
+| Lock | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device_child_buffer.cpp` | shared managed READONLY cache and native proof with VB suite |
 | Unlock | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:346` | |
 | GetDesc | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device_child_buffer.cpp:353` | `test_index_buffer_desc_binding_policy` |
 

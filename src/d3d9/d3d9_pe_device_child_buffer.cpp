@@ -355,20 +355,30 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
   if (FAILED(flushHr))
     return flushHr;
 
-  const HRESULT lockHr = hr32(dxmt9c_buffer_lock(buffer, off, size, pp, flags));
+  // Fill the PE READONLY cache from the complete managed backing. The public
+  // lock range was validated above and remains the range reported to capture
+  // and diagnostics; only the internal cache-fill lock is widened.
+  const UINT backendOff = cacheEligible ? 0u : off;
+  const UINT backendSize = cacheEligible ? desc.size : size;
+  const HRESULT lockHr =
+      hr32(dxmt9c_buffer_lock(buffer, backendOff, backendSize, pp, flags));
   if (SUCCEEDED(lockHr)) {
     state.locked = true;
     state.servedFromReadonlyCache = false;
     state.descValid = descValid;
     state.desc = desc;
     state.flags = flags;
+    if (cacheEligible && *pp)
+      *pp = static_cast<std::byte *>(*pp) + off;
     state.data = *pp;
     state.offset = off;
     state.size = size != 0u ? size : desc.size - off;
     if ((flags & D3DLOCK_READONLY) == 0)
       state.readonlyCache.invalidate();
-    if (cacheEligible && *pp &&
-        state.readonlyCache.refresh(off, size, desc.size, *pp)) {
+    void *const backendData =
+        cacheEligible && *pp ? static_cast<std::byte *>(*pp) - off : *pp;
+    if (cacheEligible && backendData &&
+        state.readonlyCache.refresh(desc.size, backendData)) {
       const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
       if (SUCCEEDED(unlockHr)) {
         *pp = state.readonlyCache.dataFor(off);

@@ -580,6 +580,10 @@ The PE resource layer owns these rules:
   volume, surface, and volume-level wrappers.
 - `LockRect()` / `LockBox()` validation must cover invalid rectangles, block
   compressed alignment, nested lock/unlock calls, and caller-memory resources.
+- A managed vertex/index-buffer READONLY cache must be generation-qualified and
+  hold the complete backing. A request-sized PE copy is not compatible with
+  WineD3D's mapped-backing behaviour for legacy applications that use an
+  element count as `SizeToLock` and subsequently apply the real byte stride.
 - `GetDC()` / `ReleaseDC()` support is format- and pool-sensitive and must
   preserve data visible through subsequent D3D9 locks or copies.
 - `SetLOD()` / `GetLOD()`, autogen mipmap filters, and `GenerateMipSubLevels()`

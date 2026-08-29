@@ -290,6 +290,14 @@ semantics of `D3DLOCK_DISCARD` and `D3DLOCK_NOOVERWRITE` must be respected: DISC
 allows the implementation to return a fresh allocation; NOOVERWRITE guarantees the
 application will not overwrite in-use regions.
 
+**R-CORE-4.5.1** A PE-side cache for `D3DPOOL_MANAGED` buffer
+`D3DLOCK_READONLY` locks must snapshot the complete resource generation, even
+when the caller requests a subrange. This preserves the Wine-runtime behaviour
+observed by older applications that pass an element count as the lock size but
+then index the mapped managed backing with the element stride. Cache hits may
+return an offset pointer into that complete snapshot; a writable lock or other
+CPU-visible mutation must invalidate the generation before another hit.
+
 **R-CORE-4.6** `Lock()` on a texture surface must return a CPU-accessible pointer with
 the correct pitch. Modifications made before `Unlock()` must be visible in subsequent
 texture samples.

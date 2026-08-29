@@ -1986,7 +1986,7 @@ void testPeBufferReadonlyCacheRangeAndGeneration() {
   const std::array<uint8_t, 8> initial{0, 1, 2, 3, 4, 5, 6, 7};
 
   check(!cache.canServe(0, 8, 8), "empty readonly cache misses");
-  check(cache.refresh(0, 8, 8, initial.data()),
+  check(cache.refresh(8, initial.data()),
         "readonly cache refreshes full range");
   check(cache.canServe(0, 8, 8), "readonly cache serves exact full range");
   check(cache.canServe(2, 4, 8), "readonly cache serves contained range");
@@ -1999,12 +1999,31 @@ void testPeBufferReadonlyCacheRangeAndGeneration() {
   cache.invalidate();
   check(!cache.canServe(0, 8, 8), "readonly cache invalidate bumps generation");
 
-  const std::array<uint8_t, 4> tail{8, 9, 10, 11};
-  check(cache.refresh(4, 0, 8, tail.data()),
-        "readonly cache refreshes zero-size tail range");
-  check(cache.canServe(4, 4, 8), "readonly cache serves refreshed tail");
-  check(!cache.canServe(0, 8, 8),
-        "readonly cache partial range does not serve full resource");
+  check(cache.refresh(8, initial.data()),
+        "readonly cache refresh restores the whole resource");
+  check(cache.canServe(4, 0, 8),
+        "whole-resource cache serves a zero-size tail lock");
+
+  // S.T.A.L.K.E.R. CoP passes a vertex count as the READONLY lock size but
+  // then indexes the returned managed-buffer backing using the 28-byte vertex
+  // stride. WineD3D/native D3D9 expose the whole backing. Keep the PE cache
+  // large enough for that compatibility shape instead of caching 4,486 bytes.
+  constexpr std::uint32_t kVertexCount = 4486u;
+  constexpr std::uint32_t kVertexStride = 28u;
+  constexpr std::uint32_t kReferencedVertex = 1621u;
+  std::vector<std::uint8_t> stalkerBuffer(kVertexCount * kVertexStride);
+  stalkerBuffer[kReferencedVertex * kVertexStride + 0x18u] = 0x5au;
+  check(cache.refresh(static_cast<std::uint32_t>(stalkerBuffer.size()),
+                      stalkerBuffer.data()),
+        "readonly cache snapshots the complete managed vertex buffer");
+  check(cache.canServe(0u, kVertexCount,
+                       static_cast<std::uint32_t>(stalkerBuffer.size())),
+        "vertex-count-sized lock is served from the whole snapshot");
+  const auto* stalkerMapped =
+      static_cast<const std::uint8_t*>(cache.dataFor(0u));
+  checkEq(stalkerMapped[kReferencedVertex * kVertexStride + 0x18u],
+          std::uint8_t{0x5a},
+          "compatibility overread remains inside the managed snapshot");
 }
 
 // DXMT9_PE_STATS_DECIMATION building block (d3d9_pe_stats_decimation.hpp):

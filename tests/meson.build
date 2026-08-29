@@ -335,6 +335,11 @@ test('dxmt9-3dmark06-lane', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-stkcop-lane', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_stkcop_lane.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
 test('dxmt9-3dmark-result-artifacts', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_3dmark_result_artifacts.py')],
      workdir: meson.project_source_root(),

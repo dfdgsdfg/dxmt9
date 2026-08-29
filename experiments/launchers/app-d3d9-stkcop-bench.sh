@@ -3,8 +3,8 @@ set -euo pipefail
 
 # S.T.A.L.K.E.R.: Call of Pripyat standalone benchmark (X-Ray 1.6, D3D9).
 # Fully headless: the Benchmark.exe GUI is bypassed by invoking
-# bin_test/xrEngine.exe directly with the argument set the GUI's .test files
-# document, plus -batch_benchmark. The engine writes <Scene>.result into
+# bin_test/xrEngine.exe directly through the GUI's OpenAutomate/native
+# benchmark path. The engine writes <Scene>.result into
 # $fs_root$/_appdata_/ (fsgame.ltx maps $app_data_root$ there); this launcher
 # regenerates the benchmark config per lane/preset/renderer, runs one scene,
 # and copies the .result and engine log into the experiment output dir.
@@ -35,10 +35,10 @@ renderer=${DXMT_STKCOP_RENDERER:-renderer_r2.5}
 vid_mode=${DXMT_STKCOP_VID_MODE:-1280x720}
 
 case "$lane" in
-  day)       test_file="dayBenchmark.test";       start_level="bench_day" ;;
-  night)     test_file="NightBenchmark.test";     start_level="bench_night" ;;
-  rain)      test_file="RainBenchmark.test";      start_level="bench_rain" ;;
-  sunshafts) test_file="SunShaftsBenchmark.test"; start_level="bench_sunshafts" ;;
+  day)       test_file="dayBenchmark.test" ;;
+  night)     test_file="NightBenchmark.test" ;;
+  rain)      test_file="RainBenchmark.test" ;;
+  sunshafts) test_file="SunShaftsBenchmark.test" ;;
   *)
     echo "[stkcop] unknown DXMT_STKCOP_LANE '$lane'; expected day|night|rain|sunshafts" >&2
     exit 2
@@ -124,7 +124,10 @@ trap collect_stkcop_results EXIT
 read -r -a extra_args <<< "${DXMT_STKCOP_EXTRA_ARGS:-}"
 echo "[stkcop] running lane=$lane via $test_file"
 exp_run_wine_binary "$app_root/bin_test/xrEngine.exe" \
-  -noprefetch -nocache -nointro -xclsx -ltx test.ltx \
-  -batch_benchmark "$test_file" \
-  -start "server(${start_level}/single/alife/new)" \
+  -ltx test.ltx -silent_error_mode -openautomate "$test_file" \
   ${extra_args[@]+"${extra_args[@]}"}
+
+if ! compgen -G "$app_root/_appdata_/*.result" >/dev/null; then
+  echo "[stkcop] engine exited successfully without producing a benchmark result" >&2
+  exit 1
+fi
