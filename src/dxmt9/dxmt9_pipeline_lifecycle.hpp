@@ -18,6 +18,7 @@ enum class PipelineStage : std::uint8_t {
   FinalOwned,
   Encoding,
   GPUInFlight,
+  Completed,
   Reclaimed,
 };
 
@@ -48,7 +49,10 @@ struct PipelineIdentity {
   std::uint64_t workId = 0;
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
-  std::uint32_t generation = 0;
+  // This is the CpuReadyTape storage generation, not a control-slot index.
+  // Keep the full 64-bit domain so an ABA check cannot truncate a wrapped
+  // arena identity at the observer boundary.
+  std::uint64_t generation = 0;
 
   constexpr bool valid() const noexcept {
     return workId != 0 && sourceOrdinal != 0 && seqId != 0 && generation != 0;
@@ -112,7 +116,7 @@ enum class PipelineObservationError : std::uint8_t {
 constexpr bool pipelineStageOwnsQueueCredit(PipelineStage stage) noexcept {
   return stage == PipelineStage::ReplayBorrowed ||
       stage == PipelineStage::FinalOwned || stage == PipelineStage::Encoding ||
-      stage == PipelineStage::GPUInFlight;
+      stage == PipelineStage::GPUInFlight || stage == PipelineStage::Completed;
 }
 
 constexpr bool pipelinePublicationMayCommit(
@@ -144,6 +148,11 @@ constexpr bool pipelineOwnerMayReclaim(
     return false;
   }
   if (stage == PipelineStage::GPUInFlight) {
+    return completionAuthority &&
+        (disposition == PipelineDisposition::Completed ||
+         disposition == PipelineDisposition::DeviceLost);
+  }
+  if (stage == PipelineStage::Completed) {
     return completionAuthority &&
         (disposition == PipelineDisposition::Completed ||
          disposition == PipelineDisposition::DeviceLost);
@@ -189,10 +198,13 @@ struct PipelineLifecycleRecord {
 };
 
 inline constexpr std::size_t kMaxObservedPipelineSources = 8;
+inline constexpr std::size_t kMaxObservedPipelineEvents = 256;
 
 struct PipelineLifecycleObserverState {
   std::array<PipelineLifecycleRecord, kMaxObservedPipelineSources> records{};
+  std::array<PipelineLifecycleEvent, kMaxObservedPipelineEvents> ownerEvents{};
   std::size_t recordCount = 0;
+  std::size_t ownerEventCount = 0;
   PipelineQueueSnapshot queue{};
   bool hasQueueSnapshot = false;
   std::size_t eventCount = 0;
@@ -368,7 +380,7 @@ constexpr PipelineObservationError validateTransition(
         : PipelineObservationError::MissingCompletionAuthority;
   }
   if (event.from == PipelineStage::GPUInFlight &&
-      event.to == PipelineStage::Reclaimed &&
+      event.to == PipelineStage::Completed &&
       (event.disposition == PipelineDisposition::Completed ||
        event.disposition == PipelineDisposition::DeviceLost)) {
     if (!pipelineOwnerMayReclaim(event.from, event.disposition,
@@ -389,6 +401,24 @@ constexpr PipelineObservationError validateTransition(
     if ((present && event.after.presentSeq != event.identity.seqId) ||
         (!present && event.after.presentSeq != event.before.presentSeq)) {
       return PipelineObservationError::PresentOutOfOrder;
+    }
+    return PipelineObservationError::None;
+  }
+  if (event.from == PipelineStage::Completed &&
+      event.to == PipelineStage::Reclaimed &&
+      (event.disposition == PipelineDisposition::Completed ||
+       event.disposition == PipelineDisposition::DeviceLost)) {
+    if (!pipelineOwnerMayReclaim(event.from, event.disposition,
+                                 event.outstandingBorrows,
+                                 event.completionAuthority)) {
+      return event.outstandingBorrows != 0
+          ? PipelineObservationError::OutstandingBorrow
+          : PipelineObservationError::MissingCompletionAuthority;
+    }
+    if (event.after.completedSeq != event.before.completedSeq ||
+        event.after.presentSeq != event.before.presentSeq ||
+        event.after.occupancy > event.before.occupancy) {
+      return PipelineObservationError::CompletionOutOfOrder;
     }
     return PipelineObservationError::None;
   }
@@ -515,6 +545,31 @@ class PipelineLifecycleObserver {
     return {.context = this, .fn = &observeFromSink};
   }
 
+  // Production owners already have the queue's serialized transition record
+  // and exact Tape locator. Preserve that evidence verbatim in a bounded cold
+  // lane; the strict reducer remains available to deterministic/model tests.
+  // This method intentionally performs no allocation, clock read, or atomic
+  // operation and is reached only through the opt-in production sink.
+  void observeOwnerEvent(const PipelineLifecycleEvent& event) noexcept {
+    if (error_ != PipelineObservationError::None) {
+      return;
+    }
+    if (!event.identity.valid()) {
+      error_ = PipelineObservationError::InvalidIdentity;
+      return;
+    }
+    if (state_.ownerEventCount == state_.ownerEvents.size()) {
+      error_ = PipelineObservationError::BoundedObserverOverflow;
+      return;
+    }
+    state_.ownerEvents[state_.ownerEventCount++] = event;
+    ++state_.eventCount;
+  }
+
+  PipelineLifecycleObserverSink productionSink() noexcept {
+    return {.context = this, .fn = &observeOwnerFromSink};
+  }
+
   constexpr PipelineObservationError error() const noexcept { return error_; }
   constexpr bool valid() const noexcept {
     return error_ == PipelineObservationError::None;
@@ -527,6 +582,11 @@ class PipelineLifecycleObserver {
   static void observeFromSink(void* context,
                               const PipelineLifecycleEvent& event) noexcept {
     static_cast<PipelineLifecycleObserver*>(context)->observe(event);
+  }
+
+  static void observeOwnerFromSink(
+      void* context, const PipelineLifecycleEvent& event) noexcept {
+    static_cast<PipelineLifecycleObserver*>(context)->observeOwnerEvent(event);
   }
 
   PipelineLifecycleObserverState state_{};

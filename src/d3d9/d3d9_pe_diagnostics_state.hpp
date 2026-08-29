@@ -4,6 +4,7 @@
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/device_c.h"
 
 #include <array>
@@ -28,12 +29,13 @@ struct PeDiagnosticsConfig {
   bool threadSampler = false;
   bool debugLog = false;
   bool scalarSemanticObserver = false;
+  bool copyMaterializationLedger = false;
   std::uint32_t threadSamplerHz = 250;
 
   constexpr bool enabled() const noexcept {
     return recorderStats || recorderChunkLog || statsDecimationN != 0 ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver;
+           scalarSemanticObserver || copyMaterializationLedger;
   }
 
   constexpr bool chunkCommitTimingEnabled() const noexcept {
@@ -54,11 +56,12 @@ struct PeDiagnosticsFeatureGates {
   bool threadSampler = false;
   bool debugLog = false;
   bool scalarSemanticObserver = false;
+  bool copyMaterializationLedger = false;
 
   constexpr bool any() const noexcept {
     return callScope || hotSetterTimer || chunkCommitTiming ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver;
+           scalarSemanticObserver || copyMaterializationLedger;
   }
 
   static constexpr PeDiagnosticsFeatureGates fromConfig(
@@ -73,6 +76,7 @@ struct PeDiagnosticsFeatureGates {
         .threadSampler = config.threadSampler,
         .debugLog = config.debugLog,
         .scalarSemanticObserver = config.scalarSemanticObserver,
+        .copyMaterializationLedger = config.copyMaterializationLedger,
     };
   }
 };
@@ -232,6 +236,7 @@ struct PeDiagnosticsState {
     return stats;
   }();
   std::uint64_t peStatsDecimationPresents_ = 0;
+  std::uint64_t peCopyMaterializationReportPresents_ = 0;
   dxmt9::d3d9::pe::PeThreadSampler *peThreadSampler_ = nullptr;
   std::uint64_t peThreadSamplerPresents_ = 0;
   bool peThreadSamplerPresentThreadChecked_ = false;

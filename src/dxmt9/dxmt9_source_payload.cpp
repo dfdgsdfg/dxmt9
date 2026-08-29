@@ -94,6 +94,14 @@ bool ArenaByteBuffer::try_append(std::span<const std::byte> bytes,
     std::memset(data_ + size_, 0, alignedOffset - size_);
   }
   if (!bytes.empty()) {
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Unix);
+    std::optional<dxmt9::core::CopyMaterializationEvent> event;
+    if (ledger) {
+      event.emplace(ledger,
+                    dxmt9::core::CopyMaterializationClass::ArenaByteCopy,
+                    bytes.size());
+    }
     std::memmove(data_ + alignedOffset, bytes.data(), bytes.size());
   }
   offset = alignedOffset;
@@ -1008,6 +1016,14 @@ bool ArenaSourcePayloadBuilder::appendBytes(
     good_ = false;
     return false;
   }
+  if (!bytes.empty()) {
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->recordMaterialization(
+          dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
+          bytes.size());
+    }
+  }
   return true;
 }
 
@@ -1170,6 +1186,15 @@ bool TransactionalChunkSlotAssembler::beginBuild() noexcept {
   return state_ == State::Building && builder_ && builder_->good();
 }
 
+bool TransactionalChunkSlotAssembler::bindOuter(OuterBinding binding) noexcept {
+  if (state_ != State::Reserved || !binding.valid() ||
+      outerBinding_.has_value()) {
+    return false;
+  }
+  outerBinding_ = binding;
+  return true;
+}
+
 bool TransactionalChunkSlotAssembler::fail() noexcept {
   state_ = State::Failed;
   return builder_ ? builder_->reject() : false;
@@ -1177,7 +1202,9 @@ bool TransactionalChunkSlotAssembler::fail() noexcept {
 
 bool TransactionalChunkSlotAssembler::commit() noexcept {
   if ((state_ != State::Reserved && state_ != State::Building) ||
-      !builder_ || !builder_->publish()) {
+      !builder_ ||
+      (outerBinding_.has_value() && !outerBinding_->valid()) ||
+      !builder_->publish()) {
     state_ = State::Failed;
     return false;
   }
@@ -1314,10 +1341,14 @@ bool TransactionalChunkSlotAssembler::tryAppendPayloadBytes(
 bool TransactionalChunkSlotAssembler::tryAppendDrawRunBatch(
     std::span<DrawRunSubmission> submissions) noexcept {
   const auto carrierBytes = submissions.size() * sizeof(DrawRunSubmission);
-  dxmt9::core::CopyMaterializationEvent carrierEvent(
-      dxmt9::core::activeCopyMaterializationLedger(),
-      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy,
-      carrierBytes);
+  std::optional<dxmt9::core::CopyMaterializationEvent> carrierEvent;
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    carrierEvent.emplace(
+        ledger,
+        dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy,
+        carrierBytes);
+  }
   directRunOpen_ = false;
   if (!beginBuild() || submissions.empty() ||
       !submissions.front().stateMaterialized ||
@@ -1411,12 +1442,17 @@ bool TransactionalChunkSlotAssembler::tryAppendDrawRunBatch(
   }
   ++drawRunCount_;
   ++commandCount_;
-  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
-    ledger->record(
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    ledger->recordMaterialization(
         dxmt9::core::CopyMaterializationClass::
             ReplaySubmissionCarrierMaterialization,
         sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext) +
             submissions.size() * sizeof(DrawUniformPayload));
+    // The carrier state is a semantic boundary, but these bytes are copied
+    // into the final arena destination by the append calls above. Keep this
+    // row as an actual copy so the ledger can conserve legacy and direct
+    // destination traffic independently of the semantic materialization row.
     ledger->record(
         dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
         sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext) +
@@ -1453,10 +1489,14 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
       (extendRun ? 0u : sizeof(FlatDrawStateRecord) +
           sizeof(DrawShaderLayoutContext) + sizeof(DrawDebugSnapshot));
   const auto drawPayloadBytesBefore = drawPayloadBytes_;
-  dxmt9::core::CopyMaterializationEvent finalAppendEvent(
-      dxmt9::core::activeCopyMaterializationLedger(),
-      dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
-      finalBaseBytes);
+  std::optional<dxmt9::core::CopyMaterializationEvent> finalAppendEvent;
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    finalAppendEvent.emplace(
+        ledger,
+        dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend,
+        finalBaseBytes);
+  }
 
   std::uint32_t stateIndex = 0;
   DrawPsoSubview psoSubview{};
@@ -1495,8 +1535,10 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
     return fail();
   }
   ++paramCount_;
-  finalAppendEvent.setBytes(
-      finalBaseBytes + (drawPayloadBytes_ - drawPayloadBytesBefore));
+  if (finalAppendEvent) {
+    finalAppendEvent->setBytes(
+        finalBaseBytes + (drawPayloadBytes_ - drawPayloadBytesBefore));
+  }
 
   if (extendRun) {
     auto* run = builder_->drawRun(directRunRecordIndex_);
@@ -1570,6 +1612,16 @@ bool TransactionalChunkSlotAssembler::tryAppendStretchRect(
   return true;
 }
 
+bool TransactionalChunkSlotAssembler::tryAppendReadback(
+    const ReadbackDesc& value) noexcept {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendReadbackCommand(value)) {
+    return builder_->reject();
+  }
+  ++commandCount_;
+  return true;
+}
+
 bool TransactionalChunkSlotAssembler::tryAppendColorFill(
     const ColorFillDesc& value) noexcept {
   directRunOpen_ = false;
@@ -1594,6 +1646,16 @@ bool TransactionalChunkSlotAssembler::tryAppendGenerateMipmaps(
     const GenerateMipmapsDesc& value) noexcept {
   directRunOpen_ = false;
   if (!beginBuild() || !builder_->tryAppendGenerateMipmapsCommand(value)) {
+    return builder_->reject();
+  }
+  ++commandCount_;
+  return true;
+}
+
+bool TransactionalChunkSlotAssembler::tryAppendPresent(
+    PresentCommandRecord&& value) noexcept {
+  directRunOpen_ = false;
+  if (!beginBuild() || !builder_->tryAppendPresentCommand(std::move(value))) {
     return builder_->reject();
   }
   ++commandCount_;

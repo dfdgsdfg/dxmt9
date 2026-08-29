@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9/copy_materialization_ledger.hpp"
+
 #include "d3d9_pe_stats_decimation.hpp"
 #include "dxmt9/device_c.h"
 #include "util/config/config.hpp"
@@ -139,8 +141,19 @@ struct StateBlockConstShadow {
                                             static_cast<std::uint32_t>(byteEnd));
         trackedSize = std::max<std::uint32_t>(trackedSize,
                                               static_cast<std::uint32_t>(end));
-        std::memcpy(values.data() + static_cast<std::size_t>(start) * elemSize,
-                    data, static_cast<std::size_t>(count) * elemSize);
+        const auto byteCount = static_cast<std::size_t>(count) * elemSize;
+        auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe);
+        if (ledger) {
+            dxmt9::core::CopyMaterializationEvent copy(
+                ledger, dxmt9::core::CopyMaterializationClass::PeStateShadow,
+                byteCount);
+            std::memcpy(values.data() + static_cast<std::size_t>(start) * elemSize,
+                        data, byteCount);
+        } else {
+            std::memcpy(values.data() + static_cast<std::size_t>(start) * elemSize,
+                        data, byteCount);
+        }
         std::fill(trackedElems.begin() + start, trackedElems.begin() + end,
                   std::uint8_t{1});
     }
@@ -155,8 +168,19 @@ struct StateBlockConstShadow {
                 valueSize = static_cast<std::uint32_t>(offset + elemSize);
             }
             if (live.values.size() >= offset + elemSize) {
-                std::memcpy(values.data() + offset,
-                            live.values.data() + offset, elemSize);
+                auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+                    dxmt9::core::CopyMaterializationOwner::Pe);
+                if (ledger) {
+                    dxmt9::core::CopyMaterializationEvent copy(
+                        ledger,
+                        dxmt9::core::CopyMaterializationClass::PeStateShadow,
+                        elemSize);
+                    std::memcpy(values.data() + offset,
+                                live.values.data() + offset, elemSize);
+                } else {
+                    std::memcpy(values.data() + offset,
+                                live.values.data() + offset, elemSize);
+                }
             } else {
                 std::memset(values.data() + offset, 0, elemSize);
             }

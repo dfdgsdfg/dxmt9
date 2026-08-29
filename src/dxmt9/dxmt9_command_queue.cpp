@@ -673,6 +673,17 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
 
   initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 
+  // PipelineLifecycleObserver is a bounded, opt-in owner-evidence sink.  It
+  // is allocated before binding so every subsequent producer/import/replay
+  // transition uses the same queue-owned observer and exact Tape locator.
+  const char* pipelineObserverEnv = std::getenv(
+      "DXMT9_PERF_PIPELINE_LIFECYCLE_OBSERVER");
+  if (pipelineObserverEnv && pipelineObserverEnv[0] != '\0' &&
+      pipelineObserverEnv[0] != '0') {
+    pipelineLifecycleObserver_ =
+        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>();
+  }
+
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
   // hook. CommandQueue is its own lifecycle root.
   bindSelfLifecycle([this](core::Handle h) -> std::uint32_t {
@@ -697,8 +708,10 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
   startThreads(
       [this] {
         auto encodeSingleSource = [this](
-                                          const core::metalqueue::ReadySlotSnapshot& source,
-                                          const core::SourcePayloadView& payload) {
+                                          const core::metalqueue::WorkerOwnedSourceSnapshot& workerSource,
+                                          const core::metalqueue::GenerationQualifiedSourceBorrow& borrow) {
+              const auto source = workerSource.copyValue();
+              const auto& payload = borrow.payload();
               const auto* legacySlot = payload.legacyPayload();
               if (!legacySlot) {
                 auto ctx = makeEncodeContext();
@@ -4008,6 +4021,11 @@ CommandQueue::beginCpuReadyArenaSource(
   control.sourceId = reservation->id;
   control.storage = reservation->storage;
   control.payload = nullptr;
+  queueLifecycle_.recordPipelineSourceArrival(
+      core::CpuReadyTape::PayloadKind::Arena,
+      core::CpuReadyTape::SourceRef{.id = reservation->id,
+                                    .storage = reservation->storage},
+      identity, layout.usedBytes);
   // Release, for the same reason as the publish increment in
   // QueueLifecycleController::commitCurrentChunk: a lock-free
   // `markTicketAcquire()` reader synchronizes with this store.
@@ -4153,6 +4171,17 @@ CommandQueue::beginCpuReadyArenaSources(
     control.sourceId = batch->reservations[i].id;
     control.storage = batch->reservations[i].storage;
     control.payload = nullptr;
+    queueLifecycle_.recordPipelineSourceArrival(
+        core::CpuReadyTape::PayloadKind::Arena,
+        core::CpuReadyTape::SourceRef{.id = control.sourceId,
+                                      .storage = control.storage},
+        core::CpuReadyAdmissionIdentity{
+            .rawOrdinal = rawOrdinal,
+            .sourceOrdinal = firstSeqId + i,
+            .seqId = firstSeqId + i,
+            .buildGeneration = buildGeneration,
+        },
+        layouts[i].usedBytes);
   }
   nextSeqId_.store(exclusiveSeqTail, std::memory_order_release);
   arenaAdmissionActive_.store(true, std::memory_order_release);
@@ -5827,6 +5856,35 @@ void CommandQueue::submitGenerateMipmaps(
   pool_.markGenerateMipmapsResources(desc, seqIdForMark(*this, 0));
 }
 
+void CommandQueue::emitCopyMaterializationReport() const noexcept {
+  const auto* ledger = core::activeCopyMaterializationLedger(
+      core::CopyMaterializationOwner::Unix);
+  if (!ledger) {
+    return;
+  }
+  for (std::size_t i = 0;
+       i < core::CopyMaterializationLedger::kClassCount; ++i) {
+    const auto materializationClass =
+        static_cast<core::CopyMaterializationClass>(i);
+    const auto row = ledger->snapshot(materializationClass);
+    if (!core::copyMaterializationSnapshotHasActivity(row)) {
+      continue;
+    }
+    util::logf(util::LogLevel::Info, "dxmt9-copy-materialization",
+               "binary=unix owner=unix class=%s copies=%llu copy_bytes=%llu copy_ns=%llu "
+               "semantic=%llu semantic_bytes=%llu retained_bytes=%llu "
+               "retained_peak=%llu",
+               core::copyMaterializationClassName(materializationClass),
+               static_cast<unsigned long long>(row.calls),
+               static_cast<unsigned long long>(row.bytes),
+               static_cast<unsigned long long>(row.inclusiveNanoseconds),
+               static_cast<unsigned long long>(row.semanticCalls),
+               static_cast<unsigned long long>(row.semanticBytes),
+               static_cast<unsigned long long>(row.retainedBytes),
+               static_cast<unsigned long long>(row.retainedBytesPeak));
+  }
+}
+
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // Replay has already accepted/counts this Present ordinal before reaching
   // the queue. A replacement gate is transient pressure, not permission to
@@ -5851,6 +5909,13 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         queueMutexSitePresentTally.fetch_add(1, std::memory_order_relaxed) + 1;
     if (presentOrdinal % 60 == 0) {
       logQueueMutexSites(presentOrdinal);
+    }
+  }
+  if (core::activeCopyMaterializationLedger(
+          core::CopyMaterializationOwner::Unix)) {
+    ++copyMaterializationReportPresents_;
+    if (copyMaterializationReportPresents_ % 60u == 0u) {
+      emitCopyMaterializationReport();
     }
   }
   const bool arenaPresentActive =
@@ -7048,6 +7113,9 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .submissionDiagnostics = &submissionDiagnostics_,
       .schedulingProgressWatchdog = &schedulingProgressWatchdog_,
       .resolveSurfaceFlags = std::move(resolveSurfaceFlags),
+      .pipelineLifecycleObserver = pipelineLifecycleObserver_
+          ? pipelineLifecycleObserver_->productionSink()
+          : dxmt9::queue::PipelineLifecycleObserverSink{},
   });
 }
 

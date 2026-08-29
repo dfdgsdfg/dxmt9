@@ -226,7 +226,10 @@ starts immediately before the class's source read/destination construction and
 ends when the destination representation is live; it excludes validation,
 resource resolution, queue waits, and semantic replay. Inclusive rows may
 overlap and must be marked non-additive unless the observer proves disjoint
-windows.
+windows. Every emitted row is prefixed with its binary-qualified owner (for
+example, `binary=unix owner=unix`); PE and Unix registries are separate, and
+the current production report emits only the Unix rows until a bounded PE
+Present/destruction report hook is added.
 
 ### 2.4 Ownership refinement
 

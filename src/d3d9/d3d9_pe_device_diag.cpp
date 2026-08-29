@@ -164,6 +164,49 @@ void D3D9DeviceImpl::recordPeStateBlockFault(bool entered,
   diagnostics_->peRecorderStats_.stateBlockFaultLastHr = hr;
 }
 
+void D3D9DeviceImpl::logPeCopyMaterializationLedger() {
+    if (!diagnostics_ || !diagnostics_->gates.copyMaterializationLedger) {
+        return;
+    }
+    const auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    if (!ledger) {
+        return;
+    }
+    for (std::size_t i = 0;
+         i < dxmt9::core::CopyMaterializationLedger::kClassCount; ++i) {
+        const auto materializationClass =
+            static_cast<dxmt9::core::CopyMaterializationClass>(i);
+        const auto row = ledger->snapshot(materializationClass);
+        if (!dxmt9::core::copyMaterializationSnapshotHasActivity(row)) {
+            continue;
+        }
+        dxmt9::util::logf(
+            dxmt9::util::LogLevel::Info, "dxmt9-copy-materialization",
+            "binary=pe owner=pe class=%s copies=%llu copy_bytes=%llu "
+            "copy_ns=%llu semantic=%llu semantic_bytes=%llu "
+            "retained_bytes=%llu retained_peak=%llu",
+            dxmt9::core::copyMaterializationClassName(materializationClass),
+            static_cast<unsigned long long>(row.calls),
+            static_cast<unsigned long long>(row.bytes),
+            static_cast<unsigned long long>(row.inclusiveNanoseconds),
+            static_cast<unsigned long long>(row.semanticCalls),
+            static_cast<unsigned long long>(row.semanticBytes),
+            static_cast<unsigned long long>(row.retainedBytes),
+            static_cast<unsigned long long>(row.retainedBytesPeak));
+    }
+}
+
+void D3D9DeviceImpl::notePeCopyMaterializationPresent() {
+    if (!diagnostics_ || !diagnostics_->gates.copyMaterializationLedger) {
+        return;
+    }
+    ++diagnostics_->peCopyMaterializationReportPresents_;
+    if (diagnostics_->peCopyMaterializationReportPresents_ % 60u == 0u) {
+        logPeCopyMaterializationLedger();
+    }
+}
+
 const char* D3D9DeviceImpl::vsConstSetterRangePhaseName(
     VsConstSetterRangePhase phase) noexcept {
     switch (phase) {

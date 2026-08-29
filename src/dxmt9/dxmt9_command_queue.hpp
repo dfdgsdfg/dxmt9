@@ -21,6 +21,7 @@
 #include "dxmt9/thread_ownership.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
@@ -955,8 +956,8 @@ class CommandQueue {
   // External callers should not use these.
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
-          const core::metalqueue::ReadySlotSnapshot& source,
-          const core::SourcePayloadView& payload)>;
+          const core::metalqueue::WorkerOwnedSourceSnapshot& source,
+          const core::metalqueue::GenerationQualifiedSourceBorrow& borrow)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   bool cpuReadySessionCoordinatorSelected() const noexcept;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
@@ -1166,6 +1167,12 @@ class CommandQueue {
   bool forceDrawResourceMarkingAfterSplit_ = false;
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
+  std::unique_ptr<dxmt9::queue::PipelineLifecycleObserver>
+      pipelineLifecycleObserver_{};
+  // Cold, opt-in diagnostics are held by the binary-local registry. They are
+  // intentionally not queue-owned: several live devices must not overwrite
+  // or dangle a process-wide installation.
+  std::uint64_t copyMaterializationReportPresents_ = 0;
   SchedulingProgressWatchdog schedulingProgressWatchdog_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
 
@@ -1200,6 +1207,7 @@ class CommandQueue {
   friend struct SchedulingProgressTestAccess;
 
   void noteInitializerPendingUploads() noexcept;
+  void emitCopyMaterializationReport() const noexcept;
   void requestSchedulingStopLocked() noexcept;
   bool cpuReadyArenaControlSlotsFreeLocked(
       std::size_t requiredSlots) const noexcept;
@@ -1334,6 +1342,24 @@ class CommandQueue {
           return false;
         }
         assemblers[i].emplace(*builders[i]);
+        const auto& ticket = reservation.ticket;
+        if (!assemblers[i]->bindOuter(
+                core::TransactionalChunkSlotAssembler::OuterBinding{
+                    .rawOrdinal = ticket.rawOrdinal,
+                    .sourceOrdinal = ticket.sourceOrdinal,
+                    .seqId = ticket.seqId,
+                    .buildGeneration = ticket.buildGeneration,
+                    .sourceGeneration = ticket.id.generation,
+                    .storageGeneration = ticket.storage.generation,
+                    .controlIndex = static_cast<std::uint32_t>(controlIndex),
+                    .firstPage = ticket.storage.firstPage,
+                    .pageCount = ticket.storage.pageCount,
+                    .segmentIndex = static_cast<std::uint32_t>(i),
+                    .segmentCount = static_cast<std::uint32_t>(layout.segmentCount),
+                    .plannedBytes = layout.segments[i].layout.usedBytes,
+                })) {
+          return false;
+        }
       }
       return true;
     }
@@ -1391,6 +1417,27 @@ class CommandQueue {
           }
           batchAssemblers[source][segment].emplace(
               *batchBuilders[source][segment]);
+          const auto& ticket = sourceReservation.ticket;
+          if (!batchAssemblers[source][segment]->bindOuter(
+                  core::TransactionalChunkSlotAssembler::OuterBinding{
+                      .rawOrdinal = ticket.rawOrdinal,
+                      .sourceOrdinal = ticket.sourceOrdinal,
+                      .seqId = ticket.seqId,
+                      .buildGeneration = ticket.buildGeneration,
+                      .sourceGeneration = ticket.id.generation,
+                      .storageGeneration = ticket.storage.generation,
+                      .controlIndex = static_cast<std::uint32_t>(
+                          batchControlIndices[source]),
+                      .firstPage = ticket.storage.firstPage,
+                      .pageCount = ticket.storage.pageCount,
+                      .segmentIndex = static_cast<std::uint32_t>(segment),
+                      .segmentCount = static_cast<std::uint32_t>(
+                          sourceLayout.segmentCount),
+                      .plannedBytes =
+                          sourceLayout.segments[segment].layout.usedBytes,
+                  })) {
+            return false;
+          }
         }
       }
       return true;

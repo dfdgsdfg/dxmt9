@@ -554,6 +554,35 @@ class ArenaSourcePayloadBuilder {
 // builder sticky-failed and the enclosing publication ticket must abort.
 class TransactionalChunkSlotAssembler {
  public:
+  // Value-only outer ownership witness supplied by CpuReadyArenaBuildLease.
+  // The assembler cannot own the queue lease (the queue must release it after
+  // publication), but it can require the lease's exact page/control/sequence
+  // and resource generation before allowing final publication.
+  struct OuterBinding {
+    std::uint64_t rawOrdinal = 0;
+    std::uint64_t sourceOrdinal = 0;
+    std::uint64_t seqId = 0;
+    std::uint64_t buildGeneration = 0;
+    std::uint64_t sourceGeneration = 0;
+    std::uint64_t storageGeneration = 0;
+    std::uint32_t controlIndex = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t firstPage = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t pageCount = 0;
+    std::uint32_t segmentIndex = 0;
+    std::uint32_t segmentCount = 0;
+    std::size_t plannedBytes = 0;
+
+    constexpr bool valid() const noexcept {
+      return rawOrdinal != 0 && sourceOrdinal != 0 && seqId != 0 &&
+             buildGeneration != 0 && sourceGeneration != 0 &&
+             storageGeneration != 0 &&
+             controlIndex != std::numeric_limits<std::uint32_t>::max() &&
+             firstPage != std::numeric_limits<std::uint32_t>::max() &&
+             pageCount != 0 && segmentCount != 0 &&
+             segmentIndex < segmentCount && plannedBytes != 0;
+    }
+  };
+
   enum class State : std::uint8_t {
     Empty,
     Reserved,
@@ -586,6 +615,7 @@ class TransactionalChunkSlotAssembler {
       TransactionalChunkSlotAssembler&&) = delete;
 
   bool reserve() noexcept;
+  bool bindOuter(OuterBinding binding) noexcept;
   bool commit() noexcept;
   void rollback() noexcept;
 
@@ -607,6 +637,9 @@ class TransactionalChunkSlotAssembler {
   }
   bool failed() const noexcept { return !good(); }
   std::size_t commandCount() const noexcept { return commandCount_; }
+  const std::optional<OuterBinding>& outerBinding() const noexcept {
+    return outerBinding_;
+  }
 
   bool tryAppendDrawRunBatch(
       std::span<DrawRunSubmission> submissions) noexcept;
@@ -615,9 +648,11 @@ class TransactionalChunkSlotAssembler {
   bool tryAppendClear(const ClearDesc& value) noexcept;
   bool tryAppendSurfaceCopy(const SurfaceCopyDesc& value) noexcept;
   bool tryAppendStretchRect(const StretchRectDesc& value) noexcept;
+  bool tryAppendReadback(const ReadbackDesc& value) noexcept;
   bool tryAppendColorFill(const ColorFillDesc& value) noexcept;
   bool tryAppendDepthResolve(const DepthResolveDesc& value) noexcept;
   bool tryAppendGenerateMipmaps(const GenerateMipmapsDesc& value) noexcept;
+  bool tryAppendPresent(PresentCommandRecord&& value) noexcept;
 
  private:
   bool beginBuild() noexcept;
@@ -641,8 +676,12 @@ class TransactionalChunkSlotAssembler {
   std::size_t directRunRecordIndex_ = 0;
   std::size_t directRunPayloadOffset_ = 0;
   bool directRunOpen_ = false;
+  std::optional<OuterBinding> outerBinding_{};
   State state_ = State::Empty;
 };
+
+static_assert(std::is_trivially_copyable_v<
+              TransactionalChunkSlotAssembler::OuterBinding>);
 
 // Compatibility spelling for existing callers while the production owner is
 // migrated to the explicit transaction name.

@@ -857,7 +857,7 @@ void testDirectAssemblerDifferentialAndConservation() {
                 TransactionalChunkSlotAssembler>);
 
   SourcePayloadCapacity capacity{};
-  capacity.commandHeaders = 1;
+  capacity.commandHeaders = 5;
   capacity.drawHotStates = 1;
   capacity.drawShaderLayouts = 1;
   capacity.drawDebugSnapshots = 1;
@@ -869,6 +869,10 @@ void testDirectAssemblerDifferentialAndConservation() {
   capacity.drawParams = 3;
   capacity.drawPayloadBytes = 2048;
   capacity.drawRunRecords = 1;
+  capacity.clearRecords = 1;
+  capacity.surfaceCopyRecords = 1;
+  capacity.readbackRecords = 1;
+  capacity.presentRecords = 1;
   const auto layout = makeSourcePayloadLayout(capacity, 4096, 8);
   check(layout.has_value(), "differential fixture layout must build");
 
@@ -940,6 +944,16 @@ void testDirectAssemblerDifferentialAndConservation() {
       .bindingOverrideData = objectBytes(bindingOverride),
       .bindingSnapshotData = objectBytes(bindingSnapshot),
   };
+  const ClearDesc mixedClear{.clearColor = true,
+                             .color = {.r = 0.2f, .g = 0.4f, .b = 0.6f, .a = 1.0f}};
+  const dxmt9::core::SurfaceCopyDesc mixedCopy{
+      .source = {.value = 71}, .destination = {.value = 72}, .linear = true};
+  const dxmt9::core::ReadbackDesc mixedReadback{
+      .source = {.value = 73}, .destination = {.value = 74}, .sourceLevel = 1};
+  dxmt9::core::PresentCommandRecord mixedPresent{
+      .present = {.sourceSurface = {.value = 75}},
+      .presentSource = {.value = 76}};
+  dxmt9::core::PresentCommandRecord legacyPresent = mixedPresent;
 
   std::vector<std::max_align_t> legacyBacking;
   std::vector<std::max_align_t> directBacking;
@@ -953,11 +967,32 @@ void testDirectAssemblerDifferentialAndConservation() {
       alignedBacking(directBacking, layout->usedBytes));
   TransactionalChunkSlotAssembler legacy(legacyBuilder);
   TransactionalChunkSlotAssembler direct(directBuilder);
+  check(direct.bindOuter(
+            TransactionalChunkSlotAssembler::OuterBinding{
+                .rawOrdinal = 101,
+                .sourceOrdinal = 202,
+                .seqId = 303,
+                .buildGeneration = 404,
+                .sourceGeneration = 505,
+                .storageGeneration = 606,
+                .controlIndex = 7,
+                .firstPage = 9,
+                .pageCount = 2,
+                .segmentIndex = 0,
+                .segmentCount = 1,
+                .plannedBytes = layout->usedBytes,
+            }),
+        "direct assembler binds the outer page/control/sequence/resource witness");
   dxmt9::core::CopyMaterializationLedger ledger;
   {
     dxmt9::core::ScopedCopyMaterializationLedger observe(ledger);
-    check(legacy.tryAppendDrawRunBatch(legacySubmissions) && legacy.commit(),
-          "legacy differential fixture must commit");
+    check(legacy.tryAppendDrawRunBatch(legacySubmissions) &&
+              legacy.tryAppendClear(mixedClear) &&
+              legacy.tryAppendSurfaceCopy(mixedCopy) &&
+              legacy.tryAppendReadback(mixedReadback) &&
+              legacy.tryAppendPresent(std::move(legacyPresent)) &&
+              legacy.commit(),
+          "legacy mixed differential fixture must commit");
     for (std::size_t i = 0; i < uniforms.size(); ++i) {
       const DirectReplayDrawInput input{
           .hot = &hot,
@@ -982,6 +1017,11 @@ void testDirectAssemblerDifferentialAndConservation() {
       check(direct.tryAppendDirectDraw(input),
             "direct A-B-A indexed/UP append must succeed");
     }
+    check(direct.tryAppendClear(mixedClear) &&
+              direct.tryAppendSurfaceCopy(mixedCopy) &&
+              direct.tryAppendReadback(mixedReadback) &&
+              direct.tryAppendPresent(std::move(mixedPresent)),
+          "direct mixed draw/control/readback/present append must succeed");
     check(direct.commit(), "direct differential fixture must commit");
   }
 
@@ -989,8 +1029,8 @@ void testDirectAssemblerDifferentialAndConservation() {
   const SourcePayloadView directView(directBlock);
   check(legacyView.valid() && directView.valid() &&
             legacyView.commandCount() == directView.commandCount() &&
-            legacyView.commandCount() == 1u,
-        "legacy and direct paths publish one equivalent A-B-A draw run");
+            legacyView.commandCount() == 5u,
+        "legacy and direct paths publish equivalent mixed command streams");
   const auto legacyDraw = legacyView.commandAt(0).command;
   const auto directDraw = directView.commandAt(0).command;
   const auto recordsEqual = [](const DrawRunCommandRecord& lhs,
@@ -1045,8 +1085,29 @@ void testDirectAssemblerDifferentialAndConservation() {
                        legacyView.drawPayloadBytes().end(),
                        directView.drawPayloadBytes().begin()),
         "direct final SoA bytes and indexed/UP locators match legacy");
+  check(legacyView.commandAt(1).kind() == directView.commandAt(1).kind() &&
+            legacyView.commandAt(1).clear.has_value() &&
+            directView.commandAt(1).clear.has_value() &&
+            legacyView.commandAt(2).kind() == directView.commandAt(2).kind() &&
+            legacyView.commandAt(2).command.surfaceCopy &&
+            directView.commandAt(2).command.surfaceCopy &&
+            legacyView.commandAt(2).command.surfaceCopy->source ==
+                directView.commandAt(2).command.surfaceCopy->source &&
+            legacyView.commandAt(3).kind() == directView.commandAt(3).kind() &&
+            legacyView.commandAt(3).command.readback &&
+            directView.commandAt(3).command.readback &&
+            legacyView.commandAt(3).command.readback->destination ==
+                directView.commandAt(3).command.readback->destination &&
+            legacyView.commandAt(4).kind() == directView.commandAt(4).kind() &&
+            legacyView.commandAt(4).command.present &&
+            directView.commandAt(4).command.present &&
+            legacyView.commandAt(4).command.present->presentSource ==
+                directView.commandAt(4).command.present->presentSource,
+        "mixed clear/copy/readback/Present commands preserve order and identity");
   const auto carrier = ledger.snapshot(
       dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy);
+  const auto carrierMaterialization = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierMaterialization);
   const auto queueFinal = ledger.snapshot(
       dxmt9::core::CopyMaterializationClass::QueueFinalSlotAppend);
   const auto expectedFinalBytes = sizeof(FlatDrawStateRecord) +
@@ -1055,12 +1116,79 @@ void testDirectAssemblerDifferentialAndConservation() {
       legacyView.drawPayloadBytes().size();
   check(carrier.calls == 1u &&
             carrier.bytes == 3u * sizeof(DrawRunSubmission) &&
+            carrierMaterialization.semanticCalls == 1u &&
+            carrierMaterialization.semanticBytes ==
+                sizeof(FlatDrawStateRecord) +
+                    sizeof(DrawShaderLayoutContext) +
+                    3u * sizeof(dxmt9::core::DrawUniformPayload) &&
+            queueFinal.semanticCalls != 0u &&
             queueFinal.calls == 4u &&
             queueFinal.bytes == 2u * expectedFinalBytes,
         "ledger distinguishes legacy carrier copying while conserving equal "
         "legacy/direct final destination bytes");
   legacyBlock.destroyConstructed();
   directBlock.destroyConstructed();
+}
+
+void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
+  using dxmt9::core::CopyMaterializationClass;
+  using dxmt9::core::CopyMaterializationOwner;
+
+  // Native tests run with the opt-in production gate unset.  This assertion
+  // pins the disabled path to a cached null and therefore no ledger object.
+  if (!dxmt9::core::copyMaterializationLedgerEnabled()) {
+    check(dxmt9::core::activeCopyMaterializationLedger(CopyMaterializationOwner::Pe) ==
+              nullptr &&
+              dxmt9::core::activeCopyMaterializationLedger(
+                  CopyMaterializationOwner::Unix) == nullptr,
+          "disabled ledger path returns null for both binary owners");
+  }
+
+  auto& registry = dxmt9::core::copyMaterializationLedgerRegistry();
+  auto& pe = registry.ledger(CopyMaterializationOwner::Pe);
+  auto& unix = registry.ledger(CopyMaterializationOwner::Unix);
+  check(&pe != &unix, "PE and Unix ledgers have distinct stable owners");
+  const auto peBefore = pe.snapshot(CopyMaterializationClass::PeStateShadow);
+  const auto unixBefore =
+      unix.snapshot(CopyMaterializationClass::QueueFinalSlotAppend);
+  pe.record(CopyMaterializationClass::PeStateShadow, 7u);
+  unix.record(CopyMaterializationClass::QueueFinalSlotAppend, 11u);
+  const auto peAfter = pe.snapshot(CopyMaterializationClass::PeStateShadow);
+  const auto unixAfter =
+      unix.snapshot(CopyMaterializationClass::QueueFinalSlotAppend);
+  check(peAfter.calls == peBefore.calls + 1u &&
+            peAfter.bytes == peBefore.bytes + 7u &&
+            unixAfter.calls == unixBefore.calls + 1u &&
+            unixAfter.bytes == unixBefore.bytes + 11u,
+        "two live binary owners retain independent report snapshots");
+  check(std::string_view(dxmt9::core::copyMaterializationOwnerName(
+                             CopyMaterializationOwner::Pe)) == "pe" &&
+            std::string_view(dxmt9::core::copyMaterializationOwnerName(
+                                 CopyMaterializationOwner::Unix)) == "unix",
+        "report owner names are binary-qualified");
+  const auto descriptor = dxmt9::core::copyMaterializationDescriptor(
+      CopyMaterializationClass::PeStateShadow);
+  check(std::string_view(descriptor.identity) ==
+            "materialize.pe.state-shadow" &&
+            descriptor.classification ==
+                dxmt9::core::CopyMaterializationClassification::Necessary,
+        "classification snapshot preserves stable identity and disposition");
+
+  dxmt9::core::CopyMaterializationLedger scoped;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(scoped);
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) == &scoped &&
+              dxmt9::core::activeCopyMaterializationLedger(
+                  CopyMaterializationOwner::Unix) == &scoped,
+          "test sink is scoped without replacing production owner storage");
+  }
+  const auto* restored = dxmt9::core::activeCopyMaterializationLedger(
+      CopyMaterializationOwner::Unix);
+  check(restored == (dxmt9::core::copyMaterializationLedgerEnabled()
+                         ? &unix
+                         : nullptr),
+        "scoped test sink restores the binary registry or disabled path");
 }
 
 void testTransactionalAssemblerRollbackReclaimsDestination() {
@@ -1192,6 +1320,7 @@ int main() {
     testConsolidatedNondrawCommandParity();
     testReplayAssemblerConsumesScratchIntoFinalArena();
     testDirectAssemblerDifferentialAndConservation();
+    testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();

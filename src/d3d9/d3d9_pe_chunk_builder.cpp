@@ -147,10 +147,15 @@ bool CommandChunkBuilder::appendPayload(
     const auto oldSize = payload_.size();
     payload_.resize(oldSize + bytes.size());
     if (!bytes.empty()) {
-      dxmt9::core::CopyMaterializationEvent event(
-          dxmt9::core::activeCopyMaterializationLedger(),
-          dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
-          bytes.size());
+      if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+              dxmt9::core::CopyMaterializationOwner::Pe)) {
+        dxmt9::core::CopyMaterializationEvent event(
+            ledger, dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
+            bytes.size());
+        ledger->recordMaterialization(
+            dxmt9::core::CopyMaterializationClass::PeSectionAppend,
+            bytes.size());
+      }
       std::memcpy(payload_.data() + oldSize, bytes.data(), bytes.size());
     }
   } catch (...) {
@@ -204,6 +209,12 @@ bool CommandChunkBuilder::overwritePayload(
     return failActiveRecord();
   }
   if (!bytes.empty()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      ledger->recordMaterialization(
+          dxmt9::core::CopyMaterializationClass::PeSectionAppend,
+          bytes.size());
+    }
     std::memcpy(payload_.data() + offset, bytes.data(), bytes.size());
   }
   return true;
@@ -252,7 +263,16 @@ bool CommandChunkBuilder::appendUpDataSectionPayload(
       bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
     return failActiveRecord();
   }
-  return appendPayload(bytes, rule->payloadAlignment, recordRelativeOffset);
+  const bool appended =
+      appendPayload(bytes, rule->payloadAlignment, recordRelativeOffset);
+  if (appended) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      ledger->recordMaterialization(
+          dxmt9::core::CopyMaterializationClass::UpScratch, bytes.size());
+    }
+  }
+  return appended;
 }
 
 bool CommandChunkBuilder::appendSectionTable(
@@ -602,11 +622,17 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
   }
   payload_.resize(totalBytes, std::byte{0});
   if (payloadBytes != 0u) {
-    dxmt9::core::CopyMaterializationEvent event(
-        dxmt9::core::activeCopyMaterializationLedger(),
-        dxmt9::core::CopyMaterializationClass::PeSealPayload, payloadBytes);
-    std::memmove(payload_.data() + payloadArenaOffset, payload_.data(),
-                 payloadBytes);
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      dxmt9::core::CopyMaterializationEvent event(
+          ledger, dxmt9::core::CopyMaterializationClass::PeSealPayload,
+          payloadBytes);
+      std::memmove(payload_.data() + payloadArenaOffset, payload_.data(),
+                   payloadBytes);
+    } else {
+      std::memmove(payload_.data() + payloadArenaOffset, payload_.data(),
+                   payloadBytes);
+    }
   }
   std::fill(payload_.begin(), payload_.begin() + payloadArenaOffset,
             std::byte{0});
@@ -626,22 +652,33 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
   };
   std::memcpy(payload_.data(), &header, sizeof(header));
   if (!records_.empty()) {
-    dxmt9::core::CopyMaterializationEvent event(
-        dxmt9::core::activeCopyMaterializationLedger(),
-        dxmt9::core::CopyMaterializationClass::PeSealRecords,
-        records_.size() * sizeof(records_[0]));
-    std::memcpy(payload_.data() + recordTableOffset, records_.data(),
-                records_.size() * sizeof(records_[0]));
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      dxmt9::core::CopyMaterializationEvent event(
+          ledger, dxmt9::core::CopyMaterializationClass::PeSealRecords,
+          records_.size() * sizeof(records_[0]));
+      std::memcpy(payload_.data() + recordTableOffset, records_.data(),
+                  records_.size() * sizeof(records_[0]));
+    } else {
+      std::memcpy(payload_.data() + recordTableOffset, records_.data(),
+                  records_.size() * sizeof(records_[0]));
+    }
   }
   if (!handles_.empty()) {
-    dxmt9::core::CopyMaterializationEvent event(
-        dxmt9::core::activeCopyMaterializationLedger(),
-        dxmt9::core::CopyMaterializationClass::PeSealHandles,
-        handles_.size() * sizeof(handles_[0]));
-    std::memcpy(payload_.data() + handleTableOffset, handles_.data(),
-                handles_.size() * sizeof(handles_[0]));
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      dxmt9::core::CopyMaterializationEvent event(
+          ledger, dxmt9::core::CopyMaterializationClass::PeSealHandles,
+          handles_.size() * sizeof(handles_[0]));
+      std::memcpy(payload_.data() + handleTableOffset, handles_.data(),
+                  handles_.size() * sizeof(handles_[0]));
+    } else {
+      std::memcpy(payload_.data() + handleTableOffset, handles_.data(),
+                  handles_.size() * sizeof(handles_[0]));
+    }
   }
-  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Pe)) {
     ledger->record(dxmt9::core::CopyMaterializationClass::PeWireFinal,
                    totalBytes);
     ledger->retain(dxmt9::core::CopyMaterializationClass::PeWireFinal,
@@ -663,7 +700,8 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
 void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
   if (sealed_ && !sealedBlob_.empty()) {
-    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Pe)) {
       ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
                       sealedBlob_.size());
       ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
@@ -702,7 +740,8 @@ void CommandChunkBuilder::reset() noexcept {
 void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   rollbackRecord();
   if (sealed_ && !sealedBlob_.empty()) {
-    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
       ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
                       sealedBlob_.size());
       ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,

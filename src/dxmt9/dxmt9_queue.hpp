@@ -4,6 +4,7 @@
 #include "dxmt9_capture.hpp"
 #include "dxmt9_cpu_ready_tape.hpp"
 #include "dxmt9_post_encode_retirement.hpp"
+#include "dxmt9_pipeline_lifecycle.hpp"
 #include "render/encode_scheduling_progress.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -229,6 +230,23 @@ struct QueueTransitionRecord {
   size_t inflightLimit = 0;
   const SwapDesc* present = nullptr;
   Handle sourceHandle{};
+  // Scalar slot witnesses keep diagnostic classification truthful even though
+  // QueueControllerState intentionally borrows the live slot array.
+  std::optional<ChunkSlot::State> beforeSlotState{};
+  std::optional<ChunkSlot::State> afterSlotState{};
+  std::optional<QueueLifecycleEvent> forcedEvent{};
+  std::size_t beforeCommandCount = 0;
+  std::size_t afterCommandCount = 0;
+  CpuReadySourceId beforeSourceId{};
+  CpuReadyStorageRef beforeStorage{};
+  CpuReadySourceId afterSourceId{};
+  CpuReadyStorageRef afterStorage{};
+  // Reclaiming deliberately rejects the generic tape metadata/payload view.
+  // Preserve the pre-transition witness so owner reporting remains possible
+  // after an inline completion has detached the source from its slot.
+  std::optional<CpuReadySourceMetadata> beforeMetadata{};
+  std::optional<CpuReadyTape::PayloadKind> beforePayloadKind{};
+  std::optional<bool> beforePresentOnly{};
 };
 
 struct NoEnqueueCommitChunkRecordShape {
@@ -443,6 +461,29 @@ struct ReadySlotSnapshot {
                                    ReadySlotSnapshot) noexcept = default;
 };
 
+// Value-only state owned by the encode worker between queue events.  Keeping
+// this separate from a resolved payload is deliberate: this object may be
+// copied into planner scratch or a selected-parallel work item, while the
+// payload itself must be reacquired through a synchronous borrow.
+class WorkerOwnedSourceSnapshot final {
+ public:
+  WorkerOwnedSourceSnapshot() = default;
+  explicit WorkerOwnedSourceSnapshot(const ReadySlotSnapshot& value) noexcept
+      : value_(value) {}
+
+  const ReadySlotSnapshot& value() const noexcept { return value_; }
+  ReadySlotSnapshot copyValue() const noexcept { return value_; }
+  bool valid() const noexcept {
+    return value_.seqId != 0 && value_.metadata.valid() &&
+           value_.sourceId.valid() && value_.storage.valid();
+  }
+
+ private:
+  ReadySlotSnapshot value_{};
+};
+
+static_assert(std::is_trivially_copyable_v<WorkerOwnedSourceSnapshot>);
+
 // Synchronous call-local resolution: either while the queue lock holds a Ready
 // prefix stable for selection, or while a Represented Tape pin protects an
 // encode call. Never store this in a lifecycle/session/partition/submission
@@ -463,6 +504,7 @@ struct ResolvedPublishedSource {
 
   bool valid() const noexcept {
     return source.valid() && seqId != 0 && metadata.valid() &&
+           source.id.generation != 0 && source.storage.generation != 0 &&
            semantic.sealed() && payload.valid();
   }
 };
@@ -476,7 +518,64 @@ static_assert(
             (sizeof(CpuReadyTape::ReadyEntry) +
              sizeof(ResolvedPublishedSource)) <=
         25u * 1024u,
-    "Ready-prefix selector scratch must stay within its fixed stack budget");
+        "Ready-prefix selector scratch must stay within its fixed stack budget");
+
+// A generation-qualified, synchronous capability.  It is intentionally
+// neither copyable nor movable, so a callback cannot place the capability in
+// a completion record or worker closure by value.  The queue keeps the
+// represented Tape source pinned until the callback returns; any cross-thread
+// handoff must use WorkerOwnedSourceSnapshot and reacquire a fresh borrow.
+class GenerationQualifiedSourceBorrow final {
+ public:
+  GenerationQualifiedSourceBorrow(const GenerationQualifiedSourceBorrow&) = delete;
+  GenerationQualifiedSourceBorrow& operator=(
+      const GenerationQualifiedSourceBorrow&) = delete;
+  GenerationQualifiedSourceBorrow(GenerationQualifiedSourceBorrow&&) = delete;
+  GenerationQualifiedSourceBorrow& operator=(GenerationQualifiedSourceBorrow&&) = delete;
+
+  bool valid() const noexcept { return valid_; }
+  const CpuReadyTape::SourceRef& source() const noexcept { return source_; }
+  const CpuReadySourceMetadata& metadata() const noexcept { return metadata_; }
+  const SourceSemanticSummary& semantic() const noexcept { return semantic_; }
+  std::uint64_t seqId() const noexcept { return seqId_; }
+  std::size_t commandBegin() const noexcept { return commandBegin_; }
+  std::size_t commandCount() const noexcept { return commandCount_; }
+  bool hasPresent() const noexcept { return hasPresent_; }
+  const SourcePayloadView& payload() const noexcept { return payload_; }
+
+ private:
+  friend class QueueLifecycleController;
+
+  explicit GenerationQualifiedSourceBorrow(
+      const ResolvedPublishedSource& resolved) noexcept
+      : source_(resolved.source),
+        seqId_(resolved.seqId),
+        metadata_(resolved.metadata),
+        semantic_(resolved.semantic),
+        payload_(resolved.payload),
+        hasPresent_(resolved.hasPresent),
+        commandBegin_(resolved.commandBegin),
+        commandCount_(resolved.commandCount),
+        valid_(resolved.valid() && resolved.metadata.seqId == resolved.seqId &&
+               resolved.source.id == resolved.sourceId &&
+               resolved.source.storage == resolved.storage &&
+               resolved.commandBegin <= resolved.payload.commandCount() &&
+               resolved.commandCount <=
+                   resolved.payload.commandCount() - resolved.commandBegin) {}
+
+  CpuReadyTape::SourceRef source_{};
+  std::uint64_t seqId_ = 0;
+  CpuReadySourceMetadata metadata_{};
+  SourceSemanticSummary semantic_{};
+  SourcePayloadView payload_{};
+  bool hasPresent_ = false;
+  std::size_t commandBegin_ = 0;
+  std::size_t commandCount_ = 0;
+  bool valid_ = false;
+};
+
+static_assert(!std::is_copy_constructible_v<GenerationQualifiedSourceBorrow>);
+static_assert(!std::is_move_constructible_v<GenerationQualifiedSourceBorrow>);
 
 // Stable, pointer-free attribution for one logical command in a published
 // source. The Tape source/storage generations disambiguate recycled control
@@ -869,9 +968,19 @@ class QueueLifecycleController {
     metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
     SchedulingProgressWatchdog* schedulingProgressWatchdog = nullptr;
     std::function<u32(Handle)> resolveSurfaceFlags;
+    // Nullable diagnostic sink.  The queue owns the observer; the controller
+    // only forwards owner evidence and never allocates on the disabled path.
+    ::dxmt9::queue::PipelineLifecycleObserverSink pipelineLifecycleObserver{};
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  // Record an arena/source admission before the Tape entry becomes Ready.
+  // The caller supplies the immutable admission identity because Tape quite
+  // intentionally does not expose metadata while the entry is Writing.
+  void recordPipelineSourceArrival(CpuReadyTape::PayloadKind payloadKind,
+                                   CpuReadyTape::SourceRef source,
+                                   CpuReadyAdmissionIdentity identity,
+                                   std::size_t ownedBytes) const noexcept;
   // R-BACK-2.65 / SessionCapacityLease: publish every transition that can
   // reduce the physical residency excluded from a new session lease. Callers
   // hold the queue scheduling mutex, so the generation and the capacity
@@ -970,7 +1079,8 @@ class QueueLifecycleController {
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,
       const std::function<std::optional<QueueSubmissionRecord>(
-          const ReadySlotSnapshot&, const SourcePayloadView&)>& encodeFn,
+          const WorkerOwnedSourceSnapshot&,
+          const GenerationQualifiedSourceBorrow&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
   // TLA+: present-bearing metadata append before CommitPublish.
   bool appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
@@ -1079,6 +1189,9 @@ class QueueLifecycleController {
   void recordNoEnqueueWaitGapToEncodeDequeue();
   void recordNoEnqueueWaitGapToCommandBufferCommit();
   void observeTransition(const QueueTransitionRecord& record) const;
+  void observePipelineOwnerTransition(const QueueTransitionRecord& record,
+                                      QueueLifecycleEvent event) const noexcept;
+  void observePipelinePoisonStop() const noexcept;
   void enqueuePresent(size_t slotIndex,
                       u64 eventSeqId,
                       const SwapDesc& present,

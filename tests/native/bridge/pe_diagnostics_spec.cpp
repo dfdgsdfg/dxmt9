@@ -86,6 +86,7 @@ void testOptionalOwnerAllocationAndConfig() {
       PeDiagnosticsConfig{.threadSampler = true, .threadSamplerHz = 733},
       PeDiagnosticsConfig{.debugLog = true},
       PeDiagnosticsConfig{.scalarSemanticObserver = true},
+      PeDiagnosticsConfig{.copyMaterializationLedger = true},
       PeDiagnosticsConfig{.moduleMap = true, .threadSampler = true},
       PeDiagnosticsConfig{.moduleMap = true, .debugLog = true},
       PeDiagnosticsConfig{.threadSampler = true, .debugLog = true},
@@ -115,6 +116,8 @@ void testOptionalOwnerAllocationAndConfig() {
               diagnostics->config.threadSampler == config.threadSampler &&
               diagnostics->config.scalarSemanticObserver ==
                   config.scalarSemanticObserver &&
+              diagnostics->config.copyMaterializationLedger ==
+                  config.copyMaterializationLedger &&
               diagnostics->config.threadSamplerHz == config.threadSamplerHz,
           "the owner preserves the resolved immutable diagnostic config");
     const bool scopeExpected =
@@ -126,11 +129,29 @@ void testOptionalOwnerAllocationAndConfig() {
               diagnostics->gates.threadSampler == config.threadSampler &&
               diagnostics->gates.debugLog == config.debugLog &&
               diagnostics->gates.scalarSemanticObserver ==
-                  config.scalarSemanticObserver,
+                  config.scalarSemanticObserver &&
+              diagnostics->gates.copyMaterializationLedger ==
+                  config.copyMaterializationLedger,
           "observer-only gates remain independently cached");
     check(static_cast<bool>(diagnostics->scalarSemanticTokens) ==
               config.scalarSemanticObserver,
           "the exact semantic ledger exists only behind its own gate");
+  }
+}
+
+void testCopyMaterializationReportSnapshotValue() {
+  const dxmt9::core::CopyMaterializationSnapshot empty{};
+  check(!dxmt9::core::copyMaterializationSnapshotHasActivity(empty),
+        "empty copy-materialization snapshot is omitted");
+  for (const auto field : {0u, 1u}) {
+    auto snapshot = empty;
+    if (field == 0u) {
+      snapshot.semanticCalls = 1u;
+    } else {
+      snapshot.retainedBytes = 1u;
+    }
+    check(dxmt9::core::copyMaterializationSnapshotHasActivity(snapshot),
+          "copy-materialization activity includes semantic and retained rows");
   }
 }
 
@@ -241,6 +262,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_recorder.hpp");
   const auto deviceCold =
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
+  const auto deviceDiag =
+      readTextFile(root / "src/d3d9/d3d9_pe_device_diag.cpp");
   for (const std::string_view coldOwner : {
            "D3D9DeviceImpl::PrepareStateBlockApplyForChild",
            "D3D9DeviceImpl::CommitStateBlockApplyForChild",
@@ -518,6 +541,16 @@ void testSourceContracts(const std::filesystem::path &root) {
       "Surface::GetDesc branches before the enabled child scope lifetime");
   checkContains(deviceSource, "__attribute__((always_inline)) noexcept",
                 "generic hot entry bodies are forced through the branch");
+  checkContains(deviceDiag,
+                "CopyMaterializationOwner::Pe",
+                "PE copy report reads the PE-owned binary-local ledger");
+  checkNotContains(deviceDiag,
+                   "CopyMaterializationOwner::Unix",
+                   "PE copy report never reads the Unix-owned ledger");
+  checkContains(deviceDiag, "binary=pe owner=pe",
+                "PE copy report rows identify their binary and owner");
+  checkContains(deviceCold, "logPeCopyMaterializationLedger();",
+                "device destruction emits the final PE copy report");
 
   for (const std::string_view removed : {
            "NotifyPeFirstCallAfterPresentForChild",
@@ -666,6 +699,7 @@ int main(int argc, char **argv) {
     check(argc == 2, "project source root argument is present");
     testOptionalOwnerAllocationAndConfig();
     testNullableDiagnosticDispatchAndClock();
+    testCopyMaterializationReportSnapshotValue();
     testStateBlockFaultSelector();
     testSourceContracts(argv[1]);
   } catch (const TestFailure &error) {

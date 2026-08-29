@@ -235,6 +235,10 @@ class FakePipelineQueue {
     return observer_;
   }
 
+  const PipelineLifecycleObserver& ownerObserver() const noexcept {
+    return ownerObserver_;
+  }
+
   const PipelineQueueSnapshot& snapshot() const noexcept { return queue_; }
 
   const std::vector<PipelineLifecycleEvent>& events() const noexcept {
@@ -258,19 +262,23 @@ class FakePipelineQueue {
 
   void completeLocked(FakeSource& source,
                       PipelineDisposition disposition) {
-    const auto before = queue_;
+    const auto beforeCompletion = queue_;
     ++queue_.completedSeq;
     if (source.payloadKind == PipelinePayloadKind::PresentOnly) {
       queue_.presentSeq = source.identity.seqId;
     }
-    --queue_.occupancy;
-    ++queue_.capacityGeneration;
-    publishAdmissionWakeIfNeeded(before);
     if (disposition == PipelineDisposition::DeviceLost) {
       queue_.failed = true;
     }
     source.borrows = 0;
-    emit(source, source.stage, PipelineStage::Reclaimed, disposition, before);
+    emit(source, source.stage, PipelineStage::Completed, disposition,
+         beforeCompletion);
+    const auto beforeReclaim = queue_;
+    --queue_.occupancy;
+    ++queue_.capacityGeneration;
+    publishAdmissionWakeIfNeeded(beforeReclaim);
+    emit(source, source.stage, PipelineStage::Reclaimed, disposition,
+         beforeReclaim);
   }
 
   void emit(FakeSource& source,
@@ -297,11 +305,13 @@ class FakePipelineQueue {
     source.stage = to;
     events_.push_back(event);
     emitPipelineLifecycleEvent(observer_.sink(), event);
+    emitPipelineLifecycleEvent(ownerObserver_.productionSink(), event);
   }
 
   bool omitAdmissionWake_ = false;
   PipelineQueueSnapshot queue_{};
   PipelineLifecycleObserver observer_{};
+  PipelineLifecycleObserver ownerObserver_{};
   std::vector<PipelineLifecycleEvent> events_{};
   std::mutex mutex_{};
   std::condition_variable admissionCv_{};
@@ -406,6 +416,8 @@ void presentOnlyAdmissionWedgeCompletes() {
         "early payload retirement stutters inside GPUInFlight");
   check(queue.events().size() == queue.observer().state().eventCount,
         "every production-owner event reaches the observer once");
+  check(queue.events().size() == queue.ownerObserver().state().ownerEventCount,
+        "owner sink retains each CV-boundary event without allocation");
 }
 
 void deliberateNativeCounterexamples() {
@@ -477,6 +489,33 @@ void deliberateNativeCounterexamples() {
     check(queue.observer().error() == PipelineObservationError::StaleGeneration,
           "stale storage generation is rejected");
   }
+}
+
+void ownerEvidenceOverflowFailsClosed() {
+  PipelineLifecycleObserver observer;
+  const auto sink = observer.productionSink();
+  PipelineLifecycleEvent event{};
+  event.from = PipelineStage::SourceArrival;
+  event.to = PipelineStage::ProducerOwned;
+  event.disposition = PipelineDisposition::Advance;
+  for (std::size_t i = 0; i < kMaxObservedPipelineEvents; ++i) {
+    event.identity = PipelineIdentity{
+        .workId = i + 1u, .sourceOrdinal = i + 1u, .seqId = i + 1u,
+        .generation = i + 1u};
+    emitPipelineLifecycleEvent(sink, event);
+  }
+  check(observer.valid() &&
+            observer.state().ownerEventCount == kMaxObservedPipelineEvents,
+        "owner evidence accepts exactly its fixed event capacity");
+  event.identity = PipelineIdentity{
+      .workId = kMaxObservedPipelineEvents + 1u,
+      .sourceOrdinal = kMaxObservedPipelineEvents + 1u,
+      .seqId = kMaxObservedPipelineEvents + 1u,
+      .generation = kMaxObservedPipelineEvents + 1u};
+  emitPipelineLifecycleEvent(sink, event);
+  check(observer.error() == PipelineObservationError::BoundedObserverOverflow &&
+            observer.state().ownerEventCount == kMaxObservedPipelineEvents,
+        "owner evidence overflow is a stable bounded disposition");
 }
 
 void failureAndShutdownRows() {
@@ -572,6 +611,7 @@ int main() {
     purePredicateTruthTables();
     presentOnlyAdmissionWedgeCompletes();
     deliberateNativeCounterexamples();
+    ownerEvidenceOverflowFailsClosed();
     failureAndShutdownRows();
   } catch (const std::exception& e) {
     std::cerr << "pipeline_lifecycle_observer_spec failed: " << e.what()

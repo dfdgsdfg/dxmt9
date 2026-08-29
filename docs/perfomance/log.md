@@ -4,7 +4,7 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Documentation Log"
 type: root-log
 status: historical
-updated: 2026-07-29
+updated: 2026-08-30
 source: docs/perfomance/index.md; docs/perfomance/overview.md; experiments/output/app-d3d9-3dmark05-release-default-gt{1,2,3}-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-gt2-phase-latency1-systemtrace-20260719; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md
 ---
@@ -15,6 +15,57 @@ Shared root-level log for [overview](overview.md) and
 [overview-3dmark05-gt1](overview-3dmark05-gt1.md). Keep long-lived structure
 changes and root-document maintenance notes here; experiment details belong in
 domain leaf documents or domain `log.md` files.
+
+## 2026-08-30 - Current-head lifecycle/copy attribution retry
+
+The uncommitted working tree based on `c3b69aff` passed the native full
+compile, the five changed-owner native specs, and `dxmt9-verify-tla`. The
+canonical builtin x86_64 unix provider and
+x64/x86 PE targets were then compiled and staged as one ABI-locked set into the
+repository-local `sikarugir-cx-24.0.7` runtime; the provider passed the
+install-name audit. The earlier child-relative missing-fixtures statement was
+false: the non-git workload fixtures were present in the master checkout and
+the retry used them read-only by absolute path. Full build identities and
+measurement evidence are preserved in
+`experiments/output/current-head-attribution-20260830/measurement-retry.md`.
+
+The bounded no-gputrace 3DMark05 GT2 observer-off lane completed with 1,705
+Presents and 28.537 sampled FPS mean (27.257486343 FPS in the GT2 3DR), return
+code 0, and zero GPU command-buffer errors. The observer-on attribution lane
+also completed (1,717 Presents, 28.817 sampled FPS mean; 27.447376251 GT2
+3DR FPS) and emitted the requested PE copy/materialization rows, lifecycle
+span evidence, stage timings, waits, CB/pass shape, and snapshot/cache/uniform
+rows. These are single bounded runs; the small off/on difference is not a
+semantic optimization or promotion claim.
+
+The repository-provided `tool-winctl` helper was built with
+`/Users/dididi/llvm-mingw/bin` (x64 SHA-256
+`9b82cd145c7f09217f34b0e8f81e9145af91c17fea5e4b62f9c530e7b28ac8a7`, 107,520
+bytes; x86 SHA-256
+`6119bf9a88b2aa508de5272017c8c4ce4ff5be2a663136d401b85e5719f1825d`, 96,768
+bytes). The exact child-current 3DMark06 GT2 observer-off lane then used the
+master absolute binary/prefix paths and child Sikarugir/build paths. It
+recorded `status=pass` after the useful interval, with the timeout-allowed
+disposition `returncode=143`, `timed_out=true`, process elapsed `251.258s`,
+and a non-black Firefly Forest screenshot whose benchmark overlay showed
+`19 FPS` at frame `195`; no official `.3dr` was emitted. The renderer recorded
+1,860 encoded/full/valid presents, zero skipped presents, 2,031,373 draws,
+5,042 command buffers, 3,180 sub-command buffers, zero chunk rejects, zero
+no-pipeline draws, and zero shader decoder rejects; the full five staged
+artifact hashes are in `experiments/output/app-d3d9-3dmark06-final-gt2-20260830-r1/result.json`.
+Observer-on was skipped because this timed-out run had no benchmark-owned 3DR
+and the extra lane was not bounded/useful.
+
+STALKER still stages child artifacts and reaches device creation but remains
+blocked before a benchmark result by the exact WSI error
+`layer_acquisition=unavailable ... requires Wine ExtEscape surface protocol or
+an exact legacy-macdrv-symbols runtime`; no FPS or Flush/control-reason
+evidence is claimed. A bounded child-vs-known-good-master Sikarugir comparison
+found byte-identical `winemac.so`, `ntdll.so`, `wine.real`, and
+`wineserver.real`, the same `_macdrv_functions` export, and semantically
+identical wrappers, so no safe configuration-only correction using the
+child-built dxmt9 artifacts exists; preserve the implementation/runtime
+blocker without speculative changes.
 
 ## 2026-07-08
 

@@ -292,10 +292,14 @@ bool prepareOffloadChunk(
   try {
     candidate.recordBlob.resize(blob.size());
     if (!blob.empty()) {
-      dxmt9::core::CopyMaterializationEvent event(
-          dxmt9::core::activeCopyMaterializationLedger(),
-          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-          blob.size());
+      auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Pe);
+      std::optional<dxmt9::core::CopyMaterializationEvent> event;
+      if (ledger) {
+        event.emplace(
+            ledger, dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+            blob.size());
+      }
       std::memcpy(candidate.recordBlob.data(), blob.data(), blob.size());
     }
     candidate.resolvedObjects.resize(envelope.handleCount);
@@ -331,7 +335,8 @@ bool prepareOffloadChunk(
       view.records.begin(), view.records.end(), [](const auto& record) {
         return record.type == D9C_COMMAND_RECORD_PRESENT;
       });
-  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Pe)) {
     ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
                    candidate.recordBlob.size());
   }
@@ -1130,12 +1135,24 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
     dxmt9::perf::countD3D9BufferUnlockDeferredRejected();
     return BufferMutationOffloadResult::RejectedPreEffect;
   }
-  std::unique_ptr<BufferMutationTask> task;
+    std::unique_ptr<BufferMutationTask> task;
   try {
     task = std::make_unique<BufferMutationTask>();
     if (length != 0u) {
+      auto* activeLedger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Pe);
+      std::optional<dxmt9::core::CopyMaterializationEvent> stagingCopy;
+      if (activeLedger) {
+        stagingCopy.emplace(
+            activeLedger,
+            dxmt9::core::CopyMaterializationClass::MutationStaging, length);
+      }
       task->stagedBytes.assign(storage.data() + offset,
                                storage.data() + offset + length);
+      if (activeLedger) {
+        activeLedger->recordMaterialization(
+            dxmt9::core::CopyMaterializationClass::MutationStaging, length);
+      }
     }
   } catch (...) {
     queue.releaseMutation(reservation);

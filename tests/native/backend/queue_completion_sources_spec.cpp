@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
@@ -26,6 +27,8 @@ using dxmt9::core::metalqueue::QueueLifecycleController;
 using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::ReadySlotSnapshot;
 using dxmt9::core::metalqueue::ResolvedPublishedSource;
+using dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow;
+using dxmt9::core::metalqueue::WorkerOwnedSourceSnapshot;
 using dxmt9::core::metalqueue::EncodeSessionSourceList;
 using dxmt9::core::metalqueue::kMaxEncodeSessionSources;
 using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
@@ -41,6 +44,7 @@ using dxmt9::core::ChunkSlotControl;
 using dxmt9::core::ArenaSourcePayloadBuilder;
 using dxmt9::core::CpuReadySourceId;
 using dxmt9::core::CpuReadyStorageRef;
+using dxmt9::core::CpuReadyAdmissionIdentity;
 using dxmt9::core::CpuReadyTape;
 using dxmt9::core::CpuReadyTapeConfig;
 using dxmt9::core::SourcePayloadCapacity;
@@ -702,6 +706,7 @@ struct QueueFixture {
   std::condition_variable finishCv{};
   std::condition_variable presentCompletedCv{};
   bool stop = false;
+  dxmt9::queue::PipelineLifecycleObserver pipelineObserver{};
   QueueLifecycleController controller{};
 
   explicit QueueFixture(
@@ -727,6 +732,7 @@ struct QueueFixture {
         .finishCv = &finishCv,
         .presentCompletedCv = &presentCompletedCv,
         .stop = &stop,
+        .pipelineLifecycleObserver = pipelineObserver.productionSink(),
     });
   }
 
@@ -768,6 +774,86 @@ struct QueueFixture {
     return ready[offset].controlIndex;
   }
 };
+
+// Actual-owner smoke: use QueueLifecycleController's production Tape and CV
+// paths (including publication, dequeue, inline completion, finish wake, and
+// reclaim) rather than the logical predicate-only fixture.  The command
+// buffer is intentionally absent; this is the deterministic native lane.
+void actualOwnerPipelineObserverUsesQueueAndCv() {
+  QueueFixture fixture(CpuReadyTapeConfig::compatibility(1));
+  {
+    std::unique_lock lock(fixture.mutex);
+    fixture.controller.presentAndCommit(lock, 1u, dxmt9::core::SwapDesc{},
+                                        dxmt9::core::Handle{});
+    check(fixture.lastCommittedSeqId == 1u,
+          "actual owner publishes one Present-bearing source");
+    ReadySlotSnapshot source{};
+    check(fixture.controller.dequeueReadySlot(lock, source),
+          "actual owner dequeues through the encode CV path");
+    check(fixture.controller.completeInlineChunk(lock, source.slotIndex,
+                                                 source.seqId),
+          "actual owner completes inline through the reclaim transaction");
+    check(fixture.controller.runFinishIteration(lock),
+          "actual owner drains the finish CV completion and waterline");
+  }
+  check(fixture.pipelineObserver.state().ownerEventCount != 0u,
+        "production sink receives actual QueueLifecycleController owners");
+  const auto& ownerState = fixture.pipelineObserver.state();
+  check(ownerState.ownerEventCount == 8u,
+        "one physical owner emits each lifecycle edge exactly once");
+  constexpr std::array expectedStages{
+      std::pair{dxmt9::queue::PipelineStage::SourceArrival,
+                 dxmt9::queue::PipelineStage::ProducerOwned},
+      std::pair{dxmt9::queue::PipelineStage::ProducerOwned,
+                 dxmt9::queue::PipelineStage::RawOwned},
+      std::pair{dxmt9::queue::PipelineStage::RawOwned,
+                 dxmt9::queue::PipelineStage::ReplayBorrowed},
+      std::pair{dxmt9::queue::PipelineStage::ReplayBorrowed,
+                 dxmt9::queue::PipelineStage::FinalOwned},
+      std::pair{dxmt9::queue::PipelineStage::FinalOwned,
+                 dxmt9::queue::PipelineStage::Encoding},
+      std::pair{dxmt9::queue::PipelineStage::Encoding,
+                 dxmt9::queue::PipelineStage::GPUInFlight},
+      std::pair{dxmt9::queue::PipelineStage::GPUInFlight,
+                 dxmt9::queue::PipelineStage::Completed},
+      std::pair{dxmt9::queue::PipelineStage::Completed,
+                 dxmt9::queue::PipelineStage::Reclaimed},
+  };
+  for (std::size_t i = 0; i < expectedStages.size(); ++i) {
+    check(ownerState.ownerEvents[i].from == expectedStages[i].first &&
+              ownerState.ownerEvents[i].to == expectedStages[i].second,
+          "actual owner event order has no duplicate completion/reclaim edge");
+  }
+  const auto& event = ownerState.ownerEvents[0];
+  check(event.identity.sourceOrdinal == event.identity.seqId &&
+            event.identity.generation != 0u,
+        "actual owner evidence preserves source ordinal, seqId, and generation");
+}
+
+void arenaSourceArrivalUsesOneGenerationQualifiedOwnerEdge() {
+  QueueFixture fixture;
+  const auto source = testSource(2u, 7u);
+  fixture.controller.recordPipelineSourceArrival(
+      CpuReadyTape::PayloadKind::Arena, source,
+      CpuReadyAdmissionIdentity{
+          .rawOrdinal = 101u,
+          .sourceOrdinal = 202u,
+          .seqId = 7u,
+          .buildGeneration = 404u,
+      },
+      128u);
+  const auto& state = fixture.pipelineObserver.state();
+  check(state.ownerEventCount == 1u,
+        "Arena admission records exactly one SourceArrival owner edge");
+  const auto& event = state.ownerEvents[0];
+  check(event.from == dxmt9::queue::PipelineStage::SourceArrival &&
+            event.to == dxmt9::queue::PipelineStage::ProducerOwned &&
+            event.payloadKind == dxmt9::queue::PipelinePayloadKind::Arena &&
+            event.identity.workId == 101u &&
+            event.identity.sourceOrdinal == 202u && event.identity.seqId == 7u &&
+            event.identity.generation == source.storage.generation,
+        "Arena arrival preserves raw/source/seq/storage-generation identity");
+}
 
 void finishPathDrainsSettlementLedgerBeyondCapacity() {
   QueueFixture fixture;
@@ -1122,9 +1208,18 @@ void runEncodeIterationPassesLiveSlotStorage() {
   std::unique_lock lock(fixture.mutex);
   const bool encoded = fixture.controller.runEncodeIteration(
       lock,
-      [&](const ReadySlotSnapshot& source,
-          const dxmt9::core::SourcePayloadView& payload)
+      [&](const dxmt9::core::metalqueue::WorkerOwnedSourceSnapshot& workerSource,
+          const dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow& borrow)
           -> std::optional<QueueSubmissionRecord> {
+        const auto source = workerSource.copyValue();
+        const auto& payload = borrow.payload();
+        check(borrow.valid() && workerSource.valid(),
+              "encode callback receives qualified borrow and owned snapshot");
+        check(borrow.source().id == source.sourceId &&
+                  borrow.source().storage == source.storage &&
+                  borrow.metadata().seqId == source.seqId &&
+                  borrow.seqId() == source.seqId,
+              "borrow carries exact source/storage and sequence generations");
         checkEq(source.slotIndex, 0u,
                 "single-source iteration forwards the dequeued slot index");
         observedSlot = const_cast<ChunkSlot*>(payload.legacyPayload());
@@ -1156,6 +1251,10 @@ void runEncodeIterationPassesLiveSlotStorage() {
   check(!fixture.stop,
         "finish does not poison after an inline source was already reclaimed");
 }
+
+static_assert(!std::is_copy_constructible_v<GenerationQualifiedSourceBorrow>);
+static_assert(!std::is_move_constructible_v<GenerationQualifiedSourceBorrow>);
+static_assert(std::is_trivially_copyable_v<WorkerOwnedSourceSnapshot>);
 
 void postEncodeRetiringControlRepresentsUnlockedReclaim() {
   QueueFixture fixture;
@@ -1205,9 +1304,10 @@ void failedEncodeSubmissionDoesNotRunPostCommitCallbacks() {
   std::unique_lock lock(fixture.mutex);
   const bool encoded = fixture.controller.runEncodeIteration(
       lock,
-      [&](const ReadySlotSnapshot& source,
-          const dxmt9::core::SourcePayloadView&)
+      [&](const dxmt9::core::metalqueue::WorkerOwnedSourceSnapshot& workerSource,
+          const dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow&)
           -> std::optional<QueueSubmissionRecord> {
+        const auto source = workerSource.copyValue();
         represented = source;
         QueueSubmissionRecord record;
         record.testOnlyAllowNullCommandBuffer = true;
@@ -3463,6 +3563,8 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
 int main() {
   try {
     dceChunkLookaheadProgressPolicyIsFailOpen();
+    actualOwnerPipelineObserverUsesQueueAndCv();
+    arenaSourceArrivalUsesOneGenerationQualifiedOwnerEdge();
     mapWaitTargetNeverExceedsCommittedWaterline();
     undrainedSettlementLedgerFailsClosedAtCapacity();
     finishPathDrainsSettlementLedgerBeyondCapacity();

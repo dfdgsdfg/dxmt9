@@ -244,7 +244,7 @@ or performance-promotion claim by itself.
 
 **R-VERIF-2.23** A composed ownership/progress specification must refine the
 runtime stages `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned ->
-Encoding -> GPUInFlight -> Reclaimed` and the
+Encoding -> GPUInFlight -> Completed -> Reclaimed` and the
 `TransactionalChunkSlotAssembler` sub-transaction. It must prove unique owner
 or synchronous borrow at every stage; no borrow escape; reserve/build/commit or
 exact reverse rollback; no publication before complete construction; no legacy

@@ -439,7 +439,8 @@ const char* cpuReadyArenaBeginStopReasonName(
 // replay. Both replay completion and queue teardown release the same list.
 void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
   if (!chunk.recordBlob.empty()) {
-    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
       ledger->release(
           dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
           chunk.recordBlob.size());
@@ -1996,14 +1997,18 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
   ScopedRetainedWrapperRelease retainedRelease(raw);
   bool ledgerPublished = false;
   try {
-    dxmt9::core::CopyMaterializationEvent rawOwnershipCopy(
-        dxmt9::core::activeCopyMaterializationLedger(),
-        dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-        bytes.size());
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    std::optional<dxmt9::core::CopyMaterializationEvent> rawOwnershipCopy;
+    if (ledger) {
+      rawOwnershipCopy.emplace(
+          ledger, dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+          bytes.size());
+    }
     raw.recordBlob.assign(
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
-    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger()) {
+    if (ledger) {
       ledger->retain(
           dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
           raw.recordBlob.size());

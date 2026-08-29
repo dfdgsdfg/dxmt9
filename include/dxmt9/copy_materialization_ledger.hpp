@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 namespace dxmt9::core {
 
@@ -23,8 +24,28 @@ enum class CopyMaterializationClass : std::uint8_t {
   QueueFinalSlotAppend,
   GpuUploadCopy,
   GpuSharedMaterialization,
+  ArenaByteCopy,
+  // Semantic events describe an ownership/materialization boundary without
+  // claiming that bytes moved.  Keep these rows separate from `record()` so
+  // reports do not accidentally count a reservation as a memcpy.
+  MutationStaging,
+  UpScratch,
+  PeSectionAppend,
   Count,
 };
+
+// Registries are binary-local by construction: each image gets its own
+// function-local instance, while the owner axis keeps PE and Unix rows
+// separate even when a native test links both sides into one image.
+enum class CopyMaterializationOwner : std::uint8_t {
+  Pe,
+  Unix,
+};
+
+[[nodiscard]] constexpr const char* copyMaterializationOwnerName(
+    CopyMaterializationOwner owner) noexcept {
+  return owner == CopyMaterializationOwner::Pe ? "pe" : "unix";
+}
 
 [[nodiscard]] constexpr const char* copyMaterializationClassName(
     CopyMaterializationClass materializationClass) noexcept {
@@ -53,6 +74,14 @@ enum class CopyMaterializationClass : std::uint8_t {
     return "copy.gpu.upload";
   case CopyMaterializationClass::GpuSharedMaterialization:
     return "materialize.gpu.shared";
+  case CopyMaterializationClass::ArenaByteCopy:
+    return "copy.arena.bytes";
+  case CopyMaterializationClass::MutationStaging:
+    return "materialize.mutation.staging";
+  case CopyMaterializationClass::UpScratch:
+    return "materialize.up.scratch";
+  case CopyMaterializationClass::PeSectionAppend:
+    return "materialize.pe.section-append";
   case CopyMaterializationClass::Count:
     break;
   }
@@ -81,6 +110,10 @@ copyMaterializationClassification(
   case CopyMaterializationClass::QueueFinalSlotAppend:
   case CopyMaterializationClass::GpuUploadCopy:
   case CopyMaterializationClass::GpuSharedMaterialization:
+  case CopyMaterializationClass::ArenaByteCopy:
+  case CopyMaterializationClass::MutationStaging:
+  case CopyMaterializationClass::UpScratch:
+  case CopyMaterializationClass::PeSectionAppend:
   case CopyMaterializationClass::Count:
     return CopyMaterializationClassification::Necessary;
   }
@@ -109,7 +142,17 @@ struct CopyMaterializationSnapshot {
   std::uint64_t inclusiveNanoseconds = 0u;
   std::uint64_t retainedBytes = 0u;
   std::uint64_t retainedBytesPeak = 0u;
+  std::uint64_t semanticCalls = 0u;
+  std::uint64_t semanticBytes = 0u;
 };
+
+// Report consumers share this pure activity predicate so PE and Unix retain
+// identical row filtering without coupling their logging implementations.
+[[nodiscard]] constexpr bool copyMaterializationSnapshotHasActivity(
+    const CopyMaterializationSnapshot& snapshot) noexcept {
+  return snapshot.calls != 0u || snapshot.semanticCalls != 0u ||
+         snapshot.retainedBytes != 0u;
+}
 
 class CopyMaterializationLedger final {
 public:
@@ -122,6 +165,13 @@ public:
     row.calls.fetch_add(1u, std::memory_order_relaxed);
     row.bytes.fetch_add(bytes, std::memory_order_relaxed);
     row.inclusiveNanoseconds.fetch_add(nanoseconds, std::memory_order_relaxed);
+  }
+
+  void recordMaterialization(CopyMaterializationClass materializationClass,
+                              std::size_t bytes = 0u) noexcept {
+    auto& row = rows_[index(materializationClass)];
+    row.semanticCalls.fetch_add(1u, std::memory_order_relaxed);
+    row.semanticBytes.fetch_add(bytes, std::memory_order_relaxed);
   }
 
   void retain(CopyMaterializationClass materializationClass,
@@ -163,6 +213,8 @@ public:
         .retainedBytes = row.retainedBytes.load(std::memory_order_relaxed),
         .retainedBytesPeak =
             row.retainedBytesPeak.load(std::memory_order_relaxed),
+        .semanticCalls = row.semanticCalls.load(std::memory_order_relaxed),
+        .semanticBytes = row.semanticBytes.load(std::memory_order_relaxed),
     };
   }
 
@@ -173,6 +225,8 @@ private:
     std::atomic<std::uint64_t> inclusiveNanoseconds{0u};
     std::atomic<std::uint64_t> retainedBytes{0u};
     std::atomic<std::uint64_t> retainedBytesPeak{0u};
+    std::atomic<std::uint64_t> semanticCalls{0u};
+    std::atomic<std::uint64_t> semanticBytes{0u};
   };
 
   static constexpr std::size_t index(
@@ -183,29 +237,62 @@ private:
   std::array<Row, kClassCount> rows_{};
 };
 
-// The production hot path pays one cached-null pointer load and branch. The
-// counter storage and clocks exist only while a caller explicitly installs a
-// ledger (normally an experiment or native conservation test).
-// Install/uninstall only at a quiescent process boundary (before replay
-// workers start, or after they join). That lifecycle rule makes the disabled
-// read a plain cached pointer branch rather than an atomic operation.
-inline CopyMaterializationLedger* gCopyMaterializationLedger = nullptr;
+class CopyMaterializationLedgerRegistry final {
+ public:
+  CopyMaterializationLedger& ledger(CopyMaterializationOwner owner) noexcept {
+    return owner == CopyMaterializationOwner::Pe ? pe_ : unix_;
+  }
+
+ private:
+  CopyMaterializationLedger pe_{};
+  CopyMaterializationLedger unix_{};
+};
+
+// Function-local storage remains stable for the lifetime of the binary and
+// cannot be replaced by a second queue/device.  The environment is sampled
+// once, so the disabled path does not touch ledger atomics or clocks.
+[[nodiscard]] inline CopyMaterializationLedgerRegistry&
+copyMaterializationLedgerRegistry() noexcept {
+  static CopyMaterializationLedgerRegistry registry;
+  return registry;
+}
+
+[[nodiscard]] inline bool copyMaterializationLedgerEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_PERF_COPY_MATERIALIZATION_LEDGER");
+    return value && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
+// Native tests may install a deterministic sink for one synchronous scope;
+// production never uses this override. It is checked before the production
+// registry so a disabled process does not construct its atomic rows.
+inline thread_local CopyMaterializationLedger* gCopyMaterializationTestLedger =
+    nullptr;
 
 [[nodiscard]] inline CopyMaterializationLedger*
-activeCopyMaterializationLedger() noexcept {
-  return gCopyMaterializationLedger;
+activeCopyMaterializationLedger(
+    CopyMaterializationOwner owner = CopyMaterializationOwner::Unix) noexcept {
+  if (gCopyMaterializationTestLedger) {
+    return gCopyMaterializationTestLedger;
+  }
+  if (!copyMaterializationLedgerEnabled()) {
+    return nullptr;
+  }
+  return &copyMaterializationLedgerRegistry().ledger(owner);
 }
 
 class ScopedCopyMaterializationLedger final {
 public:
   explicit ScopedCopyMaterializationLedger(
       CopyMaterializationLedger& ledger) noexcept
-      : previous_(gCopyMaterializationLedger) {
-    gCopyMaterializationLedger = &ledger;
+      : previous_(gCopyMaterializationTestLedger) {
+    gCopyMaterializationTestLedger = &ledger;
   }
 
   ~ScopedCopyMaterializationLedger() {
-    gCopyMaterializationLedger = previous_;
+    gCopyMaterializationTestLedger = previous_;
   }
 
   ScopedCopyMaterializationLedger(const ScopedCopyMaterializationLedger&) =

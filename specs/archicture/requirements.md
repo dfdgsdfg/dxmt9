@@ -309,7 +309,7 @@ and perform no counter update beyond one cached-null branch.
 
 **R-ARCH-7.8** Encoder-visible work follows the abstract ownership refinement
 `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->
-GPUInFlight -> Reclaimed`. Every accepted GPU-bearing identity must advance in
+GPUInFlight -> Completed -> Reclaimed`. Every accepted GPU-bearing identity must advance in
 that order, at most once per stage, or take a specified pre-effect rollback or
 zero-GPU-work terminal disposition. `ReplayBorrowed` and `Encoding` are
 synchronous capability states, not owners: neither may be retained by an

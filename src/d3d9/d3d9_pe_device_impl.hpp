@@ -427,6 +427,8 @@ inline PeDiagnosticsConfig dxmt9PeResolvedDiagnosticsConfig() {
         .threadSampler = dxmt9PeThreadSamplerEnabled(),
         .debugLog = dxmt9::util::shouldLog(dxmt9::util::LogLevel::Debug),
         .scalarSemanticObserver = dxmt9PeScalarSemanticObserverEnabled(),
+        .copyMaterializationLedger =
+            dxmt9::core::copyMaterializationLedgerEnabled(),
         .threadSamplerHz = dxmt9PeThreadSamplerHz(),
     };
 }
@@ -2009,7 +2011,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // final line is also emitted unconditionally from the destructor so the
     // last partial interval is never lost. No-op when decimation is off.
     void notePeStatsDecimationPresent();
-
+    void notePeCopyMaterializationPresent();
+    void logPeCopyMaterializationLedger();
     void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes);
 
     void recordDrawIndexedPrimitiveUPCopy(std::uint32_t vertexBytes,
@@ -2944,6 +2947,7 @@ public:
             markPePresentReturnedForCadence();
             notePeStatsDecimationPresent();
             notePeThreadSamplerPresent();
+            notePeCopyMaterializationPresent();
             if (renderTapeCaptureWasActive) {
                 finishRenderTapeCaptureAtPresentBoundary();
             } else if (peCaptureState_) {
