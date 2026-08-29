@@ -72,3 +72,44 @@ runtime. A planned canonical selector must remain absent from those files until
 the runtime honors it. A removed selector must leave the active tables and move
 to a clearly marked retired section. Experiment profiles may pin values for
 reproducibility but must not redefine engine defaults or policy class.
+
+## Default Activation Policy
+
+**R-BACK-42.8** A production optimization that performs workload-dependent
+search, candidate construction, command reordering, draw merge or split, pass
+elision, attachment-lifetime relaxation, or parallel dispatch must default off
+until its expensive work is preceded by a bounded pre-eligibility gate and the
+complete lane proves positive end-to-end frame or throughput benefit on every
+representative workload exercised by its intended default scope. A local CPU,
+GPU-counter, pass-count, or encoder-time reduction alone is insufficient.
+
+**R-BACK-42.9** A GPU-targeted optimization must not become the general default
+when the measured first ceiling is the producer, replay, encode, or presentation
+CPU path. Promotion requires evidence that GPU execution is on the target
+workload's critical path, that the selected GPU mechanism moves whole-frame
+wall time, and that selection or candidate-building CPU does not consume the
+gain. Workload-specific opt-in remains valid when those conditions hold only
+for a bounded workload class.
+
+**R-BACK-42.10** A behavior-preserving hot-path implementation detail may be
+automatic without becoming a provider axis when it only removes redundant
+copies, hashes, bridge crossings, materialization, or cache lookup; has bounded
+storage and work; introduces no new command, pass, completion, resource-lifetime,
+or D3D9-visible ordering; and has deterministic correctness plus local-cost
+evidence. Such an implementation does not need an average-FPS claim, but it
+must retain a focused regression seam while its equivalence proof is incomplete.
+
+**R-BACK-42.11** A default-on optimization must be demoted to opt-in or removed
+when a supported workload demonstrates that its selection, construction,
+validation, storage, or synchronization cost materially exceeds its end-to-end
+benefit. Prior success on another workload and an unchanged GPU counter do not
+override that regression. Demotion must preserve the stable fallback and update
+the provider registry, environment-variable mirror, and owning performance
+evidence together.
+
+**R-BACK-42.12** Do not create a provider selector solely to retain a tiny
+memo, handle carry, copy elision, or other behavior-equivalent cache. Keep the
+implementation unconditional when its invariants and maintenance cost are
+small; otherwise remove it. A rollback selector is justified only by unresolved
+correctness, compatibility, or measurable regression risk, not by the existence
+of a micro-optimization itself.
