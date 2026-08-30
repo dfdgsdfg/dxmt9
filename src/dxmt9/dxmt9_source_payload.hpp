@@ -16,7 +16,193 @@
 #include <type_traits>
 #include <utility>
 
+namespace dxmt9 {
+class CommandQueue;
+}
+
 namespace dxmt9::core {
+
+// Native-only evidence minted by CommandQueue after the payload has been
+// prepared and every resource retain/mark obligation has been discharged.
+// The constructor is private so an assembler cannot be made to look live by a
+// caller that merely knows the value fields; only the queue can mint evidence
+// tied to its active ArenaBuildContext.
+class ArenaLiveTransactionToken final {
+  friend class dxmt9::CommandQueue;
+  friend class ArenaCommitEvidence;
+
+  explicit ArenaLiveTransactionToken(const void* owner) noexcept
+      : owner_(owner) {}
+
+ public:
+  ArenaLiveTransactionToken(const ArenaLiveTransactionToken&) = delete;
+  ArenaLiveTransactionToken& operator=(const ArenaLiveTransactionToken&) = delete;
+  ArenaLiveTransactionToken(ArenaLiveTransactionToken&& other) noexcept
+      : owner_(other.owner_) {
+    other.owner_ = nullptr;
+  }
+  ArenaLiveTransactionToken& operator=(ArenaLiveTransactionToken&& other) noexcept {
+    if (this != &other) {
+      owner_ = other.owner_;
+      other.owner_ = nullptr;
+    }
+    return *this;
+  }
+
+ private:
+  const void* owner_ = nullptr;
+};
+
+class ArenaCommitEvidence final {
+  friend class dxmt9::CommandQueue;
+
+  ArenaCommitEvidence(
+      ArenaLiveTransactionToken&& liveTransaction, std::uint64_t rawOrdinal,
+      std::uint64_t sourceOrdinal, std::uint64_t seqId,
+      std::uint64_t buildGeneration, std::uint64_t sourceGeneration,
+      std::uint64_t storageGeneration, std::uint32_t controlIndex,
+      std::uint32_t firstPage, std::uint32_t pageCount,
+      std::uint32_t segmentIndex, std::uint32_t segmentCount,
+      std::size_t plannedBytes, std::uint64_t resourceCount,
+      std::uint64_t resourceDigest) noexcept
+      : liveTransaction_(liveTransaction.owner_),
+        rawOrdinal_(rawOrdinal),
+        sourceOrdinal_(sourceOrdinal),
+        seqId_(seqId),
+        buildGeneration_(buildGeneration),
+        sourceGeneration_(sourceGeneration),
+        storageGeneration_(storageGeneration),
+        controlIndex_(controlIndex),
+        firstPage_(firstPage),
+        pageCount_(pageCount),
+        segmentIndex_(segmentIndex),
+        segmentCount_(segmentCount),
+        plannedBytes_(plannedBytes),
+        resourceCount_(resourceCount),
+        resourceDigest_(resourceDigest) {
+    liveTransaction.owner_ = nullptr;
+  }
+
+ public:
+  ArenaCommitEvidence(const ArenaCommitEvidence&) = delete;
+  ArenaCommitEvidence& operator=(const ArenaCommitEvidence&) = delete;
+  ArenaCommitEvidence(ArenaCommitEvidence&& other) noexcept
+      : liveTransaction_(other.liveTransaction_),
+        rawOrdinal_(other.rawOrdinal_),
+        sourceOrdinal_(other.sourceOrdinal_),
+        seqId_(other.seqId_),
+        buildGeneration_(other.buildGeneration_),
+        sourceGeneration_(other.sourceGeneration_),
+        storageGeneration_(other.storageGeneration_),
+        controlIndex_(other.controlIndex_),
+        firstPage_(other.firstPage_),
+        pageCount_(other.pageCount_),
+        segmentIndex_(other.segmentIndex_),
+        segmentCount_(other.segmentCount_),
+        plannedBytes_(other.plannedBytes_),
+        resourceCount_(other.resourceCount_),
+        resourceDigest_(other.resourceDigest_) {
+    other.invalidate();
+  }
+  ArenaCommitEvidence& operator=(ArenaCommitEvidence&& other) noexcept {
+    if (this != &other) {
+      liveTransaction_ = other.liveTransaction_;
+      rawOrdinal_ = other.rawOrdinal_;
+      sourceOrdinal_ = other.sourceOrdinal_;
+      seqId_ = other.seqId_;
+      buildGeneration_ = other.buildGeneration_;
+      sourceGeneration_ = other.sourceGeneration_;
+      storageGeneration_ = other.storageGeneration_;
+      controlIndex_ = other.controlIndex_;
+      firstPage_ = other.firstPage_;
+      pageCount_ = other.pageCount_;
+      segmentIndex_ = other.segmentIndex_;
+      segmentCount_ = other.segmentCount_;
+      plannedBytes_ = other.plannedBytes_;
+      resourceCount_ = other.resourceCount_;
+      resourceDigest_ = other.resourceDigest_;
+      other.invalidate();
+    }
+    return *this;
+  }
+
+  bool valid() const noexcept {
+    return liveTransaction_ != nullptr && rawOrdinal_ != 0 &&
+           sourceOrdinal_ != 0 && seqId_ != 0 && buildGeneration_ != 0 &&
+           sourceGeneration_ != 0 && storageGeneration_ != 0 &&
+           controlIndex_ != std::numeric_limits<std::uint32_t>::max() &&
+           firstPage_ != std::numeric_limits<std::uint32_t>::max() &&
+           pageCount_ != 0 && segmentCount_ != 0 &&
+           segmentIndex_ < segmentCount_ && plannedBytes_ != 0;
+  }
+
+  bool matches(const void* liveTransaction, std::uint64_t rawOrdinal,
+               std::uint64_t sourceOrdinal, std::uint64_t seqId,
+               std::uint64_t buildGeneration, std::uint64_t sourceGeneration,
+               std::uint64_t storageGeneration, std::uint32_t controlIndex,
+               std::uint32_t firstPage, std::uint32_t pageCount,
+               std::uint32_t segmentIndex, std::uint32_t segmentCount,
+               std::size_t plannedBytes, std::uint64_t resourceCount,
+               std::uint64_t resourceDigest) const noexcept {
+    return valid() && liveTransaction_ == liveTransaction &&
+           rawOrdinal_ == rawOrdinal && sourceOrdinal_ == sourceOrdinal &&
+           seqId_ == seqId && buildGeneration_ == buildGeneration &&
+           sourceGeneration_ == sourceGeneration &&
+           storageGeneration_ == storageGeneration &&
+           controlIndex_ == controlIndex && firstPage_ == firstPage &&
+           pageCount_ == pageCount && segmentIndex_ == segmentIndex &&
+           segmentCount_ == segmentCount && plannedBytes_ == plannedBytes &&
+           resourceCount_ == resourceCount && resourceDigest_ == resourceDigest;
+  }
+
+  bool matchesBinding(std::uint64_t rawOrdinal, std::uint64_t sourceOrdinal,
+                      std::uint64_t seqId, std::uint64_t buildGeneration,
+                      std::uint64_t sourceGeneration,
+                      std::uint64_t storageGeneration,
+                      std::uint32_t controlIndex, std::uint32_t firstPage,
+                      std::uint32_t pageCount, std::uint32_t segmentIndex,
+                      std::uint32_t segmentCount,
+                      std::size_t plannedBytes) const noexcept {
+    return valid() && rawOrdinal_ == rawOrdinal &&
+           sourceOrdinal_ == sourceOrdinal && seqId_ == seqId &&
+           buildGeneration_ == buildGeneration &&
+           sourceGeneration_ == sourceGeneration &&
+           storageGeneration_ == storageGeneration &&
+           controlIndex_ == controlIndex && firstPage_ == firstPage &&
+           pageCount_ == pageCount && segmentIndex_ == segmentIndex &&
+           segmentCount_ == segmentCount && plannedBytes_ == plannedBytes;
+  }
+
+  std::uint64_t resourceCount() const noexcept { return resourceCount_; }
+  std::uint64_t resourceDigest() const noexcept { return resourceDigest_; }
+
+ private:
+  void invalidate() noexcept {
+    liveTransaction_ = nullptr;
+    rawOrdinal_ = sourceOrdinal_ = seqId_ = buildGeneration_ = 0;
+    sourceGeneration_ = storageGeneration_ = 0;
+    controlIndex_ = firstPage_ = std::numeric_limits<std::uint32_t>::max();
+    pageCount_ = segmentCount_ = 0;
+    segmentIndex_ = 0;
+    plannedBytes_ = resourceCount_ = resourceDigest_ = 0;
+  }
+
+  const void* liveTransaction_ = nullptr;
+  std::uint64_t rawOrdinal_ = 0;
+  std::uint64_t sourceOrdinal_ = 0;
+  std::uint64_t seqId_ = 0;
+  std::uint64_t buildGeneration_ = 0;
+  std::uint64_t sourceGeneration_ = 0;
+  std::uint64_t storageGeneration_ = 0;
+  std::uint32_t controlIndex_ = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t firstPage_ = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t pageCount_ = 0;
+  std::uint32_t segmentIndex_ = 0;
+  std::uint32_t segmentCount_ = 0;
+  std::size_t plannedBytes_ = 0;
+  std::uint64_t resourceCount_ = 0;
+  std::uint64_t resourceDigest_ = 0;
+};
 
 // Fixed-capacity storage over one caller-owned final extent. This container
 // never allocates, relocates, copies, or falls back to another allocator.
@@ -587,6 +773,7 @@ class TransactionalChunkSlotAssembler {
     Empty,
     Reserved,
     Building,
+    Prepared,
     Committed,
     RolledBack,
     Failed,
@@ -599,8 +786,12 @@ class TransactionalChunkSlotAssembler {
   }
 
   ~TransactionalChunkSlotAssembler() {
+    // A queue abort may happen after this assembler commits its local
+    // construction but before CpuReadyTape visibility. In that post-effect
+    // case the detached Tape owner destroys the block before this context is
+    // reset; the Committed state deliberately does not double-destroy it.
     if (state_ == State::Reserved || state_ == State::Building ||
-        state_ == State::Failed) {
+        state_ == State::Prepared || state_ == State::Failed) {
       rollback();
     }
   }
@@ -616,6 +807,14 @@ class TransactionalChunkSlotAssembler {
 
   bool reserve() noexcept;
   bool bindOuter(OuterBinding binding) noexcept;
+  // Publishes the immutable block for validation/planning. This is the only
+  // fallible part of the production transaction after construction.
+  bool prepare() noexcept;
+  // Only CommandQueue can mint the evidence passed here.
+  bool bindCommitEvidence(ArenaCommitEvidence&& evidence) noexcept;
+  // Native value-only fixtures that do not own a queue lease must opt into
+  // this explicitly; production queue code always uses evidence-gated commit.
+  bool commitValueOnlyForTest() noexcept;
   bool commit() noexcept;
   void rollback() noexcept;
 
@@ -634,6 +833,22 @@ class TransactionalChunkSlotAssembler {
   bool good() const noexcept {
     return builder_ && builder_->good() &&
            (state_ == State::Reserved || state_ == State::Building);
+  }
+  bool commitEvidenceMatches(
+      const void* liveTransaction, std::uint64_t rawOrdinal,
+      std::uint64_t sourceOrdinal, std::uint64_t seqId,
+      std::uint64_t buildGeneration, std::uint64_t sourceGeneration,
+      std::uint64_t storageGeneration, std::uint32_t controlIndex,
+      std::uint32_t firstPage, std::uint32_t pageCount,
+      std::uint32_t segmentIndex, std::uint32_t segmentCount,
+      std::size_t plannedBytes, std::uint64_t resourceCount,
+      std::uint64_t resourceDigest) const noexcept {
+    return commitEvidence_.has_value() &&
+           commitEvidence_->matches(
+               liveTransaction, rawOrdinal, sourceOrdinal, seqId,
+               buildGeneration, sourceGeneration, storageGeneration,
+               controlIndex, firstPage, pageCount, segmentIndex, segmentCount,
+               plannedBytes, resourceCount, resourceDigest);
   }
   bool failed() const noexcept { return !good(); }
   std::size_t commandCount() const noexcept { return commandCount_; }
@@ -677,6 +892,7 @@ class TransactionalChunkSlotAssembler {
   std::size_t directRunPayloadOffset_ = 0;
   bool directRunOpen_ = false;
   std::optional<OuterBinding> outerBinding_{};
+  std::optional<ArenaCommitEvidence> commitEvidence_{};
   State state_ = State::Empty;
 };
 

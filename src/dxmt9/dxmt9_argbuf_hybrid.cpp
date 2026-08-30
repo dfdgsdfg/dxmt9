@@ -1,6 +1,7 @@
 #include "dxmt9_argbuf_hybrid.hpp"
 
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9/core.hpp"
@@ -522,6 +523,12 @@ u64 buildAndPointEntryBytes(CommandQueue& queue,
   }();
   if (!reservation) return 0;
   build(std::span<std::byte>(reservation.contents, byteCount));
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    ledger->recordMaterialization(
+        dxmt9::core::CopyMaterializationClass::GpuSharedMaterialization,
+        byteCount);
+  }
   const void* host = static_cast<const void*>(reservation.contents);
   auto doSetBuffer = [&]() {
     recordedSetBuffer(encoderResource, reservation.slice.buffer,

@@ -1,5 +1,6 @@
 #include "dxmt9_transient_resource_arena.hpp"
 
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
@@ -163,6 +164,14 @@ BufferSlice ResourceArena::uploadBuffer(std::span<const std::byte> bytes,
       recordUploadTime();
       return {};
     }
+    // `newBuffer(info)` performs the implicit byte transfer, but its
+    // duration also includes Metal allocation/driver work. Record bytes and
+    // calls without attributing that API latency to copy_ns.
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     bytes.size());
+    }
     perf::countMetalBuffer(static_cast<std::size_t>(info.length));
     {
       WMT::Buffer view{buffer.handle};
@@ -233,7 +242,15 @@ BufferSlice ResourceArena::uploadBuffer(std::span<const std::byte> bytes,
     }
   }
 
-  std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    dxmt9::core::CopyMaterializationEvent uploadEvent(
+        ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+        bytes.size());
+    std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+  } else {
+    std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+  }
   slabAllocations_.push_back(BufferAllocation{
       .offset = offset,
       .size = alignedSize,
@@ -301,6 +318,13 @@ std::vector<BufferSlice> ResourceArena::uploadBufferBatch(
       info.memory.set((void*)bytes.data());
       auto buffer = device_.newBuffer(info);
       if (!buffer) return {};
+      // See the single-upload path: the implicit Metal transfer is counted,
+      // but allocation/driver latency is deliberately excluded from copy_ns.
+      if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+              dxmt9::core::CopyMaterializationOwner::Unix)) {
+        ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                       bytes.size());
+      }
       perf::countMetalBuffer(static_cast<std::size_t>(info.length));
       {
         WMT::Buffer view{buffer.handle};
@@ -341,7 +365,15 @@ std::vector<BufferSlice> ResourceArena::uploadBufferBatch(
         }
       }
     }
-    std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      dxmt9::core::CopyMaterializationEvent uploadEvent(
+          ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+          bytes.size());
+      std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+    } else {
+      std::memcpy(slabContents_ + offset, bytes.data(), bytes.size());
+    }
     slabAllocations_.push_back(BufferAllocation{
         .offset = offset, .size = alignedSize, .seqId = seqId});
     slabCursor_ = offset + alignedSize;

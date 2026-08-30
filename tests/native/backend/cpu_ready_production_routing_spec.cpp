@@ -3,6 +3,7 @@
 #include "device_c_chunk_replay.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/dxmt9_command_queue.hpp"
@@ -25,6 +26,200 @@
 #include <thread>
 #include <vector>
 
+namespace {
+
+void digestBytes(std::uint64_t& hash, const void* data,
+                 std::size_t size) noexcept {
+  constexpr std::uint64_t kPrime = 1099511628211ull;
+  const auto* bytes = static_cast<const std::byte*>(data);
+  for (std::size_t i = 0; i < size; ++i) {
+    hash ^= static_cast<std::uint8_t>(bytes[i]);
+    hash *= kPrime;
+  }
+}
+
+template <typename T>
+void digestValue(std::uint64_t& hash, const T& value) noexcept {
+  digestBytes(hash, &value, sizeof(value));
+}
+
+void digestHandle(std::uint64_t& hash, const dxmt9::core::Handle value) noexcept {
+  digestValue(hash, value.value);
+}
+
+void digestRect(std::uint64_t& hash, const dxmt9::core::Rect& value) noexcept {
+  digestValue(hash, value.left);
+  digestValue(hash, value.top);
+  digestValue(hash, value.right);
+  digestValue(hash, value.bottom);
+}
+
+void digestColor(std::uint64_t& hash,
+                 const dxmt9::core::ColorRGBA& value) noexcept {
+  digestValue(hash, value.r);
+  digestValue(hash, value.g);
+  digestValue(hash, value.b);
+  digestValue(hash, value.a);
+}
+
+void digestRange(std::uint64_t& hash,
+                 const dxmt9::core::DrawPayloadRange& value) noexcept {
+  digestValue(hash, value.offset);
+  digestValue(hash, value.size);
+}
+
+void digestDrawParam(std::uint64_t& hash,
+                     const dxmt9::core::DrawParam& value) noexcept {
+  digestValue(hash, value.primitiveType);
+  digestValue(hash, value.primitiveCount);
+  digestValue(hash, value.startVertex);
+  digestValue(hash, value.baseVertexIndex);
+  digestValue(hash, value.startIndex);
+  digestValue(hash, value.indexType);
+  digestValue(hash, value.indexed);
+  digestValue(hash, value.instanceCount);
+  digestRange(hash, value.userVertexRange);
+  digestRange(hash, value.userIndexRange);
+  digestRange(hash, value.bindingOverrideRange);
+  digestRange(hash, value.bindingSnapshotRange);
+  digestValue(hash, value.uniformHandle.index);
+  digestValue(hash, value.uniformHandle.generation);
+  digestValue(hash, value.uniformHandle.hash);
+}
+
+std::uint64_t effectivePayloadDigest(
+    const dxmt9::core::SourcePayloadView& payload) noexcept {
+  std::uint64_t hash = 1469598103934665603ull;
+  digestValue(hash, payload.commandCount());
+  for (std::size_t index = 0; index < payload.commandCount(); ++index) {
+    const auto command = payload.commandAt(index).command;
+    digestValue(hash, command.kind);
+    switch (command.kind) {
+    case dxmt9::core::MetalCommandKind::DrawRun:
+      if (command.drawRunRecord) {
+        const auto& record = *command.drawRunRecord;
+        digestValue(hash, record.stateIndex);
+        digestValue(hash, record.firstParam);
+        digestValue(hash, record.paramCount);
+        digestValue(hash, record.payloadOffset);
+        digestValue(hash, record.payloadSize);
+        digestValue(hash, record.uniformHandle.index);
+        digestValue(hash, record.uniformHandle.generation);
+        digestValue(hash, record.uniformHandle.hash);
+        digestValue(hash, record.invariant.viewportScissorHash);
+        digestValue(hash, record.invariant.runStableBindingHash);
+        digestValue(hash, record.invariant.streamMask);
+        digestValue(hash, record.invariant.textureMask);
+        digestValue(hash, record.invariant.samplerStateMask);
+      }
+      if (command.drawPsoSubview) {
+        const auto& pso = *command.drawPsoSubview;
+        digestValue(hash, pso.hasShaderContext);
+        digestValue(hash, pso.vertexShaderHash);
+        digestValue(hash, pso.pixelShaderHash);
+        digestValue(hash, pso.vertexDeclHash);
+        digestValue(hash, pso.renderStateHash);
+        digestValue(hash, pso.textureMask);
+        digestValue(hash, pso.samplerStateMask);
+        digestValue(hash, pso.renderTargetMask);
+        for (const auto handle : pso.colorAttachmentHandles) digestHandle(hash, handle);
+        digestHandle(hash, pso.depthStencilHandle);
+      }
+      if (command.drawState.hot) {
+        const auto& hot = *command.drawState.hot;
+        digestValue(hash, hot.key.renderStateHash);
+        digestValue(hash, hot.streamMask);
+        digestValue(hash, hot.textureMask);
+        digestValue(hash, hot.renderTargetMask);
+        digestHandle(hash, hot.indexBuffer);
+        for (const auto handle : hot.streamBuffers) digestHandle(hash, handle);
+        for (const auto handle : hot.textures) digestHandle(hash, handle);
+      }
+      for (const auto& param : command.drawParams) digestDrawParam(hash, param);
+      digestBytes(hash, command.drawPayloadBytes.data(),
+                  command.drawPayloadBytes.size_bytes());
+      break;
+    case dxmt9::core::MetalCommandKind::Clear:
+      if (command.clear) {
+        digestValue(hash, command.clear->clearColor);
+        digestValue(hash, command.clear->clearDepth);
+        digestValue(hash, command.clear->clearStencil);
+        digestColor(hash, command.clear->color);
+        digestValue(hash, command.clear->depth);
+        digestValue(hash, command.clear->stencil);
+        for (const auto& rect : command.clear->rects) digestRect(hash, rect);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::SurfaceCopy:
+      if (command.surfaceCopy) {
+        const auto& copy = *command.surfaceCopy;
+        digestHandle(hash, copy.source);
+        digestHandle(hash, copy.destination);
+        digestRect(hash, copy.sourceRect);
+        digestRect(hash, copy.destinationRect);
+        digestValue(hash, copy.sourceLevel);
+        digestValue(hash, copy.destinationLevel);
+        digestValue(hash, copy.linear);
+        digestValue(hash, copy.sourceSampleCount);
+        digestValue(hash, copy.destinationSampleCount);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::StretchRect:
+      if (command.stretchRect) {
+        const auto& stretch = *command.stretchRect;
+        digestHandle(hash, stretch.source);
+        digestHandle(hash, stretch.destination);
+        digestRect(hash, stretch.sourceRect);
+        digestRect(hash, stretch.destinationRect);
+        digestValue(hash, stretch.linear);
+        digestValue(hash, stretch.sourceSampleCount);
+        digestValue(hash, stretch.destinationSampleCount);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::Readback:
+      if (command.readback) {
+        const auto& readback = *command.readback;
+        digestHandle(hash, readback.source);
+        digestHandle(hash, readback.destination);
+        digestRect(hash, readback.sourceRect);
+        digestValue(hash, readback.sourceLevel);
+        digestValue(hash, readback.sourceSampleCount);
+        digestValue(hash, readback.destinationSampleCount);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::ColorFill:
+      if (command.colorFill) {
+        const auto& fill = *command.colorFill;
+        digestHandle(hash, fill.destination);
+        digestRect(hash, fill.rect);
+        digestColor(hash, fill.color);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::DepthResolve:
+      if (command.depthResolve) {
+        const auto& resolve = *command.depthResolve;
+        digestHandle(hash, resolve.msaaDepth);
+        digestHandle(hash, resolve.intzDest);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::GenerateMipmaps:
+      if (command.generateMipmaps) {
+        digestHandle(hash, command.generateMipmaps->texture);
+      }
+      break;
+    case dxmt9::core::MetalCommandKind::Present:
+      if (command.present) {
+        digestValue(hash, command.present->presentSource.value);
+        digestValue(hash, command.present->present.presentId.value);
+      }
+      break;
+    }
+  }
+  return hash;
+}
+
+}  // namespace
+
 namespace dxmt9 {
 
 struct CommandQueueArenaLeaseTestAccess {
@@ -32,11 +227,15 @@ struct CommandQueueArenaLeaseTestAccess {
     bool dequeued = false;
     bool arena = false;
     bool clear = false;
+    bool hasPresent = false;
     bool finalPresent = false;
     bool submitted = false;
     bool completed = false;
     bool reclaimed = false;
     std::uint64_t seqId = 0;
+    std::uint64_t rawOrdinal = 0;
+    std::uint64_t sourceOrdinal = 0;
+    std::uint64_t effectiveDigest = 0;
     std::size_t commandCount = 0;
     std::size_t arenaSegmentCount = 0;
     core::Handle presentSource{};
@@ -70,6 +269,34 @@ struct CommandQueueArenaLeaseTestAccess {
   static void forceNextPostSemanticPublishFailure(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = true;
+  }
+
+  static void forceNextCapacityFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaCapacityFailure_ = true;
+  }
+
+  static void forceNextValidationFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaValidationFailure_ = true;
+  }
+
+  static void forceNextResourceRetainFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaResourceRetainFailure_ = true;
+  }
+
+  static void forceNextPublicationFailure(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyForceNextCpuReadyArenaPublicationFailure_ = true;
+  }
+
+  static void forceNextCompletionFailure(CommandQueue& queue) {
+    queue.queueLifecycle_.forceNextCompletionFailureForTest();
+  }
+
+  static std::size_t pendingCompletionCount(CommandQueue& queue) {
+    return queue.queueLifecycle_.pendingCompletionCountForTest();
   }
 
   static CommandQueue::CpuReadyArenaFailureSnapshot takeFailure(
@@ -108,10 +335,16 @@ struct CommandQueueArenaLeaseTestAccess {
                      resolved.slot == nullptr;
       result.commandCount = resolved.payload.commandCount();
       result.arenaSegmentCount = resolved.payload.arenaSegmentCount();
+      result.rawOrdinal = resolved.metadata.rawOrdinal;
+      result.sourceOrdinal = resolved.metadata.sourceOrdinal;
+      result.effectiveDigest = effectivePayloadDigest(resolved.payload);
       result.clear = result.arena && resolved.payload.commandCount() == 1u &&
                      resolved.payload.commandAt(0).kind() ==
                          core::MetalCommandKind::Clear;
       result.finalPresent = result.arena && result.commandCount != 0 &&
+          resolved.payload.commandAt(result.commandCount - 1u).kind() ==
+              core::MetalCommandKind::Present;
+      result.hasPresent = result.commandCount != 0 &&
           resolved.payload.commandAt(result.commandCount - 1u).kind() ==
               core::MetalCommandKind::Present;
       if (result.finalPresent) {
@@ -257,6 +490,15 @@ WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
   return fixture;
 }
 
+void retainOracleObject(std::uint32_t kind, void* object) noexcept {
+  if (!object) return;
+  if (kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+    dxmt9c_buffer_addref(static_cast<D9CBuffer*>(object));
+  } else if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+    dxmt9c_surface_addref(static_cast<D9CSurface*>(object));
+  }
+}
+
 RecordSpec clearRecord(std::uint32_t rectCount = 0) {
   const D9CCommandChunkWireClear clear{
       .flags = 1u,
@@ -379,14 +621,47 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
   };
 }
 
+RecordSpec stretchRectRecord(const D9CWireObjectIdentity& source,
+                             const D9CWireObjectIdentity& destination) {
+  const D9CCommandChunkWireStretchRect fixed{
+      .srcHandleIndex = 0u,
+      .dstHandleIndex = 1u,
+      .hasSrcRect = 1u,
+      .hasDstRect = 1u,
+      .srcRect = {.left = 0, .top = 0, .right = 8, .bottom = 8},
+      .dstRect = {.left = 0, .top = 0, .right = 8, .bottom = 8},
+  };
+  return {
+      .type = D9C_COMMAND_RECORD_STRETCH_RECT,
+      .payload = bytesOf(fixed),
+      .handles = {dxmt9::d3d9::wireHandleEntry(source),
+                  dxmt9::d3d9::wireHandleEntry(destination)},
+  };
+}
+
+RecordSpec readbackRecord(const D9CWireObjectIdentity& source,
+                          const D9CWireObjectIdentity& destination) {
+  const D9CCommandChunkWireReadback fixed{
+      .srcHandleIndex = 0u,
+      .dstHandleIndex = 1u,
+  };
+  return {
+      .type = D9C_COMMAND_RECORD_READBACK,
+      .payload = bytesOf(fixed),
+      .handles = {dxmt9::d3d9::wireHandleEntry(source),
+                  dxmt9::d3d9::wireHandleEntry(destination)},
+  };
+}
+
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                       std::uint64_t rawOrdinal,
-                                      bool captureIdentity = false) {
-  dxmt9::d3d9::WireObjectRegistry registry;
+                                      bool captureIdentity = false,
+                                      dxmt9::d3d9::WireObjectRegistry* registryOverride = nullptr) {
+  dxmt9::d3d9::WireObjectRegistry localRegistry;
+  auto& registry = registryOverride ? *registryOverride : localRegistry;
   dxmt9::d3d9::RawCommandChunk raw;
   const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
-      fixture.bytes, fixture.envelope, registry,
-      [](std::uint32_t, void*) noexcept {}, raw);
+      fixture.bytes, fixture.envelope, registry, retainOracleObject, raw);
   check(prepared, "production raw chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
   raw.cpuReadyTapePlanningEnabled = true;
@@ -710,6 +985,10 @@ void providerResolvedEntryRoutesExistingClearPresent() {
   const std::array records{clearRecord(), presentRecord()};
   const auto wire = makeWireFixture(records);
   const auto before = wire.bytes;
+  dxmt9::core::CopyMaterializationLedger peLedger;
+  dxmt9::core::CopyMaterializationLedger unixLedger;
+  dxmt9::core::ScopedCopyMaterializationLedger observeUnix(
+      dxmt9::core::CopyMaterializationOwner::Unix, unixLedger);
   const auto hr = dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
       fixture.cDevice.get(), wire.bytes, wire.envelope, {});
   check(hr == D3D_OK && fixture.routing->clearCalls == 1 &&
@@ -717,6 +996,13 @@ void providerResolvedEntryRoutesExistingClearPresent() {
         "provider entry must route Clear and Present through DeviceReplaySink");
   check(wire.bytes == before,
         "provider entry must not rewrite canonical command bytes");
+  const auto unixRaw = unixLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  const auto peRaw = peLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  check(unixRaw.calls == 1u && unixRaw.bytes == wire.bytes.size() &&
+            peRaw.calls == 0u && peRaw.bytes == 0u,
+        "provider replay routes bridge raw ownership to Unix only");
 }
 
 void oversizeSegmentedPresentTakesOneLegacyRollbackSource() {
@@ -829,6 +1115,192 @@ void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {
             completion.seqId == 1u,
         "resource-bearing Direct source must complete and reclaim by its "
         "published arena identity");
+}
+
+void sameRawLegacyAndDirectProductionOracle() {
+  RuntimeFixture fixture;
+  auto* source = dxmt9c_device_create_render_target(
+      fixture.cDevice.get(), 16u, 16u, 21u, 0u, 0u, 0u, nullptr);
+  auto* destination = dxmt9c_device_create_render_target(
+      fixture.cDevice.get(), 16u, 16u, 21u, 0u, 0u, 0u, nullptr);
+  check(source != nullptr && destination != nullptr,
+        "same-raw oracle surfaces must construct");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto sourceIdentity =
+      registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE, source);
+  const auto destinationIdentity =
+      registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE, destination);
+  check(sourceIdentity.objectId != 0u && destinationIdentity.objectId != 0u,
+        "same-raw oracle must register both surface identities");
+  const std::array records{
+      clearRecord(), stretchRectRecord(sourceIdentity, destinationIdentity),
+      presentRecord()};
+  const auto wire = makeWireFixture(records);
+
+  // Both lanes start from independent RawOwned wrappers over the exact same
+  // immutable validated bytes; only the routing disposition differs.
+  auto direct = makeRaw(wire, 61u, false, &registry);
+  auto legacy = makeRaw(wire, 61u, false, &registry);
+  const std::array resources{
+      ChunkHandleEntry{.kind = ChunkHandleKind::Surface,
+                       .handle = source->obj->handle()},
+      ChunkHandleEntry{.kind = ChunkHandleKind::Surface,
+                       .handle = destination->obj->handle()}};
+  direct.resourceEntries.assign(resources.begin(), resources.end());
+  legacy.resourceEntries.assign(resources.begin(), resources.end());
+  legacy.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), direct) == D3D_OK,
+        "same-raw Direct oracle must replay successfully");
+  const auto directCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacy) == D3D_OK,
+        "same-raw Legacy oracle must replay successfully");
+  const auto legacyCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+
+  check(directCompletion.dequeued && directCompletion.arena &&
+            directCompletion.submitted && directCompletion.completed &&
+            directCompletion.reclaimed &&
+            legacyCompletion.dequeued && !legacyCompletion.arena &&
+            legacyCompletion.submitted && legacyCompletion.completed &&
+            legacyCompletion.reclaimed,
+        "same-raw lanes must both complete and reclaim their source");
+  check(directCompletion.rawOrdinal == legacyCompletion.rawOrdinal &&
+            directCompletion.rawOrdinal == 61u &&
+            directCompletion.sourceOrdinal == directCompletion.seqId &&
+            legacyCompletion.sourceOrdinal == legacyCompletion.seqId &&
+            directCompletion.sourceOrdinal - directCompletion.seqId ==
+                legacyCompletion.sourceOrdinal - legacyCompletion.seqId &&
+            directCompletion.commandCount == legacyCompletion.commandCount &&
+            directCompletion.effectiveDigest ==
+                legacyCompletion.effectiveDigest &&
+            directCompletion.hasPresent && legacyCompletion.hasPresent,
+        "same-raw lanes must preserve normalized ordinals, command layout, "
+        "payload bytes, and Present barrier");
+  const auto duplicateCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(!duplicateCompletion.dequeued,
+        "a completed source must reject a duplicate completion consume");
+  check(wire.bytes == makeWireFixture(records).bytes &&
+            direct.resourceEntries.size() == legacy.resourceEntries.size() &&
+            direct.resourceEntries.size() == 2u &&
+            direct.resourceEntries[0].kind == ChunkHandleKind::Surface &&
+            direct.resourceEntries[0].handle ==
+                legacy.resourceEntries[0].handle &&
+            direct.resourceEntries[1].handle ==
+                legacy.resourceEntries[1].handle &&
+            fixture.routing->legacyMarkCalls == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+                fixture.routing->queue_) == 0u,
+        "same-raw lanes must retain the exact resource identity through the "
+        "Direct/Legacy mark paths and release all Tape residency");
+
+  // Readback is a synchronous observation and therefore intentionally cannot
+  // be a Direct-Arena child. Keep it in the same production oracle as an
+  // explicit barrier disposition over the same registered resource identities
+  // so the differential does not accidentally claim an impossible lane.
+  const std::array barrierRecords{
+      clearRecord(), stretchRectRecord(sourceIdentity, destinationIdentity),
+      readbackRecord(sourceIdentity, destinationIdentity), presentRecord()};
+  const auto barrierWire = makeWireFixture(barrierRecords);
+  dxmt9::d3d9::ImportedChunkView barrierImported;
+  check(validateCommandChunk(barrierWire.bytes, barrierWire.envelope,
+                             &barrierImported)
+            .valid(),
+        "same-raw Readback barrier fixture must validate");
+  const auto barrierPlan = dxmt9::d3d9::planCpuReadyChunk(barrierImported, 61u);
+  check(barrierPlan.containsOrderedControls &&
+            barrierPlan.lane == dxmt9::d3d9::ReplayLane::Inline &&
+            barrierPlan.reason == dxmt9::d3d9::ReplayReason::Readback,
+        "same-raw Readback must retain its synchronous Inline barrier");
+  dxmt9::d3d9::releaseRetainedWrappers(direct);
+  dxmt9::d3d9::releaseRetainedWrappers(legacy);
+  dxmt9c_surface_release(source);
+  dxmt9c_surface_release(destination);
+}
+
+void transactionalArenaFailureInjectionDisposition() {
+  {
+    RuntimeFixture fixture;
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1u;
+    capacity.clearRecords = 1u;
+    const auto segment = makeSourcePayloadLayout(
+        capacity, fixture.routing->queue_.cpuReadyArenaPlanLimits().pageSize,
+        fixture.routing->queue_.cpuReadyArenaPlanLimits().maxPagesPerSource);
+    check(segment.has_value(), "capacity injection layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(
+        segments, fixture.routing->queue_.cpuReadyArenaPlanLimits().pageSize,
+        fixture.routing->queue_.cpuReadyArenaPlanLimits().maxPagesPerSource);
+    check(layout.has_value(), "capacity injection source layout must build");
+    dxmt9::CommandQueueArenaLeaseTestAccess::forceNextCapacityFailure(
+        fixture.routing->queue_);
+    const auto begin = fixture.routing->queue_.beginCpuReadyArenaSource(
+        70u, *layout);
+    check(begin.status ==
+              dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure,
+          "capacity injection must deterministically report pressure");
+  }
+  {
+    RuntimeFixture fixture;
+    const std::array records{clearRecord()};
+    auto raw = makeRaw(makeWireFixture(records), 71u);
+    dxmt9::CommandQueueArenaLeaseTestAccess::forceNextValidationFailure(
+        fixture.routing->queue_);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
+              fixture.routing->queue_.cpuReadyArenaPoisoned() &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                  fixture.routing->queue_) == 0u,
+          "validation injection must fail-stop before Ready publication");
+  }
+  {
+    RuntimeFixture fixture;
+    const std::array records{clearRecord()};
+    auto raw = makeRaw(makeWireFixture(records), 72u);
+    dxmt9::CommandQueueArenaLeaseTestAccess::forceNextResourceRetainFailure(
+        fixture.routing->queue_);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
+              fixture.routing->queue_.cpuReadyArenaPoisoned() &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                  fixture.routing->queue_) == 0u,
+          "resource-retain injection must fail-stop after marks without Ready");
+  }
+  {
+    RuntimeFixture fixture;
+    const std::array records{clearRecord()};
+    auto raw = makeRaw(makeWireFixture(records), 73u);
+    dxmt9::CommandQueueArenaLeaseTestAccess::forceNextPublicationFailure(
+        fixture.routing->queue_);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
+              fixture.routing->queue_.cpuReadyArenaPoisoned() &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                  fixture.routing->queue_) == 0u,
+          "publication injection must fail-stop after ownership binding");
+  }
+  {
+    RuntimeFixture fixture;
+    const std::array records{clearRecord()};
+    auto raw = makeRaw(makeWireFixture(records), 74u);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+          "completion injection setup must publish a source");
+    dxmt9::CommandQueueArenaLeaseTestAccess::forceNextCompletionFailure(
+        fixture.routing->queue_);
+    const auto completion =
+        dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+            fixture.routing->queue_);
+    check(completion.dequeued && completion.submitted &&
+              !completion.completed && !completion.reclaimed &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+                  fixture.routing->queue_) == 0u &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+                  fixture.routing->queue_) == 1u,
+          "completion injection must consume its owner and fail-stop before "
+          "waterline/reclaim");
+  }
 }
 
 void stateOnlyRawMutatesWithoutTicket() {
@@ -1081,6 +1553,8 @@ int main() {
     providerResolvedEntryRoutesExistingClearPresent();
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
+    sameRawLegacyAndDirectProductionOracle();
+    transactionalArenaFailureInjectionDisposition();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();
     batchBuilderFailureRetriesCompleteEventSerialExactlyOnce();

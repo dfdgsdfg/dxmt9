@@ -709,52 +709,58 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
       [this] {
         auto encodeSingleSource = [this](
                                           const core::metalqueue::WorkerOwnedSourceSnapshot& workerSource,
-                                          const core::metalqueue::GenerationQualifiedSourceBorrow& borrow) {
+                                          const core::metalqueue::GenerationQualifiedSourceBorrow& borrow)
+            -> std::optional<core::metalqueue::QueueSubmissionRecord> {
               const auto source = workerSource.copyValue();
-              const auto& payload = borrow.payload();
-              const auto* legacySlot = payload.legacyPayload();
-              if (!legacySlot) {
-                auto ctx = makeEncodeContext();
-                encoders::EncodeChunkOptions options{};
-                options.partitionExecutionMode =
-                    renderPartitionConfig_.resolved;
-                options.partitionSource = core::CpuReadyTape::SourceRef{
-                    .id = source.sourceId,
-                    .storage = source.storage,
-                };
-                return backend_->onSourceReady(
-                    ctx, source.slotIndex, payload, source.seqId,
-                    std::move(options));
-              }
-              auto& slot = *const_cast<core::ChunkSlot*>(legacySlot);
-              const std::size_t slotIndex = source.slotIndex;
-              traceEncodeFnStage("entry", slotIndex, slot);
-              if (encodeSlotPsoPrefetchEnabled() &&
-                  !slot.prefetchedPipelinesSealed()) {
-                traceEncodeFnStage("before-pso-prefetch", slotIndex, slot);
-                PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
-                prefetchSlotPipelines(slot);
-                traceEncodeFnStage("after-pso-prefetch", slotIndex, slot);
-              }
-              traceEncodeFnStage("before-make-context", slotIndex, slot);
-              auto ctx = makeEncodeContext();
-              traceEncodeFnStage("after-make-context", slotIndex, slot);
-              traceEncodeFnStage("before-backend-onChunkReady", slotIndex, slot);
-              encoders::EncodeChunkOptions options{};
-              options.partitionExecutionMode =
-                  renderPartitionConfig_.resolved;
-              options.partitionSource = core::CpuReadyTape::SourceRef{
-                  .id = source.sourceId,
-                  .storage = source.storage,
-              };
-              auto submission = backend_->onChunkReady(
-                  ctx, slotIndex, slot, std::move(options));
-              traceEncodeFnStage(submission.has_value()
-                                     ? "after-backend-onChunkReady-submission"
-                                     : "after-backend-onChunkReady-inline",
-                                 slotIndex,
-                                 slot);
-              return submission;
+              std::optional<core::metalqueue::QueueSubmissionRecord> result;
+              const bool visited = borrow.visitPayload(
+                  [&](const core::metalqueue::SynchronousSourcePayloadBorrow&
+                          payloadBorrow) {
+                    const auto payload = payloadBorrow.checkedView();
+                    const auto* legacySlot = payload.legacyPayload();
+                    if (!legacySlot) {
+                      auto ctx = makeEncodeContext();
+                      encoders::EncodeChunkOptions options{};
+                      options.partitionExecutionMode =
+                          renderPartitionConfig_.resolved;
+                      options.partitionSource = core::CpuReadyTape::SourceRef{
+                          .id = source.sourceId,
+                          .storage = source.storage,
+                      };
+                      result = backend_->onSourceReady(
+                          ctx, source.slotIndex, payload, source.seqId,
+                          std::move(options));
+                      return;
+                    }
+                    auto& slot = *const_cast<core::ChunkSlot*>(legacySlot);
+                    const std::size_t slotIndex = source.slotIndex;
+                    traceEncodeFnStage("entry", slotIndex, slot);
+                    if (encodeSlotPsoPrefetchEnabled() &&
+                        !slot.prefetchedPipelinesSealed()) {
+                      traceEncodeFnStage("before-pso-prefetch", slotIndex, slot);
+                      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+                      prefetchSlotPipelines(slot);
+                      traceEncodeFnStage("after-pso-prefetch", slotIndex, slot);
+                    }
+                    traceEncodeFnStage("before-make-context", slotIndex, slot);
+                    auto ctx = makeEncodeContext();
+                    traceEncodeFnStage("after-make-context", slotIndex, slot);
+                    traceEncodeFnStage("before-backend-onChunkReady", slotIndex, slot);
+                    encoders::EncodeChunkOptions options{};
+                    options.partitionExecutionMode =
+                        renderPartitionConfig_.resolved;
+                    options.partitionSource = core::CpuReadyTape::SourceRef{
+                        .id = source.sourceId,
+                        .storage = source.storage,
+                    };
+                    result = backend_->onChunkReady(
+                        ctx, slotIndex, slot, std::move(options));
+                    traceEncodeFnStage(result.has_value()
+                                           ? "after-backend-onChunkReady-submission"
+                                           : "after-backend-onChunkReady-inline",
+                                       slotIndex, slot);
+                  });
+              return visited ? std::move(result) : std::nullopt;
             };
         if (cpuReadySessionCoordinatorSelected()) {
           runCpuReadySessionEncodeLoop(
@@ -1932,6 +1938,13 @@ CommandQueue::~CommandQueue() {
   if (threadsStarted_) {
     stopThreads();
   }
+  // The periodic rows are cumulative.  Emit only a non-empty tail so an
+  // exact 60-present boundary is not reported twice (once periodically and
+  // again during destruction).
+  if (copyMaterializationReportPresents_ != 0u &&
+      copyMaterializationReportPresents_ % 60u != 0u) {
+    emitCopyMaterializationReport();
+  }
   // Archive persist lives on dxmt9::shaders::Archive's dtor — not here.
 }
 
@@ -2872,6 +2885,41 @@ void markArenaSourceResources(resources::Pool& pool,
                                 });
   }
 }
+
+struct ArenaResourceRetainDigest {
+  // Pool mark*Use is the runtime's retain operation: it raises the
+  // seq-qualified last-use watermark that gates destruction/recycling. The
+  // digest is minted only after those calls and is checked against the exact
+  // closure replayed by the mark loop; it is not treated as an independent
+  // ownership mechanism.
+  std::uint64_t count = 0;
+  std::uint64_t hash = 1469598103934665603ull;
+
+  void add(core::ChunkHandleEntry entry) noexcept {
+    constexpr std::uint64_t kPrime = 1099511628211ull;
+    const auto mix = [&](std::uint64_t value) noexcept {
+      hash ^= value;
+      hash *= kPrime;
+    };
+    mix(static_cast<std::uint64_t>(entry.kind));
+    mix(entry.handle.value);
+    ++count;
+  }
+
+  void add(std::span<const core::ChunkHandleEntry> entries) noexcept {
+    for (const auto entry : entries) add(entry);
+  }
+
+  void add(const core::SourcePayloadView& payload) noexcept {
+    for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+      visitSourceCommandResources(
+          payload.commandAt(i),
+          [&](const core::SourceCommandResourceRef& resource) {
+            add(resource.entry);
+          });
+    }
+  }
+};
 
 bool validateArenaDrawAdmissionSnapshots(
     const resources::Pool& pool,
@@ -3938,6 +3986,10 @@ CommandQueue::beginCpuReadyArenaSource(
   // single "hold" duration would not be meaningful.
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_source", /*skipHold=*/true);
+  if (testOnlyForceNextCpuReadyArenaCapacityFailure_) {
+    testOnlyForceNextCpuReadyArenaCapacityFailure_ = false;
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
   if (stop_) {
     return {.status = CpuReadyArenaBeginStatus::Stopped,
             .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
@@ -4080,6 +4132,10 @@ CommandQueue::beginCpuReadyArenaSources(
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
       qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
+  if (testOnlyForceNextCpuReadyArenaCapacityFailure_) {
+    testOnlyForceNextCpuReadyArenaCapacityFailure_ = false;
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
   if (stop_) {
     return {.status = CpuReadyArenaBeginStatus::Stopped,
             .stopReason = CpuReadyArenaBeginStopReason::QueueAlreadyStopped};
@@ -4831,7 +4887,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
     *captureIdentity = {};
   }
   for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
-    if (!context->assemblers[i] || !context->assemblers[i]->commit()) {
+    if (!context->assemblers[i] || !context->assemblers[i]->prepare()) {
       arenaBuildPoisoned_.store(true, std::memory_order_release);
       abortCpuReadyArenaSource(ticket, controlIndex);
       return false;
@@ -4986,8 +5042,16 @@ bool CommandQueue::publishCpuReadyArenaSource(
   for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
     const core::SourcePayloadView payloadView(
         *context->reservation.arenaPayloads[i]);
+    if (testOnlyForceNextCpuReadyArenaValidationFailure_) {
+      testOnlyForceNextCpuReadyArenaValidationFailure_ = false;
+      context->noteFailure(CpuReadyArenaFailureClass::Validation, 0u, i);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
     if (!payloadView.valid() ||
         !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
+      context->noteFailure(CpuReadyArenaFailureClass::Validation, 0u, i);
       arenaBuildPoisoned_.store(true, std::memory_order_release);
       abortCpuReadyArenaSource(ticket, controlIndex);
       return false;
@@ -4998,6 +5062,54 @@ bool CommandQueue::publishCpuReadyArenaSource(
     const core::SourcePayloadView payloadView(
         *context->reservation.arenaPayloads[i]);
     markArenaSourceResources(pool_, payloadView, ticket.seqId);
+  }
+  if (testOnlyForceNextCpuReadyArenaResourceRetainFailure_) {
+    testOnlyForceNextCpuReadyArenaResourceRetainFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::ResourceRetain);
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
+  // Resource marks are issued once for the source-wide closure (plus each
+  // segment's payload references), so every segment evidence carries the
+  // same exact source-level retain claim rather than counting the base
+  // resource entries once per physical segment.
+  ArenaResourceRetainDigest retained;
+  retained.add(resources);
+  for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+    retained.add(core::SourcePayloadView(
+        *context->reservation.arenaPayloads[i]));
+  }
+  for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+    const auto& segment = context->layout.segments[i];
+    const auto& sourceTicket = context->reservation.ticket;
+    if (!context->assemblers[i]->bindCommitEvidence(
+        core::ArenaCommitEvidence(
+                core::ArenaLiveTransactionToken(context),
+                sourceTicket.rawOrdinal,
+                sourceTicket.sourceOrdinal, sourceTicket.seqId,
+                sourceTicket.buildGeneration, sourceTicket.id.generation,
+                sourceTicket.storage.generation,
+                static_cast<std::uint32_t>(context->controlIndex),
+                sourceTicket.storage.firstPage, sourceTicket.storage.pageCount,
+                static_cast<std::uint32_t>(i),
+                static_cast<std::uint32_t>(context->layout.segmentCount),
+                segment.layout.usedBytes, retained.count, retained.hash)) ||
+        !context->assemblers[i]->commitEvidenceMatches(
+            context, sourceTicket.rawOrdinal, sourceTicket.sourceOrdinal,
+            sourceTicket.seqId, sourceTicket.buildGeneration,
+            sourceTicket.id.generation, sourceTicket.storage.generation,
+            static_cast<std::uint32_t>(context->controlIndex),
+            sourceTicket.storage.firstPage, sourceTicket.storage.pageCount,
+            static_cast<std::uint32_t>(i),
+            static_cast<std::uint32_t>(context->layout.segmentCount),
+            segment.layout.usedBytes, retained.count, retained.hash) ||
+        !context->assemblers[i]->commit()) {
+      context->noteFailure(CpuReadyArenaFailureClass::Publication, 0u, i);
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
   }
 
   // Phase 3 revalidates the same ticket/context/control after marking. No
@@ -5022,10 +5134,19 @@ bool CommandQueue::publishCpuReadyArenaSource(
     return false;
   }
   auto& control = slots_[controlIndex];
+  if (testOnlyForceNextCpuReadyArenaPublicationFailure_) {
+    testOnlyForceNextCpuReadyArenaPublicationFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::Publication);
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
   if (control.state != core::ChunkSlot::State::Writing ||
       control.sourceId != ticket.id || control.storage != ticket.storage ||
       !cpuReadyTape_.sealAndPublish(ticket, controlIndex,
                                    context->layout.usedBytes)) {
+    context->noteFailure(CpuReadyArenaFailureClass::Publication);
     lock.unlock();
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     abortCpuReadyArenaSource(ticket, controlIndex);
@@ -5060,6 +5181,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
   lock.unlock();
   writeCv_.notify_all();
   if (hasPublishedPresent) {
+    noteCopyMaterializationPublishedPresent();
     if (publishedPresentBoundaryPolicy ==
         BoundaryPolicy::DeferredPresentCompletion) {
       PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
@@ -5178,7 +5300,7 @@ CommandQueue::publishCpuReadyArenaBatch(
       for (std::size_t segment = 0; segment < layout.segmentCount;
            ++segment) {
         if (!context->batchAssemblers[source][segment] ||
-            !context->batchAssemblers[source][segment]->commit()) {
+            !context->batchAssemblers[source][segment]->prepare()) {
           context->noteFailure(CpuReadyArenaFailureClass::PayloadSeal,
                                source, segment,
                                context->plannedActivePages(),
@@ -5395,6 +5517,11 @@ CommandQueue::publishCpuReadyArenaBatch(
          segment < context->batchLayouts[source].segmentCount; ++segment) {
       const core::SourcePayloadView payloadView(
           *context->batchReservations[source].arenaPayloads[segment]);
+      if (testOnlyForceNextCpuReadyArenaValidationFailure_) {
+        testOnlyForceNextCpuReadyArenaValidationFailure_ = false;
+        return rollbackPreEffect(CpuReadyArenaFailureClass::Validation,
+                                 source, segment);
+      }
       if (!payloadView.valid() ||
           !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
         return rollbackPreEffect(CpuReadyArenaFailureClass::SnapshotValidation,
@@ -5413,6 +5540,62 @@ CommandQueue::publishCpuReadyArenaBatch(
           context->batchReservations[source].ticket.seqId);
     }
   }
+  if (testOnlyForceNextCpuReadyArenaResourceRetainFailure_) {
+    testOnlyForceNextCpuReadyArenaResourceRetainFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::ResourceRetain);
+    rememberFailure();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    (void)abortCpuReadyArenaBatch(ticket, /*failStop=*/true);
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
+  for (std::size_t source = 0; source < context->sourceCount; ++source) {
+    const auto& sourceTicket = context->batchReservations[source].ticket;
+    ArenaResourceRetainDigest retained;
+    retained.add(resources);
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      retained.add(core::SourcePayloadView(
+          *context->batchReservations[source].arenaPayloads[segment]));
+    }
+    for (std::size_t segment = 0;
+         segment < context->batchLayouts[source].segmentCount; ++segment) {
+      const auto& segmentLayout =
+          context->batchLayouts[source].segments[segment];
+      auto& assembler = context->batchAssemblers[source][segment];
+      if (!assembler ||
+          !assembler->bindCommitEvidence(core::ArenaCommitEvidence(
+              core::ArenaLiveTransactionToken(context),
+              sourceTicket.rawOrdinal, sourceTicket.sourceOrdinal,
+              sourceTicket.seqId, sourceTicket.buildGeneration,
+              sourceTicket.id.generation, sourceTicket.storage.generation,
+              static_cast<std::uint32_t>(
+                  context->batchControlIndices[source]),
+              sourceTicket.storage.firstPage, sourceTicket.storage.pageCount,
+              static_cast<std::uint32_t>(segment),
+              static_cast<std::uint32_t>(
+                  context->batchLayouts[source].segmentCount),
+              segmentLayout.layout.usedBytes, retained.count, retained.hash)) ||
+          !assembler->commitEvidenceMatches(
+              context, sourceTicket.rawOrdinal, sourceTicket.sourceOrdinal,
+              sourceTicket.seqId, sourceTicket.buildGeneration,
+              sourceTicket.id.generation, sourceTicket.storage.generation,
+              static_cast<std::uint32_t>(
+                  context->batchControlIndices[source]),
+              sourceTicket.storage.firstPage, sourceTicket.storage.pageCount,
+              static_cast<std::uint32_t>(segment),
+              static_cast<std::uint32_t>(
+                  context->batchLayouts[source].segmentCount),
+              segmentLayout.layout.usedBytes, retained.count, retained.hash) ||
+          !assembler->commit()) {
+        context->noteFailure(CpuReadyArenaFailureClass::Publication, source,
+                             segment);
+        rememberFailure();
+        arenaBuildPoisoned_.store(true, std::memory_order_release);
+        (void)abortCpuReadyArenaBatch(ticket, /*failStop=*/true);
+        return CpuReadyArenaPublishStatus::FailStopped;
+      }
+    }
+  }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
@@ -5425,6 +5608,16 @@ CommandQueue::publishCpuReadyArenaBatch(
     abortCpuReadyArenaBatch(ticket);
     return CpuReadyArenaPublishStatus::FailStopped;
   }
+  if (testOnlyForceNextCpuReadyArenaPublicationFailure_) {
+    testOnlyForceNextCpuReadyArenaPublicationFailure_ = false;
+    context->noteFailure(CpuReadyArenaFailureClass::Publication,
+                         context->activeSourceIndex(),
+                         context->activeSegmentIndex());
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    (void)abortCpuReadyArenaBatch(ticket, /*failStop=*/true);
+    return CpuReadyArenaPublishStatus::FailStopped;
+  }
   std::array<std::size_t, core::CpuReadyTape::kMaxArenaBatchSources>
       controlIndices{};
   for (std::size_t i = 0; i < context->sourceCount; ++i) {
@@ -5435,6 +5628,7 @@ CommandQueue::publishCpuReadyArenaBatch(
               .reservations = context->batchReservations,
               .count = context->sourceCount},
           std::span(controlIndices).first(context->sourceCount))) {
+    context->noteFailure(CpuReadyArenaFailureClass::Publication);
     lock.unlock();
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     abortCpuReadyArenaBatch(ticket);
@@ -5479,6 +5673,7 @@ CommandQueue::publishCpuReadyArenaBatch(
   lock.unlock();
   writeCv_.notify_all();
   if (hasPublishedPresent) {
+    noteCopyMaterializationPublishedPresent();
     if (presentPolicy == BoundaryPolicy::DeferredPresentCompletion) {
       PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
       drainDeferredPresentBoundary();
@@ -5870,18 +6065,34 @@ void CommandQueue::emitCopyMaterializationReport() const noexcept {
     if (!core::copyMaterializationSnapshotHasActivity(row)) {
       continue;
     }
-    util::logf(util::LogLevel::Info, "dxmt9-copy-materialization",
-               "binary=unix owner=unix class=%s copies=%llu copy_bytes=%llu copy_ns=%llu "
-               "semantic=%llu semantic_bytes=%llu retained_bytes=%llu "
-               "retained_peak=%llu",
-               core::copyMaterializationClassName(materializationClass),
-               static_cast<unsigned long long>(row.calls),
-               static_cast<unsigned long long>(row.bytes),
-               static_cast<unsigned long long>(row.inclusiveNanoseconds),
-               static_cast<unsigned long long>(row.semanticCalls),
-               static_cast<unsigned long long>(row.semanticBytes),
-               static_cast<unsigned long long>(row.retainedBytes),
-               static_cast<unsigned long long>(row.retainedBytesPeak));
+    const auto descriptor =
+        core::copyMaterializationDescriptor(materializationClass);
+    util::logf(
+        util::LogLevel::Info, "dxmt9-copy-materialization",
+        "binary=unix owner=unix identity=%s classification=%s reason=%s "
+        "copies=%llu copy_bytes=%llu copy_ns=%llu "
+        "semantic=%llu semantic_bytes=%llu retained_bytes=%llu "
+        "retained_peak=%llu",
+        descriptor.identity, descriptor.classificationName,
+        descriptor.ownershipAbiReason,
+        static_cast<unsigned long long>(row.calls),
+        static_cast<unsigned long long>(row.bytes),
+        static_cast<unsigned long long>(row.inclusiveNanoseconds),
+        static_cast<unsigned long long>(row.semanticCalls),
+        static_cast<unsigned long long>(row.semanticBytes),
+        static_cast<unsigned long long>(row.retainedBytes),
+        static_cast<unsigned long long>(row.retainedBytesPeak));
+  }
+}
+
+void CommandQueue::noteCopyMaterializationPublishedPresent() noexcept {
+  if (!core::activeCopyMaterializationLedger(
+          core::CopyMaterializationOwner::Unix)) {
+    return;
+  }
+  ++copyMaterializationReportPresents_;
+  if (copyMaterializationReportPresents_ % 60u == 0u) {
+    emitCopyMaterializationReport();
   }
 }
 
@@ -5909,13 +6120,6 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         queueMutexSitePresentTally.fetch_add(1, std::memory_order_relaxed) + 1;
     if (presentOrdinal % 60 == 0) {
       logQueueMutexSites(presentOrdinal);
-    }
-  }
-  if (core::activeCopyMaterializationLedger(
-          core::CopyMaterializationOwner::Unix)) {
-    ++copyMaterializationReportPresents_;
-    if (copyMaterializationReportPresents_ % 60u == 0u) {
-      emitCopyMaterializationReport();
     }
   }
   const bool arenaPresentActive =
@@ -6010,14 +6214,16 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   }
 
   if (arenaPresentActive) {
-    return appendActiveArenaPresent(std::move(queuedDesc), boundaryPolicy,
-                                    presentTokenStashed) ==
-                   ActiveArenaAppendResult::Appended
-        ? arenaPresentSeqId
-        : 0;
+    const auto appendResult = appendActiveArenaPresent(
+        std::move(queuedDesc), boundaryPolicy, presentTokenStashed);
+    if (appendResult == ActiveArenaAppendResult::Appended) {
+      return arenaPresentSeqId;
+    }
+    return 0;
   }
 
   std::uint64_t presentSeqId = 0;
+  bool published = false;
   {
     PerfScope stageScope(perf::countSubmitPresentCommitCpuTime);
     const auto qmxBegin = queueMutexProbeBegin();
@@ -6032,13 +6238,16 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     perf::countPresentSourceSelection(static_cast<bool>(queuedDesc.sourceSurface),
                                       sourceHandle.value != 0 &&
                                           sourceHandle.value == currentBackBuffer_.value);
-    queueLifecycle_.presentAndCommit(
+    published = queueLifecycle_.presentAndCommit(
         lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
         [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::Present);
         });
     presentSeqId = lastCommittedSeqId_;
+  }
+  if (!published) {
+    return 0;
   }
 
   // R-BACK-2.51(g) — per-present decision, not a global offload-enabled
@@ -6051,6 +6260,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // DXMT9_OFFLOAD_COMMIT_REPLAY is globally enabled for other presents in
   // this process.
   applyPublishedPresentBoundary(presentSeqId, queuedDesc, boundaryPolicy);
+  noteCopyMaterializationPublishedPresent();
   return presentSeqId;
 }
 
@@ -6109,9 +6319,11 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
     switch (policy) {
       case BoundaryPolicy::DeferredPresentCompletion:
       case BoundaryPolicy::PresentCompletion:
-        return presentCompletedSeqId_ >= targetSeqId;
+        return queue::presentTokenWaitSatisfied(
+            presentCompletedSeqId_, targetSeqId, false, false);
       case BoundaryPolicy::Completion:
-        return completedSeqIdLocked() >= targetSeqId;
+        return queue::queryGetDataPollSatisfied(completedSeqIdLocked(),
+                                                targetSeqId);
       case BoundaryPolicy::Default:
       case BoundaryPolicy::AfterAcquire:
         return presentDequeuedSeqId_ >= targetSeqId;
@@ -6176,7 +6388,8 @@ void CommandQueue::drainDeferredPresentBoundary() {
     return;
   }
   const auto reachedBoundary = [&] {
-    return presentCompletedSeqId_ >= targetSeqId;
+    return queue::presentTokenWaitSatisfied(
+        presentCompletedSeqId_, targetSeqId, false, false);
   };
   if (reachedBoundary()) {
     deferredPresentBoundaryTargetSeqId_ = 0;

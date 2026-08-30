@@ -1195,16 +1195,59 @@ bool TransactionalChunkSlotAssembler::bindOuter(OuterBinding binding) noexcept {
   return true;
 }
 
+bool TransactionalChunkSlotAssembler::prepare() noexcept {
+  if ((state_ != State::Reserved && state_ != State::Building) ||
+      !builder_ || !builder_->publish()) {
+    state_ = State::Failed;
+    return false;
+  }
+  state_ = State::Prepared;
+  return true;
+}
+
+bool TransactionalChunkSlotAssembler::bindCommitEvidence(
+    ArenaCommitEvidence&& evidence) noexcept {
+  if (state_ != State::Prepared || !outerBinding_.has_value() ||
+      !evidence.valid() ||
+      !evidence.matchesBinding(
+          outerBinding_->rawOrdinal, outerBinding_->sourceOrdinal,
+          outerBinding_->seqId, outerBinding_->buildGeneration,
+          outerBinding_->sourceGeneration, outerBinding_->storageGeneration,
+          outerBinding_->controlIndex, outerBinding_->firstPage,
+          outerBinding_->pageCount, outerBinding_->segmentIndex,
+          outerBinding_->segmentCount, outerBinding_->plannedBytes) ||
+      commitEvidence_.has_value()) {
+    state_ = State::Failed;
+    return false;
+  }
+  commitEvidence_.emplace(std::move(evidence));
+  return true;
+}
+
 bool TransactionalChunkSlotAssembler::fail() noexcept {
   state_ = State::Failed;
   return builder_ ? builder_->reject() : false;
 }
 
+bool TransactionalChunkSlotAssembler::commitValueOnlyForTest() noexcept {
+  if (state_ == State::Reserved || state_ == State::Building) {
+    if (!builder_ || (outerBinding_.has_value() && !outerBinding_->valid()) ||
+        !builder_->publish()) {
+      state_ = State::Failed;
+      return false;
+    }
+    state_ = State::Committed;
+    return true;
+  }
+  state_ = State::Failed;
+  return false;
+}
+
 bool TransactionalChunkSlotAssembler::commit() noexcept {
-  if ((state_ != State::Reserved && state_ != State::Building) ||
-      !builder_ ||
-      (outerBinding_.has_value() && !outerBinding_->valid()) ||
-      !builder_->publish()) {
+  // Queue-owned production reaches this branch only after prepare() and a
+  // queue-minted live evidence bind; no fallible operation remains here.
+  if (state_ != State::Prepared || !builder_ || !commitEvidence_ ||
+      !commitEvidence_->valid()) {
     state_ = State::Failed;
     return false;
   }
@@ -1340,15 +1383,6 @@ bool TransactionalChunkSlotAssembler::tryAppendPayloadBytes(
 
 bool TransactionalChunkSlotAssembler::tryAppendDrawRunBatch(
     std::span<DrawRunSubmission> submissions) noexcept {
-  const auto carrierBytes = submissions.size() * sizeof(DrawRunSubmission);
-  std::optional<dxmt9::core::CopyMaterializationEvent> carrierEvent;
-  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-          dxmt9::core::CopyMaterializationOwner::Unix)) {
-    carrierEvent.emplace(
-        ledger,
-        dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy,
-        carrierBytes);
-  }
   directRunOpen_ = false;
   if (!beginBuild() || submissions.empty() ||
       !submissions.front().stateMaterialized ||

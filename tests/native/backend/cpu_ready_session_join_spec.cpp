@@ -85,6 +85,32 @@ std::size_t selectSessionSourceBatchPrefix(
   return sessionHeadPrefix;
 }
 
+std::size_t selectSessionSourceBatchPrefix(
+    const core::metalqueue::SynchronousSourceBorrowBatch& candidates) {
+  std::size_t selected = 0;
+  candidates.visit([&](const core::metalqueue::GenerationQualifiedSourceBorrow& candidate,
+                       std::size_t) {
+    return candidate.visitPayload(
+        [&](const core::metalqueue::SynchronousSourcePayloadBorrow& payload) {
+      const bool hasFinalPresentTail =
+          payload.commandCount() != 0u &&
+          payload.commandAt(payload.commandCount() - 1u).kind() ==
+              core::MetalCommandKind::Present &&
+          payload.presentRecordCount() == 1u;
+      if (hasFinalPresentTail) {
+        selected = selected == 0u ? 0u : selected + 1u;
+        return false;
+      }
+      if (payload.commandsEmpty() || payload.presentRecordCount() != 0u) {
+        return false;
+      }
+      ++selected;
+      return true;
+    });
+  });
+  return selected;
+}
+
 struct CommandQueueArenaLeaseTestAccess {
   struct BatchResult {
     std::size_t dequeued = 0;
@@ -613,7 +639,7 @@ struct CommandQueueArenaLeaseTestAccess {
           lock,
           std::span<ReadySlotSnapshot>(scratch.data(),
                                        std::min(maxSources, scratch.size())),
-          [](std::span<const ResolvedPublishedSource> candidates) noexcept {
+          [](const SynchronousSourceBorrowBatch& candidates) noexcept {
             return selectSessionSourceBatchPrefix(candidates);
           });
       result.dequeued = count;
@@ -1773,8 +1799,7 @@ class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
 
   dxmt9::framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
       const dxmt9::resources::Pool& pool,
-      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
-          sources,
+      const dxmt9::core::metalqueue::SynchronousSourceBorrowBatch& sources,
       const dxmt9::render::MultiSourceSessionReplayFrontier& frontier) override {
     ++state_->plannerCalls;
     state_->plannerFrontierStates.push_back(frontier.state);
@@ -1793,12 +1818,14 @@ class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
 
   void observeMultiSourceSessionReplay(
       const dxmt9::resources::Pool& pool,
-      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
-          sources) override {
+      const dxmt9::core::metalqueue::SynchronousSourceBorrowBatch& sources)
+      override {
     ++state_->compositeObserverCalls;
-    for (const auto& source : sources) {
-      state_->compositeObservedSeqIds.push_back(source.seqId);
-    }
+    sources.visit(
+        [&](const dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow& source,
+            std::size_t) {
+          state_->compositeObservedSeqIds.push_back(source.seqId());
+        });
     if (state_->holdFirstObserver && state_->compositeObserverCalls == 1) {
       state_->firstObserverEntered.store(true, std::memory_order_release);
       while (!state_->releaseFirstObserver.load(std::memory_order_acquire)) {

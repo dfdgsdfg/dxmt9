@@ -118,11 +118,11 @@ class FrameGraphBackend final : public IRenderBackend {
       const core::ChunkSlot& slot) override;
   framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
       const resources::Pool& pool,
-      std::span<const core::metalqueue::ResolvedPublishedSource> sources,
+      const core::metalqueue::SynchronousSourceBorrowBatch& sources,
       const MultiSourceSessionReplayFrontier& frontier) override;
   void observeMultiSourceSessionReplay(
       const resources::Pool& pool,
-      std::span<const core::metalqueue::ResolvedPublishedSource> sources)
+      const core::metalqueue::SynchronousSourceBorrowBatch& sources)
       override;
 
   // Resolved optimizer options for this backend. Strict keeps every option

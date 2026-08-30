@@ -120,6 +120,7 @@ using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::CommandChunkBuilderCapacities;
 using dxmt9::d3d9::pe::CommittedPendingChunkLease;
+using dxmt9::d3d9::pe::ExactCommandChunkLayoutPlan;
 using dxmt9::d3d9::pe::PeWireObjectRef;
 using dxmt9::d3d9::pe::SparseBindingInput;
 using dxmt9::d3d9::pe::SparseStateInput;
@@ -1554,6 +1555,205 @@ void testTypedTailAndSectionAdmission() {
         "ignored draw-header/table-count mismatch cannot commit");
 }
 
+struct ImmutableExactBatch {
+  dxmt9::d3d9::pe::TextureRef texture{};
+  dxmt9::d3d9::pe::SurfaceRef surface{};
+  D9CCommandChunkWirePresent present{};
+  D9CCommandChunkWireClear clear{};
+  std::array<D9CRect, 1> clearRects{};
+};
+
+bool emitExactBatchFirst(CommandChunkBuilder& builder,
+                         const ImmutableExactBatch& batch) noexcept {
+  // Same handle twice requires record-local dedup. Exact mode resolves it by
+  // reading the already-written final handle table plus handleObjects_.
+  return dxmt9::d3d9::pe::appendUpdateTexture(
+      builder, batch.texture, batch.texture);
+}
+
+bool emitExactBatchRest(CommandChunkBuilder& builder,
+                        const ImmutableExactBatch& batch) noexcept {
+  return dxmt9::d3d9::pe::appendPresent(
+             builder, batch.present, batch.surface) &&
+         dxmt9::d3d9::pe::appendClear(builder, batch.clear,
+                                      batch.clearRects);
+}
+
+void testExactFinalLayoutSink() {
+  D9CTexture texture;
+  D9CSurface surface;
+  D9CTexture rolledBackTexture;
+  const ImmutableExactBatch batch{
+      .texture = dxmt9::d3d9::pe::qualifyLocalRef<
+          dxmt9::d3d9::pe::TextureRef>(
+          wireRef(&texture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xa100u)),
+      .surface = dxmt9::d3d9::pe::qualifyLocalRef<
+          dxmt9::d3d9::pe::SurfaceRef>(
+          wireRef(&surface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xa200u)),
+      .present = D9CCommandChunkWirePresent{
+          .hwnd = 0x1020304050607080ull,
+          .flags = 3u,
+          .hasSrc = 1u,
+          .hasDst = 1u,
+          .sourceHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+          .src = D9CRect{1, 2, 31, 42},
+          .dst = D9CRect{5, 6, 35, 46},
+      },
+      .clear = D9CCommandChunkWireClear{
+          .flags = 7u,
+          .colorARGB = 0xff123456u,
+          .z = 0.75f,
+          .stencil = 11u,
+          .rectCount = 0u,
+          .rectOffset = 0u,
+      },
+      .clearRects = {D9CRect{9, 10, 59, 70}},
+  };
+
+  std::vector<std::byte> legacyBytes;
+  std::uint32_t legacyRecordCount = 0u;
+  std::uint32_t legacyHandleCount = 0u;
+  std::uint32_t legacyPayloadBytes = 0u;
+  {
+    CommandChunkBuilder legacy;
+    check(emitExactBatchFirst(legacy, batch) &&
+              emitExactBatchRest(legacy, batch),
+          "immutable exact batch builds through the legacy sink");
+    legacyRecordCount = static_cast<std::uint32_t>(legacy.recordCount());
+    legacyHandleCount = static_cast<std::uint32_t>(legacy.handleCount());
+    legacyPayloadBytes = static_cast<std::uint32_t>(legacy.payloadBytes());
+    const auto sealed = legacy.seal();
+    check(sealed.valid(), "legacy exact-batch oracle seals");
+    legacyBytes.assign(sealed.blob.begin(), sealed.blob.end());
+    legacy.resetAndReleaseRetained();
+  }
+  check(texture.refs == 1u && surface.refs == 1u,
+        "legacy oracle releases its physical pins");
+
+  const auto overPlan = dxmt9::d3d9::pe::planExactCommandChunkLayout(
+      1u, 1u, sizeof(D9CCommandChunkWireGenerateMipmaps));
+  CommandChunkBuilder overPlanRetry(overPlan);
+  check(!dxmt9::d3d9::pe::appendPresent(
+            overPlanRetry, batch.present, batch.surface) &&
+            overPlanRetry.recordCount() == 0u &&
+            overPlanRetry.handleCount() == 0u &&
+            overPlanRetry.payloadBytes() == 0u && surface.refs == 1u,
+        "over-plan append rolls back its final prefixes and acquired retain");
+  check(dxmt9::d3d9::pe::appendGenerateMipmaps(
+            overPlanRetry, batch.texture) &&
+            overPlanRetry.seal().valid(),
+        "exact sink accepts a fitting retry after an over-plan rollback");
+  overPlanRetry.resetAndReleaseRetained();
+  check(texture.refs == 1u && surface.refs == 1u,
+        "over-plan retry releases its final retained owner");
+
+  const ExactCommandChunkLayoutPlan plan =
+      dxmt9::d3d9::pe::planExactCommandChunkLayout(
+          legacyRecordCount, legacyHandleCount, legacyPayloadBytes);
+  check(plan.valid() && plan.totalBytes == legacyBytes.size(),
+        "pure exact plan reproduces the legacy final allocation size");
+
+  dxmt9::core::CopyMaterializationLedger ledger;
+  dxmt9::core::ScopedCopyMaterializationLedger observe(
+      dxmt9::core::CopyMaterializationOwner::Pe, ledger);
+  CommandChunkBuilder exact(plan);
+  check(exact.exactFinalLayout() && exact.recordsForTest().empty() &&
+            exact.handlesForTest().empty() && exact.payloadForTest().empty(),
+        "exact sink retains no temporary wire record, handle, or payload vector");
+
+  const auto rollbackRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &rolledBackTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xa300u));
+  std::uint32_t rollbackIndex = 0u;
+  check(exact.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            exact.appendHandle(rollbackRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                               rollbackIndex) &&
+            rolledBackTexture.refs == 2u,
+        "exact active record acquires its physical pin");
+  exact.rollbackRecord();
+  check(exact.recordCount() == 0u && exact.handleCount() == 0u &&
+            exact.payloadBytes() == 0u && rolledBackTexture.refs == 1u,
+        "exact rollback restores monotone prefixes and the retain checkpoint");
+
+  check(emitExactBatchFirst(exact, batch),
+        "exact sink accepts the first immutable record");
+  check(!exact.seal().valid() && exact.recordCount() == 1u &&
+            exact.handleCount() == 1u,
+        "underfilled exact seal preserves bytes and counts for retry");
+  check(emitExactBatchRest(exact, batch),
+        "exact sink resumes after an underfilled seal retry");
+  const auto first = exact.seal();
+  check(first.valid() && first.recordCount == legacyRecordCount &&
+            first.handleCount == legacyHandleCount &&
+            first.blob.size() == legacyBytes.size() &&
+            std::equal(first.blob.begin(), first.blob.end(),
+                       legacyBytes.begin()),
+        "exact final-table/arena output is byte-identical to legacy D9C V2");
+
+  D9CCommandChunkWireHeader header{};
+  D9CCommandChunkWireRecordHeader presentRecord{};
+  std::memcpy(&header, first.blob.data(), sizeof(header));
+  std::memcpy(&presentRecord,
+              first.blob.data() + header.recordTableOffset +
+                  sizeof(D9CCommandChunkWireRecordHeader),
+              sizeof(presentRecord));
+  check(presentRecord.payloadOffset ==
+            sizeof(D9CCommandChunkWireUpdateTexture) &&
+            presentRecord.payloadOffset < header.payloadArenaOffset &&
+            presentRecord.payloadOffset + presentRecord.payloadSize <=
+                header.payloadArenaSize,
+        "exact record headers retain arena-relative, not blob-absolute, offsets");
+
+  const auto finalBeforeRepeat = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  const auto repeated = exact.seal();
+  check(repeated.valid() && repeated.blob.data() == first.blob.data() &&
+            std::equal(repeated.blob.begin(), repeated.blob.end(),
+                       legacyBytes.begin()) &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeWireFinal).calls ==
+                finalBeforeRepeat.calls,
+        "repeated exact seal reuses the same bytes without rematerialization");
+  check(ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::PeBuilderTemporary).calls ==
+            0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealRecords).calls ==
+                0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealHandles).calls ==
+                0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealPayload).calls ==
+                0u,
+        "exact sink suppresses only physically absent temporary/seal classes");
+  check(ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::PeWireFinal).calls == 1u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSectionAppend)
+                    .semanticCalls != 0u,
+        "exact sink preserves final-wire and direct section materialization");
+
+  exact.reset();
+  check(exact.exactFinalLayout() && exact.recordCount() == 0u &&
+            exact.handleCount() == 0u && exact.payloadBytes() == 0u &&
+            emitExactBatchFirst(exact, batch) &&
+            emitExactBatchRest(exact, batch),
+        "exact Reset preserves its fixed layout for the same immutable batch");
+  const auto afterReset = exact.seal();
+  check(afterReset.valid() &&
+            std::equal(afterReset.blob.begin(), afterReset.blob.end(),
+                       legacyBytes.begin()),
+        "exact Reset rebuild remains byte-identical");
+  exact.resetAndReleaseRetained();
+  check(texture.refs == 1u && surface.refs == 1u &&
+            rolledBackTexture.refs == 1u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeWireFinal)
+                    .retainedBytes == 0u,
+        "exact discard releases warm pins and final-blob ledger retention");
+}
+
 void testLargeHandleSealByteIdentityAndLedger() {
   constexpr std::size_t kHandleCount = 160u;
   std::vector<std::unique_ptr<D9CTexture>> textures;
@@ -1569,7 +1769,8 @@ void testLargeHandleSealByteIdentityAndLedger() {
           sizeof(D9CCommandChunkWireUpdateTexture),
   });
   dxmt9::core::CopyMaterializationLedger ledger;
-  dxmt9::core::ScopedCopyMaterializationLedger observe(ledger);
+  dxmt9::core::ScopedCopyMaterializationLedger observe(
+      dxmt9::core::CopyMaterializationOwner::Pe, ledger);
   const auto build = [&] {
     for (std::size_t i = 0; i < kHandleCount; ++i) {
       const auto ref = wireRef(textures[i].get(),
@@ -1670,6 +1871,7 @@ int main() {
     testCommittedPendingChunkLeaseQualification();
     testOversizedPendingBatchAppendFailure();
     testTypedTailAndSectionAdmission();
+    testExactFinalLayoutSink();
     testLargeHandleSealByteIdentityAndLedger();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()

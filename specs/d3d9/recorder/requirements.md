@@ -490,6 +490,17 @@ fallible step, repeated seal, Reset, and full-snapshot cases. Equivalence is a
 test oracle, not permission to keep both materializations in production after
 promotion.
 
+**R-CORE-REC-7.2.1** Normal command-chunk promotion requires a replayable
+producer transaction that owns one complete immutable batch across both
+passes. Its first pass must compute exact record, unique-handle, and payload
+counts without retaining objects, consuming pending state, journaling capture,
+or publishing recorder effects; its second pass must visit the same owned
+inputs and emit into the exact final layout. The transaction must not retain a
+call-local borrow or callback-derived span between passes, and installing it
+must preserve the existing CapacityPre/CapacityPost flush cadence. A per-call
+append owner whose future chunk contents and final counts are unknown does not
+satisfy this production boundary.
+
 **R-CORE-REC-7.3** Recorder reads and writes that depend on the recorder mutex
 must use typed, epoch-qualified, non-copyable and non-movable call-scope
 capabilities: `RecorderBorrow<T>` for immutable source access and

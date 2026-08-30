@@ -93,6 +93,57 @@ enum class CopyMaterializationClassification : std::uint8_t {
   Removable,
 };
 
+[[nodiscard]] constexpr const char* copyMaterializationClassificationName(
+    CopyMaterializationClassification classification) noexcept {
+  return classification == CopyMaterializationClassification::Necessary
+             ? "necessary"
+             : "removable";
+}
+
+// Keep these reasons aligned with the normative identity table in
+// specs/archicture/spec.md §2.3.  They are part of the stable report contract,
+// not free-form diagnostic prose.
+[[nodiscard]] constexpr const char* copyMaterializationOwnershipAbiReason(
+  CopyMaterializationClass materializationClass) noexcept {
+  switch (materializationClass) {
+  case CopyMaterializationClass::PeStateShadow:
+    return "producer-visible-d3d9-state-semantics";
+  case CopyMaterializationClass::PeWireFinal:
+    return "pointer-free-pe-ownership";
+  case CopyMaterializationClass::PeBuilderTemporary:
+    return "final-wire-layout-target-owner";
+  case CopyMaterializationClass::PeSealRecords:
+    return "final-offsets-known-before-construction";
+  case CopyMaterializationClass::PeSealHandles:
+    return "final-handle-capacity-reservable-transactionally";
+  case CopyMaterializationClass::PeSealPayload:
+    return "typed-producers-final-payload-range";
+  case CopyMaterializationClass::BridgeRawOwnership:
+    return "process-abi-ownership-no-shared-ownership-abi";
+  case CopyMaterializationClass::ReplaySubmissionCarrierMaterialization:
+    return "bounded-planning-final-queue-storage";
+  case CopyMaterializationClass::ReplaySubmissionCarrierCopy:
+    return "final-queue-destination-known-after-bounded-planning";
+  case CopyMaterializationClass::QueueFinalSlotAppend:
+    return "immutable-queue-ownership";
+  case CopyMaterializationClass::GpuUploadCopy:
+    return "cpu-allocation-not-gpu-readable";
+  case CopyMaterializationClass::GpuSharedMaterialization:
+    return "first-gpu-readable-owned-representation";
+  case CopyMaterializationClass::ArenaByteCopy:
+    return "queue-visible-arena-representation";
+  case CopyMaterializationClass::MutationStaging:
+    return "asynchronous-offload-ownership";
+  case CopyMaterializationClass::UpScratch:
+    return "pointer-free-wire-construction-transactional";
+  case CopyMaterializationClass::PeSectionAppend:
+    return "pe-section-ownership-before-sealing";
+  case CopyMaterializationClass::Count:
+    break;
+  }
+  return "unknown-copy-materialization-class";
+}
+
 [[nodiscard]] constexpr CopyMaterializationClassification
 copyMaterializationClassification(
     CopyMaterializationClass materializationClass) noexcept {
@@ -122,8 +173,10 @@ copyMaterializationClassification(
 
 struct CopyMaterializationDescriptor {
   const char* identity = "unknown";
+  const char* classificationName = "necessary";
   CopyMaterializationClassification classification =
       CopyMaterializationClassification::Necessary;
+  const char* ownershipAbiReason = "unknown-copy-materialization-class";
 };
 
 [[nodiscard]] constexpr CopyMaterializationDescriptor
@@ -131,8 +184,12 @@ copyMaterializationDescriptor(
     CopyMaterializationClass materializationClass) noexcept {
   return {
       .identity = copyMaterializationClassName(materializationClass),
+      .classificationName = copyMaterializationClassificationName(
+          copyMaterializationClassification(materializationClass)),
       .classification =
           copyMaterializationClassification(materializationClass),
+      .ownershipAbiReason =
+          copyMaterializationOwnershipAbiReason(materializationClass),
   };
 }
 
@@ -265,34 +322,66 @@ copyMaterializationLedgerRegistry() noexcept {
   return enabled;
 }
 
+[[nodiscard]] constexpr std::size_t copyMaterializationOwnerIndex(
+    CopyMaterializationOwner owner) noexcept {
+  return static_cast<std::size_t>(owner);
+}
+
+// The disabled production path resolves one owner-qualified cached pointer.
+// Keep registry construction behind the cached gate: a process with the
+// observer off must not construct either atomic ledger or read the environment
+// at every copy site.
+[[nodiscard]] inline CopyMaterializationLedger* const*
+productionCopyMaterializationLedgers() noexcept {
+  static const auto ledgers = [] {
+    std::array<CopyMaterializationLedger*, 2> result{};
+    if (!copyMaterializationLedgerEnabled()) {
+      return result;
+    }
+    auto& registry = copyMaterializationLedgerRegistry();
+    result[copyMaterializationOwnerIndex(CopyMaterializationOwner::Pe)] =
+        &registry.ledger(CopyMaterializationOwner::Pe);
+    result[copyMaterializationOwnerIndex(CopyMaterializationOwner::Unix)] =
+        &registry.ledger(CopyMaterializationOwner::Unix);
+    return result;
+  }();
+  return ledgers.data();
+}
+
 // Native tests may install a deterministic sink for one synchronous scope;
-// production never uses this override. It is checked before the production
-// registry so a disabled process does not construct its atomic rows.
-inline thread_local CopyMaterializationLedger* gCopyMaterializationTestLedger =
-    nullptr;
+// production never uses this override. The effective owner slots are seeded
+// from the cached production pair, so the disabled path performs one pointer
+// read and leaves the existing call-site null branch to elide diagnostics.
+inline thread_local std::array<CopyMaterializationLedger*, 2>
+    gCopyMaterializationEffectiveOwnerLedgers = [] {
+      const auto* production = productionCopyMaterializationLedgers();
+      return std::array<CopyMaterializationLedger*, 2>{
+          production[copyMaterializationOwnerIndex(CopyMaterializationOwner::Pe)],
+          production[copyMaterializationOwnerIndex(
+              CopyMaterializationOwner::Unix)]};
+    }();
 
 [[nodiscard]] inline CopyMaterializationLedger*
 activeCopyMaterializationLedger(
-    CopyMaterializationOwner owner = CopyMaterializationOwner::Unix) noexcept {
-  if (gCopyMaterializationTestLedger) {
-    return gCopyMaterializationTestLedger;
-  }
-  if (!copyMaterializationLedgerEnabled()) {
-    return nullptr;
-  }
-  return &copyMaterializationLedgerRegistry().ledger(owner);
+    CopyMaterializationOwner owner) noexcept {
+  return gCopyMaterializationEffectiveOwnerLedgers[
+      copyMaterializationOwnerIndex(owner)];
 }
 
 class ScopedCopyMaterializationLedger final {
 public:
-  explicit ScopedCopyMaterializationLedger(
-      CopyMaterializationLedger& ledger) noexcept
-      : previous_(gCopyMaterializationTestLedger) {
-    gCopyMaterializationTestLedger = &ledger;
+  ScopedCopyMaterializationLedger(CopyMaterializationOwner owner,
+                                  CopyMaterializationLedger& ledger) noexcept
+      : owner_(owner),
+        previous_(gCopyMaterializationEffectiveOwnerLedgers[
+            copyMaterializationOwnerIndex(owner)]) {
+    gCopyMaterializationEffectiveOwnerLedgers[
+        copyMaterializationOwnerIndex(owner)] = &ledger;
   }
 
   ~ScopedCopyMaterializationLedger() {
-    gCopyMaterializationTestLedger = previous_;
+    gCopyMaterializationEffectiveOwnerLedgers[
+        copyMaterializationOwnerIndex(owner_)] = previous_;
   }
 
   ScopedCopyMaterializationLedger(const ScopedCopyMaterializationLedger&) =
@@ -301,6 +390,7 @@ public:
       const ScopedCopyMaterializationLedger&) = delete;
 
 private:
+  CopyMaterializationOwner owner_ = CopyMaterializationOwner::Pe;
   CopyMaterializationLedger* previous_ = nullptr;
 };
 

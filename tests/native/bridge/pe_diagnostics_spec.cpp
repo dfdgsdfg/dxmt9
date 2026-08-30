@@ -264,6 +264,32 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
   const auto deviceDiag =
       readTextFile(root / "src/d3d9/d3d9_pe_device_diag.cpp");
+  const auto peBuilder =
+      readTextFile(root / "src/d3d9/d3d9_pe_chunk_builder.cpp");
+  const auto peConstShadow =
+      readTextFile(root / "src/d3d9/d3d9_pe_const_shadow.hpp");
+  const auto providerReplay =
+      readTextFile(root / "src/d3d9/device_c_chunk_replay.cpp");
+  const auto coreResources =
+      readTextFile(root / "src/d3d9/core_resources.cpp");
+  const auto providerOffload =
+      readTextFile(root / "src/d3d9/device_c_replay_offload.cpp");
+  const auto providerPayload =
+      readTextFile(root / "src/dxmt9/dxmt9_source_payload.cpp");
+  const auto transientArena =
+      readTextFile(root / "src/dxmt9/dxmt9_transient_resource_arena.cpp");
+  const auto resourcePool =
+      readTextFile(root / "src/dxmt9/dxmt9_resource_pool.cpp");
+  const auto argbufHybrid =
+      readTextFile(root / "src/dxmt9/dxmt9_argbuf_hybrid.cpp");
+  const auto queue =
+      readTextFile(root / "src/dxmt9/dxmt9_command_queue.cpp");
+  const auto sourcePayload =
+      readTextFile(root / "src/dxmt9/dxmt9_source_payload.cpp");
+  const auto copyLedger =
+      readTextFile(root / "include/dxmt9/copy_materialization_ledger.hpp");
+  const auto cpuPipelineOwnership = readTextFile(
+      root / "specs/verification/tla/CpuPipelineOwnership.tla");
   for (const std::string_view coldOwner : {
            "D3D9DeviceImpl::PrepareStateBlockApplyForChild",
            "D3D9DeviceImpl::CommitStateBlockApplyForChild",
@@ -549,8 +575,111 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "PE copy report never reads the Unix-owned ledger");
   checkContains(deviceDiag, "binary=pe owner=pe",
                 "PE copy report rows identify their binary and owner");
+  checkContains(deviceDiag,
+                "identity=%s classification=%s reason=%s",
+                "PE copy rows emit identity, classification, and reason");
+  checkContains(queue, "identity=%s classification=%s reason=%s",
+                "Unix copy rows emit identity, classification, and reason");
+  checkContains(queue, "copyMaterializationReportPresents_ != 0u",
+                "Unix destruction emits only a non-empty partial report");
+  checkContains(queue, "noteCopyMaterializationPublishedPresent();",
+                "Unix reports count only after successful publication");
+  checkBefore(queue, "queueLifecycle_.presentAndCommit(",
+              "noteCopyMaterializationPublishedPresent();",
+              "ordinary Unix Present report count follows publication");
+  checkContains(queue,
+                "if (hasPublishedPresent) {\n"
+                "    noteCopyMaterializationPublishedPresent();",
+                "active arena Present reports after queue publication");
+  check(countOccurrences(
+            queue,
+            "if (hasPublishedPresent) {\n"
+            "    noteCopyMaterializationPublishedPresent();") == 2u,
+        "single- and multi-source arena publication each report Present");
+  checkNotContains(
+      queue,
+      "if (appendResult == ActiveArenaAppendResult::Appended) {\n"
+      "      noteCopyMaterializationPublishedPresent();",
+      "active arena append does not count an uncommitted Present");
+  checkContains(copyLedger, "classificationName",
+                "copy descriptor retains a stable classification name");
+  checkContains(copyLedger, "ownershipAbiReason",
+                "copy descriptor retains a named ownership/ABI reason");
+  checkContains(copyLedger, "productionCopyMaterializationLedgers",
+                "disabled production lookup uses cached owner pointers");
+  checkContains(copyLedger, "gCopyMaterializationEffectiveOwnerLedgers",
+                "effective owner slots cache production pointers once");
+  checkNotContains(copyLedger, "if (auto* ledger =",
+                   "active production lookup has no test-then-production probe");
+  checkNotContains(copyLedger, "gCopyMaterializationTestOwnerLedgers.fill",
+                   "test sinks remain owner-qualified rather than all-owner");
+  checkContains(sourcePayload, "tryAppendDrawRunBatch",
+                "batch assembler remains covered by the source audit");
+  checkNotContains(sourcePayload,
+                   "CopyMaterializationClass::ReplaySubmissionCarrierCopy",
+                   "batch assembler does not claim a false whole-carrier copy");
+  checkContains(sourcePayload,
+                "CopyMaterializationClass::QueueFinalSlotAppend",
+                "batch assembler retains final-slot accounting");
+  checkContains(cpuPipelineOwnership,
+                "does not claim concrete bindings for DCE/lookahead",
+                "CPU ownership model narrows borrowCount to implemented visits");
+  checkNotContains(cpuPipelineOwnership,
+                   "borrowCount=1 obligation also\n * covers the replay, serial, DCE/lookahead",
+                   "CPU ownership model does not overclaim unimplemented bindings");
   checkContains(deviceCold, "logPeCopyMaterializationLedger();",
                 "device destruction emits the final PE copy report");
+  checkContains(deviceCold,
+                "peCopyMaterializationReportPresents_ % 60u != 0u",
+                "PE destruction does not duplicate full-interval reports");
+  checkContains(coreResources, "dxmt9/progress_predicates.hpp",
+                "PE Query uses the shared pure progress predicates");
+  checkNotContains(coreResources, "dxmt9_pipeline_lifecycle.hpp",
+                   "PE Query never includes backend-private lifecycle state");
+  checkContains(coreResources, "queryGetDataPollSatisfied",
+                "Query::getData is bound to the shared poll predicate");
+
+  // These source files are compiled into the Unix provider/runtime targets,
+  // despite their historical src/d3d9 or shared-runtime paths. An explicit
+  // owner at every call site prevents a native mixed-image test from hiding a
+  // production PE/Unix attribution inversion behind a default argument.
+  for (const auto *provider : {&providerReplay, &providerOffload,
+                               &providerPayload, &transientArena,
+                               &resourcePool, &argbufHybrid, &queue}) {
+    checkContains(*provider, "CopyMaterializationOwner::Unix",
+                  "Unix provider copy sites name the Unix owner explicitly");
+    checkNotContains(*provider, "CopyMaterializationOwner::Pe",
+                     "Unix provider copy sites never select the PE owner");
+    checkNotContains(*provider, "activeCopyMaterializationLedger()",
+                     "copy sites never rely on an implicit owner default");
+  }
+  checkContains(providerReplay, "CopyMaterializationClass::BridgeRawOwnership",
+                "Unix replay records bridge raw ownership");
+  checkContains(providerOffload, "CopyMaterializationClass::BridgeRawOwnership",
+                "Unix offload import records bridge raw ownership");
+  checkContains(providerOffload, "CopyMaterializationClass::MutationStaging",
+                "Unix offload stages mutation bytes in the Unix ledger");
+  checkContains(transientArena, "CopyMaterializationClass::GpuUploadCopy",
+                "Unix transient arena records physical GPU upload copies");
+  checkContains(argbufHybrid,
+                "CopyMaterializationClass::GpuSharedMaterialization",
+                "Unix argbuf direct construction records shared GPU materialization");
+  checkContains(queue, "binary=unix owner=unix",
+                "Unix queue report identifies the Unix binary/owner row");
+  checkContains(peBuilder, "CopyMaterializationOwner::Pe",
+                "PE builder copy sites explicitly select the PE owner");
+  checkNotContains(peBuilder, "CopyMaterializationOwner::Unix",
+                   "PE builder copy sites never select the Unix owner");
+  checkContains(peBuilder, "CopyMaterializationClass::PeWireFinal",
+                "PE builder final-wire materialization remains PE-owned");
+  checkContains(peConstShadow, "CopyMaterializationOwner::Pe",
+                "PE constant shadow copy sites explicitly select the PE owner");
+  checkNotContains(peConstShadow, "CopyMaterializationOwner::Unix",
+                   "PE constant shadow copy sites never select the Unix owner");
+  checkContains(peConstShadow, "CopyMaterializationClass::PeStateShadow",
+                "PE constant shadow materialization remains PE-owned");
+  checkNotContains(deviceSource, "CopyMaterializationOwner::Unix",
+                   "PE device source never selects the Unix owner");
 
   for (const std::string_view removed : {
            "NotifyPeFirstCallAfterPresentForChild",

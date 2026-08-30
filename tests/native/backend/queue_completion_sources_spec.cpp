@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -28,6 +29,8 @@ using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::ReadySlotSnapshot;
 using dxmt9::core::metalqueue::ResolvedPublishedSource;
 using dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow;
+using dxmt9::core::metalqueue::SynchronousSourceBorrowBatch;
+using dxmt9::core::metalqueue::SynchronousSourcePayloadBorrow;
 using dxmt9::core::metalqueue::WorkerOwnedSourceSnapshot;
 using dxmt9::core::metalqueue::EncodeSessionSourceList;
 using dxmt9::core::metalqueue::kMaxEncodeSessionSources;
@@ -1203,7 +1206,8 @@ void runEncodeIterationPassesLiveSlotStorage() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
 
-  ChunkSlot* observedSlot = nullptr;
+  bool observedLegacyPayload = false;
+  WorkerOwnedSourceSnapshot escapedWorkerSnapshot{};
   std::vector<std::uint64_t> inlineCompleted;
   std::unique_lock lock(fixture.mutex);
   const bool encoded = fixture.controller.runEncodeIteration(
@@ -1212,7 +1216,7 @@ void runEncodeIterationPassesLiveSlotStorage() {
           const dxmt9::core::metalqueue::GenerationQualifiedSourceBorrow& borrow)
           -> std::optional<QueueSubmissionRecord> {
         const auto source = workerSource.copyValue();
-        const auto& payload = borrow.payload();
+        escapedWorkerSnapshot = workerSource;
         check(borrow.valid() && workerSource.valid(),
               "encode callback receives qualified borrow and owned snapshot");
         check(borrow.source().id == source.sourceId &&
@@ -1222,9 +1226,14 @@ void runEncodeIterationPassesLiveSlotStorage() {
               "borrow carries exact source/storage and sequence generations");
         checkEq(source.slotIndex, 0u,
                 "single-source iteration forwards the dequeued slot index");
-        observedSlot = const_cast<ChunkSlot*>(payload.legacyPayload());
-        check(observedSlot == fixture.slots[0].payload,
-              "single-source iteration passes live slot storage by reference");
+        check(borrow.visitPayload(
+                  [&](const dxmt9::core::metalqueue::
+                          SynchronousSourcePayloadBorrow& payload) {
+                observedLegacyPayload = payload.isLegacy();
+              }),
+              "encode callback receives a live payload capability");
+        check(observedLegacyPayload,
+              "single-source iteration exposes the pinned legacy payload");
         check(fixture.slots[0].state == ChunkSlot::State::Encoding,
               "single-source encode sees the control shell in Encoding state");
         return std::nullopt;
@@ -1232,8 +1241,12 @@ void runEncodeIterationPassesLiveSlotStorage() {
       [&](std::uint64_t seqId) { inlineCompleted.push_back(seqId); });
 
   check(encoded, "single-source iteration consumes the ready slot");
-  check(observedSlot != nullptr,
-        "single-source iteration did not encode a ChunkSlot copy");
+  check(observedLegacyPayload,
+        "single-source iteration visited its legacy payload capability");
+  check(escapedWorkerSnapshot.valid() &&
+            !fixture.controller.resolveRepresentedSource(
+                escapedWorkerSnapshot.copyValue()).valid(),
+        "value snapshot retained after visit cannot reacquire reclaimed payload");
   checkEq(inlineCompleted.size(), 1u,
           "inline single-source completion invokes callback once");
   checkEq(inlineCompleted.front(), 1ull,
@@ -1254,7 +1267,140 @@ void runEncodeIterationPassesLiveSlotStorage() {
 
 static_assert(!std::is_copy_constructible_v<GenerationQualifiedSourceBorrow>);
 static_assert(!std::is_move_constructible_v<GenerationQualifiedSourceBorrow>);
+static_assert(!std::is_copy_constructible_v<SynchronousSourcePayloadBorrow>);
+static_assert(!std::is_move_constructible_v<SynchronousSourcePayloadBorrow>);
+static_assert(!std::is_default_constructible_v<SynchronousSourcePayloadBorrow>);
+static_assert(!std::is_constructible_v<
+              SynchronousSourcePayloadBorrow,
+              dxmt9::core::SourcePayloadView>);
 static_assert(std::is_trivially_copyable_v<WorkerOwnedSourceSnapshot>);
+static_assert(!std::is_copy_constructible_v<SynchronousSourceBorrowBatch>);
+static_assert(!std::is_move_constructible_v<SynchronousSourceBorrowBatch>);
+static_assert(!std::is_default_constructible_v<SynchronousSourceBorrowBatch>);
+static_assert(!std::is_constructible_v<
+              SynchronousSourceBorrowBatch,
+              std::span<const ResolvedPublishedSource>>);
+template <typename T>
+concept HasDirectPayloadAccessor = requires(const T& value) {
+  value.payload();
+};
+static_assert(!HasDirectPayloadAccessor<GenerationQualifiedSourceBorrow>);
+template <typename T>
+concept HasUncheckedPayloadViewAccessor = requires(const T& value) {
+  value.checkedView();
+};
+static_assert(!HasUncheckedPayloadViewAccessor<SynchronousSourcePayloadBorrow>);
+
+void synchronousSourceBatchRejectsStaleAndReclaimingBorrows() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  ReadySlotSnapshot source{};
+  std::unique_lock lock(fixture.mutex);
+  check(fixture.controller.dequeueReadySlot(lock, source),
+        "borrow batch fixture dequeues one source");
+  const auto resolved = fixture.controller.resolveRepresentedSource(source);
+  check(resolved.valid(), "borrow batch fixture resolves a represented source");
+
+  bool visited = false;
+  bool nestedCallbackRan = false;
+  bool concurrentCompletionSucceeded = true;
+  check(fixture.controller.visitRepresentedSourceBorrows(
+            lock,
+            std::span<const ResolvedPublishedSource>(&resolved, 1),
+            [&](const SynchronousSourceBorrowBatch& batch) noexcept {
+              return batch.visit(
+                  [&](const GenerationQualifiedSourceBorrow& borrow,
+                      std::size_t index) noexcept {
+                    try {
+                      visited = true;
+                      check(index == 0u && borrow.seqId() == source.seqId,
+                            "borrow batch visits the exact generation-qualified source");
+                      check(!fixture.controller.visitRepresentedSourceBorrows(
+                                lock,
+                                std::span<const ResolvedPublishedSource>(
+                                    &resolved, 1),
+                                [&](const SynchronousSourceBorrowBatch&) noexcept {
+                                  nestedCallbackRan = true;
+                                  return true;
+                                }),
+                            "active borrow epoch rejects nested reentry");
+                      lock.unlock();
+                      std::thread contender([&] {
+                        std::unique_lock contenderLock(fixture.mutex);
+                        concurrentCompletionSucceeded =
+                            fixture.controller.completeInlineChunk(
+                                contenderLock, source.slotIndex, source.seqId);
+                      });
+                      contender.join();
+                      lock.lock();
+                      check(borrow.valid(),
+                            "concurrent reclaim rejection preserves the active borrow");
+                    } catch (...) {
+                      return false;
+                    }
+                    return true;
+                  });
+            }),
+        "queue issues a live synchronous source batch");
+  check(lock.owns_lock(),
+        "borrow visitor restores queue mutex ownership before epoch release");
+  check(visited, "borrow batch invokes its visitor exactly once");
+  check(!nestedCallbackRan, "nested borrow callback is never invoked");
+  check(!concurrentCompletionSucceeded,
+        "concurrent reclaim cannot pass an already-issued source pin");
+
+  QueueFixture postValidationFixture;
+  postValidationFixture.addReadySlot(0, 1);
+  ReadySlotSnapshot postValidationSource{};
+  std::unique_lock postValidationLock(postValidationFixture.mutex);
+  check(postValidationFixture.controller.dequeueReadySlot(
+            postValidationLock, postValidationSource),
+        "post-validation fixture dequeues one source");
+  const auto postValidationResolved =
+      postValidationFixture.controller.resolveRepresentedSource(
+          postValidationSource);
+  bool postValidationCallbackRan = false;
+  check(!postValidationFixture.controller.visitRepresentedSourceBorrows(
+            postValidationLock,
+            std::span<const ResolvedPublishedSource>(
+                &postValidationResolved, 1),
+            [&](const SynchronousSourceBorrowBatch& batch) noexcept {
+              postValidationCallbackRan = batch.live();
+              return postValidationFixture.controller
+                  .invalidateActiveBorrowGenerationForTest(
+                      postValidationLock);
+            }),
+        "post-callback generation mismatch fails the visit closed");
+  check(postValidationCallbackRan,
+        "generation mismatch seam runs between pre- and post-validation");
+  check(postValidationLock.owns_lock() && postValidationFixture.stop,
+        "failed post-validation retains the queue lock and poisons the queue");
+
+  QueueFixture reclaimedFixture;
+  reclaimedFixture.addReadySlot(0, 1);
+  ReadySlotSnapshot reclaimedSource{};
+  std::unique_lock reclaimedLock(reclaimedFixture.mutex);
+  check(reclaimedFixture.controller.dequeueReadySlot(reclaimedLock,
+                                                       reclaimedSource),
+        "stale borrow fixture dequeues one source");
+  const auto staleAfterVisit =
+      reclaimedFixture.controller.resolveRepresentedSource(reclaimedSource);
+  check(staleAfterVisit.valid(), "stale borrow fixture resolves source");
+  check(reclaimedFixture.controller.completeInlineChunk(
+            reclaimedLock, reclaimedSource.slotIndex, reclaimedSource.seqId),
+        "stale borrow fixture reclaims the represented source");
+  bool staleCallbackRan = false;
+  check(!reclaimedFixture.controller.visitRepresentedSourceBorrows(
+            reclaimedLock,
+            std::span<const ResolvedPublishedSource>(&staleAfterVisit, 1),
+            [&](const SynchronousSourceBorrowBatch&) noexcept {
+              staleCallbackRan = true;
+              return true;
+            }),
+        "queue rejects a stale source/storage generation after reclaim");
+  check(!staleCallbackRan,
+        "stale use after the prior visit never reaches a payload callback");
+}
 
 void postEncodeRetiringControlRepresentsUnlockedReclaim() {
   QueueFixture fixture;
@@ -1594,16 +1740,18 @@ void dequeueReadySlotBatchHonorsAppendPredicate() {
       fixture.controller.dequeueReadySlotBatch(
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource> selected,
-             std::size_t candidateSlotIndex,
-             const dxmt9::core::SourcePayloadView& candidatePayload) {
-            checkEq(selected.size(), 1u,
-                    "predicate sees the already-selected source");
-            checkEq(candidateSlotIndex, 1u,
+          [](std::size_t selectedCount,
+             const GenerationQualifiedSourceBorrow& candidate) {
+            checkEq(selectedCount, 1u,
+                    "predicate sees the already-selected source count");
+            checkEq(candidate.slotIndex(), 1u,
                     "predicate sees the next FIFO candidate");
-            check(candidatePayload.commandCount() == 0u,
-                  "predicate sees the candidate payload view");
-            return false;
+            return candidate.visitPayload(
+                [](const SynchronousSourcePayloadBorrow& payload) {
+                  check(payload.commandCount() == 0u,
+                        "predicate sees the candidate payload view");
+                  return false;
+                });
           });
 
   checkEq(count, 1u, "batch predicate stops after the first source");
@@ -1632,20 +1780,29 @@ void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
       fixture.controller.dequeueReadySlotBatchPrefix(
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
-          [&](std::span<const ResolvedPublishedSource> candidates) {
+          [&](const SynchronousSourceBorrowBatch& candidates) {
             selectorCalled = true;
             checkEq(candidates.size(), 3u,
                     "selector sees the fixed candidate-span capacity");
-            checkEq(candidates[0].slotIndex, 0u,
-                    "selector sees first FIFO source");
-            checkEq(candidates[1].slotIndex, 1u,
-                    "selector sees second FIFO source");
-            checkEq(candidates[2].slotIndex, 2u,
-                    "selector sees third FIFO source");
-            checkEq(candidates[2].seqId, 3ull,
-                    "selector can inspect candidate metadata");
-            check(candidates[2].slot == fixture.slots[2].payload,
-                  "selector receives a resolved call-local payload view");
+            check(candidates.visitAt(0, [](const GenerationQualifiedSourceBorrow& candidate) {
+                      return candidate.slotIndex() == 0u;
+                    }),
+                  "selector sees first FIFO source");
+            check(candidates.visitAt(1, [](const GenerationQualifiedSourceBorrow& candidate) {
+                      return candidate.slotIndex() == 1u;
+                    }),
+                  "selector sees second FIFO source");
+            check(candidates.visitAt(2, [&](const GenerationQualifiedSourceBorrow& candidate) {
+                      bool payloadMatches = false;
+                      const bool payloadVisited = candidate.visitPayload(
+                          [&](const SynchronousSourcePayloadBorrow& payload) {
+                            payloadMatches = payload.isLegacy();
+                          });
+                      return candidate.slotIndex() == 2u &&
+                             candidate.seqId() == 3ull && payloadVisited &&
+                             payloadMatches;
+                    }),
+                  "selector sees third candidate metadata and payload");
             return 3u;
           });
 
@@ -1683,7 +1840,7 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
       fixture.controller.dequeueReadySlotBatchPrefix(
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource>) { return 0u; });
+          [](const SynchronousSourceBorrowBatch&) { return 0u; });
 
   checkEq(count, 1u, "rejected prefix falls back to one source");
   checkEq(fixture.cpuReadyTape.readyCount(), 2u,
@@ -1718,7 +1875,7 @@ void tentativeReadyPrefixKeepsControlsPendingAndSuffixReady() {
   std::unique_lock lock(fixture.mutex);
   checkEq(fixture.controller.reserveReadySlotBatchPrefix(
               lock, std::span<ReadySlotSnapshot>(snapshots),
-              [](std::span<const ResolvedPublishedSource>) { return 0u; }),
+              [](const SynchronousSourceBorrowBatch&) { return 0u; }),
           0u,
           "transactional selector rejection leaves the Ready FIFO intact");
   checkEq(fixture.cpuReadyTape.readyCount(), 3u,
@@ -1727,7 +1884,7 @@ void tentativeReadyPrefixKeepsControlsPendingAndSuffixReady() {
   const std::size_t count =
       fixture.controller.reserveReadySlotBatchPrefix(
           lock, std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource> candidates) {
+          [](const SynchronousSourceBorrowBatch& candidates) {
             checkEq(candidates.size(), 3u,
                     "tentative selector sees the bounded Ready prefix");
             return 2u;
@@ -1768,7 +1925,7 @@ void tentativeRestorePrecedesYoungerReadyPublication() {
   const std::size_t count =
       fixture.controller.reserveReadySlotBatchPrefix(
           lock, std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource>) { return 2u; });
+          [](const SynchronousSourceBorrowBatch&) { return 2u; });
   checkEq(count, 2u, "fixture reserves the older prefix");
 
   lock.unlock();
@@ -1803,7 +1960,7 @@ void tentativeCommitAloneMovesExactPrefixToEncoding() {
   const std::size_t count =
       fixture.controller.reserveReadySlotBatchPrefix(
           lock, std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource>) { return 2u; });
+          [](const SynchronousSourceBorrowBatch&) { return 2u; });
   checkEq(count, 2u, "fixture reserves two tentative sources");
   check(fixture.slots[0].state == ChunkSlot::State::Pending &&
             fixture.slots[1].state == ChunkSlot::State::Pending,
@@ -1847,7 +2004,7 @@ void tentativeQueueApisRejectUnlockedStaleAndTamperedSnapshots() {
   const std::size_t count =
       fixture.controller.reserveReadySlotBatchPrefix(
           lock, std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource>) { return 1u; });
+          [](const SynchronousSourceBorrowBatch&) { return 1u; });
   checkEq(count, 1u, "fixture reserves one tentative source");
 
   ReadySlotSnapshot tampered = snapshots[0];
@@ -2138,7 +2295,7 @@ void retainEncodedSourcesAcceptsSelectedPrefixMetadata() {
       fixture.controller.dequeueReadySlotBatchPrefix(
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
-          [](std::span<const ResolvedPublishedSource>) { return 3u; });
+          [](const SynchronousSourceBorrowBatch&) { return 3u; });
   checkEq(sourceCount, 3u, "test setup selects the whole source prefix");
 
   std::array<QueueCompletionSource, 3> retained{};
@@ -3587,6 +3744,7 @@ int main() {
     firstPublishSlotShapeKeepsNoPresentSlotUnclassified();
     runEncodeIterationPassesLiveSlotStorage();
     postEncodeRetiringControlRepresentsUnlockedReclaim();
+    synchronousSourceBatchRejectsStaleAndReclaimingBorrows();
     failedEncodeSubmissionDoesNotRunPostCommitCallbacks();
     compatibilityPublicationRetainsLegacyInflightLimit();
     commitStaleWritingStorageFailStopsWithoutMutation();

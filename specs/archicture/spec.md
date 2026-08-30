@@ -214,11 +214,17 @@ up to exactly one identity below.
 | `materialize.queue-final` | construct the surviving SoA record, owner, or byte range in `ChunkSlot` / `SourcePayloadBlockChain` | necessary | establishes immutable queue ownership |
 | `copy.gpu-upload` | copy final CPU bytes to a distinct GPU-readable allocation | necessary | this class exists only when the final CPU allocation is not GPU-readable; unified-memory in-place construction uses the next class instead |
 | `materialize.gpu-shared` | construct dirty GPU input directly in shared Metal storage | necessary | first and only GPU-readable owned representation |
+| `copy.arena.bytes` | append payload bytes into a Unix arena-owned byte chain | necessary | establishes the queue-visible arena representation |
+| `materialize.mutation.staging` | stage managed-buffer mutation bytes for deferred replay | necessary | preserves asynchronous offload ownership |
+| `materialize.up.scratch` | materialize user-provided UP bytes in the PE builder scratch region | necessary | keeps pointer-free wire construction transactional |
+| `materialize.pe.section-append` | append typed PE section bytes into the active builder | necessary | records the section ownership boundary before sealing |
 
 The classification is about the required architecture, not current cost.
 `gap.md` records which removable classes still exist. Each enabled ledger row
-reports `{identity, classification, calls, bytes, inclusive_cpu_time,
-peak_retained_bytes}`. Peak retention increases when a class creates or keeps a
+reports `{identity, classification, reason, calls, bytes, inclusive_cpu_time,
+peak_retained_bytes}`. `classification` is emitted as the stable name
+`necessary` or `removable`, and `reason` is a stable kebab-case name for the
+ownership/ABI rationale from the table above. Peak retention increases when a
 second live byte representation and decreases when that representation is
 released; it is not the maximum single call size. Cross-class totals may be
 shown only after every contributing row remains available. Inclusive timing
@@ -226,10 +232,12 @@ starts immediately before the class's source read/destination construction and
 ends when the destination representation is live; it excludes validation,
 resource resolution, queue waits, and semantic replay. Inclusive rows may
 overlap and must be marked non-additive unless the observer proves disjoint
-windows. Every emitted row is prefixed with its binary-qualified owner (for
+windows. Implicit Metal `newBuffer` and `replaceRegion` transfers report their
+known byte/call coverage with zero `inclusive_cpu_time`; their API duration can
+include allocation and driver work and is not charged to `copy_ns`. Every emitted row is prefixed with its binary-qualified owner (for
 example, `binary=unix owner=unix`); PE and Unix registries are separate, and
-the current production report emits only the Unix rows until a bounded PE
-Present/destruction report hook is added.
+the production PE device and Unix queue reports read only their corresponding
+owner registry.
 
 ### 2.4 Ownership refinement
 
@@ -243,9 +251,10 @@ The architecture-wide stages from R-ARCH-7.8 specialize as follows:
 | `FinalOwned` | immutable `ChunkSlot` / Arena payload chain and queue-owned re-entrant owners | synchronous encode borrow begins |
 | `Encoding` | call-local views held by the serial coordinator or bounded child | queue receipt or submitted work becomes completion authority |
 | `GPUInFlight` | command buffer, resource waterlines, receipt, query/frame token, and completion identity | ordered GPU/device-loss settlement |
+| `Completed` | ordered completion authority after GPU/device-loss settlement | all payload/resource/receipt/callback owners are eligible for final reclaim |
 | `Reclaimed` | no payload view, resource owner, receipt, or callback remains reachable | terminal |
 
-The stage names describe refinement, not seven mandatory allocations. Direct
+The stage names describe refinement, not eight mandatory allocations. Direct
 construction may combine representation changes within a stage, and state-only
 or rejected work may take an explicit no-GPU terminal path. The encode
 scheduling spec owns the concrete transaction, queue observer, and early

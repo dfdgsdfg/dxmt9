@@ -5,6 +5,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/progress_predicates.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -222,7 +223,10 @@ HRESULT Query::getData(void *output, size_t size, u32 flags,
     return S_OK;
   }
 
-  if (completedSequenceId < issuedSequenceId_) {
+  // Query::GetData is a non-blocking completion poll, not a condition-variable
+  // wait. FLUSH may publish pending work, but this predicate never blocks.
+  if (!dxmt9::queue::queryGetDataPollSatisfied(completedSequenceId,
+                                               issuedSequenceId_)) {
     if ((flags & QUERY_GETDATA_FLUSH) != 0) {
       // TLA+: QuerySeqId / GetDataFlush
       // The FLUSH caller has committed pending query records before this

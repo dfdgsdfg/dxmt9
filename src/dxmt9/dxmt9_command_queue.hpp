@@ -322,7 +322,8 @@ struct PresentOrdinalGate {
     return waitTarget != 0 && !aborted && completedOrdinal < waitTarget;
   }
   bool waitDone(std::uint64_t waitTarget, bool stopped) const {
-    return stopped || aborted || completedOrdinal >= waitTarget;
+    return ::dxmt9::queue::presentTokenWaitSatisfied(
+        completedOrdinal, waitTarget, stopped, aborted);
   }
 };
 
@@ -467,6 +468,11 @@ class CommandQueue {
 
   enum class CpuReadyArenaFailureClass : std::uint8_t {
     None,
+    Capacity,
+    Validation,
+    ResourceRetain,
+    Publication,
+    Completion,
     BuilderInitialization,
     ContextInvalid,
     Append,
@@ -1208,6 +1214,7 @@ class CommandQueue {
 
   void noteInitializerPendingUploads() noexcept;
   void emitCopyMaterializationReport() const noexcept;
+  void noteCopyMaterializationPublishedPresent() noexcept;
   void requestSchedulingStopLocked() noexcept;
   bool cpuReadyArenaControlSlotsFreeLocked(
       std::size_t requiredSlots) const noexcept;
@@ -1687,6 +1694,12 @@ class CommandQueue {
   // replayResolvedChunk has run, proving the caller fail-stops instead of
   // recursively replaying semantic effects. Never set by production.
   bool testOnlyForceNextCpuReadyArenaPostSemanticPublishFailure_ = false;
+  // Native-only deterministic fault seams for the complete transactional
+  // arena lifecycle. These are never armed by production callers.
+  bool testOnlyForceNextCpuReadyArenaCapacityFailure_ = false;
+  bool testOnlyForceNextCpuReadyArenaValidationFailure_ = false;
+  bool testOnlyForceNextCpuReadyArenaResourceRetainFailure_ = false;
+  bool testOnlyForceNextCpuReadyArenaPublicationFailure_ = false;
   // Native planner seam: tests may observe one event-wide planner result or
   // force that result invalid before any Ready/resource effect. These fields
   // are never armed by production callers.

@@ -371,6 +371,22 @@ void purePredicateTruthTables() {
   waiting.stopped = true;
   check(pipelineAdmissionWaitSatisfied(waiting, 7),
         "shutdown releases an admission waiter");
+
+  check(queryGetDataPollSatisfied(4, 4) &&
+            !queryGetDataPollSatisfied(3, 4),
+        "query poll predicate follows the completed-sequence watermark");
+  check(presentTokenWaitSatisfied(3, 3, false, false) &&
+            presentTokenWaitSatisfied(0, 3, true, false) &&
+            presentTokenWaitSatisfied(0, 3, false, true) &&
+            !presentTokenWaitSatisfied(2, 3, false, false),
+        "Present-token CV predicate admits completion, stop, or abort only");
+  check(ringAdmissionWaitSatisfied(false, false, false, false,
+                                           true, false) &&
+            ringAdmissionWaitSatisfied(true, false, true, true, false,
+                                               true) &&
+            !ringAdmissionWaitSatisfied(false, false, true, false,
+                                                true, false),
+        "ring/admission CV predicate preserves active-build pressure");
 }
 
 void presentOnlyAdmissionWedgeCompletes() {
@@ -418,6 +434,41 @@ void presentOnlyAdmissionWedgeCompletes() {
         "every production-owner event reaches the observer once");
   check(queue.events().size() == queue.ownerObserver().state().ownerEventCount,
         "owner sink retains each CV-boundary event without allocation");
+}
+
+void composedThreeAxisWakeIsDeterministic() {
+  PipelineQueueSnapshot before{
+      .completedSeq = 4,
+      .presentSeq = 3,
+      .capacityGeneration = 9,
+      .admissionWakeGeneration = 12,
+      .occupancy = 1,
+      .capacity = 1,
+      .admissionWaiters = 1,
+  };
+  check(!queryGetDataPollSatisfied(before.completedSeq, 5) &&
+            !presentTokenWaitSatisfied(before.presentSeq, 4, false,
+                                               false) &&
+            !ringAdmissionWaitSatisfied(
+                false, false, false, false, false, true),
+        "composed wake starts with all three production predicates closed");
+
+  const PipelineQueueSnapshot after{
+      .completedSeq = 5,
+      .presentSeq = 4,
+      .capacityGeneration = 10,
+      .admissionWakeGeneration = 13,
+      .occupancy = 0,
+      .capacity = 1,
+      .admissionWaiters = 1,
+  };
+  check(queryGetDataPollSatisfied(after.completedSeq, 5) &&
+            presentTokenWaitSatisfied(after.presentSeq, 4, false,
+                                               false) &&
+            ringAdmissionWaitSatisfied(
+                false, false, false, false, true, false) &&
+            pipelineTransitionRequiresAdmissionWake(before, after),
+        "one deterministic completion/reclaim event opens all three axes");
 }
 
 void deliberateNativeCounterexamples() {
@@ -610,6 +661,7 @@ int main() {
   try {
     purePredicateTruthTables();
     presentOnlyAdmissionWedgeCompletes();
+    composedThreeAxisWakeIsDeterministic();
     deliberateNativeCounterexamples();
     ownerEvidenceOverflowFailsClosed();
     failureAndShutdownRows();

@@ -31,7 +31,11 @@ class SubmissionDiagnosticsController;
 }
 
 namespace dxmt9 {
+class CommandQueue;
 class SchedulingProgressWatchdog;
+namespace render {
+class FrameGraphBackend;
+}
 }
 
 namespace dxmt9::core::metalqueue {
@@ -509,6 +513,56 @@ struct ResolvedPublishedSource {
   }
 };
 
+class QueueLifecycleController;
+class GenerationQualifiedSourceBorrow;
+class SynchronousSourcePayloadBorrow;
+class SynchronousSourceBorrowBatch;
+
+// Queue-owned liveness authority for synchronous source borrows. An epoch is
+// active only while QueueLifecycleController is invoking the associated
+// callback. Exact Tape source/storage generations are validated before unlock
+// and again after relock; unlocked capability access reads only the immutable
+// frozen record plus the atomic epoch. The locators remain pinned against the
+// queue's reclaim path throughout that interval.
+class SynchronousSourceBorrowWitness final {
+ public:
+  SynchronousSourceBorrowWitness(
+      const SynchronousSourceBorrowWitness&) = delete;
+  SynchronousSourceBorrowWitness& operator=(
+      const SynchronousSourceBorrowWitness&) = delete;
+
+ private:
+  friend class QueueLifecycleController;
+  friend class GenerationQualifiedSourceBorrow;
+  friend class SynchronousSourcePayloadBorrow;
+  friend class SynchronousSourceBorrowBatch;
+
+  SynchronousSourceBorrowWitness() = default;
+
+  std::uint64_t activate(
+      CpuReadyTape* tape,
+      std::span<const ResolvedPublishedSource> sources) noexcept;
+  void deactivate(std::uint64_t epoch) noexcept;
+  bool active(std::uint64_t epoch) const noexcept;
+  bool validatesTapeLocked(std::uint64_t epoch,
+                           const ResolvedPublishedSource& source,
+                           CpuReadyTape::State expectedState) const noexcept;
+  bool validatesFrozen(std::uint64_t epoch,
+                       const ResolvedPublishedSource& source) const noexcept;
+  std::span<const ResolvedPublishedSource> frozenSources(
+      std::uint64_t epoch) const noexcept;
+  bool invalidateFirstFrozenGenerationForTest() noexcept;
+  bool pins(CpuReadyTape::SourceRef source) const noexcept;
+
+  mutable std::mutex mutex_{};
+  std::atomic<std::uint64_t> activeEpoch_{0};
+  std::uint64_t nextEpoch_ = 1;
+  CpuReadyTape* tape_ = nullptr;
+  std::array<CpuReadyTape::SourceRef, kMaxReadyPrefixSources> pinnedSources_{};
+  std::array<ResolvedPublishedSource, kMaxReadyPrefixSources> frozenSources_{};
+  std::size_t pinnedSourceCount_ = 0;
+};
+
 static_assert(sizeof(ReadySlotSnapshot) <= 384,
               "Ready source capability must remain compact");
 static_assert(sizeof(ResolvedPublishedSource) <= 448,
@@ -519,6 +573,61 @@ static_assert(
              sizeof(ResolvedPublishedSource)) <=
         25u * 1024u,
         "Ready-prefix selector scratch must stay within its fixed stack budget");
+
+// Noncopyable, epoch-qualified access to one source payload. Public callers
+// receive only checked projections; the queue and concrete backend may unwrap
+// the underlying view while the surrounding queue-owned batch epoch is live.
+// Returned command/span projections are still borrowed C++ values: deliberate
+// address retention cannot be made impossible by the type system and remains
+// outside the synchronous callback contract.
+class SynchronousSourcePayloadBorrow final {
+ public:
+  SynchronousSourcePayloadBorrow(const SynchronousSourcePayloadBorrow&) = delete;
+  SynchronousSourcePayloadBorrow& operator=(
+      const SynchronousSourcePayloadBorrow&) = delete;
+  SynchronousSourcePayloadBorrow(SynchronousSourcePayloadBorrow&&) = delete;
+  SynchronousSourcePayloadBorrow& operator=(
+      SynchronousSourcePayloadBorrow&&) = delete;
+
+  bool valid() const noexcept;
+  bool isLegacy() const noexcept { return checkedView().isLegacy(); }
+  bool isArena() const noexcept { return checkedView().isArena(); }
+  std::size_t commandCount() const noexcept {
+    return checkedView().commandCount();
+  }
+  bool commandsEmpty() const noexcept { return commandCount() == 0u; }
+  std::size_t presentRecordCount() const noexcept {
+    return checkedView().presentRecordCount();
+  }
+  bool drawOnlyCommandStream() const noexcept {
+    return checkedView().drawOnlyCommandStream();
+  }
+  SourceCommandView commandAt(std::size_t index) const noexcept {
+    return checkedView().commandAt(index);
+  }
+
+ private:
+  friend class ::dxmt9::CommandQueue;
+  friend class ::dxmt9::render::FrameGraphBackend;
+  friend class GenerationQualifiedSourceBorrow;
+
+  SynchronousSourcePayloadBorrow(
+      const SynchronousSourceBorrowWitness& witness,
+      std::uint64_t epoch,
+      const ResolvedPublishedSource& resolved) noexcept
+      : witness_(&witness),
+        epoch_(epoch),
+        resolved_(&resolved) {}
+
+  SourcePayloadView checkedView() const noexcept;
+
+  const SynchronousSourceBorrowWitness* witness_ = nullptr;
+  std::uint64_t epoch_ = 0;
+  const ResolvedPublishedSource* resolved_ = nullptr;
+};
+
+static_assert(!std::is_copy_constructible_v<SynchronousSourcePayloadBorrow>);
+static_assert(!std::is_move_constructible_v<SynchronousSourcePayloadBorrow>);
 
 // A generation-qualified, synchronous capability.  It is intentionally
 // neither copyable nor movable, so a callback cannot place the capability in
@@ -533,49 +642,158 @@ class GenerationQualifiedSourceBorrow final {
   GenerationQualifiedSourceBorrow(GenerationQualifiedSourceBorrow&&) = delete;
   GenerationQualifiedSourceBorrow& operator=(GenerationQualifiedSourceBorrow&&) = delete;
 
-  bool valid() const noexcept { return valid_; }
+  bool valid() const noexcept;
   const CpuReadyTape::SourceRef& source() const noexcept { return source_; }
   const CpuReadySourceMetadata& metadata() const noexcept { return metadata_; }
   const SourceSemanticSummary& semantic() const noexcept { return semantic_; }
+  std::size_t slotIndex() const noexcept { return slotIndex_; }
   std::uint64_t seqId() const noexcept { return seqId_; }
   std::size_t commandBegin() const noexcept { return commandBegin_; }
   std::size_t commandCount() const noexcept { return commandCount_; }
   bool hasPresent() const noexcept { return hasPresent_; }
-  const SourcePayloadView& payload() const noexcept { return payload_; }
+
+  // Checked synchronous payload access. The callback receives a noncopyable
+  // capability rather than SourcePayloadView. C++ cannot prevent a hostile
+  // caller from retaining an address obtained from a command/span projection;
+  // that remains outside the contract, while normal capability access is
+  // epoch-checked and the queue invalidates the epoch on batch return.
+  template <typename Fn>
+  bool visitPayload(Fn&& fn) const noexcept {
+    if (!valid()) {
+      return false;
+    }
+    const SynchronousSourcePayloadBorrow payload(
+        *witness_, epoch_, *resolved_);
+    if constexpr (std::is_same_v<
+                      std::invoke_result_t<
+                          Fn&, const SynchronousSourcePayloadBorrow&>,
+                      bool>) {
+      return std::invoke(fn, payload);
+    } else {
+      std::invoke(fn, payload);
+      return true;
+    }
+  }
 
  private:
+  friend class SynchronousSourceBorrowBatch;
   friend class QueueLifecycleController;
 
   explicit GenerationQualifiedSourceBorrow(
+      const SynchronousSourceBorrowWitness& witness,
+      std::uint64_t epoch,
       const ResolvedPublishedSource& resolved) noexcept
-      : source_(resolved.source),
+      : witness_(&witness),
+        epoch_(epoch),
+        resolved_(&resolved),
+        source_(resolved.source),
+        slotIndex_(resolved.slotIndex),
         seqId_(resolved.seqId),
         metadata_(resolved.metadata),
         semantic_(resolved.semantic),
-        payload_(resolved.payload),
         hasPresent_(resolved.hasPresent),
         commandBegin_(resolved.commandBegin),
-        commandCount_(resolved.commandCount),
-        valid_(resolved.valid() && resolved.metadata.seqId == resolved.seqId &&
-               resolved.source.id == resolved.sourceId &&
-               resolved.source.storage == resolved.storage &&
-               resolved.commandBegin <= resolved.payload.commandCount() &&
-               resolved.commandCount <=
-                   resolved.payload.commandCount() - resolved.commandBegin) {}
+        commandCount_(resolved.commandCount) {}
 
+  const SynchronousSourceBorrowWitness* witness_ = nullptr;
+  std::uint64_t epoch_ = 0;
+  const ResolvedPublishedSource* resolved_ = nullptr;
   CpuReadyTape::SourceRef source_{};
+  std::size_t slotIndex_ = 0;
   std::uint64_t seqId_ = 0;
   CpuReadySourceMetadata metadata_{};
   SourceSemanticSummary semantic_{};
-  SourcePayloadView payload_{};
   bool hasPresent_ = false;
   std::size_t commandBegin_ = 0;
   std::size_t commandCount_ = 0;
-  bool valid_ = false;
 };
 
 static_assert(!std::is_copy_constructible_v<GenerationQualifiedSourceBorrow>);
 static_assert(!std::is_move_constructible_v<GenerationQualifiedSourceBorrow>);
+
+// A call-local collection of generation-qualified borrows.  The backing
+// records remain owned by the queue's selected-prefix scratch; this wrapper
+// deliberately exposes no span, iterator, or element reference.  Consumers
+// must process each borrow during visit(), so a backend cannot accidentally
+// put a borrowed source view into a session, completion record, or async
+// closure.  The queue keeps the represented sources pinned until the visit
+// returns.
+class SynchronousSourceBorrowBatch final {
+ public:
+  SynchronousSourceBorrowBatch(const SynchronousSourceBorrowBatch&) = delete;
+  SynchronousSourceBorrowBatch& operator=(
+      const SynchronousSourceBorrowBatch&) = delete;
+  SynchronousSourceBorrowBatch(SynchronousSourceBorrowBatch&&) = delete;
+  SynchronousSourceBorrowBatch& operator=(SynchronousSourceBorrowBatch&&) =
+      delete;
+
+  std::size_t size() const noexcept { return sources_.size(); }
+  bool empty() const noexcept { return sources_.empty(); }
+  bool live() const noexcept;
+
+  template <typename Fn>
+  bool visitAt(std::size_t index, Fn&& fn) const noexcept {
+    if (!live() || index >= sources_.size()) {
+      return false;
+    }
+    const GenerationQualifiedSourceBorrow borrow(
+        *witness_, epoch_, sources_[index]);
+    if (!borrow.valid()) {
+      return false;
+    }
+    if constexpr (std::is_same_v<
+                      std::invoke_result_t<Fn&, const GenerationQualifiedSourceBorrow&>,
+                      bool>) {
+      return std::invoke(fn, borrow);
+    } else {
+      std::invoke(fn, borrow);
+      return true;
+    }
+  }
+
+  template <typename Fn>
+  bool visit(Fn&& fn) const noexcept {
+    for (std::size_t i = 0; i < sources_.size(); ++i) {
+      if (!live()) {
+        return false;
+      }
+      const GenerationQualifiedSourceBorrow borrow(
+          *witness_, epoch_, sources_[i]);
+      if (!borrow.valid()) {
+        return false;
+      }
+      if constexpr (std::is_same_v<
+                        std::invoke_result_t<Fn&, const GenerationQualifiedSourceBorrow&,
+                                             std::size_t>,
+                        bool>) {
+        if (!std::invoke(fn, borrow, i)) {
+          return false;
+        }
+      } else {
+        std::invoke(fn, borrow, i);
+      }
+    }
+    return true;
+  }
+
+ private:
+  friend class QueueLifecycleController;
+
+  SynchronousSourceBorrowBatch(
+      const SynchronousSourceBorrowWitness& witness,
+      std::uint64_t epoch,
+      std::span<const ResolvedPublishedSource> sources) noexcept
+      : witness_(&witness),
+        epoch_(epoch),
+        sources_(sources) {}
+
+  const SynchronousSourceBorrowWitness* witness_ = nullptr;
+  std::uint64_t epoch_ = 0;
+  std::span<const ResolvedPublishedSource> sources_{};
+};
+
+static_assert(!std::is_copy_constructible_v<SynchronousSourceBorrowBatch>);
+static_assert(!std::is_move_constructible_v<SynchronousSourceBorrowBatch>);
 
 // Stable, pointer-free attribution for one logical command in a published
 // source. The Tape source/storage generations disambiguate recycled control
@@ -602,12 +820,44 @@ static_assert(std::is_standard_layout_v<PublishedCommandRef>);
 QueueCompletionSource completionSourceForReadySlot(
     const ReadySlotSnapshot& snapshot) noexcept;
 
+// Non-owning call-local thunk for hot queue selectors. It never allocates;
+// callers must not retain it beyond the invoking queue operation.
+template <typename Signature>
+class QueueBorrowCallbackRef;
+
+template <typename Result, typename... Args>
+class QueueBorrowCallbackRef<Result(Args...)> final {
+ public:
+  QueueBorrowCallbackRef() = default;
+
+  template <typename Fn>
+    requires (!std::is_same_v<std::remove_cvref_t<Fn>, QueueBorrowCallbackRef> &&
+              std::is_invocable_r_v<Result, Fn&, Args...>)
+  QueueBorrowCallbackRef(Fn&& fn) noexcept
+      : context_(std::addressof(fn)),
+        invoke_([](void* context, Args... args) -> Result {
+          using Callable = std::remove_reference_t<Fn>;
+          return std::invoke(*static_cast<Callable*>(context),
+                             std::forward<Args>(args)...);
+        }) {}
+
+  explicit operator bool() const noexcept { return invoke_ != nullptr; }
+  Result operator()(Args... args) const {
+    return invoke_(context_, std::forward<Args>(args)...);
+  }
+
+ private:
+  void* context_ = nullptr;
+  Result (*invoke_)(void*, Args...) = nullptr;
+};
+
 using ReadySlotBatchAppendPredicate =
-    std::function<bool(std::span<const ResolvedPublishedSource> selected,
-                       size_t candidateSlotIndex,
-                       const SourcePayloadView& candidatePayload)>;
+    QueueBorrowCallbackRef<bool(
+        std::size_t selectedCount,
+        const GenerationQualifiedSourceBorrow& candidate)>;
 using ReadySlotBatchPrefixSelector =
-    std::function<size_t(std::span<const ResolvedPublishedSource> candidates)>;
+    QueueBorrowCallbackRef<
+        size_t(const SynchronousSourceBorrowBatch& candidates)>;
 
 struct QueueSubmissionRecord {
   struct RenderEncoderGpuSample {
@@ -995,7 +1245,7 @@ class QueueLifecycleController {
   // TLA+: WriterAcquire, WriterWaitBegin, WriterWaitEnd.
   bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
   // TLA+: Present enqueue + CommitPublish for a present-bearing chunk.
-  void presentAndCommit(std::unique_lock<std::mutex>& lock,
+  bool presentAndCommit(std::unique_lock<std::mutex>& lock,
                         size_t inflightLimit,
                         const SwapDesc& present,
                         Handle sourceHandle,
@@ -1043,6 +1293,34 @@ class QueueLifecycleController {
       std::span<const ReadySlotSnapshot> sources);
   ResolvedPublishedSource resolveRepresentedSource(
       const ReadySlotSnapshot& source) const noexcept;
+  // Issue a non-forgeable callback-scoped batch after validating every source
+  // against the queue-owned Tape state. The batch constructor is private;
+  // these are the only backend-facing issuance paths.
+  template <typename Visitor>
+  bool visitTentativeSourceBorrows(
+      std::unique_lock<std::mutex>& lock,
+      std::span<const ResolvedPublishedSource> sources,
+      Visitor&& visitor) {
+    return visitSourceBorrows(
+        lock, sources, CpuReadyTape::State::TentativeRepresented,
+        std::forward<Visitor>(visitor));
+  }
+  template <typename Visitor>
+  bool visitRepresentedSourceBorrows(
+      std::unique_lock<std::mutex>& lock,
+      std::span<const ResolvedPublishedSource> sources,
+      Visitor&& visitor) {
+    return visitSourceBorrows(lock, sources, CpuReadyTape::State::Represented,
+                              std::forward<Visitor>(visitor));
+  }
+  // Native-only seam for the post-callback validation negative. It corrupts
+  // the frozen expected generation, never the queue-owned Tape, and therefore
+  // must be consumed by the active visit's locked post-validation.
+  bool invalidateActiveBorrowGenerationForTest(
+      std::unique_lock<std::mutex>& lock) noexcept {
+    return lock.owns_lock() && lock.mutex() == submissionBinding_.mutex &&
+        sourceBorrowWitness_.invalidateFirstFrozenGenerationForTest();
+  }
   // Retire one fully encoded source while retaining locator-free completion
   // authority. The caller owns the queue scheduling lock; Arena destruction
   // and Legacy payload clearing run outside it, then the transaction relocks
@@ -1169,6 +1447,64 @@ class QueueLifecycleController {
       const NoEnqueueFirstPublishSlotShape& shape);
 
  private:
+  template <typename Visitor>
+  bool visitSourceBorrows(
+      std::unique_lock<std::mutex>& lock,
+      std::span<const ResolvedPublishedSource> sources,
+      CpuReadyTape::State expectedState,
+      Visitor&& visitor) {
+    static_assert(std::is_nothrow_invocable_r_v<
+                  bool, Visitor&, const SynchronousSourceBorrowBatch&>);
+    if (!lock.owns_lock() || lock.mutex() != submissionBinding_.mutex ||
+        !submissionBinding_.cpuReadyTape ||
+        sources.size() > kMaxReadyPrefixSources) {
+      return false;
+    }
+    const std::uint64_t epoch = sourceBorrowWitness_.activate(
+        submissionBinding_.cpuReadyTape, sources);
+    if (epoch == 0u) {
+      return false;
+    }
+    struct EpochGuard {
+      std::unique_lock<std::mutex>& lock;
+      SynchronousSourceBorrowWitness& witness;
+      std::uint64_t epoch;
+      ~EpochGuard() {
+        // A callback may release the scheduling mutex only for its bounded
+        // backend work. Restore queue ownership before removing the pin so no
+        // reclaim transition can fit between deactivation and reacquisition.
+        if (!lock.owns_lock()) {
+          lock.lock();
+        }
+        witness.deactivate(epoch);
+      }
+    } guard{lock, sourceBorrowWitness_, epoch};
+
+    const auto frozenSources = sourceBorrowWitness_.frozenSources(epoch);
+    if (frozenSources.size() != sources.size()) {
+      return false;
+    }
+    for (const auto& source : frozenSources) {
+      if (!sourceBorrowWitness_.validatesTapeLocked(
+              epoch, source, expectedState)) {
+        return false;
+      }
+    }
+    const SynchronousSourceBorrowBatch batch(
+        sourceBorrowWitness_, epoch, frozenSources);
+    const bool accepted = std::invoke(visitor, batch);
+    if (!lock.owns_lock()) {
+      lock.lock();
+    }
+    for (const auto& source : frozenSources) {
+      if (!sourceBorrowWitness_.validatesTapeLocked(
+              epoch, source, expectedState)) {
+        poisonTapeFailureLocked();
+        return false;
+      }
+    }
+    return accepted;
+  }
   QueueControllerState currentState() const;
   QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
 #ifndef NDEBUG
@@ -1267,6 +1603,7 @@ class QueueLifecycleController {
   bool submit(QueueSubmissionRecord& record);
 
   SubmissionBinding submissionBinding_{};
+  SynchronousSourceBorrowWitness sourceBorrowWitness_{};
   std::array<ReadySlotSnapshot, kMaxReadyPrefixSources>
       tentativeReadyPrefix_{};
   size_t tentativeReadyPrefixCount_ = 0;
@@ -1357,6 +1694,16 @@ class QueueLifecycleController {
   // path without manufacturing a fake Objective-C command-buffer handle.
   // Production submissions enter the same pending queue through submit().
   void enqueuePendingCompletionForTest(PendingCompletion pending);
+  // Native-only deterministic completion seam. It is consumed after a
+  // pending item is dequeued but before any completion-side effect.
+  void forceNextCompletionFailureForTest() noexcept {
+    std::lock_guard lock(pendingCompletionMutex_);
+    testOnlyForceNextCompletionFailure_ = true;
+  }
+  std::size_t pendingCompletionCountForTest() noexcept {
+    std::lock_guard lock(pendingCompletionMutex_);
+    return pendingCompletion_.size();
+  }
   std::optional<PostEncodeCompletionReceipt> postEncodeReceiptForTest(
       u64 seqId, PostEncodeReceiptState state) const noexcept {
     return postEncodeCompletionLedger_.receiptFor(seqId, state);
@@ -1425,6 +1772,7 @@ class QueueLifecycleController {
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
   bool pendingCompletionStop_ = false;
+  bool testOnlyForceNextCompletionFailure_ = false;
   void* pendingCompletionWaitObserverContext_ = nullptr;
   PendingCompletionWaitObserverForTest pendingCompletionWaitObserver_ =
       nullptr;

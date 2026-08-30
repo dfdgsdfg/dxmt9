@@ -76,6 +76,12 @@ static_assert(dxmt9::core::copyMaterializationClassification(
                   dxmt9::core::CopyMaterializationClass::
                       QueueFinalSlotAppend) ==
               dxmt9::core::CopyMaterializationClassification::Necessary);
+static_assert(std::string_view(dxmt9::core::copyMaterializationClassificationName(
+                  dxmt9::core::CopyMaterializationClassification::Removable)) ==
+              "removable");
+static_assert(std::string_view(dxmt9::core::copyMaterializationOwnershipAbiReason(
+                  dxmt9::core::CopyMaterializationClass::BridgeRawOwnership)) ==
+              "process-abi-ownership-no-shared-ownership-abi");
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -824,7 +830,8 @@ void testReplayAssemblerConsumesScratchIntoFinalArena() {
             assembler.tryAppendStretchRect({}) &&
             assembler.tryAppendColorFill({}) &&
             assembler.tryAppendDepthResolve({}) &&
-            assembler.commandCount() == 6 && assembler.commit(),
+            assembler.commandCount() == 6 &&
+            assembler.commitValueOnlyForTest(),
         "replay assembler moves draw and eligible nondraw work into final SoAs");
 
   const SourcePayloadView view(block);
@@ -985,7 +992,8 @@ void testDirectAssemblerDifferentialAndConservation() {
         "direct assembler binds the outer page/control/sequence/resource witness");
   dxmt9::core::CopyMaterializationLedger ledger;
   {
-    dxmt9::core::ScopedCopyMaterializationLedger observe(ledger);
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        dxmt9::core::CopyMaterializationOwner::Unix, ledger);
     check(legacy.tryAppendDrawRunBatch(legacySubmissions) &&
               legacy.tryAppendClear(mixedClear) &&
               legacy.tryAppendSurfaceCopy(mixedCopy) &&
@@ -1022,7 +1030,8 @@ void testDirectAssemblerDifferentialAndConservation() {
               direct.tryAppendReadback(mixedReadback) &&
               direct.tryAppendPresent(std::move(mixedPresent)),
           "direct mixed draw/control/readback/present append must succeed");
-    check(direct.commit(), "direct differential fixture must commit");
+    check(direct.commitValueOnlyForTest(),
+          "direct differential fixture must commit");
   }
 
   const SourcePayloadView legacyView(legacyBlock);
@@ -1114,8 +1123,7 @@ void testDirectAssemblerDifferentialAndConservation() {
       sizeof(DrawShaderLayoutContext) + sizeof(DrawDebugSnapshot) +
       3u * (sizeof(DrawParam) + sizeof(dxmt9::core::DrawUniformPayload)) +
       legacyView.drawPayloadBytes().size();
-  check(carrier.calls == 1u &&
-            carrier.bytes == 3u * sizeof(DrawRunSubmission) &&
+  check(carrier.calls == 0u && carrier.bytes == 0u &&
             carrierMaterialization.semanticCalls == 1u &&
             carrierMaterialization.semanticBytes ==
                 sizeof(FlatDrawStateRecord) +
@@ -1124,8 +1132,8 @@ void testDirectAssemblerDifferentialAndConservation() {
             queueFinal.semanticCalls != 0u &&
             queueFinal.calls == 4u &&
             queueFinal.bytes == 2u * expectedFinalBytes,
-        "ledger distinguishes legacy carrier copying while conserving equal "
-        "legacy/direct final destination bytes");
+        "ledger omits the false batch carrier-copy event while conserving "
+        "real materialization and final destination bytes");
   legacyBlock.destroyConstructed();
   directBlock.destroyConstructed();
 }
@@ -1151,16 +1159,63 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
   const auto peBefore = pe.snapshot(CopyMaterializationClass::PeStateShadow);
   const auto unixBefore =
       unix.snapshot(CopyMaterializationClass::QueueFinalSlotAppend);
-  pe.record(CopyMaterializationClass::PeStateShadow, 7u);
-  unix.record(CopyMaterializationClass::QueueFinalSlotAppend, 11u);
+  const auto peRawBefore =
+      pe.snapshot(CopyMaterializationClass::BridgeRawOwnership);
+  const auto unixRawBefore =
+      unix.snapshot(CopyMaterializationClass::BridgeRawOwnership);
+  const auto peMutationBefore =
+      pe.snapshot(CopyMaterializationClass::MutationStaging);
+  const auto unixMutationBefore =
+      unix.snapshot(CopyMaterializationClass::MutationStaging);
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger routePe(
+        CopyMaterializationOwner::Pe, pe);
+    dxmt9::core::ScopedCopyMaterializationLedger routeUnix(
+        CopyMaterializationOwner::Unix, unix);
+    dxmt9::core::activeCopyMaterializationLedger(CopyMaterializationOwner::Pe)
+        ->record(CopyMaterializationClass::PeStateShadow, 7u);
+    dxmt9::core::activeCopyMaterializationLedger(
+        CopyMaterializationOwner::Unix)
+        ->record(CopyMaterializationClass::QueueFinalSlotAppend, 11u);
+    // These are the exact semantic events emitted by the Unix provider's raw
+    // import and managed-mutation offload paths. Keep them in the Unix row even
+    // when this native test links PE and Unix code into one image.
+    dxmt9::core::activeCopyMaterializationLedger(
+        CopyMaterializationOwner::Unix)
+        ->recordMaterialization(CopyMaterializationClass::BridgeRawOwnership,
+                                19u);
+    dxmt9::core::activeCopyMaterializationLedger(
+        CopyMaterializationOwner::Unix)
+        ->recordMaterialization(CopyMaterializationClass::MutationStaging,
+                                23u);
+  }
   const auto peAfter = pe.snapshot(CopyMaterializationClass::PeStateShadow);
   const auto unixAfter =
       unix.snapshot(CopyMaterializationClass::QueueFinalSlotAppend);
+  const auto peRawAfter =
+      pe.snapshot(CopyMaterializationClass::BridgeRawOwnership);
+  const auto unixRawAfter =
+      unix.snapshot(CopyMaterializationClass::BridgeRawOwnership);
+  const auto peMutationAfter =
+      pe.snapshot(CopyMaterializationClass::MutationStaging);
+  const auto unixMutationAfter =
+      unix.snapshot(CopyMaterializationClass::MutationStaging);
   check(peAfter.calls == peBefore.calls + 1u &&
             peAfter.bytes == peBefore.bytes + 7u &&
             unixAfter.calls == unixBefore.calls + 1u &&
             unixAfter.bytes == unixBefore.bytes + 11u,
         "two live binary owners retain independent report snapshots");
+  check(peRawAfter.semanticCalls == peRawBefore.semanticCalls &&
+            peRawAfter.semanticBytes == peRawBefore.semanticBytes &&
+            unixRawAfter.semanticCalls == unixRawBefore.semanticCalls + 1u &&
+            unixRawAfter.semanticBytes == unixRawBefore.semanticBytes + 19u &&
+            peMutationAfter.semanticCalls == peMutationBefore.semanticCalls &&
+            peMutationAfter.semanticBytes == peMutationBefore.semanticBytes &&
+            unixMutationAfter.semanticCalls ==
+                unixMutationBefore.semanticCalls + 1u &&
+            unixMutationAfter.semanticBytes == unixMutationBefore.semanticBytes +
+                23u,
+        "Unix raw ownership and mutation staging never leak into the PE row");
   check(std::string_view(dxmt9::core::copyMaterializationOwnerName(
                              CopyMaterializationOwner::Pe)) == "pe" &&
             std::string_view(dxmt9::core::copyMaterializationOwnerName(
@@ -1170,18 +1225,76 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
       CopyMaterializationClass::PeStateShadow);
   check(std::string_view(descriptor.identity) ==
             "materialize.pe.state-shadow" &&
+            std::string_view(descriptor.classificationName) == "necessary" &&
             descriptor.classification ==
-                dxmt9::core::CopyMaterializationClassification::Necessary,
-        "classification snapshot preserves stable identity and disposition");
+                dxmt9::core::CopyMaterializationClassification::Necessary &&
+            std::string_view(descriptor.ownershipAbiReason) ==
+                "producer-visible-d3d9-state-semantics",
+        "classification snapshot preserves stable identity, disposition, and reason");
+  constexpr std::array descriptorClasses{
+      CopyMaterializationClass::PeStateShadow,
+      CopyMaterializationClass::PeWireFinal,
+      CopyMaterializationClass::PeBuilderTemporary,
+      CopyMaterializationClass::PeSealRecords,
+      CopyMaterializationClass::PeSealHandles,
+      CopyMaterializationClass::PeSealPayload,
+      CopyMaterializationClass::BridgeRawOwnership,
+      CopyMaterializationClass::ReplaySubmissionCarrierMaterialization,
+      CopyMaterializationClass::ReplaySubmissionCarrierCopy,
+      CopyMaterializationClass::QueueFinalSlotAppend,
+      CopyMaterializationClass::GpuUploadCopy,
+      CopyMaterializationClass::GpuSharedMaterialization,
+      CopyMaterializationClass::ArenaByteCopy,
+      CopyMaterializationClass::MutationStaging,
+      CopyMaterializationClass::UpScratch,
+      CopyMaterializationClass::PeSectionAppend,
+  };
+  for (const auto materializationClass : descriptorClasses) {
+    const auto row = dxmt9::core::copyMaterializationDescriptor(
+        materializationClass);
+    check(std::string_view(row.identity) != "unknown" &&
+              (std::string_view(row.classificationName) == "necessary" ||
+               std::string_view(row.classificationName) == "removable") &&
+              std::string_view(row.ownershipAbiReason) != "" &&
+              std::string_view(row.ownershipAbiReason) !=
+                  "unknown-copy-materialization-class",
+          "every stable copy class has identity, classification, and named reason");
+  }
+
+  dxmt9::core::CopyMaterializationLedger scopedPe;
+  dxmt9::core::CopyMaterializationLedger scopedUnix;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observePe(
+        CopyMaterializationOwner::Pe, scopedPe);
+    dxmt9::core::ScopedCopyMaterializationLedger observeUnix(
+        CopyMaterializationOwner::Unix, scopedUnix);
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) == &scopedPe &&
+              dxmt9::core::activeCopyMaterializationLedger(
+                  CopyMaterializationOwner::Unix) == &scopedUnix,
+          "owner-qualified test sinks keep PE and Unix production rows distinct");
+    dxmt9::core::activeCopyMaterializationLedger(
+        CopyMaterializationOwner::Unix)
+        ->recordMaterialization(CopyMaterializationClass::BridgeRawOwnership,
+                                29u);
+    check(scopedUnix.snapshot(CopyMaterializationClass::BridgeRawOwnership)
+                  .semanticCalls == 1u &&
+              scopedPe.snapshot(CopyMaterializationClass::BridgeRawOwnership)
+                      .semanticCalls == 0u,
+          "owner-qualified sink receives only the selected Unix row");
+  }
 
   dxmt9::core::CopyMaterializationLedger scoped;
   {
-    dxmt9::core::ScopedCopyMaterializationLedger observe(scoped);
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        CopyMaterializationOwner::Unix, scoped);
     check(dxmt9::core::activeCopyMaterializationLedger(
-              CopyMaterializationOwner::Pe) == &scoped &&
-              dxmt9::core::activeCopyMaterializationLedger(
-                  CopyMaterializationOwner::Unix) == &scoped,
-          "test sink is scoped without replacing production owner storage");
+              CopyMaterializationOwner::Unix) == &scoped,
+          "owner-qualified test sink is scoped without replacing PE storage");
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) ==
+              (dxmt9::core::copyMaterializationLedgerEnabled() ? &pe : nullptr),
+          "owner-qualified Unix sink does not intercept PE rows");
   }
   const auto* restored = dxmt9::core::activeCopyMaterializationLedger(
       CopyMaterializationOwner::Unix);
@@ -1227,6 +1340,28 @@ void testTransactionalAssemblerRollbackReclaimsDestination() {
             dxmt9::core::ArenaSourcePayloadBlockTestAccess::
                 drawStorageEmpty(block),
         "rollback reclaims partial final destination and publishes nothing");
+}
+
+void testProductionCommitRequiresTypedEvidence() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeSourcePayloadLayout(capacity, 4096, 2);
+  check(layout.has_value(), "strict commit fixture layout must build");
+  std::vector<std::max_align_t> backing;
+  ArenaSourcePayloadBlock block;
+  ArenaSourcePayloadBuilder builder(
+      block, *layout, alignedBacking(backing, layout->usedBytes));
+  TransactionalChunkSlotAssembler assembler(builder);
+  check(assembler.tryAppendClear({}) && assembler.prepare() &&
+            assembler.state() == TransactionalChunkSlotAssembler::State::Prepared,
+        "strict commit fixture must reach Prepared");
+  check(!assembler.commit() &&
+            assembler.state() == TransactionalChunkSlotAssembler::State::Failed,
+        "production commit must reject missing typed live evidence");
+  assembler.rollback();
+  check(!block.published(),
+        "missing commit evidence must rollback the prepared destination");
 }
 
 void testArenaChainMapsOneLogicalCommandSpaceWithoutGather() {
@@ -1322,6 +1457,7 @@ int main() {
     testDirectAssemblerDifferentialAndConservation();
     testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
+    testProductionCommitRequiresTypedEvidence();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();
   } catch (const std::exception& error) {

@@ -391,6 +391,11 @@ const char* cpuReadyArenaFailureClassName(
   using Failure = dxmt9::CommandQueue::CpuReadyArenaFailureClass;
   switch (failureClass) {
   case Failure::None: return "none";
+  case Failure::Capacity: return "capacity";
+  case Failure::Validation: return "validation";
+  case Failure::ResourceRetain: return "resource_retain";
+  case Failure::Publication: return "publication";
+  case Failure::Completion: return "completion";
   case Failure::BuilderInitialization: return "builder_initialization";
   case Failure::ContextInvalid: return "context_invalid";
   case Failure::Append: return "append";
@@ -440,7 +445,7 @@ const char* cpuReadyArenaBeginStopReasonName(
 void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
   if (!chunk.recordBlob.empty()) {
     if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-            dxmt9::core::CopyMaterializationOwner::Pe)) {
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
       ledger->release(
           dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
           chunk.recordBlob.size());
@@ -1998,7 +2003,7 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
   bool ledgerPublished = false;
   try {
     auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-        dxmt9::core::CopyMaterializationOwner::Pe);
+        dxmt9::core::CopyMaterializationOwner::Unix);
     std::optional<dxmt9::core::CopyMaterializationEvent> rawOwnershipCopy;
     if (ledger) {
       rawOwnershipCopy.emplace(

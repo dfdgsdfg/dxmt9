@@ -573,12 +573,13 @@ capture rejection through the same pure helpers.
 ### 6.1 Direct final-wire transaction and semantic projection
 
 The direct-wire workstream specializes R-ARCH-7.7–7.10 and does not own the
-backend `ChunkSlot` transaction. Its proposed destination owner is a
-transactional final-blob layout with four regions known before producer
-execution:
+backend `ChunkSlot` transaction. `planExactCommandChunkLayout` and the exact
+`CommandChunkBuilder` constructor now provide an internal transactional
+final-blob primitive with four regions known before producer execution:
 
 ```text
-reserve(total bytes, record capacity, handle capacity, payload capacity)
+planExact(record count, unique-handle count, payload bytes)
+  -> reserve(exact total bytes and final region offsets)
   -> build header/table/arena through typed call-local sinks
   -> validate exact used prefixes and settlement witnesses
   -> commit one immutable pointer-free blob
@@ -586,12 +587,28 @@ reserve(total bytes, record capacity, handle capacity, payload capacity)
 ```
 
 No producer receives the base pointer or an unbounded mutable span. The sink
-accepts one checked element or exact typed range, advances monotonically within
-its reserved region, and records every newly acquired retain in the transaction
-checkpoint. Header counts and offsets are finalized only after all regions
-validate; commit is then infallible. Repeated seal returns the same committed
-bytes. Reset or rollback destroys the transaction before releasing recorder
-ownership, so no callback can observe a half-built wire identity.
+accepts one checked element or exact typed range and advances monotonically
+within its reserved region. Exact mode writes record headers and handle entries
+directly into their final tables and payload bytes directly into the final
+arena; the legacy wire record, wire handle, and payload vectors remain empty.
+Record `payloadOffset` values remain relative to the payload arena. Used-prefix
+counts live in the private final header while the transaction is unsealed;
+handle dedup and rollback use those counts, `handleObjects_`, and reads from the
+final handle table. Every newly acquired retain remains in the existing active-
+record checkpoint. Seal requires exact plan exhaustion before publishing,
+repeated seal returns the same committed bytes, and Reset reuses the fixed
+layout while preserving the existing warm-retainer policy.
+
+This primitive is not selected by normal production recording. The current
+`D3D9DeviceImpl::appendRecord` boundary owns one D3D9 call at a time, and
+CapacityPre/CapacityPost may flush according to counts accumulated so far;
+neither it nor `flushPendingCommandChunk` owns the future calls that will
+complete the chunk. Render Tape snapshot construction is a separate mutable
+bootstrap path, not a replayable normal command batch. Production selection
+therefore requires the missing replayable producer transaction from
+R-CORE-REC-7.2.1: one owner of a complete immutable batch, side-effect-free
+exact planning, and a second traversal of the same owned inputs without
+retaining call-local borrows or changing chunk cadence.
 
 `RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
 not new owners. They carry the recorder epoch and transaction identity, have no
@@ -608,13 +625,17 @@ existing scalar and StateBlock projections; it does not infer semantics from a
 wire type or payload size. The default path need not retain the token ledger.
 When disabled, one cached-null branch is the full hot-path cost.
 
-The legacy/direct harness runs both builders from one immutable canonical
-fixture. It compares complete wire bytes and owner/settlement outcomes before
-import, then imports both blobs and compares the effective command sequence.
-Failure cases stop at the same injected fallible boundary and compare rollback,
-retry, poison, and capture results. Cross-target PE builds plus the bounded Wine
-matrix in R-CORE-REC-7.5 are required because host-only value tests cannot
-exercise the PE COM and bridge failure boundary.
+The bounded native legacy/direct fixture runs both builders from one immutable
+canonical batch. It currently proves complete wire-byte identity, arena-
+relative offsets, duplicate-handle behavior, retain rollback, underfilled-seal
+retry, repeated seal, Reset reuse, and absence of the physically eliminated PE
+temporary/seal materializations. The promotion harness must additionally
+compare all command families and owner/settlement outcomes before import, then
+import both blobs and compare the effective command sequence. Failure cases
+must stop at the same injected fallible boundary and compare rollback, retry,
+poison, and capture results. Cross-target PE builds plus the bounded Wine matrix
+in R-CORE-REC-7.5 are required because host-only value tests cannot exercise
+the PE COM and bridge failure boundary.
 
 Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or

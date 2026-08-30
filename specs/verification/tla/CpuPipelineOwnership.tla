@@ -13,6 +13,16 @@
  * executable expected-failure configurations.  The production configuration
  * requires an admission wake, complete publication, join before completion
  * authority, and completion before owner reclaim.
+ *
+ * The concrete borrow binding is deliberately narrower than this abstract
+ * state machine: GenerationQualifiedSourceBorrow is non-copyable and is
+ * created only for the synchronous encode/plan/observe visit; the only value
+ * permitted across a worker or completion boundary is
+ * WorkerOwnedSourceSnapshot.  In this model, borrowCount=1 therefore denotes
+ * only the queue-issued synchronous replay/encode/plan/observe visit.  It does
+ * not claim concrete bindings for DCE/lookahead, session, partition,
+ * selected-child, observer, or completion-callback surfaces; those remain
+ * separate implementation/evidence gaps until they use the same capability.
  *)
 
 EXTENDS Naturals, FiniteSets, TLC

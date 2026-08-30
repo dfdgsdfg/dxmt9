@@ -90,31 +90,296 @@ CommandChunkBuilder::CommandChunkBuilder(
   recordLocalDedup_.init(capacities.handles);
 }
 
+CommandChunkBuilder::CommandChunkBuilder(
+    const ExactCommandChunkLayoutPlan& plan)
+    : retainer_(plan.valid() ? plan.handleCount : 0u),
+      exactFinalLayout_(true) {
+  if (!plan.valid()) {
+    return;
+  }
+  handleObjects_.reserve(plan.handleCount);
+  sealedBlob_.resize(plan.totalBytes, std::byte{0});
+  handlePresence_.init(plan.handleCount);
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = plan.recordTableOffset,
+      .recordCount = 0u,
+      .handleTableOffset = plan.handleTableOffset,
+      .handleCount = 0u,
+      .payloadArenaOffset = plan.payloadArenaOffset,
+      .payloadArenaSize = 0u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  std::memcpy(sealedBlob_.data(), &header, sizeof(header));
+}
+
 CommandChunkBuilder::~CommandChunkBuilder() {
   resetAndReleaseRetained();
 }
 
+std::size_t CommandChunkBuilder::recordCount() const noexcept {
+  if (!exactFinalLayout_) {
+    return records_.size();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  return header.recordCount;
+}
+
+std::size_t CommandChunkBuilder::handleCount() const noexcept {
+  if (!exactFinalLayout_) {
+    return handles_.size();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  return header.handleCount;
+}
+
+std::size_t CommandChunkBuilder::currentPayloadBytes() const noexcept {
+  if (!exactFinalLayout_) {
+    return payload_.size();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  return header.payloadArenaSize;
+}
+
+std::size_t CommandChunkBuilder::plannedRecordCount() const noexcept {
+  if (!exactFinalLayout_ ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  if (header.handleTableOffset < header.recordTableOffset) {
+    return 0u;
+  }
+  const auto bytes = header.handleTableOffset - header.recordTableOffset;
+  if (bytes % sizeof(D9CCommandChunkWireRecordHeader) != 0u) {
+    return 0u;
+  }
+  return bytes / sizeof(D9CCommandChunkWireRecordHeader);
+}
+
+std::size_t CommandChunkBuilder::plannedHandleCount() const noexcept {
+  if (!exactFinalLayout_ ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  if (header.payloadArenaOffset < header.handleTableOffset) {
+    return 0u;
+  }
+  const auto bytes = header.payloadArenaOffset - header.handleTableOffset;
+  if (bytes % sizeof(D9CCommandChunkWireHandleEntry) != 0u) {
+    return 0u;
+  }
+  return bytes / sizeof(D9CCommandChunkWireHandleEntry);
+}
+
+std::size_t CommandChunkBuilder::plannedPayloadBytes() const noexcept {
+  if (!exactFinalLayout_ ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return 0u;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  if (header.payloadArenaOffset > sealedBlob_.size()) {
+    return 0u;
+  }
+  return sealedBlob_.size() - header.payloadArenaOffset;
+}
+
+std::byte* CommandChunkBuilder::payloadData() noexcept {
+  if (!exactFinalLayout_) {
+    return payload_.data();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return nullptr;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  if (header.payloadArenaOffset > sealedBlob_.size()) {
+    return nullptr;
+  }
+  return sealedBlob_.data() + header.payloadArenaOffset;
+}
+
+const std::byte* CommandChunkBuilder::payloadData() const noexcept {
+  if (!exactFinalLayout_) {
+    return payload_.data();
+  }
+  if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return nullptr;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  if (header.payloadArenaOffset > sealedBlob_.size()) {
+    return nullptr;
+  }
+  return sealedBlob_.data() + header.payloadArenaOffset;
+}
+
+bool CommandChunkBuilder::setExactCounts(std::size_t records,
+                                         std::size_t handles,
+                                         std::size_t payloadBytes) noexcept {
+  // Exact mode exposes no mutable blob or payload span before seal. These
+  // monotone used-prefix counters therefore remain private construction state;
+  // every typed payload write is separately bounded to the fixed final arena
+  // and cannot alias this header.
+  if (!exactFinalLayout_ || sealed_ ||
+      records > plannedRecordCount() || handles > plannedHandleCount() ||
+      payloadBytes > plannedPayloadBytes() ||
+      records > std::numeric_limits<std::uint32_t>::max() ||
+      handles > std::numeric_limits<std::uint32_t>::max() ||
+      payloadBytes > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  header.recordCount = static_cast<std::uint32_t>(records);
+  header.handleCount = static_cast<std::uint32_t>(handles);
+  header.payloadArenaSize = static_cast<std::uint32_t>(payloadBytes);
+  std::memcpy(sealedBlob_.data(), &header, sizeof(header));
+  return true;
+}
+
+bool CommandChunkBuilder::readHandleEntry(
+    std::size_t index,
+    D9CCommandChunkWireHandleEntry& entry) const noexcept {
+  if (!exactFinalLayout_) {
+    if (index >= handles_.size()) {
+      return false;
+    }
+    entry = handles_[index];
+    return true;
+  }
+  if (index >= handleCount() ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return false;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  const auto offset = static_cast<std::size_t>(header.handleTableOffset) +
+                      index * sizeof(entry);
+  if (offset > sealedBlob_.size() ||
+      sizeof(entry) > sealedBlob_.size() - offset) {
+    return false;
+  }
+  std::memcpy(&entry, sealedBlob_.data() + offset, sizeof(entry));
+  return true;
+}
+
+bool CommandChunkBuilder::writeExactRecordEntry(
+    std::size_t index,
+    const D9CCommandChunkWireRecordHeader& record) noexcept {
+  if (!exactFinalLayout_ || index >= plannedRecordCount() ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return false;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  const auto offset = static_cast<std::size_t>(header.recordTableOffset) +
+                      index * sizeof(record);
+  if (offset > sealedBlob_.size() ||
+      sizeof(record) > sealedBlob_.size() - offset) {
+    return false;
+  }
+  std::memcpy(sealedBlob_.data() + offset, &record, sizeof(record));
+  return true;
+}
+
+bool CommandChunkBuilder::writeExactHandleEntry(
+    std::size_t index,
+    const D9CCommandChunkWireHandleEntry& handle) noexcept {
+  if (!exactFinalLayout_ || index >= plannedHandleCount() ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return false;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  const auto offset = static_cast<std::size_t>(header.handleTableOffset) +
+                      index * sizeof(handle);
+  if (offset > sealedBlob_.size() ||
+      sizeof(handle) > sealedBlob_.size() - offset) {
+    return false;
+  }
+  std::memcpy(sealedBlob_.data() + offset, &handle, sizeof(handle));
+  return true;
+}
+
+void CommandChunkBuilder::resetExactStorage() noexcept {
+  if (!exactFinalLayout_ ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  header.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
+  header.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+  header.recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+  header.handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+  header.recordCount = 0u;
+  header.handleCount = 0u;
+  header.payloadArenaSize = 0u;
+  header.reserved0 = 0u;
+  header.reserved1 = 0u;
+  std::memcpy(sealedBlob_.data(), &header, sizeof(header));
+}
+
 bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
   const auto* rule = recordRule(type);
-  if (active_.active || sealed_ || !rule) {
+  if (active_.active || sealed_ || !rule ||
+      (exactFinalLayout_ && recordCount() >= plannedRecordCount())) {
     return false;
   }
   std::size_t payloadStart = 0u;
-  if (!alignUp(payload_.size(), rule->payloadAlignment, payloadStart) ||
+  const auto payloadSize = currentPayloadBytes();
+  if (!alignUp(payloadSize, rule->payloadAlignment, payloadStart) ||
       payloadStart > std::numeric_limits<std::uint32_t>::max()) {
     return false;
   }
-  const auto payloadCheckpoint = payload_.size();
-  try {
-    payload_.resize(payloadStart, std::byte{0});
-  } catch (...) {
-    return false;
+  const auto payloadCheckpoint = payloadSize;
+  if (exactFinalLayout_) {
+    if (payloadStart > plannedPayloadBytes()) {
+      return false;
+    }
+    if (payloadStart != payloadSize) {
+      auto* data = payloadData();
+      if (!data) {
+        return false;
+      }
+      std::fill(data + payloadSize, data + payloadStart, std::byte{0});
+    }
+    if (!setExactCounts(recordCount(), handleCount(), payloadStart)) {
+      return false;
+    }
+  } else {
+    try {
+      payload_.resize(payloadStart, std::byte{0});
+    } catch (...) {
+      return false;
+    }
   }
   active_ = ActiveRecord{
       .active = true,
       .type = type,
-      .recordCheckpoint = records_.size(),
-      .handleCheckpoint = handles_.size(),
+      .recordCheckpoint = recordCount(),
+      .handleCheckpoint = handleCount(),
       .payloadCheckpoint = payloadCheckpoint,
       .payloadStart = payloadStart,
       // Assigned unconditionally, before this record's outcome (commit vs.
@@ -134,29 +399,49 @@ bool CommandChunkBuilder::appendPayload(
     return false;
   }
   std::size_t start = 0u;
-  if (!alignUp(payload_.size(), alignment, start) ||
+  const auto payloadSize = currentPayloadBytes();
+  if (!alignUp(payloadSize, alignment, start) ||
       start < active_.payloadStart ||
       start - active_.payloadStart >
           std::numeric_limits<std::uint32_t>::max() ||
       bytes.size() > std::numeric_limits<std::uint32_t>::max() -
-                         (start - active_.payloadStart)) {
+                         (start - active_.payloadStart) ||
+      bytes.size() > std::numeric_limits<std::size_t>::max() - start) {
     return failActiveRecord();
   }
+  const auto end = start + bytes.size();
+  if (exactFinalLayout_) {
+    if (end > plannedPayloadBytes()) {
+      return failActiveRecord();
+    }
+    auto* data = payloadData();
+    if (!data || !setExactCounts(recordCount(), handleCount(), end)) {
+      return failActiveRecord();
+    }
+    std::fill(data + payloadSize, data + end, std::byte{0});
+  } else {
+    try {
+      payload_.resize(start, std::byte{0});
+      payload_.resize(end);
+    } catch (...) {
+      return failActiveRecord();
+    }
+  }
   try {
-    payload_.resize(start, std::byte{0});
-    const auto oldSize = payload_.size();
-    payload_.resize(oldSize + bytes.size());
     if (!bytes.empty()) {
       if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
               dxmt9::core::CopyMaterializationOwner::Pe)) {
-        dxmt9::core::CopyMaterializationEvent event(
-            ledger, dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
-            bytes.size());
+        if (!exactFinalLayout_) {
+          dxmt9::core::CopyMaterializationEvent event(
+              ledger,
+              dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
+              bytes.size());
+        }
         ledger->recordMaterialization(
             dxmt9::core::CopyMaterializationClass::PeSectionAppend,
             bytes.size());
       }
-      std::memcpy(payload_.data() + oldSize, bytes.data(), bytes.size());
+      std::memcpy(payloadData() + start, bytes.data(), bytes.size());
     }
   } catch (...) {
     return failActiveRecord();
@@ -175,7 +460,8 @@ bool CommandChunkBuilder::reservePayload(
     return false;
   }
   std::size_t start = 0u;
-  if (!alignUp(payload_.size(), alignment, start) ||
+  const auto payloadSize = currentPayloadBytes();
+  if (!alignUp(payloadSize, alignment, start) ||
       start < active_.payloadStart ||
       start - active_.payloadStart >
           std::numeric_limits<std::uint32_t>::max() ||
@@ -184,11 +470,23 @@ bool CommandChunkBuilder::reservePayload(
       byteCount > std::numeric_limits<std::size_t>::max() - start) {
     return failActiveRecord();
   }
-  try {
-    payload_.resize(start, std::byte{0});
-    payload_.resize(start + byteCount, std::byte{0});
-  } catch (...) {
-    return failActiveRecord();
+  const auto end = start + byteCount;
+  if (exactFinalLayout_) {
+    if (end > plannedPayloadBytes()) {
+      return failActiveRecord();
+    }
+    auto* data = payloadData();
+    if (!data || !setExactCounts(recordCount(), handleCount(), end)) {
+      return failActiveRecord();
+    }
+    std::fill(data + payloadSize, data + end, std::byte{0});
+  } else {
+    try {
+      payload_.resize(start, std::byte{0});
+      payload_.resize(end, std::byte{0});
+    } catch (...) {
+      return failActiveRecord();
+    }
   }
   if (recordRelativeOffset) {
     *recordRelativeOffset =
@@ -204,8 +502,9 @@ bool CommandChunkBuilder::overwritePayload(
     return false;
   }
   const auto offset = active_.payloadStart + recordRelativeOffset;
-  if (offset < active_.payloadStart || offset > payload_.size() ||
-      bytes.size() > payload_.size() - offset) {
+  const auto payloadSize = currentPayloadBytes();
+  if (offset < active_.payloadStart || offset > payloadSize ||
+      bytes.size() > payloadSize - offset) {
     return failActiveRecord();
   }
   if (!bytes.empty()) {
@@ -215,7 +514,7 @@ bool CommandChunkBuilder::overwritePayload(
           dxmt9::core::CopyMaterializationClass::PeSectionAppend,
           bytes.size());
     }
-    std::memcpy(payload_.data() + offset, bytes.data(), bytes.size());
+    std::memcpy(payloadData() + offset, bytes.data(), bytes.size());
   }
   return true;
 }
@@ -282,7 +581,7 @@ bool CommandChunkBuilder::appendSectionTable(
   const auto tableBytes = static_cast<std::uint64_t>(sections.size()) *
                           sizeof(D9CCommandChunkWireSectionDesc);
   const auto currentOffset = active_.active
-      ? payload_.size() - active_.payloadStart
+      ? currentPayloadBytes() - active_.payloadStart
       : 0u;
   if (!activeRule ||
       (activeRule->ruleFlags & RecordRuleSparseState) == 0u ||
@@ -316,7 +615,8 @@ bool CommandChunkBuilder::overwriteSectionTable(
       static_cast<std::uint64_t>(recordRelativeOffset) +
               static_cast<std::uint64_t>(sections.size_bytes()) !=
           draw.sectionPayloadOffset ||
-      draw.sectionPayloadOffset > payload_.size() - active_.payloadStart) {
+      draw.sectionPayloadOffset >
+          currentPayloadBytes() - active_.payloadStart) {
     return failActiveRecord();
   }
 
@@ -340,8 +640,9 @@ bool CommandChunkBuilder::overwriteSectionTable(
                  rule->payloadAlignment, alignedOffset) ||
         desc.payloadOffset != alignedOffset ||
         desc.payloadOffset % rule->payloadAlignment != 0u ||
-        desc.payloadOffset > payload_.size() - active_.payloadStart ||
-        desc.byteSize > payload_.size() - active_.payloadStart -
+        desc.payloadOffset >
+            currentPayloadBytes() - active_.payloadStart ||
+        desc.byteSize > currentPayloadBytes() - active_.payloadStart -
                             desc.payloadOffset) {
       return failActiveRecord();
     }
@@ -359,7 +660,7 @@ bool CommandChunkBuilder::overwriteSectionTable(
     expectedOffset = static_cast<std::uint64_t>(desc.payloadOffset) +
                      desc.byteSize;
   }
-  if (expectedOffset != payload_.size() - active_.payloadStart) {
+  if (expectedOffset != currentPayloadBytes() - active_.payloadStart) {
     return failActiveRecord();
   }
   return overwritePayload(recordRelativeOffset, std::as_bytes(sections));
@@ -382,7 +683,7 @@ bool CommandChunkBuilder::appendConstantRecordTail(
       static_cast<std::uint64_t>(fixed.startRegister) +
               fixed.registerCount >
           limit ||
-      payload_.size() - active_.payloadStart !=
+      currentPayloadBytes() - active_.payloadStart !=
           sizeof(D9CCommandChunkWireSetConst)) {
     return failActiveRecord();
   }
@@ -397,7 +698,7 @@ bool CommandChunkBuilder::appendClearRectTail(
       !readActivePayloadValue(0u, fixed) ||
       fixed.rectCount != rects.size() ||
       fixed.rectOffset != sizeof(D9CCommandChunkWireClear) ||
-      payload_.size() - active_.payloadStart !=
+      currentPayloadBytes() - active_.payloadStart !=
           sizeof(D9CCommandChunkWireClear)) {
     return failActiveRecord();
   }
@@ -406,22 +707,37 @@ bool CommandChunkBuilder::appendClearRectTail(
 
 bool CommandChunkBuilder::appendNewHandleEntry(
     const PeWireObjectRef& object, std::uint32_t& absoluteIndex) noexcept {
-  if (handles_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+  const auto currentHandleCount = handleCount();
+  if (currentHandleCount >= std::numeric_limits<std::uint32_t>::max() ||
+      (exactFinalLayout_ && currentHandleCount >= plannedHandleCount())) {
     return false;
   }
   const auto local = PeLocalObjectIdentity{
       .kind = object.identity.kind, .object = object.object};
+  const D9CCommandChunkWireHandleEntry wire{
+      .kind = object.identity.kind,
+      .generation = object.identity.generation,
+      .objectId = object.identity.objectId,
+  };
   try {
-    handles_.push_back(D9CCommandChunkWireHandleEntry{
-        .kind = object.identity.kind,
-        .generation = object.identity.generation,
-        .objectId = object.identity.objectId,
-    });
-    try {
+    if (exactFinalLayout_) {
+      if (!writeExactHandleEntry(currentHandleCount, wire)) {
+        return false;
+      }
       handleObjects_.push_back(local);
-    } catch (...) {
-      handles_.pop_back();
-      throw;
+      if (!setExactCounts(recordCount(), currentHandleCount + 1u,
+                          currentPayloadBytes())) {
+        handleObjects_.pop_back();
+        return false;
+      }
+    } else {
+      handles_.push_back(wire);
+      try {
+        handleObjects_.push_back(local);
+      } catch (...) {
+        handles_.pop_back();
+        throw;
+      }
     }
     // Count this qualified local identity's chunk-lifetime multiplicity so
     // referencesObject()
@@ -436,7 +752,7 @@ bool CommandChunkBuilder::appendNewHandleEntry(
   } catch (...) {
     return false;
   }
-  absoluteIndex = static_cast<std::uint32_t>(handles_.size() - 1u);
+  absoluteIndex = static_cast<std::uint32_t>(currentHandleCount);
   return true;
 }
 
@@ -446,6 +762,29 @@ bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
   absoluteIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
   if (!active_.active || sealed_ || !object.valid(expectedKind)) {
     return failActiveRecord();
+  }
+
+  // Exact mode has no temporary handle vector. Its monotone used prefix plus
+  // the PE-local object sidecar are the truth sources for record-local dedup;
+  // read the wire identity back from the final table so rollback needs only
+  // restore the prefix count and truncate handleObjects_.
+  if (exactFinalLayout_) {
+    for (std::size_t i = active_.handleCheckpoint; i < handleCount(); ++i) {
+      D9CCommandChunkWireHandleEntry entry{};
+      if (!readHandleEntry(i, entry) ||
+          !identityEqual(entry, object.identity)) {
+        continue;
+      }
+      if (handleObjects_[i].object != object.object) {
+        return failActiveRecord();
+      }
+      absoluteIndex = static_cast<std::uint32_t>(i);
+      return true;
+    }
+    if (!appendNewHandleEntry(object, absoluteIndex)) {
+      return failActiveRecord();
+    }
+    return true;
   }
 
   if (!recordLocalDedup_.overflowed) {
@@ -476,8 +815,9 @@ bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
     // future record in the chunk's lifetime.
   }
 
-  for (std::size_t i = active_.handleCheckpoint; i < handles_.size(); ++i) {
-    if (!identityEqual(handles_[i], object.identity)) {
+  for (std::size_t i = active_.handleCheckpoint; i < handleCount(); ++i) {
+    D9CCommandChunkWireHandleEntry entry{};
+    if (!readHandleEntry(i, entry) || !identityEqual(entry, object.identity)) {
       continue;
     }
     if (handleObjects_[i].object != object.object) {
@@ -497,13 +837,15 @@ bool CommandChunkBuilder::commitRecord() noexcept {
     return false;
   }
   const auto* rule = recordRule(active_.type);
-  const auto payloadBytes = payload_.size() - active_.payloadStart;
-  const auto handleCount = handles_.size() - active_.handleCheckpoint;
+  const auto payloadBytes = currentPayloadBytes() - active_.payloadStart;
+  const auto currentHandleCount = handleCount();
+  const auto recordHandleCount =
+      currentHandleCount - active_.handleCheckpoint;
   if (!rule || payloadBytes < rule->fixedPayloadSize ||
       payloadBytes > std::numeric_limits<std::uint32_t>::max() ||
       active_.payloadStart > std::numeric_limits<std::uint32_t>::max() ||
       active_.handleCheckpoint > std::numeric_limits<std::uint32_t>::max() ||
-      handleCount > std::numeric_limits<std::uint32_t>::max()) {
+      recordHandleCount > std::numeric_limits<std::uint32_t>::max()) {
     return failActiveRecord();
   }
   const D9CCommandChunkWireRecordHeader record{
@@ -512,14 +854,23 @@ bool CommandChunkBuilder::commitRecord() noexcept {
       .payloadOffset = static_cast<std::uint32_t>(active_.payloadStart),
       .payloadSize = static_cast<std::uint32_t>(payloadBytes),
       .firstHandle = static_cast<std::uint32_t>(active_.handleCheckpoint),
-      .handleCount = static_cast<std::uint32_t>(handleCount),
+      .handleCount = static_cast<std::uint32_t>(recordHandleCount),
       .reserved0 = 0u,
       .reserved1 = 0u,
   };
-  try {
-    records_.push_back(record);
-  } catch (...) {
-    return failActiveRecord();
+  if (exactFinalLayout_) {
+    const auto currentRecordCount = recordCount();
+    if (!writeExactRecordEntry(currentRecordCount, record) ||
+        !setExactCounts(currentRecordCount + 1u, currentHandleCount,
+                        currentPayloadBytes())) {
+      return failActiveRecord();
+    }
+  } else {
+    try {
+      records_.push_back(record);
+    } catch (...) {
+      return failActiveRecord();
+    }
   }
   lastCommittedRecordOrdinal_ = active_.recordOrdinal;
   active_ = {};
@@ -547,10 +898,15 @@ void CommandChunkBuilder::rollbackRecord() noexcept {
       }
     }
   }
-  records_.resize(active_.recordCheckpoint);
-  handles_.resize(active_.handleCheckpoint);
+  if (exactFinalLayout_) {
+    (void)setExactCounts(active_.recordCheckpoint, active_.handleCheckpoint,
+                         active_.payloadCheckpoint);
+  } else {
+    records_.resize(active_.recordCheckpoint);
+    handles_.resize(active_.handleCheckpoint);
+    payload_.resize(active_.payloadCheckpoint);
+  }
   handleObjects_.resize(active_.handleCheckpoint);
-  payload_.resize(active_.payloadCheckpoint);
   active_ = {};
 }
 
@@ -566,8 +922,47 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
   if (sealed_) {
     return SealedCommandChunk{
         .blob = sealedBlob_,
-        .recordCount = static_cast<std::uint32_t>(records_.size()),
-        .handleCount = static_cast<std::uint32_t>(handles_.size()),
+        .recordCount = static_cast<std::uint32_t>(recordCount()),
+        .handleCount = static_cast<std::uint32_t>(handleCount()),
+    };
+  }
+  if (exactFinalLayout_) {
+    if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader) ||
+        recordCount() != plannedRecordCount() ||
+        handleCount() != plannedHandleCount() ||
+        currentPayloadBytes() != plannedPayloadBytes()) {
+      return {};
+    }
+    D9CCommandChunkWireHeader header{};
+    std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+    const auto expected = planExactCommandChunkLayout(
+        static_cast<std::uint32_t>(recordCount()),
+        static_cast<std::uint32_t>(handleCount()),
+        static_cast<std::uint32_t>(currentPayloadBytes()));
+    if (!expected.valid() || expected.totalBytes != sealedBlob_.size() ||
+        header.version != D9C_COMMAND_CHUNK_WIRE_VERSION ||
+        header.headerSize != D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE ||
+        header.recordHeaderSize !=
+            D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE ||
+        header.handleEntrySize != D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE ||
+        header.recordTableOffset != expected.recordTableOffset ||
+        header.handleTableOffset != expected.handleTableOffset ||
+        header.payloadArenaOffset != expected.payloadArenaOffset ||
+        header.reserved0 != 0u || header.reserved1 != 0u) {
+      return {};
+    }
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                     sealedBlob_.size());
+      ledger->retain(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                     sealedBlob_.size());
+    }
+    sealed_ = true;
+    return SealedCommandChunk{
+        .blob = sealedBlob_,
+        .recordCount = header.recordCount,
+        .handleCount = header.handleCount,
     };
   }
   if (records_.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -700,14 +1095,16 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
 void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
   if (sealed_ && !sealedBlob_.empty()) {
-  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
           dxmt9::core::CopyMaterializationOwner::Pe)) {
       ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
                       sealedBlob_.size());
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
-                      records_.size() * sizeof(records_[0]));
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
-                      handles_.size() * sizeof(handles_[0]));
+      if (!exactFinalLayout_) {
+        ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
+                        records_.size() * sizeof(records_[0]));
+        ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
+                        handles_.size() * sizeof(handles_[0]));
+      }
     }
   }
   // Chunk boundary, not a discard: the committed chunk's handles are now the
@@ -727,6 +1124,11 @@ void CommandChunkBuilder::reset() noexcept {
   // (nextRecordOrdinal_ itself intentionally keeps counting across resets).
   handlePresence_.clear();
   recordLocalDedup_.clear();
+  if (exactFinalLayout_) {
+    resetExactStorage();
+    sealed_ = false;
+    return;
+  }
   if (sealed_) {
     // Return the final allocation to the construction vector. The next chunk
     // retains the warm capacity without retaining the previous wire bytes.
@@ -744,10 +1146,12 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
             dxmt9::core::CopyMaterializationOwner::Pe)) {
       ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
                       sealedBlob_.size());
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
-                      records_.size() * sizeof(records_[0]));
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
-                      handles_.size() * sizeof(handles_[0]));
+      if (!exactFinalLayout_) {
+        ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
+                        records_.size() * sizeof(records_[0]));
+        ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
+                        handles_.size() * sizeof(handles_[0]));
+      }
     }
   }
   // Discard, not a chunk boundary: drop every pin including the warm ones the
@@ -760,6 +1164,11 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   handleObjects_.clear();
   handlePresence_.clear();
   recordLocalDedup_.clear();
+  if (exactFinalLayout_) {
+    resetExactStorage();
+    sealed_ = false;
+    return;
+  }
   if (sealed_) {
     payload_.swap(sealedBlob_);
   }
@@ -769,6 +1178,9 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
 }
 
 std::size_t CommandChunkBuilder::payloadBytes() const noexcept {
+  if (exactFinalLayout_) {
+    return currentPayloadBytes();
+  }
   if (!sealed_) {
     return payload_.size();
   }

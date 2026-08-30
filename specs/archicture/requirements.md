@@ -301,11 +301,19 @@ PE/unix import, replay, queue, encode, or GPU-handoff path must have one stable
 copy-class identity from `spec.md` §2.3. An enabled ledger must report, per
 class, calls, bytes, inclusive CPU time, and peak simultaneously retained
 bytes, and must classify the class as `necessary` or `removable` with a named
-ownership or ABI reason. Cumulative bytes must not be presented as retained
-memory, and aggregate bridge or replay time must not be attributed to byte
-copying. A new class or a reclassification is a specification change. With the
+ownership or ABI reason. The stable descriptor/report fields are
+`identity`, `classification`, and kebab-case `reason`. Cumulative bytes must
+not be presented as retained memory, and aggregate bridge or replay time must
+not be attributed to byte copying. A new class or a reclassification is a
+specification change. With the
 ledger disabled, the path must read no clock, allocate no observer storage,
-and perform no counter update beyond one cached-null branch.
+and perform no counter update beyond one cached-null branch. The owner argument
+must be explicit at every production call site: PE wire construction uses the
+PE registry and Unix replay/provider/queue/runtime work uses the Unix registry.
+When a Metal `newBuffer` or `replaceRegion` call performs an implicit transfer,
+the known byte/call event may be recorded with zero inclusive CPU time; the API
+duration must not be charged to `copy_ns` because it includes allocation or
+driver work.
 
 **R-ARCH-7.8** Encoder-visible work follows the abstract ownership refinement
 `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->

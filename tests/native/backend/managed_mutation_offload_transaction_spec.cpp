@@ -24,6 +24,7 @@
 #include "../../../src/dxmt9/dxmt9_device.hpp"
 #include "../../../src/dxmt9/dxmt9_mutation_offload_predicates.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -741,6 +742,11 @@ void testUnlockTransactionUnderModeOn() {
   check(admitsManagedMutationOffload(fixture.wrapper.get()),
         "a plain writable Managed unlock with a versioned record is admitted");
 
+  dxmt9::core::CopyMaterializationLedger peLedger;
+  dxmt9::core::CopyMaterializationLedger unixLedger;
+  dxmt9::core::ScopedCopyMaterializationLedger observeUnix(
+      dxmt9::core::CopyMaterializationOwner::Unix, unixLedger);
+
   const auto revisionBefore =
       fixture.upper->poolRef().findBuffer(fixture.buffer->handle().value)
           ->contentRevision;
@@ -761,6 +767,14 @@ void testUnlockTransactionUnderModeOn() {
         "the bytes have NOT landed yet — that is the point of the mode");
   check(fixture.buffer->locked(),
         "core lock state survives until the caller clears it after commit");
+  const auto unixMutation = unixLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::MutationStaging);
+  const auto peMutation = peLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::MutationStaging);
+  check(unixMutation.calls == 1u && unixMutation.bytes != 0u &&
+            unixMutation.semanticCalls == 1u && peMutation.calls == 0u &&
+            peMutation.semanticCalls == 0u,
+        "managed mutation production entry routes staging to Unix only");
 
   check(fixture.cDevice->replayOffload->start(fixture.cDevice.get()),
         "worker starts");

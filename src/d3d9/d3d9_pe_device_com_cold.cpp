@@ -176,7 +176,10 @@ D3D9DeviceImpl::~D3D9DeviceImpl() {
     logVsConstSetterRangePerf("destructor");
     logPeRecorderStats("destructor", true);
     logPeStatsDecimation();
-    logPeCopyMaterializationLedger();
+    if (diagnostics_ && diagnostics_->peCopyMaterializationReportPresents_ != 0u &&
+        diagnostics_->peCopyMaterializationReportPresents_ % 60u != 0u) {
+        logPeCopyMaterializationLedger();
+    }
     // Emit the last partial interval before the sampler stops, then stop
     // it: the sampler thread must not outlive the state it reads.
     logPeThreadSampler();

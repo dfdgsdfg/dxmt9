@@ -38,6 +38,14 @@
  *   Liveness — NoQueryWaitBlocksPresent,
  *              NoFrameLatencyBlocksQuery,
  *              NoRingPressureBlocksPresentCompletion
+ *
+ * Production predicate binding:
+ *   queryGetDataPollSatisfied(completedSeq, targetSeq) is the Query/GetData
+ *   completed-sequence predicate; presentTokenWaitSatisfied is the
+ *   presentCompletedCv_/PresentOrdinalGate predicate (including stop/abort);
+ *   ringAdmissionWaitSatisfied is the writeCv_ arena/ring admission
+ *   predicate.  The native lifecycle observer spec exercises these exact
+ *   projections in addition to this counter model.
  *)
 
 EXTENDS Naturals, FiniteSets

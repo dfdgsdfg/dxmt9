@@ -1150,7 +1150,7 @@ R-ARCH-7.10 gates pass.
 
 **R-BACK-2.88** The concrete queue lifecycle must refine
 `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->
-GPUInFlight -> Reclaimed`. A queue-assigned work identity and storage generation
+GPUInFlight -> Completed -> Reclaimed`. A queue-assigned work identity and storage generation
 must accompany every transition. The implementation must expose an opt-in
 observer that records transition, source/raw/seq identity, generation, payload
 kind, owned bytes, outstanding borrow count, and disposition. Observation must

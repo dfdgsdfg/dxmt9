@@ -25,6 +25,25 @@ namespace dxmt9 {
 
 namespace {
 
+class ScopedQueueUnlock final {
+ public:
+  explicit ScopedQueueUnlock(std::unique_lock<std::mutex>& lock) noexcept
+      : lock_(lock) {
+    DXMT_ASSERT(lock_.owns_lock());
+    lock_.unlock();
+  }
+  ScopedQueueUnlock(const ScopedQueueUnlock&) = delete;
+  ScopedQueueUnlock& operator=(const ScopedQueueUnlock&) = delete;
+  ~ScopedQueueUnlock() {
+    if (!lock_.owns_lock()) {
+      lock_.lock();
+    }
+  }
+
+ private:
+  std::unique_lock<std::mutex>& lock_;
+};
+
 [[noreturn]] void abortCpuReadySessionFailOpen(const char* reason) {
   std::fprintf(stderr,
                "[dxmt9-queue] fatal: encoded CPU-ready session pending work "
@@ -226,6 +245,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::QueueSubmissionRecord;
   using core::metalqueue::ReadySlotSnapshot;
   using core::metalqueue::ResolvedPublishedSource;
+  using core::metalqueue::GenerationQualifiedSourceBorrow;
+  using core::metalqueue::SynchronousSourceBorrowBatch;
+  using core::metalqueue::SynchronousSourcePayloadBorrow;
   using core::metalqueue::SessionReleaseAckResult;
   using core::metalqueue::SessionReleaseAction;
   using core::metalqueue::SessionReleaseCompletion;
@@ -363,7 +385,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
   const auto admissionCandidateFor =
       [&admissionKey, pageSize = tapeValues.pageSize](
-          const ResolvedPublishedSource& source) {
+          const ResolvedPublishedSource& source) noexcept {
         // Arena usedBytes names the exact constructed Tape extent. Legacy
         // usedBytes names its logical replay extent, so the session Tape-byte
         // charge is the compatibility source's reserved Tape page. ChunkSlot
@@ -686,39 +708,57 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       const std::size_t retainedCount =
           queueLifecycle_.reserveReadySlotBatchPrefix(
               lock, std::span<ReadySlotSnapshot>(scratch.data(), 1u),
-              [&](std::span<const ResolvedPublishedSource> candidates)
-                  noexcept {
+              [&](const SynchronousSourceBorrowBatch& candidates) noexcept {
                 if (candidates.size() != 1u) {
                   return std::size_t{0};
                 }
-                const auto& candidate = candidates.front();
-                if (terminalSuffixJoinEnabled &&
-                    isDeferredTerminalSuffixCandidate(candidate.payload)) {
+                std::size_t selected = 0;
+                const bool valid = candidates.visitAt(
+                    0u, [&](const GenerationQualifiedSourceBorrow& borrow) noexcept {
+                  return borrow.visitPayload(
+                      [&](const SynchronousSourcePayloadBorrow& payloadBorrow)
+                          noexcept {
+                    const auto payload = payloadBorrow.checkedView();
+                    if (terminalSuffixJoinEnabled &&
+                        isDeferredTerminalSuffixCandidate(payload)) {
+                      return false;
+                    }
+                    ResolvedPublishedSource candidate{
+                        .source = borrow.source(),
+                        .slotIndex = borrow.slotIndex(),
+                        .seqId = borrow.seqId(),
+                        .metadata = borrow.metadata(),
+                        .semantic = borrow.semantic(),
+                        .payload = payload,
+                    };
+                    const auto admission = admissionCandidateFor(candidate);
+                    if (borrow.hasPresent() ||
+                        !render::sessionSourceCanBeHead(payload) ||
+                        render::classifySessionAdmission(
+                            render::EncodeSessionAdmissionState{}, admission,
+                            admissionLimits) !=
+                            render::SessionAdmissionDecision::Admit) {
+                      return false;
+                    }
+                    const auto capacity =
+                        cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
+                    if (!capacity.valid ||
+                        !capacity.orderedTailWritingSuccessor.has_value() ||
+                        !capacity.orderedTailWritingSuccessor->valid()) {
+                      return false;
+                    }
+                    writingSuccessor =
+                        capacity.orderedTailWritingSuccessor->source;
+                    selected = 1u;
+                    return true;
+                  });
+                });
+                if (!valid || selected == 0u) {
                   // The terminal-suffix lane represents and encodes only the
                   // current A prefix while the exact successor is Writing.
                   // Whole-head retention would hide that effect boundary.
                   return std::size_t{0};
                 }
-                const auto admission = admissionCandidateFor(candidate);
-                if (candidate.semantic.hasPresent() ||
-                    !render::sessionSourceCanBeHead(
-                        candidate.payload) ||
-                    render::classifySessionAdmission(
-                        render::EncodeSessionAdmissionState{},
-                        admission,
-                        admissionLimits) !=
-                        render::SessionAdmissionDecision::Admit) {
-                  return std::size_t{0};
-                }
-                const auto capacity =
-                    cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
-                if (!capacity.valid ||
-                    !capacity.orderedTailWritingSuccessor.has_value() ||
-                    !capacity.orderedTailWritingSuccessor->valid()) {
-                  return std::size_t{0};
-                }
-                writingSuccessor =
-                    capacity.orderedTailWritingSuccessor->source;
                 return std::size_t{1};
               });
       if (retainedCount == 1u) {
@@ -857,10 +897,34 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.reserveReadySlotBatchPrefix(
             lock, std::span<ReadySlotSnapshot>(scratch),
             [&, releaseFence](
-                std::span<const ResolvedPublishedSource> candidates) noexcept {
+                const SynchronousSourceBorrowBatch& candidates) noexcept {
               render::EncodeSessionAdmissionState planned = pendingAdmission;
               std::size_t selected = 0;
-              for (const auto& candidate : candidates) {
+              bool selectionInvalid = false;
+              candidates.visit([&](const GenerationQualifiedSourceBorrow& borrow,
+                                   std::size_t) noexcept {
+                ResolvedPublishedSource candidate{};
+                if (!borrow.visitPayload(
+                        [&](const SynchronousSourcePayloadBorrow& payloadBorrow)
+                            noexcept {
+                          const auto payload = payloadBorrow.checkedView();
+                          candidate = ResolvedPublishedSource{
+                              .source = borrow.source(),
+                              .slotIndex = borrow.slotIndex(),
+                              .seqId = borrow.seqId(),
+                              .metadata = borrow.metadata(),
+                              .semantic = borrow.semantic(),
+                              .payload = payload,
+                              .sourceId = borrow.source().id,
+                              .storage = borrow.source().storage,
+                              .hasPresent = borrow.hasPresent(),
+                              .commandBegin = borrow.commandBegin(),
+                              .commandCount = borrow.commandCount(),
+                          };
+                        })) {
+                  selectionInvalid = true;
+                  return false;
+                }
                 if (releaseFence &&
                     ((releaseFence->event.fenceSeqId != 0 &&
                       candidate.seqId > releaseFence->event.fenceSeqId) ||
@@ -868,7 +932,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       candidate.metadata.rawOrdinal != 0 &&
                       candidate.metadata.rawOrdinal >
                           releaseFence->event.fenceRawOrdinal))) {
-                  break;
+                  return false;
                 }
                 if (exactReplaySingleSource) {
                   if (standaloneSerialSource.has_value() &&
@@ -876,9 +940,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                        candidate.slotIndex != standaloneSerialSource->slotIndex ||
                        candidate.seqId != standaloneSerialSource->seqId)) {
                     invalidStandaloneSerialSource = true;
-                    return std::size_t{0};
+                    selectionInvalid = true;
+                    return false;
                   }
-                  return std::size_t{1};
+                  selected = 1u;
+                  return false;
                 }
                 if (selected >= 2u && candidate.semantic.hasPresent()) {
                   // Present is a hard replay-window/logical-pass boundary,
@@ -886,7 +952,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   // same EncodeSession/CB. Leave it Ready for the next natural
                   // iteration without invalidating the complete pre-Present
                   // planning prefix.
-                  break;
+                  return false;
                 }
 
                 const auto admission = admissionCandidateFor(candidate);
@@ -930,9 +996,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     // Invalid/isolated heads still execute through the exact
                     // serial encoder; they simply cannot start a joined
                     // session based on this preflight.
-                    return std::size_t{1};
+                    selected = 1u;
+                    return false;
                   }
-                  break;
+                  return false;
                 }
                 if (!render::appendSessionAdmission(
                         planned, admission, admissionLimits)) {
@@ -941,7 +1008,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     blockedReleaseReason =
                         core::metalqueue::SessionReleaseReason::SessionCap;
                   }
-                  break;
+                  return false;
                 }
                 const auto capacity = render::sessionCapacityFor(admission);
                 if (!capacityLeaseState.lease().valid()) {
@@ -981,7 +1048,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                           snapshot, capacityPolicy.successorHeadroom);
                   if (!snapshot.valid || !unavailable.has_value()) {
                     invalidCapacitySnapshot = true;
-                    break;
+                    return false;
                   }
                   if (!capacityLeaseState.acquire(
                           capacityPolicy, *unavailable, capacity)) {
@@ -1017,7 +1084,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       perf::recordCpuReadyFirstLeaseEligibility(
                           leaseDeniedReadyHeadEligibility);
                     }
-                    break;
+                    return false;
                   }
                   selectionAcquiredLease = true;
                   selectionLeaseGeneration =
@@ -1045,13 +1112,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   // planner's complete proof window. A ninth compatible
                   // source remains Ready and is reconsidered after this
                   // planned prefix installs its carried state.
-                  break;
+                  return false;
                 }
                 if (candidate.semantic.hasPresent()) {
-                  break;
+                  return false;
                 }
-              }
-              return selected;
+                return true;
+              });
+              return selectionInvalid ? std::size_t{0} : selected;
             });
     if (count == 0) {
       if (invalidCapacitySnapshot) {
@@ -1415,49 +1483,60 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         const auto releaseSnapshot = releaseFence;
         const std::uint64_t leaseGenerationSnapshot =
             capacityLeaseState.lease().generation;
-        lock.unlock();
-        auto replayPlan = backend_->planMultiSourceSessionReplay(
-            pool_, std::span<const ResolvedPublishedSource>(
-                       resolvedWindow.data(), count),
-            replayFrontier);
+        framegraph::MultiSourceReplayPlan replayPlan{};
         std::optional<framegraph::MultiSourceReplayRuns> replayRuns;
-        if (replayPlan.valid() && replayPlan.reordered()) {
-          std::array<framegraph::MultiSourcePlanningSource,
-                     framegraph::kMaxMultiSourcePlanningSources>
-              planningSources{};
-          for (std::size_t i = 0; i < count; ++i) {
-            planningSources[i].payload = resolvedWindow[i].payload;
-          }
-          replayRuns = framegraph::buildMultiSourceReplayRuns(
-              std::span<const framegraph::MultiSourcePlanningSource>(
-                  planningSources.data(), count),
-              replayPlan);
-          if (replayRuns->valid()) {
-            // Materialize replay-order ranges while the represented payloads
-            // are pinned and scheduling is unlocked. Each synchronous
-            // fragment call receives its exact current..tail suffix; a
-            // repeated source therefore appears once per disjoint run.
-            std::vector<ResolvedPublishedSource> replayLookaheadSources;
-            replayLookaheadSources.reserve(replayRuns->runs.size());
-            for (const auto& run : replayRuns->runs) {
-              if (run.retainedSourceIndex >= count) {
-                replayLookaheadSources.clear();
-                break;
-              }
-              auto source = resolvedWindow[run.retainedSourceIndex];
-              source.commandBegin = run.commandBegin;
-              source.commandCount = run.commandCount;
-              replayLookaheadSources.push_back(source);
-            }
-            if (replayLookaheadSources.size() == replayRuns->runs.size()) {
-              preplannedReplayLookaheadSources =
-                  std::move(replayLookaheadSources);
-            }
-          }
-        }
-        lock.lock();
+        const bool borrowWindowValid =
+            queueLifecycle_.visitTentativeSourceBorrows(
+                lock,
+                std::span<const ResolvedPublishedSource>(
+                    resolvedWindow.data(), count),
+                [&](const SynchronousSourceBorrowBatch& sourceBorrows) noexcept {
+                  try {
+                    ScopedQueueUnlock queueUnlocked(lock);
+                    replayPlan = backend_->planMultiSourceSessionReplay(
+                        pool_, sourceBorrows, replayFrontier);
+                    if (replayPlan.valid() && replayPlan.reordered()) {
+                      std::array<framegraph::MultiSourcePlanningSource,
+                                 framegraph::kMaxMultiSourcePlanningSources>
+                          planningSources{};
+                      for (std::size_t i = 0; i < count; ++i) {
+                        planningSources[i].payload = resolvedWindow[i].payload;
+                      }
+                      replayRuns = framegraph::buildMultiSourceReplayRuns(
+                          std::span<const framegraph::MultiSourcePlanningSource>(
+                              planningSources.data(), count),
+                          replayPlan);
+                      if (replayRuns->valid()) {
+                        // Materialize replay-order ranges while the represented
+                        // payloads are pinned and scheduling is unlocked.
+                        std::vector<ResolvedPublishedSource>
+                            replayLookaheadSources;
+                        replayLookaheadSources.reserve(replayRuns->runs.size());
+                        for (const auto& run : replayRuns->runs) {
+                          if (run.retainedSourceIndex >= count) {
+                            replayLookaheadSources.clear();
+                            break;
+                          }
+                          auto source = resolvedWindow[run.retainedSourceIndex];
+                          source.commandBegin = run.commandBegin;
+                          source.commandCount = run.commandCount;
+                          replayLookaheadSources.push_back(source);
+                        }
+                        if (replayLookaheadSources.size() ==
+                            replayRuns->runs.size()) {
+                          preplannedReplayLookaheadSources =
+                              std::move(replayLookaheadSources);
+                        }
+                      }
+                    }
+                    return true;
+                  } catch (...) {
+                    return false;
+                  }
+                });
 
         bool snapshotStillValid =
+            borrowWindowValid &&
             sessionReleaseState_.peekNext() == releaseSnapshot &&
             capacityLeaseState.lease().generation ==
                 leaseGenerationSnapshot;
@@ -2083,20 +2162,24 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 queueLifecycle_.reserveReadySlotBatchPrefix(
                     lock,
                     std::span<ReadySlotSnapshot>(scratch.data() + 1u, 1u),
-                    [&](std::span<const ResolvedPublishedSource> candidates)
+                    [&](const SynchronousSourceBorrowBatch& candidates)
                         noexcept {
                       if (candidates.empty()) {
                         return std::size_t{0};
                       }
-                      const auto& candidate = candidates[0];
-                      return candidate.source ==
-                                  held->expectedWritingSuccessor.source &&
-                              candidate.seqId ==
-                                  held->expectedWritingSuccessor.seqId &&
-                              candidate.metadata.sourceOrdinal ==
-                                  held->expectedWritingSuccessor.sourceOrdinal
-                          ? std::size_t{1}
-                          : std::size_t{0};
+                      bool matches = false;
+                      candidates.visitAt(
+                          0u, [&](const GenerationQualifiedSourceBorrow& candidate)
+                              noexcept {
+                            matches =
+                                candidate.source() ==
+                                    held->expectedWritingSuccessor.source &&
+                                candidate.seqId() ==
+                                    held->expectedWritingSuccessor.seqId &&
+                                candidate.metadata().sourceOrdinal ==
+                                    held->expectedWritingSuccessor.sourceOrdinal;
+                          });
+                      return matches ? std::size_t{1} : std::size_t{0};
                     });
             if (successorCount != 1u) {
               drainCurrentSuffix();
@@ -2369,10 +2452,26 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     carrier = std::move(*submission);
                   }
 
-                  lock.unlock();
-                  backend_->observeMultiSourceSessionReplay(
-                      pool_, naturalSources);
-                  lock.lock();
+                  const bool observed =
+                      queueLifecycle_.visitRepresentedSourceBorrows(
+                          lock,
+                          std::span<const ResolvedPublishedSource>(
+                              naturalSources),
+                          [&](const SynchronousSourceBorrowBatch& sourceBorrows)
+                              noexcept {
+                            try {
+                              ScopedQueueUnlock queueUnlocked(lock);
+                              backend_->observeMultiSourceSessionReplay(
+                                  pool_, sourceBorrows);
+                              return true;
+                            } catch (...) {
+                              return false;
+                            }
+                          });
+                  if (!observed) {
+                    abortCpuReadySessionFailOpen(
+                        "deferred terminal-suffix observation borrow");
+                  }
                   pendingRecord = std::move(carrier);
                   pendingRecord->seqId = successor.seqId;
                   pendingRecord->slotIndex = successor.slotIndex;
@@ -2757,11 +2856,26 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 // carrier fold succeeded, so stale tentative retries cannot
                 // duplicate the observer's frame state. The retained source
                 // payloads stay live while the scheduling mutex is released.
-                lock.unlock();
-                backend_->observeMultiSourceSessionReplay(
-                    pool_, std::span<const ResolvedPublishedSource>(
-                               resolvedWindow.data(), count));
-                lock.lock();
+                const bool observed =
+                    queueLifecycle_.visitRepresentedSourceBorrows(
+                        lock,
+                        std::span<const ResolvedPublishedSource>(
+                            resolvedWindow.data(), count),
+                        [&](const SynchronousSourceBorrowBatch& sourceBorrows)
+                            noexcept {
+                          try {
+                            ScopedQueueUnlock queueUnlocked(lock);
+                            backend_->observeMultiSourceSessionReplay(
+                                pool_, sourceBorrows);
+                            return true;
+                          } catch (...) {
+                            return false;
+                          }
+                        });
+                if (!observed) {
+                  abortCpuReadySessionFailOpen(
+                      "multi-source observation borrow");
+                }
                 pendingRecord = std::move(*fragmentCarrier);
                 pendingSources = stagedSources;
                 pendingAdmission = windowPreflight.stagedAdmission;

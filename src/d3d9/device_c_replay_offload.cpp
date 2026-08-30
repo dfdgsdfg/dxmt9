@@ -293,7 +293,7 @@ bool prepareOffloadChunk(
     candidate.recordBlob.resize(blob.size());
     if (!blob.empty()) {
       auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-          dxmt9::core::CopyMaterializationOwner::Pe);
+          dxmt9::core::CopyMaterializationOwner::Unix);
       std::optional<dxmt9::core::CopyMaterializationEvent> event;
       if (ledger) {
         event.emplace(
@@ -336,7 +336,7 @@ bool prepareOffloadChunk(
         return record.type == D9C_COMMAND_RECORD_PRESENT;
       });
   if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-          dxmt9::core::CopyMaterializationOwner::Pe)) {
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
     ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
                    candidate.recordBlob.size());
   }
@@ -1140,7 +1140,7 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
     task = std::make_unique<BufferMutationTask>();
     if (length != 0u) {
       auto* activeLedger = dxmt9::core::activeCopyMaterializationLedger(
-          dxmt9::core::CopyMaterializationOwner::Pe);
+          dxmt9::core::CopyMaterializationOwner::Unix);
       std::optional<dxmt9::core::CopyMaterializationEvent> stagingCopy;
       if (activeLedger) {
         stagingCopy.emplace(

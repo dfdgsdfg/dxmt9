@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9/progress_predicates.hpp"
+
 #include <cstdint>
 
 namespace dxmt9::render {
@@ -27,11 +29,13 @@ enum class CpuReadyAdmissionAction : std::uint8_t {
 
 constexpr CpuReadyAdmissionAction classifyCpuReadyAdmissionGate(
     CpuReadyAdmissionGate gate) noexcept {
-  if (gate.stopped || gate.poisoned) {
-    return CpuReadyAdmissionAction::Stop;
-  }
-  if (!gate.arenaBuildActive && !gate.arenaBuildContextPresent &&
-      gate.controlSlotsFree && !gate.reserveStillPressured) {
+  if (::dxmt9::queue::ringAdmissionWaitSatisfied(
+          gate.stopped, gate.poisoned, gate.arenaBuildActive,
+          gate.arenaBuildContextPresent, gate.controlSlotsFree,
+          gate.reserveStillPressured)) {
+    if (gate.stopped || gate.poisoned) {
+      return CpuReadyAdmissionAction::Stop;
+    }
     return CpuReadyAdmissionAction::RetryAdmission;
   }
   return CpuReadyAdmissionAction::Wait;

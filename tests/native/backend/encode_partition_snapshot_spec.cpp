@@ -441,7 +441,7 @@ void retainedSourceResolverUsesSegmentLocalArenaViews() {
     dxmt9::core::ArenaSourcePayloadAssembler assembler(builder);
     check(assembler.tryAppendDrawRunBatch(
               std::span<dxmt9::core::DrawRunSubmission>(&submission, 1)) &&
-              assembler.commit(),
+              assembler.commitValueOnlyForTest(),
           "each segment publishes one complete draw run");
   }
 

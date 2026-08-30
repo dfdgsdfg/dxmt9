@@ -1,6 +1,7 @@
 #include "dxmt9_resource_pool.hpp"
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_metal_labels.hpp"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <vector>
@@ -789,8 +791,15 @@ Pool::stageTextureUpload(WMT::Device device,
     // R-BACK-5.7 — `countManagedTextureUploadBlit` must remain 0.
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, mipDepth};
-    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch,
-                          uploadImagePitch);
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(),
+                          pitch, uploadImagePitch);
+    // Metal performs the implicit transfer here; retain byte/call coverage
+    // without attributing API allocation/driver latency to copy_ns.
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     normalized.size());
+    }
     return std::nullopt;
   }
 
@@ -831,6 +840,11 @@ Pool::stageTextureUpload(WMT::Device device,
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
                                                        normalized.data(), pitch,
                                                        uploadImagePitch);
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     normalized.size());
+    }
   }
   StagingCopy out;
   out.stagingTexture = std::move(stagingTexture);
@@ -891,8 +905,13 @@ void Pool::uploadTextureLevel(WMT::Device device,
   if (!record->needsStagingBlit) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, mipDepth};
-    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch,
-                          uploadImagePitch);
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(),
+                          pitch, uploadImagePitch);
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     normalized.size());
+    }
     return;
   }
 
@@ -931,6 +950,11 @@ void Pool::uploadTextureLevel(WMT::Device device,
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
                                                        normalized.data(), pitch,
                                                        uploadImagePitch);
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     normalized.size());
+    }
   }
   auto commandBuffer = queue.commandBuffer();
   if (!commandBuffer) {
@@ -1331,6 +1355,13 @@ ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
     if (!buffer) {
       return;
     }
+    // `newBuffer` consumed the supplied bytes, but its duration includes
+    // allocation/driver work; record coverage without charging copy_ns.
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+                     bytes.size());
+    }
     perf::countMetalBuffer(bytes.size());
     perf::countUseResource();
     buffer.setLabel(labels::makeLabelStringFmt(
@@ -1498,7 +1529,15 @@ bool Pool::uploadBufferData(WMT::Device device,
     if (copySize == 0 || !record.contents) {
       return;
     }
-    std::memcpy(record.contents, bytes, copySize);
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Unix)) {
+      dxmt9::core::CopyMaterializationEvent uploadEvent(
+          ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+          copySize);
+      std::memcpy(record.contents, bytes, copySize);
+    } else {
+      std::memcpy(record.contents, bytes, copySize);
+    }
   });
 }
 
@@ -1594,18 +1633,43 @@ ManagedBufferMutationApplyResult Pool::applyManagedBufferMutation(
     // content; patching it below is what makes it post-mutation.
     if (contents) {
       if (patchOffset != 0u) {
-        std::memcpy(contents, record.shadow.data(), patchOffset);
+        if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+                dxmt9::core::CopyMaterializationOwner::Unix)) {
+          dxmt9::core::CopyMaterializationEvent uploadEvent(
+              ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+              patchOffset);
+          std::memcpy(contents, record.shadow.data(), patchOffset);
+        } else {
+          std::memcpy(contents, record.shadow.data(), patchOffset);
+        }
       }
       if (tailLength != 0u) {
-        std::memcpy(contents + tailOffset, record.shadow.data() + tailOffset,
-                    tailLength);
+        if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+                dxmt9::core::CopyMaterializationOwner::Unix)) {
+          dxmt9::core::CopyMaterializationEvent uploadEvent(
+              ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+              tailLength);
+          std::memcpy(contents + tailOffset,
+                      record.shadow.data() + tailOffset, tailLength);
+        } else {
+          std::memcpy(contents + tailOffset,
+                      record.shadow.data() + tailOffset, tailLength);
+        }
       }
       result.copyForwardBytes = patchOffset + tailLength;
     }
     if (patchLength != 0u && bytes != nullptr) {
       std::memcpy(record.shadow.data() + patchOffset, bytes, patchLength);
       if (contents) {
-        std::memcpy(contents + patchOffset, bytes, patchLength);
+        if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+                dxmt9::core::CopyMaterializationOwner::Unix)) {
+          dxmt9::core::CopyMaterializationEvent uploadEvent(
+              ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+              patchLength);
+          std::memcpy(contents + patchOffset, bytes, patchLength);
+        } else {
+          std::memcpy(contents + patchOffset, bytes, patchLength);
+        }
       }
       result.patchBytes = patchLength;
     }
@@ -1659,7 +1723,15 @@ bool Pool::uploadBufferDataRange(WMT::Device device,
     std::memcpy(record.shadow.data() + rangeOffset, bytes, byteCount);
     if (record.contents) {
       auto* contents = static_cast<std::uint8_t*>(record.contents);
-      std::memcpy(contents + rangeOffset, bytes, byteCount);
+      if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+              dxmt9::core::CopyMaterializationOwner::Unix)) {
+        dxmt9::core::CopyMaterializationEvent uploadEvent(
+            ledger, dxmt9::core::CopyMaterializationClass::GpuUploadCopy,
+            byteCount);
+        std::memcpy(contents + rangeOffset, bytes, byteCount);
+      } else {
+        std::memcpy(contents + rangeOffset, bytes, byteCount);
+      }
     }
   });
   return found && accepted;

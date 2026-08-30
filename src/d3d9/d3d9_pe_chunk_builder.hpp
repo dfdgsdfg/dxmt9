@@ -284,6 +284,136 @@ struct CommandChunkBuilderCapacities {
   std::size_t sealedBytes = 272u * 1024u;
 };
 
+// Pure, pointer-width-independent D9C V2 table/table/arena layout.  A valid
+// plan describes exact used counts, not spare capacity: unused table rows
+// would move the payload arena and therefore change the canonical wire bytes.
+struct ExactCommandChunkLayoutPlan {
+  std::uint32_t recordCount = 0u;
+  std::uint32_t handleCount = 0u;
+  std::uint32_t payloadBytes = 0u;
+  std::uint32_t recordTableOffset = 0u;
+  std::uint32_t handleTableOffset = 0u;
+  std::uint32_t payloadArenaOffset = 0u;
+  std::uint32_t totalBytes = 0u;
+
+  constexpr bool valid() const noexcept {
+    const auto alignUp = [](std::uint64_t value, std::uint64_t alignment,
+                            std::uint64_t& result) constexpr noexcept {
+      if (alignment == 0u) {
+        return false;
+      }
+      const auto remainder = value % alignment;
+      const auto padding = remainder == 0u ? 0u : alignment - remainder;
+      if (value > std::numeric_limits<std::uint64_t>::max() - padding) {
+        return false;
+      }
+      result = value + padding;
+      return true;
+    };
+    const std::uint64_t recordEnd =
+        static_cast<std::uint64_t>(recordTableOffset) +
+        static_cast<std::uint64_t>(recordCount) *
+            D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+    std::uint64_t expectedHandleTableOffset = 0u;
+    const std::uint64_t handleEnd =
+        static_cast<std::uint64_t>(handleTableOffset) +
+        static_cast<std::uint64_t>(handleCount) *
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+    std::uint64_t expectedPayloadArenaOffset = 0u;
+    return totalBytes >= D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE &&
+           recordTableOffset == D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE &&
+           alignUp(recordEnd, alignof(D9CCommandChunkWireHandleEntry),
+                   expectedHandleTableOffset) &&
+           expectedHandleTableOffset == handleTableOffset &&
+           alignUp(handleEnd, alignof(std::uint32_t),
+                   expectedPayloadArenaOffset) &&
+           expectedPayloadArenaOffset == payloadArenaOffset &&
+           static_cast<std::uint64_t>(payloadArenaOffset) + payloadBytes ==
+               totalBytes;
+  }
+};
+
+static_assert(sizeof(ExactCommandChunkLayoutPlan) == 28u);
+static_assert(alignof(ExactCommandChunkLayoutPlan) == 4u);
+static_assert(std::is_trivially_copyable_v<ExactCommandChunkLayoutPlan>);
+
+[[nodiscard]] constexpr ExactCommandChunkLayoutPlan
+planExactCommandChunkLayout(std::uint32_t recordCount,
+                            std::uint32_t handleCount,
+                            std::uint32_t payloadBytes) noexcept {
+  constexpr std::uint64_t kLimit =
+      std::numeric_limits<std::uint32_t>::max();
+  const std::uint64_t recordTableOffset =
+      D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+  const std::uint64_t recordEnd =
+      recordTableOffset + static_cast<std::uint64_t>(recordCount) *
+                              D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+  const auto alignUp = [](std::uint64_t value, std::uint64_t alignment,
+                          std::uint64_t& result) constexpr noexcept {
+    if (alignment == 0u) {
+      return false;
+    }
+    const auto remainder = value % alignment;
+    const auto padding = remainder == 0u ? 0u : alignment - remainder;
+    if (value > std::numeric_limits<std::uint64_t>::max() - padding) {
+      return false;
+    }
+    result = value + padding;
+    return true;
+  };
+  std::uint64_t handleTableOffset = 0u;
+  if (!alignUp(recordEnd, alignof(D9CCommandChunkWireHandleEntry),
+               handleTableOffset)) {
+    return {};
+  }
+  const std::uint64_t handleEnd =
+      handleTableOffset + static_cast<std::uint64_t>(handleCount) *
+                              D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+  std::uint64_t payloadArenaOffset = 0u;
+  if (!alignUp(handleEnd, alignof(std::uint32_t), payloadArenaOffset)) {
+    return {};
+  }
+  const std::uint64_t totalBytes = payloadArenaOffset + payloadBytes;
+  if (handleTableOffset > kLimit || payloadArenaOffset > kLimit ||
+      totalBytes > kLimit) {
+    return {};
+  }
+  return ExactCommandChunkLayoutPlan{
+      .recordCount = recordCount,
+      .handleCount = handleCount,
+      .payloadBytes = payloadBytes,
+      .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
+      .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
+      .totalBytes = static_cast<std::uint32_t>(totalBytes),
+  };
+}
+
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).valid());
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).handleTableOffset ==
+              112u);
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).handleTableOffset %
+                  alignof(D9CCommandChunkWireHandleEntry) ==
+              0u);
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).payloadArenaOffset ==
+              160u);
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).payloadArenaOffset %
+                  alignof(std::uint32_t) ==
+              0u);
+static_assert(planExactCommandChunkLayout(2u, 3u, 40u).totalBytes == 200u);
+static_assert(!ExactCommandChunkLayoutPlan{
+                   .recordCount = 2u,
+                   .handleCount = 3u,
+                   .payloadBytes = 40u,
+                   .recordTableOffset = 48u,
+                   .handleTableOffset = 113u,
+                   .payloadArenaOffset = 161u,
+                   .totalBytes = 201u,
+               }.valid());
+static_assert(!planExactCommandChunkLayout(
+                   std::numeric_limits<std::uint32_t>::max(), 0u, 0u)
+                   .valid());
+
 struct SealedCommandChunk {
   std::span<const std::byte> blob{};
   std::uint32_t recordCount = 0u;
@@ -293,8 +423,8 @@ struct SealedCommandChunk {
 };
 
 // R-BACK-43.4 `producer-owned` (PE game thread). Every member below —
-// `records_`, `handles_`, `handleObjects_`, the mutually-exclusive
-// `payload_`/`sealedBlob_` allocation,
+// the legacy `records_`/`handles_`/`payload_` staging, `handleObjects_`, the
+// final `sealedBlob_` allocation used directly by exact mode,
 // `retainer_`, `active_`, `sealed_` — is written and read only on the thread
 // driving the D3D9 recorder, and none of it is reachable from the replay
 // worker, encode thread, or completion path: the builder's output crosses to
@@ -309,6 +439,10 @@ class CommandChunkBuilder {
  public:
   explicit CommandChunkBuilder(
       const CommandChunkBuilderCapacities& capacities = {});
+  // Internal exact-count primitive. Production command recording does not
+  // currently own a replayable whole-batch transaction from which to obtain
+  // this plan before any retain or pending-delta effect.
+  explicit CommandChunkBuilder(const ExactCommandChunkLayoutPlan& plan);
   ~CommandChunkBuilder();
 
   CommandChunkBuilder(const CommandChunkBuilder&) = delete;
@@ -384,14 +518,9 @@ class CommandChunkBuilder {
       // offset rather than by a pointer borrowed across that work.
       const std::size_t relative =
           static_cast<std::size_t>(offset) + i * sizeof(T);
-      const std::size_t absolute = active_.payloadStart + relative;
-      if (!active_.active || sealed_ ||
-          absolute < active_.payloadStart ||
-          absolute > payload_.size() ||
-          sizeof(T) > payload_.size() - absolute) {
+      if (!writeReservedPayloadValue(relative, value)) {
         return failActiveRecord();
       }
-      std::memcpy(payload_.data() + absolute, &value, sizeof(T));
     }
     if (recordRelativeOffset) {
       *recordRelativeOffset = offset;
@@ -431,13 +560,9 @@ class CommandChunkBuilder {
       }
       const std::size_t relative =
           static_cast<std::size_t>(offset) + emitted * sizeof(T);
-      const std::size_t absolute = active_.payloadStart + relative;
-      if (!active_.active || sealed_ || absolute < active_.payloadStart ||
-          absolute > payload_.size() ||
-          sizeof(T) > payload_.size() - absolute) {
+      if (!writeReservedPayloadValue(relative, value)) {
         return false;
       }
-      std::memcpy(payload_.data() + absolute, &value, sizeof(T));
       ++emitted;
       return true;
     };
@@ -485,9 +610,10 @@ class CommandChunkBuilder {
 
   bool recordActive() const noexcept { return active_.active; }
   bool sealed() const noexcept { return sealed_; }
-  std::size_t recordCount() const noexcept { return records_.size(); }
-  std::size_t handleCount() const noexcept { return handles_.size(); }
+  std::size_t recordCount() const noexcept;
+  std::size_t handleCount() const noexcept;
   std::size_t payloadBytes() const noexcept;
+  bool exactFinalLayout() const noexcept { return exactFinalLayout_; }
   std::size_t retainedObjectCount() const noexcept { return retainer_.size(); }
   // Unique local ordinal of the most recently committed record. This is PE
   // bookkeeping only; it never enters the D9C wire ABI.
@@ -517,16 +643,17 @@ class CommandChunkBuilder {
         expected.identity.objectId == 0u) {
       return false;
     }
-    const std::size_t committedCount =
-        active_.active ? active_.handleCheckpoint : handles_.size();
-    if (committedCount > handles_.size() ||
+    const std::size_t committedCount = active_.active
+        ? active_.handleCheckpoint : handleCount();
+    if (committedCount > handleCount() ||
         committedCount > handleObjects_.size()) {
       return false;
     }
     for (std::size_t i = 0u; i < committedCount; ++i) {
-      const auto& wire = handles_[i];
+      D9CCommandChunkWireHandleEntry wire{};
       const auto& local = handleObjects_[i];
-      if (wire.kind != expected.identity.kind ||
+      if (!readHandleEntry(i, wire) ||
+          wire.kind != expected.identity.kind ||
           wire.generation != expected.identity.generation ||
           wire.objectId != expected.identity.objectId ||
           local.kind != expected.identity.kind ||
@@ -549,16 +676,17 @@ class CommandChunkBuilder {
     requires std::is_nothrow_invocable_v<
         Visit&, const CommittedPendingChunkLease&>
   void visitCommittedPendingChunkLeases(Visit&& visit) const noexcept {
-    const std::size_t committedCount =
-        active_.active ? active_.handleCheckpoint : handles_.size();
-    if (committedCount > handles_.size() ||
+    const std::size_t committedCount = active_.active
+        ? active_.handleCheckpoint : handleCount();
+    if (committedCount > handleCount() ||
         committedCount > handleObjects_.size()) {
       return;
     }
     for (std::size_t i = 0u; i < committedCount; ++i) {
-      const auto& wire = handles_[i];
+      D9CCommandChunkWireHandleEntry wire{};
       const auto& local = handleObjects_[i];
-      if (!local.object || wire.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+      if (!readHandleEntry(i, wire) || !local.object ||
+          wire.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
           wire.generation == 0u || wire.objectId == 0u ||
           wire.kind != local.kind) {
         continue;
@@ -589,14 +717,40 @@ class CommandChunkBuilder {
   bool readActivePayloadValue(std::uint32_t recordRelativeOffset,
                               T& value) const noexcept {
     static_assert(std::is_trivially_copyable_v<T>);
+    const auto payloadSize = currentPayloadBytes();
     if (!active_.active || sealed_ ||
-        recordRelativeOffset > payload_.size() - active_.payloadStart ||
-        sizeof(T) > payload_.size() - active_.payloadStart -
+        active_.payloadStart > payloadSize ||
+        recordRelativeOffset > payloadSize - active_.payloadStart ||
+        sizeof(T) > payloadSize - active_.payloadStart -
                         recordRelativeOffset) {
       return false;
     }
-    std::memcpy(&value,
-                payload_.data() + active_.payloadStart + recordRelativeOffset,
+    const auto* data = payloadData();
+    if (!data) {
+      return false;
+    }
+    std::memcpy(&value, data + active_.payloadStart + recordRelativeOffset,
+                sizeof(T));
+    return true;
+  }
+
+  template <typename T>
+  bool writeReservedPayloadValue(std::size_t recordRelativeOffset,
+                                 const T& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<T>);
+    const auto payloadSize = currentPayloadBytes();
+    if (!active_.active || sealed_ ||
+        active_.payloadStart > payloadSize ||
+        recordRelativeOffset > payloadSize - active_.payloadStart ||
+        sizeof(T) > payloadSize - active_.payloadStart -
+                        recordRelativeOffset) {
+      return false;
+    }
+    auto* data = payloadData();
+    if (!data) {
+      return false;
+    }
+    std::memcpy(data + active_.payloadStart + recordRelativeOffset, &value,
                 sizeof(T));
     return true;
   }
@@ -608,6 +762,24 @@ class CommandChunkBuilder {
                       std::uint32_t* recordRelativeOffset) noexcept;
   bool overwritePayload(std::uint32_t recordRelativeOffset,
                         std::span<const std::byte> bytes) noexcept;
+  std::size_t currentPayloadBytes() const noexcept;
+  std::size_t plannedRecordCount() const noexcept;
+  std::size_t plannedHandleCount() const noexcept;
+  std::size_t plannedPayloadBytes() const noexcept;
+  std::byte* payloadData() noexcept;
+  const std::byte* payloadData() const noexcept;
+  bool setExactCounts(std::size_t recordCount, std::size_t handleCount,
+                      std::size_t payloadBytes) noexcept;
+  bool readHandleEntry(
+      std::size_t index,
+      D9CCommandChunkWireHandleEntry& entry) const noexcept;
+  bool writeExactRecordEntry(
+      std::size_t index,
+      const D9CCommandChunkWireRecordHeader& record) noexcept;
+  bool writeExactHandleEntry(
+      std::size_t index,
+      const D9CCommandChunkWireHandleEntry& handle) noexcept;
+  void resetExactStorage() noexcept;
 
   struct ActiveRecord {
     bool active = false;
@@ -945,6 +1117,9 @@ class CommandChunkBuilder {
   std::uint64_t nextRecordOrdinal_ = 1u;
   std::uint64_t lastCommittedRecordOrdinal_ = 0u;
   bool sealed_ = false;
+  // Fits the existing tail padding on both supported PE pointer widths; the
+  // PeRecorderState x86/x64 footprint assertions remain unchanged.
+  bool exactFinalLayout_ = false;
 };
 
 template <typename Wire>

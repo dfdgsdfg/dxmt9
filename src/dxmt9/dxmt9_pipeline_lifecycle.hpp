@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9/progress_predicates.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>

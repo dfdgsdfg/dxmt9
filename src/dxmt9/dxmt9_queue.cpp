@@ -26,6 +26,25 @@ namespace {
 
 using enum dxmt9::core::metalcompat::CompatFlagBits;
 
+class ScopedQueueUnlock final {
+ public:
+  explicit ScopedQueueUnlock(std::unique_lock<std::mutex>& lock) noexcept
+      : lock_(lock) {
+    DXMT_ASSERT(lock_.owns_lock());
+    lock_.unlock();
+  }
+  ScopedQueueUnlock(const ScopedQueueUnlock&) = delete;
+  ScopedQueueUnlock& operator=(const ScopedQueueUnlock&) = delete;
+  ~ScopedQueueUnlock() {
+    if (!lock_.owns_lock()) {
+      lock_.lock();
+    }
+  }
+
+ private:
+  std::unique_lock<std::mutex>& lock_;
+};
+
 void recordCpuReadyTapeStats(const CpuReadyTape& tape) {
   const auto& stats = tape.stats();
   perf::recordCpuReadyTapeStats(
@@ -1879,6 +1898,141 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+std::uint64_t SynchronousSourceBorrowWitness::activate(
+    CpuReadyTape* tape,
+    std::span<const ResolvedPublishedSource> sources) noexcept {
+  std::lock_guard lock(mutex_);
+  if (!tape || sources.size() > pinnedSources_.size() ||
+      activeEpoch_.load(std::memory_order_relaxed) != 0u) {
+    return 0u;
+  }
+  std::uint64_t epoch = nextEpoch_++;
+  if (epoch == 0u) {
+    epoch = nextEpoch_++;
+  }
+  tape_ = tape;
+  pinnedSourceCount_ = sources.size();
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    pinnedSources_[i] = sources[i].source;
+    frozenSources_[i] = sources[i];
+  }
+  activeEpoch_.store(epoch, std::memory_order_release);
+  return epoch;
+}
+
+void SynchronousSourceBorrowWitness::deactivate(std::uint64_t epoch) noexcept {
+  std::lock_guard lock(mutex_);
+  if (activeEpoch_.load(std::memory_order_relaxed) == epoch) {
+    activeEpoch_.store(0u, std::memory_order_release);
+  }
+}
+
+bool SynchronousSourceBorrowWitness::active(
+    std::uint64_t epoch) const noexcept {
+  std::lock_guard lock(mutex_);
+  return epoch != 0u &&
+      activeEpoch_.load(std::memory_order_acquire) == epoch;
+}
+
+bool SynchronousSourceBorrowWitness::validatesTapeLocked(
+    std::uint64_t epoch, const ResolvedPublishedSource& source,
+    CpuReadyTape::State expectedState) const noexcept {
+  std::lock_guard lock(mutex_);
+  if (epoch == 0u ||
+      activeEpoch_.load(std::memory_order_relaxed) != epoch || !tape_ ||
+      !source.valid() ||
+      source.metadata.seqId != source.seqId ||
+      source.source.id != source.sourceId ||
+      source.source.storage != source.storage ||
+      source.commandBegin > source.payload.commandCount() ||
+      source.commandCount >
+          source.payload.commandCount() - source.commandBegin ||
+      !tape_->matches(source.source, source.metadata, source.semantic,
+                      expectedState)) {
+    return false;
+  }
+  return tape_->resolveSourcePayload(source.source.id, source.source.storage,
+                                     expectedState) == source.payload;
+}
+
+bool SynchronousSourceBorrowWitness::validatesFrozen(
+    std::uint64_t epoch,
+    const ResolvedPublishedSource& source) const noexcept {
+  if (epoch == 0u ||
+      activeEpoch_.load(std::memory_order_acquire) != epoch ||
+      !source.valid() ||
+      source.metadata.seqId != source.seqId ||
+      source.source.id != source.sourceId ||
+      source.source.storage != source.storage) {
+    return false;
+  }
+  for (std::size_t i = 0; i < pinnedSourceCount_; ++i) {
+    if (&frozenSources_[i] == &source &&
+        pinnedSources_[i] == source.source) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::span<const ResolvedPublishedSource>
+SynchronousSourceBorrowWitness::frozenSources(
+    std::uint64_t epoch) const noexcept {
+  std::lock_guard lock(mutex_);
+  if (epoch == 0u ||
+      activeEpoch_.load(std::memory_order_relaxed) != epoch) {
+    return {};
+  }
+  return std::span<const ResolvedPublishedSource>(frozenSources_.data(),
+                                                   pinnedSourceCount_);
+}
+
+bool SynchronousSourceBorrowWitness::invalidateFirstFrozenGenerationForTest()
+    noexcept {
+  std::lock_guard lock(mutex_);
+  if (activeEpoch_.load(std::memory_order_relaxed) == 0u ||
+      pinnedSourceCount_ == 0u) {
+    return false;
+  }
+  auto& generation = frozenSources_[0].source.id.generation;
+  generation = generation == std::numeric_limits<std::uint64_t>::max()
+      ? 1u
+      : generation + 1u;
+  return true;
+}
+
+bool SynchronousSourceBorrowWitness::pins(
+    CpuReadyTape::SourceRef source) const noexcept {
+  std::lock_guard lock(mutex_);
+  if (activeEpoch_.load(std::memory_order_relaxed) == 0u) {
+    return false;
+  }
+  for (std::size_t i = 0; i < pinnedSourceCount_; ++i) {
+    if (pinnedSources_[i] == source) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool GenerationQualifiedSourceBorrow::valid() const noexcept {
+  return witness_ && resolved_ &&
+      witness_->validatesFrozen(epoch_, *resolved_);
+}
+
+bool SynchronousSourcePayloadBorrow::valid() const noexcept {
+  return witness_ && resolved_ &&
+      witness_->validatesFrozen(epoch_, *resolved_);
+}
+
+SourcePayloadView SynchronousSourcePayloadBorrow::checkedView() const noexcept {
+  return valid() ? resolved_->payload : SourcePayloadView{};
+}
+
+bool SynchronousSourceBorrowBatch::live() const noexcept {
+  return witness_ && witness_->active(epoch_);
+}
+
 void QueueLifecycleController::recordPipelineSourceArrival(
     CpuReadyTape::PayloadKind payloadKind, CpuReadyTape::SourceRef source,
     CpuReadyAdmissionIdentity identity, std::size_t ownedBytes) const noexcept {
@@ -2146,7 +2300,7 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   return writingSlot->has_value();
 }
 
-void QueueLifecycleController::presentAndCommit(
+bool QueueLifecycleController::presentAndCommit(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
     const SwapDesc& present,
@@ -2154,12 +2308,12 @@ void QueueLifecycleController::presentAndCommit(
     const std::function<void(ChunkSlot&)>& onBeforePublish) {
   // TLA+: PresentFrameLatency / CommitPresent.
   if (!ensureWriterSlot(lock, inflightLimit)) {
-    return;
+    return false;
   }
   if (!appendPresentCommand(present, sourceHandle)) {
-    return;
+    return false;
   }
-  (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
+  return commitCurrentChunk(lock, inflightLimit, onBeforePublish);
 }
 
 void QueueLifecycleController::flushAndWait(
@@ -2395,16 +2549,24 @@ size_t QueueLifecycleController::dequeueReadySlotBatch(
     const ReadySlotBatchAppendPredicate& canAppend) {
   return dequeueReadySlotBatchPrefix(
       lock, out,
-      [&canAppend](std::span<const ResolvedPublishedSource> candidates) {
+      [&canAppend](const SynchronousSourceBorrowBatch& candidates) noexcept {
         if (candidates.empty()) {
           return std::size_t{0};
         }
         std::size_t count = 1;
         for (; count < candidates.size(); ++count) {
-          const auto& candidate = candidates[count];
-          if (canAppend &&
-              !canAppend(candidates.first(count), candidate.slotIndex,
-                         candidate.payload)) {
+          const bool candidateValid = candidates.visitAt(
+              count, [&](const GenerationQualifiedSourceBorrow& borrow) noexcept {
+                if (!canAppend) {
+                  return true;
+                }
+                try {
+                  return canAppend(count, borrow);
+                } catch (...) {
+                  return false;
+                }
+              });
+          if (!candidateValid) {
             break;
           }
         }
@@ -2418,9 +2580,13 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
     const ReadySlotBatchPrefixSelector& selectPrefix) {
   const size_t count = reserveReadySlotBatchPrefix(
       lock, out,
-      [&selectPrefix](std::span<const ResolvedPublishedSource> candidates) {
-        size_t selected = selectPrefix ? selectPrefix(candidates) : 0u;
-        return selected == 0 ? std::size_t{1} : selected;
+      [&selectPrefix](const SynchronousSourceBorrowBatch& candidates) noexcept {
+        try {
+          size_t selected = selectPrefix ? selectPrefix(candidates) : 0u;
+          return selected == 0 ? std::size_t{1} : selected;
+        } catch (...) {
+          return std::size_t{0};
+        }
       });
   if (count == 0) {
     return 0;
@@ -2529,8 +2695,21 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
 
   size_t count = 0;
   if (selectPrefix) {
-    count = selectPrefix(std::span<const ResolvedPublishedSource>(
-        resolved.data(), maxCount));
+    const bool visited = visitSourceBorrows(
+        lock,
+        std::span<const ResolvedPublishedSource>(resolved.data(), maxCount),
+        CpuReadyTape::State::Ready,
+        [&](const SynchronousSourceBorrowBatch& candidates) noexcept {
+          try {
+            count = selectPrefix(candidates);
+            return true;
+          } catch (...) {
+            return false;
+          }
+        });
+    if (!visited) {
+      return 0;
+    }
     if (count > maxCount) {
       return 0;
     }
@@ -2792,7 +2971,8 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
 
   auto* tape = submissionBinding_.cpuReadyTape;
   auto& control = submissionBinding_.slots[source.slotIndex];
-  if (control.state != ChunkSlot::State::Encoding ||
+  if (sourceBorrowWitness_.pins(source.source) ||
+      control.state != ChunkSlot::State::Encoding ||
       control.seqId != source.seqId || control.sourceId != source.source.id ||
       control.storage != source.source.storage ||
       !tape->canBeginPostEncodeRetire(source.source.id,
@@ -2972,8 +3152,7 @@ bool QueueLifecycleController::runEncodeIteration(
       return false;
     }
     const WorkerOwnedSourceSnapshot workerSnapshot(source);
-    const GenerationQualifiedSourceBorrow borrow(resolved);
-    if (!workerSnapshot.valid() || !borrow.valid()) {
+    if (!workerSnapshot.valid()) {
       poisonTapeFailureLocked();
       dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/dequeue",
                                             qmxEnabled, qmxSegStart);
@@ -2985,16 +3164,33 @@ bool QueueLifecycleController::runEncodeIteration(
     }
     dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/dequeue",
                                           qmxEnabled, qmxSegStart);
-    lock.unlock();
-    if (encodeFn) {
-      submission = encodeFn(workerSnapshot, borrow);
-      if (submission.has_value() && !submission->commandBuffer &&
-          !submission->testOnlyAllowNullCommandBuffer) {
-        submission.reset();
-      }
+    const bool visited = visitRepresentedSourceBorrows(
+        lock,
+        std::span<const ResolvedPublishedSource>(&resolved, 1u),
+        [&](const SynchronousSourceBorrowBatch& borrows) noexcept {
+          return borrows.visitAt(
+              0u, [&](const GenerationQualifiedSourceBorrow& borrow) noexcept {
+                ScopedQueueUnlock queueUnlocked(lock);
+                try {
+                  if (encodeFn) {
+                    submission = encodeFn(workerSnapshot, borrow);
+                    if (submission.has_value() && !submission->commandBuffer &&
+                        !submission->testOnlyAllowNullCommandBuffer) {
+                      submission.reset();
+                    }
+                  }
+                  return true;
+                } catch (...) {
+                  return false;
+                }
+              });
+        });
+    if (!visited) {
+      poisonTapeFailureLocked();
+      return false;
     }
   }
-  lock.lock();
+  DXMT_ASSERT(lock.owns_lock());
   qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                            : std::chrono::steady_clock::time_point{};
 
@@ -3143,6 +3339,10 @@ bool QueueLifecycleController::completeInlineChunk(
       .id = slot.sourceId,
       .storage = slot.storage,
   };
+  if (sourceBorrowWitness_.pins(source)) {
+    poisonTapeFailureLocked();
+    return false;
+  }
   const auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
       slot.sourceId, slot.storage, CpuReadyTape::State::Encoding);
   const auto payloadKind = submissionBinding_.cpuReadyTape->payloadKind(
@@ -3544,6 +3744,10 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
   if (!head || head->seqId != seqId ||
       head->state != CpuReadyTape::State::Completed) {
+    poisonTapeFailureLocked();
+    return false;
+  }
+  if (sourceBorrowWitness_.pins(head->source)) {
     poisonTapeFailureLocked();
     return false;
   }
@@ -4401,6 +4605,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
 bool QueueLifecycleController::processOnePendingCompletion() {
   PendingCompletion pending;
   size_t pendingDepthAfterPop = 0;
+  bool forcedCompletionFailure = false;
   {
     std::unique_lock<std::mutex> lock(pendingCompletionMutex_);
     if (!pendingCompletionStop_ && pendingCompletion_.empty() &&
@@ -4416,6 +4621,13 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     pending = std::move(pendingCompletion_.front());
     pendingCompletion_.pop_front();
     pendingDepthAfterPop = pendingCompletion_.size();
+    forcedCompletionFailure = testOnlyForceNextCompletionFailure_;
+    testOnlyForceNextCompletionFailure_ = false;
+  }
+
+  if (forcedCompletionFailure) {
+    poisonTapeFailure();
+    return false;
   }
 
   const WMTCommandBufferStatus dequeueStatus =

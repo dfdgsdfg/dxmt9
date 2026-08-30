@@ -165,7 +165,7 @@ ReplayFrontierDecision classifyReplayFrontier(
 framegraph::MultiSourceReplayPlan
 FrameGraphBackend::planMultiSourceSessionReplay(
     const resources::Pool& pool,
-    std::span<const core::metalqueue::ResolvedPublishedSource> sources,
+    const core::metalqueue::SynchronousSourceBorrowBatch& sources,
     const MultiSourceSessionReplayFrontier& frontier) {
   if (profile_ != RendererCompatProfile::Progressive ||
       !features_.passcoalesce || features_.dce || !frontier.valid() ||
@@ -177,12 +177,23 @@ FrameGraphBackend::planMultiSourceSessionReplay(
   std::array<framegraph::MultiSourcePlanningSource,
              framegraph::kMaxMultiSourcePlanningSources>
       planningSources{};
-  for (std::size_t i = 0; i < sources.size(); ++i) {
-    if (!sources[i].valid() || sources[i].commandBegin != 0u ||
-        sources[i].commandCount != sources[i].payload.commandCount()) {
-      return {};
-    }
-    planningSources[i].payload = sources[i].payload;
+  const bool valid = sources.visit(
+      [&](const core::metalqueue::GenerationQualifiedSourceBorrow& source,
+          std::size_t i) {
+        return source.visitPayload(
+            [&](const core::metalqueue::SynchronousSourcePayloadBorrow&
+                    payloadBorrow) {
+          const auto payload = payloadBorrow.checkedView();
+          if (source.commandBegin() != 0u ||
+              source.commandCount() != payload.commandCount()) {
+            return false;
+          }
+          planningSources[i].payload = payload;
+          return true;
+        });
+      });
+  if (!valid) {
+    return {};
   }
   std::optional<framegraph::ActiveRenderPlanningSeed> seed;
   if (frontier.activeRender.has_value()) {
@@ -197,12 +208,19 @@ FrameGraphBackend::planMultiSourceSessionReplay(
 
 void FrameGraphBackend::observeMultiSourceSessionReplay(
     const resources::Pool& pool,
-    std::span<const core::metalqueue::ResolvedPublishedSource> sources) {
+    const core::metalqueue::SynchronousSourceBorrowBatch& sources) {
   const framegraph::ResourceAliasResolver aliasResolver =
       makeResourceAliasResolver(pool);
-  for (const auto& source : sources) {
-    observer_.observeAndExport(source.payload, source.seqId, aliasResolver);
-  }
+  sources.visit(
+      [&](const core::metalqueue::GenerationQualifiedSourceBorrow& source,
+          std::size_t) {
+        return source.visitPayload(
+            [&](const core::metalqueue::SynchronousSourcePayloadBorrow&
+                    payloadBorrow) {
+          const auto payload = payloadBorrow.checkedView();
+          observer_.observeAndExport(payload, source.seqId(), aliasResolver);
+        });
+      });
 }
 
 bool resolvedSourceMatchesFrameGraphInput(

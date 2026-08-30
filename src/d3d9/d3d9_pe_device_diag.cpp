@@ -181,12 +181,16 @@ void D3D9DeviceImpl::logPeCopyMaterializationLedger() {
         if (!dxmt9::core::copyMaterializationSnapshotHasActivity(row)) {
             continue;
         }
+        const auto descriptor =
+            dxmt9::core::copyMaterializationDescriptor(materializationClass);
         dxmt9::util::logf(
             dxmt9::util::LogLevel::Info, "dxmt9-copy-materialization",
-            "binary=pe owner=pe class=%s copies=%llu copy_bytes=%llu "
+            "binary=pe owner=pe identity=%s classification=%s reason=%s "
+            "copies=%llu copy_bytes=%llu "
             "copy_ns=%llu semantic=%llu semantic_bytes=%llu "
             "retained_bytes=%llu retained_peak=%llu",
-            dxmt9::core::copyMaterializationClassName(materializationClass),
+            descriptor.identity, descriptor.classificationName,
+            descriptor.ownershipAbiReason,
             static_cast<unsigned long long>(row.calls),
             static_cast<unsigned long long>(row.bytes),
             static_cast<unsigned long long>(row.inclusiveNanoseconds),

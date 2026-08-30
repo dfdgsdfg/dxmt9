@@ -99,7 +99,7 @@ class IRenderBackend {
   // unsupported feature profiles preserve the natural per-source loop.
   virtual framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
       const resources::Pool& /*pool*/,
-      std::span<const core::metalqueue::ResolvedPublishedSource> /*sources*/,
+      const core::metalqueue::SynchronousSourceBorrowBatch& /*sources*/,
       const MultiSourceSessionReplayFrontier& /*frontier*/) {
     return {};
   }
@@ -110,7 +110,7 @@ class IRenderBackend {
   // observation is neither lost nor duplicated.
   virtual void observeMultiSourceSessionReplay(
       const resources::Pool& /*pool*/,
-      std::span<const core::metalqueue::ResolvedPublishedSource> /*sources*/) {}
+      const core::metalqueue::SynchronousSourceBorrowBatch& /*sources*/) {}
 };
 
 }  // namespace dxmt9::render
