@@ -8,6 +8,7 @@
 #include "render/encode_scheduling_progress.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <deque>
 #include <condition_variable>
@@ -825,6 +827,57 @@ class SynchronousSourceBorrowBatch final {
       // a deterministic failed visit instead of terminating the process.
       return false;
     }
+  }
+
+  // Visit a logical replay projection whose entries may repeat one physical
+  // source (for example, A/B/A command runs). Every projected entry must be
+  // covered by one generation-qualified physical borrow and must preserve its
+  // immutable source facts. This keeps physical pinning bounded by the Ready
+  // source prefix while allowing a validated replay suffix to contain more
+  // fragment entries than physical sources.
+  template <typename Fn>
+  bool visitResolvedProjection(
+      std::span<const ResolvedPublishedSource> projection,
+      Fn&& fn) const noexcept {
+    if (projection.empty()) {
+      return visitResolved(std::forward<Fn>(fn));
+    }
+    return visitResolved(
+        [&](std::span<const ResolvedPublishedSource> borrowed) noexcept {
+          for (const auto& projected : projection) {
+            if (!projected.valid() ||
+                projected.commandBegin > projected.payload.commandCount() ||
+                projected.commandCount >
+                    projected.payload.commandCount() -
+                        projected.commandBegin) {
+              return false;
+            }
+            const bool covered = std::any_of(
+                borrowed.begin(), borrowed.end(),
+                [&](const ResolvedPublishedSource& physical) {
+                  return projected.source == physical.source &&
+                      projected.slotIndex == physical.slotIndex &&
+                      projected.seqId == physical.seqId &&
+                      projected.metadata == physical.metadata &&
+                      projected.semantic == physical.semantic &&
+                      projected.payload == physical.payload &&
+                      projected.sourceId == physical.sourceId &&
+                      projected.storage == physical.storage &&
+                      projected.hasPresent == physical.hasPresent;
+                });
+            if (!covered) {
+              return false;
+            }
+          }
+          if constexpr (std::is_same_v<
+                            std::invoke_result_t<Fn&, decltype(projection)>,
+                            bool>) {
+            return std::invoke(fn, projection);
+          } else {
+            std::invoke(fn, projection);
+            return true;
+          }
+        });
   }
 
  private:

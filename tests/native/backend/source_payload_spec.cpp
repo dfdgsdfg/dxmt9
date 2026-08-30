@@ -999,7 +999,7 @@ void testDirectAssemblerDifferentialAndConservation() {
               legacy.tryAppendSurfaceCopy(mixedCopy) &&
               legacy.tryAppendReadback(mixedReadback) &&
               legacy.tryAppendPresent(std::move(legacyPresent)) &&
-              legacy.commit(),
+              legacy.commitValueOnlyForTest(),
           "legacy mixed differential fixture must commit");
     for (std::size_t i = 0; i < uniforms.size(); ++i) {
       const DirectReplayDrawInput input{

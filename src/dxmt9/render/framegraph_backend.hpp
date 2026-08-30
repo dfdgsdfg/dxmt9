@@ -147,7 +147,7 @@ class FrameGraphBackend final : public IRenderBackend {
       std::size_t slotIndex,
       core::SourcePayloadView payload,
       std::uint64_t seqId,
-      encoders::EncodeChunkOptions options,
+      encoders::EncodeChunkOptions&& options,
       std::span<const core::metalqueue::ResolvedPublishedSource>
           sessionLookaheadSources);
 

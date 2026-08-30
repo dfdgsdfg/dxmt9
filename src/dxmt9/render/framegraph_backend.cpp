@@ -394,7 +394,9 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
                                  encoders::EncodeChunkOptions options) {
   if (options.sessionLookaheadBorrows) {
     std::optional<core::metalqueue::QueueSubmissionRecord> result;
-    const bool visited = options.sessionLookaheadBorrows->visitResolved(
+    const bool visited =
+        options.sessionLookaheadBorrows->visitResolvedProjection(
+        options.sessionLookaheadSources,
         [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
             noexcept {
           try {
@@ -417,7 +419,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
                                  std::size_t slotIndex,
                                  core::SourcePayloadView payload,
                                  std::uint64_t seqId,
-                                 encoders::EncodeChunkOptions options,
+                                 encoders::EncodeChunkOptions&& options,
                                  std::span<const core::metalqueue::ResolvedPublishedSource>
                                      sessionLookaheadSources) {
   if (options.skipBackendPlanning) {

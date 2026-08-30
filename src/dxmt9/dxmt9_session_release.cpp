@@ -13,6 +13,20 @@ bool sessionReleaseFenceCovered(const SessionReleaseEvent& event,
          (event.fenceSeqId == 0 || coveredSeqId >= event.fenceSeqId);
 }
 
+bool sessionReleaseActionReady(const SessionReleaseSnapshot& snapshot,
+                               std::uint64_t coveredRawOrdinal,
+                               std::uint64_t coveredSeqId) noexcept {
+  if (!snapshot.valid()) {
+    return false;
+  }
+  if (snapshot.origin == SessionReleaseOrigin::Terminal) {
+    return sessionReleaseFenceCovered(snapshot.event, coveredRawOrdinal,
+                                      coveredSeqId);
+  }
+  return snapshot.event.fenceSeqId == 0 ||
+      coveredSeqId >= snapshot.event.fenceSeqId;
+}
+
 bool sessionReleaseCompletionSatisfies(
     SessionReleaseAction action,
     SessionReleaseCompletion completion) noexcept {

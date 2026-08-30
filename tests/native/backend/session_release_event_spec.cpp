@@ -106,6 +106,37 @@ void testOrdinaryFenceAndActionMustBeCovered() {
         "SubmitAndWait acknowledges at submit rather than GPU completion");
 }
 
+void testOrderedControlMayOwnForwardRawFenceAfterSequenceCoverage() {
+  const SessionReleaseEvent event{
+      .ordinal = 1,
+      .reason = SessionReleaseReason::DirectObservation,
+      .action = SessionReleaseAction::SubmitAndWait,
+      .fenceRawOrdinal = 9,
+      .fenceSeqId = 4,
+  };
+  const SessionReleaseSnapshot ordered{
+      .origin = SessionReleaseOrigin::Ordered,
+      .event = event,
+      .generation = 1,
+  };
+  check(!sessionReleaseActionReady(ordered, 8, 3),
+        "ordered control cannot act before its older sequence prefix");
+  check(sessionReleaseActionReady(ordered, 8, 4),
+        "sequence coverage makes the ordered-control action runnable");
+  check(!sessionReleaseFenceCovered(event, 8, 4),
+        "action readiness does not fabricate final raw acknowledgement");
+  check(sessionReleaseFenceCovered(event, 9, 4),
+        "the full acknowledgement still requires the control raw identity");
+  const SessionReleaseSnapshot terminal{
+      .origin = SessionReleaseOrigin::Terminal,
+      .event = event,
+      .generation = 1,
+  };
+  check(!sessionReleaseActionReady(terminal, 8, 4) &&
+            sessionReleaseActionReady(terminal, 9, 4),
+        "terminal action readiness retains the complete raw and sequence fence");
+}
+
 void testRegressingFenceIsRejected() {
   SessionReleaseState state;
   check(state.tryPostOrdered(
@@ -210,6 +241,7 @@ int main() {
     testOrdinaryEventsAreStrictFifo();
     testOrdinaryFifoFullDoesNotOverwrite();
     testOrdinaryFenceAndActionMustBeCovered();
+    testOrderedControlMayOwnForwardRawFenceAfterSequenceCoverage();
     testRegressingFenceIsRejected();
     testTerminalLatchIsStickyAndOrdered();
     testTerminalRequestsClampUnknownAndRegressedFences();

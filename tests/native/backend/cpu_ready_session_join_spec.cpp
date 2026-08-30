@@ -1456,7 +1456,8 @@ std::vector<dxmt9::core::metalqueue::QueueCompletionSource>
 snapshotLookaheadSources(const dxmt9::encoders::EncodeChunkOptions& options) {
   if (options.sessionLookaheadBorrows) {
     std::vector<dxmt9::core::metalqueue::QueueCompletionSource> snapshots;
-    options.sessionLookaheadBorrows->visitResolved(
+    options.sessionLookaheadBorrows->visitResolvedProjection(
+        options.sessionLookaheadSources,
         [&](std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
                 sources) {
           snapshots = snapshotLookaheadSources(sources);
@@ -1533,7 +1534,9 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         .sessionSource = options.sessionSource,
         .partitionSource = options.partitionSource,
         .lookaheadCount = options.sessionLookaheadBorrows
-                              ? options.sessionLookaheadBorrows->size()
+                              ? (options.sessionLookaheadSources.empty()
+                                     ? options.sessionLookaheadBorrows->size()
+                                     : options.sessionLookaheadSources.size())
                               : options.sessionLookaheadSources.size(),
         .lookaheadSources = snapshotLookaheadSources(options),
         .replayWindow = options.replayWindow,
@@ -1741,7 +1744,9 @@ class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
         .sessionSource = options.sessionSource,
         .partitionSource = options.partitionSource,
         .lookaheadCount = options.sessionLookaheadBorrows
-                              ? options.sessionLookaheadBorrows->size()
+                              ? (options.sessionLookaheadSources.empty()
+                                     ? options.sessionLookaheadBorrows->size()
+                                     : options.sessionLookaheadSources.size())
                               : options.sessionLookaheadSources.size(),
         .lookaheadSources = snapshotLookaheadSources(options),
         .replayWindow = options.replayWindow,
@@ -3994,7 +3999,9 @@ void productionLoopStoreProofLookaheadOverflowFailsClosed() {
 
   for (std::size_t source = 0; source < kSourceCount; ++source) {
     std::array<std::uint64_t, kCommandsPerSource> targets{};
-    targets.fill(0xA516u + source);
+    for (std::size_t command = 0; command < targets.size(); ++command) {
+      targets[command] = 0xA516u + source * 0x100u + command;
+    }
     fixture.publishArenaTargetSequence(130u + source, targets);
   }
   const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
@@ -4006,11 +4013,18 @@ void productionLoopStoreProofLookaheadOverflowFailsClosed() {
     dxmt9::CommandQueueArenaLeaseTestAccess::
         runCpuReadySessionEncodeLoop(queue);
   });
-  check(waitUntil([&] {
-          return backendState->observedCalls.load(
-                     std::memory_order_acquire) ==
-              kTotalCommands;
-        }),
+  const bool completed = waitUntil([&] {
+    return backendState->observedCalls.load(std::memory_order_acquire) ==
+        kTotalCommands;
+  });
+  if (!completed) {
+    std::cerr << "overflow observed calls: "
+              << backendState->observedCalls.load(std::memory_order_acquire)
+              << "\n";
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  }
+  check(completed,
         "overflow fixture executes every source-qualified fragment");
   dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   encodeThread.join();
@@ -6497,6 +6511,55 @@ void productionFinalWsiQuiescenceWakesIdleCoordinator() {
   encodeThread.join();
 }
 
+void productionOrderedControlForwardRawWakesIdleCoordinator() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadySessionReleaseLane(
+      queue);
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableSchedulingWaitObservation(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  dxmt9::CommandQueueArenaLeaseTestAccess::waitForIdleSessionWaitEntries(
+      queue, 1u);
+
+  std::atomic<bool> releaseReturned{false};
+  std::atomic<bool> releaseResult{false};
+  std::thread releaseThread([&] {
+    releaseResult.store(
+        queue.releaseCpuReadySessionBeforeOrderedControl(
+            dxmt9::core::metalqueue::SessionReleaseReason::DirectObservation,
+            dxmt9::core::metalqueue::SessionReleaseAction::SubmitSession, 1u),
+        std::memory_order_release);
+    releaseReturned.store(true, std::memory_order_release);
+  });
+
+  const bool completed = waitUntil([&] {
+    return releaseReturned.load(std::memory_order_acquire);
+  });
+  if (!completed) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  }
+  releaseThread.join();
+  check(completed && releaseResult.load(std::memory_order_acquire),
+        "idle coordinator acknowledges an ordered control whose raw identity "
+        "is newer than the empty represented source prefix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+                acknowledgedSessionReleaseOrdinal(queue) == 1u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::
+                hasPendingSessionRelease(queue),
+        "forward raw identity is covered only by the acknowledged action");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+}
+
 void productionFinalWsiQuiescenceDrainsOpenSessionAndPresent() {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
@@ -6751,6 +6814,7 @@ int main() {
     failedArenaSupplyEntryCannotContaminateNextSource();
     unownedArenaSupplyAttemptCannotCreateCancelableExactEntry();
     productionFinalWsiQuiescenceWakesIdleCoordinator();
+    productionOrderedControlForwardRawWakesIdleCoordinator();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
     productionLoopPlansSeparateBThenASourcesIntoOneCarrier();

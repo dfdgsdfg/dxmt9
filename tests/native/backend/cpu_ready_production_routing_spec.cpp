@@ -92,7 +92,8 @@ std::uint64_t effectivePayloadDigest(
   std::uint64_t hash = 1469598103934665603ull;
   digestValue(hash, payload.commandCount());
   for (std::size_t index = 0; index < payload.commandCount(); ++index) {
-    const auto command = payload.commandAt(index).command;
+    const auto source = payload.commandAt(index);
+    const auto& command = source.command;
     digestValue(hash, command.kind);
     switch (command.kind) {
     case dxmt9::core::MetalCommandKind::DrawRun:
@@ -140,14 +141,14 @@ std::uint64_t effectivePayloadDigest(
                   command.drawPayloadBytes.size_bytes());
       break;
     case dxmt9::core::MetalCommandKind::Clear:
-      if (command.clear) {
-        digestValue(hash, command.clear->clearColor);
-        digestValue(hash, command.clear->clearDepth);
-        digestValue(hash, command.clear->clearStencil);
-        digestColor(hash, command.clear->color);
-        digestValue(hash, command.clear->depth);
-        digestValue(hash, command.clear->stencil);
-        for (const auto& rect : command.clear->rects) digestRect(hash, rect);
+      if (source.clear) {
+        digestValue(hash, source.clear->clearColor);
+        digestValue(hash, source.clear->clearDepth);
+        digestValue(hash, source.clear->clearStencil);
+        digestColor(hash, source.clear->color);
+        digestValue(hash, source.clear->depth);
+        digestValue(hash, source.clear->stencil);
+        for (const auto& rect : source.clear->rects) digestRect(hash, rect);
       }
       break;
     case dxmt9::core::MetalCommandKind::SurfaceCopy:
@@ -208,10 +209,9 @@ std::uint64_t effectivePayloadDigest(
       }
       break;
     case dxmt9::core::MetalCommandKind::Present:
-      if (command.present) {
-        digestValue(hash, command.present->presentSource.value);
-        digestValue(hash, command.present->present.presentId.value);
-      }
+      // The empty wire Present acquires a runtime swapchain source and
+      // PresentId. Sequential Direct/Legacy oracle runs therefore compare the
+      // ordered barrier kind, not those newly issued runtime identities.
       break;
     }
   }
@@ -640,10 +640,11 @@ RecordSpec stretchRectRecord(const D9CWireObjectIdentity& source,
 }
 
 RecordSpec readbackRecord(const D9CWireObjectIdentity& source,
-                          const D9CWireObjectIdentity& destination) {
+                          const D9CWireObjectIdentity& destination,
+                          std::uint32_t firstHandle = 0u) {
   const D9CCommandChunkWireReadback fixed{
-      .srcHandleIndex = 0u,
-      .dstHandleIndex = 1u,
+      .srcHandleIndex = firstHandle,
+      .dstHandleIndex = firstHandle + 1u,
   };
   return {
       .type = D9C_COMMAND_RECORD_READBACK,
@@ -1167,8 +1168,14 @@ void sameRawLegacyAndDirectProductionOracle() {
             legacyCompletion.submitted && legacyCompletion.completed &&
             legacyCompletion.reclaimed,
         "same-raw lanes must both complete and reclaim their source");
-  check(directCompletion.rawOrdinal == legacyCompletion.rawOrdinal &&
-            directCompletion.rawOrdinal == 61u &&
+  // Direct admission publishes the original raw identity. Compatibility
+  // publication predates that identity domain and intentionally leaves it
+  // absent; the oracle normalizes that optional field to the known input raw
+  // rather than fabricating a Legacy queue identity. PresentId is likewise a
+  // runtime-issued ordinal, so the payload digest compares only the original
+  // Present fields above.
+  check(directCompletion.rawOrdinal == 61u &&
+            legacyCompletion.rawOrdinal == 0u &&
             directCompletion.sourceOrdinal == directCompletion.seqId &&
             legacyCompletion.sourceOrdinal == legacyCompletion.seqId &&
             directCompletion.sourceOrdinal - directCompletion.seqId ==
@@ -1177,13 +1184,11 @@ void sameRawLegacyAndDirectProductionOracle() {
             directCompletion.effectiveDigest ==
                 legacyCompletion.effectiveDigest &&
             directCompletion.hasPresent && legacyCompletion.hasPresent,
-        "same-raw lanes must preserve normalized ordinals, command layout, "
+        "same-raw lanes must preserve lane-normalized ordinals, command layout, "
         "payload bytes, and Present barrier");
-  const auto duplicateCompletion =
-      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
-          fixture.routing->queue_);
-  check(!duplicateCompletion.dequeued,
-        "a completed source must reject a duplicate completion consume");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 0u,
+        "a completed source must leave no duplicate Ready publication");
   check(wire.bytes == makeWireFixture(records).bytes &&
             direct.resourceEntries.size() == legacy.resourceEntries.size() &&
             direct.resourceEntries.size() == 2u &&
@@ -1204,7 +1209,7 @@ void sameRawLegacyAndDirectProductionOracle() {
   // so the differential does not accidentally claim an impossible lane.
   const std::array barrierRecords{
       clearRecord(), stretchRectRecord(sourceIdentity, destinationIdentity),
-      readbackRecord(sourceIdentity, destinationIdentity), presentRecord()};
+      readbackRecord(sourceIdentity, destinationIdentity, 2u), presentRecord()};
   const auto barrierWire = makeWireFixture(barrierRecords);
   dxmt9::d3d9::ImportedChunkView barrierImported;
   check(validateCommandChunk(barrierWire.bytes, barrierWire.envelope,

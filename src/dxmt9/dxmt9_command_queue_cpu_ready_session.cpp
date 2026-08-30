@@ -260,13 +260,50 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       [this](std::unique_lock<std::mutex>& lock,
              std::span<const ResolvedPublishedSource> sources,
              const ResolvedPublishedSource& source,
-             encoders::EncodeChunkOptions options)
+             encoders::EncodeChunkOptions options,
+             bool exposeLookahead)
       -> std::optional<QueueSubmissionRecord> {
+    std::array<ResolvedPublishedSource,
+               core::metalqueue::kMaxReadyPrefixSources>
+        representedSources{};
+    std::size_t representedCount = 0;
+    for (const auto& candidate : sources) {
+      auto represented = std::find_if(
+          representedSources.begin(),
+          representedSources.begin() + representedCount,
+          [&](const ResolvedPublishedSource& existing) {
+            return existing.source == candidate.source;
+          });
+      if (represented != representedSources.begin() + representedCount) {
+        if (represented->slotIndex != candidate.slotIndex ||
+            represented->seqId != candidate.seqId ||
+            represented->metadata != candidate.metadata ||
+            represented->semantic != candidate.semantic ||
+            represented->payload != candidate.payload ||
+            represented->sourceId != candidate.sourceId ||
+            represented->storage != candidate.storage ||
+            represented->hasPresent != candidate.hasPresent) {
+          return std::nullopt;
+        }
+        continue;
+      }
+      if (representedCount == representedSources.size()) {
+        return std::nullopt;
+      }
+      representedSources[representedCount++] = candidate;
+    }
+    if (exposeLookahead) {
+      options.sessionLookaheadSources = sources;
+    }
     std::optional<QueueSubmissionRecord> result;
     const bool visited = queueLifecycle_.visitRepresentedSourceBorrows(
-        lock, sources,
+        lock,
+        std::span<const ResolvedPublishedSource>(representedSources.data(),
+                                                 representedCount),
         [&](const SynchronousSourceBorrowBatch& sourceBorrows) noexcept {
-          options.sessionLookaheadBorrows = &sourceBorrows;
+          if (exposeLookahead) {
+            options.sessionLookaheadBorrows = &sourceBorrows;
+          }
           ScopedQueueUnlock queueUnlocked(lock);
           try {
             result = encodeCpuReadySessionSource(source, std::move(options));
@@ -547,8 +584,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       [this, &pendingRecord, &pendingSession,
        &submitPendingRecordLocked](std::unique_lock<std::mutex>& lock) {
         const auto release = sessionReleaseState_.peekNext();
-        if (!release ||
-            release->event.fenceSeqId > sessionReleaseCoveredSeqId_) {
+        if (!release || !core::metalqueue::sessionReleaseActionReady(
+                            *release, sessionReleaseCoveredRawOrdinal_,
+                            sessionReleaseCoveredSeqId_)) {
           return false;
         }
 
@@ -700,8 +738,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       encodeCv_.wait(lock, [this] {
         const auto release = sessionReleaseState_.peekNext();
         const bool coveredRelease = release &&
-            core::metalqueue::sessionReleaseFenceCovered(
-                release->event, sessionReleaseCoveredRawOrdinal_,
+            core::metalqueue::sessionReleaseActionReady(
+                *release, sessionReleaseCoveredRawOrdinal_,
                 sessionReleaseCoveredSeqId_);
         return stop_ || !cpuReadyTape_.readyEmpty() || coveredRelease;
       });
@@ -2462,7 +2500,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                         std::span<const ResolvedPublishedSource>(
                             replaySources.data() + run,
                             replaySources.size() - run),
-                        replaySources[run], std::move(options));
+                        replaySources[run], std::move(options), true);
                     if (!submission ||
                         (carrier &&
                          !core::metalqueue::
@@ -2846,7 +2884,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                           replayLookaheadSources.data(),
                           replayLookaheadSources.size())
                           .subspan(runIndex),
-                      replaySource, std::move(options));
+                      replaySource, std::move(options), true);
                   if (!submission.has_value()) {
                     perf::countCpuReadyMultiSourcePostEffectFatal(
                         perf::CpuReadyMultiSourceFatalReason::
@@ -3212,7 +3250,7 @@ multi_source_window_complete:
             lock,
             std::span<const ResolvedPublishedSource>(resolvedLookahead.data(),
                                                      resolvedCount),
-            resolvedLookahead[0], std::move(options));
+            resolvedLookahead[0], std::move(options), resolvedCount > 1u);
       }
       if (!submission.has_value()) {
         if (appendToPending) {

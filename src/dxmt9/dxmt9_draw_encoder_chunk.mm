@@ -1444,6 +1444,69 @@ struct ActiveSeedMergeTicketAudit {
   }
 };
 
+// Direct callers need the same mutable storage shape as an EncodeSession, but
+// keeping that shape as an unconditional function local makes the already
+// large encodeChunk frame exceed the default macOS worker-thread stack once a
+// synchronous borrow visitor is layered above it. Reuse one heap-backed
+// one-shot instance per encode thread and clear its contents at the call
+// boundary. Session callers never acquire this fallback.
+class ThreadLocalOneShotSessionStorage final {
+ public:
+  ThreadLocalOneShotSessionStorage()
+      : storage_(encode_session::createStorage()) {}
+  ~ThreadLocalOneShotSessionStorage() {
+    encode_session::destroyStorage(storage_);
+  }
+
+  ThreadLocalOneShotSessionStorage(
+      const ThreadLocalOneShotSessionStorage&) = delete;
+  ThreadLocalOneShotSessionStorage& operator=(
+      const ThreadLocalOneShotSessionStorage&) = delete;
+
+  EncodeChunkSessionStorage& acquire(const uniform::DirtyState& dirty) {
+    clear();
+    encode_session::initializeStorage(*storage_, dirty);
+    return *storage_;
+  }
+
+  void release() noexcept {
+    clear();
+  }
+
+ private:
+  void clear() noexcept {
+    std::destroy_at(storage_);
+    std::construct_at(storage_);
+  }
+
+  EncodeChunkSessionStorage* storage_ = nullptr;
+};
+
+ThreadLocalOneShotSessionStorage& oneShotSessionStorage() {
+  thread_local ThreadLocalOneShotSessionStorage storage;
+  return storage;
+}
+
+class ScopedOneShotSessionStorageRelease final {
+ public:
+  explicit ScopedOneShotSessionStorageRelease(
+      ThreadLocalOneShotSessionStorage* storage) noexcept
+      : storage_(storage) {}
+  ~ScopedOneShotSessionStorageRelease() {
+    if (storage_) {
+      storage_->release();
+    }
+  }
+
+  ScopedOneShotSessionStorageRelease(
+      const ScopedOneShotSessionStorageRelease&) = delete;
+  ScopedOneShotSessionStorageRelease& operator=(
+      const ScopedOneShotSessionStorageRelease&) = delete;
+
+ private:
+  ThreadLocalOneShotSessionStorage* storage_ = nullptr;
+};
+
 }  // namespace
 
 static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
@@ -1451,7 +1514,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     std::size_t slotIndex,
     core::SourcePayloadView payload,
     std::uint64_t sourceSeqId,
-    EncodeChunkOptions options,
+    EncodeChunkOptions&& options,
     std::span<const core::metalqueue::ResolvedPublishedSource>
         sessionLookaheadSources) {
   @autoreleasepool {
@@ -1675,10 +1738,15 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                                          : "after-new-command-buffer");
   // One-shot storage for direct callers. The opt-in EncodeSession path below
   // supplies persistent storage so source boundaries can remain metadata-only.
-  EncodeChunkSessionStorage localSession =
-      encode_session::makeStorage(ctx.dirty);
+  ThreadLocalOneShotSessionStorage* localSessionOwner = nullptr;
+  EncodeChunkSessionStorage* localSession = nullptr;
+  if (!options.session) {
+    localSessionOwner = &oneShotSessionStorage();
+    localSession = &localSessionOwner->acquire(ctx.dirty);
+  }
+  ScopedOneShotSessionStorageRelease localSessionRelease(localSessionOwner);
   EncodeChunkSessionStorage& session =
-      options.session ? *options.session->storage : localSession;
+      options.session ? *options.session->storage : *localSession;
   if (options.session) {
     encode_session::initializeStorage(session, ctx.dirty);
     if (session.commandBufferChainTail == NULL_OBJECT_HANDLE) {
@@ -4813,7 +4881,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeChunkOptions options) {
   if (options.sessionLookaheadBorrows) {
     std::optional<core::metalqueue::QueueSubmissionRecord> result;
-    const bool visited = options.sessionLookaheadBorrows->visitResolved(
+    const bool visited =
+        options.sessionLookaheadBorrows->visitResolvedProjection(
+        options.sessionLookaheadSources,
         [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
             noexcept {
           try {

@@ -105,6 +105,13 @@ enum class SessionReleaseAckResult : std::uint8_t {
 bool sessionReleaseFenceCovered(const SessionReleaseEvent& event,
                                 std::uint64_t coveredRawOrdinal,
                                 std::uint64_t coveredSeqId) noexcept;
+// An ordered control owns its raw identity on the posting thread. The
+// coordinator may execute the requested action once the older queue sequence
+// prefix is represented; acknowledgement then advances coveredRawOrdinal to
+// the control's own fence before applying the full fence check above.
+bool sessionReleaseActionReady(const SessionReleaseSnapshot& snapshot,
+                               std::uint64_t coveredRawOrdinal,
+                               std::uint64_t coveredSeqId) noexcept;
 bool sessionReleaseCompletionSatisfies(
     SessionReleaseAction action,
     SessionReleaseCompletion completion) noexcept;
