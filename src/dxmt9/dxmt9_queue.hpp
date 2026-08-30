@@ -54,6 +54,99 @@ struct CpuReadySupplyObservationToken {
       CpuReadySupplyObservationToken) noexcept = default;
 };
 
+// Queue-local, storage-free promise for the immediate source after one Ready
+// publication. The single-consumer replay FIFO may arm it only after it has
+// observed an already-adopted immediate raw successor; an empty producer FIFO
+// is never predicted. It authorizes only a pre-effect retained-head wait. The
+// eventual CpuReadyPublicationTicket remains the source/storage authority.
+struct CpuReadyNextSourceIntent {
+  u64 generation = 0;
+  u64 predecessorSeqId = 0;
+  u64 rawOrdinal = 0;
+  u64 sourceOrdinal = 0;
+  u64 seqId = 0;
+
+  constexpr bool valid() const noexcept {
+    return generation != 0 && predecessorSeqId != 0 && rawOrdinal != 0 &&
+           sourceOrdinal != 0 && seqId != 0;
+  }
+
+  friend constexpr bool operator==(CpuReadyNextSourceIntent,
+                                   CpuReadyNextSourceIntent) noexcept = default;
+};
+
+struct CpuReadyNextSourceIntentPlan {
+  CpuReadyNextSourceIntent intent{};
+  u64 generationHighWater = 0;
+  bool armed = false;
+};
+
+constexpr CpuReadyNextSourceIntentPlan planCpuReadyNextSourceIntent(
+    u64 generationHighWater,
+    u64 publishedSourceOrdinal,
+    u64 publishedSeqId,
+    u64 nextRawOrdinal,
+    bool hasPresent) noexcept {
+  CpuReadyNextSourceIntentPlan result{
+      .generationHighWater = generationHighWater,
+  };
+  if (hasPresent || publishedSourceOrdinal == 0 || publishedSeqId == 0 ||
+      nextRawOrdinal == 0 ||
+      publishedSourceOrdinal == std::numeric_limits<u64>::max() ||
+      publishedSeqId == std::numeric_limits<u64>::max()) {
+    return result;
+  }
+  u64 generation = generationHighWater + 1u;
+  if (generation == 0) {
+    generation = 1u;
+  }
+  result.intent = CpuReadyNextSourceIntent{
+      .generation = generation,
+      .predecessorSeqId = publishedSeqId,
+      .rawOrdinal = nextRawOrdinal,
+      .sourceOrdinal = publishedSourceOrdinal + 1u,
+      .seqId = publishedSeqId + 1u,
+  };
+  result.generationHighWater = generation;
+  result.armed = true;
+  return result;
+}
+
+constexpr bool cpuReadyNextSourceIntentMatches(
+    CpuReadyNextSourceIntent intent,
+    u64 predecessorSourceOrdinal,
+    u64 predecessorSeqId) noexcept {
+  return intent.valid() && predecessorSourceOrdinal != 0 &&
+         predecessorSeqId != 0 &&
+         predecessorSourceOrdinal != std::numeric_limits<u64>::max() &&
+         predecessorSeqId != std::numeric_limits<u64>::max() &&
+         intent.predecessorSeqId == predecessorSeqId &&
+         intent.sourceOrdinal == predecessorSourceOrdinal + 1u &&
+         intent.seqId == predecessorSeqId + 1u;
+}
+
+constexpr bool cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+    CpuReadyNextSourceIntent intent,
+    u64 publishedLastSourceOrdinal,
+    u64 publishedLastSeqId,
+    std::size_t publishedSourceCount) noexcept {
+  if (!intent.valid() || publishedSourceCount == 0u) {
+    return false;
+  }
+  const auto count = static_cast<u64>(publishedSourceCount);
+  if (publishedLastSourceOrdinal < count || publishedLastSeqId < count) {
+    return false;
+  }
+  const auto firstSourceOrdinal = publishedLastSourceOrdinal - count + 1u;
+  const auto firstSeqId = publishedLastSeqId - count + 1u;
+  if (intent.sourceOrdinal < firstSourceOrdinal ||
+      intent.sourceOrdinal > publishedLastSourceOrdinal) {
+    return false;
+  }
+  const auto offset = intent.sourceOrdinal - firstSourceOrdinal;
+  return intent.seqId == firstSeqId + offset;
+}
+
 constexpr u64 committedSequenceWaitTarget(u64 requestedSeqId,
                                           u64 lastCommittedSeqId) noexcept {
   return requestedSeqId <= lastCommittedSeqId ? requestedSeqId

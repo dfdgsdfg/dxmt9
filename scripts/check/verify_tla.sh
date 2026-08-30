@@ -62,6 +62,9 @@ done
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  # The historical R15 shadow planner dropped the active render seed after
+  # retaining and restoring a Ready head, so it could never prove A|B|A.
+  "CpuReadyActiveHeadLookahead|.seedless.counterexample|Invariant ActiveSeedPreserved is violated"
   # End-to-end CPU pipeline mutations are independent: reclaim must wake a
   # parked admission, publication requires the complete assembler prefix,
   # completion authority follows the child join, owner reclaim follows

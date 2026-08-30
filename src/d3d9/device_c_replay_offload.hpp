@@ -172,6 +172,10 @@ struct RawCommandChunk {
   std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
   // Raw FIFO identity. For canonical planning/admission, replaySeq == rawOrdinal.
   ReplaySeq replaySeq = 0;
+  // Single-consumer-only lookahead. pop() sets this only when the immediately
+  // following FIFO item is an already-adopted planning-enabled raw chunk.
+  // It owns no payload and predicts neither an empty queue nor a control item.
+  ReplaySeq nextQueuedRawOrdinalHint = 0;
   // Zero in the normal renderer. A non-zero pair binds this raw FIFO item to
   // the exact PE Render Tape CommandChunk event that was accepted only after
   // this bridge call returned successfully.
@@ -740,6 +744,14 @@ class ReplayOffloadQueue {
     out = std::move(queue_.front());
     queue_.pop_front();
     queuedBytes_ -= out.chargedBytes;
+    if (!out.isMutation() && !out.isStateBlockApply() &&
+        out.chunk.cpuReadyTapePlanningEnabled && !queue_.empty() &&
+        !queue_.front().placeholder() && !queue_.front().isMutation() &&
+        !queue_.front().isStateBlockApply() &&
+        queue_.front().chunk.cpuReadyTapePlanningEnabled) {
+      out.chunk.nextQueuedRawOrdinalHint =
+          queue_.front().chunk.replaySeq;
+    }
     inFlight_ = true;
     if (observabilityEnabled_) {
       noteReplayInflightRaw(true);

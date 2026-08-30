@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-08-25
-source: docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md
+updated: 2026-08-30
+source: docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H236` - current GT2 saturates the app/PE producer thread, but module-qualified sampling assigns only 10.6% to PE `d3d9.dll`; broad recorder-local tuning is closed as an FPS lane.
+Latest tracked row: `H239` - exact replay-FIFO next-source intent is implemented and proved, but it is never selected in GT2; the remaining Tape locality gap is bounded replay/store-action equivalence, not missing source identity.
 
 ## Start Here
 
@@ -22,6 +22,9 @@ Latest tracked row: `H236` - current GT2 saturates the app/PE producer thread, b
 
 ## Recent Leaf Documents
 
+- [present-pacing-cpu-ready-next-source-intent.239 - Replay-FIFO Intent Is Safe but Does Not Recover Tape Locality](present-pacing-cpu-ready-next-source-intent.239.md)
+- [present-pacing-cpu-ready-active-head-locality.238 - Active-Session Lookahead Closes the Local Hold Gap but Not Tape Locality](present-pacing-cpu-ready-active-head-locality.238.md)
+- [present-pacing-cpu-ready-tape-promotion-gate.237 - CPU-Ready Tape Restores Progress but Misses the Locality Gate](present-pacing-cpu-ready-tape-promotion-gate.237.md)
 - [present-pacing-current-bottleneck-pe-symbol.236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 10.6%](present-pacing-current-bottleneck-pe-symbol.236.md)
 - [present-pacing-sfiv-current-tail-attribution.235 - Current SFIV Tail Is CPU/Producer Cadence, Not A GPU Hot Frame](present-pacing-sfiv-current-tail-attribution.235.md)
 - [present-pacing-arena-admission-regression-boundary.233 - Segmented Arena Admission Turns Capacity Pressure Into Session Fragmentation](present-pacing-arena-admission-regression-boundary.233.md)

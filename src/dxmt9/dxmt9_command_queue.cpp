@@ -5168,12 +5168,17 @@ bool CommandQueue::publishCpuReadyArenaSource(
   const auto publishedPresentBoundaryPolicy =
       context->pendingPresentBoundaryPolicy;
   const bool flushAfterPublication = context->flushAfterPublication;
+  const auto nextQueuedRawOrdinalHint =
+      context->nextQueuedRawOrdinalHint;
   // Ready publication transfers any stashed drawable token's cleanup
   // obligation from the build context to normal encoded-Present consumption.
   context->presentTokenStashed = false;
   activeArenaBuild_.store(nullptr, std::memory_order_release);
   arenaBuildContext_.reset();
   arenaAdmissionActive_.store(false, std::memory_order_release);
+  advanceCpuReadyNextSourceIntentLocked(
+      ticket.sourceOrdinal, ticket.seqId, 1u, nextQueuedRawOrdinalHint,
+      hasPublishedPresent);
   recordCpuReadyTapeStats(cpuReadyTape_);
   queueLifecycle_.noteCpuReadyCapacityProgress();
   schedulingProgressWatchdog_.notePublished(ticket.seqId,
@@ -5654,6 +5659,11 @@ CommandQueue::publishCpuReadyArenaBatch(
   }
   const bool hasPublishedPresent = context->presentAppended;
   const auto publishedSeq = context->batchReservations[last].ticket.seqId;
+  const auto publishedSourceOrdinal =
+      context->batchReservations[last].ticket.sourceOrdinal;
+  const auto publishedSourceCount = context->batchReservations.size();
+  const auto nextQueuedRawOrdinalHint =
+      context->nextQueuedRawOrdinalHint;
   const auto presentDesc = context->pendingPresentDesc;
   const auto presentPolicy = context->pendingPresentBoundaryPolicy;
   const bool flushAfterPublication = context->flushAfterPublication;
@@ -5668,6 +5678,10 @@ CommandQueue::publishCpuReadyArenaBatch(
   activeArenaBuild_.store(nullptr, std::memory_order_release);
   arenaBuildContext_.reset();
   arenaAdmissionActive_.store(false, std::memory_order_release);
+  advanceCpuReadyNextSourceIntentLocked(
+      publishedSourceOrdinal, publishedSeq,
+      publishedSourceCount, nextQueuedRawOrdinalHint,
+      hasPublishedPresent);
   recordCpuReadyTapeStats(cpuReadyTape_);
   queueLifecycle_.noteCpuReadyCapacityProgress();
   lock.unlock();
@@ -7359,6 +7373,73 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
           ? pipelineLifecycleObserver_->productionSink()
           : dxmt9::queue::PipelineLifecycleObserverSink{},
   });
+}
+
+bool CommandQueue::armCpuReadyNextSourceIntent(
+    core::CpuReadyPublicationTicket predecessor,
+    std::uint64_t nextRawOrdinal,
+    bool predecessorHasPresent) noexcept {
+  if (!cpuReadySessionLaneEnabled_ ||
+      !predecessor.strictIdentityValid() ||
+      predecessor.sourceOrdinal ==
+          std::numeric_limits<std::uint64_t>::max() ||
+      predecessor.seqId == std::numeric_limits<std::uint64_t>::max()) {
+    return false;
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::lock_guard lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "arm_cpu_ready_next_source_intent");
+  if (stop_ || !arenaBuildContext_.has_value() ||
+      arenaBuildContext_->reservation.ticket != predecessor ||
+      arenaBuildContext_->batchMode || predecessorHasPresent ||
+      nextRawOrdinal == 0 ||
+      predecessor.seqId == 0 ||
+      nextSeqId_.load(std::memory_order_relaxed) != predecessor.seqId + 1u) {
+    return false;
+  }
+  arenaBuildContext_->nextQueuedRawOrdinalHint = nextRawOrdinal;
+  return true;
+}
+
+void CommandQueue::cancelCpuReadyNextSourceIntent(
+    std::uint64_t rawOrdinal) noexcept {
+  if (rawOrdinal == 0) {
+    return;
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::lock_guard lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "cancel_cpu_ready_next_source_intent");
+  if (nextSourceIntent_.valid() &&
+      nextSourceIntent_.rawOrdinal == rawOrdinal) {
+    nextSourceIntent_ = {};
+    perf::countCpuReadyNextSourceIntentCanceled();
+    encodeCv_.notify_one();
+  }
+}
+
+void CommandQueue::advanceCpuReadyNextSourceIntentLocked(
+    std::uint64_t sourceOrdinal,
+    std::uint64_t seqId,
+    std::size_t publishedSourceCount,
+    std::uint64_t nextRawOrdinal,
+    bool hasPresent) noexcept {
+  if (core::metalqueue::
+          cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+              nextSourceIntent_, sourceOrdinal, seqId,
+              publishedSourceCount)) {
+    nextSourceIntent_ = {};
+  }
+  const auto plan = core::metalqueue::planCpuReadyNextSourceIntent(
+      nextSourceIntentGeneration_, sourceOrdinal, seqId, nextRawOrdinal,
+      hasPresent);
+  if (!plan.armed) {
+    return;
+  }
+  nextSourceIntent_ = plan.intent;
+  nextSourceIntentGeneration_ = plan.generationHighWater;
+  perf::countCpuReadyNextSourceIntentArmed();
 }
 
 void CommandQueue::noteInitializerPendingUploads() noexcept {

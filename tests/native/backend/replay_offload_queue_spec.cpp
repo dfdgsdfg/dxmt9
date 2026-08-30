@@ -54,6 +54,53 @@ void testFifoPushPop() {
   check(q.depth() == 0, "drained depth");
 }
 
+void testPopExposesOnlyAdoptedImmediateRawLookahead() {
+  using namespace dxmt9::d3d9;
+  const auto planned = [](ReplaySeq ordinal) {
+    auto chunk = makeChunk(16);
+    chunk.replaySeq = ordinal;
+    chunk.cpuReadyTapePlanningEnabled = true;
+    return chunk;
+  };
+
+  {
+    ReplayOffloadQueue queue(4, 1u << 20);
+    check(queue.push(planned(1u)), "single planned raw push");
+    ReplayQueueItem out;
+    check(queue.pop(out) && out.chunk.nextQueuedRawOrdinalHint == 0u,
+          "an empty producer FIFO never predicts a successor");
+    queue.markReplayDone();
+  }
+  {
+    ReplayOffloadQueue queue(4, 1u << 20);
+    check(queue.push(planned(11u)) && queue.push(planned(12u)),
+          "adjacent planned raws push");
+    ReplayQueueItem out;
+    check(queue.pop(out) && out.chunk.replaySeq == 11u &&
+              out.chunk.nextQueuedRawOrdinalHint == 12u,
+          "pop exposes the already-adopted immediate planned raw ordinal");
+    queue.markReplayDone();
+    check(queue.pop(out) && out.chunk.nextQueuedRawOrdinalHint == 0u,
+          "the FIFO tail has no synthetic continuation");
+    queue.markReplayDone();
+  }
+  {
+    ReplayOffloadQueue queue(4, 1u << 20);
+    auto control = std::make_unique<StateBlockApplyTask>();
+    check(queue.push(planned(21u)) &&
+              queue.pushStateBlockApply(control) ==
+                  ReplayQueuePushDisposition::Accepted,
+          "planned raw plus ordered control push");
+    ReplayQueueItem out;
+    check(queue.pop(out) && out.chunk.nextQueuedRawOrdinalHint == 0u,
+          "an immediate ordered control never becomes a source promise");
+    queue.markReplayDone();
+    check(queue.pop(out) && out.isStateBlockApply(),
+          "ordered control remains the exact next FIFO item");
+    queue.markReplayDone();
+  }
+}
+
 void testDrainWaitsForInFlight() {
   dxmt9::d3d9::ReplayOffloadQueue q(4, 1 << 20);
   check(q.push(makeChunk(8)), "push");
@@ -760,6 +807,7 @@ void testTerminalScopedFenceRejectsProviderCall() {
 int main() {
   try {
     testFifoPushPop();
+    testPopExposesOnlyAdoptedImmediateRawLookahead();
     testDrainWaitsForInFlight();
     testBoundedPushBlocksUntilPop();
     testStopReleasesEverything();

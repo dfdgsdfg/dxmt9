@@ -285,7 +285,7 @@ void firstLeaseCapacityWaitTruthTable() {
 
 void sessionWakeTruthTables() {
   using namespace dxmt9::render;
-  for (std::uint32_t bits = 0; bits < 256u; ++bits) {
+  for (std::uint32_t bits = 0; bits < 512u; ++bits) {
     const CpuReadySessionWakeState state{
         .stopped = (bits & 1u) != 0,
         .ready = (bits & 2u) != 0,
@@ -295,6 +295,7 @@ void sessionWakeTruthTables() {
         .writerPressure = (bits & 32u) != 0,
         .initializerPending = (bits & 64u) != 0,
         .capacityProgress = (bits & 128u) != 0,
+        .sourceIntentProgress = (bits & 256u) != 0,
     };
     const bool openExpected = (bits & 0x0fu) != 0;
     const bool retainedExpected = bits != 0;

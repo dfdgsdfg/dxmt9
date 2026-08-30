@@ -1593,12 +1593,15 @@ int32_t replayPlannedChunk(D9CDevice* device,
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
-  dxmt9::d3d9::ImportedChunkView imported;
-  if (!importOwnedChunk(raw, imported)) {
-    return commitChunkFail("chunk-planned-import");
-  }
   auto upper = device->dev().upperDevice();
   auto* queue = upper ? &upper->queue() : nullptr;
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!importOwnedChunk(raw, imported)) {
+    if (queue) {
+      queue->cancelCpuReadyNextSourceIntent(raw.replaySeq);
+    }
+    return commitChunkFail("chunk-planned-import");
+  }
   const auto limits = queue
       ? queue->cpuReadyArenaPlanLimits()
       : dxmt9::CommandQueue::CpuReadyArenaPlanLimits{};
@@ -1626,6 +1629,11 @@ int32_t replayPlannedChunk(D9CDevice* device,
         dxmt9::perf::OffloadReplayStage::Encode);
   }
   capturePlanReason = static_cast<std::uint32_t>(plan.reason);
+  if (queue && (!allowDirectArena || !plan.directArenaCandidate())) {
+    // The predecessor may wait only for a source-producing Direct successor.
+    // Cancel before StateOnly/Inline/Legacy/control replay has any effect.
+    queue->cancelCpuReadyNextSourceIntent(raw.replaySeq);
+  }
   const auto logAdmissionFailure = [&](std::uint32_t beginStatus,
                                        dxmt9::CommandQueue::
                                            CpuReadyArenaBeginStopReason
@@ -1823,6 +1831,10 @@ int32_t replayPlannedChunk(D9CDevice* device,
     return hr;
   }
   const auto admissionTicket = lease.ticket();
+  if (!segmentSerial && raw.nextQueuedRawOrdinalHint != 0u) {
+    (void)queue->armCpuReadyNextSourceIntent(
+        admissionTicket, raw.nextQueuedRawOrdinalHint, raw.hasPresent);
+  }
   dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
   dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
   const auto publishStatus = segmentSerial

@@ -328,6 +328,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   render::EncodeSessionAdmissionState pendingAdmission{};
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
+  bool activeRetainedHeadSingleSourceFallback = false;
   render::FirstLeaseReadyHeadIdentity firstLeaseStandaloneConsumedHead{};
   render::FirstLeaseReadyHeadIdentity firstLeaseCreditRearmObservedHead{};
   render::FirstLeaseReadyHeadIdentity firstLeaseStandalonePendingHead{};
@@ -749,30 +750,50 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       continue;
     }
 
-    // A fresh one-source Ready frontier cannot expose an A|B + A replay
-    // window to the bounded planner. When that exact frontier has one already-
-    // reserved ordered-tail Writing successor, retain the whole Ready source
-    // tentatively until the successor publishes. An active session consumes
-    // its Ready head immediately; R15 showed that parking it provided no
-    // cross-source return and failed strict locality.
+    // A one-source Ready frontier cannot expose an A|B + A replay window to
+    // the bounded planner. When that exact frontier has one already-reserved
+    // ordered-tail Writing successor, retain the whole Ready source
+    // tentatively until the successor publishes. The original fresh-frontier
+    // form prevents startup fragmentation. An active session may now use the
+    // same physical hold only when its render frontier is complete: unlike the
+    // retired seedless R15 observer, the current planner receives the active
+    // render seed and can prove a cross-window return before any effect.
     const bool freshRetainedHeadFrontier =
         !pendingRecord.has_value() && !pendingSession &&
         !pendingAdmission.valid() && !capacityLeaseState.lease().valid();
+    const bool activeRetainedHeadFrontier =
+        pendingRecord.has_value() && pendingSession &&
+        pendingAdmission.valid() && capacityLeaseState.lease().valid() &&
+        encoders::encodeChunkSessionReplayFrontierState(*pendingSession) ==
+            encoders::EncodeSessionReplayFrontierState::ActiveRenderComplete;
+    const bool retainedHeadFrontier =
+        freshRetainedHeadFrontier || activeRetainedHeadFrontier;
     if (!exactReplaySingleSource &&
-        freshRetainedHeadFrontier &&
+        !activeRetainedHeadSingleSourceFallback &&
+        !stop_ &&
+        retainedHeadFrontier &&
         cpuReadyTape_.readyCount() == 1u &&
         !sessionReleaseState_.hasPending() &&
         !queueLifecycle_.producerSequenceWaitActive() &&
         arenaAdmissionWaiterCount_.load(std::memory_order_acquire) == 0u &&
         !queueLifecycle_.producerWriterPressureActive() &&
         !(initializer_ && initializer_->hasPendingUploadsUnlocked())) {
-      perf::countCpuReadyRetainedHeadAttempt();
+      const auto retainedHeadKind = activeRetainedHeadFrontier
+          ? perf::CpuReadyRetainedHeadFrontier::ActiveRender
+          : perf::CpuReadyRetainedHeadFrontier::Fresh;
+      perf::countCpuReadyRetainedHeadAttempt(retainedHeadKind);
       core::CpuReadyTape::SourceRef writingSuccessor{};
+      std::optional<core::metalqueue::CpuReadyNextSourceIntent>
+          nextSourceIntent;
+      auto retainedHeadRejection =
+          perf::CpuReadyRetainedHeadRejectReason::ReservationRace;
       const std::size_t retainedCount =
           queueLifecycle_.reserveReadySlotBatchPrefix(
               lock, std::span<ReadySlotSnapshot>(scratch.data(), 1u),
               [&](const SynchronousSourceBorrowBatch& candidates) noexcept {
                 if (candidates.size() != 1u) {
+                  retainedHeadRejection =
+                      perf::CpuReadyRetainedHeadRejectReason::BorrowShape;
                   return std::size_t{0};
                 }
                 std::size_t selected = 0;
@@ -782,8 +803,16 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       [&](const SynchronousSourcePayloadBorrow& payloadBorrow)
                           noexcept {
                     const auto payload = payloadBorrow.checkedView();
+                    if (!payload.valid()) {
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::PayloadInvalid;
+                      return false;
+                    }
                     if (terminalSuffixJoinEnabled &&
                         isDeferredTerminalSuffixCandidate(payload)) {
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::
+                              TerminalSuffixOwned;
                       return false;
                     }
                     ResolvedPublishedSource candidate{
@@ -795,23 +824,58 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                         .payload = payload,
                     };
                     const auto admission = admissionCandidateFor(candidate);
-                    if (borrow.hasPresent() ||
-                        !render::sessionSourceCanBeHead(payload) ||
-                        render::classifySessionAdmission(
-                            render::EncodeSessionAdmissionState{}, admission,
-                            admissionLimits) !=
-                            render::SessionAdmissionDecision::Admit) {
+                    const bool sourceCompatible = activeRetainedHeadFrontier
+                        ? render::sessionSourceCanAppendToPending(payload, true)
+                        : render::sessionSourceCanBeHead(payload);
+                    const auto admissionState = activeRetainedHeadFrontier
+                        ? pendingAdmission
+                        : render::EncodeSessionAdmissionState{};
+                    if (borrow.hasPresent()) {
+                      retainedHeadRejection =
+                          perf::CpuReadyRetainedHeadRejectReason::Present;
+                      return false;
+                    }
+                    if (!sourceCompatible) {
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::
+                              SourceCompatibility;
+                      return false;
+                    }
+                    if (render::classifySessionAdmission(
+                            admissionState, admission, admissionLimits) !=
+                        render::SessionAdmissionDecision::Admit) {
+                      retainedHeadRejection =
+                          perf::CpuReadyRetainedHeadRejectReason::Admission;
                       return false;
                     }
                     const auto capacity =
                         cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
-                    if (!capacity.valid ||
-                        !capacity.orderedTailWritingSuccessor.has_value() ||
-                        !capacity.orderedTailWritingSuccessor->valid()) {
+                    if (!capacity.valid) {
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::CapacitySnapshot;
                       return false;
                     }
-                    writingSuccessor =
-                        capacity.orderedTailWritingSuccessor->source;
+                    if (capacity.orderedTailWritingSuccessor.has_value()) {
+                      if (!capacity.orderedTailWritingSuccessor->valid()) {
+                        retainedHeadRejection = perf::
+                            CpuReadyRetainedHeadRejectReason::
+                                WritingSuccessorInvalid;
+                        return false;
+                      }
+                      writingSuccessor =
+                          capacity.orderedTailWritingSuccessor->source;
+                    } else if (core::metalqueue::
+                                   cpuReadyNextSourceIntentMatches(
+                                       nextSourceIntent_,
+                                       candidate.metadata.sourceOrdinal,
+                                       candidate.seqId)) {
+                      nextSourceIntent = nextSourceIntent_;
+                    } else {
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::
+                              WritingSuccessorMissing;
+                      return false;
+                    }
                     selected = 1u;
                     return true;
                   });
@@ -825,7 +889,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 return std::size_t{1};
               });
       if (retainedCount == 1u) {
-        perf::countCpuReadyRetainedHeadHeld();
+        perf::countCpuReadyRetainedHeadHeld(retainedHeadKind);
+        if (nextSourceIntent.has_value()) {
+          perf::countCpuReadyRetainedHeadIntentSelected();
+        }
         const auto waitStarted = perf::enabled()
             ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point{};
@@ -835,8 +902,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
         auto successorReady = [&]() {
           std::array<core::CpuReadyTape::ReadyEntry, 1> ready{};
-          if (cpuReadyTape_.copyReadyPrefix(ready) == 1u &&
-              ready.front().source == writingSuccessor) {
+          const bool hasReady = cpuReadyTape_.copyReadyPrefix(ready) == 1u;
+          const bool exactReady = hasReady &&
+              (nextSourceIntent.has_value()
+                   ? ready.front().metadata.sourceOrdinal ==
+                             nextSourceIntent->sourceOrdinal &&
+                         ready.front().seqId == nextSourceIntent->seqId
+                   : ready.front().source == writingSuccessor);
+          if (exactReady) {
             readySuccessor = ready.front();
             return true;
           }
@@ -844,6 +917,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           return false;
         };
         auto writingSuccessorStillExact = [&]() {
+          if (nextSourceIntent.has_value()) {
+            return nextSourceIntent_ == *nextSourceIntent;
+          }
           const auto capacity =
               cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
           return capacity.valid &&
@@ -870,6 +946,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 .capacityProgress =
                     queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
                         observedCapacityProgress,
+                .sourceIntentProgress = nextSourceIntent.has_value() &&
+                    nextSourceIntent_ != *nextSourceIntent,
             });
           });
 
@@ -921,11 +999,18 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             }
             if (fallback.has_value()) {
               perf::countCpuReadyRetainedHeadFallback(*fallback);
-              exactReplaySingleSource = true;
+              exactReplaySingleSource = !activeRetainedHeadFrontier;
+              activeRetainedHeadSingleSourceFallback =
+                  activeRetainedHeadFrontier;
             } else {
               DXMT_ASSERT(readySuccessor.has_value());
-              perf::countCpuReadyRetainedHeadSuccessorReady();
+              perf::countCpuReadyRetainedHeadSuccessorReady(
+                  retainedHeadKind);
+              if (nextSourceIntent.has_value()) {
+                perf::countCpuReadyRetainedHeadIntentSuccessorReady();
+              }
               exactReplaySingleSource = false;
+              activeRetainedHeadSingleSourceFallback = false;
             }
             break;
           }
@@ -934,6 +1019,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         }
         continue;
       }
+      perf::countCpuReadyRetainedHeadRejected(retainedHeadRejection);
     }
 
     bool blockedByPendingCompatibility = false;
@@ -1169,6 +1255,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 selectedCapacityCharges[selected] = capacity;
                 selectedCapacityCharged[selected] = true;
                 ++selected;
+                if (activeRetainedHeadSingleSourceFallback) {
+                  // The active hold already owns a live lease. Its fallback
+                  // must still pass through admission/charge before selecting
+                  // exactly the restored older source; the fresh/pressure
+                  // exact-replay shortcut intentionally bypasses that path.
+                  return false;
+                }
                 if (planned.valid() && selected >=
                         framegraph::kMaxMultiSourcePlanningSources) {
                   // Keep the represented transaction within the bounded
@@ -1419,6 +1512,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       standaloneSerialSource.reset();
       firstLeaseStandalonePendingHead = {};
       exactReplaySingleSource = !abandonedStandaloneSerial;
+      activeRetainedHeadSingleSourceFallback = false;
       if (testOnlyRestore) {
         return;
       }
@@ -1670,6 +1764,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             });
           }
           exactReplaySingleSource = false;
+          activeRetainedHeadSingleSourceFallback = false;
           continue;
         }
         revalidatedActiveRender = active;
@@ -1711,6 +1806,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       standaloneSerialSource.reset();
       firstLeaseStandalonePendingHead = {};
       exactReplaySingleSource = !abandonedStandaloneSerial;
+      activeRetainedHeadSingleSourceFallback = false;
       continue;
     }
     if (firstLeaseStandalonePendingHead.valid()) {
@@ -1718,6 +1814,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       firstLeaseStandalonePendingHead = {};
     }
     exactReplaySingleSource = false;
+    activeRetainedHeadSingleSourceFallback = false;
     standaloneSerialSource.reset();
     const auto unchargeSelectedCapacity =
         [&](std::size_t sourceIndex) {
@@ -1873,7 +1970,17 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     // already Represented and fully charged here; no borrowed payload enters
     // the held state.
     bool deferredSuffixHandled = false;
-    if (terminalSuffixJoinEnabled && freshPlanningFrontier && count == 1u &&
+    const bool activeTerminalSuffixFrontier =
+        pendingRecord.has_value() && pendingSession &&
+        pendingAdmission.valid() && capacityLeaseState.lease().valid() &&
+        encoders::encodeChunkSessionReplayFrontierState(*pendingSession) ==
+            encoders::EncodeSessionReplayFrontierState::ActiveRenderComplete;
+    const auto terminalSuffixFrontier = activeTerminalSuffixFrontier
+        ? perf::CpuReadyTerminalSuffixFrontier::ActiveRender
+        : perf::CpuReadyTerminalSuffixFrontier::Fresh;
+    if (terminalSuffixJoinEnabled &&
+        (freshPlanningFrontier || activeTerminalSuffixFrontier) &&
+        count == 1u &&
         selectedPrefixStartsSession && selectedCompletionSourcesValid &&
         !fullCaptureBoundary()) {
       ResolvedPublishedSource current =
@@ -1911,22 +2018,30 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             sessionReleaseState_.peekNext().value_or(
                 core::metalqueue::SessionReleaseSnapshot{});
 
-        EncodeSessionSourceList stagedSources;
-        render::EncodeSessionAdmissionState stagedAdmission{};
-        encoders::EncodeChunkSession stagedSession =
-            encoders::makeEncodeChunkSession();
-        const bool registrationValid = stagedSources.append(
-                selectedCompletionSources[0]) &&
+        EncodeSessionSourceList stagedSources = pendingSources;
+        render::EncodeSessionAdmissionState stagedAdmission =
+            pendingAdmission;
+        encoders::EncodeChunkSession stagedSession;
+        if (freshPlanningFrontier) {
+          stagedSession = encoders::makeEncodeChunkSession();
+        }
+        encoders::EncodeChunkSessionState* registrationSession =
+            freshPlanningFrontier ? stagedSession.get()
+                                  : pendingSession.get();
+        const bool registrationValid = registrationSession &&
+            stagedSources.append(selectedCompletionSources[0]) &&
             render::appendSessionAdmission(
                 stagedAdmission, currentAdmission, admissionLimits) &&
             encoders::appendEncodeChunkSessionSources(
-                *stagedSession,
+                *registrationSession,
                 std::span<const QueueCompletionSource>(
                     selectedCompletionSources.data(), 1u));
         if (registrationValid) {
           pendingSources = stagedSources;
           pendingAdmission = stagedAdmission;
-          pendingSession = std::move(stagedSession);
+          if (freshPlanningFrontier) {
+            pendingSession = std::move(stagedSession);
+          }
 
           encoders::PreRegisteredEncodeSourceFragmentAccumulator
               currentFragments{};
@@ -1935,6 +2050,12 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           prefixSource.commandCount = 1u;
           encoders::EncodeChunkOptions prefixOptions{};
           prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
+          const obj_handle_t injectedCommandBuffer = pendingRecord
+              ? pendingRecord->commandBuffer.handle
+              : NULL_OBJECT_HANDLE;
+          if (pendingRecord) {
+            prefixOptions.commandBuffer = pendingRecord->commandBuffer;
+          }
           prefixOptions.session = pendingSession.get();
           prefixOptions.deferSessionFinalization = true;
           prefixOptions.partitionSource = current.source;
@@ -1959,6 +2080,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           if (!prefixSubmission) {
             abortCpuReadySessionFailOpen(
                 "deferred terminal-suffix prefix encode");
+          }
+          if (pendingRecord &&
+              !core::metalqueue::foldEncodedSessionFragmentCarrier(
+                  *prefixSubmission, *pendingRecord,
+                  injectedCommandBuffer)) {
+            abortCpuReadySessionFailOpen(
+                "deferred terminal-suffix prefix carrier fold");
           }
           pendingRecord = std::move(*prefixSubmission);
           const auto heldReplayFrontier =
@@ -1989,6 +2117,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             abortCpuReadySessionFailOpen(
                 "deferred terminal-suffix held state");
           }
+          perf::countCpuReadyTerminalSuffixPrefix(terminalSuffixFrontier);
           // SourcePayloadView is a synchronous borrow. The park below retains
           // only the value-only held state and re-resolves the represented
           // current source for each later call-local use.
@@ -2079,6 +2208,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             (void)tryRetireEncodedSource(
                 0u, suffixSource, currentAdmission, currentCompletion);
             recordCapacityLeaseUsed();
+            perf::countCpuReadyTerminalSuffixNaturalDrain(
+                terminalSuffixFrontier);
             deferredSuffixHandled = true;
           };
 
@@ -2551,6 +2682,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       1u, successorForEffects, successorAdmission,
                       successorCompletion);
                   recordCapacityLeaseUsed();
+                  perf::countCpuReadyTerminalSuffixJoined(
+                      terminalSuffixFrontier);
                   deferredSuffixHandled = true;
                 }
               }

@@ -683,6 +683,15 @@ class CommandQueue {
       const core::ArenaSourcePayloadLayout& layout) noexcept;
   bool waitForCpuReadyArenaAdmission(
       std::span<const core::ArenaSourcePayloadLayout> layouts) noexcept;
+  // The replay worker may promise only an already-adopted immediate raw FIFO
+  // successor, after the current source has replayed successfully and before
+  // it becomes Ready. No Tape storage or Metal/completion ownership moves.
+  bool armCpuReadyNextSourceIntent(
+      core::CpuReadyPublicationTicket predecessor,
+      std::uint64_t nextRawOrdinal,
+      bool predecessorHasPresent) noexcept;
+  void cancelCpuReadyNextSourceIntent(
+      std::uint64_t rawOrdinal) noexcept;
 
   // Ordered-control synchronization for the CPU-ready session lane. The
   // caller supplies only backend release semantics and the raw-stream fence;
@@ -1004,6 +1013,12 @@ class CommandQueue {
       std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
+  void advanceCpuReadyNextSourceIntentLocked(
+      std::uint64_t sourceOrdinal,
+      std::uint64_t seqId,
+      std::size_t publishedSourceCount,
+      std::uint64_t nextRawOrdinal,
+      bool hasPresent) noexcept;
   void prefetchSlotPipelines(core::ChunkSlot& slot, bool seal = true);
   void startThreads(std::function<void()> encodeLoop,
                     std::function<void()> finishLoop,
@@ -1062,6 +1077,8 @@ class CommandQueue {
   //     needs the same mutex. That is what makes the re-stamp a fixed point
   //     rather than another race.
   std::atomic<std::uint64_t> nextSeqId_{1};
+  core::metalqueue::CpuReadyNextSourceIntent nextSourceIntent_{};
+  std::uint64_t nextSourceIntentGeneration_ = 0;
 
   // TLA+: ProducerMarkReclaim — the ticket read in `WorkerBeginBatch` and
   // `BeginMark`. Callable with or without `mutex_`; see the memory-order
@@ -1530,6 +1547,10 @@ class CommandQueue {
     bool presentAppended = false;
     bool presentTokenStashed = false;
     bool flushAfterPublication = false;
+    // Staged only after successful semantic replay. Publication turns this
+    // already-adopted replay-FIFO fact into the globally visible intent in
+    // the same scheduling-lock transaction that makes this source Ready.
+    std::uint64_t nextQueuedRawOrdinalHint = 0;
     struct CaptureCommandAnchor {
       std::uint32_t firstRecord = 0;
       std::uint32_t lastRecord = 0;

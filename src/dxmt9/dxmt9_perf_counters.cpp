@@ -1070,13 +1070,25 @@ void countCpuReadySessionTailSubmitted() {
   add(counters().cpuReadySessionTailSubmitted);
 }
 
-void countCpuReadyRetainedHeadAttempt() {
-  add(counters().cpuReadyRetainedHeadAttempts);
+void countCpuReadyRetainedHeadAttempt(
+    CpuReadyRetainedHeadFrontier frontier) {
+  auto& c = counters();
+  add(c.cpuReadyRetainedHeadAttempts);
+  if (frontier == CpuReadyRetainedHeadFrontier::ActiveRender) {
+    add(c.cpuReadyRetainedHeadActiveRenderAttempts);
+  } else {
+    add(c.cpuReadyRetainedHeadFreshAttempts);
+  }
 }
 
-void countCpuReadyRetainedHeadHeld() {
+void countCpuReadyRetainedHeadHeld(CpuReadyRetainedHeadFrontier frontier) {
   auto& c = counters();
   add(c.cpuReadyRetainedHeadHeld);
+  if (frontier == CpuReadyRetainedHeadFrontier::ActiveRender) {
+    add(c.cpuReadyRetainedHeadActiveRenderHeld);
+  } else {
+    add(c.cpuReadyRetainedHeadFreshHeld);
+  }
   std::uint64_t live = 0;
   if (enabled()) {
     live = c.cpuReadyRetainedHeadLive.fetch_add(
@@ -1086,8 +1098,15 @@ void countCpuReadyRetainedHeadHeld() {
   updateMax(c.cpuReadyRetainedHeadPeak, live);
 }
 
-void countCpuReadyRetainedHeadSuccessorReady() {
-  add(counters().cpuReadyRetainedHeadSuccessorReady);
+void countCpuReadyRetainedHeadSuccessorReady(
+    CpuReadyRetainedHeadFrontier frontier) {
+  auto& c = counters();
+  add(c.cpuReadyRetainedHeadSuccessorReady);
+  if (frontier == CpuReadyRetainedHeadFrontier::ActiveRender) {
+    add(c.cpuReadyRetainedHeadActiveRenderSuccessorReady);
+  } else {
+    add(c.cpuReadyRetainedHeadFreshSuccessorReady);
+  }
 }
 
 void countCpuReadyRetainedHeadFallback(
@@ -1129,6 +1148,89 @@ void recordCpuReadyRetainedHeadWait(std::uint64_t nanoseconds) {
   while (live != 0 &&
          !c.cpuReadyRetainedHeadLive.compare_exchange_weak(
              live, live - 1, std::memory_order_relaxed)) {
+  }
+}
+
+void countCpuReadyRetainedHeadRejected(
+    CpuReadyRetainedHeadRejectReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyRetainedHeadRejectReason::BorrowShape:
+    add(c.cpuReadyRetainedHeadRejectBorrowShape);
+    break;
+  case CpuReadyRetainedHeadRejectReason::PayloadInvalid:
+    add(c.cpuReadyRetainedHeadRejectPayloadInvalid);
+    break;
+  case CpuReadyRetainedHeadRejectReason::TerminalSuffixOwned:
+    add(c.cpuReadyRetainedHeadRejectTerminalSuffixOwned);
+    break;
+  case CpuReadyRetainedHeadRejectReason::Present:
+    add(c.cpuReadyRetainedHeadRejectPresent);
+    break;
+  case CpuReadyRetainedHeadRejectReason::SourceCompatibility:
+    add(c.cpuReadyRetainedHeadRejectSourceCompatibility);
+    break;
+  case CpuReadyRetainedHeadRejectReason::Admission:
+    add(c.cpuReadyRetainedHeadRejectAdmission);
+    break;
+  case CpuReadyRetainedHeadRejectReason::CapacitySnapshot:
+    add(c.cpuReadyRetainedHeadRejectCapacitySnapshot);
+    break;
+  case CpuReadyRetainedHeadRejectReason::WritingSuccessorMissing:
+    add(c.cpuReadyRetainedHeadRejectWritingSuccessorMissing);
+    break;
+  case CpuReadyRetainedHeadRejectReason::WritingSuccessorInvalid:
+    add(c.cpuReadyRetainedHeadRejectWritingSuccessorInvalid);
+    break;
+  case CpuReadyRetainedHeadRejectReason::ReservationRace:
+    add(c.cpuReadyRetainedHeadRejectReservationRace);
+    break;
+  }
+}
+
+void countCpuReadyNextSourceIntentArmed() {
+  add(counters().cpuReadyNextSourceIntentArmed);
+}
+
+void countCpuReadyNextSourceIntentCanceled() {
+  add(counters().cpuReadyNextSourceIntentCanceled);
+}
+
+void countCpuReadyRetainedHeadIntentSelected() {
+  add(counters().cpuReadyRetainedHeadIntentSelected);
+}
+
+void countCpuReadyRetainedHeadIntentSuccessorReady() {
+  add(counters().cpuReadyRetainedHeadIntentSuccessorReady);
+}
+
+void countCpuReadyTerminalSuffixPrefix(
+    CpuReadyTerminalSuffixFrontier frontier) {
+  auto& c = counters();
+  if (frontier == CpuReadyTerminalSuffixFrontier::ActiveRender) {
+    add(c.cpuReadyTerminalSuffixActiveRenderPrefixes);
+  } else {
+    add(c.cpuReadyTerminalSuffixFreshPrefixes);
+  }
+}
+
+void countCpuReadyTerminalSuffixJoined(
+    CpuReadyTerminalSuffixFrontier frontier) {
+  auto& c = counters();
+  if (frontier == CpuReadyTerminalSuffixFrontier::ActiveRender) {
+    add(c.cpuReadyTerminalSuffixActiveRenderJoined);
+  } else {
+    add(c.cpuReadyTerminalSuffixFreshJoined);
+  }
+}
+
+void countCpuReadyTerminalSuffixNaturalDrain(
+    CpuReadyTerminalSuffixFrontier frontier) {
+  auto& c = counters();
+  if (frontier == CpuReadyTerminalSuffixFrontier::ActiveRender) {
+    add(c.cpuReadyTerminalSuffixActiveRenderNaturalDrains);
+  } else {
+    add(c.cpuReadyTerminalSuffixFreshNaturalDrains);
   }
 }
 

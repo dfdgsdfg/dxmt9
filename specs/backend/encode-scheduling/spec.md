@@ -657,21 +657,51 @@ The generalized design permits a bounded `N+1 ... N+k` prefix that was ready at
 snapshot creation. Lack of proof is immediate conservative failure, never a
 producer wait.
 
-The serial session planner has one narrower fresh-frontier forward-look
-exception. If no session, admission, or capacity lease exists, and the frontier
-contains exactly one compatible present-free Ready source plus exactly one
-current-generation ordered-tail Writing successor, it may reserve that whole
-Ready source as the sole `TentativeRepresented` prefix and park. The park does
-not acquire or mutate admission or lease state. Successor publication first
-restores the older prefix, producing the ordinary two-source Ready window
-consumed by the existing bounded planner. Every semantic, progress, pressure,
-initializer, writer-identity, or shutdown exit also restores first and re-
-enters exact single-source replay; an exact Ready successor wins over a
+The serial session planner has one bounded whole-head forward-look exception.
+If the frontier contains exactly one compatible present-free Ready source plus
+either one current-generation ordered-tail Writing successor or one exact
+queue-local next-source intent, it may reserve that whole Ready source as the
+sole `TentativeRepresented` prefix and park in
+either of two states:
+
+- a fresh frontier with no session, admission, or capacity lease; or
+- a live session with valid admission and lease state whose replay frontier is
+  exactly `ActiveRenderComplete`.
+
+The intent is not predicted from Ready publication. The single-consumer replay
+FIFO attaches only the ordinal of an already-adopted immediate planning raw to
+the current worker item. After successful semantic replay, that value is staged
+in the active Arena transaction; Ready publication settles any predecessor
+intent and exposes the new generation-stamped `(predecessorSeqId, rawOrdinal,
+sourceOrdinal, seqId)` value before unlocking. An empty FIFO or immediate
+placeholder, mutation, or StateBlock item exposes no hint. If the next raw
+plans to StateOnly, Inline, Legacy, or Reject, it cancels the matching intent
+before effect and wakes the same pure wait predicate. A Direct admission wait
+uses the existing pressure fallback. The actual publication ticket remains the
+payload/storage authority.
+
+The active form classifies append compatibility and capacity against the live
+session state and preserves its active render seed. The park does not acquire
+or mutate admission, lease, completion, render-pass, or Metal state. Successor
+publication first restores the older prefix, producing the ordinary two-source
+Ready window consumed by the existing bounded planner; the active form passes
+the unchanged seed into that planner. Every semantic, progress, pressure,
+initializer, writer/intent-identity, or shutdown exit also restores first and
+re-enters exact single-source replay; an exact Ready successor wins over a
 simultaneous pressure observation. The retained head is never committed
-directly. Once a session is active, a sole Ready head is ordinarily consumed
-immediately. Section 5.2 defines the only exception: the source remains
-represented while a value-described terminal suffix waits for one exact
-ordered-tail Writing successor.
+directly. Section 5.2 remains the distinct effectful exception: it can retain a
+value-described terminal suffix only after the current source prefix has
+encoded.
+
+Perf-enabled attribution is total at the hold decision. Every fresh or active
+attempt increments exactly one held outcome or one typed rejection outcome:
+borrow shape, invalid payload, terminal-suffix ownership, Present, source
+compatibility, admission, capacity snapshot, missing successor identity,
+invalid Writing successor, or reservation race. Therefore
+`attempts = held + sum(rejections)` for a complete run. Fresh and active
+attempt/held/successor-ready counters remain separate; the rejection taxonomy
+is aggregate because it classifies the shared production predicate. These
+counters are observational and cannot authorize a wait.
 
 ## 5. EncodeSession State Machine
 
@@ -894,13 +924,17 @@ page pointer, session pointer, Metal object, or callback survives the park.
 
 The transaction is:
 
-1. Require a fresh planning frontier with one represented candidate and no full
-   capture boundary. The current source must contain exactly
+1. Require either a fresh planning frontier or a carried session whose replay
+   frontier is exactly `ActiveRenderComplete`, with one represented candidate
+   and no full capture boundary. The current source must contain exactly
    `DrawRun(A), Clear(B), DrawRun(B)`, and the capacity snapshot must expose one
    exact ordered-tail Writing successor with a valid physical claim inside
-   successor headroom. Pre-register current completion once, admit and charge
-   it once, and encode only command 0 with backend replanning suppressed and a
-   pre-registered fragment accumulator.
+   successor headroom. Pre-register current completion once after any carried
+   FIFO prefix, admit and charge it once, and encode only command 0 with backend
+   replanning suppressed and a pre-registered fragment accumulator. A carried
+   form injects the existing command buffer and folds the prefix result into
+   the existing submission carrier; it does not replace the session, active
+   render seed, completion prefix, callbacks, or capture ownership.
 2. At prefix completion, snapshot the replay frontier, complete active-render
    dependency state, active render-pass instance token, and full capture
    boundary. Retain the current Ready/completion/admission/range values, the
@@ -945,6 +979,12 @@ The production policy object exposes `Empty`, `PrefixEncoded`, `Held`,
 concrete coordinator uses the first successor replay call, rather than a
 rollback-capable state mutation, as the `JoinEffectful` cut. No drain condition
 invents a session or command-buffer boundary.
+
+Runtime attribution separates fresh and carried-active transactions at the
+prefix effect, successful join, and natural-drain outcomes. The six
+`cpu_ready_terminal_suffix_{fresh,active_render}_{prefixes,joined,natural_drains}`
+counters are diagnostic-only; they prove that a wild run exercised the intended
+carrier form and do not participate in scheduling.
 
 When perf counters explicitly enable collection, every bounded replay window
 carries call-local, trivially copyable diagnostic provenance after its existing

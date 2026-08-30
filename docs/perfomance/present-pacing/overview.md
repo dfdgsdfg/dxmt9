@@ -5,7 +5,7 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap - 
 type: domain-overview
 status: current
 updated: 2026-08-30
-source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-tape-promotion-gate.237.md
+source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
@@ -41,6 +41,8 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 | H221 | Probe-wrapper defaults aligned with the promoted engine defaults | accepted policy change | `run_3dmark05_perf_probe.sh` now pins `DXMT9_OFFLOAD_COMMIT_REPLAY` / `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` to `1` by default like the engine (`e5129346`); env `0` is the off switch. Probe `result.json` baselines after 2026-07-12 are trio-on by default; reproduce historical default-off recipes by passing `0` explicitly. |
 | H236 | Current GT2 first ceiling is the saturated producer thread, but PE `d3d9.dll` is only 10.6% | accepted current attribution | [present-pacing-current-bottleneck-pe-symbol.236](present-pacing-current-bottleneck-pe-symbol.236.md) joins a clean current-cap run, a ten-second Time Profiler interval, a Metal stage sidecar, and the Tier 2 PE sampler. Producer utilization is one full core versus encode `60%` and replay `57%`; PE module shares are game `64.3%`, `winemetal.dll` `13.9%`, and `d3d9.dll` `10.6%`. The PE module has no single dominant remaining leaf. |
 | H237 | CPU-ready Tape now completes but still misses strict locality | promotion rejected; implementation remains default off | [present-pacing-cpu-ready-tape-promotion-gate.237](present-pacing-cpu-ready-tape-promotion-gate.237.md) records a clean native/formal/build/triangle gate and a completed same-build GT2 pair. Ready depth moves `1.000 -> 2.200`, but CB/pass/tile rise `0.31%`/`0.73%`/`2.93%`; the next owner is incomplete retained cross-source suffix attribution, not capacity or another FPS-only run. |
+| H238 | Active-session lookahead closes every locally provable hold, but not the locality gate | implementation and proof complete; promotion rejected | [present-pacing-cpu-ready-active-head-locality.238](present-pacing-cpu-ready-active-head-locality.238.md) adds active-seed-preserving whole-head retention, carried terminal-suffix ownership, native tests, and a bounded TLA model. The final GT2 pair still raises CB/pass/tile by `0.25%`/`1.21%`/`4.70%`. Exact rejection conservation attributes all non-held heads to Present (`1,245`) or absence of a future Writing identity (`227`); the next owner is an atomic next-source intent contract, not another local wait policy. |
+| H239 | Exact replay-FIFO next-source intent closes the identity contract, but not locality | implementation and proof complete; promotion rejected | [present-pacing-cpu-ready-next-source-intent.239](present-pacing-cpu-ready-next-source-intent.239.md) binds adopted raw, Direct disposition, cancellation, generation-stamped publication, and wake progress. GT2 selects the intent zero times and still raises CB/pass/tile by `0.34%`/`1.15%`/`4.40%`. Exact late-action accounting resolves `10,770/11,038` unknown actions to Store, moving the remaining owner to bounded replay/store-action equivalence. |
 
 ## Current Frontier
 
@@ -59,6 +61,11 @@ remaining branches are:
   snapshot/materialization elimination and safe CPU-stage overlap. Parallel
   render encoding remains non-default after duplicated CPU cost outweighed its
   chunk-wall reduction.
+- **CPU-ready Tape:** the publication, admission, session, active-head, and
+  next-source-intent mechanisms are implemented and bounded by native/TLA
+  evidence, but H239 still fails CB/pass/tile locality. The remaining design
+  question is frame-wide sealing versus an incremental store-action
+  equivalence proof; the provider remains default off.
 
 ## Current Navigation
 
@@ -68,6 +75,8 @@ remaining branches are:
 
 ## Recent Leaf Documents
 
+- [present-pacing-cpu-ready-next-source-intent.239 - Replay-FIFO Intent Is Safe but Does Not Recover Tape Locality](present-pacing-cpu-ready-next-source-intent.239.md)
+- [present-pacing-cpu-ready-active-head-locality.238 - Active-Session Lookahead Closes the Local Hold Gap but Not Tape Locality](present-pacing-cpu-ready-active-head-locality.238.md)
 - [present-pacing-cpu-ready-tape-promotion-gate.237 - CPU-Ready Tape Restores Progress but Misses the Locality Gate](present-pacing-cpu-ready-tape-promotion-gate.237.md)
 - [present-pacing-current-bottleneck-pe-symbol.236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 10.6%](present-pacing-current-bottleneck-pe-symbol.236.md)
 - [present-pacing-engine-default-trio.203 - The Promoted Trio Becomes The Engine Default](present-pacing-engine-default-trio.203.md)

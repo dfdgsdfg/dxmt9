@@ -303,6 +303,26 @@ enum class CpuReadyRetainedHeadFallbackReason : std::uint8_t {
   WriterGone,
   Pressure,
 };
+enum class CpuReadyRetainedHeadFrontier : std::uint8_t {
+  Fresh,
+  ActiveRender,
+};
+enum class CpuReadyTerminalSuffixFrontier : std::uint8_t {
+  Fresh,
+  ActiveRender,
+};
+enum class CpuReadyRetainedHeadRejectReason : std::uint8_t {
+  BorrowShape,
+  PayloadInvalid,
+  TerminalSuffixOwned,
+  Present,
+  SourceCompatibility,
+  Admission,
+  CapacitySnapshot,
+  WritingSuccessorMissing,
+  WritingSuccessorInvalid,
+  ReservationRace,
+};
 void countCpuReadySessionPendingStarted();
 void countEncodePartitionPlan(bool explicitPlan,
                               std::uint64_t rangeCount,
@@ -457,13 +477,26 @@ void recordCpuReadySessionCapRequirement(
 void countCpuReadySessionDisposition(CpuReadySessionDisposition disposition);
 void countCpuReadySessionIsolation(
     CpuReadySessionIsolationReason reason);
-void countCpuReadyRetainedHeadAttempt();
-void countCpuReadyRetainedHeadHeld();
-void countCpuReadyRetainedHeadSuccessorReady();
+void countCpuReadyRetainedHeadAttempt(CpuReadyRetainedHeadFrontier frontier);
+void countCpuReadyRetainedHeadHeld(CpuReadyRetainedHeadFrontier frontier);
+void countCpuReadyRetainedHeadSuccessorReady(
+    CpuReadyRetainedHeadFrontier frontier);
 void countCpuReadyRetainedHeadFallback(
     CpuReadyRetainedHeadFallbackReason reason);
 void countCpuReadyRetainedHeadRestoreFailure();
 void recordCpuReadyRetainedHeadWait(std::uint64_t nanoseconds);
+void countCpuReadyRetainedHeadRejected(
+    CpuReadyRetainedHeadRejectReason reason);
+void countCpuReadyNextSourceIntentArmed();
+void countCpuReadyNextSourceIntentCanceled();
+void countCpuReadyRetainedHeadIntentSelected();
+void countCpuReadyRetainedHeadIntentSuccessorReady();
+void countCpuReadyTerminalSuffixPrefix(
+    CpuReadyTerminalSuffixFrontier frontier);
+void countCpuReadyTerminalSuffixJoined(
+    CpuReadyTerminalSuffixFrontier frontier);
+void countCpuReadyTerminalSuffixNaturalDrain(
+    CpuReadyTerminalSuffixFrontier frontier);
 enum class CpuReadyMultiSourceFallbackReason : std::uint8_t {
   Eligibility,
   NaturalPlan,

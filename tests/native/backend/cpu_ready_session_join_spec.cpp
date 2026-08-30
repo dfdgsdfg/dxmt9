@@ -289,6 +289,31 @@ struct CommandQueueArenaLeaseTestAccess {
         core::CpuReadyTape::State::TentativeRepresented;
   }
 
+  static bool armNextSourceIntentForReadySource(
+      CommandQueue& queue,
+      const core::metalqueue::QueueCompletionSource& source,
+      std::uint64_t nextRawOrdinal) {
+    std::lock_guard lock(queue.mutex_);
+    std::array<core::CpuReadyTape::ReadyEntry, kCommandChunkCount> ready{};
+    const auto count = queue.cpuReadyTape_.copyReadyPrefix(ready);
+    const auto found = std::find_if(
+        ready.begin(), ready.begin() + count, [&](const auto& entry) {
+          return entry.source == source.source && entry.seqId == source.seqId;
+        });
+    if (found == ready.begin() + count) {
+      return false;
+    }
+    const auto plan = core::metalqueue::planCpuReadyNextSourceIntent(
+        queue.nextSourceIntentGeneration_, found->metadata.sourceOrdinal,
+        found->seqId, nextRawOrdinal, /*hasPresent=*/false);
+    if (!plan.armed) {
+      return false;
+    }
+    queue.nextSourceIntent_ = plan.intent;
+    queue.nextSourceIntentGeneration_ = plan.generationHighWater;
+    return true;
+  }
+
   static bool stopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.stop_;
@@ -2384,7 +2409,7 @@ void productionLoopRetainsOneReadyHeadForExactWritingSuccessor() {
         "retained head submits through the planned carrier");
 }
 
-void productionLoopConsumesOneReadyHeadBehindActiveSession() {
+void productionLoopRetainsOneReadyHeadBehindActiveSession() {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
   auto backendState = std::make_shared<PlannedProductionBackendState>();
@@ -2420,27 +2445,335 @@ void productionLoopConsumesOneReadyHeadBehindActiveSession() {
         snapshotReadyCompletionSources(queue);
     check(retained.size() == 1u && retained.front().seqId == 2u,
           "A|B is the sole Ready source behind active A");
-    fixture.beginLegacyTargetDraw(kTargetA);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::
+              armNextSourceIntentForReadySource(
+                  queue, retained.front(), /*nextRawOrdinal=*/62u),
+          "an already-adopted immediate raw arms the exact successor intent");
     backendState->releaseFirstReturn.store(true,
                                            std::memory_order_release);
+
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+                queue, retained.front());
+          }),
+          "publication intent parks the sole A|B head before successor "
+          "storage exists");
+    check(backendState->observedCalls.load(std::memory_order_acquire) == 1u,
+          "intent-retained head owns no new Metal effect before Writing");
+
+    fixture.beginLegacyTargetDraw(kTargetA);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
+              queue),
+          "exact active-session Writing A publishes normally");
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 4u;
+          }),
+          "restored active head and successor execute one A,A,B plan");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1u &&
+            backendState->plannerFrontierStates ==
+                std::vector<dxmt9::encoders::EncodeSessionReplayFrontierState>{
+                    dxmt9::encoders::EncodeSessionReplayFrontierState::
+                        ActiveRenderComplete} &&
+            backendState->plannerSourceCounts ==
+                std::vector<std::size_t>({2u}) &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 3u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 0u, 1u}),
+        "active seed qualifies the retained two-source return window");
+  const obj_handle_t carrier = backendState->calls.front().commandBuffer;
+  check(carrier != NULL_OBJECT_HANDLE &&
+            backendState->calls[1].commandBuffer == carrier,
+        "active retained plan appends to the current command-buffer carrier");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, head) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, retained),
+        "active retained replay preserves FIFO completion authority");
+}
+
+void productionLoopJoinsTerminalSuffixBehindActiveSession() {
+  setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D3u;
+  constexpr std::uint64_t kTargetB = 0xB5D3u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> current;
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> successor;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "active terminal-suffix fixture opens its A render session");
+    fixture.publishArenaTerminalSuffix(63u, kTargetA, kTargetB);
+    current = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(current.size() == 1u,
+          "active terminal-suffix fixture exposes one Ready source");
+    fixture.beginLegacyTargetDraw(kTargetA);
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
 
     check(waitUntil([&] {
             return backendState->observedCalls.load(
                        std::memory_order_acquire) == 2u;
           }),
-          "active session consumes the sole A|B head immediately");
-    check(!dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
-              queue, retained.front()),
-          "active-session Ready head never enters the retained park state");
+          "active terminal-suffix lane encodes the leading A fragment");
+    check(!dxmt9::CommandQueueArenaLeaseTestAccess::
+              hasActivePostEncodeReceipt(queue, current.front().seqId),
+          "active terminal-suffix prefix has no completion effect");
 
     check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
               queue),
-          "later active-session Writing A publishes normally");
+          "active terminal-suffix successor publishes exactly once");
+    successor = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(waitUntil([&] {
+            return backendState->completedCalls.load(
+                       std::memory_order_acquire) == 4u;
+          }),
+          "active terminal-suffix transaction joins its exact successor");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(successor.size() == 1u &&
+            backendState->plannerCalls == 0u &&
+            backendState->compositeObserverCalls == 1u &&
+            backendState->compositeObservedSeqIds ==
+                std::vector<std::uint64_t>({2u, 3u}) &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 3u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 0u, 2u}),
+        "active carrier replays A,A,A,Clear(B),B exactly once");
+  const std::array sources{head.front(), current.front(), successor.front()};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "active terminal-suffix join preserves FIFO completion authority");
+
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+}
+
+void productionLoopDrainsActiveTerminalSuffixBeforeStop() {
+  setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D4u;
+  constexpr std::uint64_t kTargetB = 0xB5D4u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> current;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "active terminal drain fixture opens its A session");
+    fixture.publishArenaTerminalSuffix(64u, kTargetA, kTargetB);
+    current = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    fixture.beginLegacyTargetDraw(kTargetA);
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
     check(waitUntil([&] {
             return backendState->observedCalls.load(
-                       std::memory_order_acquire) == 3u;
+                       std::memory_order_acquire) == 2u;
           }),
-          "active carrier consumes the later A without retained lookahead");
+          "active terminal drain fixture reaches its held prefix");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(current.size() == 1u && backendState->plannerCalls == 0u &&
+            backendState->compositeObserverCalls == 0u &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 2u}),
+        "stop drains only the older suffix through the carried session");
+  const std::array sources{head.front(), current.front()};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "active terminal stop drain preserves prior and current completion");
+
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+}
+
+void productionLoopRestoresActiveRetainedHeadBeforeStopDrain() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D2u;
+  constexpr std::uint64_t kTargetB = 0xB5D2u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> retained;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "active stop fixture opens its initial render session");
+    fixture.publishArenaTargetPair(62u, kTargetA, kTargetB);
+    retained = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(retained.size() == 1u,
+          "active stop fixture exposes one append-compatible Ready head");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::
+              armNextSourceIntentForReadySource(
+                  queue, retained.front(), /*nextRawOrdinal=*/63u),
+          "stop fixture arms one exact already-adopted raw intent");
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+                queue, retained.front());
+          }),
+          "active stop fixture parks on publication intent before any new "
+          "source storage or effect");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->observedCalls.load(std::memory_order_acquire) == 2u &&
+            backendState->plannerCalls == 0u &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 1u}),
+        "stop restores the active held source and replays each command once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, head) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, retained),
+        "active stop fallback preserves FIFO completion authority");
+}
+
+void productionLoopRestoresActiveRetainedHeadAfterIntentCancel() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D3u;
+  constexpr std::uint64_t kTargetB = 0xB5D3u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "intent-cancel fixture opens its initial render session");
+    fixture.publishArenaTargetPair(64u, kTargetA, kTargetB);
+    const auto retained = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(retained.size() == 1u &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::
+                  armNextSourceIntentForReadySource(
+                      queue, retained.front(), /*nextRawOrdinal=*/65u),
+          "intent-cancel fixture exposes one promised Ready head");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+                queue, retained.front());
+          }),
+          "intent-cancel fixture reaches the pre-effect held state");
+
+    queue.cancelCpuReadyNextSourceIntent(65u);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 2u;
+          }),
+          "non-source classification cancellation wakes and restores the "
+          "active held head");
     dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
     encodeThread.join();
   } catch (...) {
@@ -2452,23 +2785,61 @@ void productionLoopConsumesOneReadyHeadBehindActiveSession() {
   }
 
   check(backendState->plannerCalls == 0u &&
-            backendState->plannerFrontierStates.empty() &&
-            backendState->plannerSourceCounts.empty() &&
             backendState->encodedSeqIds ==
-                std::vector<std::uint64_t>({1u, 2u, 2u, 3u}) &&
+                std::vector<std::uint64_t>({1u, 2u, 2u}) &&
             backendState->encodedCommandIndices ==
-                std::vector<std::size_t>({0u, 0u, 1u, 0u}),
-        "active Ready work preserves natural source order without a retained "
-        "two-source planner window");
-  const obj_handle_t carrier = backendState->calls.front().commandBuffer;
-  check(carrier != NULL_OBJECT_HANDLE &&
-            backendState->calls[1].commandBuffer == carrier,
-        "immediate active head appends to the current command-buffer carrier");
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
-            queue, head) &&
-            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
-                queue, retained),
-        "immediate active replay preserves FIFO completion authority");
+                std::vector<std::size_t>({0u, 0u, 1u}),
+        "canceled intent owns no effect and natural replay stays exactly once");
+}
+
+void nextSourceIntentTransitionTruthTable() {
+  using dxmt9::core::metalqueue::cpuReadyNextSourceIntentMatches;
+  using dxmt9::core::metalqueue::
+      cpuReadyNextSourceIntentSatisfiedByPublishedSuffix;
+  using dxmt9::core::metalqueue::planCpuReadyNextSourceIntent;
+
+  const auto first = planCpuReadyNextSourceIntent(
+      0u, 41u, 51u, 61u, /*hasPresent=*/false);
+  check(first.armed && first.generationHighWater == 1u &&
+            first.intent.generation == 1u &&
+            first.intent.predecessorSeqId == 51u &&
+            first.intent.rawOrdinal == 61u &&
+            first.intent.sourceOrdinal == 42u &&
+            first.intent.seqId == 52u,
+        "non-Present publication arms one exact immediate-source intent");
+  check(cpuReadyNextSourceIntentMatches(first.intent, 41u, 51u) &&
+            !cpuReadyNextSourceIntentMatches(first.intent, 40u, 51u) &&
+            !cpuReadyNextSourceIntentMatches(first.intent, 41u, 50u),
+        "intent matching binds both predecessor source and sequence order");
+  check(cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+            first.intent, 42u, 52u, 1u) &&
+            cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+                first.intent, 44u, 54u, 3u) &&
+            !cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+                first.intent, 44u, 55u, 3u) &&
+            !cpuReadyNextSourceIntentSatisfiedByPublishedSuffix(
+                first.intent, 44u, 54u, 2u),
+        "single and atomic multi-source publication consume only an aligned "
+        "intent identity");
+
+  const auto second = planCpuReadyNextSourceIntent(
+      first.generationHighWater, 42u, 52u, 62u,
+      /*hasPresent=*/false);
+  check(second.armed && second.generationHighWater == 2u &&
+            second.intent.generation == 2u,
+        "successive publications advance the intent ABA generation");
+  const auto present = planCpuReadyNextSourceIntent(
+      second.generationHighWater, 43u, 53u, 63u,
+      /*hasPresent=*/true);
+  check(!present.armed && !present.intent.valid() &&
+            present.generationHighWater == second.generationHighWater,
+        "Present clears the promise without consuming a generation");
+  const auto overflow = planCpuReadyNextSourceIntent(
+      present.generationHighWater,
+      std::numeric_limits<std::uint64_t>::max(), 54u, 64u,
+      /*hasPresent=*/false);
+  check(!overflow.armed && !overflow.intent.valid(),
+        "unrepresentable successor identity fails closed");
 }
 
 void productionLoopRestoresRetainedHeadBeforeStopDrain() {
@@ -6788,6 +7159,7 @@ int main() {
   setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
   setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
   try {
+    nextSourceIntentTransitionTruthTable();
     if (perfOffCase) {
       productionLoopPerfOffKeepsSeedPlanWithoutTicketWork();
       productionLoopAttributesSessionCapCloseToSameKeyReopen(false);
@@ -6821,7 +7193,9 @@ int main() {
     productionLoopCanonicalizesNaturalCarrierBeforeReorderedComposite();
     productionLoopPlansFreshRepeatedSourceWindow();
     productionLoopRetainsOneReadyHeadForExactWritingSuccessor();
-    productionLoopConsumesOneReadyHeadBehindActiveSession();
+    productionLoopRetainsOneReadyHeadBehindActiveSession();
+    productionLoopJoinsTerminalSuffixBehindActiveSession();
+    productionLoopDrainsActiveTerminalSuffixBeforeStop();
     productionLoopRestoresRetainedHeadBeforeStopDrain();
     productionLoopRestoresRetainedHeadBeforeOrderedRelease();
     plannerUnlockRestoresExactPrefixBeforeOrderedRelease();
@@ -6855,6 +7229,8 @@ int main() {
     productionReplayFencesQueryBetweenOlderAndYoungerDraws();
     productionReplayFencesEveryQueryInOneRaw();
     productionReplayGateOffLeavesQueryInCompatibilityWriter();
+    productionLoopRestoresActiveRetainedHeadBeforeStopDrain();
+    productionLoopRestoresActiveRetainedHeadAfterIntentCancel();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_session_join_spec failed: " << error.what()
               << '\n';

@@ -633,8 +633,9 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "CopyMaterializationClass::QueueFinalSlotAppend",
                 "batch assembler retains final-slot accounting");
   checkContains(cpuPipelineOwnership,
-                "does not claim concrete bindings for DCE/lookahead",
-                "CPU ownership model narrows borrowCount to implemented visits");
+                "Production DCE successor lookahead and CPU-ready session "
+                "replay use this",
+                "CPU ownership model binds the implemented synchronous visits");
   checkNotContains(cpuPipelineOwnership,
                    "borrowCount=1 obligation also\n * covers the replay, serial, DCE/lookahead",
                    "CPU ownership model does not overclaim unimplemented bindings");

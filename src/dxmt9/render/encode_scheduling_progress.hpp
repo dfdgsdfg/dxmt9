@@ -146,6 +146,7 @@ struct CpuReadySessionWakeState {
   bool writerPressure = false;
   bool initializerPending = false;
   bool capacityProgress = false;
+  bool sourceIntentProgress = false;
 };
 
 constexpr bool openSessionWaitDone(CpuReadySessionWakeState state) noexcept {
@@ -157,7 +158,7 @@ constexpr bool retainedOrDeferredSessionWaitDone(
     CpuReadySessionWakeState state) noexcept {
   return openSessionWaitDone(state) || state.admissionPressure ||
       state.writerPressure || state.initializerPending ||
-      state.capacityProgress;
+      state.capacityProgress || state.sourceIntentProgress;
 }
 
 constexpr bool initializerPendingTransitionNeedsWake(
